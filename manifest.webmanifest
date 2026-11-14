@@ -1,0 +1,11 @@
+{
+  "name": "Skywright",
+  "short_name": "Skywright",
+  "description": "Build a plane from parts, then fly it (and crash it).",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#14181d",
+  "theme_color": "#14181d",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
