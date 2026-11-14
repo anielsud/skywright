@@ -534,10 +534,28 @@ function stepFlight(dtReal) {
     onGround: ac.onGround && ac.parts.some((p) => p.alive && p.gear?.wheels.some((w) => w.contact)), groundSpeed: gs, surface: surf,
     scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead, cockpit, doppler, rain: world.rain.visible ? world.W.rain : 0,
     listener: { pos: flightCam.position, fwd: camFwd, up: camUp },
-    amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, overWater: world.groundAt(flightCam.position.x, flightCam.position.z).type === 'water' } });
+    amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) } });
   hud.update(ac, world, f.mission, flightCam);
   if (f.debug) $('#debug').textContent = `α ${(ac.alpha * 57.3).toFixed(1)}° g ${ac.g.toFixed(2)} V ${ac.airspeed?.toFixed(1)} m=${Math.round(ac.mass)} com=${ac.com.toArray().map((v) => v.toFixed(2))} w=${ac.w.toArray().map((v) => v.toFixed(2))}`;
   $('#debug').style.display = f.debug ? '' : 'none';
+}
+
+// 0..1: how close the camera is to open water (sampled in rings, refreshed twice a second)
+function waterProximity(f, world, p) {
+  if (f.waterT && f.t - f.waterT < 0.5) return f.waterNear;
+  f.waterT = f.t;
+  let best = 1e9;
+  for (const r of [0, 30, 70, 130, 220, 340, 500]) {
+    for (let k = 0; k < (r ? 12 : 1); k++) {
+      const a = (k / 12) * Math.PI * 2;
+      if (world.sampleGrid(p.x + Math.cos(a) * r, p.z + Math.sin(a) * r) < world.waterLevel) { best = r; break; }
+    }
+    if (best < 1e9) break;
+  }
+  // height above the water also counts as distance
+  const d = Math.hypot(best, Math.max(0, p.y - world.waterLevel));
+  f.waterNear = best < 1e9 ? Math.max(0, 1 - d / 450) : 0;
+  return f.waterNear;
 }
 
 // ---------- main loop ----------
@@ -583,6 +601,6 @@ async function boot() {
   setTimeout(() => $('#splash').remove(), 900);
   document.addEventListener('pointerdown', () => { audio.init(); if (state === 'hangar') audio.music(true); }, { once: true });
   if ('serviceWorker' in navigator && location.protocol !== 'file:' && !location.hostname.match(/^(localhost|127\.)/)) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.__sky = { THREE, Aircraft, REALISM, analyze, audio, hangar, get F() { return F; }, startFlight, endFlight, presets, settings, flightCfg, controls, rig };
+  window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, audio, hangar, get F() { return F; }, startFlight, endFlight, presets, settings, flightCfg, controls, rig };
 }
 boot();
