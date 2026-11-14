@@ -561,6 +561,6 @@ async function boot() {
   setTimeout(() => $('#splash').remove(), 900);
   document.addEventListener('pointerdown', () => { audio.init(); if (state === 'hangar') audio.music(true); }, { once: true });
   if ('serviceWorker' in navigator && location.protocol !== 'file:' && !location.hostname.match(/^(localhost|127\.)/)) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.__sky = { THREE, Aircraft, REALISM, analyze, hangar, get F() { return F; }, startFlight, endFlight, presets, settings, flightCfg, controls, rig };
+  window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, hangar, get F() { return F; }, startFlight, endFlight, presets, settings, flightCfg, controls, rig };
 }
 boot();

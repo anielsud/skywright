@@ -191,7 +191,6 @@ export function makePresets() {
     const b = new PB('Jumbo', 'Four-engine airliner. Heavy, stable, majestic.');
     const f = b.add('fus_airliner', [0, 0, 0]);
     b.add('ck_airliner', [0, 0, -11], { parent: f });
-    b.add('x_tailcone', [0, 0.1, 11], { parent: f, color: 0xf2f2ee });
     const wp = [1.5, -0.9, -1.5];
     const w = b.pair('w_airliner', wp, { parent: f });
     b.underWing('e_turbofan', 'w_airliner', w[0], wp, 0.32, 1.6, 2.2);
@@ -206,7 +205,6 @@ export function makePresets() {
     const b = new PB('Centipede', 'Fourteen engines. Props AND jets. Because why not.');
     const f = b.add('fus_airliner', [0, 0, 0], { color: 0x7b2d8b });
     b.add('ck_airliner', [0, 0, -11], { parent: f, color: 0x7b2d8b });
-    b.add('x_tailcone', [0, 0.1, 11], { parent: f, color: 0x7b2d8b });
     const wp = [1.5, 0.6, -1.0];
     const w = b.pair('w_airliner', wp, { parent: f, color: 0xf2f2ee });
     for (const s of [0.18, 0.32, 0.46, 0.6, 0.74, 0.88]) b.underWing('e_turboprop', 'w_airliner', w[0], wp, s, 0.75 - s * 0.35, 1.2, { color: 0xf2b705 });
