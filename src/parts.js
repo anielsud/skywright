@@ -61,8 +61,8 @@ function loft(sections, c0, c1, thick, camber, n = 10, capStart = true, capEnd =
   const ring = [];
   for (let i = n; i >= 0; i--) ring.push([xs[i], sample(up, xs[i])]);
   for (let i = 1; i < n; i++) ring.push([xs[i], sample(lo, xs[i])]);
-  const R = ring.length, pos = [], idx = [];
-  for (const s of sections) for (const [cx, cy] of ring) pos.push(s.x, s.y + cy * s.chord, s.zLE + cx * s.chord);
+  const R = ring.length, pos = [], idx = [], uvs = [];
+  sections.forEach((s, k) => { for (const [cx, cy] of ring) { pos.push(s.x, s.y + cy * s.chord, s.zLE + cx * s.chord); uvs.push(cx * s.chord * 0.25, s.x * 0.25 + (cy > 0 ? 0 : 0.5)); } });
   for (let k = 0; k < sections.length - 1; k++) for (let i = 0; i < R; i++) {
     const a = k * R + i, b = k * R + ((i + 1) % R), c = (k + 1) * R + ((i + 1) % R), d = (k + 1) * R + i;
     idx.push(a, d, c, a, c, b);
@@ -70,13 +70,14 @@ function loft(sections, c0, c1, thick, camber, n = 10, capStart = true, capEnd =
   const addCap = (k, flip) => {
     const base = pos.length / 3, s = sections[k];
     let mx = 0, my = 0; for (const [cx, cy] of ring) { mx += cx; my += cy; } mx /= R; my /= R;
-    pos.push(s.x, s.y + my * s.chord, s.zLE + mx * s.chord);
+    pos.push(s.x, s.y + my * s.chord, s.zLE + mx * s.chord); uvs.push(0, 0);
     for (let i = 0; i < R; i++) { const a = k * R + i, b = k * R + ((i + 1) % R); flip ? idx.push(base, a, b) : idx.push(base, b, a); }
   };
   if (capStart) addCap(0, false);
   if (capEnd) addCap(sections.length - 1, true);
   let g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   g.setIndex(idx);
   g = g.toNonIndexed(); g.computeVertexNormals();
   return g;
@@ -472,7 +473,7 @@ def({ id: 'x_navlight', cat: 'extra', name: 'Strobe Light', desc: 'Blinking posi
     const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), M.light(0xffffff).clone()); bulb.position.y = 0.05; g.add(bulb); g.userData.bulb = bulb; return g; } });
 def({ id: 'x_landlight', cat: 'extra', name: 'Landing Light', desc: 'Bright spotlight for night landings.', mass: 4, hp: 80, color: 0xcccccc, light: 'landing',
   build: (c) => { const g = new THREE.Group(); const h = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.09, 0.15, 14), M.paint(c)); h.rotation.x = Math.PI / 2; g.add(h);
-    const lens = new THREE.Mesh(new THREE.CircleGeometry(0.11, 14), M.light(0xfff4dd).clone()); lens.position.z = -0.08; lens.rotation.y = Math.PI; g.add(lens); return g; } });
+    const lens = new THREE.Mesh(new THREE.CircleGeometry(0.11, 14), new THREE.MeshBasicMaterial({ color: 0xfff4dd })); lens.position.z = -0.08; lens.rotation.y = Math.PI; g.add(lens); return g; } });
 def({ id: 'x_strut', cat: 'extra', name: 'Strut', desc: 'Structural strut. Connect wings for biplanes.', mass: 12, hp: 400, color: 0x888888,
   build: (c) => { const g = new THREE.Group(); const s = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.6, 8), M.paint(c)); g.add(s); return g; } });
 def({ id: 'x_pylon', cat: 'extra', name: 'Pylon', desc: 'Vertical mounting pylon. Hang engines lower or higher.', mass: 40, hp: 600, color: C.gray,

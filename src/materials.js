@@ -23,11 +23,30 @@ export function grimeTexture() {
   return _grime;
 }
 
+// Panel seams and rivet lines (bump map) so bodies read as real aircraft skins.
+let _panel;
+export function panelTexture() {
+  if (_panel) return _panel;
+  const s = 512, c = document.createElement('canvas'); c.width = c.height = s;
+  const g = c.getContext('2d');
+  g.fillStyle = '#808080'; g.fillRect(0, 0, s, s);
+  g.strokeStyle = '#3a3a3a'; g.lineWidth = 2;
+  for (let x = 0; x <= s; x += 64) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, s); g.stroke(); }
+  for (let y = 0; y <= s; y += 128) { g.beginPath(); g.moveTo(0, y); g.lineTo(s, y); g.stroke(); }
+  for (let y = 32; y < s; y += 128) for (let x = 0; x < s; x += 64) { g.beginPath(); g.moveTo(x + 6, y + 40); g.lineTo(x + 58, y + 40); g.stroke(); }
+  g.fillStyle = '#5c5c5c';
+  for (let x = 0; x <= s; x += 64) for (let y = 4; y < s; y += 9) { g.beginPath(); g.arc(x + 5, y, 1.2, 0, 7); g.fill(); }
+  for (let y = 0; y <= s; y += 128) for (let x = 4; x < s; x += 9) { g.beginPath(); g.arc(x, y + 5, 1.2, 0, 7); g.fill(); }
+  _panel = new THREE.CanvasTexture(c); _panel.wrapS = _panel.wrapT = THREE.RepeatWrapping; _panel.repeat.set(1, 1); _panel.anisotropy = 8;
+  return _panel;
+}
+
 export const M = {
   paint(color, finish = 'gloss') {
     return cached('paint' + color + finish, () => new THREE.MeshPhysicalMaterial({
       color, metalness: finish === 'metal' ? 0.85 : 0.15, roughness: finish === 'matte' ? 0.7 : 0.38,
       clearcoat: finish === 'gloss' ? 0.8 : 0.1, clearcoatRoughness: 0.15, roughnessMap: grimeTexture(),
+      bumpMap: panelTexture(), bumpScale: 1.2,
     }));
   },
   aluminum: () => cached('alu', () => new THREE.MeshStandardMaterial({ color: 0xc9ccd1, metalness: 0.9, roughness: 0.32, roughnessMap: grimeTexture() })),
@@ -44,9 +63,9 @@ export const M = {
     clearcoat: 1, side: THREE.DoubleSide, depthWrite: false,
   })),
   propDisc: () => cached('pdisc', () => new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false })),
-  flame: () => cached('flame', () => new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: 0.0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })),
-  flameCore: () => cached('flameCore', () => new THREE.MeshBasicMaterial({ color: 0x8fb4ff, transparent: true, opacity: 0.0, blending: THREE.AdditiveBlending, depthWrite: false })),
-  light: (color) => cached('light' + color, () => new THREE.MeshBasicMaterial({ color })),
+  flame: () => cached('flame', () => new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 1.5, 0.5), transparent: true, opacity: 0.0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })),
+  flameCore: () => cached('flameCore', () => new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 2.2, 5), transparent: true, opacity: 0.0, blending: THREE.AdditiveBlending, depthWrite: false })),
+  light: (color) => cached('light' + color, () => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(4) })),
   burnt: () => cached('burnt', () => new THREE.MeshStandardMaterial({ color: 0x1c1a18, metalness: 0.4, roughness: 0.85 })),
   pilot: () => cached('pilot', () => new THREE.MeshStandardMaterial({ color: 0xeaeaea, metalness: 0.1, roughness: 0.5 })),
   visor: () => cached('visor', () => new THREE.MeshStandardMaterial({ color: 0x332200, metalness: 0.9, roughness: 0.1 })),
