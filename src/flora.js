@@ -28,7 +28,7 @@ const SPECIES = {
     const tiers = 6 + Math.floor(r() * 4);
     for (let k = 0; k < tiers; k++) {
       const t = k / tiers, y = H * (0.22 + t * 0.72), rad = (1 - t) * (H * 0.24) + 0.5;
-      const cone = new THREE.ConeGeometry(rad, H * 0.2, 10, 2, true);
+      const cone = new THREE.ConeGeometry(rad, H * 0.2, 10, 2, false);
       const p = cone.attributes.position;
       for (let i = 0; i < p.count; i++) { const yy = p.getY(i); if (yy < 0) { const a = Math.atan2(p.getZ(i), p.getX(i)); const star = 1 + 0.22 * Math.sin(a * 5 + k) + (r() - 0.5) * 0.25; p.setX(i, p.getX(i) * star); p.setZ(i, p.getZ(i) * star); p.setY(i, yy - r() * 0.8 - 0.3); } }
       cone.translate(0, y, 0);

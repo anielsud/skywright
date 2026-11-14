@@ -272,7 +272,7 @@ export function buildRoadMeshes(w, net) {
       P.forEach((p, i) => {
         const a = P[Math.max(0, i - 1)], b = P[Math.min(P.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize();
         const x = p.x - d.z * s, z = p.z + d.x * s, y = rl.bridge[i] ? p.y + 0.5 : Math.max(w.sampleGrid(x, z), p.y - 1.5) + 0.5;
-        pos.push(x - d.z * 0.05, y, z + d.x * 0.05, x + d.z * 0.05, y, z - d.x * 0.05);
+        pos.push(x + d.z * 0.05, y, z - d.x * 0.05, x - d.z * 0.05, y, z + d.x * 0.05); // left then right, like the road ribbons, so faces point up
         if (i > 0) { const o = (i - 1) * 2; idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2); }
       });
       const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
