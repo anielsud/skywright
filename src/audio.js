@@ -141,7 +141,7 @@ export class Audio {
     else v.pan.setPosition(p.x, p.y, p.z);
   }
 
-  // state: { engines:[{sound,rpm,spoolT,count,blades,ab,burning,pos}], listener:{pos,fwd,up}, airspeed, buffet, onGround, groundSpeed, surface, scrape, stall, cockpit, doppler, rain, amb:{loc,night,agl,overWater,day} }
+  // state: { engines:[{sound,rpm,spoolT,count,blades,ab,burning,pos}], listener:{pos,fwd,up}, airspeed, buffet, onGround, groundSpeed, surface, scrape, stall, cockpit, doppler, rain, amb:{loc,night,agl,waterNear,day} }
   update(s) {
     if (!this.ctx) return;
     const dop = s.doppler || 1;
@@ -214,7 +214,8 @@ export class Audio {
       this.crickets = this.gain(0); const c = this.osc('sine', 4300), am = this.gain(0), l1 = this.osc('square', 28), l1g = this.gain(0.5), l2 = this.osc('square', 0.7), l2g = this.gain(0.5);
       l1.connect(l1g); l1g.connect(am.gain); l2.connect(l2g); l2g.connect(am.gain); c.connect(am); am.connect(this.crickets); this.crickets.connect(this.amb);
     }
-    this.set(this.surf.gain, (a.overWater || a.loc === 'islands' ? 1 : 0.15) * low * 0.35, 0.5);
+    const near = a.waterNear || 0; // surf only where there is water nearby (sea surf on the islands, gentle lapping on lakes/rivers)
+    this.set(this.surf.gain, near * near * (a.loc === 'islands' ? 0.45 : 0.14), 0.5);
     this.set(this.crickets.gain, a.night ? low * 0.025 : 0, 1);
     // birdsong: occasional procedural chirps placed around the listener
     if (a.day && low > 0.2 && Math.random() < 0.03 * low) this.bird(a.loc === 'islands', lp);

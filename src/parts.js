@@ -6,7 +6,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 // ---------- geometry helpers ----------
 // Body of revolution around Z. profile: [[z, r], ...] nose (most negative z) first.
 // u = along length, v = around (0 = top, 0.25 = right side, 0.75 = left side).
-export function revolve(profile, { segs = 32, sy = 1, sx = 1, yOff = null } = {}) {
+export function revolve(profile, { segs = 32, sy = 1, sx = 1, yOff = null, cap = false } = {}) {
   const pos = [], uv = [], idx = [];
   const z0 = profile[0][0], z1 = profile[profile.length - 1][0];
   for (let j = 0; j < profile.length; j++) {
@@ -22,6 +22,14 @@ export function revolve(profile, { segs = 32, sy = 1, sx = 1, yOff = null } = {}
   for (let j = 0; j < profile.length - 1; j++) for (let i = 0; i < segs; i++) {
     const a = j * row + i, b = (j + 1) * row + i, c = (j + 1) * row + i + 1, d = j * row + i + 1;
     idx.push(a, b, c, a, c, d);
+  }
+  if (cap) { // close open ends with a flat disc (front faces -z, back faces +z)
+    for (const [j, front] of [[0, true], [profile.length - 1, false]]) {
+      if (profile[j][1] < 0.01) continue;
+      const centre = pos.length / 3, yo = yOff ? yOff(profile[j][0]) : 0;
+      pos.push(0, yo, profile[j][0]); uv.push(front ? 0 : 1, 0.5);
+      for (let i = 0; i < segs; i++) { const a = j * row + i, b = j * row + i + 1; front ? idx.push(centre, a, b) : idx.push(centre, b, a); }
+    }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -71,7 +79,7 @@ function loft(sections, c0, c1, thick, camber, n = 10, capStart = true, capEnd =
     const base = pos.length / 3, s = sections[k];
     let mx = 0, my = 0; for (const [cx, cy] of ring) { mx += cx; my += cy; } mx /= R; my /= R;
     pos.push(s.x, s.y + my * s.chord, s.zLE + mx * s.chord); uvs.push(0, 0);
-    for (let i = 0; i < R; i++) { const a = k * R + i, b = k * R + ((i + 1) % R); flip ? idx.push(base, a, b) : idx.push(base, b, a); }
+    for (let i = 0; i < R; i++) { const a = k * R + i, b = k * R + ((i + 1) % R); flip ? idx.push(base, b, a) : idx.push(base, a, b); } // root faces -x, tip faces +x
   };
   if (capStart) addCap(0, false);
   if (capEnd) addCap(sections.length - 1, true);
@@ -148,7 +156,7 @@ function fin(o, color) {
 // ---------- part builders ----------
 function fuselage(profile, { color, sy = 1, sx = 1, windows = 0, yOff, segs = 36 }) {
   const g = new THREE.Group();
-  const geo = revolve(smoothProfile(profile, 40), { sy, sx, yOff, segs });
+  const geo = revolve(smoothProfile(profile, 40), { sy, sx, yOff, segs, cap: true });
   let mat = M.paint(color);
   if (windows) { mat = mat.clone(); mat.map = windowTexture(1, windows); }
   g.add(new THREE.Mesh(geo, mat));
@@ -244,7 +252,7 @@ function jetEngine({ len, radius, color, fan = false, ab = false }) {
 
 function rocket({ len, radius, color }) {
   const g = new THREE.Group();
-  g.add(new THREE.Mesh(revolve(smoothProfile([[0, 0], [radius * 1.5, radius * 0.8], [radius * 3, radius], [len, radius]], 20).concat([[len + 0.001, radius * 0.4]]), { segs: 24 }), M.paint(color)));
+  g.add(new THREE.Mesh(revolve(smoothProfile([[0, 0], [radius * 1.5, radius * 0.8], [radius * 3, radius], [len, radius]], 20).concat([[len + 0.001, radius * 0.4]]), { segs: 24, cap: true }), M.paint(color)));
   const noz = new THREE.Mesh(revolve([[len, radius * 0.5], [len + radius * 0.9, radius * 0.8]], { segs: 20 }), M.darkMetal());
   g.add(noz);
   for (let i = 0; i < 4; i++) {
@@ -296,7 +304,7 @@ function gearLeg({ len, r, w = null, color = 0xdddddd, fairing = false, bogie = 
 
 function float_({ len, r, color }) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(revolve(smoothProfile([[-len / 2, 0.02], [-len / 2 + 0.6, r * 0.8], [0, r], [len / 2 - 0.5, r * 0.7], [len / 2, 0.05]], 30), { segs: 20, sy: 0.8, yOff: (z) => (z < -len / 2 + 0.8 ? (z + len / 2 - 0.8) * -0.2 : 0) }), M.paint(color));
+  const body = new THREE.Mesh(revolve(smoothProfile([[-len / 2, 0.02], [-len / 2 + 0.6, r * 0.8], [0, r], [len / 2 - 0.5, r * 0.7], [len / 2, 0.05]], 30), { segs: 20, sy: 0.8, cap: true, yOff: (z) => (z < -len / 2 + 0.8 ? (z + len / 2 - 0.8) * -0.2 : 0) }), M.paint(color));
   body.position.y = -1.0; g.add(body);
   for (const dz of [-len * 0.18, len * 0.18]) {
     const st = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.0, 8), M.steel()); st.position.set(0, -0.5, dz); g.add(st);
@@ -319,14 +327,14 @@ def({ id: 'fus_fighter', cat: 'fuselage', name: 'Fighter Body', desc: 'Area-rule
   build: (c) => {
     const g = fuselage([[-6.5, 0.0], [-5.6, 0.32], [-3.5, 0.7], [-1, 0.9], [2.5, 0.85], [5.2, 0.7], [6.0, 0.6]], { color: c, sy: 0.85, sx: 1.1 });
     for (const sx of [-1, 1]) { // intakes
-      const it = new THREE.Mesh(revolve([[-2.6, 0.3], [-2.4, 0.42], [1.5, 0.42], [3, 0.2]], { segs: 16, sy: 1.2 }), M.paint(c));
+      const it = new THREE.Mesh(revolve([[-2.6, 0.3], [-2.4, 0.42], [1.5, 0.42], [3, 0.2]], { segs: 16, sy: 1.2, cap: true }), M.paint(c));
       it.position.set(sx * 0.85, -0.15, 0); g.add(it);
-      const mouth = new THREE.Mesh(new THREE.CircleGeometry(0.32, 16), M.intake()); mouth.position.set(sx * 0.85, -0.15, -2.58); mouth.rotation.y = Math.PI; mouth.scale.y = 1.2; g.add(mouth);
+      const mouth = new THREE.Mesh(new THREE.CircleGeometry(0.32, 16), M.intake()); mouth.position.set(sx * 0.85, -0.15, -2.62); mouth.rotation.y = Math.PI; mouth.scale.y = 1.2; g.add(mouth);
     }
     return g;
   } });
 def({ id: 'fus_airliner', cat: 'fuselage', name: 'Airliner Tube', desc: 'A long pressurised cabin with 120 windows. Bring big wings.', mass: 14000, hp: 9000, color: C.white,
-  build: (c) => fuselage([[-11, 1.9], [-6, 1.95], [0, 1.95], [7, 1.9], [11, 1.75]], { color: c, windows: 46, segs: 40 }) });
+  build: (c) => fuselage([[-11, 1.9], [-6, 1.95], [0, 1.95], [6, 1.9], [9, 1.55], [11.5, 0.75], [12.6, 0.25]], { color: c, windows: 46, segs: 40, yOff: (z) => (z > 6 ? (z - 6) ** 2 * 0.025 : 0) }) });
 def({ id: 'fus_cargo', cat: 'fuselage', name: 'Cargo Hauler', desc: 'Fat, strong freighter body.', mass: 9000, hp: 9000, color: C.green,
   build: (c) => fuselage([[-7, 2.3], [-3, 2.45], [3, 2.45], [6, 2.0], [9, 0.8], [9.6, 0.4]], { color: c, sy: 1.0, yOff: (z) => (z > 4 ? (z - 4) * 0.32 : 0), segs: 36 }) });
 def({ id: 'fus_pod', cat: 'fuselage', name: 'Mini Pod', desc: 'Short stubby pod. Great for twin-boom or outrigger builds.', mass: 120, hp: 500, color: C.yellow,
@@ -361,7 +369,7 @@ def({ id: 'ck_fighter', cat: 'cockpit', name: 'Fighter Canopy', desc: 'Gold-tint
 def({ id: 'ck_airliner', cat: 'cockpit', name: 'Airliner Nose', desc: 'Flight deck with wrap-around windscreen. Bolts to the front of a tube.', mass: 1600, hp: 2500, color: C.white, eye: [0, 0.9, -2.8],
   build: (c) => {
     const g = new THREE.Group();
-    g.add(new THREE.Mesh(revolve(smoothProfile([[-4.6, 0], [-4.4, 0.7], [-3.4, 1.4], [-1.8, 1.82], [0, 1.9]], 24), { segs: 40, yOff: (z) => (z + 0) * -0.04 }), M.paint(c)));
+    g.add(new THREE.Mesh(revolve(smoothProfile([[-4.6, 0], [-4.4, 0.7], [-3.4, 1.4], [-1.8, 1.82], [0, 1.9]], 24), { segs: 40, yOff: (z) => (z + 0) * -0.04, cap: true }), M.paint(c)));
     const ws = new THREE.Mesh(new THREE.SphereGeometry(1.86, 24, 8, Math.PI * 0.3, Math.PI * 0.4, Math.PI * 0.3, Math.PI * 0.12), M.black());
     ws.position.set(0, 0.0, -1.7); ws.scale.set(1, 1, 1.25); ws.rotation.y = Math.PI / 2 + Math.PI; g.add(ws);
     const radome = new THREE.Mesh(new THREE.SphereGeometry(0.72, 16, 12), M.paint(0x30343a)); radome.position.z = -4.25; radome.scale.z = 0.5; g.add(radome);
