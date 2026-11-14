@@ -492,7 +492,7 @@ function stepFlight(dtReal) {
   }
   // wingtip contrails / vortices when pulling hard in humid air
   if (!ac.dead && Math.abs(ac.g) > 4 && ac.airspeed > 60) for (const p of ac.parts) if (p.alive && p.d.wing && p.d.cat === 'wing') { const tip = p.surfaces.at(-1); if (tip && Math.random() < 0.5) effects.puff(ac.worldPoint(tip.pos), ac.v.clone().multiplyScalar(0.8), { color: [1, 1, 1], s0: 0.3, s1: 1.5, life: 0.5, a: 0.4, drag: 2 }); }
-  traffic.update(dt, effects);
+  traffic.update(dt, effects, flightCam.position);
   const wind = world.windBase.clone().add(world.gust);
   effects.update(dt, wind);
   // camera
