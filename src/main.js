@@ -8,6 +8,7 @@ import { Traffic, buildStatic, mergeByMaterial } from './traffic.js';
 import { Effects } from './effects.js';
 import { SonicFX } from './sonic.js';
 import { Audio, MIX_DEFAULTS, OLD_MIX_DEFAULTS } from './audio.js';
+import { WorldSound } from './worldsound.js';
 import { Callouts } from './callouts.js';
 import { Controls } from './controls.js';
 import { HUD } from './hud.js';
@@ -537,6 +538,7 @@ function buildFlight(cfg) {
   sonic.onMilestone = (n) => { hud.center(`MACH ${n}!`, 1800); audio.play('ring'); };
   F = { scene, world, ac, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
   F.callouts = new Callouts(audio, ac);
+  F.worldSound = new WorldSound(audio, world, traffic);
   net.attach(F);
   rig.init = false; rig.set('chase'); rig.look.dist = 1;
   hud.setUnits(settings.units); hud.show(true);
@@ -560,6 +562,7 @@ function endFlight(restarting = false) {
   if (updatePending) { reloadFresh(); return; }
   const f = F; F = null;
   f.world.dispose(); f.effects.dispose(); f.sonic.dispose(); post.shimmer(null); f.traffic.dispose(); f.mission?.dispose?.();
+  f.worldSound?.dispose();
   f.scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
   renderer.renderLists.dispose();
   audio.silence();
@@ -782,6 +785,7 @@ function stepFlight(dtReal) {
     listener: { pos: flightCam.position, fwd: camFwd, up: camUp },
     amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) },
     music: flightMusic(f, ac, world) });
+  f.worldSound?.update(f, flightCam.position, dtReal, net.players?.values());
   f.callouts?.update(world, dtReal);
   hud.update(ac, world, f.mission, flightCam, net.markers());
   if (f.debug) $('#debug').textContent = `α ${(ac.alpha * 57.3).toFixed(1)}° g ${ac.g.toFixed(2)} V ${ac.airspeed?.toFixed(1)} m=${Math.round(ac.mass)} com=${ac.com.toArray().map((v) => v.toFixed(2))} w=${ac.w.toArray().map((v) => v.toFixed(2))}`;

@@ -338,5 +338,48 @@
   "start": 2.5,
   "end": 10.5,
   "loop": true
+ },
+ "veh_road": {
+  "id": 785698,
+  "start": 0.4,
+  "end": 6.0,
+  "loop": true
+ },
+ "train_rumble": {
+  "id": 831430,
+  "start": 15,
+  "end": 25,
+  "loop": true
+ },
+ "train_bell": {
+  "id": 843361,
+  "start": 2,
+  "end": 8,
+  "loop": true
+ },
+ "train_horn": {
+  "id": 799291,
+  "start": 0,
+  "end": 3.0
+ },
+ "bird_flock": {
+  "id": 616623,
+  "start": 0.4,
+  "end": 7.3
+ },
+ "bird_crow": {
+  "id": 537988,
+  "start": 0,
+  "end": 4.6
+ },
+ "bird_gull": {
+  "id": 479595,
+  "start": 1.9,
+  "end": 3.5
+ },
+ "bird_strike": {
+  "id": 235451,
+  "start": 0,
+  "end": 0.95
  }
 }

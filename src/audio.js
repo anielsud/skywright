@@ -10,7 +10,7 @@ const HEADROOM = 0.25;
 // Recorded engine layers (assets/sfx, built by tools/sfx/process.py). Each engine blends an idle and a high-power loop
 // by RPM/spool and pitches them with it; 'cabin' layers replace the outside sound in the cockpit view.
 // rate: [playbackRate at n=0, at n=1] where n is normalised RPM (props) or spool (turbines).
-const SAMPLE_ENGINES = {
+export const SAMPLE_ENGINES = {
   piston: { idle: ['eng_piston_idle', 0.8, 1.25], high: ['eng_piston_high', 0.82, 1.08], cabin: ['eng_piston_cabin', 0.85, 1.1], gain: 1 },
   radial: { idle: ['eng_radial_idle', 0.8, 1.25], high: ['eng_radial_high', 0.75, 1.0], gain: 1 },
   turboprop: { idle: ['eng_turboprop_ext', 0.78, 0.95], high: ['eng_turboprop_ext', 0.92, 1.12], cabinIdle: ['eng_turboprop_idle', 0.9, 1.05], cabin: ['eng_turboprop_high', 0.9, 1.05], gain: 1 },
@@ -18,15 +18,15 @@ const SAMPLE_ENGINES = {
   fan: { idle: ['eng_fan_idle', 0.85, 1.2], high: ['eng_jet_high', 0.68, 0.88], cabin: ['eng_fan_cabin', 0.9, 1.1], gain: 1 },
   rocket: { high: ['eng_rocket', 0.95, 1.05], gain: 1 },
 };
-const SAMPLE_LEVEL = { piston: 3.6, radial: 2.7, turboprop: 3.1, jet: 2.1, fan: 2.2, rocket: 3.0 }; // full power ≈ -24 dB props, -28 jets (weighted, tools/sfx measurements)
+export const SAMPLE_LEVEL = { piston: 3.6, radial: 2.7, turboprop: 3.1, jet: 2.1, fan: 2.2, rocket: 3.0 }; // full power ≈ -24 dB props, -28 jets (weighted, tools/sfx measurements)
 // Recorded world/foley levels (linear), balanced with tools/sfx-style weighted measurements.
 const MUSIC = { hangar: 0.6, cruise: 0.7, mission: 1.3 }; // weighted avg at music 100%: hangar ≈-35, cruise ≈-38 (under the engine), mission ≈-33 dB
-const SHOT = { voice: 1.8, crash: 0.4, debris: 0.2, glass: 0.35, explosion: 0.4, boom: 0.4, chirp: 0.38, splash: 0.32, gear: 0.32, thunder: 0.3 }; // peaks: crash ≈-22, explosion ≈-18, chirp ≈-28 dB weighted
+const SHOT = { voice: 1.8, crash: 0.4, debris: 0.2, glass: 0.35, explosion: 0.4, boom: 0.4, chirp: 0.38, splash: 0.32, gear: 0.32, thunder: 0.3, strike: 0.6 }; // peaks: crash ≈-22, explosion ≈-18, chirp ≈-28 dB weighted
 const REC = { windExt: 2.66, windCk: 4.6, roll: 2, rain: 2, day: 0.73, night: 0.52, sea: 1.38, lake: 1.46 }; // wind@120 m/s ≈-32, roll ≈-30, rain ≈-30, day bed ≈-40 dB weighted
 // workshop foley (hangar building) levels, and the synth each falls back to while clips load
 const WS = { place: 0.48, clunk: 0.37, ratchet: 0.29, tick: 0.25, spray: 0.72, select: 0.25, toolbox: 0.35, button: 0.22, room: 0.23 }; // peaks (weighted, 100%): place ≈-29, remove ≈-28, paint/rotate/flip ≈-31, select/undo ≈-32, ticks ≈-36; room tone ≈-47 avg
 const WS_FALLBACK = { place: 'clank', remove: 'clank', paint: 'pop', select: 'click', rotate: 'click', move: 'click', flip: 'click', undo: 'click', redo: 'click', load: 'clank', save: 'clank' };
-const RPM_RANGE ={ piston: [700, 2700], radial: [600, 2600], turboprop: [1000, 2000] };
+export const RPM_RANGE = { piston: [700, 2700], radial: [600, 2600], turboprop: [1000, 2000] };
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }; // -12 dB overall: a game shouldn't hit the speaker at full scale
 
 export class Audio {
@@ -460,7 +460,9 @@ export class Audio {
         for (let i = 0; i < 4; i++) this.burst('brown', 'lowpass', 500, 0.5, (0.9 + Math.random() * 0.6) * (0.5 + P), 3 + Math.random() * 4, this.fx, i * (0.3 + Math.random() * 0.8), 60);
         break;
       }
-      case 'bird': this.tone('sine', 2400, 3800, 0.08, 0.12, 0, d); this.tone('sine', 2800, 4200, 0.06, 0.1, 0.15, d); this.burst('white', 'bandpass', 600, 2, 0.6, 0.3, d); break;
+      case 'bird': // bird strike: a thwack, then the rest of the flock scattering
+        if (this.shot('bird_strike', { gain: SHOT.strike, rate: 0.9 + Math.random() * 0.2, dest: d })) { this.shot('bird_flock', { gain: SHOT.strike * 0.35, rate: 1.05, dest: d, delay: 0.05 }); break; }
+        this.tone('sine', 2400, 3800, 0.08, 0.12, 0, d); this.tone('sine', 2800, 4200, 0.06, 0.1, 0.15, d); this.burst('white', 'bandpass', 600, 2, 0.6, 0.3, d); break;
       case 'click': this.tone('triangle', 1700, 1100, 0.07, 0.05); this.burst('white', 'highpass', 4000, 1, 0.05, 0.02); break;
       case 'clank': this.tone('triangle', 620 + Math.random() * 80, 600, 0.12, 0.6); this.tone('sine', 1500, 1450, 0.05, 0.7); this.tone('sine', 2310, 2300, 0.025, 0.5); this.burst('white', 'bandpass', 3000, 2, 0.12, 0.05); this.tone('sine', 90, 60, 0.25, 0.15); break;
       case 'pop': this.tone('sine', 400, 900, 0.1, 0.08); break;

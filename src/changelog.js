@@ -2,6 +2,11 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.24.0', items: [
+    'The world makes noise now! Cars and trucks hum past on the roads, the train rumbles along and honks its horn before level crossings (listen for the crossing bells), and the other planes and the helicopter by the airport sound like real engines.',
+    'Fly close to a flock of birds and hear their wings flap and their calls. Hit one and you’ll hear a THWACK!',
+    'Flying with friends? You can hear their planes roar past you.',
+  ] },
   { v: '1.23.0', items: [
     'Bigger, busier towns: chalets with balconies in the mountains, colourful cottages and hotels with pools on the islands, and adobe houses, motels and water towers in the desert. Farms have barns, silos and fences.',
     'The airport has real hangars, a terminal and a control tower, and at night lots of windows light up.',
