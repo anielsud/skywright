@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from '../vendor/addons/OrbitControls.js';
 import { RoomEnvironment } from '../vendor/addons/RoomEnvironment.js';
 import { PARTS, CATEGORIES, PAINTS, partInfo } from './parts.js';
-import { analyze, partMatrix, mirroredOf, newPart, subtree, removeParts, cloneDesign } from './design.js';
+import { analyze, partMatrix, partScale, mirroredOf, newPart, subtree, removeParts, cloneDesign } from './design.js';
 import { makeNoise } from './noise.js';
 
 const ghostMat = new THREE.MeshBasicMaterial({ color: 0x4fc3ff, transparent: true, opacity: 0.45, depthWrite: false });
@@ -111,6 +111,27 @@ export class Hangar {
     this.audio.play('click');
   }
   resetRotation() { this.edit((p) => { p.quat = [0, 0, 0, 1]; }); }
+  // Body sizing. axis 'len' scales local z, 'dia' local x+y. Pass undo=false for follow-up steps of one slider drag.
+  resizePart(axis, v, undo = true) {
+    if (this.sel < 0) return;
+    if (undo) this.pushUndo();
+    const j = this.symmetry ? this.partner(this.sel) : -1;
+    for (const k of j >= 0 ? [this.sel, j] : [this.sel]) this.scalePart(k, axis, v);
+    this.rebuild();
+  }
+  scalePart(i, axis, v) {
+    const parts = this.design.parts, p = parts[i];
+    const oldM = partMatrix(p), s = [...partScale(p)];
+    if (axis === 'len') s[2] = v; else s[0] = s[1] = v;
+    if (s.every((x) => Math.abs(x - 1) < 1e-6)) delete p.scale; else p.scale = s;
+    // attached parts ride the surface: map each direct child's origin through old->new body scale, carry its subtree along rigidly
+    const toNew = partMatrix(p).multiply(oldM.invert()), a = new THREE.Vector3(), b = new THREE.Vector3();
+    parts.forEach((c, ci) => {
+      if (c.parent !== i || ci === i) return;
+      a.fromArray(c.pos); b.copy(a).applyMatrix4(toNew).sub(a);
+      for (const k of subtree(parts, ci)) if (k !== i) parts[k].pos = parts[k].pos.map((x, n) => +(x + b.getComponent(n)).toFixed(4));
+    });
+  }
   flip() { this.edit((p) => { p.mirror = !p.mirror; }); }
   paint(color) { this.edit((p) => { p.color = color; }); this.audio.play('pop'); }
   deleteSel() {

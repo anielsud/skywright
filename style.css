@@ -60,6 +60,9 @@ body.hide-right .inspector { transform: translateX(310px); }
 .swatches button { aspect-ratio: 1; padding: 0; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .2); }
 .swatches button.on { border-color: #fff; box-shadow: 0 0 0 2px var(--accent2); }
 .wide { width: 100%; margin-top: 12px; }
+.sizer .lbl { display: flex; justify-content: space-between; align-items: baseline; }
+.sizer .lbl b { font-size: 14px; color: var(--accent); letter-spacing: 0; }
+.sizer input[type=range] { height: 36px; touch-action: none; }
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .stat-grid div { background: rgba(255, 255, 255, .04); border-radius: 8px; padding: 6px 8px; }
 .stat-grid label { display: block; font-size: 10.5px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }

@@ -1,7 +1,7 @@
 // Runtime aircraft: rigid-body flight model built from parts, ground contact, damage & break-up.
 import * as THREE from 'three';
 import { PARTS, partInfo } from './parts.js';
-import { partMatrix, subtree } from './design.js';
+import { partMatrix, partScale, partMass, partHp, subtree } from './design.js';
 import { M } from './materials.js';
 import { clamp, lerp } from './noise.js';
 
@@ -111,7 +111,9 @@ export class Aircraft {
       partMatrix(p, m); m.decompose(obj.position, obj.quaternion, obj.scale);
       obj.traverse((o) => { if (o.isMesh) { o.castShadow = !o.material.transparent; o.receiveShadow = !o.material.transparent; } });
       this.root.add(obj);
-      const part = { i, p, d, obj, m: m.clone(), alive: true, hp: d.hp, dmg: 0, mass: d.mass, info, scorched: false,
+      // m may carry scale (resized bodies): keep a pure rotation and the scaled bbox size for inertia/drag
+      const rot = new THREE.Matrix4().makeRotationFromQuaternion(obj.quaternion), size = info.size.clone().multiply(new THREE.Vector3(...partScale(p)));
+      const part = { i, p, d, obj, m: m.clone(), rot, size, alive: true, hp: partHp(p), dmg: 0, mass: partMass(p), info, scorched: false,
         center: info.centroid.clone().applyMatrix4(m), surfaces: [], engine: null, gear: null, hull: [], dragA: null, name: d.name };
       const ctrlObjs = obj.userData.controls || (obj.children[0]?.userData?.controls) || [];
       for (const s of info.surfaces) {
@@ -151,12 +153,12 @@ export class Aircraft {
       // hull points (excluding gear: wheels handle that)
       if (!d.gear) for (const h of info.hull) part.hull.push(h.clone().applyMatrix4(m));
       // body drag areas
-      const sz = info.size;
+      const sz = size;
       if (!d.wing) {
         const cd = d.cat === 'gear' ? [0.6, 0.6, 0.7] : d.cat === 'fuselage' || d.cat === 'cockpit' ? [0.5, 0.6, 0.06] : [0.5, 0.5, 0.18];
         const ax = sz.y * sz.z * 0.75, ay = sz.x * sz.z * 0.75, az = sz.x * sz.y * 0.785;
         // rotate area box into body frame roughly (use abs of rotation matrix)
-        const e = m.elements;
+        const e = rot.elements;
         const A = [ax * cd[0], ay * cd[1], az * cd[2]];
         part.dragA = new THREE.Vector3(
           Math.abs(e[0]) * A[0] + Math.abs(e[4]) * A[1] + Math.abs(e[8]) * A[2],
@@ -186,10 +188,10 @@ export class Aircraft {
     const I = [0, 0, 0, 0, 0, 0, 0, 0, 0];
     for (const p of this.parts) {
       if (!p.alive) continue;
-      const s = p.info.size, mm = p.mass;
+      const s = p.size, mm = p.mass;
       // local box inertia, rotated approximately with abs rotation
       const ix = (mm / 12) * (s.y * s.y + s.z * s.z), iy = (mm / 12) * (s.x * s.x + s.z * s.z), iz = (mm / 12) * (s.x * s.x + s.y * s.y);
-      const e = p.m.elements;
+      const e = p.rot.elements;
       const R = [e[0], e[4], e[8], e[1], e[5], e[9], e[2], e[6], e[10]];
       const loc = [ix, iy, iz];
       for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) { let sum = 0; for (let k = 0; k < 3; k++) sum += R[a * 3 + k] * loc[k] * R[b * 3 + k]; I[a * 3 + b] += sum; }
