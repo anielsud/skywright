@@ -39,7 +39,7 @@ export class Controls {
         <div class="t-throttle"><div class="t-thr-fill"></div><div class="t-thr-knob"><span>THR</span></div><div class="t-thr-label">0%</div></div>
         <div class="t-rudder"><div class="t-rud-knob"></div><span class="t-rud-label">RUDDER</span></div>
       </div>
-      <div class="t-stick"><div class="t-stick-ring"></div><div class="t-stick-knob"></div></div>
+      <div class="t-stick-zone"><div class="t-stick"><div class="t-stick-ring"></div><div class="t-stick-knob"></div></div></div>
       <div class="t-buttons">
         <button data-act="brake" class="t-btn hold">BRAKE</button>
         <button data-act="gear" class="t-btn">GEAR</button>
@@ -53,17 +53,22 @@ export class Controls {
     const rud = el.querySelector('.t-rudder'), rk = el.querySelector('.t-rud-knob');
     const rudMove = (e) => { const r = rud.getBoundingClientRect(); this.touch.yaw = clamp(((e.clientX - r.left) / r.width) * 2 - 1, -1, 1); rk.style.transform = `translateX(${this.touch.yaw * (r.width / 2 - 24)}px)`; };
     this.drag(rud, rudMove, rudMove, () => { this.touch.yaw = 0; rk.style.transform = ''; });
-    const st = el.querySelector('.t-stick'), knob = el.querySelector('.t-stick-knob');
+    // Floating stick: touch anywhere in the big right-hand zone and the stick centres under the thumb.
+    const zone = el.querySelector('.t-stick-zone'), st = el.querySelector('.t-stick'), knob = el.querySelector('.t-stick-knob');
     let origin = null;
     const stMove = (e) => {
-      const r = st.getBoundingClientRect(); const R = r.width / 2;
-      if (!origin) origin = { x: r.left + R, y: r.top + R };
+      const R = st.offsetWidth / 2;
       let dx = (e.clientX - origin.x) / (R * 0.8), dy = (e.clientY - origin.y) / (R * 0.8);
       const m = Math.hypot(dx, dy); if (m > 1) { dx /= m; dy /= m; }
       this.touch.roll = dx; this.touch.pitch = dy; this.touch.active = true;
       knob.style.transform = `translate(${dx * R * 0.8}px, ${dy * R * 0.8}px)`;
     };
-    this.drag(st, (e) => { origin = null; stMove(e); }, stMove, () => { this.touch.roll = this.touch.pitch = 0; this.touch.active = false; knob.style.transform = ''; origin = null; });
+    this.drag(zone, (e) => {
+      const z = zone.getBoundingClientRect(), R = st.offsetWidth / 2;
+      origin = { x: e.clientX, y: e.clientY };
+      st.style.left = `${e.clientX - z.left - R}px`; st.style.top = `${e.clientY - z.top - R}px`; st.style.right = st.style.bottom = 'auto';
+      st.classList.add('live'); stMove(e);
+    }, stMove, () => { this.touch.roll = this.touch.pitch = 0; this.touch.active = false; knob.style.transform = ''; origin = null; st.style.left = st.style.top = st.style.right = st.style.bottom = ''; st.classList.remove('live'); });
     el.querySelectorAll('.t-btn').forEach((b) => {
       const act = b.dataset.act;
       if (act === 'brake') {
