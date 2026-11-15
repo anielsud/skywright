@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.56.0', items: [
+    'A real aircraft workshop: steel roof trusses, skylights, a giant sliding door open to the runway, workbenches, an engine on a stand, shelves full of parts and a half-built plane in the corner. The floor is so shiny it reflects your plane!',
+  ] },
   { v: '1.55.0', items: [
     'NEW PLACE: Bora Bora! Coral Islands is now the real Bora Bora in French Polynesia, from satellite photos: take off from the airport on its little islet, fly over the turquoise lagoon and coral reef, around Mount Otemanu, and past hundreds of overwater bungalows.',
     "Taha'a, Raiatea and Maupiti are out on the horizon too.",
