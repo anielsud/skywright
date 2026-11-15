@@ -25,6 +25,7 @@ export const ROOMS = 4; // sessions per location
 export const MAX_PLAYERS = 6;
 const SEND_DT = 1 / 15;
 const TIMEOUT = 15000; // ms without hearing from someone before we give up on them
+const LOAD_TIMEOUT = 45000; // ...or one who just joined and is still loading
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const cleanName = (s) => (String(s || '').replace(/\s+/g, ' ').trim().slice(0, 16) || 'Pilot');
 const roomId = (loc, n) => `${PREFIX}${loc}-${n}`;
@@ -344,11 +345,15 @@ export class Net {
   }
 
   heartbeat() {
+    const now = performance.now(), frozen = now - (this.beat || now) > 3000; this.beat = now;
     if (!this.role) return;
-    const now = performance.now();
+    // Our page was frozen (building a world takes seconds, longer on a busy tablet): messages that arrived meanwhile
+    // are still queued, so silence says nothing about the others. Start their clocks again instead of dropping them.
+    if (frozen) { this.hostSeen = now; for (const p of this.players.values()) p.seen = now; }
     this.send({ type: 'ping' });
     if (this.role === 'host') {
-      for (const p of [...this.players.values()]) if (now - p.seen > TIMEOUT) { p.conn?.close(); this.removePlayer(p.id, 'timeout'); this.broadcast({ type: 'left', id: p.id }); }
+      // a pilot who hasn't sent a position yet is probably still building their world: give them longer
+      for (const p of [...this.players.values()]) if (now - p.seen > (p.buf.snaps.length ? TIMEOUT : LOAD_TIMEOUT)) { p.conn?.close(); this.removePlayer(p.id, 'timeout'); this.broadcast({ type: 'left', id: p.id }); }
     } else if (now - this.hostSeen > TIMEOUT) this.hostLost();
   }
 
