@@ -209,22 +209,28 @@ const REAL_SAT_GLSL = /* glsl */`
   }`;
 
 // ---------- water ----------
+// Two materials share one set of uniforms (o.U): the big plane (open water, and the core's fully-wet grid cells) and,
+// with o.shore, the core's shore mesh (World.buildShoreWater), whose edge is the shoreline itself.
 export function waterMaterial(o) {
-  const U = {
-    depthTex: { value: o.depthTex }, outerTex: { value: null }, outerOrigin: { value: new THREE.Vector2(0, 0) }, outerSize: { value: 1 }, nrm: { value: o.normal }, tHalf: { value: o.half }, tSize: { value: o.size }, waterLevel: { value: o.level },
+  const U = o.U || {
+    // ground heights for the shore, shallows and foam: the fine baked grid (World.heightTex), relative to the water level
+    fineTex: { value: o.fine.tex }, fineGrid: { value: o.fine.grid },
+    outerTex: { value: null }, outerOrigin: { value: new THREE.Vector2(0, 0) }, outerSize: { value: 1 }, nrm: { value: o.normal }, waterLevel: { value: o.level },
     sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color(1, 1, 1) }, skyZen: { value: new THREE.Color(0.3, 0.5, 0.8) },
     skyHor: { value: new THREE.Color(0.7, 0.8, 0.9) }, amb: { value: 1 }, deepCol: { value: new THREE.Color(o.deep) }, shallowCol: { value: new THREE.Color(o.shallow) },
     sandCol: { value: new THREE.Color(o.sand) }, fogColor: { value: new THREE.Color(0, 0, 0) }, foamAmt: { value: o.foam ?? 1 }, rough: { value: 0.35 }, reef: { value: o.reef ?? 0 },
     // tile-grid cells known to be dry land all over (farfield.js): no water drawn there at all
     farMask: { value: null }, farMaskOrigin: { value: new THREE.Vector2() }, farMaskSize: { value: 0 }, farCell: { value: 1 },
   };
+  if (!o.U) Object.assign(U, FOG);
   const mat = new THREE.ShaderMaterial({
-    uniforms: Object.assign(U, FOG),
+    uniforms: U, defines: o.shore ? { WATER_SHORE: '' } : {},
     vertexShader: /* glsl */`
       varying vec3 vW;
       void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
     fragmentShader: /* glsl */`
-      uniform sampler2D depthTex; uniform sampler2D outerTex; uniform vec2 outerOrigin; uniform float outerSize; uniform sampler2D nrm; uniform float tHalf; uniform float tSize; uniform float waterLevel;
+      uniform sampler2D fineTex; uniform vec4 fineGrid; uniform mat4 projectionMatrix;
+      uniform sampler2D outerTex; uniform vec2 outerOrigin; uniform float outerSize; uniform sampler2D nrm; uniform float waterLevel;
       uniform vec3 sunDir; uniform vec3 sunCol; uniform vec3 skyZen; uniform vec3 skyHor; uniform float amb;
       uniform vec3 deepCol; uniform vec3 shallowCol; uniform vec3 sandCol; uniform vec3 fogColor; uniform float foamAmt; uniform float rough; uniform float uTime; uniform float reef;
       float wh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -233,20 +239,39 @@ export function waterMaterial(o) {
       varying vec3 vW;
       ${FOG_GLSL}
       vec3 nmap(vec2 p) { return texture2D(nrm, p).xzy * 2.0 - 1.0; }
+      // Ground height relative to the water on the core's fine grid, interpolated over the triangles the ground is
+      // drawn with (PlaneGeometry's split (a,b,d) + (b,c,d), as World.triAt). wet: is the whole grid cell under water?
+      // grid: world x,z of vertex (0,0), 1/spacing, cells.
+      float fineH(vec2 p, out bool wet) {
+        vec2 f = clamp((p - fineGrid.xy) * fineGrid.z, vec2(0.0), vec2(fineGrid.w - 0.001));
+        ivec2 i = ivec2(floor(f)); vec2 u = f - vec2(i);
+        float a = texelFetch(fineTex, i, 0).r, b = texelFetch(fineTex, i + ivec2(0, 1), 0).r, c = texelFetch(fineTex, i + ivec2(1, 1), 0).r, d = texelFetch(fineTex, i + ivec2(1, 0), 0).r;
+        wet = max(max(a, b), max(c, d)) < 0.0;
+        return u.x + u.y <= 1.0 ? a + (d - a) * u.x + (b - a) * u.y : c + (b - c) * (1.0 - u.x) + (d - c) * (1.0 - u.y);
+      }
       void main() {
-        vec2 tuv = (vW.xz + tHalf) / tSize;
-        float th = -80.0;
-        if (tuv.x >= 0.0 && tuv.y >= 0.0 && tuv.x <= 1.0 && tuv.y <= 1.0) th = texture2D(depthTex, tuv).r;
+        float th = -80.0; // ground under this point, relative to the water level
+        bool wet = true;
+        vec2 cf = (vW.xz - fineGrid.xy) * fineGrid.z;
+        bool core = cf.x >= 0.0 && cf.y >= 0.0 && cf.x <= fineGrid.w && cf.y <= fineGrid.w;
+        if (core) th = fineH(vW.xz, wet);
+        #ifdef WATER_SHORE
+        th = min(th, 0.0); // the mesh is the water: right at its edge the ground meets it
+        #else
+        // In the core the plane only draws grid cells that are under water all over; the shore mesh draws the rest
+        // (and overlaps a ring of wet cells, so there is never a gap between them). Outside, the streamed tiles' heights.
+        if (core) { if (!wet) discard; }
         else if (outerSize > 1.0) { vec2 ouv = (vW.xz - outerOrigin) / outerSize; if (ouv.x >= 0.0 && ouv.y >= 0.0 && ouv.x <= 1.0 && ouv.y <= 1.0) th = texture2D(outerTex, ouv).r; }
-        // dry land: leave it to the terrain. Deciding here (not by depth test against nearly-level beaches,
-        // which flickers at a distance) keeps the shoreline stable.
-        if (th > waterLevel + 0.1) discard;
+        if (th > 0.02) discard;
+        #endif
         // beyond the depth maps: tile-grid cells known to be dry land all over (farfield.js)
+        #ifndef WATER_SHORE
         if (farMaskSize > 0.0) {
           vec2 muv = (floor(vW.xz / farCell) - farMaskOrigin + 0.5) / farMaskSize;
           if (muv.x > 0.0 && muv.y > 0.0 && muv.x < 1.0 && muv.y < 1.0) { float m = floor(texture2D(farMask, muv).r * 3.0 + 0.5); if (mod(m, 2.0) > 0.5) discard; }
         }
-        float depth = max(0.0, waterLevel - th);
+        #endif
+        float depth = max(0.0, -th);
         float dist = length(cameraPosition - vW);
         vec2 p = vW.xz;
         vec3 n = nmap(p / 61.0 + vec2(uTime * 0.011, uTime * 0.007)) + nmap(p / 23.0 - vec2(uTime * 0.016, -uTime * 0.009)) * 0.7 + nmap(p / 260.0 + uTime * 0.002) * 0.8;
@@ -280,11 +305,22 @@ export function waterMaterial(o) {
         col = mix(col, vec3(0.9, 0.93, 0.95) * lightAmt, clamp(foam, 0.0, 1.0) * 0.85);
         col = applyHeightFog(col, vW, fogColor);
         gl_FragColor = vec4(col, 1.0);
+        // Where it IS water, it wins the depth test against ground less than lift metres above the water. Beyond the
+        // detail patch the ground is the coarse ~50 m mesh, whose nearly-level shore triangles stick out over (or sink
+        // under) the fine-grid shore by up to a metre or so: seen at a glancing angle they poked through the shallows
+        // as flat sheets and flickered against it. The depth written is that of the point on this view ray lift metres
+        // above the water: a vertical tolerance, so it works at any angle (a depth offset along the ray, or
+        // polygonOffset, is worth nothing at a glancing angle). It grows with distance, as the ground's error does, and
+        // stays a small fraction of the camera's height, so from just above the water nothing in front is covered.
+        {
+          vec3 toCam = cameraPosition - vW;
+          float lift = min(clamp(dist * 0.00025, 0.02, 1.2), max(toCam.y, 0.0) * 0.1);
+          vec4 cp = projectionMatrix * viewMatrix * vec4(vW + toCam * (lift / max(toCam.y, 0.01)), 1.0);
+          gl_FragDepth = clamp(cp.z / cp.w * 0.5 + 0.5, 0.0, 1.0);
+        }
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
-    // where it IS water, win the depth test against the nearly-level seabed just below it (no shimmering shallows)
-    polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: -2,
   });
   mat.userData.U = U;
   return mat;

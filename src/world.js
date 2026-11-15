@@ -93,6 +93,7 @@ export const WEATHER = {
   fog: { name: 'Fog', clouds: 0.1, cover: 0, fog: 0.0007, wind: 1, turb: 0.05, rain: 0, snow: 0, storm: 0, dark: 0.25, haze: 4, cirrus: 0.15 },
 };
 
+const SHORE_UNDER = 0.5, SHORE_OVER = 0.3; // metres: see World.shoreSnap
 const QUALITY = {
   low: { res: 180, bake: 384, trees: 6000, shadows: false, shadowSize: 1024, clouds: 0.45, cirrus: false, pixel: 1, post: false },
   medium: { res: 220, bake: 640, trees: 12000, shadows: true, shadowSize: 1024, clouds: 0.65, cirrus: true, pixel: 1.25, post: true },
@@ -197,6 +198,11 @@ export class World {
     v = this.cover.forest(cx, cz, h, slope, undefined, undefined, (h - hz) / l);
     c.set(key, v); return v;
   }
+  // No ground within a few decimetres of the water level, in every height grid the ground is drawn from and physics
+  // uses (core bake, coarse core mesh, streamed tiles): under water it is at least SHORE_UNDER below, dry land at least
+  // SHORE_OVER above. Otherwise gentle beaches, and the edges of the Jungfrau lakes after resampling their 20 m grid,
+  // leave ground and water at nearly the same height over wide areas, which no depth buffer can tell apart at a distance.
+  shoreSnap(h) { const wl = this.waterLevel; return h < wl ? Math.min(h, wl - SHORE_UNDER) : Math.max(h, wl + SHORE_OVER); }
   rawHeight(x, z) {
     let h = this.height(x, z);
     // flatten airport
@@ -217,6 +223,7 @@ export class World {
     if (this.real) gradeReal(this, this.net);
     this.dryLand(); // no-op without a terrain bake (real places)
     flattenGrid(this, this.net);
+    for (let k = 0; k < H.length; k++) H[k] = this.shoreSnap(H[k]);
     this.road = { samples: this.net.roads[0].pts, width: 9 };
     this.roadHash = new Map();
     for (const rd of [...this.net.roads, ...(this.net.rail ? [this.net.rail] : [])]) rd.pts.forEach((p) => { const k = Math.floor(p.x / 40) + ',' + Math.floor(p.z / 40); if (!this.roadHash.has(k)) this.roadHash.set(k, []); this.roadHash.get(k).push([p.x, p.z, rd.width / 2]); });
@@ -257,6 +264,7 @@ export class World {
     if (this.hR0 !== R) this.rawFine();
     const Hh = this.Hh0; this.Hh0 = null;
     flattenHi(this, this.net, Hh, R);
+    for (let k = 0; k < Hh.length; k++) Hh[k] = this.shoreSnap(Hh[k]);
     const paint = makePainter(this, this.net);
     this.Hh = Hh; this.hR = R; this.hStep = st;
     this.roadSurf = roadSurface(this, this.net); // from here on sampleGrid/groundAt stand on the roads and bridges
@@ -264,7 +272,7 @@ export class World {
     const pad = this.bakePad(st), PW = W + 2 * pad, Hp = new Float32Array(PW * PW);
     for (let j = 0; j < PW; j++) for (let i = 0; i < PW; i++) {
       const gi = i - pad, gj = j - pad;
-      Hp[j * PW + i] = gi >= 0 && gj >= 0 && gi <= R && gj <= R ? Hh[gj * W + gi] : this.rawHeight(-half + gi * st, -half + gj * st);
+      Hp[j * PW + i] = gi >= 0 && gj >= 0 && gi <= R && gj <= R ? Hh[gj * W + gi] : this.shoreSnap(this.rawHeight(-half + gi * st, -half + gj * st));
     }
     const maps = { alb: new Uint8Array(W * W * 4), nor: new Uint8Array(W * W * 4) };
     const bake = this.bakeMaps(Hp, R, pad, -half, -half, st, paint, maps); while (!bake.next().done);
@@ -274,13 +282,16 @@ export class World {
     this.shadowData = new Uint8Array(SR * SR * 4).fill(255);
     this.shadowTex = this.dataTex(this.shadowData, SR); this.shadowTex.generateMipmaps = false; this.shadowTex.minFilter = THREE.LinearFilter;
     this.shadowR = SR;
-    // coarse heights for water depth (matches the rendered mesh)
-    // ground heights for the water shader (shore, foam, where water is drawn at all): the fine baked grid, which is
-    // what the ground near the camera is drawn from (and what physics uses), so the shoreline matches the land
-    const hd = new Uint16Array(W * W);
-    for (let k = 0; k < hd.length; k++) hd[k] = THREE.DataUtils.toHalfFloat(Hh[k]);
-    this.depthTex = new THREE.DataTexture(hd, W, W, THREE.RedFormat, THREE.HalfFloatType);
-    this.depthTex.magFilter = this.depthTex.minFilter = THREE.LinearFilter; this.depthTex.needsUpdate = true;
+  }
+  // Ground heights of a grid mesh for the water shader (where water is drawn at all, shallows, foam): one texel per
+  // vertex, relative to the water level (full precision at the shore even for a lake at 561 m), read texel by texel
+  // and interpolated over the mesh's own triangles.
+  heightTex(H, W) {
+    const d = new Float32Array(W * W);
+    for (let k = 0; k < d.length; k++) d[k] = H[k] - this.waterLevel;
+    const t = new THREE.DataTexture(d, W, W, THREE.RedFormat, THREE.FloatType);
+    t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; t.needsUpdate = true;
+    return t;
   }
   // Core bake resolution: ultra resolves the eroded terrain's gullies (~14 m texels; ~2 s more loading than 1024)
   bakeRes() { return this.qName === 'ultra' && this.bake ? Math.max(this.q.bake, 1536) : this.q.bake; }
@@ -510,12 +521,58 @@ export class World {
     g.putImageData(img, 0, 0);
     const nt = new THREE.CanvasTexture(c); nt.wrapS = nt.wrapT = THREE.RepeatWrapping;
     const pal = this.loc.waterColors || (this.loc.id === 'islands' ? { deep: 0x05324a, shallow: 0x19b5b0, sand: 0xe9dcb0 } : this.loc.desert ? { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 } : { deep: 0x0b2a35, shallow: 0x2f6f6a, sand: 0x6b6a55 });
-    // depth texels centred on the baked-grid vertices they come from
-    const mat = waterMaterial({ depthTex: this.depthTex, normal: nt, half: this.half + this.hStep / 2, size: this.size + this.hStep, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6, reef: this.loc.id === 'islands' ? 1 : 0 });
+    // where the water is drawn at all, shallows and foam: the fine baked grid, which the ground near the camera is drawn
+    // from and physics uses (the coarse core mesh further out is covered by the water shader's depth lift)
+    const fine = { tex: this.heightTex(this.Hh, this.hR + 1), grid: new THREE.Vector4(-this.half, -this.half, 1 / this.hStep, this.hR) };
+    const mat = waterMaterial({ fine, normal: nt, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6, reef: this.loc.id === 'islands' ? 1 : 0 });
     const w = new THREE.Mesh(new THREE.PlaneGeometry(300000, 300000), mat); // under the whole far terrain (tiles.js / farfield.js)
     w.rotation.x = -Math.PI / 2; w.position.y = this.waterLevel;
     this.waterMat = mat;
     this.water = w; this.group.add(w);
+    this.shoreWater = this.buildShoreWater(waterMaterial({ U: mat.userData.U, shore: true }));
+    this.group.add(this.shoreWater);
+  }
+
+  // The water along the core's shores as a mesh whose edge IS the shoreline: every grid cell that is partly under water,
+  // cut along the water level through the very triangles the ground is drawn with (the fine grid: detail patch and
+  // physics), so water and land meet exactly, with no per-pixel test and antialiased like any other edge. A ring of
+  // fully wet cells around those overlaps the plane, which draws only fully wet cells in the core (no cracks between).
+  buildShoreWater(mat) {
+    const R = this.hR, W = R + 1, H = this.Hh, wl = this.waterLevel, st = this.hStep, o = -this.half;
+    const wetN = new Uint8Array(R * R); // wet corners per cell
+    for (let j = 0; j < R; j++) for (let i = 0; i < R; i++) { const k = j * W + i; wetN[j * R + i] = (H[k] < wl) + (H[k + 1] < wl) + (H[k + W] < wl) + (H[k + W + 1] < wl); }
+    const draw = new Uint8Array(R * R);
+    for (let j = 0; j < R; j++) for (let i = 0; i < R; i++) {
+      const n = wetN[j * R + i]; if (n === 0 || n === 4) continue;
+      for (let b = Math.max(0, j - 1); b <= Math.min(R - 1, j + 1); b++) for (let a = Math.max(0, i - 1); a <= Math.min(R - 1, i + 1); a++) if (wetN[b * R + a]) draw[b * R + a] = 1;
+    }
+    const pos = [], idx = [], ids = new Map();
+    // vertices are shared by key (grid vertex, or the crossing on a grid edge), so neighbouring cells meet watertight
+    const grid = (g) => { let v = ids.get(g); if (v === undefined) { v = pos.length / 3; ids.set(g, v); pos.push(o + (g % W) * st, wl, o + Math.floor(g / W) * st); } return v; };
+    const cross = (g0, g1) => {
+      const a = Math.min(g0, g1), b = Math.max(g0, g1), key = -1 - (a * 4 + (b - a === 1 ? 0 : b - a === W ? 1 : 2));
+      let v = ids.get(key); if (v !== undefined) return v;
+      const t = (H[a] - wl) / (H[a] - H[b]); v = pos.length / 3; ids.set(key, v);
+      pos.push(o + ((a % W) + ((b % W) - (a % W)) * t) * st, wl, o + (Math.floor(a / W) + (Math.floor(b / W) - Math.floor(a / W)) * t) * st);
+      return v;
+    };
+    const poly = [];
+    const tri = (p, q, r) => { // the part of triangle p,q,r under water, as a fan
+      poly.length = 0;
+      for (const [g, h] of [[p, q], [q, r], [r, p]]) {
+        if (H[g] < wl) poly.push(grid(g));
+        if ((H[g] < wl) !== (H[h] < wl)) poly.push(cross(g, h));
+      }
+      for (let k = 1; k + 1 < poly.length; k++) idx.push(poly[0], poly[k], poly[k + 1]);
+    };
+    for (let j = 0; j < R; j++) for (let i = 0; i < R; i++) {
+      if (!draw[j * R + i]) continue;
+      const a = j * W + i, b = a + W, c = b + 1, d = a + 1; // same split as the ground: (a,b,d) + (b,c,d)
+      tri(a, b, d); tri(b, c, d);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeBoundingSphere();
+    return new THREE.Mesh(g, mat);
   }
 
   // ---------------- sky / light ----------------
@@ -1068,6 +1125,7 @@ export class World {
     if (this.envRT) this.envRT.dispose();
     this.pmrem.dispose();
     this.atmo.dispose(); this.clouds.dispose();
+    this.waterMat?.userData.U.fineTex.value.dispose();
     this.scene.environment = null; this.scene.fog = null;
   }
 }
