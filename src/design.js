@@ -86,6 +86,7 @@ export function removeParts(design, idxs) {
 const RHO = 1.225, G = 9.81;
 export function analyze(design) {
   const m = new THREE.Matrix4(), com = new THREE.Vector3();
+  let drivePower = 0, motors = 0, driveWheels = 0, wheels = 0;
   let rotorLift = 0, rotors = 0, tailRotors = 0, twist = 0, rotorOff = 0; const rotorAt = new THREE.Vector3();
   let mass = 0, thrust = 0, wingArea = 0, finArea = 0, engines = 0, props = 0, jets = 0, rockets = 0, gear = 0, floats = 0, smoke = 0;
   const lift = new THREE.Vector3(); let liftW = 0; let latLift = 0, latThrust = 0;
@@ -101,7 +102,9 @@ export function analyze(design) {
   if (mass > 0) com.divideScalar(mass);
   const n = new THREE.Vector3(), pos = new THREE.Vector3();
   for (const { p, d, info, m: mm } of items) {
-    if (d.engine?.type === 'tailrotor') tailRotors++;
+    if (d.gear && !d.gear.float) { wheels++; if (d.gear.drive) driveWheels++; }
+    if (d.engine?.type === 'drive') { motors++; engines++; drivePower += d.engine.thrust * thrustScale(p) * partPower(p); }
+    else if (d.engine?.type === 'tailrotor') tailRotors++;
     else if (d.engine?.type === 'rotor') {
       engines++; rotors++;
       const t = d.engine.thrust * thrustScale(p) * partPower(p), at = info.center.clone().applyMatrix4(mm);
@@ -126,7 +129,8 @@ export function analyze(design) {
     }
   }
   if (rotorLift > 0) { rotorAt.divideScalar(rotorLift); rotorOff = Math.hypot(rotorAt.x - com.x, rotorAt.z - com.z); }
-  const hover = mass > 0 ? rotorLift / (mass * G) : 0, heli = rotors > 0;
+  const hover = mass > 0 ? rotorLift / (mass * G) : 0, heli = rotors > 0, car = motors > 0 && !heli;
+  const grip = mass > 0 ? drivePower / (mass * G) : 0;
   const col = liftW > 0 ? lift.divideScalar(liftW) : com.clone();
   const mac = wingArea > 0 ? Math.sqrt(wingArea / 7) : 1;
   const margin = (col.z - com.z) / mac; // + = stable (lift centre behind CoM)
@@ -144,18 +148,26 @@ export function analyze(design) {
       if (!gear) warnings.push(['info', 'No skids: it will sit on its belly. Add Helicopter Skids from Gear.']);
       if (hover >= 1.05 && rotorAt.y >= com.y && rotorOff <= 0.4 && (tailRotors || Math.abs(twist) <= rotorLift * 0.2)) warnings.push(['good', 'Ready to hover! Throttle to the middle to hold height.']);
     }
+    else if (car) {
+      if (!driveWheels) warnings.push(['bad', 'The Car Engine needs Car Wheels to push on. Add some from the Car tab.']);
+      else if (wheels < 3) warnings.push(['warn', 'Fewer than 3 wheels: it will tip over. Use 4.']);
+      if (driveWheels && !design.parts.some((q) => PARTS[q.id]?.gear?.steer)) warnings.push(['warn', 'Nothing steers. Use Steering Wheels at the front.']);
+      if (grip < 0.25 && driveWheels) warnings.push(['warn', 'Heavy for its engine: it will be slow. Add Power or another engine.']);
+      if (driveWheels && wheels >= 3) warnings.push(['good', 'Ready to drive! Throttle to go, stick to steer, pull the stick back to reverse.']);
+    }
     else if (!engines) warnings.push(['info', 'No engines: it’s a glider. It will start in the air.']);
-    if (!heli && wingArea < 0.5) warnings.push(['bad', 'No wings. Only Arcade mode will get this off the ground.']);
-    if (!heli && wingArea > 0.5 && margin < -0.02) warnings.push(['bad', 'Tail-heavy: the centre of mass is behind the lift. Expect flips in Sim mode. Move wings back or add weight up front.']);
-    else if (!heli && margin > 0.6) warnings.push(['warn', 'Very nose-heavy. It will be hard to lift the nose. Move wings forward.']);
-    if (!heli && finArea < 0.4 && wingArea > 0.5) warnings.push(['warn', 'No vertical fin: it will yaw around in Pilot and Sim modes.']);
-    if (!heli && tw > 0 && tw < 0.18) warnings.push(['warn', 'Underpowered. Add engines or lose weight.']);
-    if (!heli && tw > 1.2) warnings.push(['good', 'Thrust-to-weight over 1: it can climb straight up!']);
-    if (!heli && !gear) warnings.push(['info', 'No landing gear: it will belly-slide on take-off. Starting in the air is easier.']);
-    if (!heli && (Math.abs(latLift) > wingArea * 0.4 || Math.abs(latThrust) > thrust * 0.3)) warnings.push(['warn', 'Lopsided! It will roll or yaw in Sim mode (Arcade forgives this).']);
-    if (!heli && stall < 40 && tw > 0.2 && margin >= -0.02 && margin <= 0.6 && finArea >= 0.4) warnings.push(['good', 'Looks flyable. Have fun!']);
+    const plane = !heli && !(car && wingArea < 0.5);
+    if (plane && wingArea < 0.5) warnings.push(['bad', 'No wings. Only Arcade mode will get this off the ground.']);
+    if (plane && wingArea > 0.5 && margin < -0.02) warnings.push(['bad', 'Tail-heavy: the centre of mass is behind the lift. Expect flips in Sim mode. Move wings back or add weight up front.']);
+    else if (plane && margin > 0.6) warnings.push(['warn', 'Very nose-heavy. It will be hard to lift the nose. Move wings forward.']);
+    if (plane && finArea < 0.4 && wingArea > 0.5) warnings.push(['warn', 'No vertical fin: it will yaw around in Pilot and Sim modes.']);
+    if (plane && tw > 0 && tw < 0.18) warnings.push(['warn', 'Underpowered. Add engines or lose weight.']);
+    if (plane && tw > 1.2) warnings.push(['good', 'Thrust-to-weight over 1: it can climb straight up!']);
+    if (plane && !gear) warnings.push(['info', 'No landing gear: it will belly-slide on take-off. Starting in the air is easier.']);
+    if (plane && (Math.abs(latLift) > wingArea * 0.4 || Math.abs(latThrust) > thrust * 0.3)) warnings.push(['warn', 'Lopsided! It will roll or yaw in Sim mode (Arcade forgives this).']);
+    if (plane && stall < 40 && tw > 0.2 && margin >= -0.02 && margin <= 0.6 && finArea >= 0.4) warnings.push(['good', 'Looks flyable. Have fun!']);
   }
-  return { heli, hover, rotors, tailRotors, mass, com, col, margin, stall, thrust, tw, wingArea, finArea, engines, props, jets, rockets, gear, floats, smoke, ctrl, warnings };
+  return { car, grip, motors, driveWheels, wheels, heli, hover, rotors, tailRotors, mass, com, col, margin, stall, thrust, tw, wingArea, finArea, engines, props, jets, rockets, gear, floats, smoke, ctrl, warnings };
 }
 
 // ---------- presets ----------
@@ -318,6 +330,16 @@ export function makePresets() {
     b.add('r_tail', [0.12, 0.75, 7.9], { parent: boom });
     b.add('r_main', [0, 0.55, 1.44], { parent: f });
     b.pair('g_skid', [0.6, -0.4, 0.3], { parent: f });
+    P.push(b.d);
+  }
+  { // Dune Buggy — a car
+    const b = new PB('Dune Buggy', 'A fast little car. Throttle to go, stick to steer, pull back to reverse.');
+    const f = b.add('fus_pod', [0, 0, 0], { color: 0xe8601c });
+    b.add('x_nosecone', [0, 0, -1.6], { parent: f, color: 0xe8601c });
+    b.add('ck_open', [0, 0.45, -0.2], { parent: f });
+    b.add('c_motor', [0, 0.35, 1.2], { parent: f });
+    b.pair('c_wheel_steer', [0.78, -0.2, -1.1], { parent: f });
+    b.pair('c_wheel', [0.78, -0.2, 1.1], { parent: f });
     P.push(b.d);
   }
   return P;
