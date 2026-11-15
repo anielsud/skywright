@@ -77,12 +77,14 @@ function buildPalette() {
 }
 
 function fmt(n, d = 0) { return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }) : '—'; }
+let sizeDrag = false;
 function renderInspector() {
   const d = hangar.design, s = hangar.stats || analyze(d);
   $('#plane-name').value = d.name || '';
   const sel = hangar.sel >= 0 ? d.parts[hangar.sel] : null;
   const sp = $('#sel-panel');
-  if (sel) {
+  if (sel && sizeDrag) { /* keep the slider being dragged alive: don't rebuild the panel mid-drag */ }
+  else if (sel) {
     const def = PARTS[sel.id];
     sp.hidden = false;
     sp.innerHTML = `<h3>${def.name}${hangar.partner(hangar.sel) >= 0 && hangar.symmetry ? ' <span class="pill">×2 mirrored</span>' : ''}</h3>
@@ -103,6 +105,8 @@ function renderInspector() {
           <div class="row2"><button data-flip>Flip</button><button data-reset>Reset</button></div>
         </div>
       </div>
+      ${def.cat === 'fuselage' ? `<div class="sizer">${[['len', 'Length', 0.5, 3, (sel.scale || [1, 1, 1])[2]], ['dia', 'Diameter', 0.5, 2.5, (sel.scale || [1, 1, 1])[0]]].map(([a, n, lo, hi, v]) =>
+        `<label class="lbl">${n} <b data-sv="${a}">${v.toFixed(1)}×</b></label><input type="range" data-size="${a}" min="${lo}" max="${hi}" step="0.05" value="${v}">`).join('')}</div>` : ''}
       <label class="lbl">Paint</label>
       <div class="swatches">${PAINTS.map((c) => `<button style="background:#${c.toString(16).padStart(6, '0')}" data-c="${c}" class="${c === sel.color ? 'on' : ''}"></button>`).join('')}</div>
       <button class="danger wide" data-del>🗑 Remove part${hangar.sel === 0 ? ' (and everything)' : ''}</button>`;
@@ -113,6 +117,17 @@ function renderInspector() {
     sp.querySelector('[data-reset]').addEventListener('click', () => hangar.resetRotation());
     sp.querySelectorAll('[data-c]').forEach((b) => b.addEventListener('click', () => hangar.paint(+b.dataset.c)));
     sp.querySelector('[data-del]').addEventListener('click', () => hangar.deleteSel());
+    sp.querySelectorAll('[data-size]').forEach((r) => {
+      const a = r.dataset.size; let raf = 0;
+      // one undo entry per drag; rebuild at most once per frame while dragging
+      r.addEventListener('input', () => {
+        sp.querySelector(`[data-sv="${a}"]`).textContent = `${(+r.value).toFixed(1)}×`;
+        const first = !sizeDrag; sizeDrag = true;
+        if (first) hangar.resizePart(a, +r.value, true);
+        else if (!raf) raf = requestAnimationFrame(() => { raf = 0; hangar.resizePart(a, +r.value, false); });
+      });
+      r.addEventListener('change', () => { cancelAnimationFrame(raf); raf = 0; if (sizeDrag) { sizeDrag = false; hangar.resizePart(a, +r.value, false); } });
+    });
   } else sp.hidden = true;
   const marginPct = clamp(s.margin, -0.5, 1);
   const balPos = clamp(50 + marginPct * 60, 4, 96);

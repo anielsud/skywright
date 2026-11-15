@@ -2,12 +2,19 @@
 import * as THREE from 'three';
 import { PARTS, partInfo } from './parts.js';
 
+export const partScale = (p) => p.scale || [1, 1, 1];
 export function partMatrix(p, out = new THREE.Matrix4()) {
-  return out.compose(new THREE.Vector3(...p.pos), new THREE.Quaternion(...p.quat), new THREE.Vector3(p.mirror ? -1 : 1, 1, 1));
+  const [sx, sy, sz] = partScale(p);
+  return out.compose(new THREE.Vector3(...p.pos), new THREE.Quaternion(...p.quat), new THREE.Vector3(p.mirror ? -sx : sx, sy, sz));
 }
+const volScale = (p) => { const [sx, sy, sz] = partScale(p); return sx * sy * sz; };
+export const partMass = (p) => PARTS[p.id].mass * volScale(p);
+export const partHp = (p) => PARTS[p.id].hp * Math.sqrt(volScale(p)); // bigger bodies are a bit tougher
 
 export function mirroredOf(p) {
-  return { ...p, pos: [-p.pos[0], p.pos[1], p.pos[2]], quat: [p.quat[0], -p.quat[1], -p.quat[2], p.quat[3]], mirror: !p.mirror };
+  const m = { ...p, pos: [-p.pos[0], p.pos[1], p.pos[2]], quat: [p.quat[0], -p.quat[1], -p.quat[2], p.quat[3]], mirror: !p.mirror };
+  if (p.scale) m.scale = [...p.scale]; // don't share the array with the original
+  return m;
 }
 
 export function newPart(id, pos, opts = {}) {
@@ -44,7 +51,7 @@ export function analyze(design) {
     const d = PARTS[p.id]; if (!d) continue;
     const info = partInfo(p.id); partMatrix(p, m);
     const c = info.centroid.clone().applyMatrix4(m);
-    mass += d.mass; com.addScaledVector(c, d.mass);
+    const pm = partMass(p); mass += pm; com.addScaledVector(c, pm);
     items.push({ p, d, info, m: m.clone(), c });
   }
   if (mass > 0) com.divideScalar(mass);
@@ -245,10 +252,10 @@ export function makePresets() {
 
 export function cloneDesign(d) { return JSON.parse(JSON.stringify(d)); }
 export function encodeDesign(d) {
-  const slim = { n: d.name, p: d.parts.map((p) => [p.id, p.pos.map((v) => +v.toFixed(3)), p.quat.map((v) => +v.toFixed(4)), p.mirror ? 1 : 0, p.color, p.parent]) };
+  const slim = { n: d.name, p: d.parts.map((p) => [p.id, p.pos.map((v) => +v.toFixed(3)), p.quat.map((v) => +v.toFixed(4)), p.mirror ? 1 : 0, p.color, p.parent, ...(p.scale ? [p.scale.map((v) => +v.toFixed(3))] : [])]) };
   return btoa(unescape(encodeURIComponent(JSON.stringify(slim))));
 }
 export function decodeDesign(s) {
   const slim = JSON.parse(decodeURIComponent(escape(atob(s.trim()))));
-  return { name: slim.n || 'Imported', parts: slim.p.filter((a) => PARTS[a[0]]).map((a) => ({ id: a[0], pos: a[1], quat: a[2], mirror: !!a[3], color: a[4], parent: a[5] })) };
+  return { name: slim.n || 'Imported', parts: slim.p.filter((a) => PARTS[a[0]]).map((a) => ({ id: a[0], pos: a[1], quat: a[2], mirror: !!a[3], color: a[4], parent: a[5], ...(Array.isArray(a[6]) && a[6].length === 3 && a[6].every((v) => Number.isFinite(v) && v > 0) ? { scale: a[6] } : {}) })) };
 }
