@@ -65,7 +65,7 @@ export class TerrainTiles {
     // mesh heights first: a tile that's all sea needs nothing else
     const H = new Float32Array(n * n);
     let anyLand = false;
-    for (let b = 0; b < n; b++) { for (let a = 0; a < n; a++) { const h = W.height(x0 + a * 2 * st, z0 + b * 2 * st); H[b * n + a] = h; if (h > W.waterLevel + 0.5) anyLand = true; } if (b % 8 === 7) yield; }
+    for (let b = 0; b < n; b++) { for (let a = 0; a < n; a++) { const h = W.shoreSnap(W.height(x0 + a * 2 * st, z0 + b * 2 * st)); H[b * n + a] = h; if (h > W.waterLevel + 0.5) anyLand = true; } if (b % 8 === 7) yield; }
     let minH = Infinity; for (let k = 0; k < H.length; k++) if (H[k] < minH) minH = H[k];
     const tile = { i, j, lod, segs, H, st: 2 * st, x0, z0, n, mesh: null, trees: [], hit: new Map(), land: minH > W.waterLevel + 20 };
     if (!anyLand) return tile; // open water: nothing to draw, the sea plane covers it
@@ -74,7 +74,7 @@ export class TerrainTiles {
     for (let b = 0; b < PW; b++) {
       for (let a = 0; a < PW; a++) {
         const gi = a - pad, gj = b - pad;
-        Hp[b * PW + a] = gi >= 0 && gj >= 0 && gi <= R && gj <= R && !(gi & 1) && !(gj & 1) ? H[(gj >> 1) * n + (gi >> 1)] : W.height(x0 + gi * st, z0 + gj * st);
+        Hp[b * PW + a] = gi >= 0 && gj >= 0 && gi <= R && gj <= R && !(gi & 1) && !(gj & 1) ? H[(gj >> 1) * n + (gi >> 1)] : W.shoreSnap(W.height(x0 + gi * st, z0 + gj * st));
       }
       if (b % 4 === 3) yield;
     }
@@ -117,7 +117,8 @@ export class TerrainTiles {
       ox = Math.round(cam.x / 2000) * 2000 - span / 2, oz = Math.round(cam.z / 2000) * 2000 - span / 2;
     if (!this.depthData) { this.depthData = new Uint16Array(R * R); this.depthTex = new THREE.DataTexture(this.depthData, R, R, THREE.RedFormat, THREE.HalfFloatType); this.depthTex.magFilter = this.depthTex.minFilter = THREE.LinearFilter; }
     const tmp = new Uint16Array(R * R);
-    for (let j = 0; j < R; j++) { for (let i = 0; i < R; i++) tmp[j * R + i] = THREE.DataUtils.toHalfFloat(W.sampleGrid(ox + (i + 0.5) * span / R, oz + (j + 0.5) * span / R)); if (j % 4 === 3) yield; }
+    // relative to the water level, like the core's height maps: half floats are fine-grained near zero, i.e. at the shore
+    for (let j = 0; j < R; j++) { for (let i = 0; i < R; i++) tmp[j * R + i] = THREE.DataUtils.toHalfFloat(W.sampleGrid(ox + (i + 0.5) * span / R, oz + (j + 0.5) * span / R) - W.waterLevel); if (j % 4 === 3) yield; }
     this.depthData.set(tmp);
     this.depthTex.needsUpdate = true;
     U.outerTex.value = this.depthTex; U.outerOrigin.value.set(ox, oz); U.outerSize.value = span;
