@@ -901,6 +901,7 @@ function applyQuality() {
   if (F) F.world.sun.castShadow = F.world.q.shadows && perf.level < 3;
   if (F) F.world.detailU.tDetail.value = perf.level < 3 ? 1 : 0; // photo ground detail goes last, with shadows
   if (F) F.world.setPerfLevel?.(perf.level); // thinner clouds, no cirrus when struggling
+  if (F) F.world.flora.setPerf?.(perf.level); // grass ring, then tree LOD range shrink under load
   hangar.setQuality(tier);
   onResize();
 }
