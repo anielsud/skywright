@@ -15,6 +15,7 @@ import { clamp } from './noise.js';
 import { installFog } from './shaders.js';
 import { Post } from './post.js';
 import { VERSION, COMMIT, BUILT } from './version.js';
+import { CHANGELOG, changesSince, newer } from './changelog.js';
 import { Net } from './net.js';
 installFog();
 
@@ -24,6 +25,8 @@ const LS = {
   set(k, v) { try { localStorage.setItem('skywright.' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+// Must be read before anything below writes to storage (the settings migration does, for every new player).
+const returningPlayer = LS.get('settings', null) !== null || LS.get('current', null) !== null;
 const settings = Object.assign({ quality: 'auto', units: 'imperial', invert: false, controlMode: 'stick', mix: null, touch: 'auto', showFps: false }, LS.get('settings', {}));
 if ((settings.v || 1) < 2) { settings.quality = 'auto'; settings.v = 2; LS.set('settings', settings); } // move everyone onto adaptive quality once
 // 'auto' = medium features on tablets / high on desktops, plus resolution that adapts to the frame rate
@@ -379,6 +382,31 @@ async function updateNow(status) {
     setTimeout(reloadFresh, 400);
   } catch (e) { status.textContent = 'Couldn’t reach the server. Are you online?'; }
 }
+// ---------- what's new ----------
+// After an update brings in a higher VERSION, list what changed since the version this player last saw.
+function whatsNewModal(entries, title = 'What’s new ✨') {
+  const MAX = 6, shown = entries.slice(0, MAX);
+  const m = ui.modal(`<h2>${title}</h2>
+    <div class="whats-new">${shown.map((e, i) => `<section${i ? '' : ' class="latest"'}>
+      <h4>Version ${e.v}</h4><ul>${e.items.map((t) => `<li>${t}</li>`).join('')}</ul></section>`).join('')}
+    ${entries.length > MAX ? `<p class="more">…and ${entries.length - MAX} more updates before that.</p>` : ''}</div>
+    <div class="modal-foot"><button data-close class="primary">Let’s fly!</button></div>`);
+  m.el.querySelector('[data-close]').addEventListener('click', () => audio.play('click'));
+}
+function maybeShowWhatsNew() {
+  let seen = LS.get('seenVersion', null);
+  if (!seen) {
+    // Older builds didn't record this. A player with saved stuff has been here before: show them the newest release.
+    // A brand-new player just starts at the current version with no popup.
+    seen = returningPlayer ? (CHANGELOG[1]?.v || VERSION) : VERSION;
+  }
+  LS.set('seenVersion', VERSION);
+  if (!newer(VERSION, seen)) return;
+  const entries = changesSince(seen, VERSION);
+  if (!entries.length) return;
+  // let the splash fade first, and don't cover another modal or a flight
+  setTimeout(() => { if (state === 'hangar' && $('#modal-root').style.display !== 'block') whatsNewModal(entries); }, 1200);
+}
 function settingsModal() {
   const m = ui.modal(`
     <h2>Settings</h2>
@@ -392,12 +420,13 @@ function settingsModal() {
     <div class="mixer">${[['master', 'Volume'], ['engines', 'Engines'], ['world', 'Wind & world'], ['fx', 'Effects'], ['music', 'Music']].map(([k, n]) =>
       `<label>${n}</label><input type="range" min="0" max="1" step="0.02" value="${settings.mix[k]}" data-mix="${k}"><b data-mixv="${k}">${Math.round(settings.mix[k] * 100)}</b>`).join('')}</div>
     <p class="version">${buildInfo()}</p>
-    <div class="update-row"><button id="upd">Check for updates</button><span id="upd-status"></span></div>
+    <div class="update-row"><button id="upd">Check for updates</button><button id="wn">What’s new</button><span id="upd-status"></span></div>
     <div class="modal-foot"><button data-close class="primary">Done</button></div>`);
   const el = m.el;
   const pick = (attr, key, after) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { settings[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); LS.set('settings', settings); after?.(); }));
   pick('q', 'quality', () => { perf.scale = 1; perf.level = 0; applyQuality(); });
   el.querySelector('#upd').addEventListener('click', () => updateNow(el.querySelector('#upd-status')));
+  el.querySelector('#wn').addEventListener('click', () => whatsNewModal(CHANGELOG, 'What’s new'));
   el.querySelector('#fps').addEventListener('change', (e) => { settings.showFps = e.target.checked; LS.set('settings', settings); });
   pick('u', 'units', renderInspector); pick('cm', 'controlMode', () => controls.setMode(settings.controlMode)); pick('t', 'touch');
   el.querySelector('#inv').addEventListener('change', (e) => { settings.invert = e.target.checked; controls.invert = settings.invert; LS.set('settings', settings); });
@@ -877,6 +906,7 @@ async function boot() {
   requestAnimationFrame(frame);
   $('#splash').classList.add('hide');
   setTimeout(() => $('#splash').remove(), 900);
+  maybeShowWhatsNew();
   document.addEventListener('pointerdown', () => { audio.init(); if (state === 'hangar') audio.music(true); }, { once: true });
   if ('serviceWorker' in navigator && location.protocol !== 'file:' && !location.hostname.match(/^(localhost|127\.)/)) {
     // The service worker is for offline play; updates are driven by autoCheckUpdate (see above).

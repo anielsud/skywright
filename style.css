@@ -232,7 +232,15 @@ body.touch-on .hud-bc { bottom: auto; top: calc(56px + env(safe-area-inset-top))
 .version { margin: 18px 0 0; font-size: 12px; color: var(--dim); text-align: center; font-variant-numeric: tabular-nums; user-select: text; }
 #fps-meter { position: absolute; left: 12px; bottom: 12px; font-size: 12px; background: rgba(0,0,0,.5); padding: 3px 8px; border-radius: 6px; font-variant-numeric: tabular-nums; }
 body.touch-on #fps-meter { bottom: auto; top: calc(250px + env(safe-area-inset-top)); }
-.update-row { display: flex; gap: 10px; align-items: center; justify-content: center; margin-top: 8px; font-size: 13px; color: var(--dim); }
+.update-row { display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; color: var(--dim); }
+
+/* ---------- what's new ---------- */
+.whats-new section { padding: 10px 14px; border-radius: 10px; margin-bottom: 8px; background: rgba(255, 255, 255, .04); }
+.whats-new section.latest { background: rgba(255, 176, 32, .12); border: 1px solid rgba(255, 176, 32, .35); }
+.whats-new h4 { margin: 0 0 6px; font-size: 13px; color: var(--accent); letter-spacing: .03em; }
+.whats-new ul { margin: 0; padding-left: 20px; }
+.whats-new li { margin: 4px 0; line-height: 1.4; }
+.whats-new .more { color: var(--dim); font-size: 13px; text-align: center; margin: 4px 0 0; }
 
 /* ---------- multiplayer ---------- */
 .mp-note { opacity: .8; margin: 0 0 10px; }
