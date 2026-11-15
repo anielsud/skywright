@@ -42,7 +42,7 @@ export class HUD {
     this.mapRange = 5000;
     this.$('h-map').addEventListener('click', () => { this.mapRange = this.mapRange === 5000 ? 12000 : this.mapRange === 12000 ? 2000 : 5000; });
   }
-  setUnits(u) { this.units = UNITS[u] || UNITS.imperial; this.$('h-spdu').textContent = this.units.spdU; this.$('h-altu').textContent = this.units.altU; this.$('h-vsu').textContent = this.units.vsU; this.$('h-skinu').textContent = this.units.tempU; }
+  setUnits(u) { this.units = UNITS[u] || UNITS.imperial; this.altUnit = this.vsUnit = null; this.$('h-spdu').textContent = this.units.spdU; this.$('h-altu').textContent = this.units.altU; this.$('h-vsu').textContent = this.units.vsU; this.$('h-skinu').textContent = this.units.tempU; }
   toast(text, kind = '') {
     const d = document.createElement('div'); d.className = 'toast ' + kind; d.textContent = text;
     this.toasts.prepend(d);
@@ -64,12 +64,20 @@ export class HUD {
     const spd = ac.airspeed || 0;
     this.$('h-spd').textContent = Math.round(spd * U.spd);
     const agl = ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), world.waterLevel);
-    this.$('h-alt').textContent = Math.round((ac.x.y) * U.alt) + (agl < 300 ? `  (${Math.round(Math.max(0, agl - 2) * U.alt)} AGL)` : '');
-    this.$('h-vs').textContent = Math.round(ac.v.y * U.vs);
+    // up high: kilometres (metric) or miles above 100,000 ft, so the numbers stay readable on the way to space
+    const hi = U.altU === 'm' ? ac.x.y >= 10000 : ac.x.y * U.alt >= 100000;
+    const altTxt = !hi ? Math.round((ac.x.y) * U.alt) + (agl < 300 ? `  (${Math.round(Math.max(0, agl - 2) * U.alt)} AGL)` : '')
+      : U.altU === 'm' ? (ac.x.y / 1000).toFixed(ac.x.y < 100000 ? 1 : 0) : (ac.x.y / 1609.344).toFixed(1);
+    this.$('h-alt').textContent = altTxt;
+    const fast = U.vsU === 'fpm' && Math.abs(ac.v.y) > 100; // a rocket's thousands of feet per minute: feet per second instead
+    this.$('h-vs').textContent = Math.round(ac.v.y * (fast ? 3.28084 : U.vs));
+    const au = hi ? (U.altU === 'm' ? 'km' : 'mi') : U.altU, vu = fast ? 'ft/s' : U.vsU;
+    if (au !== this.altUnit) { this.altUnit = au; this.$('h-altu').textContent = au; }
+    if (vu !== this.vsUnit) { this.vsUnit = vu; this.$('h-vsu').textContent = vu; }
     const f = ac.forward; let hdg = Math.round(THREE.MathUtils.radToDeg(Math.atan2(f.x, -f.z)) + (world.loc.north || 0) + 720) % 360; // real places: the world is turned to line up with the real runway
     this.$('h-hdg').textContent = String(hdg).padStart(3, '0');
     // Mach number and skin temperature (shown once they get interesting)
-    const M = ac.mach || 0, skin = ac.skinC ?? 15;
+    const M = (ac.airFx ?? 1) > 0.05 ? ac.mach || 0 : 0, skin = ac.skinC ?? 15; // (no Mach number in a vacuum)
     this.$('h-machrow').style.display = M > 0.5 ? '' : 'none';
     if (M > 0.5) { const m = this.$('h-mach'); m.textContent = M.toFixed(2); m.style.color = M >= 1 ? '#ffd400' : M > 0.85 ? '#cfe8ff' : ''; }
     this.$('h-skinrow').style.display = skin > 45 ? '' : 'none';

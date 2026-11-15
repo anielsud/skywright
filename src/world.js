@@ -15,6 +15,7 @@ import { erode } from './erosion.js';
 import { terrainDetailUniforms } from './terrainTex.js';
 import { CascadedShadows, NEAR_SHADOW } from './cascades.js';
 import { REAL_LOCATIONS, realData } from './realworld.js';
+import { SpaceView } from './space.js';
 import { RealScenery } from './realBuildings.js';
 import { BAKED, preloadBake, bakeFor, withBake, landAt } from './terrainBake.js';
 import { Landcover } from './landcover.js';
@@ -146,6 +147,7 @@ export class World {
     this.setWeather(this.weatherId);
     this.setTime(this.time);
     this.tiles = new TerrainTiles(this); // endless land beyond the detailed core
+    this.space = new SpaceView(this); // up high: the planet below, a black sky, a sea of cloud (nothing below 5 km)
   }
 
   // Resolves once everything a World for this location loads asynchronously is in (the terrain bake). Never rejects.
@@ -721,6 +723,7 @@ export class World {
     if (this.lightsMat) this.lightsMat.opacity = this.night || dark > 0.55 ? 1 : 0;
     if (this.roadGroup) this.roadGroup.userData.lampMat.opacity = this.night || dark > 0.6 ? 1 : 0;
     if (this.windowMats) for (const m of this.windowMats) m.emissiveIntensity = this.night ? 3.5 : 0;
+    this.space?.onLighting();
     this.envDirty = true;
   }
   updateEnv() {
@@ -1108,6 +1111,7 @@ export class World {
     const th = [2.5, 2.83, 3.17, 3.5];
     for (let k = 0; k < 4; k++) { const white = ang > th[k]; cols.setXYZ(k, 1, white ? 1 : 0.1, white ? 1 : 0.1); }
     cols.needsUpdate = true;
+    this.space.update(camera, dt);
     this.updateEnv();
   }
 
@@ -1120,7 +1124,7 @@ export class World {
   dispose() {
     this.cascades?.dispose(this.scene);
     this.scene.remove(this.group, this.sky, this.sun, this.sun.target, this.hemi, this.moon, this.deck, this.deck2, this.clouds.mesh, this.rain, this.snow);
-    this.tiles?.dispose();
+    this.tiles?.dispose(); this.space.dispose();
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     if (this.envRT) this.envRT.dispose();
     this.pmrem.dispose();

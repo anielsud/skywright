@@ -168,6 +168,7 @@ export class SonicFX {
   update(dt, ctx) {
     const ac = this.ac; this.t += dt;
     const dead = ac.dead || !ac.root.visible;
+    const air = ac.airFx ?? 1; // near-vacuum: no shock waves, no condensation, no plasma
     const M = dead ? 0 : (ac.mach || 0), C = ac.skinC ?? 15, V = ac.v.length();
     // airflow direction (world); never zero so the shaders can't produce NaN
     if (V > 1) this.U.fwd.value.copy(ac.v).divideScalar(V);
@@ -176,14 +177,15 @@ export class SonicFX {
     this.U.nose.value.copy(ac.x).addScaledVector(this.U.axis.value, -this.minZ);
     // --- sonic boom ---
     if (dead) this.armed = false; // (re)appearing already supersonic (e.g. a remote player) is not a boom
+    else if (air < 0.05) { /* nothing to boom in (and no Mach milestones) */ }
     else if (M < 0.95) this.armed = true;
     else if (M >= 1 && this.armed) { this.armed = false; this.boom(ctx); }
     const whole = Math.floor(M);
-    if (whole > this.best) { if (whole >= 2) this.onMilestone?.(whole); this.best = whole; }
+    if (whole > this.best && air >= 0.05) { if (whole >= 2) this.onMilestone?.(whole); this.best = whole; }
     // --- vapour cone: humid low air makes the thickest clouds ---
     const W = ctx.world?.W, hum = clamp(0.4 + 0.6 * (1 - ac.x.y / 7000) + (W?.rain || 0) * 0.3 + (W?.cover || 0) * 0.15, 0.35, 1.2);
     const band = smooth(0.86, 0.97, M) * (1 - smooth(1.04, 1.16, M));
-    this.vapourI += (band * hum - this.vapourI) * Math.min(1, dt * 8);
+    this.vapourI += (band * hum * air - this.vapourI) * Math.min(1, dt * 8);
     const fwd = _v.copy(this.U.fwd.value);
     _q.setFromUnitVectors(_Y, _v2.copy(fwd).negate());
     if (this.vapourI > 0.01 && !dead) {
@@ -200,7 +202,7 @@ export class SonicFX {
       }
     } else this.vapour.visible = false;
     // --- plasma sheath (very high Mach / white-hot) ---
-    const pl = dead ? 0 : Math.max(smooth(4.2, 6, M), smooth(950, 1500, C) * smooth(3, 4, M));
+    const pl = dead ? 0 : Math.max(smooth(4.2, 6, M), smooth(950, 1500, C) * smooth(3, 4, M)) * air;
     this.plasmaI += (pl - this.plasmaI) * Math.min(1, dt * 4);
     if (this.plasmaI > 0.01) {
       const m = this.plasma, R = Math.max(this.span * 0.45, this.hgt * 1.6), L = this.len * 0.9;

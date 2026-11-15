@@ -1,7 +1,7 @@
 // Shared shader upgrades: height fog with sun in-scattering, terrain splatting, water, foliage sway.
 import * as THREE from 'three';
 import { TERRAIN_DETAIL_GLSL } from './terrainTex.js';
-import { SKY_LOOKUP_GLSL } from './sky.js';
+import { SKY_LOOKUP_GLSL, PLANET } from './sky.js';
 
 // ---------- global height fog ----------
 // One shared set of uniforms, attached by reference to every built-in material at compile time,
@@ -20,11 +20,14 @@ export const FOG = {
   fogExt: { value: new THREE.Vector3(1, 1, 1) },
   // distance (m) by which everything has faded fully into the haze: the edge of the far terrain
   fogEnd: { value: 1e9 },
+  // flying high (space.js): 0 near the ground (none of this runs), 1 from ~16 km up. Things below the camera then take the
+  // real air between them and us from the sky-view table, and the edge of the world fades into the planet (its ground map).
+  fogSpace: { value: 0 }, fogGMap: PLANET.gmap,
 };
 
 export const FOG_GLSL = /* glsl */`
   uniform vec3 fogSunDir; uniform vec3 fogSunColor; uniform float fogBase; uniform float fogFalloff; uniform float fogLin;
-  uniform sampler2D skyLUT; uniform float fogSkyMix; uniform vec3 fogExt; uniform float fogEnd;
+  uniform sampler2D skyLUT; uniform float fogSkyMix; uniform vec3 fogExt; uniform float fogEnd; uniform float fogSpace; uniform vec3 fogGMap;
   ${SKY_LOOKUP_GLSL}
   // the colour fully hazed-out things take on, looking along vd (also what the sky dome shows below the horizon)
   vec3 fogTarget(vec3 vd, vec3 fogCol, out vec3 ext) {
@@ -61,7 +64,20 @@ export const FOG_GLSL = /* glsl */`
     vec3 ext;
     vec3 fc = fogTarget(vd, fogCol, ext);
     vec3 amt = 1.0 - exp(-od * ext);
-    return mix(col, fc, amt);
+    vec3 res = mix(col, fc, amt);
+    if (fogSpace > 0.0 && vd.y < 0.0) {
+      // from high up, looking down: the table gives the light scattered into the whole air column down to sea level and
+      // how much gets through it; this point sees the share of that column between it and us (air thins ~8 km per e-fold)
+      vec4 L = skyLookFull(skyLUT, vd);
+      float m0 = exp(-max(cameraPosition.y, 0.0) / 8000.0), mp = exp(-max(wp.y, 0.0) / 8000.0);
+      float fr = clamp((mp - m0) / max(1.0 - m0, 1e-4), 0.0, 1.0);
+      vec3 T = pow(vec3(max(L.a, 1e-3)), vec3(0.4279, 1.0, 2.4414)), Tf = pow(T, vec3(fr));
+      vec3 phys = col * Tf + L.rgb * (1.0 - Tf) / max(1.0 - T, vec3(1e-3));
+      float feh = clamp((length(wp.xz - cameraPosition.xz) - fend * 0.7) / (fend * 0.3), 0.0, 1.0); // (by ground distance up here)
+      phys = mix(phys, L.rgb + T * groundMap(skyLUT, wp.xz, fogGMap), feh * feh); // the world's far edge melts into the planet
+      res = mix(res, phys, fogSpace * smoothstep(0.0, 0.03, L.a));
+    }
+    return res;
   }`;
 
 let patched = false;
