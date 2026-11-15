@@ -42,31 +42,7 @@ export const LOCATIONS = {
       return h;
     },
   },
-  islands: {
-    id: 'islands', name: 'Coral Islands', desc: 'Turquoise lagoons, palm-fringed beaches and a volcano island.', seed: 23, rwyH: 6, water: 0, cloudBase: 1100, trees: 'palm',
-    colors: { grass: [0x3f7a2c, 0x56913a, 0x2f6125], rock: 0x5a524a, snow: 0x5a524a, sand: 0xe3d3a3, dirt: 0x7a6040 }, snowline: 99999, boats: true, erosion: { cell: 420, depth: 0.1, octaves: 3 },
-    height(n, x, z) {
-      const r0 = Math.hypot(x * 0.8, z * 0.42);
-      let h = 120 * Math.max(0, 1 - r0 / 1500) ** 1.2 + n.fbm(x / 900, z / 900, 4) * 30 - 20;
-      const isl = [[5200, -3800, 2100, 650], [-4800, -1500, 1500, 300], [-2800, 5400, 1700, 260], [6200, 4800, 1100, 200], [600, -8200, 1300, 380]];
-      for (const [ix, iz, r, hh] of isl) { const d = Math.hypot(x - ix, z - iz); if (d < r * 1.6) h = Math.max(h, hh * Math.max(0, 1 - d / r) ** 1.6 + n.fbm(x / 500, z / 500, 4) * 40 - 15 * (d / r)); }
-      // volcano crater on the big island
-      const dv = Math.hypot(x - 5200, z + 3800); if (dv < 260) h -= (260 - dv) * 0.9;
-      // open ocean beyond the home islands (no sandbar speckle), dotted with procedural islands
-      const r1 = Math.hypot(x, z); h -= smoothstep(6000, 11000, r1) * 30;
-      const C = 7000, gx = Math.floor(x / C), gz = Math.floor(z / C);
-      for (let a = gx - 1; a <= gx + 1; a++) for (let b = gz - 1; b <= gz + 1; b++) {
-        if (Math.abs(a * C + C / 2) < 12500 && Math.abs(b * C + C / 2) < 12500) continue; // keep the home map as designed
-        const hs = (k) => { const v = Math.sin(a * 127.1 + b * 311.7 + k * 74.7) * 43758.5453; return v - Math.floor(v); };
-        if (hs(1) > 0.5) continue;
-        const ix = a * C + C * (0.25 + hs(2) * 0.5), iz = b * C + C * (0.25 + hs(3) * 0.5), r = 700 + hs(4) * 1300, hh = 60 + hs(5) * 380;
-        const d = Math.hypot(x - ix, z - iz);
-        if (d < r * 1.6) h = Math.max(h, hh * Math.max(0, 1 - d / r) ** 1.6 + n.fbm(x / 500, z / 500, 4) * 40 - 15 * (d / r));
-      }
-      h = Math.max(h, -45 + n.fbm(x / 2000, z / 2000, 3) * 20);
-      return h;
-    },
-  },
+  islands: null, // Bora Bora (real, src/realworld.js) took the Coral Islands' place: same id, so saved settings and online sessions carry over
   canyon: {
     id: 'canyon', name: 'Red Canyon', desc: 'Towering mesas, a winding canyon river and endless desert.', seed: 37, rwyH: 120, water: 8, cloudBase: 3000, trees: 'cactus',
     colors: { grass: [0xb06a3b, 0xc27d48, 0x9a5a32], rock: 0x8e4a2c, snow: 0xd9b48a, sand: 0xd2a26c, dirt: 0xa0603a }, snowline: 99999, desert: true, erosion: { cell: 360, depth: 0.12, octaves: 3, slope0: 0.15, slope1: 0.8 },
@@ -210,7 +186,7 @@ export class World {
     // flatten airport
     const dx = Math.max(0, Math.abs(x - 100) - 350), dz = Math.max(0, Math.abs(z) - RWY.len / 2 - 250);
     const d = Math.hypot(dx, dz);
-    const t = smoothstep(0, 700, d);
+    const t = smoothstep(0, this.loc.padBlend || 700, d); // padBlend: a tighter apron, e.g. an airport on a narrow reef islet
     return lerp(this.loc.rwyH, h, t);
   }
   buildTerrain() {
@@ -526,7 +502,7 @@ export class World {
     // where the water is drawn at all, shallows and foam: the fine baked grid, which the ground near the camera is drawn
     // from and physics uses (the coarse core mesh further out is covered by the water shader's depth lift)
     const fine = { tex: this.heightTex(this.Hh, this.hR + 1), grid: new THREE.Vector4(-this.half, -this.half, 1 / this.hStep, this.hR) };
-    const mat = waterMaterial({ fine, normal: nt, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6, reef: this.loc.id === 'islands' ? 1 : 0 });
+    const mat = waterMaterial({ fine, normal: nt, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6, reef: this.loc.waterReef ?? (this.loc.id === 'islands' ? 1 : 0) }); // waterReef: less made-up coral where the depths are real
     const w = new THREE.Mesh(new THREE.PlaneGeometry(300000, 300000), mat); // under the whole far terrain (tiles.js / farfield.js)
     w.rotation.x = -Math.PI / 2; w.position.y = this.waterLevel;
     this.waterMat = mat;

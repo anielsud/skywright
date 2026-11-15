@@ -8,7 +8,7 @@
 // to zero at the edge of the baked area, so the streamed land beyond stays seamless.
 export const BAKE = { n: 2049, span: 26624, core: 22000 };
 // locations with a bake in assets/terrain/ (others, e.g. real-world ones, are never fetched)
-export const BAKED = ['alpine', 'islands', 'canyon'];
+export const BAKED = ['alpine', 'canyon'];
 
 const store = new Map(); // id -> Promise<data|null>
 

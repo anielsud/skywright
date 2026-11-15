@@ -43,6 +43,18 @@ LOCS = {
         # one level for the game's water plane, between Thunersee (557.8 m) and Brienzersee (563.7 m)
         water=561,
     ),
+    'islands': dict(
+        # Bora Bora: runway centre on Motu Mute, the reef islet north of the main island. Runway 11/29 runs 124.6 deg
+        # true, so game -z points there (take-off to the south-east with Otemanu ahead on the right); the terminal and
+        # the boat dock sit on the lagoon side (game +x), as the real ones do. The id keeps the old Coral Islands' slot.
+        lat0=-16.444372, lon0=-151.751256, north=124.6, rwyH=2.5,
+        # detailed square: the whole lagoon and barrier reef with a ring of deep ocean; coarse square: Tupai, Taha'a,
+        # Raiatea, Maupiti and Huahine on the horizon
+        hi=(-8400, -16400, 24000), hiN=2048, hiImg=4096, hiZoomH=13, hiZoomI=14,
+        far=(-70000, -110000, 180000), farN=2048, farImg=4096, farZoomH=11, farZoomI=12,
+        padBlend=160,  # = loc.padBlend in src/realworld.js: the airport's apron meets the lagoon within 160 m
+        water=0, sea=True,  # sea level; the lagoon and ocean floor come from bathymetry (tools/realworld/sea.py)
+    ),
 }
 
 # ---------------------------------------------------------------- geo helpers
@@ -252,6 +264,7 @@ BKIND = {  # building tag -> kind code used by the runtime (src/realBuildings.js
     'church': 3, 'chapel': 3, 'cathedral': 3,
     'industrial': 4, 'warehouse': 4, 'commercial': 4, 'retail': 4, 'supermarket': 4, 'service': 4, 'transportation': 4, 'train_station': 4, 'office': 4, 'hangar': 4,
     'hotel': 5,
+    'stilt_house': 7,  # overwater bungalows (Bora Bora): on stilts above the lagoon
     'school': 6, 'public': 6, 'civic': 6, 'hospital': 6, 'university': 6, 'government': 6, 'kindergarten': 6,
 }
 ROOF = {'flat': 0, 'gabled': 1, 'hipped': 2, 'half-hipped': 2, 'pyramidal': 3, 'skillion': 4, 'onion': 3, 'dome': 3, 'round': 1, 'gambrel': 1, 'mansard': 2}
@@ -371,9 +384,10 @@ def carve_water(L, H, osm):
     print(f'  carved {int(mk.sum())} lake samples, {len(lakes)} mountain lakes', flush=True)
     return H
 
-def bake_cover(L, osm, N):
-    """Vegetation mask over the hi square: 0 = nothing grows (buildings, roads, water, glacier), else 1 + forest * 254."""
-    img = Image.new('L', (N, N), 1)
+def bake_cover(L, osm, N, base=None):
+    """Vegetation mask over the hi square: 0 = nothing grows (buildings, roads, water, glacier), else 1 + forest * 254.
+    base: a starting mask (sea locations: the sea and the imagery's green canopy, tools/realworld/sea.py)."""
+    img = Image.fromarray(base) if base is not None else Image.new('L', (N, N), 1)
     land = osm['land']
     for test, v in ((lambda t: t.get('landuse') == 'forest' or t.get('natural') == 'wood', 255), (lambda t: t.get('natural') == 'scrub', 110), (lambda t: t.get('natural') == 'glacier', 0)):
         raster(L, N, [r for t, rings in land if test(t) for r in rings], v, img)
@@ -407,16 +421,22 @@ def main():
     os.makedirs(out, exist_ok=True)
     print('osm', flush=True)
     osm = bake_osm(L, cache)  # heights need the lakes
+    sea = None
+    if L.get('sea'):  # coasts, lagoons and reefs (bathymetry from the imagery) instead of lakes
+        import sea
+        osm['out']['piers'] = sea.piers(L, L['hi'], cache)
     if 'heights' in only:
         print('heights', flush=True)
         far = bake_heights(L, L['far'], L['farN'], L['farZoomH'], cache)
         hi = bake_heights(L, L['hi'], L['hiN'], L['hiZoomH'], cache)
-        hi = carve_water(L, hi, osm)
+        if sea: hi, far = sea.bake_sea(L, hi, far, cache); osm['out']['lakes'] = []
+        else: hi = carve_water(L, hi, osm)
         print('  hi range', float(hi.min()), float(hi.max()), ' far', float(far.min()), float(far.max()))
         print('  hi.bin.gz', write_heights(os.path.join(out, 'hi.bin.gz'), hi))
         print('  far.bin.gz', write_heights(os.path.join(out, 'far.bin.gz'), far))
     if 'osm' in only:
-        cover = bake_cover(L, osm, L['hiImg'])
+        cover = bake_cover(L, osm, L['hiImg'], sea.cover_base(L, cache, out) if sea else None)
+        if sea: cover = sea.bare_cliffs(L, cover, out)
         cover.save(os.path.join(out, 'cover.png'), optimize=True)
         print('  cover.png', os.path.getsize(os.path.join(out, 'cover.png')), flush=True)
         if 'lakes' not in osm['out']:
@@ -428,6 +448,7 @@ def main():
         for key, N, zoom in (('far', L['farImg'], L['farZoomI']), ('hi', L['hiImg'], L['hiZoomI'])):
             img = bake_image(L, L[key], N, zoom, cache)
             if key == 'hi': img = clear_roofs(L, img, osm)
+            if key == 'hi' and sea: img = sea.fix_summit_cloud(L, sea.fill_pad(L, img, out), out)
             p = os.path.join(out, key + '.jpg')
             Image.fromarray(img).save(p, quality=86 if key == 'hi' else 88, optimize=True, progressive=True)
             print(' ', key + '.jpg', os.path.getsize(p), flush=True)

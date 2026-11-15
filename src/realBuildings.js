@@ -11,6 +11,13 @@ const VIEW = { low: 4500, medium: 8000, high: 14000 };
 // kind codes from the bake: 0 house, 1 apartments, 2 farm / barn / shed, 3 church, 4 industrial / commercial, 5 hotel, 6 public
 const WALLS = { plaster: [0xf2ece0, 0xe8dcc4, 0xefe2c8, 0xdcd0b8, 0xe6dccc, 0xd8d4c8, 0xf0e8d8], wood: [0xffffff, 0xf0e0c8, 0xd8b898, 0xc8a080] }; // tints over the photo atlas (buildings.js)
 const ROOFS = { tile: [0x7a5444, 0x6e4a3c, 0x845a48, 0x664436, 0x8a6250], grey: [0x6a6c70, 0x5a5c62, 0x7a7266, 0x666058], shingle: [0x8a8070, 0x7a7266, 0x6e665a, 0x948a78] };
+// loc.osmStyle 'tropical' (Bora Bora): painted plaster and timber houses under corrugated metal, pandanus thatch on the
+// resorts, and overwater bungalows (kind 7, or any building standing in the lagoon) on stilts with their piers
+const TROPIC = {
+  walls: [0xf6f2e8, 0xf2ead6, 0xe6efe2, 0xf4dcc8, 0xd8eaee, 0xf6e6b8, 0xffffff, 0xe8d8c0], wood: [0xb08c64, 0x9c7a56, 0xc4a27a, 0x8a6a4a],
+  metal: [0xa8442e, 0x8e3a2a, 0x3f6e52, 0x3d5f86, 0xc8c8c4, 0xb8b4aa, 0x5a7a8a, 0x7a2e2a], thatch: [0xffe2a8, 0xf4d398, 0xffeabc, 0xe8c890],
+};
+const DECK = 1.7; // m above the water: bungalow floors and pier decks
 
 export class RealScenery {
   constructor(world) {
@@ -29,7 +36,7 @@ export class RealScenery {
 
   // ---------------- buildings ----------------
   buildBuildings(list) {
-    const W = this.w, r = mulberry32(W.loc.seed * 5 + 3), lowQ = W.qName === 'low';
+    const W = this.w, r = mulberry32(W.loc.seed * 5 + 3), lowQ = W.qName === 'low', trop = W.loc.osmStyle === 'tropical', wl = W.waterLevel;
     for (const b of list) {
       const [kind, hTag, lv, rsTag, rhTag, minH, flat] = b;
       const n = flat.length / 2; if (n < 3) continue;
@@ -60,24 +67,27 @@ export class RealScenery {
       // ground under it: walls start just below the lowest corner
       let g0 = Infinity, g1 = -Infinity;
       for (const p of P) { const h = W.sampleGrid(p[0], p[1]); g0 = Math.min(g0, h); g1 = Math.max(g1, h); }
-      if (g0 < W.waterLevel - 2) continue;
-      const base = g0 - 0.6;
+      const wet = trop && (kind === 7 || g0 < wl + 0.2); // on stilts over the lagoon
+      if (wet ? A > 900 || g0 < wl - 15 : g0 < wl - 2) continue;
+      const base = wet ? wl + DECK : g0 - 0.6;
       // heights: tagged, from levels, or by kind and size
       const big = A > 450, small = A < 35;
       let roof = rsTag;
       if (roof < 0) roof = kind === 4 || kind === 6 ? (A > 350 ? 0 : 1) : kind === 1 && big ? 0 : rect > 0.78 ? 1 : rect > 0.55 && A < 900 ? 2 : 0;
       if (roof === 4) roof = 1;
       if (roof === 1 && hw > 16) roof = 0; // no giant gables on huge halls
+      if (trop && rsTag < 0 && (wet || kind === 5) && A < 500) roof = 2; // thatched resort roofs are hipped
       const pitch = kind === 3 ? 1.1 : kind === 2 ? 0.5 : 0.58;
-      let rise = roof === 0 ? 0 : rhTag > 0 ? rhTag : Math.min(hw * pitch, 9);
+      let rise = roof === 0 ? 0 : rhTag > 0 ? rhTag : Math.min(hw * (trop && roof === 2 ? 0.95 : pitch), trop ? 5.5 : 9);
       let walls;
       if (hTag > 0) walls = Math.max(2.5, hTag - minH - rise);
       else if (lv > 0) walls = lv * 2.9 + 0.5;
+      else if (trop) walls = wet ? 2.9 : small ? 2.5 : kind === 0 || kind === 7 ? (A > 260 ? 6.2 : 3.3) : kind === 1 ? 8.8 : kind === 3 ? 7.5 : kind === 5 ? (A > 600 ? 7.2 : 3.6) : 5.5;
       else walls = small ? 2.6 : kind === 0 ? (A > 160 ? 8.6 : 5.9) : kind === 1 ? 11.5 : kind === 2 ? 4.8 : kind === 3 ? 10 : kind === 4 ? 7.5 : kind === 5 ? 12.5 : 9.5;
       if (hTag > 0 && hTag - minH < walls + rise) rise = Math.max(0, hTag - minH - walls);
-      const eave = (g0 + g1) / 2 + minH + walls - base;
+      const eave = wet ? walls : (g0 + g1) / 2 + minH + walls - base;
       // style: Swiss chalets (dark timber) up in the villages, plaster in the valley towns
-      const hAbs = (g0 + g1) / 2, chalet = (kind === 0 || kind === 5 || kind === 2) && r() < (kind === 2 ? 0.75 : smoothstep(600, 1100, hAbs) * 0.6 + 0.12);
+      const hAbs = (g0 + g1) / 2, chalet = !trop && (kind === 0 || kind === 5 || kind === 2) && r() < (kind === 2 ? 0.75 : smoothstep(600, 1100, hAbs) * 0.6 + 0.12);
       let wallCell, wallCol;
       if (kind === 2) { wallCell = chalet ? C.WOOD : C.BOARDS; wallCol = chalet ? WALLS.wood[(r() * 4) | 0] : 0xd8c8b0; }
       else if (chalet) { wallCell = C.WOOD_WIN; wallCol = WALLS.wood[(r() * 4) | 0]; }
@@ -93,7 +103,15 @@ export class RealScenery {
       const style = kind === 4 ? 'grey' : chalet ? (u < 0.55 ? 'shingle' : u < 0.85 ? 'grey' : 'tile') : (u < 0.68 ? 'tile' : 'grey');
       const pal = ROOFS[style], roofCol = pal[(r() * pal.length) | 0];
       // (the clay photo tile is bright: half the tiled roofs get the weathered dark tile)
-      const roofCell = style === 'tile' ? (r() < 0.5 ? C.TILES : C.DARKTILE ?? C.TILES) : style === 'shingle' ? C.SHINGLE : kind === 4 ? C.SEAM : C.SLATE;
+      let roofCell = style === 'tile' ? (r() < 0.5 ? C.TILES : C.DARKTILE ?? C.TILES) : style === 'shingle' ? C.SHINGLE : kind === 4 ? C.SEAM : C.SLATE;
+      let roofC = roofCol;
+      if (trop) {
+        const thatch = (wet || kind === 5 || (kind === 0 && r() < 0.12)) && A < 600;
+        const timber = wet || (thatch && r() < 0.6) || r() < 0.15;
+        wallCell = timber ? C.WOOD_WIN : kind === 4 ? C.CONCRETE : kind === 3 ? C.CHURCH_WIN : small ? C.PLAIN : [C.CLAP_WIN, C.SHUTTERED, C.WIN][(r() * 3) | 0];
+        wallCol = timber ? TROPIC.wood[(r() * 4) | 0] : TROPIC.walls[(r() * TROPIC.walls.length) | 0];
+        roofCell = thatch ? C.THATCH : C.SEAM; roofC = thatch ? TROPIC.thatch[(r() * 4) | 0] : TROPIC.metal[(r() * TROPIC.metal.length) | 0];
+      }
       // ---- geometry
       const ch = this.chunk(cx, cz), B = ch.B;
       B.seed = (r() * 255) | 0;
@@ -107,9 +125,17 @@ export class RealScenery {
       if (roof === 1 || roof === 2 || roof === 3) {
         B.setFrame(cxo, base, czo, yaw);
         const over = kind === 4 ? 0.3 : chalet ? 1.1 : 0.6;
-        if (roof === 1) B.gable(hw * 2, hl * 2, eave, rise, over, roofCell, roofCol, wallCell === C.WOOD_WIN ? C.WOOD : C.PLAIN, wallCol, { under: chalet });
-        else B.hip(hw * 2, hl * 2, eave, rise, over, roofCell, roofCol);
+        if (roof === 1) B.gable(hw * 2, hl * 2, eave, rise, over, roofCell, roofC, wallCell === C.WOOD_WIN ? C.WOOD : C.PLAIN, wallCol, { under: chalet });
+        else B.hip(hw * 2, hl * 2, eave, rise, over, roofCell, roofC);
       } else this.flatRoof(B, P, eave, kind === 4 ? C.GRAVEL : C.CONCRETE, kind === 4 ? 0xa8a49c : 0x9a958c);
+      if (wet) { // a timber deck round the bungalow, on piles down to the lagoon floor
+        B.setFrame(0, 0, 0, 0);
+        B.obox(cxo, czo, ux, uz, hl + 1.4, hw + 1.4, base - 0.3, base, C.BOARDS, 0x9a7a58);
+        for (const [a, c] of [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, -1], [0, 1]]) {
+          const px = cxo + ux * a * (hl + 1) - uz * c * (hw + 1), pz = czo + uz * a * (hl + 1) + ux * c * (hw + 1), y0 = Math.min(wl - 0.5, W.sampleGrid(px, pz));
+          B.box(px, y0, pz, 0.32, base - 0.3 - y0, 0.32, C.DARKWOOD, 0x5a4634, { top: false });
+        }
+      }
       ch.n++; ch.x += cx; ch.z += cz;
       // collisions: a disc per building (the aircraft's parts are tested against these)
       const key = Math.floor(cx / 50) + ',' + Math.floor(cz / 50);
@@ -117,6 +143,7 @@ export class RealScenery {
       this.grid.get(key).push([cx, base, cz, eave + rise, Math.sqrt(A / Math.PI)]);
       this.count++;
     }
+    this.buildPiers(W.real.osm.piers || []);
     const mat = (this.mat = buildingMaterial({ cellPx: { low: 128, medium: 192, ultra: 384 }[W.qName] ?? 256, interiors: W.qName !== 'low' })); // the towns' atlas
     W.windowMats = W.windowMats || []; W.windowMats.push(mat);
     this.chunkList = [];
@@ -128,6 +155,35 @@ export class RealScenery {
       this.chunkList.push({ m, x: ch.x / ch.n, z: ch.z / ch.n, r: g.boundingSphere.radius });
     }
     this.chunks = null;
+  }
+  // piers and jetties (OSM man_made=pier): plank decks on piles, walkways out to the overwater bungalows
+  buildPiers(list) {
+    const W = this.w, wl = W.waterLevel;
+    for (const [area, width, flat] of list) {
+      const P = []; for (let k = 0; k < flat.length; k += 2) P.push([flat[k], flat[k + 1]]);
+      if (P.length < 2 || P.some((p) => Math.abs(p[0] - 100) < 480 && Math.abs(p[1]) < 1250)) continue;
+      const deck = (x, z) => Math.max(wl + DECK, W.sampleGrid(x, z) + 0.25);
+      if (area) {
+        if (P.length < 3) continue;
+        let cx = 0, cz = 0; for (const p of P) { cx += p[0] / P.length; cz += p[1] / P.length; }
+        const ch = this.chunk(cx, cz); ch.B.setFrame(0, 0, 0, 0);
+        this.flatRoof(ch.B, P, deck(cx, cz), C.BOARDS, 0x9a7a58);
+        ch.n++; ch.x += cx; ch.z += cz;
+        continue;
+      }
+      for (let i = 1; i < P.length; i++) {
+        const a = P[i - 1], b = P[i], L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L < 0.5) continue;
+        const ux = (b[0] - a[0]) / L, uz = (b[1] - a[1]) / L, cx = (a[0] + b[0]) / 2, cz = (a[1] + b[1]) / 2, y = Math.max(deck(a[0], a[1]), deck(b[0], b[1]));
+        const ch = this.chunk(cx, cz), B = ch.B; B.setFrame(0, 0, 0, 0);
+        B.obox(cx, cz, ux, uz, L / 2 + width * 0.3, width / 2, y - 0.25, y, C.BOARDS, 0x9a7a58);
+        for (let t = 0; t <= L; t += 4) for (const sd of [-1, 1]) {
+          const px = a[0] + ux * t - uz * sd * (width / 2 - 0.15), pz = a[1] + uz * t + ux * sd * (width / 2 - 0.15), g = W.sampleGrid(px, pz);
+          if (g > y - 0.6) continue;
+          B.box(px, Math.min(g, wl - 0.5), pz, 0.24, y - 0.25 - Math.min(g, wl - 0.5), 0.24, C.DARKWOOD, 0x5a4634, { top: false });
+        }
+        ch.n++; ch.x += cx; ch.z += cz;
+      }
+    }
   }
   chunk(x, z) {
     const k = Math.floor(x / CHUNK) + ',' + Math.floor(z / CHUNK);
