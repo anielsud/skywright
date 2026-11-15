@@ -1,17 +1,195 @@
 {
-  "_doc": "Recorded sounds shipped in assets/sfx. id = Freesound id, [start, end] seconds of the source to use. loop: crossfade the ends so it loops seamlessly. Rebuild with tools/sfx/process.py.",
-  "eng_piston_idle":   { "id": 127095, "start": 30, "end": 40, "loop": true },
-  "eng_piston_high":   { "id": 127095, "start": 80, "end": 90, "loop": true },
-  "eng_piston_cabin":  { "id": 325845, "start": 2, "end": 12, "loop": true },
-  "eng_radial_idle":   { "id": 143556, "start": 7.5, "end": 15.5, "loop": true },
-  "eng_radial_high":   { "id": 437771, "start": 8, "end": 18, "loop": true },
-  "eng_turboprop_ext": { "id": 828952, "start": 5, "end": 15, "loop": true },
-  "eng_turboprop_idle":{ "id": 399371, "start": 15, "end": 25, "loop": true },
-  "eng_turboprop_high":{ "id": 399371, "start": 117, "end": 127, "loop": true },
-  "eng_jet_idle":      { "id": 322178, "start": 22, "end": 32, "loop": true },
-  "eng_jet_high":      { "id": 128613, "start": 0, "end": 5.1, "loop": true },
-  "eng_jet_ab":        { "id": 104883, "start": 12, "end": 22, "loop": true },
-  "eng_fan_idle":      { "id": 817123, "start": 64, "end": 74, "loop": true },
-  "eng_fan_cabin":     { "id": 436942, "start": 70, "end": 80, "loop": true },
-  "eng_rocket":        { "id": 774245, "start": 4, "end": 14, "loop": true }
+ "_doc": "Recorded sounds shipped in assets/sfx. id = Freesound id, [start, end] seconds of the source to use. loop: crossfade the ends so it loops seamlessly. Rebuild with tools/sfx/process.py.",
+ "eng_piston_idle": {
+  "id": 127095,
+  "start": 30,
+  "end": 40,
+  "loop": true
+ },
+ "eng_piston_high": {
+  "id": 127095,
+  "start": 80,
+  "end": 90,
+  "loop": true
+ },
+ "eng_piston_cabin": {
+  "id": 325845,
+  "start": 2,
+  "end": 12,
+  "loop": true
+ },
+ "eng_radial_idle": {
+  "id": 143556,
+  "start": 7.5,
+  "end": 15.5,
+  "loop": true
+ },
+ "eng_radial_high": {
+  "id": 437771,
+  "start": 8,
+  "end": 18,
+  "loop": true
+ },
+ "eng_turboprop_ext": {
+  "id": 828952,
+  "start": 5,
+  "end": 15,
+  "loop": true
+ },
+ "eng_turboprop_idle": {
+  "id": 399371,
+  "start": 15,
+  "end": 25,
+  "loop": true
+ },
+ "eng_turboprop_high": {
+  "id": 399371,
+  "start": 117,
+  "end": 127,
+  "loop": true
+ },
+ "eng_jet_idle": {
+  "id": 322178,
+  "start": 22,
+  "end": 32,
+  "loop": true
+ },
+ "eng_jet_high": {
+  "id": 128613,
+  "start": 0,
+  "end": 5.1,
+  "loop": true
+ },
+ "eng_jet_ab": {
+  "id": 104883,
+  "start": 12,
+  "end": 22,
+  "loop": true
+ },
+ "eng_fan_idle": {
+  "id": 817123,
+  "start": 64,
+  "end": 74,
+  "loop": true
+ },
+ "eng_fan_cabin": {
+  "id": 436942,
+  "start": 70,
+  "end": 80,
+  "loop": true
+ },
+ "eng_rocket": {
+  "id": 774245,
+  "start": 4,
+  "end": 14,
+  "loop": true
+ },
+ "wind_cockpit": {
+  "id": 162414,
+  "start": 0,
+  "end": 9.3,
+  "loop": true
+ },
+ "wind_ext": {
+  "id": 651541,
+  "start": 12,
+  "end": 25,
+  "loop": true
+ },
+ "roll_runway": {
+  "id": 591079,
+  "start": 50,
+  "end": 60,
+  "loop": true
+ },
+ "rain": {
+  "id": 671409,
+  "start": 1,
+  "end": 13,
+  "loop": true
+ },
+ "amb_day": {
+  "id": 529573,
+  "start": 10,
+  "end": 30,
+  "loop": true
+ },
+ "amb_night": {
+  "id": 579572,
+  "start": 5,
+  "end": 20,
+  "loop": true
+ },
+ "amb_sea": {
+  "id": 475350,
+  "start": 20,
+  "end": 40,
+  "loop": true
+ },
+ "amb_lake": {
+  "id": 550926,
+  "start": 20,
+  "end": 40,
+  "loop": true
+ },
+ "tyre_chirp": {
+  "id": 481668,
+  "start": 0.15,
+  "end": 1.1
+ },
+ "gear_motor": {
+  "id": 425273,
+  "start": 0,
+  "end": 4.0
+ },
+ "thunder_1": {
+  "id": 151201,
+  "start": 0,
+  "end": 5.5
+ },
+ "thunder_2": {
+  "id": 322210,
+  "start": 0,
+  "end": 14
+ },
+ "thunder_3": {
+  "id": 441836,
+  "start": 2.6,
+  "end": 16.5
+ },
+ "crash_metal": {
+  "id": 675466,
+  "start": 0,
+  "end": 5.5
+ },
+ "debris_big": {
+  "id": 703247,
+  "start": 0,
+  "end": 4.6
+ },
+ "debris_small": {
+  "id": 703248,
+  "start": 0,
+  "end": 3.8
+ },
+ "explosion": {
+  "id": 840508,
+  "start": 0,
+  "end": 6.3
+ },
+ "boom": {
+  "id": 434426,
+  "start": 0,
+  "end": 2.6
+ },
+ "splash": {
+  "id": 637952,
+  "start": 19.4,
+  "end": 22.8
+ },
+ "glass": {
+  "id": 848312,
+  "start": 0.55,
+  "end": 2.2
+ }
 }
