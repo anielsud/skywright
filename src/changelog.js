@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.34.0', items: [
+    'Every place sounds different now: planes taxiing and buzzing around the airport, the hum of town with church bells when you fly low over it, and wild gusty wind when you climb really high or zoom past a mountain.',
+    'Thunderstorms roar with their own howling wind, and in the cockpit you can hear the rain drumming on your canopy.',
+  ] },
   { v: '1.33.0', items: [
     'Fixed: water and beaches no longer flicker or poke through each other, and the waves and foam now line up with the real shoreline.',
   ] },

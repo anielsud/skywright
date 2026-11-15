@@ -12,6 +12,9 @@ import { SAMPLE_ENGINES, SAMPLE_LEVEL, RPM_RANGE } from './audio.js';
 // horn ≈-27 @80 m, bell ≈-36 @15 m, flock flaps ≈-36 @20 m, calls ≈-37 @25 m; another plane at full power ≈-33 @15 m
 // (a few dB under your own engine in the chase view).
 const LVL = { car: 1.5, truck: 2, train: 5, horn: 3.6, bell: 1.1, flock: 1.4, call: 1.1, plane: 1.4 };
+// Ambience beds (weighted dBFS at full amount, measured over 7 s): airport ≈-40 (under an idling engine), town ≈-39 (bells to ≈-31),
+// high wind ≈-38 (gusts to ≈-33), storm wind ≈-34, canopy rain in a storm ≈-35 (on top of the existing rain bed). Nature beds sit at -41..-34.
+const AMB = { airport: 0.7, town: 0.7, high: 1, storm: 1, canopy: 0.55 };
 const CAR_VOICES = 3, CAR_RANGE = 240, TRAIN_RANGE = 1600, PLANE_VOICES = 3, PLANE_RANGE = 3500, FLOCK_RANGE = 160;
 const HEAVY = { truck: 1, tanker: 1, bus: 1 };
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -85,7 +88,7 @@ export class WorldSound {
     return out;
   }
 
-  update(f, lp, dt, players) {
+  update(f, lp, dt, players, cockpit = false) {
     if (!this.on || !lp) return;
     this.t += dt;
     const rank = this.t - this.rankT > 0.25; if (rank) this.rankT = this.t;
@@ -94,6 +97,7 @@ export class WorldSound {
     this.updateTrain(lp, dt);
     this.updatePlanes(f, lp, rank, players);
     if (rank) this.updateFlocks(lp);
+    this.updateAmbience(lp, dt, agl, cockpit);
   }
 
   // ---------- road traffic: the nearest few cars get a pooled tyre/engine hum ----------
@@ -166,7 +170,7 @@ export class WorldSound {
       const list = [];
       for (const pl of players || []) { const ac = pl.remote?.ac; if (ac && !ac.dead && ac.root.visible) list.push({ key: pl, pos: ac.x, ...this.remoteEngine(ac) }); }
       const P = this.traffic?.pattern; if (P) list.push({ key: P, pos: P.obj.position, kind: 'piston', n: 0.62, count: 1 });
-      const H = this.traffic?.heli; if (H) list.push({ key: H, pos: H.g.position, kind: 'turboprop', n: 0.75, count: 1 });
+      const H = this.traffic?.heli; if (H) list.push({ key: H, pos: H.g.position, kind: SAMPLE_ENGINES.rotor ? 'rotor' : 'turboprop', n: 0.75, count: 1 });
       const near = list.filter((x) => x.kind && x.pos.distanceTo(lp) < PLANE_RANGE).sort((a, b) => a.pos.distanceTo(lp) - b.pos.distanceTo(lp)).slice(0, PLANE_VOICES);
       for (const s of this.planes) if (s.owner && !near.some((x) => x.key === s.owner.key && x.kind === s.owner.kind)) s.release();
       for (const x of near) {
@@ -217,6 +221,59 @@ export class WorldSound {
     }
   }
 
+  // ---------- location ambience: airport bustle, town hum, high/mountain wind, storm wind and rain drumming on the canopy ----------
+  // Where you are is checked twice a second with a handful of terrain samples; the beds crossfade slowly and only loop while audible.
+  updateAmbience(lp, dt, agl, cockpit) {
+    const W = this.world, A = this.A;
+    this.ambT = (this.ambT ?? 1) + dt;
+    if (this.ambT > 0.5) { this.ambT = 0; this.where = this.locate(lp, agl); }
+    const w = this.where; if (!w) return;
+    // gusts: a slow random walk the high wind follows
+    this.gustT = (this.gustT ?? 0) - dt;
+    if (this.gustT < 0) { this.gustT = 0.8 + Math.random() * 2.2; this.gustTo = Math.random() ** 1.5; }
+    this.gust = (this.gust ?? 0.5) + ((this.gustTo ?? 0.5) - (this.gust ?? 0.5)) * Math.min(1, dt * 1.2);
+    const night = W.night ? 0.6 : 1, storm = W.W?.storm ? Math.min(1, (W.W.wind || 15) / 15) : 0;
+    const rain = W.rain?.visible ? W.W.rain : 0;
+    this.ambBed('amb_airport', this.bus, w.airport * night * AMB.airport);
+    this.ambBed('amb_town', this.bus, w.town * night * AMB.town);
+    this.ambBed('wind_high', this.bus, w.high * (0.45 + 0.75 * this.gust) * AMB.high * (1 - 0.5 * storm), 0.8 + 0.25 * this.gust);
+    this.ambBed('wind_storm', this.bus, storm * AMB.storm * (0.7 + 0.5 * this.gust));
+    // inside the canopy: drumming rain, heavier in a storm (not muffled: it's on the glass right next to you)
+    this.ambBed('rain_canopy', A.amb, cockpit ? Math.min(1.6, rain) * AMB.canopy : 0);
+  }
+  // 0..1 amounts for where the camera is
+  locate(lp, agl) {
+    const W = this.world, rw = W.runway || { len: 1800 };
+    // the airfield: runways + taxiways + apron (x from the runway to past the terminal), only on/near the ground
+    const ax = Math.max(-120 - lp.x, 0, lp.x - 430), az = Math.max(0, Math.abs(lp.z) - rw.len / 2 - 60);
+    const airport = (1 - smooth(60, 650, Math.hypot(ax, az))) * (1 - smooth(15, 140, agl));
+    // towns: low and close
+    let town = 0;
+    for (const t of W.net?.towns || []) {
+      const d = Math.max(0, Math.hypot(lp.x - t.c.x, lp.z - t.c.z) - 260 * t.size);
+      town = Math.max(town, (1 - smooth(0, 650, d)) * Math.sqrt(t.size));
+    }
+    town *= 1 - smooth(50, 380, agl);
+    // high up, or skimming close past a mountain (any of 6 samples 250 m around that rises near your height and is a real peak)
+    let peak = 0;
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * Math.PI * 2, h = W.heightAt(lp.x + Math.cos(a) * 250, lp.z + Math.sin(a) * 250);
+      peak = Math.max(peak, smooth(-300, -40, h - lp.y) * smooth(500, 1100, h - W.waterLevel));
+    }
+    const high = Math.max(smooth(600, 2000, agl), peak);
+    return { airport, town, high };
+  }
+  // a looping bed that only exists while it's audible: created on fade-in, stopped a few seconds after fading out
+  ambBed(name, dest, v, rate) {
+    this.beds ||= {};
+    let b = this.beds[name];
+    if (v > 0.002 && !b) { if (!this.A.has(name)) return; const src = this.A.loop(name), g = this.A.gain(0); src.connect(g); g.connect(dest); b = this.beds[name] = { src, g, quiet: 0 }; }
+    if (!b) return;
+    this.A.set(b.g.gain, Math.max(0, v), 1.2); if (rate) this.A.set(b.src.playbackRate, rate, 0.8);
+    b.quiet = v > 0.002 ? 0 : b.quiet + 1;
+    if (b.quiet > 400) { try { b.src.stop(); b.g.disconnect(); } catch { /* gone */ } delete this.beds[name]; } // ~6 s of silence at 60 fps
+  }
+
   // positional one-shot with distance roll-off, air absorption and travel delay
   shotAt(name, pos, lp, { gain = 1, ref = 20, delay = 0, rate = 1 } = {}) {
     const A = this.A, b = A.buffers[name]; if (!b) return false;
@@ -233,6 +290,7 @@ export class WorldSound {
   dispose() {
     if (!this.on) return; this.on = false;
     for (const s of [...this.cars, ...this.planes, this.train, this.bell]) s.dispose();
+    for (const b of Object.values(this.beds || {})) { this.A.set(b.g.gain, 0, 0.05); setTimeout(() => { try { b.src.stop(); b.g.disconnect(); } catch { /* gone */ } }, 300); }
     this.A.set(this.bus.gain, 0, 0.05); setTimeout(() => { try { this.bus.disconnect(); } catch { /* gone */ } }, 300);
   }
 }
