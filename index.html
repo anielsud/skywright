@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#14181d">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Skywright</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hangar-ui">
+  <header class="topbar">
+    <div class="logo"><svg viewBox="0 0 64 64" width="26" height="26"><path d="M32 6 L37 28 L60 36 L60 41 L37 37 L35 52 L43 57 L43 60 L32 57 L21 60 L21 57 L29 52 L27 37 L4 41 L4 36 L27 28 Z" fill="currentColor"/></svg><span>SKYWRIGHT</span></div>
+    <input id="plane-name" maxlength="28" aria-label="Plane name">
+    <div class="tb-actions">
+      <button id="btn-planes" title="Load, save and share planes">✈ Planes</button>
+      <button id="btn-undo" title="Undo">↶</button><button id="btn-redo" title="Redo">↷</button>
+      <button id="btn-help" title="Help">?</button>
+      <button id="btn-settings" title="Settings">⚙</button>
+      <button id="btn-fly" class="primary fly">FLY ▶</button>
+    </div>
+  </header>
+  <aside class="palette">
+    <nav id="cats"></nav>
+    <div id="part-list"></div>
+  </aside>
+  <aside class="inspector">
+    <section id="sel-panel" hidden></section>
+    <section id="stats"></section>
+  </aside>
+  <div class="bottombar">
+    <button id="btn-toggle-left" class="small">☰ Parts</button>
+    <button id="btn-sym" class="toggle">⇋ Mirror</button>
+    <button id="btn-bal" class="toggle">◎ Balance</button>
+    <button id="btn-frame">⌖ Centre</button>
+    <button id="btn-toggle-right" class="small">Info ☰</button>
+  </div>
+  <div id="placing-bar" hidden><span></span><button>Cancel</button></div>
+</div>
+
+<div id="flight-ui" style="display:none">
+  <div id="hud"></div>
+  <div id="touch-root"></div>
+  <pre id="debug" style="display:none"></pre>
+</div>
+
+<div id="hint"></div>
+<div id="loading"><div class="spinner"></div><p>Generating world…</p></div>
+<div id="modal-root" style="display:none"></div>
+<div id="splash"><div class="logo big"><svg viewBox="0 0 64 64" width="64" height="64"><path d="M32 6 L37 28 L60 36 L60 41 L37 37 L35 52 L43 57 L43 60 L32 57 L21 60 L21 57 L29 52 L27 37 L4 41 L4 36 L27 28 Z" fill="currentColor"/></svg><span>SKYWRIGHT</span></div><p>Build it. Fly it. Break it.</p></div>
+<noscript>Skywright needs JavaScript and WebGL.</noscript>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
