@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.38.0', items: [
+    'Fly really high and the world keeps going all the way to the horizon: mountains, islands and desert fade softly into the sky instead of stopping at a square edge.',
+  ] },
   { v: '1.37.0', items: [
     'Damage you can hear! A hurt engine coughs, sputters and pops, and the worse it gets the more it stumbles. A burning engine crackles with fire.',
     'Pull really hard turns and the plane creaks and groans under the strain. A damaged wing rattles and flutters, faster the faster you fly.',
