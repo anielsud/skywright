@@ -1,7 +1,7 @@
 // Runtime aircraft: rigid-body flight model built from parts, ground contact, damage & break-up.
 import * as THREE from 'three';
 import { PARTS, partInfo } from './parts.js';
-import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale } from './design.js';
+import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale, partPower, partBurn } from './design.js';
 import { M } from './materials.js';
 import { clamp, lerp } from './noise.js';
 
@@ -126,9 +126,9 @@ export class Aircraft {
       }
       ctrlObjs.forEach((c) => { if (part.surfaces[c.strip]) part.surfaces[c.strip].ctrlObj = c.obj; });
       if (d.engine) {
-        const e = d.engine, ts = thrustScale(p);
+        const e = d.engine, ts = thrustScale(p) * partPower(p);
         part.engine = { ...e, thrust: e.thrust * ts, ab: e.ab ? e.ab * ts : 0, pos: info.center.clone().applyMatrix4(m), dir: new THREE.Vector3(0, 0, -1).transformDirection(m), spool: 0, rpm: 0, thrustNow: 0,
-          burn: e.burn || 0, burning: false, ab: 0, prop: obj.userData.prop, fan: obj.userData.fan, flame: obj.userData.flame, flameCore: obj.userData.flameCore, spinDir: p.mirror ? -1 : 1, angle: 0, smokeT: 0 };
+          burn: partBurn(p), burning: false, ab: 0, prop: obj.userData.prop, fan: obj.userData.fan, flame: obj.userData.flame, flameCore: obj.userData.flameCore, spinDir: p.mirror ? -1 : 1, angle: 0, smokeT: 0 };
       }
       if (d.gear) {
         const gi = d.gear, ls = linScale(p); // ls: resized gear (wheel/strut sizes are in metres, the mesh is in part-local units)

@@ -126,6 +126,8 @@ export class Hangar {
   }
   resetRotation() { this.edit((p) => { p.quat = [0, 0, 0, 1]; }); }
   // Part sizing. axis is a sizeSliders() key (len/dia/span/chord/size). Pass undo=false for follow-up steps of one slider drag.
+  // Engine tuning (power multiplier, rocket burn seconds); a value equal to stock is stored as absent.
+  setTune(key, v, stock, undo = true) { this.edit((p) => { if (Math.abs(v - stock) < 1e-6) delete p[key]; else p[key] = +v.toFixed(2); }, undo); }
   resizePart(axis, v, undo = true) {
     if (this.sel < 0) return;
     if (undo) this.pushUndo();
