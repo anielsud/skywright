@@ -23,6 +23,8 @@ python3 tools/test/smoke.py     # serves the repo root itself on a free port; no
 | `--only Kestrel` | fly just one preset (quick check, ~30 s) |
 | `--keep` | keep the screenshots and print where they are (they are always kept on failure, with one per failed step) |
 | `--out DIR` | write screenshots to DIR (implies `--keep`) |
+| `--quality low` | graphics setting for the flights |
+| `--min-realtime R` | fail a flight whose clock runs slower than R × realtime (default 0.25; 0 = any frame) |
 | `--port N` / `--cdp-port N` | fixed ports for the static server / Chrome debugger (default: free ones) |
 
 Chrome is found at the usual macOS path, or `google-chrome` / `chromium` on Linux. Set `CHROME=/path/to/chrome` to override.
@@ -33,6 +35,10 @@ On Linux it uses SwiftShader for WebGL (no GPU needed), which is how it runs in 
 **Before every merge to main.** Several sessions and agents merge all day, so run it on your branch after rebasing on
 origin/main, right before `gh pr merge`. A FAIL means don't merge: fix it, or if the bug is someone else's, file an issue.
 
-It also runs on every pull request (`.github/workflows/smoke.yml`, not a required check); screenshots are attached to the run.
+It also runs on every pull request (`.github/workflows/smoke.yml`, not a required check; screenshots are attached to
+the run). That is a **reduced** check: GitHub's runners have no GPU, and software WebGL (SwiftShader) draws about one
+flight frame every few seconds, so CI flies at `--quality low --min-realtime 0`. It still catches boot errors, missing
+files, clips that don't decode, and presets that throw when a flight starts, but it doesn't really fly them. A green CI
+run is not a substitute for running it locally.
 
 When you add a preset, a sound clip or a modal, the test picks presets and clips up automatically.

@@ -288,7 +288,7 @@ async def run(args, url, ws_url, shots):
                 await cdp.js(f'{S}.hangar.load({S}.presets.find((d) => d.name === {json.dumps(name)})); {S}.startFlight()')
                 await cdp.wait_for(f'{S}.F && {S}.F.ac && {S}.F.t > 0', 90, 'the flight to start')
                 await cdp.js(f'{S}.controls.setThrottle(1)')
-                t0 = await cdp.js(f'{S}.F.t')
+                t0, w0 = await cdp.js(f'{S}.F.t'), time.time()
                 await asyncio.sleep(FLIGHT_SECONDS)
                 if shoot:
                     await cdp.screenshot(os.path.join(shots, f'flight-{name}.png'))
@@ -296,6 +296,7 @@ async def run(args, url, ws_url, shots):
                     const n = (v) => [v.x, v.y, v.z].every(Number.isFinite);
                     return {{ t: F.t, pos: n(a.x), vel: n(a.v), alive: a.parts.filter((p) => p.alive).length,
                              parts: a.parts.length, speed: a.v.length(), alt: a.x.y, thr: {S}.controls.throttle }}; }})()""")
+                wall = time.time() - w0
                 if s is None:
                     raise AssertionError('the flight ended on its own')
                 if not s['pos'] or not s['vel']:
@@ -303,12 +304,12 @@ async def run(args, url, ws_url, shots):
                 if not s['parts']:
                     raise AssertionError('the plane has no parts')
                 ran = s['t'] - t0
-                if ran < FLIGHT_SECONDS * 0.25:
-                    raise AssertionError(f'frame loop stalled: flight clock moved {ran:.2f} s in {FLIGHT_SECONDS:.0f} s')
+                if ran <= 0 or ran < wall * args.min_realtime:
+                    raise AssertionError(f'frame loop stalled: flight clock moved {ran:.2f} s in {wall:.1f} s')
                 await cdp.js(f'{S}.endFlight()')
                 await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 10, 'the hangar')
                 return (f"{s['speed']:.0f} m/s, alt {s['alt']:.0f} m, {s['alive']}/{s['parts']} parts, "
-                        f"{ran / FLIGHT_SECONDS * 100:.0f}% realtime")
+                        f"{ran / wall * 100:.0f}% realtime")
             await r.step(f'fly: {name}', fly, timeout=150)
         return r.results
 
@@ -322,6 +323,9 @@ def main():
     ap.add_argument('--cdp-port', type=int, default=0, help='Chrome debugging port (default: a free one)')
     ap.add_argument('--quality', choices=['auto', 'low', 'medium', 'high'],
                     help="graphics setting for the flights (CI uses 'low': software WebGL is slow)")
+    ap.add_argument('--min-realtime', type=float, default=0.25, metavar='R',
+                    help='fail a flight if its clock runs slower than R x realtime (default 0.25; 0 = any frame '
+                         'at all, for CI where software WebGL draws about one flight frame every few seconds)')
     ap.add_argument('--size', default='1280x800', help='window size WxH')
     args = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)  # keep step lines in order when piped (CI logs)
