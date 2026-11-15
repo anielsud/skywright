@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.50.0', items: [
+    'Fixed: the landing challenge and “In the air” starts no longer begin inside a mountain. You always start with a clear path to the runway.',
+  ] },
   { v: '1.49.0', items: [
     'Smooth as butter: no more stutters or camera jitter while flying, and no more long pause when you crash.',
   ] },
