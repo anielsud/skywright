@@ -3,6 +3,8 @@ const CACHE = 'skywright-v3';
 // real-world location data (assets/real/, ~15 MB a place): not precached, cached on first use in its own cache,
 // which survives releases so a new version doesn't download the mountains again
 const REAL = 'skywright-real-v1';
+// hangar textures and props (assets/hangar/, 3-8 MB by quality): also cached on first use, in a cache that survives releases
+const HANGAR = 'skywright-hangar-v1';
 const FILES = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'icon.svg',
   'vendor/three.module.min.js', 'vendor/peerjs.min.js', 'vendor/addons/Sky.js', 'vendor/addons/BufferGeometryUtils.js', 'vendor/addons/OrbitControls.js', 'vendor/addons/RoomEnvironment.js',
   ...[].map((f) => `src/${f}.js`),
@@ -13,7 +15,7 @@ const FILES = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'icon.sv
 // recorded sounds: whatever assets/sfx/index.json lists (built by tools/sfx/process.py), so this list never goes stale
 const sfxFiles = () => fetch('assets/sfx/index.json', { cache: 'reload' }).then((r) => r.json()).then((ix) => ['assets/sfx/index.json', ...Object.keys(ix).map((n) => `assets/sfx/${n}.ogg`)]).catch(() => []);
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then(async (c) => c.addAll([...FILES, ...(await sfxFiles())].map((f) => new Request(f, { cache: 'reload' }))) /* bypass the HTTP cache so a new deploy precaches fresh files */).then(() => self.skipWaiting())); });
-self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE && k !== REAL).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
+self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE && k !== REAL && k !== HANGAR).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', (e) => {
   const req = e.request; if (req.method !== 'GET') return;
   if (req.url.includes('/assets/music/')) return; // streamed media uses range requests: leave them to the network + HTTP cache
@@ -21,7 +23,7 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(isDoc
     ? fetch(req, { cache: 'no-cache' }).then((r) => { caches.open(CACHE).then((c) => c.put(req, r.clone())); return r; }).catch(() => caches.match(req).then((r) => r || caches.match('index.html')))
     : caches.match(req).then((cached) => {
-      const store = req.url.includes('/assets/real/') ? REAL : CACHE;
+      const store = req.url.includes('/assets/real/') ? REAL : req.url.includes('/assets/hangar/') ? HANGAR : CACHE;
       const net = fetch(req, { cache: 'no-cache' }).then((resp) => /* revalidate with the server (cheap 304s), never trust a stale HTTP cache */ { if (resp.ok) { const copy = resp.clone(); caches.open(store).then((c) => c.put(req, copy)); } return resp; }).catch(() => cached);
       return cached || net; // stale-while-revalidate: next load gets the update
     }));

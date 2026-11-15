@@ -4,8 +4,11 @@ import { OrbitControls } from '../vendor/addons/OrbitControls.js';
 import { RoomEnvironment } from '../vendor/addons/RoomEnvironment.js';
 import { PARTS, CATEGORIES, PAINTS, partInfo } from './parts.js';
 import { analyze, partMatrix, partScale, sizeAxes, mirroredOf, newPart, subtree, removeParts, cloneDesign } from './design.js';
-import { makeNoise } from './noise.js';
 import { assemble, ControlPreview } from './planeDetail.js';
+import { HangarEnv } from './hangarEnv.js';
+
+// the hour the flight settings will fly at: the hangar's daylight follows it
+const flightHour = () => { try { const t = JSON.parse(localStorage.getItem('skywright.flight'))?.time; return Number.isFinite(t) ? t : 10; } catch { return 10; } };
 
 const ghostMat = new THREE.MeshBasicMaterial({ color: 0x4fc3ff, transparent: true, opacity: 0.45, depthWrite: false });
 
@@ -32,39 +35,18 @@ export class Hangar {
     this.preview = new ControlPreview(); // control check: arrows/WASD, Q/E, F
   }
 
+  // The building, props, lighting and the view outside live in hangarEnv.js; the plane is the only thing you can pick.
   buildEnv() {
-    const pm = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.85;
-    this.scene.background = new THREE.Color(0x1d2126);
-    this.scene.fog = new THREE.Fog(0x1d2126, 60, 160);
-    // concrete floor
-    const s = 512, c = document.createElement('canvas'); c.width = c.height = s; const g = c.getContext('2d'); const img = g.createImageData(s, s); const n = makeNoise(4);
-    for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) { const v = 150 + n.fbm(x / 60, y / 60, 4) * 25 + (Math.random() - 0.5) * 18; const i = (y * s + x) * 4; img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v * 1.02; img.data[i + 3] = 255; }
-    g.putImageData(img, 0, 0); g.strokeStyle = 'rgba(40,40,40,0.5)'; g.lineWidth = 2; g.strokeRect(0, 0, s, s);
-    g.fillStyle = 'rgba(240,190,0,0.85)'; g.fillRect(0, s / 2 - 4, s, 8);
-    const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(12, 12); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(240, 240), new THREE.MeshStandardMaterial({ map: t, roughness: 0.55, metalness: 0.1, color: 0x9a9a9a }));
-    floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; this.scene.add(floor); this.floor = floor;
-    // walls & ribs
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.8, metalness: 0.3, side: THREE.BackSide });
-    const shell = new THREE.Mesh(new THREE.CylinderGeometry(70, 70, 140, 40, 1, true, 0, Math.PI), wallMat);
-    shell.rotation.z = Math.PI / 2; shell.rotation.y = Math.PI / 2; shell.scale.set(1, 1, 0.6); shell.position.y = 0; this.scene.add(shell);
-    for (let z = -60; z <= 60; z += 15) { const rib = new THREE.Mesh(new THREE.TorusGeometry(69, 0.6, 6, 40, Math.PI), new THREE.MeshStandardMaterial({ color: 0x555b63, metalness: 0.7, roughness: 0.4 })); rib.position.z = z; rib.scale.set(1, 0.6, 1); this.scene.add(rib); }
-    // lights
-    this.scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x3a3530, 1.0)); // the room environment map does the soft fill (no point lights: much cheaper on tablets)
-    const key = new THREE.DirectionalLight(0xfff3e0, 2.2); key.position.set(15, 30, 12); key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024); this.key = key; const sc = key.shadow.camera; sc.left = sc.bottom = -40; sc.right = sc.top = 40; sc.far = 120; key.shadow.bias = -0.0005;
-    this.scene.add(key);
-    for (const [x, z] of [[-15, -15], [15, -15], [-15, 15], [15, 15]]) {
-      const lamp = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.6, 0.6, 16), new THREE.MeshBasicMaterial({ color: 0xfff6e0 })); lamp.position.set(x, 38, z); this.scene.add(lamp);
-    }
-    // tool cart & crates for flavour
-    const crate = new THREE.MeshStandardMaterial({ color: 0x8a6a3e, roughness: 0.85 });
-    for (const [x, z, s2] of [[-26, -18, 2], [-23.5, -18.5, 1.5], [-25, -15.8, 1.3], [28, 20, 2.2]]) { const b = new THREE.Mesh(new THREE.BoxGeometry(s2, s2, s2), crate); b.position.set(x, s2 / 2, z); b.castShadow = b.receiveShadow = true; this.scene.add(b); }
-    const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 1.8, 20), new THREE.MeshStandardMaterial({ color: 0x1d4e89, metalness: 0.5, roughness: 0.4 }));
-    for (const [x, z] of [[24, -22], [25.4, -21.6], [24.6, -23.3]]) { const d = drum.clone(); d.position.set(x, 0.9, z); d.castShadow = true; this.scene.add(d); }
+    const env = new HangarEnv(this.renderer, this.scene); this.env = env;
+    env.viewCamera = this.camera;
+    env.onChange = () => { this.envDirty = true; this.shadowsDirty(); this.needsRender = true; };
+    env.setupReflection(() => [this.markers, this.selBox, this.ghost].filter(Boolean));
+    this.key = env.sun;
+    env.setHour(flightHour());
+    this.envDirty = true;
   }
+  shadowsDirty() { if (!this.env) return; this.env.sun.shadow.needsUpdate = true; this.env.key.shadow.needsUpdate = true; }
+  bakeEnv() { this.env.bakeEnvironment([this.designGroup, this.markers, this.selBox, this.ghost].filter(Boolean)); this.renderer.compile(this.scene, this.camera); this.envDirty = false; this.shadowsDirty(); this.needsRender = true; } // compile: no shader hitches when props come into view // (the bake drew the shadow maps without the plane)
 
   buildMarkers() {
     const g = new THREE.Group();
@@ -80,7 +62,16 @@ export class Hangar {
 
   activate(on) {
     this.controls.enabled = on; this.needsRender = true; this.preview.enabled = on;
-    if (on) { this.rebuild(); }
+    const cv = this.renderer.domElement;
+    if (on) {
+      // back from a flight: re-upload the hangar a few textures per frame behind a hidden canvas, then fade it in
+      if (this.env.beginRestore()) { cv.style.transition = 'none'; cv.style.opacity = '0'; }
+      if (this.env.setHour(flightHour())) this.envDirty = true;
+      this.rebuild();
+    } else {
+      cv.style.transition = 'none'; cv.style.opacity = ''; // the flight shares the canvas
+      this.env.release(); // none of the hangar's GPU memory stays around during the flight
+    }
   }
 
   // ---------- design editing ----------
@@ -242,6 +233,8 @@ export class Hangar {
     const box = new THREE.Box3().setFromObject(this.designGroup);
     this.designGroup.position.y = box.isEmpty() ? 2 : -box.min.y + 0.02;
     this.designGroup.updateMatrixWorld(true);
+    this.shadowsDirty(); // shadows are only redrawn when something changed
+    this.env.setPlaneFootprint(new THREE.Box3().setFromObject(this.designGroup));
     this.stats = analyze(this.design);
     this.preview.attach(this.design, objs, this.stats.com);
     // markers
@@ -305,13 +298,21 @@ export class Hangar {
   }
   // Returns true when the view changed and needs drawing (the hangar only renders on demand).
   update(dt) {
+    if (this.env.restoring) {
+      if (!this.env.restoreStep()) return false;
+      const cv = this.renderer.domElement; requestAnimationFrame(() => { cv.style.transition = 'opacity 0.25s'; cv.style.opacity = ''; });
+      this.shadowsDirty(); this.needsRender = true;
+    }
     if (this.controls.update()) this.needsRender = true;
     if (this.preview.update(dt)) this.needsRender = true;
+    if (this.env.clampCamera(this.camera, this.controls.target)) this.needsRender = true; // walls, office block
+    if (this.envDirty && !this.env.loading && this.env.tier) this.bakeEnv();
+    if (this.env.animating) { this.env.update(dt); this.needsRender = true; } // Ultra: dust in the sunbeams
     if (this.selBox.visible) this.updateSelection();
     if (this.placing && this.ghost) { ghostMat.opacity = 0.35 + Math.sin(performance.now() / 200) * 0.15; this.needsRender = true; }
     const r = this.needsRender; this.needsRender = false; return r;
   }
-  setQuality(tier) { const n = tier === 'ultra' ? 4096 : tier === 'high' ? 2048 : 1024; if (this.key.shadow.mapSize.x !== n) { this.key.shadow.mapSize.set(n, n); this.key.shadow.map?.dispose(); this.key.shadow.map = null; } this.needsRender = true; }
+  setQuality(tier) { this.env.setTier(tier); this.envDirty = true; this.needsRender = true; }
   resize(w, h) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); this.needsRender = true; }
   render() { this.renderer.render(this.scene, this.camera); }
 }
