@@ -471,5 +471,50 @@
  },
  "vo_aww": {
   "tts": "Oh no! Try again!"
+ },
+ "roll_grass": {
+  "id": 515038,
+  "start": 24,
+  "end": 34,
+  "loop": true
+ },
+ "roll_dirt": {
+  "id": 251662,
+  "start": 2,
+  "end": 10,
+  "loop": true
+ },
+ "roll_snow": {
+  "id": 71099,
+  "start": 5.4,
+  "end": 10.2,
+  "loop": true
+ },
+ "water_taxi": {
+  "id": 592836,
+  "start": 2,
+  "end": 12,
+  "loop": true
+ },
+ "float_slap": {
+  "id": 637206,
+  "start": 10,
+  "end": 20,
+  "loop": true
+ },
+ "bump_1": {
+  "id": 675466,
+  "start": 1.38,
+  "end": 1.7
+ },
+ "bump_2": {
+  "id": 675466,
+  "start": 1.92,
+  "end": 2.22
+ },
+ "bump_3": {
+  "id": 675466,
+  "start": 2.58,
+  "end": 2.95
  }
 }

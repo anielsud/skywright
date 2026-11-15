@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.29.0', items: [
+    'Hear what you’re rolling on: soft rumbly grass, crunchy dirt and sand, squeaky snow, and real bumps and knocks when the ground gets rough.',
+    'Float planes splash and swish across the water, and little waves slap against the floats while you sit still.',
+  ] },
   { v: '1.28.0', items: [
     'Fly together without codes! Press FLY and you join everyone already flying at that place. The location cards show how many pilots are up, and you can Join a session, start a new one with your own time and weather, or pick Alone.',
     'Each pilot starts on a free runway, and if the host lands back in the hangar the game keeps going for everyone else.',

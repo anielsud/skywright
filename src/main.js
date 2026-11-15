@@ -843,7 +843,7 @@ function stepFlight(dtReal) {
   const agl = flightCam.position.y - Math.max(world.heightAt(flightCam.position.x, flightCam.position.z), world.waterLevel);
   audio.update({ engines: Object.values(engines), airspeed: ac.dead ? 0 : (ac.airspeed || 0), buffet: ac.dead || ac.onGround ? 0 : Math.max(0, ac.alpha - 0.22) + (ac.stalled ? 0.15 : 0),
     onGround: ac.onGround && ac.parts.some((p) => p.alive && p.gear?.wheels.some((w) => w.contact)), groundSpeed: gs, surface: surf,
-    scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead, cockpit, doppler, rain: world.rain.visible ? world.W.rain : 0,
+    gear: contactGear(ac), scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead, cockpit, doppler, rain: world.rain.visible ? world.W.rain : 0,
     listener: { pos: flightCam.position, fwd: camFwd, up: camUp },
     amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) },
     music: flightMusic(f, ac, world) });
@@ -861,6 +861,11 @@ function flightMusic(f, ac, world) {
   const h = ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), world.waterLevel);
   f.musicHigh = h > (f.musicHigh ? 120 : 250); // hysteresis so it doesn't flicker around the threshold
   return f.musicHigh && !ac.onGround ? 'cruise' : null;
+}
+// what is touching the ground: 'skid' (helicopter skids), 'float' or 'wheel' (picks the ground-roll sound)
+function contactGear(ac) {
+  for (const p of ac.parts) if (p.alive && p.gear?.wheels.some((w) => w.contact)) return p.gear.skid ? 'skid' : p.gear.float ? 'float' : 'wheel';
+  return 'wheel';
 }
 // 0..1: how close the camera is to open water (sampled in rings, refreshed twice a second)
 function waterProximity(f, world, p) {

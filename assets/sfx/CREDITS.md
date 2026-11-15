@@ -2,6 +2,7 @@
 
 Recordings from [Freesound](https://freesound.org), trimmed, looped and level-matched for the game.
 
+- "tires_snow_ice_slow.wav" by dunebuggy (CC0): https://freesound.org/people/dunebuggy/sounds/71099/
 - "Afterburner sound.wav" by StoneyJ (CC0): https://freesound.org/people/StoneyJ/sounds/104883/
 - "DR0000_0029.mp3" by drewkelly (CC0): https://freesound.org/people/drewkelly/sounds/127095/
 - "jetengine loop2.aif" by smidoid (CC BY 4.0): https://freesound.org/people/smidoid/sounds/128613/
@@ -10,6 +11,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "balfron thunder M.wav" by hokstnator (CC BY 4.0): https://freesound.org/people/hokstnator/sounds/151201/
 - "Jet Plane Wind Noise Loop of a KC-135 Stratotanker 4.flac" by qubodup (CC0): https://freesound.org/people/qubodup/sounds/162414/
 - "Body_Hit_Coat_Against_Wall.wav" by jcdecha (CC0): https://freesound.org/people/jcdecha/sounds/235451/
+- "Tires on Gravel Road 2" by OBXJohn (CC0): https://freesound.org/people/OBXJohn/sounds/251662/
 - "F16 fighter jet start up.aif" by ikbenraar (CC0): https://freesound.org/people/ikbenraar/sounds/322178/
 - "Deep thunder clap 03.wav" by klankbeeld (CC BY 4.0): https://freesound.org/people/klankbeeld/sounds/322210/
 - "Airplane inside ambient- cessna 414. condenser .mp3" by Daveshu88 (CC0): https://freesound.org/people/Daveshu88/sounds/325845/
@@ -30,6 +32,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "spray can" by richwise (CC0): https://freesound.org/people/richwise/sounds/476839/
 - "R01-71-Close up Seagull.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/479595/
 - "R03-19-Old Auto Tire Skid.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/481668/
+- "camioneta avanzando sobre tierra / pickup truck going overland" by jusebago (CC0): https://freesound.org/people/jusebago/sounds/515038/
 - "Meadow with many insects chirps atmo field recording" by Garuda1982 (CC0): https://freesound.org/people/Garuda1982/sounds/529573/
 - "Crow.wav" by Ambientsoundapp (CC0): https://freesound.org/people/Ambientsoundapp/sounds/537988/
 - "Foley_Object_Toolbox_Drops_&_Movements_&_Searching_Stereo_H5.wav" by Nox_Sound (CC0): https://freesound.org/people/Nox_Sound/sounds/550341/
@@ -38,8 +41,10 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Quiet summer night tone with steady close crickets and other animal calls 1" by leonelmail (CC0): https://freesound.org/people/leonelmail/sounds/579572/
 - "Car rolling on asphalt .wav" by orlandorizo (CC0): https://freesound.org/people/orlandorizo/sounds/591079/
 - "Ratchet Wrench Avg Speed Multiple" by Rudmer_Rotteveel (CC0): https://freesound.org/people/Rudmer_Rotteveel/sounds/591524/
+- "Canoe moving through water" by TheFlyFishingFilmmaker (CC BY 4.0): https://freesound.org/people/TheFlyFishingFilmmaker/sounds/592836/
 - "121003 Pigeon flock fly away, wing flaps, Toronto.wav" by TRP (CC0): https://freesound.org/people/TRP/sounds/616623/
 - "You've succeeded (game jingle)" by Rolly-SFX (CC0): https://freesound.org/people/Rolly-SFX/sounds/626259/
+- "boat knocks fiberglass water laps on hull.flac" by kyles (CC0): https://freesound.org/people/kyles/sounds/637206/
 - "water movements big splashes and waves.flac" by kyles (CC0): https://freesound.org/people/kyles/sounds/637952/
 - "wind draft loop 1" by nsstudios (CC BY 4.0): https://freesound.org/people/nsstudios/sounds/651541/
 - "forest heavy rain loop.wav" by Victormaa (CC0): https://freesound.org/people/Victormaa/sounds/671409/
