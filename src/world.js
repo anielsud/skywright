@@ -43,18 +43,7 @@ export const LOCATIONS = {
     },
   },
   islands: null, // Bora Bora (real, src/realworld.js) took the Coral Islands' place: same id, so saved settings and online sessions carry over
-  canyon: {
-    id: 'canyon', name: 'Red Canyon', desc: 'Towering mesas, a winding canyon river and endless desert.', seed: 37, rwyH: 120, water: 8, cloudBase: 3000, trees: 'cactus',
-    colors: { grass: [0xb06a3b, 0xc27d48, 0x9a5a32], rock: 0x8e4a2c, snow: 0xd9b48a, sand: 0xd2a26c, dirt: 0xa0603a }, snowline: 99999, desert: true, erosion: { cell: 360, depth: 0.12, octaves: 3, slope0: 0.15, slope1: 0.8 },
-    height(n, x, z) {
-      const cz = z + Math.sin(x / 1700) * 1400 + Math.sin(x / 600) * 200 - 2600;
-      const canyon = 1 - smoothstep(60, 520, Math.abs(cz));
-      let base = 120 + n.fbm(x / 3000, z / 3000, 3) * 30;
-      const mesa = n.fbm(x / 2200 + 10, z / 2200, 5);
-      if (mesa > 0.12) { const t = smoothstep(0.12, 0.2, mesa); const steps = Math.floor(t * 4) / 4 + smoothstep(0, 1, (t * 4) % 1) / 4 * 0.25; base += steps * 380 + n.fbm(x / 300, z / 300, 2) * 8; }
-      return lerp(base, -10 + n.fbm(x / 400, z / 400, 2) * 6, canyon);
-    },
-  },
+  canyon: null, // the Grand Canyon (real, src/realworld.js) took the Red Canyon's place, the same way
 };
 
 // real places from baked geodata (src/realworld.js): loaded before the World is built
@@ -438,6 +427,7 @@ export class World {
     const h = this.sampleGrid(x, z);
     if (S && S.q(x, z) && S.e <= 0) return { h, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: 'runway' }; // on a road
     if (h < this.waterLevel) return { h: this.waterLevel, n: new THREE.Vector3(0, 1, 0), type: 'water' };
+    const rw = this.real?.waterAt(x, z); if (rw != null && h < rw + 0.3) return { h: rw, n: new THREE.Vector3(0, 1, 0), type: 'water' }; // real rivers above the water level
     if (this.bake && !this.bake.dry && this.landAt(x, z, this.gL || (this.gL = [0, 0, 0, 0]))[0] > 0.6) return { h, n: new THREE.Vector3(0, 1, 0), type: 'water' }; // rivers, lakes
     const hx = this.sampleGrid(x + e, z), hz = this.sampleGrid(x, z + e);
     const n = new THREE.Vector3(h - hx, e, h - hz).normalize();
@@ -445,7 +435,7 @@ export class World {
     if (Math.abs(z) < RWY.len / 2 + 30 && RUNWAYS.some((r) => Math.abs(x - r.x) < RWY.width / 2 + 2)) type = 'runway';
     else if (this.isPaved(x, z)) type = 'runway';
     else if (n.y < 0.8) type = 'rock';
-    else if (this.loc.desert) type = 'sand';
+    else if (this.loc.desert) type = this.real && this.real.forest(x, z) > 0.45 ? 'grass' : 'sand'; // (pine needles under the real rims' forests)
     else if (h > this.loc.snowline + 100) type = 'snow';
     return { h: type === 'runway' ? Math.max(h, this.loc.rwyH) : h, n: type === 'runway' ? new THREE.Vector3(0, 1, 0) : n, type };
   }
@@ -595,7 +585,11 @@ export class World {
     const el = THREE.MathUtils.degToRad(dayFrac >= 0 && dayFrac <= 1 ? elev : -Math.abs(Math.sin(dayFrac * Math.PI)) * 30);
     const az = THREE.MathUtils.degToRad(90 + dayFrac * 180 - 25);
     this.sunDir = new THREE.Vector3(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az)).normalize();
-    if (this.loc.north) this.sunDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(this.loc.north)); // the world is turned: keep the sun in the true south
+    if (this.loc.sunLat != null) { // a real place's sun path (equinox): due east at 6:00, true south at noon, due west at 18:00
+      const h = (this.time - 12) * Math.PI / 12, phi = THREE.MathUtils.degToRad(this.loc.sunLat), ce = Math.cos(el);
+      const b = Math.PI + Math.atan2(Math.sin(h), Math.sin(phi) * Math.cos(h)) - THREE.MathUtils.degToRad(this.loc.north || 0); // bearing in the game frame
+      this.sunDir.set(ce * Math.sin(b), Math.sin(el), -ce * Math.cos(b));
+    } else if (this.loc.north) this.sunDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(this.loc.north)); // the world is turned: keep the sun in the true south
     this.sunElev = el;
     this.applyLighting();
   }
@@ -638,7 +632,7 @@ export class World {
     this.scene.fog.color.copy(fogC); this.fogBase = W.fog * (this.weatherId === 'clear' ? 1.0 : 1.5) * (this.q.res < 200 ? 1.3 : 1);
     this.scene.fog.density = W.fog;
     FOG.fogLin.value = this.fogBase;
-    FOG.fogBase.value = this.loc.id === 'alpine' ? this.loc.rwyH - 40 : this.waterLevel;
+    FOG.fogBase.value = this.loc.fogBase ?? (this.loc.id === 'alpine' ? this.loc.rwyH - 40 : this.waterLevel);
     FOG.fogFalloff.value = this.weatherId === 'fog' ? 1 / 220 : W.cover ? 1 / 1400 : 1 / 750;
     FOG.fogSunDir.value.copy(this.sunDir);
     FOG.fogSunColor.value.copy(sunCol).multiplyScalar((0.25 + golden * 0.9) * day * (1 - dark * 0.9));

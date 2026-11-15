@@ -1,7 +1,7 @@
 // Scenery for real-world locations from OpenStreetMap (© OpenStreetMap contributors, ODbL), baked by
 // tools/realworld/bake.py: every mapped building extruded from its real footprint (walls from the facade atlas in
-// buildings.js, gabled / hipped / flat roofs, Swiss chalet style up in the villages), railways, cable car lines and
-// mountain lakes. Takes the place of Towns (towns.js) for these locations and offers the same interface.
+// buildings.js, gabled / hipped / flat roofs, Swiss chalet style up in the villages), railways, cable car lines,
+// mountain lakes and rivers above the World's water level. Takes the place of Towns (towns.js) for these locations and offers the same interface.
 import * as THREE from 'three';
 import { Builder, buildingMaterial, C } from './buildings.js';
 import { mulberry32, smoothstep } from './noise.js';
@@ -31,12 +31,13 @@ export class RealScenery {
     this.buildRails(D.osm.rails);
     this.buildCables(D.osm.cables);
     this.buildLakes(D.osm.lakes || []);
+    this.buildRivers(D.rivers);
     this.ms = performance.now() - t0;
   }
 
   // ---------------- buildings ----------------
   buildBuildings(list) {
-    const W = this.w, r = mulberry32(W.loc.seed * 5 + 3), lowQ = W.qName === 'low', trop = W.loc.osmStyle === 'tropical', wl = W.waterLevel;
+    const W = this.w, r = mulberry32(W.loc.seed * 5 + 3), lowQ = W.qName === 'low', trop = W.loc.osmStyle === 'tropical', wl = W.waterLevel, SB = W.loc.buildStyle || {};
     for (const b of list) {
       const [kind, hTag, lv, rsTag, rhTag, minH, flat] = b;
       const n = flat.length / 2; if (n < 3) continue;
@@ -87,7 +88,7 @@ export class RealScenery {
       if (hTag > 0 && hTag - minH < walls + rise) rise = Math.max(0, hTag - minH - walls);
       const eave = wet ? walls : (g0 + g1) / 2 + minH + walls - base;
       // style: Swiss chalets (dark timber) up in the villages, plaster in the valley towns
-      const hAbs = (g0 + g1) / 2, chalet = !trop && (kind === 0 || kind === 5 || kind === 2) && r() < (kind === 2 ? 0.75 : smoothstep(600, 1100, hAbs) * 0.6 + 0.12);
+      const hAbs = (g0 + g1) / 2, chalet = !trop && (kind === 0 || kind === 5 || kind === 2) && r() < (kind === 2 ? 0.75 : SB.wood ?? smoothstep(600, 1100, hAbs) * 0.6 + 0.12);
       let wallCell, wallCol;
       if (kind === 2) { wallCell = chalet ? C.WOOD : C.BOARDS; wallCol = chalet ? WALLS.wood[(r() * 4) | 0] : 0xd8c8b0; }
       else if (chalet) { wallCell = C.WOOD_WIN; wallCol = WALLS.wood[(r() * 4) | 0]; }
@@ -100,7 +101,8 @@ export class RealScenery {
       // roofs: the usual Swiss mix (red-brown tiles in the valley towns, dark shingles or grey slate on chalets);
       // the satellite can't help, its 10 m pixels blur roofs into gardens (and the bake clears them from the photo)
       const u = r();
-      const style = kind === 4 ? 'grey' : chalet ? (u < 0.55 ? 'shingle' : u < 0.85 ? 'grey' : 'tile') : (u < 0.68 ? 'tile' : 'grey');
+      let style = kind === 4 ? 'grey' : chalet ? (u < 0.55 ? 'shingle' : u < 0.85 ? 'grey' : 'tile') : (u < 0.68 ? 'tile' : 'grey');
+      if (SB.roofs && kind !== 4) { let v = u; style = SB.roofs.find(([, p]) => (v -= p) < 0)?.[0] || 'grey'; } // the location's own mix
       const pal = ROOFS[style], roofCol = pal[(r() * pal.length) | 0];
       // (the clay photo tile is bright: half the tiled roofs get the weathered dark tile)
       let roofCell = style === 'tile' ? (r() < 0.5 ? C.TILES : C.DARKTILE ?? C.TILES) : style === 'shingle' ? C.SHINGLE : kind === 4 ? C.SEAM : C.SLATE;
@@ -272,12 +274,46 @@ export class RealScenery {
     m.receiveShadow = true; this.group.add(m);
   }
 
+  // ---------------- rivers above the World's water level (the Colorado): a ribbon on the baked downhill surface ----------------
+  buildRivers(list) {
+    if (!list.length) return;
+    const pos = [], uv = [], idx = [];
+    for (const P of list) {
+      const o = pos.length / 3; let v = 0;
+      P.forEach((p, i) => {
+        const a = P[Math.max(0, i - 1)], b = P[Math.min(P.length - 1, i + 1)], dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz) || 1;
+        const w = p.w + 14, nx = -dz / L * w, nz = dx / L * w; // a little wider than the bed: the edges tuck under the banks
+        if (i) v += Math.hypot(p.x - P[i - 1].x, p.z - P[i - 1].z);
+        pos.push(p.x - nx, p.h, p.z - nz, p.x + nx, p.h, p.z + nz); uv.push(0, v / 40, w / 20, v / 40);
+        if (i) { const k = o + (i - 1) * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+      });
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx);
+    g.computeVertexNormals(); g.computeBoundingSphere();
+    // ripples: a tileable normal map from a few plane waves, drifting downstream (update)
+    const s = 128, c = document.createElement('canvas'); c.width = c.height = s;
+    const cx = c.getContext('2d'), img = cx.createImageData(s, s), rr = mulberry32(17), wv = [];
+    for (let k = 0; k < 24; k++) { const f = 1 + Math.floor(rr() ** 1.5 * 12), a = (rr() - 0.5) * 2.2; wv.push([Math.round(Math.sin(a) * f) || 1, Math.round(Math.cos(a) * f * 1.6), 1 / f, rr() * 6.28]); }
+    for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+      let ddx = 0, ddy = 0; for (const [kx, ky, am, ph] of wv) { const cs = Math.cos((2 * Math.PI * (kx * x + ky * y)) / s + ph) * am; ddx += cs * kx; ddy += cs * ky; }
+      const n = new THREE.Vector3(-ddx * 0.05, -ddy * 0.05, 1).normalize(), k = (y * s + x) * 4;
+      img.data[k] = (n.x * 0.5 + 0.5) * 255; img.data[k + 1] = (n.y * 0.5 + 0.5) * 255; img.data[k + 2] = (n.z * 0.5 + 0.5) * 255; img.data[k + 3] = 255;
+    }
+    cx.putImageData(img, 0, 0);
+    const nt = new THREE.CanvasTexture(c); nt.wrapS = nt.wrapT = THREE.RepeatWrapping;
+    const mat = new THREE.MeshStandardMaterial({ color: this.w.loc.river?.color ?? 0x3a5a50, roughness: 0.3, metalness: 0, normalMap: nt, normalScale: new THREE.Vector2(0.45, 0.45), envMapIntensity: 0.5 });
+    const m = new THREE.Mesh(g, mat); m.receiveShadow = true;
+    this.river = m; this.group.add(m);
+  }
+
   hit(p) {
     const arr = this.grid.get(Math.floor(p.x / 50) + ',' + Math.floor(p.z / 50)); if (!arr) return null;
     for (const t of arr) { const dx = p.x - t[0], dz = p.z - t[2]; if (dx * dx + dz * dz < t[4] * t[4] && p.y < t[1] + t[3] && p.y > t[1] - 2) return t; }
     return null;
   }
   update(dt, t, fx, cam) {
+    if (this.river) this.river.material.normalMap.offset.y = -(t || 0) * 0.06; // flowing downstream
     if (!cam || !this.chunkList) return;
     for (const c of this.chunkList) c.m.visible = Math.hypot(c.x - cam.x, c.z - cam.z) < this.view + c.r;
   }

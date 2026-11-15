@@ -1,7 +1,7 @@
 // Offline terrain bake: runs a landscape-evolution simulation over the 26 km core of each built-in location and
 // writes assets/terrain/<id>.bin (see src/terrainBake.js for the format and how the game reads it).
 //
-//   node --import ./tools/terrain/hooks.mjs tools/terrain/bake.mjs [alpine islands canyon] [--n 2049]
+//   node --import ./tools/terrain/hooks.mjs tools/terrain/bake.mjs [alpine islands] [--n 2049]
 //        [--cache dir] [--preview dir]
 // Run it again whenever a location's height function (world.js LOCATIONS) or erosion settings change: the game
 // checks probe heights stored in the file and ignores a stale bake. ~5-15 min per location at 2049 (13 m cells).
@@ -40,7 +40,6 @@ mkdirSync(OUT, { recursive: true });
 const SIM = {
   alpine: { uplift: { K: 0.03, u: 8, iters: 250, pow: 1, maxS: 1.1, macro: 2500, gain: 0.85, mix: 1, fine: 160, detail: 0.35 }, K: 0.0005, iters: 20, dt: 1, m: 0.5, talus: 0.9, shed: 0.12, talusIters: 12, diff: 0.06, sedK: 0.55, rivA: 1.2e6, rivW: 6, wet: true },
   islands: { uplift: { K: 0.03, u: 6, iters: 250, pow: 1, maxS: 1.0, macro: 1500, gain: 0.85, mix: 1, fine: 120, detail: 0.3 }, K: 0.0005, iters: 20, dt: 1, m: 0.5, talus: 0.9, shed: 0.08, talusIters: 10, diff: 0.08, sedK: 0.6, rivA: 0.8e6, rivW: 5, wet: true },
-  canyon: { breach: false, mfd: 3, K: 0.00025, iters: 40, dt: 1, m: 0.5, talus: 1.3, shed: 0.1, talusIters: 10, diff: 0, sedK: 0.8, rivA: 0.9e6, rivW: 7, wet: false },
 };
 
 const D8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]];

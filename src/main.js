@@ -523,6 +523,7 @@ function helpModal() {
   <h4>Tips</h4><p>Take off around the stall speed shown in the hangar. In Simulator mode, land gently (under ~3 m/s sink) or your gear will snap! Sailplanes can ride rising air under cumulus clouds and along sunny ridges.</p>
   <h4>Credits</h4><p>Voice callouts use the open-source Piper voice "joe". Engines, wind, tyres, weather, nature and crash sounds are real recordings from <a href="https://freesound.org" target="_blank" rel="noopener">Freesound</a>: <a href="assets/sfx/CREDITS.md" target="_blank" rel="noopener">sound credits</a>. Music: “Easy Lemon”, “Floating Cities” and “Heroic Age” by Kevin MacLeod (incompetech.com), licensed under <a href="http://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>.</p>
   <p>Jungfrau Region and Bora Bora: satellite imagery <a href="https://s2maps.eu" target="_blank" rel="noopener">Sentinel-2 cloudless 2016</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016, CC BY 4.0); elevation from Terrain Tiles on AWS; Bora Bora's lagoon depths are estimated from the imagery; map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</p>
+  <p>Grand Canyon: aerial imagery from the USDA National Agriculture Imagery Program (NAIP) via the USGS <a href="https://www.usgs.gov/programs/national-geospatial-program/national-map" target="_blank" rel="noopener">National Map</a> (public domain); elevation from Terrain Tiles on AWS (USGS 3DEP); map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</p>
   <p>Earth from space: NASA Visible Earth (<a href="https://visibleearth.nasa.gov" target="_blank" rel="noopener">Blue Marble Next Generation and Earth at Night</a>, public domain).</p>
   </div><div class="modal-foot"><button data-close class="primary">Got it</button></div>`, 'wide');
 }
@@ -542,6 +543,7 @@ $('#hud').addEventListener('click', (e) => { if (e.target.id === 'h-cam') onActi
 function findWater(world) {
   const ws = world.loc.waterStart; // a location's own seaplane spot (e.g. in a lagoon, not out in the surf)
   if (ws && world.heightAt(ws[0], ws[1]) < world.waterLevel - 2) return new THREE.Vector3(ws[0], 0, ws[1]);
+  const rs = world.real?.waterStart?.(); if (rs) return rs; // a real river high above the water level (the Colorado)
   for (let r = 300; r < 6000; r += 150) for (let a = 0; a < Math.PI * 2; a += 0.25) {
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
     let ok = true; for (let k = -6; k <= 6; k++) if (world.heightAt(x, z + k * 60) > world.waterLevel - 2) { ok = false; break; }
@@ -593,7 +595,7 @@ function buildFlight(cfg) {
   if (start === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0); }
   else if (start === 'water') {
     const w = findWater(world);
-    if (w) ac.spawn(env, w, 0); else { start = 'air'; }
+    if (w) ac.spawn(env, w.pos || w, w.heading || 0); else { start = 'air'; }
   }
   if (start === 'air') { // on the extended centreline of whichever runway end has room, high enough to clear the hills ahead
     const sp = planAirStart(world, rwy, st.heli ? 120 : 450);

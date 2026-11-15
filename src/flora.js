@@ -327,8 +327,21 @@ function biome(loc, wl) {
       { sp: 'rock', opts: { tint: [0.4, 0.38, 0.37], moss: [0.2, 0.26, 0.1] }, variants: 2, rock: true, dens: (e) => 0.008 + 0.25 * smoothstep(0.3, 0.55, e.s) },
     ];
   }
+  if (loc.id === 'rim') {
+    // the Grand Canyon (real altitudes): open ponderosa pine forest on the rims, pinyon-juniper woodland below
+    // ~2150 m and on the canyon's upper terraces, then sparse desert scrub down to the river. No saguaros here.
+    const z = (e, a, b, c, d) => smoothstep(a, b, e.h) * (1 - smoothstep(c, d, e.h)), ok = (s, a = 0.3, b = 0.5) => 1 - smoothstep(a, b, s);
+    return [
+      { sp: 'spruce', kind: 'conifer', opts: { larch: true, h: 17, hv: 13, w: 0.2, base: 0.32, tint: [0.42, 0.47, 0.3] }, variants: 3, dens: (e) => e.F * (0.3 + 0.7 * e.C) * 0.85 * z(e, 1950, 2150, 9e3, 9e3) * ok(e.s, 0.3, 0.5) },
+      { sp: 'juniper', opts: { tint: [0.78, 0.82, 0.62] }, variants: 3, dens: (e) => (0.015 + e.F * 0.5 * (0.4 + 0.6 * e.C)) * z(e, 1150, 1350, 2150, 2400) * ok(e.s, 0.35, 0.55) },
+      { sp: 'juniper', opts: { h: 4, tint: [0.62, 0.7, 0.48] }, variants: 2, dens: (e) => e.F * 0.3 * z(e, 1500, 1700, 2250, 2450) * ok(e.s, 0.35, 0.55) },
+      { sp: 'shrub', kind: 'shrub', opts: { scrub: true, s: 0.8, tint: [0.72, 0.72, 0.56] }, variants: 2, dens: (e) => (0.06 + 0.25 * e.F) * ok(e.s, 0.35, 0.6) },
+      { sp: 'dead', variants: 1, dens: (e) => 0.003 * z(e, 1900, 2100, 9e3, 9e3) },
+      { sp: 'rock', opts: { tint: [0.95, 0.8, 0.68] }, variants: 4, rock: true, dens: (e) => 0.003 + 0.05 * smoothstep(0.3, 0.6, e.s) }, // pale Kaibab limestone / sandstone
+    ];
+  }
   // desert: pinyon-juniper woodland on the mesas, saguaro and scrub on the flats, cottonwoods along the river
-  const flat = (s, a = 0.22, b = 0.38) => 1 - smoothstep(a, b, s);
+  const flat =(s, a = 0.22, b = 0.38) => 1 - smoothstep(a, b, s);
   return [
     { sp: 'saguaro', variants: 3, dens: (e) => 0.05 * flat(e.s) * (1 - e.riv) },
     { sp: 'juniper', kind: 'conifer', opts: { tint: [0.95, 0.9, 0.66] }, variants: 3, dens: (e) => (0.03 + e.F * 0.3 * (0.4 + 0.6 * e.C)) * flat(e.s, 0.3, 0.45) },
@@ -723,6 +736,7 @@ export class Flora {
       if (roadNear && W.nearRoad(x, z, 11)) continue;
       const h = W.sampleGrid(x, z); if (h < wl + 0.7) continue;
       if (W.landAt && W.landAt(x, z, e.land || (e.land = [0, 0, 0, 0]))[0] > 0.3) continue; // not in rivers and lakes (world.js terrain bake)
+      if (W.real?.waterAt(x, z, 16) != null) continue; // nor in real rivers above the water level (realworld.js)
       let t = u2 * tot, k = 0; while (k < G.length - 1 && (t -= dens[k]) > 0) k++;
       const gr = G[k], V = gr.vars[Math.floor(u3 * gr.vars.length)];
       if (gr.rock) {
@@ -990,6 +1004,7 @@ class GroundCover {
       const cl = nz.n2(x / 7.3 + 3, z / 7.3) * 0.6 + nz.n2(x / 2.1, z / 2.1) * 0.4;
       if (u < smoothstep(0.1, -0.6, cl) * 0.6) continue;
       const h = W.sampleGrid(x, z); if (h < wl + 0.6) continue;
+      if (W.real?.waterAt(x, z, 10) != null) continue; // real rivers (realworld.js)
       if (h > loc.snowline + 40) continue;
       const s = 1 - 3 / Math.hypot(W.sampleGrid(x + 3, z) - h, 3, W.sampleGrid(x, z + 3) - h); if (s > 0.42) continue;
       if (roadNear && W.nearRoad(x, z, 4)) continue;

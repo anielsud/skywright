@@ -1,6 +1,7 @@
 // Real-world locations, built from geodata baked offline by tools/realworld/bake.py into assets/real/<id>/:
-// heights (AWS Terrain Tiles), Sentinel-2 cloudless imagery (EOX, CC BY 4.0) and OpenStreetMap data (ODbL).
-// Two nested squares: a detailed one (~20 m heights, ~10 m imagery) around the airport, and a coarse one
+// heights (AWS Terrain Tiles), imagery (Sentinel-2 cloudless by EOX, CC BY 4.0; in the US, USDA NAIP aerial photos,
+// public domain) and OpenStreetMap data (ODbL).
+// Two nested squares: a detailed one (~20 m heights, ~5-10 m imagery) around the airport, and a coarse one
 // (~230 m heights, ~120 m imagery) out to the haze, so the real mountains carry on to the horizon.
 // Everything is loaded before the World is built (loadReal), then World asks this module for heights, colours,
 // the vegetation mask, the road network and the minimap. The game frame: metres, origin at the runway centre,
@@ -10,8 +11,7 @@ import { resample } from './roads.js';
 import { smoothstep, clamp } from './noise.js';
 
 const BASE = 'assets/real/';
-const GAIN = 1.35, DESHADE = 0.3; // imagery brightness (linear) and how much of its baked-in shading to remove (shaders.js)
-const GAIN_SRGB = Math.pow(GAIN, 1 / 2.2);
+const GAIN = 1.35, DESHADE = 0.3; // imagery brightness (linear, loc.satGain overrides) and how much of its baked-in shading to remove (shaders.js)
 const cache = new Map(); // id -> loaded data (kept for the session: flying here again needs no reload)
 
 export const REAL_LOCATIONS = {
@@ -41,6 +41,26 @@ export const REAL_LOCATIONS = {
     osmStyle: 'tropical', // realBuildings.js: painted houses under metal roofs, thatched resorts, overwater bungalows
     waterColors: { deep: 0x0b3474, shallow: 0x12bcc8, sand: 0x9ae8dc }, waterReef: 0.15, // sapphire ocean, turquoise lagoon over pale sand
     colors: { grass: [0x3f7a2c, 0x56913a, 0x2f6125], rock: 0x5a524a, snow: 0x5a524a, sand: 0xe3d3a3, dirt: 0x7a6040 },
+    height(n, x, z) { const D = cache.get(this.id); return D ? D.height(x, z) : this.rwyH; },
+  },
+  // the Grand Canyon took the place (and the id) of the fictional Red Canyon: old settings and rooms carry over
+  canyon: {
+    id: 'canyon', name: 'Grand Canyon', real: true,
+    desc: 'The real Grand Canyon from aerial photos: the South Rim villages, Phantom Ranch, the Colorado River and the North Rim.',
+    credit: 'Imagery: USDA NAIP via USGS The National Map (public domain) · Heights: AWS Terrain Tiles (USGS 3DEP) · Map data © OpenStreetMap contributors',
+    seed: 37, rwyH: 2002, water: 200, north: 40.5, cloudBase: 4300, trees: 'pine', snowline: 99999, erosion: false, desert: true,
+    fogBase: 1300, // haze settles into the canyon
+    satGain: 1.05, // NAIP is brighter than Sentinel-2
+    cliff: [0.36, 0.24, 0.18, 0.4], // the walls: red-stained limestone and sandstone (the deshadowed photos see most of them)
+    sunLat: 36.05, // the real sun path: sunset light from the west on the canyon walls (world.js setTime)
+    // the hi imagery file per quality tier (NAIP is sharp enough to be worth 8192 px on a laptop)
+    img: { ultra: 'hi.jpg', high: 'hi.jpg', medium: 'hi-4k.jpg', low: 'hi-2k.jpg' },
+    // ponderosa pine on the rims, pinyon-juniper below, desert scrub in the canyon (flora.js 'rim'); real altitudes
+    flora: { biome: 'rim', snowline: 99999, h: (h) => h, wl: 50 },
+    waterColors: { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 },
+    river: { color: 0x3c4836 }, // the Colorado: olive green (silty brown after storms)
+    buildStyle: { wood: 0.3, roofs: [['shingle', 0.35], ['grey', 0.5], ['tile', 0.15]] }, // the parks' log-and-stone rustic, motels in Tusayan
+    colors: { grass: [0x8a7a55, 0x9a8a60, 0x7a6a48], rock: 0x9a5a3c, snow: 0xd9b48a, sand: 0xc49a6c, dirt: 0x9a6a48 },
     height(n, x, z) { const D = cache.get(this.id); return D ? D.height(x, z) : this.rwyH; },
   },
 };
@@ -73,13 +93,14 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   const dir = BASE + id + '/';
   let done = 0; const tick = (p) => { done++; onProgress?.(done / 7); return p; };
   const [meta, hiZ, farZ, hiB, farB, coverB, osm] = await Promise.all([
-    get(dir + 'meta.json', 'json'), get(dir + 'hi.bin.gz'), get(dir + 'far.bin.gz'), get(dir + 'hi.jpg', 'blob'), get(dir + 'far.jpg', 'blob'), get(dir + 'cover.png', 'blob'), get(dir + 'osm.json', 'json'),
+    get(dir + 'meta.json', 'json'), get(dir + 'hi.bin.gz'), get(dir + 'far.bin.gz'), get(dir + (loc.img?.[quality] || 'hi.jpg'), 'blob'), get(dir + 'far.jpg', 'blob'), get(dir + 'cover.png', 'blob'), get(dir + 'osm.json', 'json'),
   ].map((p) => p.then(tick)));
-  const texSize = quality === 'high' ? 4096 : 2048;
+  // the largest imagery texture on this tier; a place with loc.img has a ready-made hi file per tier (no resize)
+  const texSize = quality === 'high' || quality === 'ultra' ? 4096 : 2048, fit = { resizeWidth: texSize, resizeHeight: texSize, resizeQuality: 'high' };
   const opt = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
   const [hiBmp, farBmp, coverBmp] = await Promise.all([
-    createImageBitmap(hiB, texSize < 4096 ? { resizeWidth: texSize, resizeHeight: texSize, resizeQuality: 'high' } : {}),
-    createImageBitmap(farB, texSize < 4096 ? { resizeWidth: texSize, resizeHeight: texSize, resizeQuality: 'high' } : {}), createImageBitmap(coverB, opt),
+    createImageBitmap(hiB, !loc.img && texSize < 4096 ? fit : {}),
+    createImageBitmap(farB, texSize < 4096 ? fit : {}), createImageBitmap(coverB, opt),
   ]);
   const D = new RealData(loc, meta, decodeHeights(await gunzip(hiZ), meta.hi.n), decodeHeights(await gunzip(farZ), meta.far.n), hiBmp, farBmp, coverBmp, osm);
   D.key = key;
@@ -92,6 +113,7 @@ export function realData(loc) { return cache.get(loc.id) || null; }
 class RealData {
   constructor(loc, meta, hiH, farH, hiBmp, farBmp, coverBmp, osm) {
     this.loc = loc; this.meta = meta; this.osm = osm;
+    this.gain = loc.satGain ?? GAIN; this.gainS = Math.pow(this.gain, 1 / 2.2); // (per place: aerial photos come brighter than Sentinel-2)
     this.hi = { ...meta.hi, H: hiH, sp: meta.hi.size / (meta.hi.n - 1) };
     this.far = { ...meta.far, H: farH, sp: meta.far.size / (meta.far.n - 1) };
     this.hiBmp = hiBmp; this.farBmp = farBmp;
@@ -103,6 +125,50 @@ class RealData {
     this.cover = { ...meta.hi, n: cn, d: cover }; // (meta's n is the height grid's)
     coverBmp.close?.();
     this.edge = 1500; // blend from the detailed heights to the coarse ones over the last 1.5 km of the detailed square
+    this.buildRivers(osm.rivers || []);
+  }
+  // Rivers far above the World's water level (the Colorado in the Grand Canyon): the bake carved a bed under a
+  // downhill water surface. Kept where the detailed heights are used unblended. Segments go in a 100 m hash.
+  buildRivers(list) {
+    this.rivers = []; this.riverHash = new Map();
+    for (const flat of list) {
+      let pts = [];
+      const flush = () => { if (pts.length > 2) this.rivers.push(pts); pts = []; };
+      for (let k = 0; k < flat.length; k += 4) {
+        if (this.inHi(flat[k], flat[k + 1]) < this.edge + 100) { flush(); continue; }
+        pts.push({ x: flat[k], z: flat[k + 1], h: flat[k + 2], w: flat[k + 3] });
+      }
+      flush();
+    }
+    for (const P of this.rivers) for (let i = 0; i + 1 < P.length; i++) {
+      const a = P[i], b = P[i + 1], m = Math.max(a.w, b.w) + 20;
+      for (let cx = Math.floor((Math.min(a.x, b.x) - m) / 100); cx <= Math.floor((Math.max(a.x, b.x) + m) / 100); cx++)
+        for (let cz = Math.floor((Math.min(a.z, b.z) - m) / 100); cz <= Math.floor((Math.max(a.z, b.z) + m) / 100); cz++) {
+          const k = cx * 65536 + cz; let L = this.riverHash.get(k); if (!L) this.riverHash.set(k, (L = [])); L.push(a, b);
+        }
+    }
+  }
+  // water surface height of a real river at (x,z), or null when not on one (m: metres of bank to count as well)
+  waterAt(x, z, m = 0) {
+    if (!this.riverHash.size) return null;
+    const L = this.riverHash.get(Math.floor(x / 100) * 65536 + Math.floor(z / 100)); if (!L) return null; // (cells hold segments within w + 20 m)
+    let best = null, bd = Infinity;
+    for (let k = 0; k < L.length; k += 2) {
+      const a = L[k], b = L[k + 1], dx = b.x - a.x, dz = b.z - a.z, l2 = dx * dx + dz * dz || 1;
+      const t = clamp(((x - a.x) * dx + (z - a.z) * dz) / l2, 0, 1), px = a.x + dx * t - x, pz = a.z + dz * t - z, d = Math.hypot(px, pz);
+      if (d < a.w + (b.w - a.w) * t + m && d < bd) { bd = d; best = a.h + (b.h - a.h) * t; }
+    }
+    return best;
+  }
+  // where a seaplane starts on the river (a long straight reach, from the bake), or null
+  waterStart() {
+    const s = this.osm.riverStart; if (!s || this.waterAt(s[0], s[1]) == null) return null;
+    // mid-stream: the nearest centre-line point, facing downstream along the reach
+    let best = null, bd = Infinity;
+    for (const P of this.rivers) P.forEach((p, i) => { const d = Math.hypot(p.x - s[0], p.z - s[1]); if (d < bd && i + 1 < P.length) { bd = d; best = [p, P[Math.min(P.length - 1, i + 3)]]; } });
+    if (!best) return null;
+    const [a, b] = best;
+    return { pos: new THREE.Vector3(a.x, 0, a.z), heading: Math.atan2(-(b.x - a.x), -(b.z - a.z)) };
   }
   sampleH(G, x, z) {
     const n = G.n, fx = clamp((x - G.x0) / G.sp, 0, n - 1.0001), fz = clamp((z - G.z0) / G.sp, 0, n - 1.0001);
@@ -123,7 +189,7 @@ class RealData {
     const n = P.n, fx = clamp((x - P.x0) / P.size * n - 0.5, 0, n - 1.001), fz = clamp((z - P.z0) / P.size * n - 0.5, 0, n - 1.001);
     const i = fx | 0, j = fz | 0, u = fx - i, v = fz - j, d = P.d, k = (j * n + i) * 4, k2 = k + n * 4;
     const ch = (o) => ((d[k + o] * (1 - u) + d[k + 4 + o] * u) * (1 - v) + (d[k2 + o] * (1 - u) + d[k2 + 4 + o] * u) * v) / 255;
-    return c.setRGB(Math.min(1, ch(0) * GAIN_SRGB), Math.min(1, ch(1) * GAIN_SRGB), Math.min(1, ch(2) * GAIN_SRGB)); // sRGB values, like the baked albedo
+    const g = this.gainS; return c.setRGB(Math.min(1, ch(0) * g), Math.min(1, ch(1) * g), Math.min(1, ch(2) * g)); // sRGB values, like the baked albedo
   }
   color(x, z, c) {
     const e = this.inHi(x, z);
@@ -151,13 +217,16 @@ class RealData {
     return {
       satHi: { value: this.tex.hi }, satFar: { value: this.tex.far },
       satHiR: { value: new THREE.Vector4(h.x0, h.z0, 1 / h.size, 0) }, satFarR: { value: new THREE.Vector4(f.x0, f.z0, 1 / f.size, 0) },
-      satSun: { value: this.captureSun() }, satGain: { value: GAIN }, satDeshade: { value: DESHADE },
+      satSun: { value: this.captureSun() }, satGain: { value: this.gain }, satDeshade: { value: DESHADE },
+      satCliff: { value: new THREE.Vector4(...(this.loc.cliff || [0.15, 0.14, 0.125, 0.75])) }, // colour of steep rock the photo can't see, and how much
     };
   }
   // where the sun was for the imagery (Sentinel-2 passes at ~10:30 solar time; the cloudless mosaic is mostly summer
   // scenes): azimuth ~150 deg, elevation ~55 deg, turned into the game frame
+  // (meta.sun: [true azimuth, elevation], estimated by the bake from the photos themselves, e.g. for NAIP)
   captureSun() {
-    const az = THREE.MathUtils.degToRad(150), el = THREE.MathUtils.degToRad(55), th = THREE.MathUtils.degToRad(this.loc.north || 0);
+    const [az0, el0] = this.meta.sun || [150, 55];
+    const az = THREE.MathUtils.degToRad(az0), el = THREE.MathUtils.degToRad(el0), th = THREE.MathUtils.degToRad(this.loc.north || 0);
     const E = Math.sin(az) * Math.cos(el), N = Math.cos(az) * Math.cos(el);
     return new THREE.Vector3(E * Math.cos(th) - N * Math.sin(th), Math.sin(el), -(E * Math.sin(th) + N * Math.cos(th))).normalize();
   }
