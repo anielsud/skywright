@@ -46,6 +46,8 @@ for name, c in man.items():
         t = np.linspace(0, np.pi / 2, n); fin, fout = np.sin(t), np.cos(t)
         y = x[:L].copy(); y[:n] = x[:n] * fin + x[L:L + n] * fout   # tail fades out over the head fading in
         x = y
+    if not c.get('loop'):  # one-shots: 5 ms fade-in, 60 ms fade-out so cut points never click
+        a_, b_ = int(0.005 * SR), int(0.06 * SR); x = x.copy(); x[:a_] *= np.linspace(0, 1, a_); x[-b_:] *= np.linspace(1, 0, b_)
     x = match_loudness(x)
     subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'f32le', '-ar', str(SR), '-ac', '1', '-i', '-', '-c:a', 'libopus', '-b:a', '80k', '-vbr', 'on', str(OUT / f'{name}.ogg')], input=x.tobytes(), check=True)
     index[name] = {'f0': round(f0(x), 1), 'dur': round(len(x) / SR, 3), 'src': c['id']}

@@ -19,6 +19,9 @@ const SAMPLE_ENGINES = {
   rocket: { high: ['eng_rocket', 0.95, 1.05], gain: 1 },
 };
 const SAMPLE_LEVEL = { piston: 3.6, radial: 2.7, turboprop: 3.1, jet: 2.1, fan: 2.2, rocket: 3.0 }; // full power ≈ -24 dB props, -28 jets (weighted, tools/sfx measurements)
+// Recorded world/foley levels (linear), balanced with tools/sfx-style weighted measurements.
+const SHOT = { crash: 0.4, debris: 0.2, glass: 0.35, explosion: 0.4, boom: 0.4, chirp: 0.38, splash: 0.32, gear: 0.32, thunder: 0.3 }; // peaks: crash ≈-22, explosion ≈-18, chirp ≈-28 dB weighted
+const REC = { windExt: 2.66, windCk: 4.6, roll: 2, rain: 2, day: 0.73, night: 0.52, sea: 1.38, lake: 1.46 }; // wind@120 m/s ≈-32, roll ≈-30, rain ≈-30, day bed ≈-40 dB weighted
 const RPM_RANGE = { piston: [700, 2700], radial: [600, 2600], turboprop: [1000, 2000] };
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }; // -12 dB overall: a game shouldn't hit the speaker at full scale
 
@@ -80,6 +83,21 @@ export class Audio {
   canSample(kind) { const d = SAMPLE_ENGINES[kind]; return !!d && ['idle', 'high', 'cabin', 'cabinIdle'].every((r) => !d[r] || this.buffers[d[r][0]]) && (!d.ab || this.buffers[d.ab]); }
   dropVoice(k) { const v = this.voices[k]; delete this.voices[k]; this.set(v.out.gain, 0, 0.05); setTimeout(() => { try { v.out.disconnect(); v.pan?.disconnect(); v.layers?.forEach((l) => l.src.stop()); } catch { /* gone */ } }, 300); }
   loop(name) { const s = this.ctx.createBufferSource(); s.buffer = this.buffers[name]; s.loop = true; s.start(0, Math.random() * s.buffer.duration); return s; }
+  has(name) { return !!this.buffers[name]; }
+  // one-shot recording; returns false (so callers fall back to synthesis) if it isn't loaded
+  shot(name, { gain = 1, rate = 1, dest = this.fx, delay = 0 } = {}) {
+    const b = this.buffers[name]; if (!b || !this.ctx) return false;
+    const src = this.ctx.createBufferSource(); src.buffer = b; src.playbackRate.value = rate;
+    const g = this.gain(gain); src.connect(g); g.connect(dest); src.start(this.ctx.currentTime + delay);
+    src.onended = () => g.disconnect(); return true;
+  }
+  // looping bed (created once, silent until its gain is set); null if the clip isn't loaded
+  bed(name, dest) {
+    this.beds ||= {};
+    if (!this.beds[name] && this.has(name)) { const src = this.loop(name), g = this.gain(0); src.connect(g); g.connect(dest); this.beds[name] = { src, g }; }
+    return this.beds[name] || null;
+  }
+  bedGain(name, dest, v, t = 0.3, rate) { const b = this.bed(name, dest); if (!b) return false; this.set(b.g.gain, v, t); if (rate) this.set(b.src.playbackRate, rate, 0.1); return true; }
   makeWave(ampFn, N = 64) {
     const re = new Float32Array(N), im = new Float32Array(N);
     for (let n = 1; n < N; n++) { const a = ampFn(n), ph = Math.random() * Math.PI * 2; re[n] = a * Math.cos(ph); im[n] = a * Math.sin(ph); }
@@ -260,16 +278,23 @@ export class Audio {
     for (const k of ['piston', 'radial', 'turboprop', 'electric', 'jet', 'fan', 'rocket']) if (!seen.has(k) && this.voices[k]) this.set(this.voices[k].out.gain, 0, 0.15);
     // airflow
     const sp = s.airspeed, ck = s.cockpit ? 0.65 : 1;
-    const wv = this.voice('wind'); this.set(wv.nf.frequency, 250 + Math.min(sp, 130) * 9); this.set(wv.out.gain, Math.min(0.4, (sp / 90) ** 2 * 0.3) * ck); // wind sits under the engine, even at jet speeds
+    const wAmt = Math.min(0.4, (sp / 90) ** 2 * 0.3); // wind sits under the engine, even at jet speeds
+    const wRate = 0.8 + Math.min(sp, 200) / 400;
+    const recWind = this.bedGain('wind_ext', this.airBus, wAmt * (s.cockpit ? 0 : 1) * REC.windExt, 0.15, wRate) & this.bedGain('wind_cockpit', this.airBus, wAmt * (s.cockpit ? 1 : 0) * REC.windCk, 0.15, wRate);
+    const wv = this.voice('wind'); this.set(wv.nf.frequency, 250 + Math.min(sp, 130) * 9); this.set(wv.out.gain, recWind ? 0 : wAmt * ck);
     const wh = this.voice('whistle'); this.set(wh.nf.frequency, 900 + sp * 14); this.set(wh.out.gain, Math.max(0, (sp - 60) / 200) ** 2 * 0.1 * ck);
     const bf = this.voice('buffet'); this.set(bf.out.gain, Math.min(1.2, (s.buffet || 0) * 3) * (s.cockpit ? 1.5 : 0.7), 0.05); this.set(bf.lfo.frequency, 6 + Math.random() * 6);
     // ground roll
     const rv = this.voice('roll');
-    this.set(rv.out.gain, s.onGround ? Math.min(1, s.groundSpeed / 30) * (s.surface === 'runway' ? 0.45 : 1.0) : 0, 0.05);
+    const rollAmt = s.onGround ? Math.min(1, s.groundSpeed / 30) : 0;
+    // runway: recorded tyres on asphalt; grass/dirt keep the synthesized bumpy rumble
+    const recRoll = this.bedGain('roll_runway', this.airBus, s.surface === 'runway' ? rollAmt * REC.roll : 0, 0.05, 0.6 + Math.min(s.groundSpeed, 60) / 100);
+    this.set(rv.out.gain, rollAmt * (s.surface === 'runway' ? (recRoll ? 0 : 0.45) : 1.0), 0.05);
     this.set(rv.nf.frequency, s.surface === 'runway' ? 120 : 260); this.set(rv.bg.gain, s.surface === 'runway' ? 0.4 : 2.2);
     this.set(rv.cg.gain, s.scrape ? Math.min(0.5, s.scrape / 40) : 0, 0.05);
     const st = this.voice('stall'); this.set(st.out.gain, s.stall && Math.floor(this.ctx.currentTime * 4) % 2 === 0 ? 0.07 : 0, 0.01);
-    const rn = this.voice('rain'); this.set(rn.out.gain, s.rain * 0.13 * (s.cockpit ? 1.6 : 1), 0.3);
+    const recRain = this.bedGain('rain', this.amb, s.rain * REC.rain * (s.cockpit ? 1.4 : 1), 0.4);
+    const rn = this.voice('rain'); this.set(rn.out.gain, recRain ? 0 : s.rain * 0.13 * (s.cockpit ? 1.6 : 1), 0.3);
     this.ambience(s.amb, s.listener?.pos);
   }
 
@@ -311,10 +336,14 @@ export class Audio {
       l1.connect(l1g); l1g.connect(am.gain); l2.connect(l2g); l2g.connect(am.gain); c.connect(am); am.connect(this.crickets); this.crickets.connect(this.amb);
     }
     const near = a.waterNear || 0; // surf only where there is water nearby (sea surf on the islands, gentle lapping on lakes/rivers)
-    this.set(this.surf.gain, near * near * (a.loc === 'islands' ? 0.45 : 0.14), 0.5);
-    this.set(this.crickets.gain, a.night ? low * 0.025 : 0, 1);
+    const sea = a.loc === 'islands';
+    const recSea = this.bedGain('amb_sea', this.amb, sea ? near * near * REC.sea : 0, 0.8) & this.bedGain('amb_lake', this.amb, sea ? 0 : near * near * REC.lake, 0.8);
+    this.set(this.surf.gain, recSea ? 0 : near * near * (sea ? 0.45 : 0.14), 0.5);
+    const recNight = this.bedGain('amb_night', this.amb, a.night ? low * REC.night : 0, 1);
+    this.set(this.crickets.gain, a.night && !recNight ? low * 0.025 : 0, 1);
+    this.bedGain('amb_day', this.amb, a.day ? low * REC.day : 0, 1); // meadow: insects and distant birds near the ground
     // birdsong: occasional procedural chirps placed around the listener
-    if (a.day && low > 0.2 && Math.random() < 0.03 * low) this.bird(a.loc === 'islands', lp);
+    if (a.day && low > 0.2 && Math.random() < 0.02 * low) this.bird(sea, lp);
   }
   bird(gull, lp) {
     const t = this.ctx.currentTime;
@@ -334,7 +363,7 @@ export class Audio {
       o.start(s0); o.stop(s0 + dur + 0.05);
     }
   }
-  silence() { if (!this.ctx) return; for (const k in this.voices) this.set(this.voices[k].out.gain, 0, 0.05); if (this.surf) { this.set(this.surf.gain, 0, 0.1); this.set(this.crickets.gain, 0, 0.1); } }
+  silence() { if (!this.ctx) return; for (const k in this.voices) this.set(this.voices[k].out.gain, 0, 0.05); if (this.surf) { this.set(this.surf.gain, 0, 0.1); this.set(this.crickets.gain, 0, 0.1); } for (const k in this.beds || {}) this.set(this.beds[k].g.gain, 0, 0.1); }
 
   // ---------- one-shots ----------
   dest(pos) {
@@ -371,25 +400,39 @@ export class Audio {
     if (!this.ctx) return;
     const P = Math.min(2, p), d = this.dest(pos);
     switch (name) {
+      // recorded where we have it (vary pitch so repeats don't sound identical); synthesis as the fallback
       case 'impact':
-        this.tone('sine', 90, 35, 0.9 * P, 0.5, 0, d); this.burst('brown', 'lowpass', 400, 0.7, 0.9 * P, 0.4 + P * 0.3, d);
-        this.crunch(P, d); if (P > 0.6) this.clatter(P, d, 8);
+        this.tone('sine', 90, 35, 0.6 * P, 0.4, 0, d); // body thump
+        if (this.shot('crash_metal', { gain: SHOT.crash * P, rate: 0.8 + Math.random() * 0.4, dest: d })) { if (P > 0.6) this.shot('debris_small', { gain: SHOT.debris * P, rate: 0.9 + Math.random() * 0.25, dest: d, delay: 0.12 }); break; }
+        this.burst('brown', 'lowpass', 400, 0.7, 0.9 * P, 0.4 + P * 0.3, d); this.crunch(P, d); if (P > 0.6) this.clatter(P, d, 8);
         break;
-      case 'crack': this.burst('white', 'highpass', 2000, 0.7, 0.8 * P, 0.12, d); this.crunch(P * 0.8, d, 0.15); this.tone('triangle', 900, 120, 0.2 * P, 0.4, 0, d); this.clatter(P, d, 10, 1.8); break;
-      case 'glass': for (let i = 0; i < 18; i++) { this.burst('white', 'bandpass', 4000 + Math.random() * 6000, 12, 0.25, 0.05 + Math.random() * 0.25, d, Math.random() * 0.4); this.tone('sine', 3000 + Math.random() * 5000, 2500, 0.03, 0.3, Math.random() * 0.5, d); } break;
+      case 'crack': this.burst('white', 'highpass', 2000, 0.7, (this.has('debris_small') ? 0.25 : 0.8) * P, 0.12, d);
+        if (this.shot('debris_small', { gain: SHOT.debris * P, rate: 1 + Math.random() * 0.3, dest: d })) break;
+        this.crunch(P * 0.8, d, 0.15); this.tone('triangle', 900, 120, 0.2 * P, 0.4, 0, d); this.clatter(P, d, 10, 1.8); break;
+      case 'glass': if (this.shot('glass', { gain: SHOT.glass, rate: 0.9 + Math.random() * 0.25, dest: d })) break;
+        for (let i = 0; i < 18; i++) { this.burst('white', 'bandpass', 4000 + Math.random() * 6000, 12, 0.25, 0.05 + Math.random() * 0.25, d, Math.random() * 0.4); this.tone('sine', 3000 + Math.random() * 5000, 2500, 0.03, 0.3, Math.random() * 0.5, d); } break;
       case 'explosion':
+        if (this.shot('explosion', { gain: SHOT.explosion, rate: 0.85 + Math.random() * 0.2, dest: d })) {
+          this.shot('boom', { gain: SHOT.boom, rate: 0.8 + Math.random() * 0.2, dest: d }); this.shot('debris_big', { gain: SHOT.debris, dest: d, delay: 0.35 }); break;
+        }
         this.tone('sine', 70, 22, 1.6, 2.2, 0, d); this.burst('brown', 'lowpass', 260, 0.5, 2.0, 4.0, d, 0, 60); this.burst('white', 'lowpass', 2400, 0.5, 1.0, 1.4, d, 0, 300);
         for (let i = 0; i < 10; i++) this.burst('crackle', 'highpass', 500, 0.7, 0.8, 0.5, d, 0.1 + Math.random() * 2);
         this.clatter(1.4, d, 20, 3.5);
         break;
-      case 'chirp': this.burst('white', 'bandpass', 2600, 4, 0.22 * P, 0.12, this.fx, 0, 1700); this.burst('white', 'bandpass', 2300, 4, 0.18 * P, 0.1, this.fx, 0.07, 1600); this.burst('brown', 'lowpass', 180, 1, 0.6 * P, 0.25); break;
-      case 'splash': this.burst('white', 'lowpass', 3000, 0.5, 0.7 * P, 1.3, d, 0, 500); this.burst('brown', 'lowpass', 300, 1, 0.7 * P, 0.9, d); for (let i = 0; i < 8; i++) this.burst('white', 'bandpass', 1500 + Math.random() * 3000, 4, 0.15 * P, 0.1, d, 0.2 + Math.random() * 0.8); break;
-      case 'gear': // motor whine, then a clunk into the locks
-        this.tone('sawtooth', 140, 210, 0.04, 2.6, 0, this.fx); this.burst('white', 'bandpass', 900, 3, 0.05, 2.6);
-        this.tone('sine', 70, 40, 0.5, 0.25, 2.7); this.burst('brown', 'lowpass', 500, 1, 0.5, 0.3, this.fx, 2.7); this.burst('white', 'bandpass', 2500, 8, 0.15, 0.08, this.fx, 2.72);
+      case 'chirp': this.burst('brown', 'lowpass', 180, 1, 0.6 * P, 0.25);
+        if (this.shot('tyre_chirp', { gain: SHOT.chirp * P, rate: 0.95 + Math.random() * 0.2 })) break;
+        this.burst('white', 'bandpass', 2600, 4, 0.22 * P, 0.12, this.fx, 0, 1700); this.burst('white', 'bandpass', 2300, 4, 0.18 * P, 0.1, this.fx, 0.07, 1600); break;
+      case 'splash': if (this.shot('splash', { gain: SHOT.splash * P, rate: 0.85 + Math.random() * 0.3, dest: d })) break;
+        this.burst('white', 'lowpass', 3000, 0.5, 0.7 * P, 1.3, d, 0, 500); this.burst('brown', 'lowpass', 300, 1, 0.7 * P, 0.9, d); for (let i = 0; i < 8; i++) this.burst('white', 'bandpass', 1500 + Math.random() * 3000, 4, 0.15 * P, 0.1, d, 0.2 + Math.random() * 0.8); break;
+      case 'gear': { // motor whine, then a clunk into the locks
+        const rec = this.shot('gear_motor', { gain: SHOT.gear }), lock = rec ? 3.6 : 2.7;
+        if (!rec) { this.tone('sawtooth', 140, 210, 0.04, 2.6, 0, this.fx); this.burst('white', 'bandpass', 900, 3, 0.05, 2.6); }
+        this.tone('sine', 70, 40, 0.5, 0.25, lock); this.burst('brown', 'lowpass', 500, 1, 0.5, 0.3, this.fx, lock); this.burst('white', 'bandpass', 2500, 8, 0.15, 0.08, this.fx, lock + 0.02);
         break;
+      }
       case 'flaps': this.tone('sawtooth', 220, 260, 0.025, 1.2); this.burst('white', 'bandpass', 1200, 4, 0.03, 1.2); this.tone('sine', 120, 80, 0.12, 0.12, 1.2); break;
       case 'thunder': {
+        if (this.shot(`thunder_${1 + Math.floor(Math.random() * 3)}`, { gain: SHOT.thunder * (0.5 + P * 0.5), rate: 0.85 + Math.random() * 0.25 })) break;
         this.burst('white', 'highpass', 1500, 0.5, 0.5 * P, 0.25); this.burst('white', 'lowpass', 3000, 0.5, 0.6 * P, 0.7, this.fx, 0.02, 400);
         for (let i = 0; i < 4; i++) this.burst('brown', 'lowpass', 500, 0.5, (0.9 + Math.random() * 0.6) * (0.5 + P), 3 + Math.random() * 4, this.fx, i * (0.3 + Math.random() * 0.8), 60);
         break;
