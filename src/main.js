@@ -388,7 +388,7 @@ async function updateNow(status) {
 // ---------- what's new ----------
 // After an update brings in a higher VERSION, list what changed since the version this player last saw.
 function whatsNewModal(entries, title = 'What’s new ✨') {
-  const MAX = 6, shown = entries.slice(0, MAX);
+  const MAX = 10, shown = entries.slice(0, MAX);
   const m = ui.modal(`<h2>${title}</h2>
     <div class="whats-new">${shown.map((e, i) => `<section${i ? '' : ' class="latest"'}>
       <h4>Version ${e.v}</h4><ul>${e.items.map((t) => `<li>${t}</li>`).join('')}</ul></section>`).join('')}
