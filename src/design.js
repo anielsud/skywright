@@ -114,7 +114,7 @@ export function analyze(design) {
       const t = (d.engine.ab || d.engine.thrust) * thrustScale(p) * partPower(p); thrust += t;
       latThrust += (info.center.clone().applyMatrix4(mm).x - com.x) * t;
     }
-    if (d.gear) { gear++; if (d.gear.float) floats++; }
+    if (d.gear) { gear++; if (d.gear.float && !d.gear.skid) floats++; } // skids float but are not a seaplane
     if (d.smoke) smoke++;
     for (const s0 of info.surfaces) {
       const s = scaleSurface(s0, partScale(p));
