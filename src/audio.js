@@ -21,11 +21,14 @@ export const SAMPLE_ENGINES = {
 export const SAMPLE_LEVEL = { piston: 3.6, radial: 2.7, turboprop: 3.1, jet: 2.1, fan: 2.2, rocket: 3.0 }; // full power ≈ -24 dB props, -28 jets (weighted, tools/sfx measurements)
 // Recorded world/foley levels (linear), balanced with tools/sfx-style weighted measurements.
 const MUSIC = { hangar: 0.6, cruise: 0.7, mission: 1.3 }; // weighted avg at music 100%: hangar ≈-35, cruise ≈-38 (under the engine), mission ≈-33 dB
-const SHOT = { voice: 1.8, crash: 0.4, debris: 0.2, glass: 0.35, explosion: 0.4, boom: 0.4, chirp: 0.38, splash: 0.32, gear: 0.32, thunder: 0.3, strike: 0.6 }; // peaks: crash ≈-22, explosion ≈-18, chirp ≈-28 dB weighted
+const SHOT = { lever: 0.24, voice: 1.8, crash: 0.4, debris: 0.2, glass: 0.35, explosion: 0.4, boom: 0.4, chirp: 0.38, splash: 0.32, gear: 0.32, thunder: 0.3, strike: 0.6 }; // peaks: crash ≈-22, explosion ≈-18, chirp ≈-28 dB weighted
 const REC = { windExt: 2.66, windCk: 4.6, roll: 2, rain: 2, day: 0.73, night: 0.52, sea: 1.38, lake: 1.46 }; // wind@120 m/s ≈-32, roll ≈-30, rain ≈-30, day bed ≈-40 dB weighted
 // workshop foley (hangar building) levels, and the synth each falls back to while clips load
 const WS = { place: 0.48, clunk: 0.37, ratchet: 0.29, tick: 0.25, spray: 0.72, select: 0.25, toolbox: 0.35, button: 0.22, room: 0.23 }; // peaks (weighted, 100%): place ≈-29, remove ≈-28, paint/rotate/flip ≈-31, select/undo ≈-32, ticks ≈-36; room tone ≈-47 avg
 const WS_FALLBACK = { place: 'clank', remove: 'clank', paint: 'pop', select: 'click', rotate: 'click', move: 'click', flip: 'click', undo: 'click', redo: 'click', load: 'clank', save: 'clank' };
+// music ducking depths (dB) and the stall horn's level
+const DUCK = { voice: 6, crash: 6 };
+const STALL_HORN = 0.18; // ≈-28 dB weighted while stalled: over the engine at climb power, under the "Stall!" voice
 // mission stings (rings, countdown, results)
 const MS = { chime: 0.36, beep: 0.53, fanfare: 0.49, fail: 0.47, record: 0.75 }; // peaks (weighted, 100%): chime ≈-27, countdown ≈-29 (GO ≈-26), fanfare ≈-24.5, fail ≈-26.5, record ≈-25
 const RING_STEPS = [-5, -3, -1, 0, 2, 4, 5, 7, 9, 11, 12, 14]; // semitones: the checkpoint chime climbs a major scale, G up to the D above the octave
@@ -63,12 +66,12 @@ export class Audio {
     this.fxLow = ctx.createBiquadFilter(); this.fxLow.type = 'lowshelf'; this.fxLow.frequency.value = 150; this.fxLow.gain.value = -10;
     this.fx = this.gain(1); this.fx.connect(this.fxLow); this.fxLow.connect(this.subCut);
     this.amb = this.gain(1); this.amb.connect(this.subCut);
-    this.musBus = this.gain(1); this.musBus.connect(this.subCut);
+    this.musBus = this.gain(1); this.musDuck = this.gain(1); this.musBus.connect(this.musDuck); this.musDuck.connect(this.subCut); // musDuck: dips under voices and big crashes
     // reverb send
     this.verb = ctx.createConvolver(); this.verbOut = this.gain(0.9); this.verb.connect(this.verbOut); this.verbOut.connect(this.subCut);
     this.sendBus = this.gain(0.12); this.bus.connect(this.sendBus); this.sendBus.connect(this.verb);
     this.sendFx = this.gain(0.4); this.fx.connect(this.sendFx); this.sendFx.connect(this.verb);
-    this.musSend = this.gain(0.8); this.musBus.connect(this.musSend); this.musSend.connect(this.verb);
+    this.musSend = this.gain(0.8); this.musDuck.connect(this.musSend); this.musSend.connect(this.verb);
     this.comp.connect(this.master); this.master.connect(ctx.destination);
     // meter for tests / balancing, weighted like a tablet speaker heard by a person: little below ~250 Hz, presence boosted (≈K-weighting)
     this.meter = ctx.createAnalyser(); this.meter.fftSize = 2048;
@@ -103,7 +106,7 @@ export class Audio {
   loop(name) { const s = this.ctx.createBufferSource(); s.buffer = this.buffers[name]; s.loop = true; s.start(0, Math.random() * s.buffer.duration); return s; }
   has(name) { return !!this.buffers[name]; }
   // cockpit voice callout (src/callouts.js); goes through the Effects channel, never muffled by the cockpit filter
-  say(name) { return !!name && this.callouts !== false && this.shot(name, { gain: SHOT.voice, dest: this.fx }); }
+  say(name) { const ok = !!name && this.callouts !== false && this.shot(name, { gain: SHOT.voice, dest: this.fx }); if (ok) this.duck(DUCK.voice, this.buffers[name].duration + 0.2); return ok; }
   // one-shot recording; returns false (so callers fall back to synthesis) if it isn't loaded
   shot(name, { gain = 1, rate = 1, dest = this.fx, delay = 0 } = {}) {
     const b = this.buffers[name]; if (!b || !this.ctx) return false;
@@ -225,8 +228,13 @@ export class Audio {
       v.n = this.noise('brown'); v.nf = this.filt('lowpass', 160, 1); v.n.connect(v.nf); to(v.nf);
       v.bump = this.noise('crackle'); v.bf = this.filt('lowpass', 300); v.bg = this.gain(1.5); v.bump.connect(v.bf); v.bf.connect(v.bg); to(v.bg);
       v.c = this.noise(); v.cf = this.filt('bandpass', 1200, 1); v.cg = this.gain(0); v.c.connect(v.cf); v.cf.connect(v.cg); v.cg.connect(this.fx);
-    } else if (kind === 'stall') {
-      v.o = this.osc('square', 440); v.f = this.filt('lowpass', 1800); v.o.connect(v.f); to(v.f);
+    } else if (kind === 'stall') { // reed stall-warning horn (like a Cessna's): two slightly beating reeds, a nasal formant, breath and flutter
+      v.flt = this.gain(1); v.lfo = this.osc('sine', 6.5); v.lg = this.gain(0.2); v.lfo.connect(v.lg); v.lg.connect(v.flt.gain);
+      v.o = this.osc('sawtooth', 660); v.o2 = this.osc('sawtooth', 664.5); this.wobble(v.o.detune, 12, 5); this.wobble(v.o2.detune, 12, 5);
+      v.f = this.filt('bandpass', 1900, 0.8); v.lp = this.filt('lowpass', 4500, 0.7); v.og = this.gain(0.5);
+      v.o.connect(v.og); v.o2.connect(v.og); v.og.connect(v.f); v.f.connect(v.lp); v.lp.connect(v.flt);
+      v.br = this.noise(); v.bf = this.filt('bandpass', 1320, 5); v.bg = this.gain(0.5); v.br.connect(v.bf); v.bf.connect(v.bg); v.bg.connect(v.flt);
+      to(v.flt);
     } else if (kind === 'rain') {
       v.n = this.noise(); v.nf = this.filt('highpass', 1500, 0.4); v.n.connect(v.nf); to(v.nf);
       v.d = this.noise('crackle'); v.df = this.filt('bandpass', 3000, 1); v.dg = this.gain(0.6); v.d.connect(v.df); v.df.connect(v.dg); to(v.dg);
@@ -322,7 +330,7 @@ export class Audio {
     this.set(rv.out.gain, recRoll || s.surface === 'water' ? 0 : rollAmt * (s.surface === 'runway' ? 0.45 : 1.0), 0.05);
     this.set(rv.nf.frequency, s.surface === 'runway' ? 120 : 260); this.set(rv.bg.gain, s.surface === 'runway' ? 0.4 : 2.2);
     this.set(rv.cg.gain, s.scrape ? Math.min(0.5, s.scrape / 40) : 0, 0.05);
-    const st = this.voice('stall'); this.set(st.out.gain, s.stall && Math.floor(this.ctx.currentTime * 4) % 2 === 0 ? 0.07 : 0, 0.01);
+    const st = this.voice('stall'); this.set(st.out.gain, s.stall ? STALL_HORN : 0, s.stall ? 0.03 : 0.1); // continuous while stalled, like the real reed
     const recRain = this.bedGain('rain', this.amb, s.rain * REC.rain * (s.cockpit ? 1.4 : 1), 0.4);
     const rn = this.voice('rain'); this.set(rn.out.gain, recRain ? 0 : s.rain * 0.13 * (s.cockpit ? 1.6 : 1), 0.3);
     this.ambience(s.amb, s.listener?.pos);
@@ -548,6 +556,7 @@ export class Audio {
   play(name, p = 1, pos = null) {
     if (!this.ctx) return;
     if (name in WS_FALLBACK) { if (this.workshop(name)) return; name = WS_FALLBACK[name]; }
+    if (name === 'explosion' || (name === 'impact' && p >= 1.5)) this.duck(DUCK.crash, name === 'explosion' ? 2.5 : 1.2); // let the crash land, then the music comes back
     const P = Math.min(2, p), d = this.dest(pos);
     switch (name) {
       // recorded where we have it (vary pitch so repeats don't sound identical); synthesis as the fallback
@@ -574,13 +583,14 @@ export class Audio {
         this.burst('white', 'bandpass', 2600, 4, 0.22 * P, 0.12, this.fx, 0, 1700); this.burst('white', 'bandpass', 2300, 4, 0.18 * P, 0.1, this.fx, 0.07, 1600); break;
       case 'splash': if (this.shot('splash', { gain: SHOT.splash * P, rate: 0.85 + Math.random() * 0.3, dest: d })) break;
         this.burst('white', 'lowpass', 3000, 0.5, 0.7 * P, 1.3, d, 0, 500); this.burst('brown', 'lowpass', 300, 1, 0.7 * P, 0.9, d); for (let i = 0; i < 8; i++) this.burst('white', 'bandpass', 1500 + Math.random() * 3000, 4, 0.15 * P, 0.1, d, 0.2 + Math.random() * 0.8); break;
-      case 'gear': { // motor whine, then a clunk into the locks
-        const rec = this.shot('gear_motor', { gain: SHOT.gear }), lock = rec ? 3.6 : 2.7;
-        if (!rec) { this.tone('sawtooth', 140, 210, 0.04, 2.6, 0, this.fx); this.burst('white', 'bandpass', 900, 3, 0.05, 2.6); }
+      case 'gear': { // lever click in the cockpit, motor whine, then a clunk into the locks
+        const lv = this.lever('sw_gear', SHOT.lever, 0.18);
+        const rec = this.shot('gear_motor', { gain: SHOT.gear, delay: lv }), lock = (rec ? 3.6 : 2.7) + lv;
+        if (!rec) { this.tone('sawtooth', 140, 210, 0.04, 2.6, lv, this.fx); this.burst('white', 'bandpass', 900, 3, 0.05, 2.6, this.fx, lv); }
         this.tone('sine', 70, 40, 0.5, 0.25, lock); this.burst('brown', 'lowpass', 500, 1, 0.5, 0.3, this.fx, lock); this.burst('white', 'bandpass', 2500, 8, 0.15, 0.08, this.fx, lock + 0.02);
         break;
       }
-      case 'flaps': this.tone('sawtooth', 220, 260, 0.025, 1.2); this.burst('white', 'bandpass', 1200, 4, 0.03, 1.2); this.tone('sine', 120, 80, 0.12, 0.12, 1.2); break;
+      case 'flaps': { const lv = this.lever('sw_flaps', SHOT.lever * 1.27, 0.12); this.tone('sawtooth', 220, 260, 0.025, 1.2, lv); this.burst('white', 'bandpass', 1200, 4, 0.03, 1.2, this.fx, lv); this.tone('sine', 120, 80, 0.12, 0.12, 1.2 + lv); break; }
       case 'thunder': {
         if (this.shot(`thunder_${1 + Math.floor(Math.random() * 3)}`, { gain: SHOT.thunder * (0.5 + P * 0.5), rate: 0.85 + Math.random() * 0.25 })) break;
         this.burst('white', 'highpass', 1500, 0.5, 0.5 * P, 0.25); this.burst('white', 'lowpass', 3000, 0.5, 0.6 * P, 0.7, this.fx, 0.02, 400);
@@ -643,6 +653,20 @@ export class Audio {
   }
   // quiet room tone under the hangar music: a big workshop with tools going far off ('world' channel)
   roomTone(on) { this.roomOn = on; if (this.ctx) this.bedGain('amb_hangar', this.amb, on ? WS.room : 0, on ? 1.5 : 0.4); }
+
+  // ---------- mix: music ducking, cockpit levers ----------
+  // Dip the music by `db` for `hold` seconds (voice callouts, big crashes), then bring it back smoothly. Overlapping ducks extend the hold.
+  duck(db, hold) {
+    if (!this.musDuck) return;
+    const g = this.musDuck.gain, now = this.ctx.currentTime;
+    const active = now < (this.duckEnd || 0);
+    this.duckDb = active ? Math.max(this.duckDb, db) : db; this.duckEnd = Math.max(active ? this.duckEnd : 0, now + hold);
+    if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(now); else { g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); }
+    g.setTargetAtTime(10 ** (-this.duckDb / 20), now, 0.06); // ~150 ms down
+    g.setTargetAtTime(1, this.duckEnd, 0.35); // ~1 s back up
+  }
+  // a cockpit lever/switch click before a motor sound; returns the delay to give the motor (0 if the clip isn't loaded)
+  lever(name, gain, after) { return this.shot(name, { gain, rate: 0.95 + Math.random() * 0.1 }) ? after : 0; }
 
   // ---------- mission sounds (rings, countdown, results) ----------
   // Recorded stings, each with a synth fallback, plus optional voice lines (audio.say: off with the callouts setting).
