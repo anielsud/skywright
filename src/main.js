@@ -708,7 +708,7 @@ function stepFlight(dtReal) {
   const engines = {};
   if (!ac.dead) for (const p of ac.parts) {
     if (!p.alive || !p.engine) continue; const e = p.engine;
-    const k = e.sound; if (!engines[k]) engines[k] = { sound: k, rpm: 0, spoolT: 0, count: 0, blades: { e_turboprop: 4, e_radial: 3, e_electric: 6 }[p.p.id] || 2, ab: false, burning: false, pos: new THREE.Vector3() };
+    const k = e.sound; if (!engines[k]) engines[k] = { sound: k, rpm: 0, spoolT: 0, count: 0, blades: { e_turboprop: 4, e_radial: 3, e_electric: 6 }[p.p.id] || 2, ab: false, burning: false, pos: new THREE.Vector3(), fwd: ac.forward };
     const a = engines[k]; a.count++; a.rpm = Math.max(a.rpm, e.rpm || 0); a.spoolT = Math.max(a.spoolT, e.spoolT || 0); a.ab = a.ab || e.abOn; a.burning = a.burning || e.burning;
     a.pos.add(ac.worldPoint(e.pos));
   }
