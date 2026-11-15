@@ -669,7 +669,7 @@ export class Aircraft {
         }
       }
       if (p.gear) {
-        if (p.gear.retract && p.gear.strut) p.gear.strut.rotation.x = (1 - this.gearT) * -Math.PI / 2 * (p.d.gear.steer ? -1 : 1);
+        if (p.gear.retract && p.gear.strut) this.animateRetract(p);
         const w = p.gear.wheels[0];
         if (p.gear.wheelObj && !w.float) {
           p.gear.wheelObj.position.y = -w.len + w.comp;
@@ -690,6 +690,25 @@ export class Aircraft {
     }
   }
 
+  // Retractable gear folds into the body: main legs swing inwards (towards the centreline), nose/centre legs
+  // forwards, and everything above the attachment point is clipped so nothing pokes through the wing.
+  animateRetract(p) {
+    const g = p.gear, up = 1 - this.gearT;
+    if (!g.clip) {
+      g.clip = new THREE.Plane();
+      g.strut.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); o.material.clippingPlanes = [g.clip]; o.material.clipShadows = true; } });
+      const xw = p.p.pos[0], centre = Math.abs(xw) < 0.35 || p.d.gear.steer;
+      g.fold = centre ? { axis: 'x', sign: p.d.gear.steer ? 1 : -1 } : { axis: 'z', sign: -Math.sign(xw) * (p.p.mirror ? -1 : 1) };
+    }
+    g.strut.rotation.x = g.strut.rotation.z = 0;
+    g.strut.rotation[g.fold.axis] = up * (Math.PI / 2) * g.fold.sign;
+    g.strut.visible = this.gearT > 0.02;
+    // clip plane at the skin: keep only what hangs below the attachment point (in world space)
+    p.obj.updateMatrixWorld();
+    const n = new THREE.Vector3(0, -1, 0).transformDirection(p.obj.matrixWorld), o = new THREE.Vector3(0, -0.03, 0).applyMatrix4(p.obj.matrixWorld);
+    g.clip.setFromNormalAndCoplanarPoint(n, o);
+    if (this.gearT > 0.999) g.clip.constant = 1e6; // fully down: no clipping
+  }
   setCockpitView(on) {
     const ck = this.parts.find((p) => p.alive && p.eye);
     if (ck) ck.obj.visible = !on;

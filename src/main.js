@@ -36,6 +36,7 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPrefere
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.localClippingEnabled = true; // retracting gear is clipped at the skin so it tucks into its bay
 const pixelRatio = () => Math.max(0.5, Math.min(window.devicePixelRatio || 1, { low: 1, medium: 1.25, high: 2 }[qualityTier()]) * (settings.quality === 'auto' ? perf.scale : 1));
 renderer.setPixelRatio(pixelRatio());
 const post = new Post(renderer);
