@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.40.0', items: [
+    'New in Settings: share anonymous stats (no names) so we can see which planes and places get flown and make the game run smoother on your tablet. You can switch it off any time.',
+  ] },
   { v: '1.39.0', items: [
     'Fixed: helicopters now start on the runway when you pick “On the runway”, instead of landing in a lake.',
   ] },

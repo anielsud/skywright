@@ -20,6 +20,7 @@ import { Post } from './post.js';
 import { VERSION, COMMIT, BUILT } from './version.js';
 import { CHANGELOG, changesSince, newer } from './changelog.js';
 import { Net } from './net.js';
+import { Analytics } from './analytics.js';
 installFog();
 
 // ---------- persistence ----------
@@ -30,7 +31,8 @@ const LS = {
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 // Must be read before anything below writes to storage (the settings migration does, for every new player).
 const returningPlayer = LS.get('settings', null) !== null || LS.get('current', null) !== null;
-const settings = Object.assign({ callouts: true, quality: 'auto', units: 'imperial', invert: false, controlMode: 'stick', mix: null, touch: 'auto', showFps: false }, LS.get('settings', {}));
+const settings = Object.assign({ callouts: true, quality: 'auto', units: 'imperial', invert: false, controlMode: 'stick', mix: null, touch: 'auto', showFps: false, analytics: true }, LS.get('settings', {}));
+const analytics = new Analytics({ version: VERSION, commit: COMMIT, enabled: settings.analytics !== false });
 if ((settings.v || 1) < 2) { settings.quality = 'auto'; settings.v = 2; LS.set('settings', settings); } // move everyone onto adaptive quality once
 // 'auto' = medium features on tablets / high on desktops, plus resolution that adapts to the frame rate
 const qualityTier = () => (settings.quality === 'auto' ? (isTouch ? 'medium' : 'high') : settings.quality);
@@ -277,6 +279,9 @@ window.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.shiftKey ? redo() : undo(); e.preventDefault(); }
 });
 
+// For analytics: preset planes by name; anything built or changed by the player is just 'custom' (their names stay on the device)
+const planeLabel = (d) => presets.find((p) => p.name === d.name && p.parts.length === d.parts.length)?.name || 'custom';
+const planeKind = (st) => (st.heli ? 'helicopter' : st.car && st.wingArea < 0.5 ? 'car' : st.floats ? 'seaplane' : 'plane');
 // Save the plane on the hangar floor into "My planes" under its name (same name = overwrite that save).
 function saveCurrent() {
   if (!hangar.design.parts.length) { ui.hint('Build something first!'); return; }
@@ -285,6 +290,7 @@ function saveCurrent() {
   const i = mine.findIndex((d) => d.name === name), c = cloneDesign(hangar.design);
   if (i >= 0) mine[i] = c; else mine.push(c);
   LS.set('designs', mine); audio.play('save');
+  analytics.capture('plane_saved', { parts: c.parts.length, overwrite: i >= 0, saved_planes: mine.length });
   ui.hint(`Saved “${name}” — find it in Planes`);
 }
 function planesModal() {
@@ -306,12 +312,12 @@ function planesModal() {
     <div class="modal-foot"><button data-close>Close</button></div>`, 'wide');
   const el = m.el;
   el.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => { el.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === b)); el.querySelectorAll('[data-pane]').forEach((p) => (p.hidden = p.dataset.pane !== b.dataset.tab)); }));
-  el.querySelectorAll('[data-load]').forEach((b) => b.addEventListener('click', () => { const [k, i] = b.dataset.load.split(':'); hangar.load(k === 'preset' ? presets[+i] : mine[+i]); audio.play('load'); m.close(); }));
+  el.querySelectorAll('[data-load]').forEach((b) => b.addEventListener('click', () => { const [k, i] = b.dataset.load.split(':'); hangar.load(k === 'preset' ? presets[+i] : mine[+i]); audio.play('load'); m.close(); analytics.capture('plane_loaded', { source: k, plane: k === 'preset' ? presets[+i].name : 'custom' }); }));
   el.querySelectorAll('[data-delp]').forEach((b) => b.addEventListener('click', () => { mine.splice(+b.dataset.delp, 1); LS.set('designs', mine); m.close(); planesModal(); }));
-  el.querySelector('[data-new]').addEventListener('click', () => { hangar.load({ name: 'My Plane', parts: [] }); activeCat = 'fuselage'; buildPalette(); m.close(); ui.hint('Pick a body to start'); });
+  el.querySelector('[data-new]').addEventListener('click', () => { hangar.load({ name: 'My Plane', parts: [] }); analytics.capture('plane_loaded', { source: 'blank' }); activeCat = 'fuselage'; buildPalette(); m.close(); ui.hint('Pick a body to start'); });
   el.querySelector('[data-save]').addEventListener('click', () => { saveCurrent(); m.close(); });
   el.querySelector('#copy-code').addEventListener('click', () => { const t = el.querySelector('#share-code'); t.select(); navigator.clipboard?.writeText(t.value).then(() => ui.hint('Copied!'), () => document.execCommand('copy')); });
-  el.querySelector('#import-btn').addEventListener('click', () => { try { hangar.load(decodeDesign(el.querySelector('#import-code').value)); audio.play('load'); m.close(); ui.hint('Imported!'); } catch (e) { ui.hint('That code didn’t work'); } });
+  el.querySelector('#import-btn').addEventListener('click', () => { try { hangar.load(decodeDesign(el.querySelector('#import-code').value)); audio.play('load'); m.close(); ui.hint('Imported!'); analytics.capture('plane_loaded', { source: 'import' }); } catch (e) { ui.hint('That code didn’t work'); } });
 }
 
 function timeLabel(t) { const h = Math.floor(t), mm = Math.round((t - h) * 60); const lab = t < 5 || t > 20.5 ? 'Night' : t < 7.5 ? 'Dawn' : t < 11 ? 'Morning' : t < 15 ? 'Midday' : t < 18 ? 'Afternoon' : 'Sunset'; return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${lab}`; }
@@ -472,18 +478,21 @@ function settingsModal() {
     <label class="check"><input type="checkbox" id="callouts" ${settings.callouts ? 'checked' : ''}> Voice callouts (altitude on landing, stall, pull up)</label>
     <div class="mixer">${[['master', 'Volume'], ['engines', 'Engines'], ['world', 'Wind & world'], ['fx', 'Effects'], ['music', 'Music']].map(([k, n]) =>
       `<label>${n}</label><input type="range" min="0" max="1" step="0.02" value="${settings.mix[k]}" data-mix="${k}"><b data-mixv="${k}">${Math.round(settings.mix[k] * 100)}</b>`).join('')}</div>
-    <p class="version">${buildInfo()}</p>
+    <label class="lbl">Privacy</label>
+    <label class="check"><input type="checkbox" id="stats" ${settings.analytics !== false ? 'checked' : ''}> Share anonymous usage stats (which planes and places get flown, frame rate, errors). No names or locations.</label>
+    <p class="version">${buildInfo()} · device ${analytics.id}</p>
     <div class="update-row"><button id="upd">Check for updates</button><button id="wn">What’s new</button><span id="upd-status"></span></div>
     <div class="modal-foot"><button data-close class="primary">Done</button></div>`);
   const el = m.el;
-  const pick = (attr, key, after) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { settings[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); LS.set('settings', settings); after?.(); }));
+  const pick = (attr, key, after) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { settings[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); LS.set('settings', settings); analytics.capture('setting_changed', { setting: key, value: settings[key] }); after?.(); }));
   pick('q', 'quality', () => { perf.scale = 1; perf.level = 0; applyQuality(); });
   el.querySelector('#upd').addEventListener('click', () => updateNow(el.querySelector('#upd-status')));
   el.querySelector('#wn').addEventListener('click', () => whatsNewModal(CHANGELOG, 'What’s new'));
-  el.querySelector('#fps').addEventListener('change', (e) => { settings.showFps = e.target.checked; LS.set('settings', settings); });
+  el.querySelector('#fps').addEventListener('change', (e) => { settings.showFps = e.target.checked; LS.set('settings', settings); analytics.capture('setting_changed', { setting: 'showFps', value: settings.showFps }); });
+  el.querySelector('#stats').addEventListener('change', (e) => { settings.analytics = e.target.checked; LS.set('settings', settings); analytics.setEnabled(settings.analytics); });
   pick('u', 'units', renderInspector); pick('cm', 'controlMode', () => controls.setMode(settings.controlMode)); pick('t', 'touch');
-  el.querySelector('#inv').addEventListener('change', (e) => { settings.invert = e.target.checked; controls.invert = settings.invert; LS.set('settings', settings); });
-  el.querySelector('#callouts').addEventListener('change', (e) => { settings.callouts = audio.callouts = e.target.checked; LS.set('settings', settings); });
+  el.querySelector('#inv').addEventListener('change', (e) => { settings.invert = e.target.checked; controls.invert = settings.invert; LS.set('settings', settings); analytics.capture('setting_changed', { setting: 'invert', value: settings.invert }); });
+  el.querySelector('#callouts').addEventListener('change', (e) => { settings.callouts = audio.callouts = e.target.checked; LS.set('settings', settings); analytics.capture('setting_changed', { setting: 'callouts', value: settings.callouts }); });
   el.querySelectorAll('[data-mix]').forEach((r) => r.addEventListener('input', () => {
     const k = r.dataset.mix; settings.mix[k] = +r.value; el.querySelector(`[data-mixv="${k}"]`).textContent = Math.round(r.value * 100);
     audio.setMix(settings.mix); LS.set('settings', settings);
@@ -598,6 +607,9 @@ function buildFlight(cfg) {
   hangar.activate(false);
   audio.music(false);
   state = 'flight';
+  F.track = { location: cfg.location, realism: cfg.realism, mode: cfg.mode, start, time_of_day: cfg.time, weather: cfg.weather, online: !!net.active, plane: planeLabel(design), kind: planeKind(st), engine: ac.hasEngine };
+  Object.assign(F, { t0: performance.now(), frames: 0, activeT: 0, fpsLow: Infinity, maxLevel: perf.level, playersMax: net.count });
+  analytics.capture('flight_start', { ...F.track, parts: design.parts.length, part_types: [...new Set(design.parts.map((p) => p.id))], quality: settings.quality, touch: showTouch, control_mode: settings.controlMode });
   $('#loading').classList.remove('show');
   onResize();
   const msg = { runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.' }[start];
@@ -605,8 +617,22 @@ function buildFlight(cfg) {
   if (!ac.hasEngine) hud.toast('Glider: look for rising air under clouds and over sunny ridges.');
 }
 
+// One flight_end per flight: outcome is how it ended (crash, mission result) or why it was left (hangar, restart, closed the app)
+function trackFlightEnd(f, exit) {
+  if (!f || f.tracked || !f.track) return; f.tracked = true;
+  const s = f.ac.stats, secs = (performance.now() - f.t0) / 1000;
+  analytics.capture('flight_end', {
+    ...f.track, outcome: f.outcome || exit, exit, seconds: Math.round(secs), air_seconds: Math.round(s.airTime),
+    max_speed_kmh: Math.round(s.maxSpeed * 3.6), max_alt_m: Math.round(s.maxAlt), max_mach: +(s.maxMach || 0).toFixed(2), max_g: +s.maxG.toFixed(1),
+    distance_km: +(s.distance / 1000).toFixed(1), landings: s.landings, best_landing_ms: s.bestLanding == null ? null : +s.bestLanding.toFixed(2), parts_lost: s.partsLost,
+    fps_avg: f.activeT > 1 ? Math.round(f.frames / f.activeT) : null, fps_low: Number.isFinite(f.fpsLow) ? Math.round(f.fpsLow) : null,
+    quality_level: f.maxLevel, res_scale: +perf.scale.toFixed(2), players_max: f.playersMax,
+  });
+}
+analytics.onLeave = () => trackFlightEnd(F, 'closed');
 function endFlight(restarting = false) {
   if (!F) return;
+  trackFlightEnd(F, restarting ? 'restart' : 'hangar');
   net.detach(); if (!restarting) net.leave();
   if (updatePending) { reloadFresh(); return; }
   const f = F; F = null;
@@ -672,6 +698,7 @@ function statsHTML(ac) {
 function showEnd(title, extra = '') {
   if (!F || F.shownEnd) return;
   F.shownEnd = true;
+  F.outcome = /Kaboom/.test(title) ? 'destroyed' : /Splash/.test(title) ? 'splashdown' : /Course/.test(title) ? 'race_done' : /Landing score/.test(title) ? 'landing_done' : 'crashed';
   const m = ui.modal(`<h2>${title}</h2>${extra}<div class="pause-stats">${statsHTML(F.ac)}</div>
     <div class="col-buttons"><button class="primary big" data-a="restart">Fly again</button><button data-a="watch">Keep watching</button><button data-a="hangar">Back to hangar (repair)${net.active ? ' · leaves the game' : ''}</button></div>`, 'sticky');
   m.el.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', () => {
@@ -783,8 +810,8 @@ function stepFlight(dtReal) {
   for (const e of f.events.splice(0)) {
     if (e.type === 'count') { audio.mission(e.n ? 'count' : 'go', e.n); hud.center(e.n ? `${e.n}` : 'GO!', 800); }
     if (e.type === 'ring') { audio.mission('checkpoint', e.n, e.total); hud.center(`${e.n} / ${e.total}`, 900); }
-    if (e.type === 'raceDone') { audio.mission('win'); const best = LS.get('best', {}); const key = `${f.cfg.location}:${hangar.design.name}`; const pb = !best[key] || e.time < best[key]; if (pb) { best[key] = e.time; LS.set('best', best); setTimeout(() => audio.mission('record'), 2600); } setTimeout(() => showEnd(`Course complete: ${e.time.toFixed(1)} s`, pb ? '<p class="good">New personal best!</p>' : `<p>Best: ${best[key].toFixed(1)} s</p>`), 1500); }
-    if (e.type === 'landingDone') { audio.mission(e.crashed || e.score < 300 ? 'fail' : e.score > 500 ? 'win' : 'ok'); const stars = '★'.repeat(Math.round(e.score / 200)) + '☆'.repeat(5 - Math.round(e.score / 200)); setTimeout(() => showEnd(e.crashed ? 'Crashed on landing' : `Landing score: ${e.score}`, e.crashed ? '' : `<p class="stars">${stars}</p><p>Sink rate ${e.vs.toFixed(1)} m/s · ${Math.abs(e.cl).toFixed(1)} m off centreline · ${Math.round(Math.abs(e.aim))} m ${e.aim > 0 ? 'short of' : 'past'} the aim point${e.onRwy ? '' : ' · missed the runway!'}</p>`), 800); }
+    if (e.type === 'raceDone') { audio.mission('win'); analytics.capture('mission_done', { ...f.track, mission: 'rings', seconds: +e.time.toFixed(1) }); const best = LS.get('best', {}); const key = `${f.cfg.location}:${hangar.design.name}`; const pb = !best[key] || e.time < best[key]; if (pb) { best[key] = e.time; LS.set('best', best); setTimeout(() => audio.mission('record'), 2600); } setTimeout(() => showEnd(`Course complete: ${e.time.toFixed(1)} s`, pb ? '<p class="good">New personal best!</p>' : `<p>Best: ${best[key].toFixed(1)} s</p>`), 1500); }
+    if (e.type === 'landingDone') { analytics.capture('mission_done', { ...f.track, mission: 'landing', crashed: !!e.crashed, score: e.score, sink_ms: +e.vs.toFixed(2), on_runway: !!e.onRwy }); audio.mission(e.crashed || e.score < 300 ? 'fail' : e.score > 500 ? 'win' : 'ok'); const stars = '★'.repeat(Math.round(e.score / 200)) + '☆'.repeat(5 - Math.round(e.score / 200)); setTimeout(() => showEnd(e.crashed ? 'Crashed on landing' : `Landing score: ${e.score}`, e.crashed ? '' : `<p class="stars">${stars}</p><p>Sink rate ${e.vs.toFixed(1)} m/s · ${Math.abs(e.cl).toFixed(1)} m off centreline · ${Math.round(Math.abs(e.aim))} m ${e.aim > 0 ? 'short of' : 'past'} the aim point${e.onRwy ? '' : ' · missed the runway!'}</p>`), 800); }
     if (e.type === 'thunder') setTimeout(() => audio.play('thunder', e.power), e.delay * 1000);
   }
   // debris
@@ -917,6 +944,7 @@ function applyQuality() {
 // switching off the most expensive effects (MSAA -> bloom/post -> shadows) if needed.
 function governPerf(dt) {
   const ms = dt * 1000; perf.ema += (ms - perf.ema) * 0.05; perf.fps = 1000 / perf.ema;
+  if (state === 'flight' && F?.t0) { if (ms < 1000) { F.frames++; F.activeT += dt; } if (!F.paused && performance.now() - F.t0 > 8000 && ms < 1000) F.fpsLow = Math.min(F.fpsLow, perf.fps); F.maxLevel = Math.max(F.maxLevel, perf.level); if (net.count > F.playersMax) F.playersMax = net.count; }
   const fpsEl = document.getElementById('fps-meter');
   if (fpsEl) { fpsEl.style.display = settings.showFps && state === 'flight' ? '' : 'none'; if (settings.showFps) fpsEl.textContent = `${Math.round(perf.fps)} fps · ${Math.round(renderer.getPixelRatio() * 100)}% res${perf.level ? ' · lite ' + perf.level : ''}`; }
   if (settings.quality !== 'auto' || (state !== 'flight' && state !== 'hangar')) return;
@@ -1033,6 +1061,7 @@ scrollRail($('#part-list'), $('.palette .rail'));
 document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'flight' && F && !F.paused) togglePause(true); });
 
 // ---------- boot ----------
+function gpuName() { try { const gl = renderer.getContext(), x = gl.getExtension('WEBGL_debug_renderer_info'); return x ? gl.getParameter(x.UNMASKED_RENDERER_WEBGL) : null; } catch { return null; } }
 async function boot() {
   onResize();
   const saved = LS.get('current', null);
@@ -1045,6 +1074,7 @@ async function boot() {
   $('#splash').classList.add('hide');
   setTimeout(() => $('#splash').remove(), 900);
   maybeShowWhatsNew();
+  analytics.open({ quality: settings.quality, units: settings.units, control_mode: settings.controlMode, saved_planes: LS.get('designs', []).length, gpu: gpuName() });
   document.addEventListener('pointerdown', () => { audio.init(); if (state === 'hangar') audio.music(true); }, { once: true });
   if ('serviceWorker' in navigator && location.protocol !== 'file:' && !location.hostname.match(/^(localhost|127\.)/)) {
     // The service worker is for offline play; updates are driven by autoCheckUpdate (see above).
@@ -1058,6 +1088,6 @@ async function boot() {
     addEventListener('online', autoCheckUpdate);
     addEventListener('focus', autoCheckUpdate);
   }
-  window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, net, presets, settings, flightCfg, controls, rig };
+  window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, net, presets, settings, flightCfg, controls, rig, analytics };
 }
 boot();
