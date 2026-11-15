@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { M } from './materials.js';
 import { PM, SKIN_TILE, lightGeometry } from './planeMaterials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
+import { bladeGeometry, rotorBlade, propEngineDetail, jetEngineDetail, rocketDetail, gearLegDetailed, cockpitDetail, rotorDetail, strutDetail, ringLoft, Bag, V, bar } from './partDetail.js';
 
 // ---------- geometry helpers ----------
 // Body of revolution around Z. profile: [[z, r], ...] nose (most negative z) first.
@@ -50,7 +51,7 @@ export function smoothProfile(pts, n = 28) {
   return curve.getPoints(n).map((p) => [p.x, Math.max(0, p.y)]);
 }
 
-function airfoil(n, thick, camber) {
+export function airfoil(n, thick, camber) {
   // returns closed loop of [x(0..1 chord, LE=0), y] going TE->upper->LE->lower->TE
   const up = [], lo = [];
   for (let i = 0; i <= n; i++) {
@@ -63,7 +64,7 @@ function airfoil(n, thick, camber) {
 }
 
 // Build a lofted surface between sections. Each section: {x, y, zLE, chord}. Chord range [c0, c1] fraction.
-function loft(sections, c0, c1, thick, camber, n = 10, capStart = true, capEnd = true) {
+export function loft(sections, c0, c1, thick, camber, n = 10, capStart = true, capEnd = true) {
   const { up, lo } = airfoil(40, thick, camber);
   const sample = (arr, x) => { // linear interp of airfoil y at chord fraction x
     for (let i = 1; i < arr.length; i++) if (arr[i][0] >= x) { const a = arr[i - 1], b = arr[i]; const t = (x - a[0]) / (b[0] - a[0] || 1); return a[1] + (b[1] - a[1]) * t; }
@@ -116,11 +117,14 @@ function buildWing(o, color) {
   const strips = o.strips || ['ctrl', 'ctrl', 'ctrl'];
   const NS = strips.length;
   const controls = [], surfaces = [];
+  // detail builds: a visible hinge gap and small spanwise gaps between neighbouring surfaces (physics strips are unchanged)
+  const lv = o.lv || 0, gapC = lv ? Math.min(0.015, 0.03 / o.root) : 0, gapS = lv ? Math.min(0.012, 0.025 / o.span) : 0;
   const area = (() => { let a = 0; for (let k = 0; k < 40; k++) a += chordAt((k + 0.5) / 40) * o.span / 40; return a; })();
   for (let si = 0; si < NS; si++) {
     const s0 = si / NS, s1 = (si + 1) / NS;
     const secs = []; const sub = Math.max(1, Math.round(K / NS));
-    for (let k = 0; k <= sub; k++) secs.push(sec(s0 + (s1 - s0) * (k / sub)));
+    const a0 = s0 + (si > 0 && strips[si - 1] !== strips[si] ? gapS / 2 : 0), a1 = s1 - (si < NS - 1 && strips[si + 1] !== strips[si] ? gapS / 2 : 0); // a gap where the role changes
+    for (let k = 0; k <= sub; k++) secs.push(sec(a0 + (a1 - a0) * (k / sub)));
     const role = strips[si];
     // hinge line in canonical coords
     const h0 = new THREE.Vector3(secs[0].x, secs[0].y, secs[0].zLE + hinge * secs[0].chord);
@@ -130,12 +134,12 @@ function buildWing(o, color) {
     pivot.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir);
     pivot.updateMatrix();
     const inv = pivot.matrix.clone().invert();
-    const geo = loft(secs, hinge - 0.005, 1, o.thick ?? 0.12, o.camber ?? 0.02, 6);
+    const geo = loft(secs, lv ? hinge + gapC : hinge - 0.005, 1, o.thick ?? 0.12, o.camber ?? 0.02, 6);
     geo.applyMatrix4(inv);
     const hinged = new THREE.Object3D();
     const cm = new THREE.Mesh(geo, paint);
     hinged.add(cm); pivot.add(hinged); g.add(pivot);
-    controls.push({ obj: hinged, strip: si });
+    controls.push({ obj: hinged, strip: si, role, pivot, inv, secs });
     // physics strip: area, centre at quarter chord
     let sa = 0; for (let k = 0; k < 20; k++) sa += chordAt(s0 + (s1 - s0) * (k + 0.5) / 20) * o.span * (s1 - s0) / 20;
     const sm = (s0 + s1) / 2, cs = sec(sm);
@@ -148,8 +152,69 @@ function buildWing(o, color) {
   for (const s of surfaces) s.ar = o.ar || ar;
   g.userData.controls = controls;
   if (o.deco) wingDeco(g, o, sec, hinge);
+  if (lv) wingDetail(g, o, sec, hinge, gapC, paint, controls);
   return { group: g, surfaces, area };
 }
+
+// Detail build of a wing: dark hinge coves, static wicks on the trailing edges and, on big wings (o.slats), leading-edge
+// slats, upper-surface spoilers and flap-track fairings. Slats/spoilers are listed in userData for planeDetail to animate.
+function wingDetail(g, o, sec, hinge, gapC, paint, controls) {
+  const th = o.thick ?? 0.12, cam = o.camber ?? 0.02, { up } = airfoil(40, th, cam);
+  const upAt = (x) => { for (let i = 1; i < up.length; i++) if (up[i][0] >= x) { const a = up[i - 1], b = up[i]; return a[1] + (b[1] - a[1]) * ((x - a[0]) / (b[0] - a[0] || 1)); } return up.at(-1)[1]; };
+  const camAt = (x) => cam * 4 * x * (1 - x);
+  const spanOf = (x) => x / (o.span * Math.cos(THREE.MathUtils.degToRad(o.dihedral || 0)) || 1);
+  const at = (s, x, dy = 0) => { const c = sec(s); return V(c.x, c.y + (camAt(x) + dy) * c.chord, c.zLE + x * c.chord); };
+  const cove = new Bag();
+  for (const c of controls) {
+    const sA = spanOf(c.secs[0].x), sB = spanOf(c.secs.at(-1).x);
+    // cove: a dark ribbon on the camber line across the hinge gap
+    const pos = [];
+    for (const s of [sA, sB]) for (const x of [hinge - 0.004, hinge + gapC + 0.004]) pos.push(...at(s, x).toArray());
+    const cg = new THREE.BufferGeometry(); cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.setIndex([0, 2, 1, 1, 2, 3]); cg.computeVertexNormals();
+    cove.add(cg, M.intake());
+    // static wicks: little rods off the trailing edge of ailerons, elevators and rudders
+    if (c.role !== 'flap' && c.role !== 'fixed' && o.span > 1) for (const t of [0.35, 0.8]) {
+      const te = at(sA + (sB - sA) * t, 0.995), w = new THREE.Mesh(bar(te, te.clone().add(V(0, 0, 0.11)), 0.008, 0.008, true, 4).applyMatrix4(c.inv), M.black());
+      w.userData.near = true; c.obj.add(w);
+    }
+  }
+  cove.to(g);
+  if (!o.slats) return;
+  const slats = [], spoilers = [];
+  // slats: a skin cap over the leading edge (outboard of the inboard Krueger region), moving forward/down with the flaps
+  for (const [sA, sB] of [[0.12, 0.54], [0.555, 0.97]]) {
+    const secs = []; for (let k = 0; k <= 3; k++) { const c = sec(sA + (sB - sA) * k / 3), e = c.chord * 0.004; secs.push({ x: c.x, y: c.y, zLE: c.zLE - e, chord: c.chord * 1.008 }); }
+    const piv = new THREE.Object3D(); piv.add(new THREE.Mesh(loft(secs, 0, 0.13, th * 1.03, cam, 8), paint)); g.add(piv);
+    slats.push({ obj: piv, chord: sec((sA + sB) / 2).chord });
+  }
+  for (const c of controls) {
+    if (c.role !== 'flap') continue;
+    const sa = spanOf(c.secs[0].x), sb = spanOf(c.secs.at(-1).x);
+    // spoilers: thin panels on the upper surface ahead of the flaps, hinged at their front edge
+    for (let k = 0; k < 2; k++) {
+      const pa = sa + (sb - sa) * (k / 2) + 0.004, pb = sa + (sb - sa) * ((k + 1) / 2) - 0.004, x0 = 0.6, x1 = hinge - 0.006, rings = [];
+      for (const s of [pa, pb]) {
+        const cs = sec(s), ring = [];
+        for (let i = 0; i <= 4; i++) { const x = x0 + (x1 - x0) * (i / 4); ring.push(V(cs.x, cs.y + (upAt(x) + 0.003) * cs.chord, cs.zLE + x * cs.chord)); }
+        for (let i = 4; i >= 0; i--) { const x = x0 + (x1 - x0) * (i / 4); ring.push(V(cs.x, cs.y + (upAt(x) - 0.006) * cs.chord, cs.zLE + x * cs.chord)); }
+        rings.push(ring);
+      }
+      const pv = new THREE.Object3D(); pv.position.copy(rings[0][0]); pv.quaternion.setFromUnitVectors(V(1, 0, 0), rings[1][0].clone().sub(rings[0][0]).normalize()); pv.updateMatrix();
+      const geo = ringLoft(rings, true, true); geo.applyMatrix4(pv.matrix.clone().invert());
+      const hinged = new THREE.Object3D(); hinged.add(new THREE.Mesh(geo, paint)); pv.add(hinged); g.add(pv);
+      spoilers.push({ obj: hinged });
+    }
+    // flap-track fairings: canoes under the wing that tilt down with the flap
+    for (const t of [0.3, 0.75]) {
+      const cs = sec(sa * (1 - t) + sb * t), L = cs.chord * 0.62, rr = cs.chord * 0.055;
+      const prof = smoothProfile([[0, 0.01], [L * 0.15, rr * 0.8], [L * 0.45, rr], [L * 0.85, rr * 0.55], [L, 0.01]], 14);
+      const cg = revolve(prof, { segs: 12, sx: 0.55 }); cg.translate(cs.x, cs.y + (camAt(0.7) - th * 0.45) * cs.chord - rr * 0.45, cs.zLE + cs.chord * 0.52);
+      cg.applyMatrix4(c.inv); c.obj.add(new THREE.Mesh(cg, paint));
+    }
+  }
+  g.userData.slats = slats; g.userData.spoilers = spoilers;
+}
+
 
 // Cosmetic meshes (lights, decals) are skipped by partInfo so they never change hull points or mass centre.
 const cosmetic = (m) => { m.userData.cosmetic = true; m.castShadow = false; return m; };
@@ -178,9 +243,9 @@ function wingDeco(g, o, sec, hinge) {
   g.add(cosmetic(new THREE.Mesh(rg, PM.roundel())));
 }
 
-function fin(o, color) {
+function fin(o, color, lv = 0) {
   // build as wing then rotate span(+X) to +Y
-  const w = buildWing({ ...o, dihedral: 0, camber: 0, deco: 'fin' }, color);
+  const w = buildWing({ ...o, dihedral: 0, camber: 0, deco: 'fin', lv }, color);
   const holder = new THREE.Group(); w.group.rotation.z = Math.PI / 2; holder.add(w.group);
   holder.userData.controls = w.group.userData.controls;
   const rot = (v) => [-v[1], v[0], v[2]];
@@ -193,6 +258,7 @@ function fuselage(profile, { color, sy = 1, sx = 1, windows = 0, yOff, segs = 36
   const g = new THREE.Group();
   const prof = smoothProfile(profile, 40);
   g.add(new THREE.Mesh(revolve(prof, { sy, sx, yOff, segs, cap: true }), PM.skin(color, windows)));
+  g.userData.body = { prof, sx, sy, yOff }; // for planeDetail: antennas, ports and lights placed on the skin
   if (reg) for (const side of [1, -1]) g.add(cosmetic(new THREE.Mesh(bodyDecal(prof, { sx, sy, yOff, side, ...reg }), PM.reg(reg.text, color))));
   return g;
 }
@@ -218,8 +284,20 @@ function bodyDecal(prof, { sx = 1, sy = 1, yOff = null, side = 1, at = 0.6, lift
   return g;
 }
 
-function propeller(radius, blades, color = null) {
+function propeller(radius, blades, color = null, lv = 0) {
   const prop = new THREE.Group();
+  if (lv) { // twisted, tapered blades with painted tips
+    const blade = bladeGeometry(radius, { chord: blades > 4 ? 0.8 : 1 });
+    for (let b = 0; b < blades; b++) {
+      const piv = new THREE.Object3D(); piv.rotation.z = (b / blades) * Math.PI * 2;
+      piv.add(new THREE.Mesh(blade, PM.blade()));
+      prop.add(piv);
+    }
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(radius, 40), M.propDisc()); disc.userData.isDisc = true;
+    const holder = new THREE.Group(); holder.add(prop); holder.add(disc);
+    holder.userData.spinner = prop; holder.userData.disc = disc;
+    return holder;
+  }
   const bladeShape = new THREE.Shape();
   bladeShape.moveTo(0, -0.04); bladeShape.quadraticCurveTo(radius * 0.4, -0.1, radius * 0.95, -0.05);
   bladeShape.quadraticCurveTo(radius * 1.02, 0, radius * 0.95, 0.04); bladeShape.quadraticCurveTo(radius * 0.4, 0.07, 0, 0.04);
@@ -241,7 +319,7 @@ function propeller(radius, blades, color = null) {
   return holder;
 }
 
-function propEngine({ len, radius, propR, blades, color, radial = false, spinnerColor }) {
+function propEngine({ len, radius, propR, blades, color, radial = false, spinnerColor, lv = 0 }) {
   const g = new THREE.Group();
   const prof = radial
     ? [[0, 0], [0.0, radius * 0.75], [0.05, radius], [len * 0.5, radius * 0.98], [len, radius * 0.7], [len + 0.01, 0]]
@@ -265,13 +343,14 @@ function propEngine({ len, radius, propR, blades, color, radial = false, spinner
   }
   const spinner = new THREE.Mesh(revolve([[-radius * 0.9, 0], [-radius * 0.75, radius * 0.18], [-radius * 0.4, radius * 0.33], [0, radius * 0.36], [0.01, 0]], { segs: 24 }), spinnerColor ? PM.skin(spinnerColor) : M.chrome());
   g.add(spinner);
-  const p = propeller(propR, blades);
+  const p = propeller(propR, blades, null, lv);
   p.position.z = -radius * 0.25; g.add(p);
   g.userData.prop = p; g.userData.spinnerMesh = spinner;
+  if (lv) propEngineDetail(g, { len, radius, radial, color, propR });
   return g;
 }
 
-function jetEngine({ len, radius, color, fan = false, ab = false }) {
+function jetEngine({ len, radius, color, fan = false, ab = false, lv = 0 }) {
   const g = new THREE.Group();
   const prof = fan
     ? [[0, radius * 0.92], [0.05, radius], [len * 0.35, radius * 1.02], [len * 0.8, radius * 0.85], [len, radius * 0.62]]
@@ -302,10 +381,11 @@ function jetEngine({ len, radius, color, fan = false, ab = false }) {
   const flameCore = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.35, radius * 2.2, 16, 1, true), M.flameCore().clone());
   flameCore.rotation.x = -Math.PI / 2; flameCore.position.z = len + radius * 1.5; g.add(flameCore);
   g.userData.fan = fanG; g.userData.flame = flame; g.userData.flameCore = flameCore; g.userData.ab = ab;
+  if (lv) jetEngineDetail(g, { len, radius, fan, ab });
   return g;
 }
 
-function rocket({ len, radius, color }) {
+function rocket({ len, radius, color, lv = 0 }) {
   const g = new THREE.Group();
   g.add(new THREE.Mesh(revolve(smoothProfile([[0, 0], [radius * 1.5, radius * 0.8], [radius * 3, radius], [len, radius]], 20).concat([[len + 0.001, radius * 0.4]]), { segs: 24, cap: true }), PM.skin(color)));
   const noz = new THREE.Mesh(revolve([[len, radius * 0.5], [len + radius * 0.9, radius * 0.8]], { segs: 20 }), M.darkMetal());
@@ -319,6 +399,7 @@ function rocket({ len, radius, color }) {
   const flameCore = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.5, radius * 4, 16, 1, true), M.flameCore().clone());
   flameCore.rotation.x = -Math.PI / 2; flameCore.position.z = len + radius * 2.5; g.add(flameCore);
   g.userData.flame = flame; g.userData.flameCore = flameCore;
+  if (lv) rocketDetail(g, { len, radius });
   return g;
 }
 
@@ -331,7 +412,8 @@ function wheel(r, w) {
   return g;
 }
 
-function gearLeg({ len, r, w = null, color = 0xdddddd, fairing = false, bogie = false, steer = false }) {
+function gearLeg({ len, r, w = null, color = 0xdddddd, fairing = false, bogie = false, steer = false, lv = 0 }) {
+  if (lv) return gearLegDetailed({ len, r, w, color, fairing, bogie, steer });
   const g = new THREE.Group();
   const strut = new THREE.Group();
   const sm = new THREE.Mesh(new THREE.CylinderGeometry(0.05 + r * 0.08, 0.05 + r * 0.08, len, 10), M.steel());
@@ -369,11 +451,11 @@ function float_({ len, r, color }) {
 
 // Helicopter rotor: mast up from the origin, blades spinning in the horizontal plane (a disc of radius R).
 // side = true builds a tail rotor instead: no mast, disc facing sideways (+X).
-function rotorHead({ R, blades, chord, mast = 0, side = false, color }) {
+function rotorHead({ R, blades, chord, mast = 0, side = false, color, lv = 0 }) {
   const g = new THREE.Group();
   if (mast) { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, mast, 12), M.steel()); m.position.y = mast / 2; g.add(m); }
   const spin = new THREE.Group();
-  const bgeo = new THREE.BoxGeometry(R * 0.94, Math.max(0.03, chord * 0.12), chord); bgeo.translate(R * 0.5, 0, 0);
+  const bgeo = lv ? rotorBlade(R, chord) : new THREE.BoxGeometry(R * 0.94, Math.max(0.03, chord * 0.12), chord); if (!lv) bgeo.translate(R * 0.5, 0, 0);
   for (let b = 0; b < blades; b++) {
     const piv = new THREE.Object3D(); piv.rotation.z = (b / blades) * Math.PI * 2;
     const bl = new THREE.Mesh(bgeo, M.prop()); bl.rotation.x = Math.PI / 2 + 0.12; piv.add(bl); // flat in the disc plane, slight pitch
@@ -386,6 +468,7 @@ function rotorHead({ R, blades, chord, mast = 0, side = false, color }) {
   holder.userData.spinner = spin; holder.userData.disc = disc;
   if (side) holder.rotation.y = Math.PI / 2; else { holder.rotation.x = -Math.PI / 2; holder.position.y = mast; }
   g.add(holder); g.userData.prop = holder;
+  if (lv) rotorDetail(g, { R, blades, chord, mast });
   return g;
 }
 function skid({ len, h, color }) {
@@ -418,7 +501,9 @@ function ensureUv1(obj) {
   obj.traverse((m) => { const g = m.geometry; if (m.isMesh && g.attributes.uv1 === undefined) g.setAttribute('uv1', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2)); });
   return obj;
 }
-function def(p) { const b = p.build; p.build = (c) => ensureUv1(b(c)); PARTS[p.id] = p; }
+// build(color, { detail }): detail 0 (default) is the plain part every physics query uses (partInfo); 1-2 add the
+// visual-only detail of partDetail.js. Builders read it as lv.
+function def(p) { const b = p.build; p.build = (c, o) => ensureUv1(b(c, o?.detail || 0)); PARTS[p.id] = p; }
 
 // --- Fuselages ---
 def({ id: 'fus_light', cat: 'fuselage', name: 'Light Cabin', desc: 'Four-seat high-wing cabin. The classic trainer body.', mass: 380, hp: 900, color: C.white,
@@ -448,7 +533,7 @@ def({ id: 'fus_glider', cat: 'fuselage', name: 'Glider Body', desc: 'Long slende
 
 // --- Cockpits / noses ---
 def({ id: 'ck_bubble', cat: 'cockpit', name: 'Bubble Canopy', desc: 'All-round view glass bubble. Sits on top of a body.', mass: 60, hp: 250, color: C.darkgray, eye: [0, 0.25, 0.1],
-  build: (c) => {
+  build: (c, lv) => {
     const g = new THREE.Group();
     const glass = new THREE.Mesh(new THREE.SphereGeometry(0.5, 28, 16, 0, Math.PI * 2, 0, Math.PI / 2), PM.canopy()); glass.scale.set(0.9, 0.85, 2.0); g.add(glass);
     const frame = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.025, 6, 40), PM.skin(c)); frame.rotation.x = Math.PI / 2; frame.scale.set(0.9, 2.0, 1); g.add(frame);
@@ -457,10 +542,11 @@ def({ id: 'ck_bubble', cat: 'cockpit', name: 'Bubble Canopy', desc: 'All-round v
     const panel = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.14, 0.22), M.black()); panel.position.set(0, 0.07, -0.55); g.add(panel);
     const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.13, 16, 12), M.pilot()); helmet.position.set(0, 0.28, 0.2); g.add(helmet);
     const visor = new THREE.Mesh(new THREE.SphereGeometry(0.135, 16, 8, -0.9, 1.8, 1.0, 0.7), M.visor()); visor.position.copy(helmet.position); visor.rotation.y = Math.PI; g.add(visor);
+    if (lv) cockpitDetail('ck_bubble', g, c);
     return g;
   } });
 def({ id: 'ck_fighter', cat: 'cockpit', name: 'Fighter Canopy', desc: 'Gold-tinted teardrop canopy with an ejection seat.', mass: 150, hp: 300, color: C.gray, eye: [0, 0.35, 0.2],
-  build: (c) => {
+  build: (c, lv) => {
     const g = new THREE.Group();
     const glass = new THREE.Mesh(revolve(smoothProfile([[-1.6, 0.02], [-0.8, 0.42], [0.3, 0.5], [1.4, 0.3], [2.0, 0.04]], 24), { segs: 24, sy: 1.15 }), PM.canopy(0x6b5524));
     g.add(glass);
@@ -469,15 +555,17 @@ def({ id: 'ck_fighter', cat: 'cockpit', name: 'Fighter Canopy', desc: 'Gold-tint
     const coaming = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.4), M.black()); coaming.position.set(0, 0.14, -0.55); g.add(coaming);
     const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.14, 16, 12), M.pilot()); helmet.position.set(0, 0.3, 0.2); g.add(helmet);
     const visor = new THREE.Mesh(new THREE.SphereGeometry(0.145, 16, 8, -0.9, 1.8, 1.0, 0.7), M.visor()); visor.position.copy(helmet.position); visor.rotation.y = Math.PI; g.add(visor);
+    if (lv) cockpitDetail('ck_fighter', g, c);
     return g;
   } });
 def({ id: 'ck_airliner', cat: 'cockpit', name: 'Airliner Nose', desc: 'Flight deck with wrap-around windscreen. Bolts to the front of a tube.', mass: 1600, hp: 2500, color: C.white, eye: [0, 0.9, -2.8],
-  build: (c) => {
+  build: (c, lv) => {
     const g = new THREE.Group();
     g.add(new THREE.Mesh(revolve(smoothProfile([[-4.6, 0], [-4.4, 0.7], [-3.4, 1.4], [-1.8, 1.82], [0, 1.9]], 24), { segs: 40, yOff: (z) => (z + 0) * -0.04, cap: true }), PM.skin(c)));
     const ws = new THREE.Mesh(new THREE.SphereGeometry(1.86, 24, 8, Math.PI * 0.3, Math.PI * 0.4, Math.PI * 0.3, Math.PI * 0.12), PM.windscreen());
     ws.position.set(0, 0.0, -1.7); ws.scale.set(1, 1, 1.25); ws.rotation.y = Math.PI / 2 + Math.PI; g.add(ws);
     const radome = new THREE.Mesh(new THREE.SphereGeometry(0.72, 16, 12), PM.skin(0x30343a)); radome.position.z = -4.25; radome.scale.z = 0.5; g.add(radome);
+    if (lv) cockpitDetail('ck_airliner', g, c);
     return g;
   } });
 def({ id: 'ck_glassnose', cat: 'cockpit', name: 'Greenhouse Nose', desc: 'Framed glass nose, like an old bomber.', mass: 220, hp: 400, color: C.navy, eye: [0, 0.1, -0.6],
@@ -502,19 +590,19 @@ def({ id: 'ck_open', cat: 'cockpit', name: 'Open Cockpit', desc: 'Windscreen, le
 
 // --- Wings ---
 const wingDef = (id, name, desc, mass, hp, color, o) => def({ id, cat: 'wing', name, desc, mass, hp, color, attach: 'wing', wing: o,
-  build: (c) => { const w = buildWing({ ...o, deco: 'wing' }, c); w.group.userData.surfaces = w.surfaces; return w.group; } });
+  build: (c, lv) => { const w = buildWing({ ...o, deco: 'wing', lv }, c); w.group.userData.surfaces = w.surfaces; return w.group; } });
 wingDef('w_trainer', 'Trainer Wing', 'Straight, thick, gentle stall. Forgiving.', 110, 1100, C.white, { span: 5.4, root: 1.6, tip: 1.4, sweep: 0.05, dihedral: 2, thick: 0.15, camber: 0.04, strips: ['flap', 'flap', 'aileron'], flaps: true });
 wingDef('w_taper', 'Tapered Wing', 'Efficient tapered wing for fast props.', 150, 1200, C.white, { span: 5.8, root: 2.2, tip: 1.1, sweep: 0.3, dihedral: 4, thick: 0.13, camber: 0.03, strips: ['flap', 'aileron', 'aileron'], flaps: true, roundel: true });
 wingDef('w_ellipse', 'Elliptical Wing', 'Graceful elliptical planform, as seen on famous fighters.', 220, 1500, C.green, { span: 5.6, root: 2.4, tip: 0.5, sweep: 0.15, dihedral: 5, thick: 0.13, camber: 0.025, planform: 'ellipse', strips: ['flap', 'aileron', 'aileron'], flaps: true, roundel: true });
 wingDef('w_swept', 'Swept Jet Wing', 'Swept back for speed. Stalls harder.', 500, 2600, C.gray, { span: 5.2, root: 4.2, tip: 1.3, sweep: 3.2, dihedral: -2, thick: 0.07, camber: 0.01, strips: ['flap', 'aileron', 'aileron'], flaps: true, roundel: true, ar: 3.5 });
 wingDef('w_delta', 'Delta Wing', 'Huge triangle. High AoA, lots of drag when you pull.', 800, 3200, C.gray, { span: 4.6, root: 9, tip: 0.8, sweep: 7.6, dihedral: 0, thick: 0.05, camber: 0, strips: ['ctrl', 'ctrl', 'ctrl'], hinge: 0.85, ar: 2.0, roundel: true });
 wingDef('w_glider', 'Glider Wing', 'Long, skinny, glides forever.', 95, 700, C.white, { span: 9.0, root: 1.0, tip: 0.45, sweep: 0.15, dihedral: 3, thick: 0.14, camber: 0.04, strips: ['flap', 'flap', 'aileron'], flaps: true });
-wingDef('w_airliner', 'Airliner Wing', 'Giant swept wing with plenty of fuel and lift.', 7000, 30000, C.white, { span: 16, root: 7, tip: 1.8, sweep: 7.5, dihedral: 5, thick: 0.11, camber: 0.025, strips: ['flap', 'flap', 'aileron'], flaps: true });
+wingDef('w_airliner', 'Airliner Wing', 'Giant swept wing with plenty of fuel and lift.', 7000, 30000, C.white, { span: 16, root: 7, tip: 1.8, sweep: 7.5, dihedral: 5, thick: 0.11, camber: 0.025, strips: ['flap', 'flap', 'aileron'], flaps: true, slats: true });
 wingDef('w_stub', 'Stub Wing', 'Short, strong. Good for hanging engines on.', 60, 900, C.yellow, { span: 2.4, root: 1.3, tip: 1.1, sweep: 0.1, dihedral: 0, thick: 0.14, camber: 0.02, strips: ['fixed', 'aileron'], flaps: false });
 
 // --- Tail surfaces ---
 const tailDef = (id, name, desc, mass, hp, color, o, isFin = false) => def({ id, cat: 'tail', name, desc, mass, hp, color, attach: isFin ? 'fin' : 'wing', wing: o,
-  build: (c) => { const w = isFin ? fin(o, c) : buildWing(o, c); w.group.userData.surfaces = w.surfaces; return w.group; } });
+  build: (c, lv) => { const w = isFin ? fin(o, c, lv) : buildWing({ ...o, lv }, c); w.group.userData.surfaces = w.surfaces; return w.group; } });
 tailDef('t_hstab', 'Tailplane', 'Horizontal stabilizer with elevator. Use a pair at the back.', 25, 500, C.white, { span: 1.8, root: 1.1, tip: 0.7, sweep: 0.3, dihedral: 0, thick: 0.1, camber: 0, strips: ['ctrl', 'ctrl'], hinge: 0.62 });
 tailDef('t_vfin', 'Vertical Fin', 'Fin and rudder. Keeps the nose pointing forwards.', 25, 500, C.white, { span: 1.6, root: 1.5, tip: 0.8, sweep: 0.9, thick: 0.1, strips: ['ctrl', 'ctrl'], hinge: 0.62 }, true);
 tailDef('t_jet_hstab', 'Swept Tailplane', 'Swept all-moving tail for jets.', 140, 1200, C.gray, { span: 2.8, root: 2.4, tip: 0.9, sweep: 1.9, dihedral: -4, thick: 0.06, camber: 0, strips: ['ctrl', 'ctrl'], hinge: 0.3 });
@@ -526,13 +614,13 @@ tailDef('t_canard', 'Canard', 'Small fore-plane. Mount near the nose for that fu
 // --- Engines ---
 def({ id: 'e_piston', cat: 'engine', name: 'Piston 180 hp', desc: 'Four-cylinder flat engine with two-blade prop. Putt-putt.', mass: 150, hp: 600, color: C.white,
   engine: { type: 'prop', thrust: 3400, vmax: 85, sound: 'piston', idleRpm: 700, maxRpm: 2700, cyl: 4 },
-  build: (c) => propEngine({ len: 1.1, radius: 0.5, propR: 0.95, blades: 2, color: c }) });
+  build: (c, lv) => propEngine({ len: 1.1, radius: 0.5, propR: 0.95, blades: 2, color: c, lv }) });
 def({ id: 'e_radial', cat: 'engine', name: 'Radial 1,400 hp', desc: 'Nine big cylinders, three blades, a glorious rumble.', mass: 750, hp: 1500, color: C.green,
   engine: { type: 'prop', thrust: 14000, vmax: 165, sound: 'radial', idleRpm: 600, maxRpm: 2600, cyl: 9 },
-  build: (c) => propEngine({ len: 1.6, radius: 0.75, propR: 1.6, blades: 3, color: c, radial: true, spinnerColor: c }) });
+  build: (c, lv) => propEngine({ len: 1.6, radius: 0.75, propR: 1.6, blades: 3, color: c, radial: true, spinnerColor: c, lv }) });
 def({ id: 'e_turboprop', cat: 'engine', name: 'Turboprop', desc: 'Turbine-driven four-blade prop. Smooth and strong.', mass: 520, hp: 1400, color: C.white,
   engine: { type: 'prop', thrust: 21000, vmax: 190, sound: 'turboprop', idleRpm: 1000, maxRpm: 2000, cyl: 0, spool: 1.5 },
-  build: (c) => propEngine({ len: 2.6, radius: 0.55, propR: 1.7, blades: 4, color: c }) });
+  build: (c, lv) => propEngine({ len: 2.6, radius: 0.55, propR: 1.7, blades: 4, color: c, lv }) });
 def({ id: 'e_electric', cat: 'engine', name: 'Electric Fan', desc: 'Silent-ish ducted electric fan. Instant power, high whine.', mass: 60, hp: 400, color: 0x2a9d8f,
   engine: { type: 'prop', thrust: 2500, vmax: 110, sound: 'electric', idleRpm: 0, maxRpm: 9000, cyl: 0 },
   build: (c) => {
@@ -545,33 +633,33 @@ def({ id: 'e_electric', cat: 'engine', name: 'Electric Fan', desc: 'Silent-ish d
   } });
 def({ id: 'e_jet_small', cat: 'engine', name: 'Small Turbojet', desc: 'Light jet engine. Needs speed to shine.', mass: 300, hp: 900, color: C.gray,
   engine: { type: 'jet', thrust: 13000, spool: 2.5, sound: 'jet' },
-  build: (c) => jetEngine({ len: 2.2, radius: 0.38, color: c }) });
+  build: (c, lv) => jetEngine({ len: 2.2, radius: 0.38, color: c, lv }) });
 def({ id: 'e_jet_ab', cat: 'engine', name: 'Afterburning Turbojet', desc: 'Fighter engine. Push throttle past 95% for the afterburner.', mass: 1600, hp: 2000, color: C.darkgray,
   engine: { type: 'jet', thrust: 55000, ab: 85000, spool: 3.5, sound: 'jet' },
-  build: (c) => jetEngine({ len: 4.2, radius: 0.55, color: c, ab: true }) });
+  build: (c, lv) => jetEngine({ len: 4.2, radius: 0.55, color: c, ab: true, lv }) });
 def({ id: 'e_turbofan', cat: 'engine', name: 'Big Turbofan', desc: 'High-bypass airliner engine. Huge thrust, slow spool.', mass: 2600, hp: 4000, color: C.white,
   engine: { type: 'jet', thrust: 70000, spool: 5, sound: 'fan' },
-  build: (c) => jetEngine({ len: 4.0, radius: 1.15, color: c, fan: true }) });
+  build: (c, lv) => jetEngine({ len: 4.0, radius: 1.15, color: c, fan: true, lv }) });
 def({ id: 'e_rocket', cat: 'engine', name: 'Rocket Booster', desc: 'Pure chaos: fires when throttle > 50%, burns 20 s unless you change it. No refills!', mass: 450, hp: 700, color: C.orange,
   engine: { type: 'rocket', thrust: 90000, burn: 20, sound: 'rocket' },
-  build: (c) => rocket({ len: 3.2, radius: 0.32, color: c }) });
+  build: (c, lv) => rocket({ len: 3.2, radius: 0.32, color: c, lv }) });
 
 // --- Helicopter rotors ---
 // Main rotors lift straight up along the mast. Throttle is the collective: in Arcade, middle = hover.
 // A single main rotor twists the body the other way; a tail rotor cancels that and gives rudder control.
 def({ id: 'r_main', cat: 'rotor', name: 'Main Rotor', desc: 'Two-blade helicopter rotor. Mount on top, over the middle. Needs a tail rotor!', mass: 220, hp: 900, color: C.darkgray,
   engine: { type: 'rotor', thrust: 12000, sound: 'turboprop', idleRpm: 1000, maxRpm: 2000, spool: 2.5 },
-  build: (c) => rotorHead({ R: 4.2, blades: 2, chord: 0.3, mast: 0.7, color: c }) });
+  build: (c, lv) => rotorHead({ R: 4.2, blades: 2, chord: 0.3, mast: 0.7, color: c, lv }) });
 def({ id: 'r_main4', cat: 'rotor', name: 'Four-Blade Rotor', desc: 'Bigger, smoother four-blade rotor for heavier helicopters.', mass: 600, hp: 2000, color: C.darkgray,
   engine: { type: 'rotor', thrust: 52000, sound: 'turboprop', idleRpm: 1000, maxRpm: 2000, spool: 3 },
-  build: (c) => rotorHead({ R: 6.5, blades: 4, chord: 0.45, mast: 0.9, color: c }) });
+  build: (c, lv) => rotorHead({ R: 6.5, blades: 4, chord: 0.45, mast: 0.9, color: c, lv }) });
 def({ id: 'r_tail', cat: 'rotor', name: 'Tail Rotor', desc: 'Small side rotor for the end of the tail. Stops the spin and lets the rudder turn you.', mass: 30, hp: 300, color: C.darkgray,
   engine: { type: 'tailrotor', thrust: 0, idleRpm: 1000, maxRpm: 2000 },
-  build: (c) => rotorHead({ R: 0.75, blades: 2, chord: 0.14, side: true, color: c }) });
+  build: (c, lv) => rotorHead({ R: 0.75, blades: 2, chord: 0.14, side: true, color: c, lv }) });
 
 // --- Landing gear (origin = strut top; wheel ray down) ---
 const gearDef = (id, name, desc, mass, hp, opts, gearInfo) => def({ id, cat: 'gear', name, desc, mass, hp, color: 0xdddddd, attach: 'gear', gear: gearInfo,
-  build: (c) => gearLeg({ ...opts, color: c }) });
+  build: (c, lv) => gearLeg({ ...opts, color: c, lv }) });
 gearDef('g_nose', 'Nose Wheel', 'Steerable nose wheel. Rudder steers on the ground.', 25, 260, { len: 0.95, r: 0.22, steer: true, fairing: false }, { len: 0.95, r: 0.22, steer: true, brake: false, limit: 4.5, k: 2.2 });
 gearDef('g_main', 'Main Gear Leg', 'Spring-steel leg with a faired wheel. Use one each side.', 35, 380, { len: 1.05, r: 0.28, fairing: true }, { len: 1.05, r: 0.28, steer: false, brake: true, limit: 5.0, k: 3 });
 gearDef('g_tail', 'Tail Wheel', 'Little steerable tail wheel for taildraggers.', 10, 160, { len: 0.38, r: 0.12, steer: true }, { len: 0.38, r: 0.12, steer: true, brake: false, limit: 4.0, k: 1.2 });
@@ -589,7 +677,7 @@ def({ id: 'c_motor', cat: 'car', name: 'Car Engine', desc: 'V8 with a blower. Dr
   engine: { type: 'drive', thrust: 5000, vmax: 50, sound: 'piston', idleRpm: 800, maxRpm: 2700, cyl: 8 },
   build: (c) => carMotor({ color: c }) });
 const carWheel = (id, name, desc, mass, r, len, w, steer) => def({ id, cat: 'car', name, desc, mass, hp: 700, color: 0x2a2a2a, attach: 'gear',
-  gear: { len, r, steer, brake: true, drive: true, limit: 8, k: 3 }, build: (c) => gearLeg({ len, r, w, steer, color: c }) });
+  gear: { len, r, steer, brake: true, drive: true, limit: 8, k: 3 }, build: (c, lv) => gearLeg({ len, r, w, steer, color: c, lv }) });
 carWheel('c_wheel', 'Car Wheel', 'Driven wheel with a fat tyre. Put them at the back.', 30, 0.36, 0.35, 0.3, false);
 carWheel('c_wheel_steer', 'Steering Wheel', 'Driven wheel that steers. Put them at the front.', 32, 0.36, 0.35, 0.3, true);
 carWheel('c_monster', 'Monster Wheel', 'Huge bouncy monster-truck wheel. Drives and steers.', 120, 0.8, 0.6, 0.6, true);
@@ -613,7 +701,7 @@ def({ id: 'x_landlight', cat: 'extra', name: 'Landing Light', desc: 'Bright spot
   build: (c) => { const g = new THREE.Group(); const h = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.09, 0.15, 14), PM.skin(c)); h.rotation.x = Math.PI / 2; g.add(h);
     const lens = new THREE.Mesh(lightGeometry(new THREE.CircleGeometry(0.11, 14), 2), PM.light()); lens.userData.planeLight = true; lens.position.z = -0.08; lens.rotation.y = Math.PI; g.add(lens); return g; } });
 def({ id: 'x_strut', cat: 'extra', name: 'Strut', desc: 'Structural strut. Connect wings for biplanes.', mass: 12, hp: 400, color: 0x888888,
-  build: (c) => { const g = new THREE.Group(); const s = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.6, 8), PM.skin(c)); g.add(s); return g; } });
+  build: (c, lv) => { const g = new THREE.Group(); const s = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.6, 8), PM.skin(c)); g.add(s); if (lv) strutDetail(g, c); return g; } });
 def({ id: 'x_pylon', cat: 'extra', name: 'Pylon', desc: 'Vertical mounting pylon. Hang engines lower or higher.', mass: 40, hp: 600, color: C.gray,
   build: (c) => { const g = new THREE.Group(); const sh = new THREE.Shape(); sh.moveTo(-0.8, 0); sh.lineTo(0.9, 0); sh.lineTo(0.5, -0.8); sh.lineTo(-0.4, -0.8); sh.closePath();
     const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.12, bevelEnabled: false }); geo.rotateY(Math.PI / 2); geo.translate(-0.06, 0, 0); g.add(new THREE.Mesh(geo, PM.skin(c))); return g; } });
