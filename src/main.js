@@ -232,18 +232,49 @@ function buildInfo() {
   const when = BUILT ? new Date(BUILT).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'local dev build';
   return `Skywright ${VERSION} · build ${COMMIT} · ${when}`;
 }
-// Ask the server which build is live; if it's newer, clear the offline cache and reload straight into it.
+// ---------- updates ----------
+// The deployed src/version.js is the source of truth: poll it (a ~200-byte no-store fetch) and when its COMMIT differs
+// from the one we're running, wipe the offline cache and reload. Relying on the browser's service-worker update alone
+// was unreliable: it only checks on load / every 10 min / on refocus, and its all-or-nothing precache can fail on flaky wifi.
+let updatePending = false, lastInput = 0;
+for (const ev of ['pointerdown', 'pointermove', 'keydown', 'wheel']) addEventListener(ev, () => { lastInput = performance.now(); }, { capture: true, passive: true });
+async function liveCommit() {
+  const txt = await (await fetch(`src/version.js?t=${Date.now()}`, { cache: 'no-store' })).text();
+  return (txt.match(/COMMIT = '([^']+)'/) || [])[1] || null;
+}
+async function reloadFresh() {
+  if (window.caches) for (const k of await caches.keys()) await caches.delete(k); // scripts then come from the network
+  location.reload();
+}
+// Called when the hangar is idle: no modal open and no touches for a few seconds, so nobody gets yanked mid-drag.
+function applyUpdateWhenIdle() {
+  if (state !== 'hangar') { updatePending = true; return; } // flights reload when they end
+  const busy = $('#modal-root').style.display === 'block' || performance.now() - lastInput < 4000 || hangar.placing || net.active; // don't drop a multiplayer room either
+  if (busy) { setTimeout(applyUpdateWhenIdle, 2000); return; }
+  ui.hint('Updating to the latest version…'); setTimeout(reloadFresh, 800);
+}
+let checking = false;
+async function autoCheckUpdate() {
+  if (checking || COMMIT === 'dev' || document.hidden || !navigator.onLine) return;
+  checking = true;
+  try {
+    const live = await liveCommit();
+    if (!live || live === 'dev' || live === COMMIT) return;
+    // loop guard: if a reload didn't bring in this build (CDN still propagating), try it at most once a minute
+    const tried = JSON.parse(sessionStorage.getItem('skywright.updTried') || 'null');
+    if (tried && tried.live === live && Date.now() - tried.t < 60000) return;
+    sessionStorage.setItem('skywright.updTried', JSON.stringify({ live, t: Date.now() }));
+    applyUpdateWhenIdle();
+  } catch { /* offline or server hiccup: next poll */ } finally { checking = false; }
+}
+// Settings button: same check, with feedback, and it reloads even on a dev build.
 async function updateNow(status) {
   status.textContent = 'Checking…';
   try {
-    const txt = await (await fetch(`src/version.js?t=${Date.now()}`, { cache: 'no-store' })).text();
-    const live = (txt.match(/COMMIT = '([^']+)'/) || [])[1];
+    const live = await liveCommit();
     if (live && live === COMMIT && COMMIT !== 'dev') { status.textContent = 'You have the latest version ✓'; return; }
     status.textContent = live && live !== 'dev' ? `Updating to build ${live}…` : 'Reloading…';
-    const reg = await navigator.serviceWorker?.getRegistration();
-    await reg?.update().catch(() => {});
-    if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
-    setTimeout(() => location.reload(), 400);
+    setTimeout(reloadFresh, 400);
   } catch (e) { status.textContent = 'Couldn’t reach the server. Are you online?'; }
 }
 function settingsModal() {
@@ -366,11 +397,10 @@ function buildFlight(cfg) {
   if (!ac.hasEngine) hud.toast('Glider: look for rising air under clouds and over sunny ridges.');
 }
 
-let updatePending = false;
 function endFlight(restarting = false) {
   if (!F) return;
   net.detach(); if (!restarting) net.leave();
-  if (updatePending) { location.reload(); return; }
+  if (updatePending) { reloadFresh(); return; }
   const f = F; F = null;
   f.world.dispose(); f.effects.dispose(); f.traffic.dispose(); f.mission?.dispose?.();
   f.scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
@@ -705,17 +735,16 @@ async function boot() {
   setTimeout(() => $('#splash').remove(), 900);
   document.addEventListener('pointerdown', () => { audio.init(); if (state === 'hangar') audio.music(true); }, { once: true });
   if ('serviceWorker' in navigator && location.protocol !== 'file:' && !location.hostname.match(/^(localhost|127\.)/)) {
-    // Auto-update: when a newly deployed version takes over, reload straight away in the hangar,
-    // or as soon as the current flight ends (never mid-flight).
-    const hadController = !!navigator.serviceWorker.controller;
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!hadController) return; // first install, nothing to refresh
-      if (state === 'hangar') { ui.hint('Updating to the latest version…'); setTimeout(() => location.reload(), 600); } else updatePending = true;
-    });
-    navigator.serviceWorker.register('sw.js').then((reg) => {
-      setInterval(() => reg.update().catch(() => {}), 10 * 60 * 1000);
-      document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
-    }).catch(() => {});
+    // The service worker is for offline play; updates are driven by autoCheckUpdate (see above).
+    navigator.serviceWorker.addEventListener('controllerchange', autoCheckUpdate);
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+  if (location.protocol !== 'file:') {
+    setTimeout(autoCheckUpdate, 3000);
+    setInterval(autoCheckUpdate, 60 * 1000);
+    document.addEventListener('visibilitychange', autoCheckUpdate);
+    addEventListener('online', autoCheckUpdate);
+    addEventListener('focus', autoCheckUpdate);
   }
   window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, net, presets, settings, flightCfg, controls, rig };
 }
