@@ -157,12 +157,12 @@ function wirePads(sp, sel) {
     holdRepeat(b, (first, held, ticks) => {
       // 1 step per tick at first, ramping over ~2 s to 10 cm or 6° per tick (about 1.7 m/s or 100°/s)
       const per = Math.min(k[0] === 'm' ? 10 : 6, 1 + (held / 0.06) ** 2 / 40) * ticks;
-      if (first) { sizeDrag = true; audio.play('click'); const p = hangar.design.parts[hangar.sel]; v = k[0] === 'm' ? p.pos[axis] : 0; base = [...p.quat]; }
+      if (first) { sizeDrag = true; audio.play(k[0] === 'm' ? 'move' : 'rotate'); const p = hangar.design.parts[hangar.sel]; v = k[0] === 'm' ? p.pos[axis] : 0; base = [...p.quat]; } else audio.tick(k[0] === 'm' ? 'slide' : 'ratchet');
       if (k[0] === 'm') { v = clamp(v + dir * 0.01 * per, -L, L); const t = Math.round(v * 100) / 100; apply((u) => hangar.setPos(axis, t, u), first); }
       else { v += dir * per; const t = Math.round(v); apply((u) => hangar.rotateFrom(base, axis, t, u), first); }
     }, () => { if (raf) { cancelAnimationFrame(raf); raf = 0; pending(false); } pending = null; sizeDrag = false; renderInspector(); });
   });
-  sp.querySelector('[data-reset]').addEventListener('click', () => { audio.play('click'); hangar.resetRotation(); });
+  sp.querySelector('[data-reset]').addEventListener('click', () => { audio.play('rotate'); hangar.resetRotation(); });
 }
 function wireCtls(sp, sel) {
   const rows = Object.fromEntries(ctlRows(sel).flatMap(([, r]) => r).map((c) => [c.k, c]));
@@ -177,7 +177,7 @@ function wireCtls(sp, sel) {
   const end = (k, v) => { cancelAnimationFrame(raf); raf = 0; if (sizeDrag) { applyCtl(k, v, false); sizeDrag = false; renderInspector(); } };
   sp.querySelectorAll('[data-ctl]').forEach((r) => {
     const k = r.dataset.ctl;
-    r.addEventListener('input', () => { const first = !sizeDrag; if (first) begin(); sizeDrag = true; show(k, +r.value); step(k, +r.value, first); });
+    r.addEventListener('input', () => { audio.tick('slide', (r.value - r.min) / (r.max - r.min)); const first = !sizeDrag; if (first) begin(); sizeDrag = true; show(k, +r.value); step(k, +r.value, first); });
     r.addEventListener('change', () => end(k, +r.value));
   });
   sp.querySelectorAll('[data-fine]').forEach((b) => {
@@ -185,7 +185,7 @@ function wireCtls(sp, sel) {
     let timer = 0, v = c.v;
     const tick = (first) => {
       v = Math.min(c.hi, Math.max(c.lo, +(v + dir * c.fine).toFixed(3)));
-      slider.value = v; show(k, v); step(k, v, first); if (first) audio.play('click');
+      slider.value = v; show(k, v); step(k, v, first); audio.tick('slide', (v - c.lo) / (c.hi - c.lo));
     };
     const stop = () => { if (!timer) return; clearTimeout(timer); clearInterval(timer); timer = 0; end(k, v); };
     b.addEventListener('pointerdown', (ev) => {
@@ -222,7 +222,7 @@ function renderInspector() {
       <label class="lbl">Paint</label>
       <div class="swatches">${PAINTS.map((c) => `<button style="background:#${c.toString(16).padStart(6, '0')}" data-c="${c}" class="${c === sel.color ? 'on' : ''}"></button>`).join('')}</div>
       <button class="danger wide" data-del>🗑 Remove part${hangar.sel === 0 ? ' (and everything)' : ''}</button>`;
-    sp.querySelector('[data-flip]').addEventListener('click', () => hangar.flip());
+    sp.querySelector('[data-flip]').addEventListener('click', () => { hangar.flip(); audio.play('flip'); });
     sp.querySelectorAll('[data-c]').forEach((b) => b.addEventListener('click', () => hangar.paint(+b.dataset.c)));
     sp.querySelector('[data-del]').addEventListener('click', () => hangar.deleteSel());
     wireCtls(sp, sel); wirePads(sp, sel);
@@ -254,8 +254,9 @@ function renderInspector() {
 hangar.onChange = () => { renderInspector(); };
 
 $('#plane-name').addEventListener('input', (e) => { hangar.design.name = e.target.value; LS.set('current', hangar.design); });
-$('#btn-undo').addEventListener('click', () => hangar.undo());
-$('#btn-redo').addEventListener('click', () => hangar.redo());
+const undo = () => { if (hangar.undoStack.length) audio.play('undo'); hangar.undo(); }, redo = () => { if (hangar.redoStack.length) audio.play('redo'); hangar.redo(); };
+$('#btn-undo').addEventListener('click', undo);
+$('#btn-redo').addEventListener('click', redo);
 $('#btn-sym').addEventListener('click', () => { hangar.symmetry = !hangar.symmetry; renderInspector(); });
 $('#btn-bal').addEventListener('click', () => { hangar.showBalance = !hangar.showBalance; hangar.rebuild(); });
 $('#btn-frame').addEventListener('click', () => hangar.frame());
@@ -271,7 +272,7 @@ window.addEventListener('keydown', (e) => {
   if (state !== 'hangar' || e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   if (e.key === 'Escape') { hangar.cancelPlacing(); hangar.sel = -1; hangar.updateSelection(); buildPalette(); renderInspector(); }
   if ((e.key === 'Delete' || e.key === 'Backspace') && hangar.sel >= 0) hangar.deleteSel();
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.shiftKey ? hangar.redo() : hangar.undo(); e.preventDefault(); }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.shiftKey ? redo() : undo(); e.preventDefault(); }
 });
 
 // Save the plane on the hangar floor into "My planes" under its name (same name = overwrite that save).
@@ -281,7 +282,7 @@ function saveCurrent() {
   hangar.design.name = name; $('#plane-name').value = name;
   const i = mine.findIndex((d) => d.name === name), c = cloneDesign(hangar.design);
   if (i >= 0) mine[i] = c; else mine.push(c);
-  LS.set('designs', mine); audio.play('clank');
+  LS.set('designs', mine); audio.play('save');
   ui.hint(`Saved “${name}” — find it in Planes`);
 }
 function planesModal() {
@@ -303,12 +304,12 @@ function planesModal() {
     <div class="modal-foot"><button data-close>Close</button></div>`, 'wide');
   const el = m.el;
   el.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => { el.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === b)); el.querySelectorAll('[data-pane]').forEach((p) => (p.hidden = p.dataset.pane !== b.dataset.tab)); }));
-  el.querySelectorAll('[data-load]').forEach((b) => b.addEventListener('click', () => { const [k, i] = b.dataset.load.split(':'); hangar.load(k === 'preset' ? presets[+i] : mine[+i]); audio.play('clank'); m.close(); }));
+  el.querySelectorAll('[data-load]').forEach((b) => b.addEventListener('click', () => { const [k, i] = b.dataset.load.split(':'); hangar.load(k === 'preset' ? presets[+i] : mine[+i]); audio.play('load'); m.close(); }));
   el.querySelectorAll('[data-delp]').forEach((b) => b.addEventListener('click', () => { mine.splice(+b.dataset.delp, 1); LS.set('designs', mine); m.close(); planesModal(); }));
   el.querySelector('[data-new]').addEventListener('click', () => { hangar.load({ name: 'My Plane', parts: [] }); activeCat = 'fuselage'; buildPalette(); m.close(); ui.hint('Pick a body to start'); });
   el.querySelector('[data-save]').addEventListener('click', () => { saveCurrent(); m.close(); });
   el.querySelector('#copy-code').addEventListener('click', () => { const t = el.querySelector('#share-code'); t.select(); navigator.clipboard?.writeText(t.value).then(() => ui.hint('Copied!'), () => document.execCommand('copy')); });
-  el.querySelector('#import-btn').addEventListener('click', () => { try { hangar.load(decodeDesign(el.querySelector('#import-code').value)); m.close(); ui.hint('Imported!'); } catch (e) { ui.hint('That code didn’t work'); } });
+  el.querySelector('#import-btn').addEventListener('click', () => { try { hangar.load(decodeDesign(el.querySelector('#import-code').value)); audio.play('load'); m.close(); ui.hint('Imported!'); } catch (e) { ui.hint('That code didn’t work'); } });
 }
 
 function timeLabel(t) { const h = Math.floor(t), mm = Math.round((t - h) * 60); const lab = t < 5 || t > 20.5 ? 'Night' : t < 7.5 ? 'Dawn' : t < 11 ? 'Morning' : t < 15 ? 'Midday' : t < 18 ? 'Afternoon' : 'Sunset'; return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${lab}`; }

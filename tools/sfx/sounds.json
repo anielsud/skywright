@@ -236,5 +236,107 @@
  },
  "vo_firm": {
   "tts": "Firm landing."
+ },
+ "ws_place_1": {
+  "id": 349398,
+  "start": 1.95,
+  "end": 2.4,
+  "loop": false
+ },
+ "ws_place_2": {
+  "id": 349398,
+  "start": 2.38,
+  "end": 2.8,
+  "loop": false
+ },
+ "ws_place_3": {
+  "id": 349398,
+  "start": 0.0,
+  "end": 0.3,
+  "loop": false
+ },
+ "ws_clunk_1": {
+  "id": 426848,
+  "start": 0.72,
+  "end": 1.7,
+  "loop": false
+ },
+ "ws_clunk_2": {
+  "id": 426846,
+  "start": 0.68,
+  "end": 1.9,
+  "loop": false
+ },
+ "ws_clunk_3": {
+  "id": 426846,
+  "start": 3.08,
+  "end": 4.3,
+  "loop": false
+ },
+ "ws_ratchet_1": {
+  "id": 591524,
+  "start": 0.75,
+  "end": 1.4,
+  "loop": false
+ },
+ "ws_ratchet_2": {
+  "id": 591524,
+  "start": 1.62,
+  "end": 2.25,
+  "loop": false
+ },
+ "ws_tick_1": {
+  "id": 352875,
+  "start": 0.45,
+  "end": 0.62,
+  "loop": false
+ },
+ "ws_tick_2": {
+  "id": 352875,
+  "start": 0.93,
+  "end": 1.1,
+  "loop": false
+ },
+ "ws_spray_1": {
+  "id": 476839,
+  "start": 2.95,
+  "end": 3.85,
+  "loop": false
+ },
+ "ws_spray_2": {
+  "id": 476839,
+  "start": 5.95,
+  "end": 6.8,
+  "loop": false
+ },
+ "ws_select_1": {
+  "id": 829499,
+  "start": 4.75,
+  "end": 5.4,
+  "loop": false
+ },
+ "ws_select_2": {
+  "id": 829499,
+  "start": 0.0,
+  "end": 0.45,
+  "loop": false
+ },
+ "ws_toolbox": {
+  "id": 550341,
+  "start": 5.1,
+  "end": 7.2,
+  "loop": false
+ },
+ "ws_button": {
+  "id": 553077,
+  "start": 0.0,
+  "end": 0.5,
+  "loop": false
+ },
+ "amb_hangar": {
+  "id": 449591,
+  "start": 2.5,
+  "end": 10.5,
+  "loop": true
  }
 }
