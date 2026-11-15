@@ -851,7 +851,7 @@ function stepFlight(dtReal) {
     listener: { pos: flightCam.position, fwd: camFwd, up: camUp },
     amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) },
     music: flightMusic(f, ac, world) });
-  f.worldSound?.update(f, flightCam.position, dtReal, net.players?.values());
+  f.worldSound?.update(f, flightCam.position, dtReal, net.players?.values(), cockpit);
   f.callouts?.update(world, dtReal);
   hud.update(ac, world, f.mission, flightCam, net.markers());
   if (f.debug) $('#debug').textContent = `α ${(ac.alpha * 57.3).toFixed(1)}° g ${ac.g.toFixed(2)} V ${ac.airspeed?.toFixed(1)} m=${Math.round(ac.mass)} com=${ac.com.toArray().map((v) => v.toFixed(2))} w=${ac.w.toArray().map((v) => v.toFixed(2))}`;

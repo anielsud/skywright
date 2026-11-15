@@ -546,5 +546,35 @@
   "start": 20.0,
   "end": 28.0,
   "loop": true
+ },
+ "amb_airport": {
+  "id": 438124,
+  "start": 45,
+  "end": 55,
+  "loop": true
+ },
+ "amb_town": {
+  "id": 451731,
+  "start": 20,
+  "end": 30,
+  "loop": true
+ },
+ "wind_high": {
+  "id": 438876,
+  "start": 10,
+  "end": 20,
+  "loop": true
+ },
+ "wind_storm": {
+  "id": 518090,
+  "start": 20,
+  "end": 30,
+  "loop": true
+ },
+ "rain_canopy": {
+  "id": 616585,
+  "start": 10,
+  "end": 20,
+  "loop": true
  }
 }
