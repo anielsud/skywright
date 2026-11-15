@@ -64,7 +64,7 @@ export class TerrainTiles {
     const W = this.w, T = this.size, x0 = i * T, z0 = j * T, st = T / segs, n = segs + 1;
     const H = new Float32Array(n * n);
     let anyLand = false;
-    for (let b = 0; b < n; b++) { for (let a = 0; a < n; a++) { const h = W.loc.height(W.noise, x0 + a * st, z0 + b * st); H[b * n + a] = h; if (h > W.waterLevel + 0.5) anyLand = true; } if (b % 8 === 7) yield; }
+    for (let b = 0; b < n; b++) { for (let a = 0; a < n; a++) { const h = W.height(x0 + a * st, z0 + b * st); H[b * n + a] = h; if (h > W.waterLevel + 0.5) anyLand = true; } if (b % 8 === 7) yield; }
     const tile = { i, j, segs, H, st, x0, z0, n, mesh: null, trees: [] };
     if (!anyLand) return tile; // open water: nothing to draw, the sea plane covers it
     const pos = new Float32Array(n * n * 3), col = new Float32Array(n * n * 3), uv = new Float32Array(n * n * 2), c = new THREE.Color();
@@ -141,7 +141,7 @@ export class TerrainTiles {
   sample(x, z, tile = null) {
     const T = this.size;
     const t = tile || this.tiles.get(this.key(Math.floor(x / T), Math.floor(z / T)));
-    if (!t) return this.w.loc.height(this.w.noise, x, z);
+    if (!t) return this.w.height(x, z);
     const fx = Math.min(t.segs - 1e-6, Math.max(0, (x - t.x0) / t.st)), fz = Math.min(t.segs - 1e-6, Math.max(0, (z - t.z0) / t.st));
     const a0 = Math.floor(fx), b0 = Math.floor(fz), u = fx - a0, v = fz - b0, n = t.n, H = t.H;
     const A = H[b0 * n + a0], B = H[(b0 + 1) * n + a0], C = H[(b0 + 1) * n + a0 + 1], D = H[b0 * n + a0 + 1];

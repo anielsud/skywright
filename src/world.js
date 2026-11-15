@@ -10,13 +10,14 @@ import { planNetwork, flattenGrid, flattenHi, makePainter, buildRoadMeshes } fro
 import { Flora } from './flora.js';
 import { Towns } from './towns.js';
 import { TerrainTiles } from './tiles.js';
+import { erode } from './erosion.js';
 
 const RWY = { len: 1800, width: 45 };
 
 export const LOCATIONS = {
   alpine: {
     id: 'alpine', name: 'Alpine Valley', desc: 'Snowy peaks, a glacier lake, pine forests and a mountain village.', seed: 11, rwyH: 30, water: 0, cloudBase: 2300, trees: 'pine',
-    colors: { grass: [0x4a6b2a, 0x5f7f35, 0x3f5d27], rock: 0x6b6660, snow: 0xf4f6f8, sand: 0x9a8d6a, dirt: 0x6f5a3c }, snowline: 1250, balloons: true,
+    colors: { grass: [0x4a6b2a, 0x5f7f35, 0x3f5d27], rock: 0x6b6660, snow: 0xf4f6f8, sand: 0x9a8d6a, dirt: 0x6f5a3c }, snowline: 1250, balloons: true, erosion: { cell: 800, depth: 0.16, octaves: 4 },
     height(n, x, z) {
       const vx = x - Math.sin(z / 2600) * 900; // valley centre line meanders
       let dv = Math.abs(vx);
@@ -24,7 +25,7 @@ export const LOCATIONS = {
       const k0 = Math.round(x / 9500);
       for (const k of [k0 - 1, k0, k0 + 1]) if (k) dv = Math.min(dv, Math.abs(x - k * 9500 - Math.sin(z / 2600 + k * 1.7) * 900));
       const mask = smoothstep(500, 2600, dv);
-      const peaks = n.ridged(x / 3800, z / 3800, 6) * 2100 + n.fbm(x / 1500, z / 1500, 4) * 220;
+      const peaks = n.ridged(x / 3800, z / 3800, 3) * 2100 + n.fbm(x / 1500, z / 1500, 2) * 220; // big shapes only: erosion adds the detail
       let h = 25 + n.fbm(x / 1200, z / 1200, 3) * 18 + mask * peaks;
       const lake = Math.hypot(x - 1500, z + 3800); if (lake < 1300) h = lerp(-25, h, smoothstep(700, 1300, lake));
       return h;
@@ -32,7 +33,7 @@ export const LOCATIONS = {
   },
   islands: {
     id: 'islands', name: 'Coral Islands', desc: 'Turquoise lagoons, palm-fringed beaches and a volcano island.', seed: 23, rwyH: 6, water: 0, cloudBase: 1100, trees: 'palm',
-    colors: { grass: [0x3f7a2c, 0x56913a, 0x2f6125], rock: 0x5a524a, snow: 0x5a524a, sand: 0xe3d3a3, dirt: 0x7a6040 }, snowline: 99999, boats: true,
+    colors: { grass: [0x3f7a2c, 0x56913a, 0x2f6125], rock: 0x5a524a, snow: 0x5a524a, sand: 0xe3d3a3, dirt: 0x7a6040 }, snowline: 99999, boats: true, erosion: { cell: 420, depth: 0.1, octaves: 3 },
     height(n, x, z) {
       const r0 = Math.hypot(x * 0.8, z * 0.42);
       let h = 120 * Math.max(0, 1 - r0 / 1500) ** 1.2 + n.fbm(x / 900, z / 900, 4) * 30 - 20;
@@ -57,7 +58,7 @@ export const LOCATIONS = {
   },
   canyon: {
     id: 'canyon', name: 'Red Canyon', desc: 'Towering mesas, a winding canyon river and endless desert.', seed: 37, rwyH: 120, water: 8, cloudBase: 3000, trees: 'cactus',
-    colors: { grass: [0xb06a3b, 0xc27d48, 0x9a5a32], rock: 0x8e4a2c, snow: 0xd9b48a, sand: 0xd2a26c, dirt: 0xa0603a }, snowline: 99999, desert: true,
+    colors: { grass: [0xb06a3b, 0xc27d48, 0x9a5a32], rock: 0x8e4a2c, snow: 0xd9b48a, sand: 0xd2a26c, dirt: 0xa0603a }, snowline: 99999, desert: true, erosion: { cell: 360, depth: 0.12, octaves: 3, slope0: 0.15, slope1: 0.8 },
     height(n, x, z) {
       const cz = z + Math.sin(x / 1700) * 1400 + Math.sin(x / 600) * 200 - 2600;
       const canyon = 1 - smoothstep(60, 520, Math.abs(cz));
@@ -92,6 +93,9 @@ export class World {
     this.loc = LOCATIONS[opts.location] || LOCATIONS.alpine;
     this.q = QUALITY[opts.quality] || QUALITY.medium; this.qName = opts.quality || 'medium';
     this.noise = makeNoise(this.loc.seed);
+    // the one height function everything uses (core bake, streamed tiles, physics fallback): location shape + erosion
+    const base = (x, z) => this.loc.height(this.noise, x, z);
+    this.height = this.loc.erosion === false ? base : erode(base, { seed: this.loc.seed, ...this.loc.erosion });
     this.rnd = mulberry32(this.loc.seed * 7);
     this.time = opts.time ?? 10; this.weatherId = opts.weather || 'clear';
     this.waterLevel = this.loc.water;
@@ -116,7 +120,7 @@ export class World {
 
   // ---------------- terrain ----------------
   rawHeight(x, z) {
-    let h = this.loc.height(this.noise, x, z);
+    let h = this.height(x, z);
     // flatten airport
     const dx = Math.max(0, Math.abs(x - 140) - 300), dz = Math.max(0, Math.abs(z) - RWY.len / 2 - 250);
     const d = Math.hypot(dx, dz);
@@ -276,7 +280,7 @@ export class World {
   sampleGrid(x, z) {
     const N = this.N, step = this.step, half = this.half;
     const fx = (x + half) / step, fz = (z + half) / step;
-    if (fx < 0 || fz < 0 || fx >= N || fz >= N) return this.tiles ? this.tiles.sample(x, z) : this.loc.height(this.noise, x, z);
+    if (fx < 0 || fz < 0 || fx >= N || fz >= N) return this.tiles ? this.tiles.sample(x, z) : this.height(x, z);
     const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, W = N + 1, H = this.H;
     const a = H[j * W + i], b = H[(j + 1) * W + i], cc = H[(j + 1) * W + i + 1], d = H[j * W + i + 1];
     // PlaneGeometry triangles: (a,b,d) and (b,c,d) - split along b-d
