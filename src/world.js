@@ -157,7 +157,7 @@ export class World {
     }
     geo.computeVertexNormals();
     this.bakeTerrain();
-    const maps = { detailU: this.detailU, albedo: this.albedoTex, normal: this.normalTex, shadow: this.shadowTex, half, size: S };
+    const sst = S / (this.shadowR - 1), maps = { detailU: this.detailU, albedo: this.albedoTex, normal: this.normalTex, shadow: this.shadowTex, orig: new THREE.Vector2(-half - this.hStep / 2, -half - this.hStep / 2), span: S + this.hStep, sOrig: new THREE.Vector2(-half - sst / 2, -half - sst / 2), sSpan: S + sst };
     const mat = terrainMaterial(maps);
     this.terrainMat = mat; this.patchMat = terrainMaterial(maps, true);
     const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true;
@@ -177,39 +177,63 @@ export class World {
     flattenHi(this, this.net, Hh, R);
     const paint = makePainter(this, this.net);
     this.Hh = Hh; this.hR = R; this.hStep = st;
-    const blur = (src, r) => { // separable box blur
-      const a = new Float32Array(W * W), b = new Float32Array(W * W);
-      for (let j = 0; j < W; j++) { let acc = 0; for (let i = -r; i <= r; i++) acc += src[j * W + Math.min(W - 1, Math.max(0, i))]; for (let i = 0; i < W; i++) { a[j * W + i] = acc / (2 * r + 1); acc += src[j * W + Math.min(W - 1, i + r + 1)] - src[j * W + Math.max(0, i - r)]; } }
-      for (let i = 0; i < W; i++) { let acc = 0; for (let j = -r; j <= r; j++) acc += a[Math.min(W - 1, Math.max(0, j)) * W + i]; for (let j = 0; j < W; j++) { b[j * W + i] = acc / (2 * r + 1); acc += a[Math.min(W - 1, j + r + 1) * W + i] - a[Math.max(0, j - r) * W + i]; } }
-      return b;
-    };
-    const b1 = blur(Hh, 2), b2 = blur(Hh, 10);
-    const alb = new Uint8Array(W * W * 4), nor = new Uint8Array(W * W * 4);
-    const c = new THREE.Color(), n = new THREE.Vector3();
-    const at = (i, j) => Hh[Math.min(R, Math.max(0, j)) * W + Math.min(R, Math.max(0, i))];
-    for (let j = 0; j <= R; j++) for (let i = 0; i <= R; i++) {
-      const k = j * W + i, h = Hh[k], x = -half + i * st, z = -half + j * st;
-      n.set(at(i - 1, j) - at(i + 1, j), 2 * st, at(i, j - 1) - at(i, j + 1)).normalize();
-      nor[k * 4] = (n.x * 0.5 + 0.5) * 255; nor[k * 4 + 1] = (n.y * 0.5 + 0.5) * 255; nor[k * 4 + 2] = (n.z * 0.5 + 0.5) * 255; nor[k * 4 + 3] = 255;
-      const slope = 1 - n.y;
-      this.baseColor(x, z, h, slope, c);
-      if (h > this.waterLevel + 0.5 && slope < 0.25) paint(x, z, c);
-      // ambient occlusion from local concavity
-      const ao = clamp(1 - Math.max(0, b1[k] - h) * 0.04 - Math.max(0, b2[k] - h) * 0.006, 0.35, 1);
-      alb[k * 4] = Math.min(255, c.r * 255); alb[k * 4 + 1] = Math.min(255, c.g * 255); alb[k * 4 + 2] = Math.min(255, c.b * 255); alb[k * 4 + 3] = ao * 255;
+    // heights padded beyond the core edge, so AO and normals at the border match the streamed tiles next to it
+    const pad = this.bakePad(st), PW = W + 2 * pad, Hp = new Float32Array(PW * PW);
+    for (let j = 0; j < PW; j++) for (let i = 0; i < PW; i++) {
+      const gi = i - pad, gj = j - pad;
+      Hp[j * PW + i] = gi >= 0 && gj >= 0 && gi <= R && gj <= R ? Hh[gj * W + gi] : this.rawHeight(-half + gi * st, -half + gj * st);
     }
-    const mk = (data, w, fmt = THREE.RGBAFormat) => { const t = new THREE.DataTexture(data, w, w, fmt); t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; t.anisotropy = 8; t.needsUpdate = true; return t; };
-    this.albedoTex = mk(alb, W); this.albedoTex.colorSpace = THREE.SRGBColorSpace;
-    this.normalTex = mk(nor, W);
+    const maps = { alb: new Uint8Array(W * W * 4), nor: new Uint8Array(W * W * 4) };
+    const bake = this.bakeMaps(Hp, R, pad, -half, -half, st, paint, maps); while (!bake.next().done);
+    this.albedoTex = this.dataTex(maps.alb, W, true);
+    this.normalTex = this.dataTex(maps.nor, W);
     const SR = Math.floor(R / 2) + 1;
     this.shadowData = new Uint8Array(SR * SR * 4).fill(255);
-    this.shadowTex = mk(this.shadowData, SR); this.shadowTex.generateMipmaps = false; this.shadowTex.minFilter = THREE.LinearFilter;
+    this.shadowTex = this.dataTex(this.shadowData, SR); this.shadowTex.generateMipmaps = false; this.shadowTex.minFilter = THREE.LinearFilter;
     this.shadowR = SR;
     // coarse heights for water depth (matches the rendered mesh)
     const N = this.N, hd = new Uint16Array((N + 1) * (N + 1));
     for (let k = 0; k < hd.length; k++) hd[k] = THREE.DataUtils.toHalfFloat(this.H[k]);
     this.depthTex = new THREE.DataTexture(hd, N + 1, N + 1, THREE.RedFormat, THREE.HalfFloatType);
     this.depthTex.magFilter = this.depthTex.minFilter = THREE.LinearFilter; this.depthTex.needsUpdate = true;
+  }
+  // Padding (texels) a bake needs around its grid: the wider AO blur radius, plus one for normals.
+  bakePad(st) { return Math.max(1, Math.round(10 * (this.size / this.q.bake) / st)) + 1; }
+  // Albedo (+AO in alpha) and normal maps for an (R+1)^2 grid of texels at spacing st starting at (x0,z0). Hp holds the
+  // heights with pad extra texels on every side. Shared by the core bake and the streamed outer tiles, so both look the
+  // same. AO radii are fixed in metres (the core's 2 and 10 texels), so coarser tiles shade like the core. Generator:
+  // yields every few rows so tiles can be built a few ms per frame.
+  *bakeMaps(Hp, R, pad, x0, z0, st, paint, out) {
+    const W = R + 1, PW = W + 2 * pad, cs = this.size / this.q.bake;
+    const blur = (src, r) => { // separable box blur
+      const a = new Float32Array(PW * PW), b = new Float32Array(PW * PW), M = PW - 1;
+      for (let j = 0; j < PW; j++) { let acc = 0; for (let i = -r; i <= r; i++) acc += src[j * PW + Math.min(M, Math.max(0, i))]; for (let i = 0; i < PW; i++) { a[j * PW + i] = acc / (2 * r + 1); acc += src[j * PW + Math.min(M, i + r + 1)] - src[j * PW + Math.max(0, i - r)]; } }
+      for (let i = 0; i < PW; i++) { let acc = 0; for (let j = -r; j <= r; j++) acc += a[Math.min(M, Math.max(0, j)) * PW + i]; for (let j = 0; j < PW; j++) { b[j * PW + i] = acc / (2 * r + 1); acc += a[Math.min(M, j + r + 1) * PW + i] - a[Math.max(0, j - r) * PW + i]; } }
+      return b;
+    };
+    const b1 = blur(Hp, Math.max(1, Math.round(2 * cs / st))), b2 = blur(Hp, Math.max(1, Math.round(10 * cs / st)));
+    yield;
+    const { alb, nor } = out, c = new THREE.Color(), n = new THREE.Vector3();
+    for (let j = 0; j <= R; j++) {
+      for (let i = 0; i <= R; i++) {
+        const k = j * W + i, p = (j + pad) * PW + i + pad, h = Hp[p], x = x0 + i * st, z = z0 + j * st;
+        n.set(Hp[p - 1] - Hp[p + 1], 2 * st, Hp[p - PW] - Hp[p + PW]).normalize();
+        nor[k * 4] = (n.x * 0.5 + 0.5) * 255; nor[k * 4 + 1] = (n.y * 0.5 + 0.5) * 255; nor[k * 4 + 2] = (n.z * 0.5 + 0.5) * 255; nor[k * 4 + 3] = 255;
+        const slope = 1 - n.y;
+        this.baseColor(x, z, h, slope, c);
+        if (paint && h > this.waterLevel + 0.5 && slope < 0.25) paint(x, z, c);
+        // ambient occlusion from local concavity
+        const ao = clamp(1 - Math.max(0, b1[p] - h) * 0.04 - Math.max(0, b2[p] - h) * 0.006, 0.35, 1);
+        alb[k * 4] = Math.min(255, c.r * 255); alb[k * 4 + 1] = Math.min(255, c.g * 255); alb[k * 4 + 2] = Math.min(255, c.b * 255); alb[k * 4 + 3] = ao * 255;
+      }
+      if (j % 8 === 7) yield;
+    }
+  }
+  // The baked colours are written as-is and read back as sRGB: that darker, richer look is the game's ground palette.
+  dataTex(data, w, srgb = false) {
+    const t = new THREE.DataTexture(data, w, w, THREE.RGBAFormat); t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; t.anisotropy = 8; t.needsUpdate = true;
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
   }
   sampleHi(x, z) {
     const R = this.hR, W = R + 1, fx = clamp((x + this.half) / this.hStep, 0, R - 0.001), fz = clamp((z + this.half) / this.hStep, 0, R - 0.001);
@@ -402,7 +426,8 @@ export class World {
     g.putImageData(img, 0, 0);
     const nt = new THREE.CanvasTexture(c); nt.wrapS = nt.wrapT = THREE.RepeatWrapping;
     const pal = this.loc.id === 'islands' ? { deep: 0x05324a, shallow: 0x19b5b0, sand: 0xe9dcb0 } : this.loc.desert ? { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 } : { deep: 0x0b2a35, shallow: 0x2f6f6a, sand: 0x6b6a55 };
-    const mat = waterMaterial({ depthTex: this.depthTex, normal: nt, half: this.half, size: this.size, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6 });
+    // depth texels centred on the coarse mesh vertices they come from, so shorelines line up with the streamed tiles' depth
+    const mat = waterMaterial({ depthTex: this.depthTex, normal: nt, half: this.half + this.step / 2, size: this.size + this.step, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6 });
     const w = new THREE.Mesh(new THREE.PlaneGeometry(90000, 90000), mat);
     w.rotation.x = -Math.PI / 2; w.position.y = this.waterLevel;
     this.waterMat = mat;
@@ -657,7 +682,7 @@ export class World {
     }
     return false;
   }
-  treeHit(p) { return this.flora.hit(p) || this.towns.hit(p); }
+  treeHit(p) { return this.flora.hit(p) || this.towns.hit(p) || this.tiles?.treeHit(p); }
   // ---------------- clouds ----------------
   buildClouds() {
     this.clouds = new Billboards(1600, puffTexture(), { nearFade: 0.9 });
