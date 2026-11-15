@@ -123,7 +123,7 @@ export class RealScenery {
     for (const ch of this.chunks.values()) {
       if (ch.B.empty) continue;
       const g = ch.B.toGeometry(), m = new THREE.Mesh(g, mat);
-      m.castShadow = W.qName === 'high'; m.receiveShadow = true;
+      m.castShadow = W.qBase === 'high'; m.receiveShadow = true;
       this.group.add(m);
       this.chunkList.push({ m, x: ch.x / ch.n, z: ch.z / ch.n, r: g.boundingSphere.radius });
     }
