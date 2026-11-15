@@ -14,6 +14,7 @@ import { MODES, RingRace, LandingChallenge } from './missions.js';
 import { clamp } from './noise.js';
 import { installFog } from './shaders.js';
 import { Post } from './post.js';
+import { VERSION, COMMIT, BUILT } from './version.js';
 installFog();
 
 // ---------- persistence ----------
@@ -203,6 +204,10 @@ function flightModal() {
   el.querySelector('#go').addEventListener('click', () => { LS.set('flight', flightCfg); m.close(); startFlight(); });
 }
 
+function buildInfo() {
+  const when = BUILT ? new Date(BUILT).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'local dev build';
+  return `Skywright ${VERSION} · build ${COMMIT} · ${when}`;
+}
 function settingsModal() {
   const m = ui.modal(`
     <h2>Settings</h2>
@@ -212,6 +217,7 @@ function settingsModal() {
     <label class="lbl">On-screen controls</label><div class="chips">${['auto', 'on', 'off'].map((t) => `<button data-t="${t}" class="${settings.touch === t ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>
     <label class="check"><input type="checkbox" id="inv" ${settings.invert ? 'checked' : ''}> Invert pitch (push stick forward / up-arrow to climb)</label>
     <label class="lbl">Volume</label><input type="range" min="0" max="1" step="0.05" value="${settings.volume}" id="vol">
+    <p class="version">${buildInfo()}</p>
     <div class="modal-foot"><button data-close class="primary">Done</button></div>`);
   const el = m.el;
   const pick = (attr, key, after) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { settings[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); LS.set('settings', settings); after?.(); }));
@@ -315,8 +321,10 @@ function buildFlight(cfg) {
   if (!ac.hasEngine) hud.toast('Glider: look for rising air under clouds and over sunny ridges.');
 }
 
+let updatePending = false;
 function endFlight() {
   if (!F) return;
+  if (updatePending) { location.reload(); return; }
   const f = F; F = null;
   f.world.dispose(); f.effects.dispose(); f.traffic.dispose(); f.mission?.dispose?.();
   f.scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
@@ -600,7 +608,19 @@ async function boot() {
   $('#splash').classList.add('hide');
   setTimeout(() => $('#splash').remove(), 900);
   document.addEventListener('pointerdown', () => { audio.init(); if (state === 'hangar') audio.music(true); }, { once: true });
-  if ('serviceWorker' in navigator && location.protocol !== 'file:' && !location.hostname.match(/^(localhost|127\.)/)) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && location.protocol !== 'file:' && !location.hostname.match(/^(localhost|127\.)/)) {
+    // Auto-update: when a newly deployed version takes over, reload straight away in the hangar,
+    // or as soon as the current flight ends (never mid-flight).
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) return; // first install, nothing to refresh
+      if (state === 'hangar') { ui.hint('Updating to the latest version…'); setTimeout(() => location.reload(), 600); } else updatePending = true;
+    });
+    navigator.serviceWorker.register('sw.js').then((reg) => {
+      setInterval(() => reg.update().catch(() => {}), 10 * 60 * 1000);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+    }).catch(() => {});
+  }
   window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, audio, hangar, get F() { return F; }, startFlight, endFlight, presets, settings, flightCfg, controls, rig };
 }
 boot();
