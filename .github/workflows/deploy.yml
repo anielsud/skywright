@@ -1,0 +1,39 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stamp build info
+        run: |
+          SHA="${GITHUB_SHA::7}"
+          BUILT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sed -i "s/^export const COMMIT = .*/export const COMMIT = '${SHA}';/" src/version.js
+          sed -i "s/^export const BUILT = .*/export const BUILT = '${BUILT}';/" src/version.js
+          # a fresh offline-cache name per deploy, so installed apps always pick up the new build
+          sed -i "s/^const CACHE = .*/const CACHE = 'skywright-${SHA}';/" sw.js
+          cat src/version.js
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deploy
+        uses: actions/deploy-pages@v4
