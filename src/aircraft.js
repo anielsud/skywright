@@ -4,16 +4,29 @@ import { PARTS, partInfo } from './parts.js';
 import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale, partPower, partBurn } from './design.js';
 import { M } from './materials.js';
 import { clamp, lerp } from './noise.js';
+import { keepHeatPatch } from './sonic.js';
 
 export const REALISM = {
-  arcade: { id: 'arcade', name: 'Arcade', aeroTorque: 0, assist: 1, liftMult: 1.6, minArea: 12, stallSharp: 0, sideslipKill: 1.6, gearMult: 2.5, crashMult: 2.6, gLimit: Infinity, thrustTorque: 0, propTorque: 0, dragMult: 0.6, autoLevel: 0.9 },
-  pilot: { id: 'pilot', name: 'Pilot', aeroTorque: 0.55, assist: 0.45, liftMult: 1.15, minArea: 0, stallSharp: 0.5, sideslipKill: 0.25, gearMult: 1.5, crashMult: 1.6, gLimit: 16, thrustTorque: 0.4, propTorque: 0, dragMult: 0.85, autoLevel: 0.15 },
-  sim: { id: 'sim', name: 'Simulator', aeroTorque: 1, assist: 0, liftMult: 1, minArea: 0, stallSharp: 1, sideslipKill: 0, gearMult: 1, crashMult: 1, gLimit: 10, thrustTorque: 1, propTorque: 1, dragMult: 1, autoLevel: 0 },
+  arcade: { id: 'arcade', name: 'Arcade', aeroTorque: 0, assist: 1, liftMult: 1.6, minArea: 12, stallSharp: 0, sideslipKill: 1.6, gearMult: 2.5, crashMult: 2.6, gLimit: Infinity, thrustTorque: 0, propTorque: 0, dragMult: 0.6, autoLevel: 0.9, waveMult: 0.45 },
+  pilot: { id: 'pilot', name: 'Pilot', aeroTorque: 0.55, assist: 0.45, liftMult: 1.15, minArea: 0, stallSharp: 0.5, sideslipKill: 0.25, gearMult: 1.5, crashMult: 1.6, gLimit: 16, thrustTorque: 0.4, propTorque: 0, dragMult: 0.85, autoLevel: 0.15, waveMult: 0.75 },
+  sim: { id: 'sim', name: 'Simulator', aeroTorque: 1, assist: 0, liftMult: 1, minArea: 0, stallSharp: 1, sideslipKill: 0, gearMult: 1, crashMult: 1, gLimit: 10, thrustTorque: 1, propTorque: 1, dragMult: 1, autoLevel: 0, waveMult: 1 },
 };
 
 const G = 9.81;
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _qi = new THREE.Quaternion();
 export const airDensity = (h) => 1.225 * Math.exp(-Math.max(0, h) / 9000);
+// ISA air temperature (K): -6.5 °C per km up to the tropopause at 11 km, then a constant -56.5 °C
+export const airTemp = (h) => 288.15 - 0.0065 * clamp(h, 0, 11000);
+// speed of sound (m/s): 340 at sea level, 295 above 11 km
+export const speedOfSound = (h) => 20.05 * Math.sqrt(airTemp(h));
+// Extra parasite drag from shock waves, as a multiple of the normal drag (0 below Mach 0.8).
+// It climbs steeply through the transonic band ("the sound barrier"), peaks just past Mach 1, then eases off,
+// so punching through takes full power (or a dive) and it gets easier once you're supersonic.
+export function waveDrag(M) {
+  if (!(M > 0.8)) return 0;
+  if (M < 1.02) { const t = (M - 0.8) / 0.22; return 1.2 * t * t * (3 - 2 * t); }
+  return 1.2 * (0.35 + 0.65 * Math.exp(-(M - 1.02) * 2.5));
+}
 
 // ---- shared impulse contact solver (world frame) ----
 // body: { x (com world), v, wW (world ang vel), invMass, invIW (Matrix3 world) }
@@ -261,10 +274,17 @@ export class Aircraft {
 
   step(dtFrame, env) {
     if (this.dead) return;
-    const n = Math.max(1, Math.ceil(dtFrame / (1 / 240)));
+    // more, smaller steps at very high dynamic pressure (hypersonic rockets) so the stiff aero torques stay stable
+    const qd = 0.5 * airDensity(this.x.y) * this.v.lengthSq();
+    const hz = 240 * clamp(Math.sqrt(qd / 150000), 1, 4);
+    const n = Math.max(1, Math.ceil(dtFrame * hz));
     const dt = dtFrame / n;
-    const v0 = this.v.clone();
+    const v0 = this.v.clone(), x0 = this.x.clone(), q0 = this.q.clone();
     for (let i = 0; i < n; i++) this.substep(dt, env);
+    if (!Number.isFinite(this.x.x + this.x.y + this.x.z + this.v.x + this.v.y + this.v.z + this.q.x + this.q.y + this.q.z + this.q.w + this.w.x + this.w.y + this.w.z)) {
+      // numerical blow-up (absurd speeds): never let NaN reach the renderer (bloom turns it into a black frame)
+      this.x.copy(x0); this.v.copy(v0).multiplyScalar(0.9); this.q.copy(q0); this.w.set(0, 0, 0); this.wW.set(0, 0, 0);
+    }
     if (this.isCar) this.carRecover(dtFrame);
     if (dtFrame > 0) { const acc = this.v.clone().sub(v0).divideScalar(dtFrame); this.gSmooth = lerp(this.gSmooth ?? 1, (acc.dot(this.up) + G * this.up.y) / G, Math.min(1, dtFrame * 8)); this.g = this.gSmooth; }
     this.time += dtFrame; this.stats.time += dtFrame;
@@ -357,6 +377,9 @@ export class Aircraft {
     const vAirB = _v.copy(this.v).sub(wind).applyQuaternion(_qi).clone();
     const V = vAirB.length();
     this.airspeed = V;
+    const mach = V / speedOfSound(alt);
+    this.mach = mach;
+    const wave = 1 + waveDrag(mach) * (R.waveMult ?? 1);
     const F = new THREE.Vector3(), T = new THREE.Vector3(), Taero = new THREE.Vector3();
     const ctl = this.ctl;
     const flapDefl = [0, 0.18, 0.35, 0.6][this.flaps];
@@ -366,7 +389,8 @@ export class Aircraft {
       else if (Math.abs(ctl.pitch) < 0.08) this.trim = clamp(this.trim - this.w.x * dt * 1.2, -0.7, 0.7);
     }
     const pitchCmd = clamp(ctl.pitch + (R.aeroTorque > 0 ? this.trim : 0), -1, 1);
-    const maxDefl = 0.38;
+    // control surfaces can't swing fully against a supersonic airstream (also keeps Mach 4 rockets flyable)
+    const maxDefl = 0.38 * Math.min(1, 60000 / Math.max(1, 0.5 * rho * V * V));
     let liftScale = R.liftMult;
     if (R.minArea && this.hArea < R.minArea) liftScale *= Math.min(8, R.minArea / Math.max(0.6, this.hArea));
     let maxAlpha = 0, totalLift = 0;
@@ -400,7 +424,7 @@ export class Aircraft {
           const post = clMax * (1 - 0.4 * R.stallSharp);
           cl = R.stallSharp > 0 ? lerp(lerp(clMax, post, Math.min(1, (aeAbs - a0) * 20)), fp, t * R.stallSharp) : (aeAbs > Math.PI / 2 ? fp : clMax);
         }
-        let cd = 0.012 + (cl * cl) / (Math.PI * 0.8 * s.ar) + 1.2 * Math.sin(a) ** 2 * (aeAbs > a0 ? 1 : 0.3) + Math.abs(dFlap) * 0.08;
+        let cd = 0.012 * wave + (cl * cl) / (Math.PI * 0.8 * s.ar) + 1.2 * Math.sin(a) ** 2 * (aeAbs > a0 ? 1 : 0.3) + Math.abs(dFlap) * 0.08;
         const qd = 0.5 * rho * V2 * s.area;
         const vh = _v2.copy(vp).divideScalar(Vs);
         ld.copy(s.n).addScaledVector(vh, -s.n.dot(vh)).normalize();
@@ -416,7 +440,7 @@ export class Aircraft {
       if (p.dragA) {
         r.copy(p.center).sub(this.com);
         vp.copy(this.w).cross(r).add(vAirB);
-        const k = -0.5 * rho * R.dragMult;
+        const k = -0.5 * rho * R.dragMult * wave;
         let A = p.dragA;
         const retracted = p.gear && p.gear.retract && this.gearT < 0.05;
         const fx = k * A.x * vp.x * Math.abs(vp.x), fy = k * A.y * vp.y * Math.abs(vp.y), fz = k * A.z * vp.z * Math.abs(vp.z) * (retracted ? 0.05 : 1);
@@ -457,6 +481,7 @@ export class Aircraft {
         thrust = e.thrust * (0.04 + 0.96 * e.spoolT) * (1 + 0.25 * Math.min(1, fwdSpeed / 300));
         e.abOn = !!e.ab && ctl.throttle > 0.95 && e.spoolT > 0.9;
         if (e.abOn) thrust += (e.ab - e.thrust);
+        if (e.ab) thrust *= 1 + 0.9 * clamp((mach - 0.8) / 1.2, 0, 1); // fighter intakes: ram air adds thrust at supersonic speed
       } else if (e.type === 'rocket') thrust = e.burning ? e.thrust : 0;
       thrust *= (rho / 1.225) ** (e.type === 'rocket' ? 0 : 0.7) * dmgF;
       if (p.dmg > p.hp * 0.75 && e.type !== 'rocket') thrust *= 0.2;
@@ -655,7 +680,7 @@ export class Aircraft {
     p.dmg += amount;
     if (!p.scorched && p.dmg > p.hp * 0.55) {
       p.scorched = true;
-      p.obj.traverse((o) => { if (o.isMesh && !o.material.transparent && o.material.color) { o.material = o.material.clone(); o.material.color.multiplyScalar(0.45); if (o.material.roughness !== undefined) o.material.roughness = 0.8; if (o.material.clearcoat) o.material.clearcoat = 0; } });
+      p.obj.traverse((o) => { if (o.isMesh && !o.material.transparent && o.material.color) { const old = o.material; o.material = old.clone(); keepHeatPatch(old, o.material); o.material.color.multiplyScalar(0.45); if (o.material.roughness !== undefined) o.material.roughness = 0.8; if (o.material.clearcoat) o.material.clearcoat = 0; } });
       if (p.engine) this.emit('msg', { text: `${p.name} damaged!`, bad: true });
     }
     if (p.dmg >= p.hp) this.breakPart(p.i, 'impact');
@@ -737,6 +762,16 @@ export class Aircraft {
   updateVisuals(dt, env) {
     if (this.dead) return;
     this.syncVisual();
+    // Mach number and skin temperature (also runs for remote planes, which skip substep).
+    // Air hitting the skin is squeezed and heats it towards T_amb * (1 + 0.2 M²); the skin warms and cools with a lag.
+    const tAmb = airTemp(this.x.y);
+    this.mach = (this.airspeed || 0) / speedOfSound(this.x.y);
+    if (!Number.isFinite(this.mach)) this.mach = 0;
+    this.stats.maxMach = Math.max(this.stats.maxMach || 0, this.mach);
+    const tSkin = tAmb * (1 + 0.2 * this.mach * this.mach);
+    if (!(this.skinK > 0)) this.skinK = tAmb;
+    this.skinK += (tSkin - this.skinK) * (1 - Math.exp(-dt / (tSkin > this.skinK ? 6 : 12)));
+    this.skinC = this.skinK - 273.15;
     const spd = this.v.length(); this.stats.maxSpeed = Math.max(this.stats.maxSpeed, spd);
     this.stats.maxAlt = Math.max(this.stats.maxAlt, this.x.y - (env.groundHeightAtSpawn || 0));
     if (!this.onGround) { this.stats.airTime += dt; this.airTimeNow = (this.airTimeNow || 0) + dt; }

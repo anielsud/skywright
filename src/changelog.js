@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.19.0', items: [
+    'Go supersonic! Push a jet past the sound barrier for a vapour cloud, a sonic BOOM and “MACH 1!”. Go really fast with rockets and your plane glows red, then orange, then white-hot. Watch your Mach number and skin temperature on the screen.',
+  ] },
   { v: '1.18.1', items: [
     'Flying with a keyboard? A new box in the bottom-left corner shows your throttle, where your stick is pointing and your rudder, so you always know what the plane is being told to do.',
   ] },

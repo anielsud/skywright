@@ -3,8 +3,8 @@ import * as THREE from 'three';
 import { clamp } from './noise.js';
 
 const UNITS = {
-  metric: { spd: 3.6, spdU: 'km/h', alt: 1, altU: 'm', vs: 1, vsU: 'm/s' },
-  imperial: { spd: 1.94384, spdU: 'kt', alt: 3.28084, altU: 'ft', vs: 196.85, vsU: 'fpm' },
+  metric: { spd: 3.6, spdU: 'km/h', alt: 1, altU: 'm', vs: 1, vsU: 'm/s', temp: (c) => c, tempU: '°C' },
+  imperial: { spd: 1.94384, spdU: 'kt', alt: 3.28084, altU: 'ft', vs: 196.85, vsU: 'fpm', temp: (c) => c * 1.8 + 32, tempU: '°F' },
 };
 
 export class HUD {
@@ -16,6 +16,8 @@ export class HUD {
         <div class="hud-row"><label>ALT</label><span id="h-alt">0</span><small id="h-altu">ft</small></div>
         <div class="hud-row"><label>V/S</label><span id="h-vs">0</span><small id="h-vsu">fpm</small></div>
         <div class="hud-row"><label>HDG</label><span id="h-hdg">000</span>°</div>
+        <div class="hud-row" id="h-machrow" style="display:none"><label>MACH</label><span id="h-mach">0.00</span></div>
+        <div class="hud-row" id="h-skinrow" style="display:none"><label>SKIN</label><span id="h-skin">0</span><small id="h-skinu">°C</small></div>
         <canvas id="h-adi" width="120" height="120"></canvas>
       </div>
       <div class="hud-tc"><div id="h-mission"></div><div id="h-toasts"></div></div>
@@ -25,7 +27,7 @@ export class HUD {
       </div>
       <div class="hud-bc">
         <span class="lamp" id="l-gear">GEAR</span><span class="lamp" id="l-flaps">FLAPS 0</span><span class="lamp" id="l-brake">BRAKE</span>
-        <span class="lamp" id="l-smoke">SMOKE</span><span class="lamp warn" id="l-stall">STALL</span><span class="lamp" id="l-ab">AFTERBURNER</span><span class="lamp" id="l-g">1.0 G</span>
+        <span class="lamp" id="l-smoke">SMOKE</span><span class="lamp warn" id="l-stall">STALL</span><span class="lamp" id="l-ab">AFTERBURNER</span><span class="lamp" id="l-mach" style="display:none">SUPERSONIC</span><span class="lamp" id="l-g">1.0 G</span>
       </div>
       <div class="hud-ctl" id="h-ctl">
         <div class="ctl-thr"><b id="c-thr-v">0%</b><div class="ctl-thr-bar"><div id="c-thr"></div></div><small id="c-thr-l">THR</small><kbd>⇧ / Ctrl</kbd></div>
@@ -40,7 +42,7 @@ export class HUD {
     this.mapRange = 5000;
     this.$('h-map').addEventListener('click', () => { this.mapRange = this.mapRange === 5000 ? 12000 : this.mapRange === 12000 ? 2000 : 5000; });
   }
-  setUnits(u) { this.units = UNITS[u] || UNITS.imperial; this.$('h-spdu').textContent = this.units.spdU; this.$('h-altu').textContent = this.units.altU; this.$('h-vsu').textContent = this.units.vsU; }
+  setUnits(u) { this.units = UNITS[u] || UNITS.imperial; this.$('h-spdu').textContent = this.units.spdU; this.$('h-altu').textContent = this.units.altU; this.$('h-vsu').textContent = this.units.vsU; this.$('h-skinu').textContent = this.units.tempU; }
   toast(text, kind = '') {
     const d = document.createElement('div'); d.className = 'toast ' + kind; d.textContent = text;
     this.toasts.prepend(d);
@@ -60,6 +62,12 @@ export class HUD {
     this.$('h-vs').textContent = Math.round(ac.v.y * U.vs);
     const f = ac.forward; let hdg = Math.round(THREE.MathUtils.radToDeg(Math.atan2(f.x, -f.z)) + 360) % 360;
     this.$('h-hdg').textContent = String(hdg).padStart(3, '0');
+    // Mach number and skin temperature (shown once they get interesting)
+    const M = ac.mach || 0, skin = ac.skinC ?? 15;
+    this.$('h-machrow').style.display = M > 0.5 ? '' : 'none';
+    if (M > 0.5) { const m = this.$('h-mach'); m.textContent = M.toFixed(2); m.style.color = M >= 1 ? '#ffd400' : M > 0.85 ? '#cfe8ff' : ''; }
+    this.$('h-skinrow').style.display = skin > 45 ? '' : 'none';
+    if (skin > 45) { const t = this.$('h-skin'); t.textContent = Math.round(U.temp(skin)); t.style.color = skin > 900 ? '#fff4d6' : skin > 500 ? '#ff9a3d' : skin > 220 ? '#ff5a3d' : ''; }
     const L = (id, on, txt) => { const e = this.$(id); e.classList.toggle('on', !!on); if (txt) e.textContent = txt; };
     L('l-gear', ac.hasRetract ? ac.gearDown : false, ac.hasRetract ? (ac.gearT > 0.95 ? 'GEAR DOWN' : ac.gearT < 0.05 ? 'GEAR UP' : 'GEAR ···') : 'FIXED GEAR');
     this.$('l-gear').style.display = ac.parts.some((p) => p.gear && p.alive) ? '' : 'none';
@@ -69,6 +77,7 @@ export class HUD {
     this.$('l-stall').style.display = ac.stalled ? '' : 'none';
     const ab = ac.parts.some((p) => p.alive && p.engine && (p.engine.abOn || p.engine.burning));
     this.$('l-ab').style.display = ab ? '' : 'none'; L('l-ab', ab, ac.parts.some((p) => p.alive && p.engine?.burning) ? `ROCKET ${Math.max(0, Math.min(...ac.parts.filter((p) => p.alive && p.engine?.burning).map((p) => p.engine.burn))).toFixed(0)}s` : 'AFTERBURNER');
+    this.$('l-mach').style.display = M >= 1 && !ac.dead ? '' : 'none'; L('l-mach', M >= 1);
     const ge = this.$('l-g'); ge.textContent = `${ac.g.toFixed(1)} G`; ge.classList.toggle('warn', Math.abs(ac.g) > 6);
     this.$('h-mission').textContent = mission?.hud ? mission.hud() : '';
     this.drawADI(ac); this.drawMap(ac, world, mission, others);
