@@ -378,5 +378,67 @@
   "f0": 85.0,
   "dur": 9.5,
   "src": 704945
+ },
+ "ms_chime": {
+  "f0": 263.7,
+  "dur": 1.6,
+  "src": 373364
+ },
+ "ms_beep": {
+  "f0": 219.7,
+  "dur": 0.85,
+  "src": 813525
+ },
+ "ms_go": {
+  "f0": 219.7,
+  "dur": 1.08,
+  "src": 813525
+ },
+ "ms_fanfare": {
+  "f0": 263.7,
+  "dur": 2.931,
+  "src": 677858
+ },
+ "ms_fail": {
+  "f0": 177.2,
+  "dur": 3.8,
+  "src": 362205
+ },
+ "ms_record": {
+  "f0": 220.5,
+  "dur": 4.1,
+  "src": 626259
+ },
+ "vo_checkpoint": {
+  "dur": 0.456,
+  "tts": "Checkpoint!"
+ },
+ "vo_record": {
+  "dur": 0.481,
+  "tts": "New record!"
+ },
+ "vo_complete": {
+  "dur": 0.71,
+  "tts": "Mission complete!"
+ },
+ "vo_three": {
+  "dur": 0.244,
+  "tts": "Three!"
+ },
+ "vo_two": {
+  "dur": 0.228,
+  "tts": "Two!"
+ },
+ "vo_one": {
+  "dur": 0.266,
+  "tts": "One!"
+ },
+ "vo_go": {
+  "dur": 0.203,
+  "tts": "Go!"
+ },
+ "vo_aww": {
+  "dur": 1.576,
+  "tts": "Oh no! Try again!"
  }
 }

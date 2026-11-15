@@ -15,6 +15,8 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Airplane inside ambient- cessna 414. condenser .mp3" by Daveshu88 (CC0): https://freesound.org/people/Daveshu88/sounds/325845/
 - "Air Impact Wrench" by sevenbsb (CC0): https://freesound.org/people/sevenbsb/sounds/349398/
 - "Camera Slider Wheel Clicks" by PotatokingXII (CC0): https://freesound.org/people/PotatokingXII/sounds/352875/
+- "horn_fail_wahwah_2.wav" by TaranP (CC0): https://freesound.org/people/TaranP/sounds/362205/
+- "Glockenspiel - C5 (glock_medium_C5.wav)" by sgossner (CC0): https://freesound.org/people/sgossner/sounds/373364/
 - "Bombardier Dash 8-300 Runway Takeoff Cruise.wav" by Pack489 (CC0): https://freesound.org/people/Pack489/sounds/399371/
 - "Landing Gear" by 77Pacer (CC0): https://freesound.org/people/77Pacer/sounds/425273/
 - "Aluminium pipe dropped on concrete, indoor, 4 impacts.wav" by Bibow (CC0): https://freesound.org/people/Bibow/sounds/426846/
@@ -37,16 +39,19 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Car rolling on asphalt .wav" by orlandorizo (CC0): https://freesound.org/people/orlandorizo/sounds/591079/
 - "Ratchet Wrench Avg Speed Multiple" by Rudmer_Rotteveel (CC0): https://freesound.org/people/Rudmer_Rotteveel/sounds/591524/
 - "121003 Pigeon flock fly away, wing flaps, Toronto.wav" by TRP (CC0): https://freesound.org/people/TRP/sounds/616623/
+- "You've succeeded (game jingle)" by Rolly-SFX (CC0): https://freesound.org/people/Rolly-SFX/sounds/626259/
 - "water movements big splashes and waves.flac" by kyles (CC0): https://freesound.org/people/kyles/sounds/637952/
 - "wind draft loop 1" by nsstudios (CC BY 4.0): https://freesound.org/people/nsstudios/sounds/651541/
 - "forest heavy rain loop.wav" by Victormaa (CC0): https://freesound.org/people/Victormaa/sounds/671409/
 - "S37-14 Two cars crash foley; good metallic bump.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/675466/
+- "Game Success Fanfare Short" by el_boss (CC0): https://freesound.org/people/el_boss/sounds/677858/
 - "Big falling debris (crash)" by xkeril (CC0): https://freesound.org/people/xkeril/sounds/703247/
 - "Fall debris (crash)" by xkeril (CC0): https://freesound.org/people/xkeril/sounds/703248/
 - "Jet Engine Start Cart.wav" by C-V (CC0): https://freesound.org/people/C-V/sounds/704945/
 - "Rocket Launch Boost and Burning (Version A)" by TheLittleCrow (CC0): https://freesound.org/people/TheLittleCrow/sounds/774245/
 - "truck driving sound" by joni_ompong (CC0): https://freesound.org/people/joni_ompong/sounds/785698/
 - "Locomotive Train Horn" by thet00nedl00n (CC0): https://freesound.org/people/thet00nedl00n/sounds/799291/
+- "Countdown for race, game start" by Pastew (CC0): https://freesound.org/people/Pastew/sounds/813525/
 - "Airport Jet Idle" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/817123/
 - "Airplane Turboprop (Outside Perspective) 2" by Saladsounds (CC0): https://freesound.org/people/Saladsounds/sounds/828952/
 - "UIMvmt_Equip Item, Weapon or Armor, Metallic Selection x4" by harrisonlace (CC0): https://freesound.org/people/harrisonlace/sounds/829499/
