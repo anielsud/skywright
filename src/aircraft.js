@@ -680,7 +680,7 @@ export class Aircraft {
     p.dmg += amount;
     if (!p.scorched && p.dmg > p.hp * 0.55) {
       p.scorched = true;
-      p.obj.traverse((o) => { if (o.isMesh && !o.material.transparent && o.material.color) { const old = o.material; o.material = old.clone(); keepHeatPatch(old, o.material); o.material.color.multiplyScalar(0.45); if (o.material.roughness !== undefined) o.material.roughness = 0.8; if (o.material.clearcoat) o.material.clearcoat = 0; } });
+      p.obj.traverse((o) => { if (o.isMesh && !o.material.transparent && o.material.color) { const old = o.material; o.material = old.clone(); keepHeatPatch(old, o.material); o.material.color.multiplyScalar(0.45); if (o.material.roughness !== undefined) o.material.roughness = 0.8; if (o.material.clearcoat) o.material.clearcoat = 1e-4; } }); // (not 0: that's another shader, compiled mid-crash)
       if (p.engine) this.emit('msg', { text: `${p.name} damaged!`, bad: true });
     }
     if (p.dmg >= p.hp) this.breakPart(p.i, 'impact');

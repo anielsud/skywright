@@ -50,6 +50,10 @@ export function patchCascadeChunk() {
 }
 patchCascadeChunk();
 
+// Layer for small shadow casters (house details, cars, parked planes, nearby trees): they render into every cascade
+// but the farthest, whose ~4 m texels can't show them anyway. The camera and the nearer cascades see the layer too.
+export const NEAR_SHADOW = 2;
+
 const _c = new THREE.Vector3(), _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _qi = new THREE.Quaternion(), _m = new THREE.Matrix4();
 const _up = new THREE.Vector3(0, 1, 0);
 
@@ -67,6 +71,7 @@ export class CascadedShadows {
       l.shadow.map?.dispose(); l.shadow.map = null;
       l.shadow.camera.near = 1;
       l.userData.radius = 0;
+      if (i < this.lights.length - 1) l.shadow.camera.layers.enable(NEAR_SHADOW);
     });
     this._corners = Array.from({ length: 8 }, () => new THREE.Vector3());
   }
@@ -75,6 +80,7 @@ export class CascadedShadows {
   // Fit each cascade's orthographic box to a bounding sphere of its slice of the camera frustum (stable under
   // rotation), and snap it to whole shadow texels in light space (stable under translation: no shimmering edges).
   update(camera, lightDir) {
+    camera.layers.enable(NEAR_SHADOW);
     if (!this.sun.castShadow) return;
     this.frame++;
     const tanY = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2), tanX = tanY * camera.aspect;
@@ -110,6 +116,7 @@ export class CascadedShadows {
   }
   dispose(scene) {
     for (const l of this.lights.slice(1)) { scene.remove(l, l.target); l.shadow.map?.dispose(); l.dispose(); }
+    this.sun.shadow.camera.layers.disable(NEAR_SHADOW);
     this.lights.length = 1;
   }
 }
