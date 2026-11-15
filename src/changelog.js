@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.25.0', items: [
+    'Start your engines! On the runway, push the throttle and listen: propeller planes whirr and cough before they roar to life, and jets whine as they spool up and light with a WHOOMP.',
+    'Park with the throttle at zero and the engine shuts down: the propeller winds down with a few last chuffs, and jets whine down to silence.',
+  ] },
   { v: '1.24.0', items: [
     'The world makes noise now! Cars and trucks hum past on the roads, the train rumbles along and honks its horn before level crossings (listen for the crossing bells), and the other planes and the helicopter by the airport sound like real engines.',
     'Fly close to a flock of birds and hear their wings flap and their calls. Hit one and you’ll hear a THWACK!',
