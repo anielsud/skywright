@@ -311,7 +311,7 @@ export class Towns {
           if (onOther(rd, (a.x + b.x) / 2 + nx * s * hw, (a.z + b.z) / 2 + nz * s * hw, pw, ux, uz, wide) || onOther(rd, mx, mz, pw * 0.5, ux, uz, wide)) continue;
           const kw = wide.w + 0.4 * (wide.w > hw);
           const pa = [a.x + nx * s * kw, a.z + nz * s * kw], pb = [b.x + nx * s * kw, b.z + nz * s * kw], qa = [pa[0] + nx * s * pw, pa[1] + nz * s * pw], qb = [pb[0] + nx * s * pw, pb[1] + nz * s * pw];
-          const y = (p) => Math.max(W.sampleGrid(p[0], p[1]), a.y - 1.5) + 0.25 + kerb;
+          const y = (p) => Math.max(W.sampleGrid(p[0], p[1]), a.y - 1.5) + 0.02 + kerb; // the road surface (sampleGrid on a road) is the tarmac
           G.setFrame(0, 0, 0, 0); this.covered(mx, mz, Math.atan2(nx, nz), -pw / 2 - 0.3, pw / 2 + 0.3, -L / 2 - 0.5, L / 2 + 0.5);
           const A = [pa[0], y(pa), pa[1]], B = [pb[0], y(pb), pb[1]], Aq = [qa[0], y(qa), qa[1]], Bq = [qb[0], y(qb), qb[1]];
           const u0 = i * L / 3, u1 = (i + 1) * L / 3;
@@ -321,7 +321,7 @@ export class Towns {
           if (s > 0) G.quad(B0, A0, A, B, [0, 0, L / 3, 0, L / 3, 0.06, 0, 0.06], C.CONCRETE, 0xd8d6d0); else G.quad(A0, B0, B, A, [0, 0, L / 3, 0, L / 3, 0.06, 0, 0.06], C.CONCRETE, 0xd8d6d0);
           // lamps every ~26 m, alternating sides
           if (s === (li % 2 ? 1 : -1)) {
-            lampAcc += L; if (lampAcc > 26) { lampAcc = 0; li++; this.lamp(D, ch, qa[0] - nx * s * 0.5, W.sampleGrid(qa[0], qa[1]) + 0.25 + kerb, qa[1] - nz * s * 0.5, Math.atan2(-nx * s, -nz * s), st); }
+            lampAcc += L; if (lampAcc > 26) { lampAcc = 0; li++; this.lamp(D, ch, qa[0] - nx * s * 0.5, W.sampleGrid(qa[0], qa[1]) + 0.02 + kerb, qa[1] - nz * s * 0.5, Math.atan2(-nx * s, -nz * s), st); }
           }
         }
       }

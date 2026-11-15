@@ -89,7 +89,7 @@ export class Debris {
       let maxPen = 0; let touching = false; const p = new THREE.Vector3();
       for (const h of this.hull) {
         p.copy(h).applyQuaternion(this.q).add(this.x);
-        const g = env.groundAt(p.x, p.z);
+        const g = env.groundAt(p.x, p.z, p.y);
         const r = contactPoint(this, p, g, { e: 0.25, mu: g.type === 'water' ? 0.1 : 0.6 });
         if (r) { touching = true; maxPen = Math.max(maxPen, r.pen); if (r.vn < -6 && env.onDebrisHit) env.onDebrisHit(this, p, -r.vn, g); }
       }
@@ -578,7 +578,7 @@ export class Aircraft {
         w.contact = false;
         if (!usable) continue;
         this.worldPoint(w.top, top);
-        const g = env.groundAt(top.x, top.z);
+        const g = env.groundAt(top.x, top.z, top.y);
         const L = w.len + w.r;
         down.copy(w.dir).applyQuaternion(q);
         const cosd = Math.max(0.35, -down.dot(g.n));
@@ -636,7 +636,7 @@ export class Aircraft {
       for (const h of p.hull) {
         this.worldPoint(h, hp);
         if (hp.y > this.x.y + 50) continue;
-        const g = env.groundAt(hp.x, hp.z);
+        const g = env.groundAt(hp.x, hp.z, hp.y);
         if (hp.y > g.h) continue;
         const water = g.type === 'water';
         const res = contactPoint(this, hp, g, { e: water ? 0 : 0.12, mu: water ? 0.12 : g.type === 'runway' ? 0.4 : 0.55 });

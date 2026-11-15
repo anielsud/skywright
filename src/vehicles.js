@@ -154,7 +154,7 @@ export class Vehicles {
     for (const t in this.meshes) { this.meshes[t].count = this.parkedCount[t] || 0; if (!this.meshes[t].instanceColor) this.meshes[t].setColorAt(0, col.set(0xffffff)); this.meshes[t].instanceColor.needsUpdate = true; }
     this.drawDist = { low: 1200, medium: 1800, high: 3000 }[world.qBase] || 1800;
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1);
-    for (const c of this.parked) { c.p.y = world.sampleGrid(c.p.x, c.p.z) + 0.25; q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), c.yaw); m4.compose(c.p, q, one); this.meshes[c.type].setMatrixAt(c.slot, m4); }
+    for (const c of this.parked) { c.p.y = world.sampleGrid(c.p.x, c.p.z) + 0.03; q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), c.yaw); m4.compose(c.p, q, one); this.meshes[c.type].setMatrixAt(c.slot, m4); }
     // lights (points): 2 head + 2 tail per moving car
     const n = this.cars.length * 4;
     this.lp = new Float32Array(n * 3); this.lc = new Float32Array(n * 3);
@@ -171,8 +171,8 @@ export class Vehicles {
     const a = path.pts[lo], b = path.pts[(lo + 1) % path.pts.length], seg = (lo + 1 < L.length ? L[lo + 1] : path.total) - L[lo];
     const t = seg > 0 ? (s - L[lo]) / seg : 0;
     out.lerpVectors(a, b, t); dirOut.subVectors(b, a).normalize();
-    const br = path.bridge?.[lo];
-    out.y = br ? a.y + (b.y - a.y) * t + 0.25 : this.world.sampleGrid(out.x, out.z) + 0.25;
+    // roads and rail carry their own profile (what physics drives on, bridges included); the apron loop is flat ground
+    out.y = path.kind === 'apron' ? this.world.sampleGrid(out.x, out.z) + 0.25 : a.y + (b.y - a.y) * t + 0.02;
     return lo;
   }
   update(dt, camPos) {
@@ -202,10 +202,8 @@ export class Vehicles {
       const o = ci * 12;
       if (camPos && (p.x - camPos.x) ** 2 + (p.z - camPos.z) ** 2 > R2) { this.lc.fill(0, o, o + 12); c.slot = undefined; return; } // too far to see: simulate only
       c.slot = vis[c.type]++;
-      // pitch from front/back wheel heights
-      const yaw = Math.atan2(-d.x, -d.z);
-      const fz = this.world.sampleGrid(p.x + d.x * mdl.L * 0.4, p.z + d.z * mdl.L * 0.4), bz = this.world.sampleGrid(p.x - d.x * mdl.L * 0.4, p.z - d.z * mdl.L * 0.4);
-      const pitch = c.path.bridge ? 0 : Math.atan2(fz - bz, mdl.L * 0.8);
+      // pitch with the road's grade (no per-frame allocations: reuse eu)
+      const yaw = Math.atan2(-d.x, -d.z), pitch = Math.atan2(d.y, Math.hypot(d.x, d.z));
       q.setFromEuler(eu.set(pitch, yaw, 0, 'YXZ'));
       m4.compose(p, q, one); this.meshes[c.type].setMatrixAt(c.slot, m4);
       // lights

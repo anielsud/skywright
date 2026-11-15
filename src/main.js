@@ -574,7 +574,7 @@ function buildFlight(cfg) {
   const traffic = new Traffic(scene, world, presets);
   const st = analyze(design);
   const env = {
-    groundAt: (x, z) => world.groundAt(x, z), maxGround: (x, z) => world.maxGround(x, z), windAt: (p) => world.windAt(p),
+    groundAt: (x, z, y) => world.groundAt(x, z, y), maxGround: (x, z) => world.maxGround(x, z), windAt: (p) => world.windAt(p),
     get night() { return world.night || world.W.dark > 0.6; }, groundHeightAtSpawn: world.loc.rwyH,
     onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40, p.clone()); },
   };
