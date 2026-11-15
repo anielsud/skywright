@@ -162,6 +162,25 @@ export class World {
     U.landTex.value = this.landTex || null; U.landOn.value = B ? 1 : 0; U.landDry.value = B?.dry ? 1 : 0;
     U.landOrig.value.set(B ? B.x0 - B.lcell / 2 : 0, B ? B.x0 - B.lcell / 2 : 0); U.landSpan.value = B ? B.span + B.lcell : 1;
   }
+  // No rivers or lakes on the airfield or in the towns (they are flattened over): clear the water map there.
+  dryLand() {
+    const B = this.bake; if (!B) return;
+    if (!B.water0) { B.water0 = new Uint8Array(B.nw * B.nw); for (let k = 0; k < B.water0.length; k++) B.water0[k] = B.land[k * 4]; } // pristine copy: towns move with quality
+    else for (let k = 0; k < B.water0.length; k++) B.land[k * 4] = B.water0[k];
+    const zones = [[(x, z) => Math.hypot(Math.max(0, Math.abs(x - 100) - 350), Math.max(0, Math.abs(z) - RWY.len / 2 - 250)), 150, 500]];
+    for (const t of this.net?.towns || []) zones.push([(x, z) => Math.hypot(x - t.c.x, z - t.c.z) - 420 * t.size, 0, 200]);
+    const n = B.nw, c = B.lcell, x0 = B.x0, land = B.land;
+    for (let j = 0; j < n; j++) {
+      const z = x0 + j * c; if (Math.abs(z) > 6000) continue;
+      for (let i = 0; i < n; i++) {
+        const k = (j * n + i) * 4; if (!land[k]) continue;
+        const x = x0 + i * c; let f = 1;
+        for (const [d, a, b] of zones) f = Math.min(f, smoothstep(a, b, d(x, z)));
+        if (f < 1) land[k] = Math.round(land[k] * f);
+      }
+    }
+    if (this.landTex) this.landTex.needsUpdate = true;
+  }
   // [water, drain, depo, wet] at (x,z), each 0..1 (zeros where there is no bake): rivers/lakes, drainage (log area),
   // scree/alluvium, wetness. Vegetation and props can use it to keep out of rivers.
   landAt(x, z, out = [0, 0, 0, 0]) { return landAt(this.bake, x, z, out); }
@@ -194,6 +213,7 @@ export class World {
     this.H = H;
     // road / rail network, towns and fields; flattened into the heightfield
     this.net = this.real ? this.real.network(this) : planNetwork(this);
+    this.dryLand(); // no-op without a terrain bake (real places)
     flattenGrid(this, this.net);
     this.road = { samples: this.net.roads[0].pts, width: 9 };
     this.roadHash = new Map();
