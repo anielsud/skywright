@@ -7,9 +7,48 @@ export function partMatrix(p, out = new THREE.Matrix4()) {
   const [sx, sy, sz] = partScale(p);
   return out.compose(new THREE.Vector3(...p.pos), new THREE.Quaternion(...p.quat), new THREE.Vector3(p.mirror ? -sx : sx, sy, sz));
 }
+
+// ---------- resizing ----------
+// Long round extras resize like bodies; wings/tails by span and chord; everything else by one uniform Size.
+const ROUND_EXTRAS = new Set(['x_nosecone', 'x_tailcone', 'x_tank']);
+const isFin = (id) => PARTS[id].attach === 'fin'; // fins are built span-up (+Y), thickness along X
+// The sliders a part offers: [key, label, min, max]
+export function sizeSliders(id) {
+  const d = PARTS[id]; if (!d) return [];
+  if (d.cat === 'fuselage' || ROUND_EXTRAS.has(id)) return [['len', 'Length', 0.5, 3], ['dia', 'Diameter', 0.5, 2.5]];
+  if (d.wing) return [['span', 'Span', 0.5, 2.5], ['chord', 'Chord', 0.5, 2]];
+  return [['size', 'Size', 0.5, 2.5]];
+}
+// Which local scale components ([x, y, z]) a slider drives. Chord also scales thickness so the airfoil keeps its shape.
+export function sizeAxes(id, key) {
+  if (key === 'len') return [2];
+  if (key === 'dia') return [0, 1];
+  if (key === 'span') return [isFin(id) ? 1 : 0];
+  if (key === 'chord') return [2, isFin(id) ? 0 : 1];
+  return [0, 1, 2];
+}
+export const sizeValue = (p, key) => partScale(p)[sizeAxes(p.id, key)[0]];
 const volScale = (p) => { const [sx, sy, sz] = partScale(p); return sx * sy * sz; };
-export const partMass = (p) => PARTS[p.id].mass * volScale(p);
-export const partHp = (p) => PARTS[p.id].hp * Math.sqrt(volScale(p)); // bigger bodies are a bit tougher
+// Mass follows what the part is: bodies by volume, wings by area, engines and gear by size² (so thrust/weight stays put)
+function massScale(p) {
+  const d = PARTS[p.id], [sx, sy, sz] = partScale(p);
+  if (d.wing) return (isFin(p.id) ? sy : sx) * sz;
+  if (d.engine || d.gear) return Math.cbrt(sx * sy * sz) ** 2;
+  return sx * sy * sz;
+}
+export const partMass = (p) => PARTS[p.id].mass * massScale(p);
+export const partHp = (p) => PARTS[p.id].hp * Math.sqrt(massScale(p)); // bigger parts are a bit tougher
+export const thrustScale = (p) => Math.cbrt(volScale(p)) ** 2; // thrust grows with intake / prop disc area
+export const linScale = (p) => Math.cbrt(volScale(p)); // gear: wheel radius and strut length
+// A lifting surface (part-local arrays) after the part is scaled: span/chord stretch area, chord and aspect ratio;
+// n comes back pre-divided by scale², so transformDirection(partMatrix) yields R·S⁻¹·n: still perpendicular to the stretched skin.
+const _sv = new THREE.Vector3();
+export function scaleSurface(s, [sx, sy, sz]) {
+  if (sx === 1 && sy === 1 && sz === 1) return s;
+  const span = _sv.set(s.s[0] * sx, s.s[1] * sy, s.s[2] * sz).length(), chord = _sv.set(s.f[0] * sx, s.f[1] * sy, s.f[2] * sz).length();
+  return { ...s, n: _sv.set(s.n[0] / (sx * sx), s.n[1] / (sy * sy), s.n[2] / (sz * sz)).normalize().toArray(),
+    area: s.area * span * chord, chord: s.chord * chord, ar: s.ar && Math.max(1, s.ar * span / chord) };
+}
 
 export function mirroredOf(p) {
   const m = { ...p, pos: [-p.pos[0], p.pos[1], p.pos[2]], quat: [p.quat[0], -p.quat[1], -p.quat[2], p.quat[3]], mirror: !p.mirror };
@@ -59,12 +98,13 @@ export function analyze(design) {
   for (const { p, d, info, m: mm } of items) {
     if (d.engine) {
       engines++; if (d.engine.type === 'jet') jets++; else if (d.engine.type === 'rocket') rockets++; else props++;
-      const t = d.engine.ab || d.engine.thrust; thrust += t;
+      const t = (d.engine.ab || d.engine.thrust) * thrustScale(p); thrust += t;
       latThrust += (info.center.clone().applyMatrix4(mm).x - com.x) * t;
     }
     if (d.gear) { gear++; if (d.gear.float) floats++; }
     if (d.smoke) smoke++;
-    for (const s of info.surfaces) {
+    for (const s0 of info.surfaces) {
+      const s = scaleSurface(s0, partScale(p));
       n.set(...s.n).transformDirection(mm); pos.set(...s.pos).applyMatrix4(mm);
       const horiz = Math.abs(n.y);
       wingArea += s.area * horiz; finArea += s.area * Math.abs(n.x);
