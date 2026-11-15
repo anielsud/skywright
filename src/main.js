@@ -81,36 +81,82 @@ function buildPalette() {
 }
 
 function fmt(n, d = 0) { return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }) : '—'; }
-let sizeDrag = false; // a slider drag or +/- hold is in progress: don't rebuild the panel under the finger
-// Inspector sliders: [group, rows]. Each row has an absolute slider for coarse moves and +/- buttons
-// (tap = one fine step, hold = repeat) for exact placement.
+let sizeDrag = false; // a slider drag or button hold is in progress: don't rebuild the panel under the finger
+// Size sliders: an absolute slider for coarse changes and +/- buttons (tap = one fine step, hold = repeat).
 function ctlRows(p) {
-  const L = Math.max(4, Math.ceil(Math.max(...hangar.design.parts.flatMap((q) => q.pos.map(Math.abs)))) + 2);
-  const m = (v) => `${v.toFixed(2)} m`, deg = (v) => `${Math.round(v)}°`, x = (v) => `${v.toFixed(2)}×`;
-  const e = hangar.euler();
+  const x = (v) => `${v.toFixed(2)}×`;
   return [
-    ['Move', [['m0', 'Side', 0], ['m1', 'Height', 1], ['m2', 'Fore / aft', 2]].map(([k, name, i]) => ({ k, name, v: p.pos[i], lo: -L, hi: L, step: 0.01, fine: 0.01, fmt: m }))],
-    ['Rotate', [['r0', 'Pitch', 0, 90], ['r1', 'Yaw', 1, 180], ['r2', 'Roll', 2, 180]].map(([k, name, i, lim]) => ({ k, name, v: e[i], lo: -lim, hi: lim, step: 0.5, fine: 1, fmt: deg }))],
     ['Size', sizeSliders(p.id).map(([a, name, lo, hi]) => ({ k: 's' + a, name, v: sizeValue(p, a), lo, hi, step: 0.01, fine: 0.01, fmt: x }))],
   ].filter(([, rows]) => rows.length);
 }
-function applyCtl(k, v, undo, base) {
-  const t = k[0], a = k.slice(1);
-  if (t === 'm') hangar.setPos(+a, v, undo);
-  else if (t === 'r') { const e = [...base]; e[+a] = v; hangar.setEuler(e, undo); }
-  else hangar.resizePart(a, v, undo);
+function applyCtl(k, v, undo) { hangar.resizePart(k.slice(1), v, undo); }
+// Press-and-hold repeat for a button: tick(first, held, ticks) once on press, then every 60 ms after a short pause.
+// held = seconds since the repeat started and ticks = 60 ms periods since the last call, both from the clock,
+// so a hold moves at the same speed even when a busy tablet fires the timer late.
+function holdRepeat(b, tick, done) {
+  let timer = 0, t0 = 0, last = 0;
+  const stop = () => { if (!timer) return; clearTimeout(timer); clearInterval(timer); timer = 0; done(); };
+  b.addEventListener('pointerdown', (ev) => {
+    ev.preventDefault(); b.setPointerCapture?.(ev.pointerId);
+    tick(true, 0, 1);
+    timer = setTimeout(() => {
+      t0 = last = performance.now();
+      timer = setInterval(() => { const now = performance.now(); tick(false, (now - t0) / 1000, Math.max(1, (now - last) / 60)); last = now; }, 60);
+    }, 400);
+  });
+  for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(t, stop);
+}
+// Move and Rotate pads: big arrow buttons laid out the way the part will go, so "Up" is up and "Left" is left.
+// Tap = 1 cm / 1°, hold = repeat and speed up (to 10 cm / 6° per step), so no slider is needed.
+const PAD_MOVE = [
+  ['m1', 1, '▲', 'Up', 'u'], ['m0', -1, '◀', 'Left', 'l'], ['m0', 1, '▶', 'Right', 'r'], ['m1', -1, '▼', 'Down', 'd'],
+  ['m2', -1, '⇑', 'Front', 'f'], ['m2', 1, '⇓', 'Back', 'b'],
+];
+const PAD_ROT = [
+  ['r2', 1, '⟲', 'Roll left', 'tl'], ['r0', 1, '⤴', 'Nose up', 'u'], ['r2', -1, '⟳', 'Roll right', 'tr'],
+  ['r1', 1, '↶', 'Turn left', 'l'], ['r1', -1, '↷', 'Turn right', 'r'], ['r0', -1, '⤵', 'Nose down', 'd'],
+];
+function padHTML(kind, btns, centre = '') {
+  return `<div class="pad pad-${kind}">${btns.map(([k, dir, icon, name, at]) =>
+    `<button class="at-${at}" data-nudge="${k},${dir}" aria-label="${name}"><i>${icon}</i><small>${name}</small></button>`).join('')}${centre}</div>`;
+}
+function padReadout(p) {
+  const e = hangar.euler(), m = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}`;
+  return { m: `Side ${m(p.pos[0])} · Up ${m(p.pos[1])} · Back ${m(p.pos[2])} m`, r: `Nose ${Math.round(e[0])}° · Turn ${Math.round(e[1])}° · Roll ${Math.round(e[2])}°` };
+}
+function wirePads(sp, sel) {
+  const L = Math.max(4, Math.ceil(Math.max(...hangar.design.parts.flatMap((q) => q.pos.map(Math.abs)))) + 2);
+  let raf = 0, pending = null;
+  const show = () => { const r = padReadout(hangar.design.parts[hangar.sel]); sp.querySelector('[data-ro=m]').textContent = r.m; sp.querySelector('[data-ro=r]').textContent = r.r; };
+  const apply = (fn, first) => {
+    if (first) { fn(true); show(); return; }
+    pending = fn;
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; pending(false); show(); }); // at most one rebuild per frame
+  };
+  sp.querySelectorAll('[data-nudge]').forEach((b) => {
+    const [k, d] = b.dataset.nudge.split(','), dir = +d, axis = +k[1];
+    let v = 0, base = null;
+    holdRepeat(b, (first, held, ticks) => {
+      // 1 step per tick at first, ramping over ~2 s to 10 cm or 6° per tick (about 1.7 m/s or 100°/s)
+      const per = Math.min(k[0] === 'm' ? 10 : 6, 1 + (held / 0.06) ** 2 / 40) * ticks;
+      if (first) { sizeDrag = true; audio.play('click'); const p = hangar.design.parts[hangar.sel]; v = k[0] === 'm' ? p.pos[axis] : 0; base = [...p.quat]; }
+      if (k[0] === 'm') { v = clamp(v + dir * 0.01 * per, -L, L); const t = Math.round(v * 100) / 100; apply((u) => hangar.setPos(axis, t, u), first); }
+      else { v += dir * per; const t = Math.round(v); apply((u) => hangar.rotateFrom(base, axis, t, u), first); }
+    }, () => { if (raf) { cancelAnimationFrame(raf); raf = 0; pending(false); } pending = null; sizeDrag = false; renderInspector(); });
+  });
+  sp.querySelector('[data-reset]').addEventListener('click', () => { audio.play('click'); hangar.resetRotation(); });
 }
 function wireCtls(sp, sel) {
   const rows = Object.fromEntries(ctlRows(sel).flatMap(([, r]) => r).map((c) => [c.k, c]));
-  let base = null, raf = 0, pending = null; // base: Euler at gesture start, so editing one angle never disturbs the others
+  let raf = 0, pending = null;
   const show = (k, v) => { sp.querySelector(`[data-cv="${k}"]`).textContent = rows[k].fmt(v); };
-  const begin = () => { base = hangar.euler(); };
+  const begin = () => {};
   const step = (k, v, first) => {
-    if (first) { applyCtl(k, v, true, base); return; }
+    if (first) { applyCtl(k, v, true); return; }
     pending = [k, v];
-    if (!raf) raf = requestAnimationFrame(() => { raf = 0; applyCtl(...pending, false, base); }); // at most one rebuild per frame
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; applyCtl(...pending, false); }); // at most one rebuild per frame
   };
-  const end = (k, v) => { cancelAnimationFrame(raf); raf = 0; if (sizeDrag) { applyCtl(k, v, false, base); sizeDrag = false; renderInspector(); } };
+  const end = (k, v) => { cancelAnimationFrame(raf); raf = 0; if (sizeDrag) { applyCtl(k, v, false); sizeDrag = false; renderInspector(); } };
   sp.querySelectorAll('[data-ctl]').forEach((r) => {
     const k = r.dataset.ctl;
     r.addEventListener('input', () => { const first = !sizeDrag; if (first) begin(); sizeDrag = true; show(k, +r.value); step(k, +r.value, first); });
@@ -143,20 +189,25 @@ function renderInspector() {
     sp.hidden = false;
     sp.innerHTML = `<h3>${def.name}${hangar.partner(hangar.sel) >= 0 && hangar.symmetry ? ' <span class="pill">×2 mirrored</span>' : ''}</h3>
       <p class="desc">${def.desc}</p>
+      <label class="lbl grp">Move</label>
+      ${padHTML('move', PAD_MOVE, '<span class="pad-plane" aria-hidden="true">✈</span>')}
+      <p class="pad-ro" data-ro="m">${padReadout(sel).m}</p>
+      <label class="lbl grp">Turn</label>
+      ${padHTML('rot', PAD_ROT, '<button class="at-c" data-reset aria-label="Straighten"><i>⊙</i><small>Straight</small></button>')}
+      <p class="pad-ro" data-ro="r">${padReadout(sel).r}</p>
       ${ctlRows(sel).map(([group, rows]) => `<label class="lbl grp">${group}</label>` + rows.map((c) => `
         <div class="ctl"><label class="lbl">${c.name} <b data-cv="${c.k}">${c.fmt(c.v)}</b></label>
           <div class="ctl-row"><button data-fine="${c.k},-1" aria-label="${c.name} down">−</button>
           <input type="range" data-ctl="${c.k}" min="${c.lo}" max="${c.hi}" step="${c.step}" value="${c.v}">
           <button data-fine="${c.k},1" aria-label="${c.name} up">+</button></div></div>`).join('')).join('')}
-      <div class="row2"><button data-flip>Flip</button><button data-reset>Straighten</button></div>
+      <button class="wide" data-flip>⇄ Flip</button>
       <label class="lbl">Paint</label>
       <div class="swatches">${PAINTS.map((c) => `<button style="background:#${c.toString(16).padStart(6, '0')}" data-c="${c}" class="${c === sel.color ? 'on' : ''}"></button>`).join('')}</div>
       <button class="danger wide" data-del>🗑 Remove part${hangar.sel === 0 ? ' (and everything)' : ''}</button>`;
     sp.querySelector('[data-flip]').addEventListener('click', () => hangar.flip());
-    sp.querySelector('[data-reset]').addEventListener('click', () => hangar.resetRotation());
     sp.querySelectorAll('[data-c]').forEach((b) => b.addEventListener('click', () => hangar.paint(+b.dataset.c)));
     sp.querySelector('[data-del]').addEventListener('click', () => hangar.deleteSel());
-    wireCtls(sp, sel);
+    wireCtls(sp, sel); wirePads(sp, sel);
   } else sp.hidden = true;
   const marginPct = clamp(s.margin, -0.5, 1);
   const balPos = clamp(50 + marginPct * 60, 4, 96);
@@ -741,7 +792,10 @@ function onResize() {
 window.addEventListener('resize', onResize);
 // Long-presses on a tablet must never open the browser's context menu or start a text selection:
 // both cancel the touch and leave the controls stuck.
-const notText = (e) => !(e.target.closest && e.target.closest('input, textarea'));
+// Only real text boxes keep the menu (for paste). Sliders are <input> too, but on Android a long-press on one
+// opened the browser's own menu, so they are covered like everything else.
+const TEXT_INPUT = 'textarea, input:not([type]), input[type=text], input[type=search], input[type=url], input[type=number]';
+const notText = (e) => !(e.target.closest && e.target.closest(TEXT_INPUT));
 for (const t of [window, document]) {
   t.addEventListener('contextmenu', (e) => { if (notText(e)) { e.preventDefault(); e.stopPropagation(); } }, { capture: true });
   t.addEventListener('selectstart', (e) => { if (notText(e)) e.preventDefault(); }, { capture: true });
@@ -751,6 +805,38 @@ window.oncontextmenu = (e) => !notText(e) || false;
 // from the touch, not only via the contextmenu event). Pointer events still arrive, so nothing else changes.
 const noTouchDefault = (el) => el.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
 noTouchDefault(canvas); noTouchDefault(document.getElementById('touch-root'));
+// Scroll rails: a big grab handle beside each side panel, so a finger can scroll the panel without landing on
+// (and nudging) a control. Drag the thumb, or touch anywhere on the rail to jump there.
+function scrollRail(scroller, rail) {
+  const thumb = rail.firstElementChild;
+  const sync = () => {
+    const h = scroller.clientHeight, H = scroller.scrollHeight, track = rail.clientHeight;
+    const over = H > h + 2; rail.classList.toggle('idle', !over);
+    const th = over ? Math.max(56, track * h / H) : track;
+    thumb.style.height = th + 'px';
+    thumb.style.transform = `translateY(${over ? (track - th) * scroller.scrollTop / (H - h) : 0}px)`;
+  };
+  let grab = null;
+  const to = (y) => {
+    const r = rail.getBoundingClientRect(), th = thumb.offsetHeight, H = scroller.scrollHeight - scroller.clientHeight;
+    scroller.scrollTop = clamp((y - r.top - grab) / Math.max(1, r.height - th), 0, 1) * H;
+  };
+  rail.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); rail.setPointerCapture?.(e.pointerId);
+    const t = thumb.getBoundingClientRect();
+    grab = e.clientY >= t.top && e.clientY <= t.bottom ? e.clientY - t.top : t.height / 2; // off the thumb: centre it under the finger
+    rail.classList.add('drag'); to(e.clientY);
+  });
+  rail.addEventListener('pointermove', (e) => { if (grab !== null) to(e.clientY); });
+  for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) rail.addEventListener(t, () => { grab = null; rail.classList.remove('drag'); });
+  rail.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+  scroller.addEventListener('scroll', sync, { passive: true });
+  new ResizeObserver(sync).observe(scroller);
+  new MutationObserver(sync).observe(scroller, { childList: true, subtree: true });
+  sync();
+}
+scrollRail($('#insp-scroll'), $('.inspector .rail'));
+scrollRail($('#part-list'), $('.palette .rail'));
 document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'flight' && F && !F.paused) togglePause(true); });
 
 // ---------- boot ----------
