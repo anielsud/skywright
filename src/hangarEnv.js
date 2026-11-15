@@ -22,6 +22,9 @@ const ROOM = new THREE.Box3(new THREE.Vector3(-HW + 0.8, -60, -HD + 0.8), new TH
 const OBSTACLES = [new THREE.Box3(new THREE.Vector3(17.2, -1, 26.0), new THREE.Vector3(HW, 7.6, HD))];
 
 // ---------- small helpers ----------
+// swap a loaded <img> for a decoded, already flipped ImageBitmap (falls back to the <img> where that isn't supported)
+const decoded = (t) => (typeof createImageBitmap !== 'function' ? Promise.resolve() : createImageBitmap(t.image, { imageOrientation: 'flipY', premultiplyAlpha: 'none' })
+  .then((bm) => { t.image = bm; t.flipY = false; t.needsUpdate = true; }).catch(() => {}));
 const rng = (seed) => () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
 const col = (c) => (c instanceof THREE.Color ? c : new THREE.Color(c));
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _v = new THREE.Vector3(), _s = new THREE.Vector3(1, 1, 1);
@@ -892,10 +895,12 @@ export class HangarEnv {
           t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = name === 'floor' || name === 'apron' ? aniso : Math.min(aniso, 4); t.repeat.setScalar(rep);
           if (suf === 'c') t.colorSpace = THREE.SRGBColorSpace;
           out[key] = t;
-          if (--left === 0) {
+          // keep a decoded ImageBitmap (not the <img>, whose pixels the browser may drop and decode again): the
+          // hangar re-uploads its textures every time a flight ends
+          decoded(t).then(() => { if (--left === 0) {
             for (const m of mats) { for (const k in out) { m[k]?.dispose?.(); m[k] = out[k]; } if (m.normalMap) m.normalScale.setScalar(name === 'floor' ? 0.6 : 1); if (name !== 'floor') m.roughness = 1; m.needsUpdate = true; } // the maps carry the roughness
             this.loading--; this.onChange('tex');
-          }
+          } });
         }, undefined, () => { if (--left === 0) this.loading--; });
       }
     };
@@ -1044,11 +1049,11 @@ export class HangarEnv {
     for (const l of [this.sun, this.key]) l.shadow.needsUpdate = true;
     return true;
   }
-  // upload up to ~12 Mpx of textures this frame; true when everything is back
+  // re-upload some textures this frame; true when everything is back
   restoreStep() {
     const q = this.restoreQ; if (!q) return true;
-    let px = 0;
-    while (q.length && (px < 12e6 || this.restoreFrames > 20)) { const t = q.shift(); px += t.image.width * t.image.height; this.renderer.initTexture(t); }
+    const t0 = performance.now(); // ~30 ms of uploads per frame behind the hidden canvas (~0.3 s in all), everything after 20 frames
+    do this.renderer.initTexture(q.shift()); while (q.length && (performance.now() - t0 < 30 || this.restoreFrames > 20));
     this.restoreFrames++;
     if (q.length) return false;
     this.restoreQ = null; return true;
