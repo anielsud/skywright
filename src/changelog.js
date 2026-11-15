@@ -2,6 +2,11 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.37.0', items: [
+    'Damage you can hear! A hurt engine coughs, sputters and pops, and the worse it gets the more it stumbles. A burning engine crackles with fire.',
+    'Pull really hard turns and the plane creaks and groans under the strain. A damaged wing rattles and flutters, faster the faster you fly.',
+    'Fixed: rocket engines could stay silent after starting on the runway.',
+  ] },
   { v: '1.36.0', items: [
     'Real forests! Thick pine and birch woods in the mountains, palm groves on the islands, and cactus, juniper and desert bushes in the canyon.',
     'Boulders on the hillsides and grass and flowers when you fly low.',
