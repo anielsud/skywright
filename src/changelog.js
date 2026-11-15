@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.18.0', items: [
+    'Fly past the edge of the map and the land now looks just the same: same colours, rocks, forests and lakes, with no line where it changes.',
+  ] },
   { v: '1.17.1', items: [
     'Fixed: the “What’s new” popup was skipping some updates (like helicopters!).',
   ] },
