@@ -844,6 +844,7 @@ function applyQuality() {
   renderer.shadowMap.type = tier === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
   if (F) F.world.sun.castShadow = F.world.q.shadows && perf.level < 3;
   if (F) F.world.detailU.tDetail.value = perf.level < 3 ? 1 : 0; // photo ground detail goes last, with shadows
+  if (F) F.world.setPerfLevel?.(perf.level); // thinner clouds, no cirrus when struggling
   hangar.setQuality(tier);
   onResize();
 }
