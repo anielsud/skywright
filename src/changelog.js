@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.23.0', items: [
+    'Bigger, busier towns: chalets with balconies in the mountains, colourful cottages and hotels with pools on the islands, and adobe houses, motels and water towers in the desert. Farms have barns, silos and fences.',
+    'The airport has real hangars, a terminal and a control tower, and at night lots of windows light up.',
+  ] },
   { v: '1.22.0', items: [
     'The hangar sounds like a real workshop now! Parts go on with a “brrrt” from the air wrench, removed parts clang onto the concrete, paint hisses out of a spray can, turning a part clicks a ratchet and sliders tick as you drag them.',
     'Loading a plane rattles the toolbox, and you can hear a busy workshop far off in the background (turn it down with the World slider).',
