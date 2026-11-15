@@ -64,6 +64,15 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 - Runway lights and PAPI lights.
 - Traffic: cars and trucks with headlights, bird flocks (bird strikes!), hot-air balloons, boats and a plane flying the circuit.
 
+**A living world**
+- **Roads:** a ring road, highways, town streets and long bridges (one crosses the sea to the volcano island).
+- **Traffic:** 8 kinds of procedurally modelled vehicles (cars, SUVs, pickups, vans, buses, lorries and tankers). They follow lanes, keep their distance, show brake lights, and use headlights at night.
+- **Towns:** houses, apartments, shops, churches and stations. Building style follows the location: chalets in the Alps, colourful cottages and hotels on the islands, adobe in the desert. Windows light up at night, chimneys smoke, and street lamps glow.
+- **Farmland:** fields of crops (pivot-irrigation circles in the desert), plus farms with barns and silos, and grazing sheep or cows.
+- **Plants:** procedural trees in many variants (pines, broadleaf, birch, palms, saguaro cacti, shrubs, rocks), with near/far detail levels and grass near the ground.
+- **More life:** a railway with a train in the mountains and the desert, wind turbines, a helicopter shuttle, a radio mast, and a lighthouse with harbour on the islands.
+- **Obstacles:** you can crash into buildings and trees.
+
 **Graphics**
 - High-resolution baked terrain textures with ambient occlusion and soft sun shadows from the mountains.
 - Per-pixel blending of grass, rock and snow.
@@ -118,6 +127,7 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 | `src/world.js` | Terrain, water, sky, lighting, weather, clouds, airport, trees, village |
 | `src/traffic.js` | Cars, birds, balloons, boats, the circuit plane |
 | `src/effects.js`, `src/billboard.js` | Particles and instanced billboards (shared with clouds) |
+| `src/roads.js`, `src/vehicles.js`, `src/flora.js`, `src/towns.js` | Road/rail network, traffic, vegetation, towns and landmarks |
 | `src/shaders.js`, `src/post.js` | Height fog, terrain/water/foliage shaders, post-processing |
 | `src/audio.js` | Synthesized sound |
 | `src/controls.js`, `src/cameras.js`, `src/hud.js` | Input, cameras, HUD |

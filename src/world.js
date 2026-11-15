@@ -6,6 +6,9 @@ import { Billboards } from './billboard.js';
 import { puffTexture, glowTexture, M } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { FOG, terrainMaterial, waterMaterial, swayMaterial } from './shaders.js';
+import { planNetwork, flattenGrid, flattenHi, makePainter, buildRoadMeshes } from './roads.js';
+import { Flora } from './flora.js';
+import { Towns } from './towns.js';
 
 const RWY = { len: 1800, width: 45 };
 
@@ -62,9 +65,9 @@ export const WEATHER = {
 };
 
 const QUALITY = {
-  low: { res: 180, bake: 384, trees: 2500, shadows: false, shadowSize: 1024, clouds: 0.5, pixel: 1, post: false },
-  medium: { res: 280, bake: 640, trees: 7000, shadows: true, shadowSize: 2048, clouds: 0.8, pixel: 1.5, post: true },
-  high: { res: 420, bake: 1024, trees: 16000, shadows: true, shadowSize: 4096, clouds: 1, pixel: 2, post: true },
+  low: { res: 180, bake: 384, trees: 6000, shadows: false, shadowSize: 1024, clouds: 0.5, pixel: 1, post: false },
+  medium: { res: 280, bake: 640, trees: 16000, shadows: true, shadowSize: 2048, clouds: 0.8, pixel: 1.5, post: true },
+  high: { res: 420, bake: 1024, trees: 32000, shadows: true, shadowSize: 4096, clouds: 1, pixel: 2, post: true },
 };
 export { QUALITY };
 
@@ -72,7 +75,7 @@ export class World {
   constructor(renderer, scene, opts) {
     this.renderer = renderer; this.scene = scene;
     this.loc = LOCATIONS[opts.location] || LOCATIONS.alpine;
-    this.q = QUALITY[opts.quality] || QUALITY.medium;
+    this.q = QUALITY[opts.quality] || QUALITY.medium; this.qName = opts.quality || 'medium';
     this.noise = makeNoise(this.loc.seed);
     this.rnd = mulberry32(this.loc.seed * 7);
     this.time = opts.time ?? 10; this.weatherId = opts.weather || 'clear';
@@ -87,8 +90,8 @@ export class World {
     this.buildSky();
     this.buildRunway();
     this.buildAirport();
-    this.buildTrees();
-    this.buildVillage();
+    this.flora = new Flora(this);
+    this.towns = new Towns(this);
     this.buildClouds();
     this.buildPrecip();
     this.setWeather(this.weatherId);
@@ -110,35 +113,12 @@ export class World {
     const H = new Float32Array((N + 1) * (N + 1));
     for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) H[j * (N + 1) + i] = this.rawHeight(-half + i * step, -half + j * step);
     this.H = H;
-    // road loop (ellipse around the airport, perturbed), flattened into the terrain
-    const pts = [];
-    const rx = this.loc.id === 'islands' ? 650 : 900, rz = this.loc.id === 'islands' ? 1250 : 2300;
-    for (let k = 0; k < 240; k++) {
-      const a = (k / 240) * Math.PI * 2;
-      const wob = 1 + this.noise.n2(Math.cos(a) * 1.3, Math.sin(a) * 1.3) * 0.18;
-      pts.push(new THREE.Vector3(Math.cos(a) * rx * wob + 140, 0, Math.sin(a) * rz * wob));
-    }
-    const curve = new THREE.CatmullRomCurve3(pts, true);
-    const samples = curve.getSpacedPoints(700);
-    samples.pop();
-    const hs = samples.map((p) => Math.max(this.sampleGrid(p.x, p.z), this.waterLevel + 1.5));
-    // smooth heights
-    let sm = hs.slice();
-    for (let it = 0; it < 30; it++) sm = sm.map((h, i) => (sm[(i - 1 + sm.length) % sm.length] + h * 2 + sm[(i + 1) % sm.length]) / 4);
-    samples.forEach((p, i) => (p.y = sm[i] + 0.25));
-    this.road = { curve, samples, width: 9 };
-    for (let k = 0; k < samples.length; k++) {
-      const p = samples[k];
-      const i0 = Math.floor((p.x + half) / step), j0 = Math.floor((p.z + half) / step);
-      for (let j = j0 - 2; j <= j0 + 3; j++) for (let i = i0 - 2; i <= i0 + 3; i++) {
-        if (i < 0 || j < 0 || i > N || j > N) continue;
-        const x = -half + i * step, z = -half + j * step;
-        const d = Math.hypot(x - p.x, z - p.z);
-        const t = 1 - smoothstep(step * 0.7, step * 2.2, d);
-        const idx = j * (N + 1) + i;
-        H[idx] = lerp(H[idx], p.y - 0.35, t);
-      }
-    }
+    // road / rail network, towns and fields; flattened into the heightfield
+    this.net = planNetwork(this);
+    flattenGrid(this, this.net);
+    this.road = { samples: this.net.roads[0].pts, width: 9 };
+    this.roadHash = new Map();
+    for (const rd of [...this.net.roads, ...(this.net.rail ? [this.net.rail] : [])]) rd.pts.forEach((p) => { const k = Math.floor(p.x / 40) + ',' + Math.floor(p.z / 40); if (!this.roadHash.has(k)) this.roadHash.set(k, []); this.roadHash.get(k).push([p.x, p.z, rd.width / 2]); });
     // geometry
     const geo = new THREE.PlaneGeometry(S, S, N, N);
     geo.rotateX(-Math.PI / 2); // now x,z plane; vertex order: rows along +z (j), cols along +x (i)
@@ -162,7 +142,7 @@ export class World {
     // far skirt so the edge isn't visible
     const skirt = new THREE.Mesh(new THREE.RingGeometry(S * 0.49, S * 4, 64, 1), new THREE.MeshStandardMaterial({ color: this.loc.id === 'islands' ? 0x0d3b4a : new THREE.Color(L.grass[0]).multiplyScalar(this.loc.desert ? 0.9 : 0.6), roughness: 1 }));
     skirt.rotation.x = -Math.PI / 2; skirt.position.y = this.loc.id === 'islands' ? -50 : this.loc.desert ? 110 : 20; this.group.add(skirt);
-    this.buildRoadMesh();
+    this.roadGroup = buildRoadMeshes(this, this.net); this.group.add(this.roadGroup);
     this.buildMinimap();
   }
   // Bake high-resolution albedo (+AO) and normal maps from the analytic height function.
@@ -170,7 +150,8 @@ export class World {
     const R = this.q.bake, S = this.size, half = this.half, st = S / R, W = R + 1;
     const Hh = new Float32Array(W * W);
     for (let j = 0; j <= R; j++) for (let i = 0; i <= R; i++) Hh[j * W + i] = this.rawHeight(-half + i * st, -half + j * st);
-    // blend in the flattened road bed from the coarse grid near the road
+    flattenHi(this, this.net, Hh, R);
+    const paint = makePainter(this, this.net);
     this.Hh = Hh; this.hR = R; this.hStep = st;
     const blur = (src, r) => { // separable box blur
       const a = new Float32Array(W * W), b = new Float32Array(W * W);
@@ -207,6 +188,7 @@ export class World {
       }
       if (h < this.waterLevel + 4) c.lerp(sand, 1 - smoothstep(this.waterLevel + 1, this.waterLevel + 4, h));
       if (h < this.waterLevel - 1) c.lerp(seabed, 0.6);
+      if (h > this.waterLevel + 0.5 && slope < 0.25) paint(x, z, c);
       // ambient occlusion from local concavity
       const ao = clamp(1 - Math.max(0, b1[k] - h) * 0.04 - Math.max(0, b2[k] - h) * 0.006, 0.35, 1);
       alb[k * 4] = Math.min(255, c.r * 255); alb[k * 4 + 1] = Math.min(255, c.g * 255); alb[k * 4 + 2] = Math.min(255, c.b * 255); alb[k * 4 + 3] = ao * 255;
@@ -302,26 +284,6 @@ export class World {
     return false;
   }
 
-  buildRoadMesh() {
-    const s = this.road.samples, w = this.road.width / 2;
-    const pos = [], uv = [], idx = [];
-    for (let k = 0; k <= s.length; k++) {
-      const p = s[k % s.length], pn = s[(k + 1) % s.length];
-      const d = new THREE.Vector3().subVectors(pn, p).setY(0).normalize();
-      const r = new THREE.Vector3(-d.z, 0, d.x);
-      pos.push(p.x + r.x * w, p.y + 0.15, p.z + r.z * w, p.x - r.x * w, p.y + 0.15, p.z - r.z * w);
-      uv.push(0, k * 2, 1, k * 2);
-      if (k < s.length) { const a = k * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
-    const c = document.createElement('canvas'); c.width = 64; c.height = 64; const x = c.getContext('2d');
-    x.fillStyle = '#3a3b3d'; x.fillRect(0, 0, 64, 64); x.fillStyle = '#d8d8d0'; x.fillRect(2, 0, 2, 64); x.fillRect(60, 0, 2, 64); x.fillStyle = '#e8c547'; x.fillRect(31, 0, 2, 32);
-    const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
-    const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ map: t, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }));
-    m.receiveShadow = true; this.group.add(m);
-  }
-
   buildMinimap() {
     const s = 256, c = document.createElement('canvas'); c.width = c.height = s;
     const g = c.getContext('2d'), img = g.createImageData(s, s);
@@ -336,6 +298,10 @@ export class World {
     }
     g.putImageData(img, 0, 0);
     g.fillStyle = '#222'; g.fillRect(s / 2 - 1.5, s / 2 - (RWY.len / this.size) * s / 2, 3, (RWY.len / this.size) * s);
+    const toM = (p) => [((p.x + this.half) / this.size) * s, ((p.z + this.half) / this.size) * s];
+    for (const rd of this.net.roads) { g.strokeStyle = rd.kind === 'highway' ? 'rgba(250,220,120,0.9)' : 'rgba(240,240,230,0.7)'; g.lineWidth = rd.kind === 'street' ? 0.6 : 1.1; g.beginPath(); rd.pts.forEach((p, i) => { const [x, y] = toM(p); i ? g.lineTo(x, y) : g.moveTo(x, y); }); if (rd.closed) g.closePath(); g.stroke(); }
+    if (this.net.rail) { g.strokeStyle = 'rgba(60,40,30,0.9)'; g.setLineDash([2, 2]); g.beginPath(); this.net.rail.pts.forEach((p, i) => { const [x, y] = toM(p); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); g.setLineDash([]); }
+    for (const t of this.net.towns) { const [x, y] = toM(t.c); g.fillStyle = 'rgba(255,230,200,0.85)'; g.beginPath(); g.arc(x, y, 3.5 * t.size + 1.5, 0, 7); g.fill(); }
     this.minimap = c;
   }
 
@@ -492,6 +458,7 @@ export class World {
     if (!this.lastBakeDir || this.lastBakeDir.distanceTo(lightDir) > 0.01) { this.lastBakeDir = lightDir.clone(); this.bakeShadows(); }
     // night lights
     if (this.lightsMat) this.lightsMat.opacity = this.night || dark > 0.55 ? 1 : 0;
+    if (this.roadGroup) this.roadGroup.userData.lampMat.opacity = this.night || dark > 0.6 ? 1 : 0;
     if (this.windowMats) for (const m of this.windowMats) m.emissiveIntensity = this.night ? 3.5 : 0;
     this.envDirty = true;
   }
@@ -605,117 +572,15 @@ export class World {
   }
 
   // ---------------- vegetation ----------------
-  treeGeometry(kind) {
-    const parts = [];
-    const col = (g, c) => { const n = g.attributes.position.count, a = new Float32Array(n * 3); const cc = new THREE.Color(c); for (let i = 0; i < n; i++) { a[i * 3] = cc.r; a[i * 3 + 1] = cc.g; a[i * 3 + 2] = cc.b; } g.setAttribute('color', new THREE.BufferAttribute(a, 3)); return g.toNonIndexed ? (g.index ? g.toNonIndexed() : g) : g; };
-    if (kind === 'pine') {
-      parts.push(col(new THREE.CylinderGeometry(0.25, 0.35, 3, 5).translate(0, 1.5, 0), 0x4a3423));
-      for (let k = 0; k < 5; k++) {
-        const cg = new THREE.ConeGeometry(2.9 - k * 0.52, 3.4 - k * 0.35, 9, 1);
-        const cp = cg.attributes.position; for (let i = 0; i < cp.count; i++) if (cp.getY(i) < 0) { cp.setX(i, cp.getX(i) * (0.9 + Math.random() * 0.25)); cp.setZ(i, cp.getZ(i) * (0.9 + Math.random() * 0.25)); cp.setY(i, cp.getY(i) - Math.random() * 0.35); }
-        parts.push(col(cg.translate(0, 2.6 + k * 1.75, 0), [0x173219, 0x1d3c20, 0x234626, 0x2a502c, 0x325a32][k]));
-      }
-    } else if (kind === 'palm') {
-      const trunk = new THREE.CylinderGeometry(0.18, 0.3, 9, 6, 4); const tp = trunk.attributes.position;
-      for (let i = 0; i < tp.count; i++) { const y = tp.getY(i) + 4.5; tp.setX(i, tp.getX(i) + (y / 9) ** 2 * 1.4); }
-      parts.push(col(trunk.translate(0, 4.5, 0), 0x7a6247));
-      for (let k = 0; k < 7; k++) {
-        const leaf = new THREE.PlaneGeometry(1.1, 5, 1, 4); const lp = leaf.attributes.position;
-        for (let i = 0; i < lp.count; i++) { const y = lp.getY(i) + 2.5; lp.setZ(i, -((y / 5) ** 2) * 2.2); }
-        leaf.translate(0, 2.5, 0); leaf.rotateX(-1.2); leaf.rotateY((k / 7) * Math.PI * 2); leaf.translate(1.4, 9, 0);
-        parts.push(col(leaf, k % 2 ? 0x2f6b23 : 0x3c7d2b));
-      }
-    } else if (kind === 'cactus') {
-      parts.push(col(new THREE.CylinderGeometry(0.35, 0.4, 5, 7).translate(0, 2.5, 0), 0x3d6b3a));
-      parts.push(col(new THREE.CylinderGeometry(0.22, 0.25, 1.6, 6).rotateZ(Math.PI / 2).translate(0.8, 2.2, 0), 0x3d6b3a));
-      parts.push(col(new THREE.CylinderGeometry(0.22, 0.25, 1.8, 6).translate(1.5, 3.0, 0), 0x3d6b3a));
-      parts.push(col(new THREE.DodecahedronGeometry(1.2, 0).scale(1.6, 0.6, 1.2).translate(4, 0.3, 2), 0x8e5a3a)); // rock
-    } else {
-      parts.push(col(new THREE.CylinderGeometry(0.25, 0.35, 3, 5).translate(0, 1.5, 0), 0x4a3423));
-      parts.push(col(new THREE.IcosahedronGeometry(2.5, 0).scale(1, 1.2, 1).translate(0, 4.5, 0), 0x3b5f2a));
-    }
-    const g = mergeGeometries(parts.map((p) => (p.index ? p.toNonIndexed() : p)));
-    g.computeVertexNormals();
-    return g;
-  }
-  buildTrees() {
-    const kind = this.loc.trees, n = this.q.trees;
-    const geo = this.treeGeometry(kind);
-    const mat = swayMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: kind === 'palm' ? THREE.DoubleSide : THREE.FrontSide }), kind === 'palm' ? 0.6 : kind === 'cactus' ? 0 : 0.3);
-    const mesh = new THREE.InstancedMesh(geo, mat, n);
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
-    let k = 0, tries = 0; const tint = new THREE.Color();
-    this.treeGrid = new Map();
-    while (k < n && tries < n * 30) {
-      tries++;
-      const x = (this.rnd() - 0.5) * this.size * 0.8, z = (this.rnd() - 0.5) * this.size * 0.8;
-      if (Math.abs(x - 140) < 500 && Math.abs(z) < RWY.len / 2 + 450) continue;
-      const g = this.groundAt(x, z);
-      if (g.type === 'water' || g.type === 'runway' || g.n.y < 0.82) continue;
-      const h = g.h;
-      if (kind === 'pine' && (h > this.loc.snowline - 50 || h < 5)) continue;
-      if (kind === 'palm' && (h > 60 || h < this.waterLevel + 1)) continue;
-      const dens = this.noise.fbm(x / 1400 + 40, z / 1400, 3);
-      if (dens < (kind === 'cactus' ? 0.05 : -0.05)) continue;
-      // keep off the road
-      if (this.nearRoad(x, z, 14)) continue;
-      const sc = 0.7 + this.rnd() * 0.8 * (kind === 'pine' ? 1.2 : 1);
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.rnd() * 6.28);
-      s.set(sc, sc * (0.85 + this.rnd() * 0.4), sc); p.set(x, h - 0.2, z);
-      m.compose(p, q, s); mesh.setMatrixAt(k, m);
-      mesh.setColorAt(k, tint.setHSL(0, 0, 0.75 + this.rnd() * 0.45));
-      const key = Math.floor(x / 50) + ',' + Math.floor(z / 50);
-      if (!this.treeGrid.has(key)) this.treeGrid.set(key, []);
-      this.treeGrid.get(key).push([x, h, z, (kind === 'palm' ? 9.5 : kind === 'cactus' ? 4.5 : 10) * s.y, 2.2 * sc]);
-      k++;
-    }
-    mesh.count = k; mesh.castShadow = this.q.shadows; mesh.receiveShadow = true;
-    this.trees = mesh; this.group.add(mesh);
-  }
   nearRoad(x, z, d) {
-    const s = this.road.samples;
-    for (let i = 0; i < s.length; i += 2) { const dx = s[i].x - x, dz = s[i].z - z; if (dx * dx + dz * dz < d * d) return true; }
+    const cx = Math.floor(x / 40), cz = Math.floor(z / 40), R = Math.ceil(d / 40);
+    for (let i = cx - R; i <= cx + R; i++) for (let j = cz - R; j <= cz + R; j++) {
+      const arr = this.roadHash.get(i + ',' + j); if (!arr) continue;
+      for (const [px, pz, hw] of arr) if ((px - x) ** 2 + (pz - z) ** 2 < (d + hw) ** 2) return true;
+    }
     return false;
   }
-  treeHit(p) { // returns tree top height if inside a tree trunk/crown volume
-    const key = Math.floor(p.x / 50) + ',' + Math.floor(p.z / 50);
-    const arr = this.treeGrid?.get(key); if (!arr) return null;
-    for (const t of arr) { const dx = p.x - t[0], dz = p.z - t[2]; if (dx * dx + dz * dz < t[4] * t[4] && p.y < t[1] + t[3] && p.y > t[1]) return t; }
-    return null;
-  }
-
-  buildVillage() {
-    // a cluster of houses near the road, away from the runway
-    const c = this.loc.id === 'islands' ? new THREE.Vector3(-650, 0, -550) : this.loc.desert ? new THREE.Vector3(-1050, 0, 900) : new THREE.Vector3(-1100, 0, -800);
-    const winTex = this.windowTex();
-    const wall = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, map: winTex, emissive: 0xffc070, emissiveMap: winTex, emissiveIntensity: 0 });
-    this.windowMats.push(wall);
-    const roofMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 });
-    const n = 70;
-    const walls = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), wall, n);
-    const rg = new THREE.CylinderGeometry(0.72, 0.72, 1, 3, 1); rg.rotateZ(Math.PI / 2); rg.rotateX(Math.PI / 6 * 0); rg.scale(1, 0.55, 1.0); rg.rotateY(Math.PI / 2);
-    const roofs = new THREE.InstancedMesh(rg, roofMat, n);
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), col = new THREE.Color();
-    const wallCols = this.loc.desert ? [0xd8b48a, 0xc9a074, 0xe2c9a6] : this.loc.id === 'islands' ? [0xffffff, 0xf3e7c9, 0x9fd4d9, 0xf0c9a8] : [0xf4efe6, 0xe8dcc4, 0xd9cbb0];
-    const roofCols = this.loc.desert ? [0xb98a5e, 0xa0714a] : this.loc.id === 'islands' ? [0xc1543b, 0x4a7aa3, 0xd0a060] : [0x7a3c2a, 0x4b4b52, 0x8a4a33];
-    let k = 0;
-    for (let t = 0; t < 400 && k < n; t++) {
-      const x = c.x + (this.rnd() - 0.5) * 700, z = c.z + (this.rnd() - 0.5) * 700;
-      const g = this.groundAt(x, z); if (g.type === 'water' || g.n.y < 0.9 || this.nearRoad(x, z, 14)) continue;
-      const w = 7 + this.rnd() * 6, d = 8 + this.rnd() * 8, h = 5 + this.rnd() * (this.loc.desert ? 3 : 5);
-      const ang = Math.round(this.rnd() * 4) * Math.PI / 2 + (this.rnd() - 0.5) * 0.3;
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), ang);
-      m.compose(new THREE.Vector3(x, g.h - 0.5, z), q, new THREE.Vector3(w, h + 0.5, d)); walls.setMatrixAt(k, m);
-      walls.setColorAt(k, col.set(wallCols[k % wallCols.length]));
-      m.compose(new THREE.Vector3(x, g.h + h, z), q, new THREE.Vector3(w * 1.1, this.loc.desert ? 0.15 : w * 0.75, d * 1.05)); roofs.setMatrixAt(k, m);
-      roofs.setColorAt(k, col.set(roofCols[k % roofCols.length]));
-      k++;
-    }
-    walls.count = roofs.count = k;
-    walls.castShadow = roofs.castShadow = this.q.shadows; walls.receiveShadow = roofs.receiveShadow = true;
-    this.group.add(walls, roofs);
-  }
-
+  treeHit(p) { return this.flora.hit(p) || this.towns.hit(p); }
   // ---------------- clouds ----------------
   buildClouds() {
     this.clouds = new Billboards(1600, puffTexture(), { nearFade: 0.9 });

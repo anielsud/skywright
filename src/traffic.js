@@ -5,6 +5,7 @@ import { partMatrix } from './design.js';
 import { mulberry32, clamp } from './noise.js';
 import { M, glowTexture } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
+import { Vehicles } from './vehicles.js';
 
 export function buildStatic(design) {
   const g = new THREE.Group(); const m = new THREE.Matrix4();
@@ -27,67 +28,10 @@ export class Traffic {
   constructor(scene, world, presets) {
     this.scene = scene; this.world = world; this.group = new THREE.Group(); scene.add(this.group);
     this.r = mulberry32(world.loc.seed + 5);
-    this.buildCars(); this.buildBirds();
+    this.vehicles = new Vehicles(scene, world); this.buildBirds(); this.buildHeli();
     if (world.loc.balloons) this.buildBalloons();
     if (world.loc.boats) this.buildBoats();
     this.buildPatternPlane(presets);
-  }
-  // ---------- cars ----------
-  buildCars() {
-    const parts = [
-      colored(new THREE.BoxGeometry(1.9, 0.7, 4.4).translate(0, 0.65, 0), 0xffffff),
-      colored(new THREE.BoxGeometry(1.7, 0.6, 2.3).translate(0, 1.25, 0.2), 0x20262e),
-    ];
-    for (const [x, z] of [[-0.9, -1.4], [0.9, -1.4], [-0.9, 1.4], [0.9, 1.4]]) parts.push(colored(new THREE.CylinderGeometry(0.34, 0.34, 0.25, 10).rotateZ(Math.PI / 2).translate(x, 0.34, z), 0x111111));
-    const geo = mergeGeometries(parts); geo.computeVertexNormals();
-    const truck = mergeGeometries([colored(new THREE.BoxGeometry(2.4, 2.6, 7).translate(0, 2.0, 1.2), 0xffffff), colored(new THREE.BoxGeometry(2.3, 2.0, 2.0).translate(0, 1.5, -3.4), 0x2b2f36),
-      ...[[-1.1, -3.2], [1.1, -3.2], [-1.1, 3], [1.1, 3]].map(([x, z]) => colored(new THREE.CylinderGeometry(0.5, 0.5, 0.35, 10).rotateZ(Math.PI / 2).translate(x, 0.5, z), 0x111111))]);
-    truck.computeVertexNormals();
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.5 });
-    const n = 46;
-    this.carMesh = new THREE.InstancedMesh(geo, mat, n); this.truckMesh = new THREE.InstancedMesh(truck, mat, 8);
-    this.carMesh.castShadow = this.truckMesh.castShadow = true;
-    const cols = [0xc8102e, 0xf2f2ee, 0x1d4e89, 0x222222, 0x8a9099, 0xf2b705, 0x2e6b3f, 0x6fb7e9];
-    this.cars = [];
-    const L = this.world.road.samples.length;
-    for (let i = 0; i < n + 8; i++) {
-      const truckK = i >= n;
-      const c = { s: this.r() * L, speed: (truckK ? 14 : 16 + this.r() * 12) / 13 * (this.r() < 0.5 ? 1 : -1), truck: truckK, idx: truckK ? i - n : i };
-      this.cars.push(c);
-      (truckK ? this.truckMesh : this.carMesh).setColorAt(c.idx, new THREE.Color(cols[i % cols.length]));
-    }
-    this.group.add(this.carMesh, this.truckMesh);
-    // head/tail lights
-    const lp = new Float32Array(this.cars.length * 4 * 3), lc = new Float32Array(this.cars.length * 4 * 3);
-    for (let i = 0; i < this.cars.length; i++) for (let k = 0; k < 4; k++) { const c = k < 2 ? [1, 0.95, 0.8] : [1, 0.1, 0.05]; lc.set(c, (i * 4 + k) * 3); }
-    const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(lp, 3)); lg.setAttribute('color', new THREE.BufferAttribute(lc, 3));
-    this.carLights = new THREE.Points(lg, new THREE.PointsMaterial({ size: 1.6, map: glowTexture(), vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-    this.carLights.frustumCulled = false; this.group.add(this.carLights);
-  }
-  updateCars(dt) {
-    const S = this.world.road.samples, L = S.length;
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), d = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
-    const lp = this.carLights.geometry.attributes.position.array;
-    this.carLights.visible = this.world.night || this.world.W.dark > 0.5;
-    this.cars.forEach((c, ci) => {
-      c.s = (c.s + c.speed * dt + L) % L;
-      const i0 = Math.floor(c.s), t = c.s - i0, a = S[i0 % L], b = S[(i0 + 1) % L];
-      p.lerpVectors(a, b, t);
-      d.subVectors(b, a).normalize(); if (c.speed < 0) d.negate();
-      const right = new THREE.Vector3(-d.z, 0, d.x);
-      p.addScaledVector(right, 2.2);
-      q.setFromUnitVectors(new THREE.Vector3(0, 0, -1), new THREE.Vector3(d.x, 0, d.z).normalize());
-      const pitch = Math.asin(clamp(d.y, -1, 1)); q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), pitch));
-      m.compose(p, q, one);
-      (c.truck ? this.truckMesh : this.carMesh).setMatrixAt(c.idx, m);
-      const fw = d.clone(), len = c.truck ? 4.4 : 2.2;
-      for (let k = 0; k < 4; k++) {
-        const side = k % 2 ? 0.7 : -0.7, f = k < 2 ? len : -len;
-        lp[(ci * 4 + k) * 3] = p.x + fw.x * f + right.x * side; lp[(ci * 4 + k) * 3 + 1] = p.y + 0.8; lp[(ci * 4 + k) * 3 + 2] = p.z + fw.z * f + right.z * side;
-      }
-    });
-    this.carMesh.instanceMatrix.needsUpdate = true; this.truckMesh.instanceMatrix.needsUpdate = true;
-    this.carLights.geometry.attributes.position.needsUpdate = true;
   }
   // ---------- birds ----------
   buildBirds() {
@@ -230,8 +174,37 @@ export class Traffic {
     P.obj.rotateZ(clamp(turn * 25, -0.6, 0.6));
     for (const pr of P.obj.userData.props) pr.userData.spinner.rotation.z += dt * 120;
   }
-  update(dt, fx) {
-    this.updateCars(dt); this.updateBirds(dt);
+  // ---------- helicopter shuttling between town and airport ----------
+  buildHeli() {
+    const W = this.world, t = W.net.towns[0]; if (!t) return;
+    const g = new THREE.Group(), paint = M.paint(0xc8102e), dark = M.darkMetal();
+    const body = new THREE.Mesh(new THREE.SphereGeometry(1.4, 16, 12), paint); body.scale.set(1, 1, 1.6); g.add(body);
+    const glass = new THREE.Mesh(new THREE.SphereGeometry(1.2, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2.2), M.glass()); glass.rotation.x = -Math.PI / 2.4; glass.position.set(0, 0.2, -1.2); g.add(glass);
+    const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.35, 6, 8), paint); boom.rotation.x = Math.PI / 2; boom.position.set(0, 0.3, 4.4); g.add(boom);
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.6, 0.9), paint); fin.position.set(0, 1, 7.2); g.add(fin);
+    for (const s2 of [-0.9, 0.9]) { const skid = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3.6, 6), dark); skid.rotation.x = Math.PI / 2; skid.position.set(s2, -1.6, 0); g.add(skid); }
+    const rotor = new THREE.Group(); for (let k = 0; k < 4; k++) { const b = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.05, 11), dark); b.rotation.y = k * Math.PI / 2; rotor.add(b); } rotor.position.y = 1.7; g.add(rotor);
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(5.5, 32), M.propDisc()); disc.rotation.x = -Math.PI / 2; disc.position.y = 1.72; g.add(disc);
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2, 0.2), dark); tail.position.set(0.3, 1, 7.3); g.add(tail);
+    g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    this.group.add(g);
+    const a = new THREE.Vector3(250, W.loc.rwyH, -60), b = t.c.clone().setY(W.sampleGrid(t.c.x, t.c.z));
+    this.heli = { g, rotor, tail, a, b, t: 0, phase: 0 };
+  }
+  updateHeli(dt) {
+    const H = this.heli; if (!H) return;
+    H.t += dt; const cycle = 120, u = (H.t % cycle) / cycle; // hover-climb-cruise-descend-sit, both ways
+    const leg = u < 0.5 ? u * 2 : (u - 0.5) * 2, from = u < 0.5 ? H.a : H.b, to = u < 0.5 ? H.b : H.a;
+    const k = Math.min(1, Math.max(0, (leg - 0.15) / 0.7)), e = k * k * (3 - 2 * k);
+    const p = from.clone().lerp(to, e); const lift = Math.sin(Math.min(1, Math.max(0, (leg - 0.05) / 0.9)) * Math.PI);
+    p.y = Math.max(this.world.sampleGrid(p.x, p.z), from.y + (to.y - from.y) * e) + 2 + lift * 160;
+    const dir = to.clone().sub(from).setY(0).normalize();
+    H.g.position.copy(p); H.g.rotation.set(0, Math.atan2(-dir.x, -dir.z), 0); H.g.rotateX(-0.15 * Math.sin(k * Math.PI));
+    H.rotor.rotation.y += dt * (leg > 0.03 && leg < 0.97 ? 30 : 6); H.tail.rotation.x += dt * 50;
+  }
+  update(dt, fx, cam) {
+    this.vehicles.update(dt, cam); this.updateBirds(dt); this.updateHeli(dt);
+    if (cam) { this.world.flora.update(cam); this.world.towns.update(dt, this.world.t, fx, cam); }
     if (this.balloons) this.updateBalloons(dt);
     if (this.boats) this.updateBoats(dt, fx);
     this.updatePattern(dt);
