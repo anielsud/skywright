@@ -11,6 +11,7 @@ import { Flora } from './flora.js';
 import { Towns } from './towns.js';
 import { TerrainTiles } from './tiles.js';
 import { erode } from './erosion.js';
+import { terrainDetailUniforms } from './terrainTex.js';
 
 const RWY = { len: 1800, width: 45 };
 
@@ -99,6 +100,7 @@ export class World {
     this.rnd = mulberry32(this.loc.seed * 7);
     this.time = opts.time ?? 10; this.weatherId = opts.weather || 'clear';
     this.waterLevel = this.loc.water;
+    this.detailU = terrainDetailUniforms(this.loc.id, this.waterLevel, this.loc.snowline);
     this.size = 22000;
     this.group = new THREE.Group(); scene.add(this.group);
     this.t = 0; this.night = false;
@@ -155,7 +157,7 @@ export class World {
     }
     geo.computeVertexNormals();
     this.bakeTerrain();
-    const mat = terrainMaterial({ detail: this.detailTexture(), rock: this.rockTexture(), albedo: this.albedoTex, normal: this.normalTex, shadow: this.shadowTex, half, size: S });
+    const mat = terrainMaterial({ detailU: this.detailU, albedo: this.albedoTex, normal: this.normalTex, shadow: this.shadowTex, half, size: S });
     this.terrainMat = mat;
     const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true;
     this.terrain = mesh; this.group.add(mesh);
@@ -232,7 +234,6 @@ export class World {
     }
     this.shadowTex.needsUpdate = true;
   }
-  rockTexture() { return this.tileNoise(123, [[4, 0.35], [8, 0.25], [16, 0.2], [48, 0.12], [128, 0.08]], [1, 0.97, 0.93], 3.0, 130, 140); }
   detailTexture() { return this.tileNoise(99, [[8, 0.45], [16, 0.25], [32, 0.15], [64, 0.1], [128, 0.05]], [1, 1.01, 0.96], 1, 150, 120); }
   tileNoise(seed, octs, tint, stretch, base, amp) {
     const s = 256, c = document.createElement('canvas'); c.width = c.height = s;

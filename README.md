@@ -136,3 +136,7 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 | `src/main.js` | App flow, menus, flight loop |
 
 `window.__sky` exposes the app state for debugging and headless tests.
+
+## Credits
+
+Ground textures in `tex/` are CC0 from [Poly Haven](https://polyhaven.com) (aerial_grass_rock, aerial_rocks_02, aerial_beach_01, dry_ground_rocks, cliff_side).

@@ -1,5 +1,6 @@
 // Shared shader upgrades: height fog with sun in-scattering, terrain splatting, water, foliage sway.
 import * as THREE from 'three';
+import { TERRAIN_DETAIL_GLSL } from './terrainTex.js';
 
 // ---------- global height fog ----------
 // One shared set of uniforms, attached by reference to every built-in material at compile time,
@@ -64,40 +65,38 @@ export function installFog() {
 
 // ---------- terrain material ----------
 export function terrainMaterial(maps) {
-  const mat = new THREE.MeshStandardMaterial({ map: maps.detail, roughness: 0.93, metalness: 0 });
-  const U = { albedoTex: { value: maps.albedo }, normTex: { value: maps.normal }, shadowTex: { value: maps.shadow }, rockTex: { value: maps.rock },
-    tHalf: { value: maps.half }, tSize: { value: maps.size }, shadowOn: { value: 1 } };
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.93, metalness: 0 });
+  const U = { albedoTex: { value: maps.albedo }, normTex: { value: maps.normal }, shadowTex: { value: maps.shadow },
+    tHalf: { value: maps.half }, tSize: { value: maps.size }, shadowOn: { value: 1 }, ...maps.detailU };
   mat.userData.U = U;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, U);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vTW;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-      varying vec3 vTW; uniform sampler2D albedoTex; uniform sampler2D normTex; uniform sampler2D shadowTex; uniform sampler2D rockTex;
-      uniform float tHalf; uniform float tSize; uniform float shadowOn;`)
+      varying vec3 vTW; uniform sampler2D albedoTex; uniform sampler2D normTex; uniform sampler2D shadowTex;
+      uniform float tHalf; uniform float tSize; uniform float shadowOn;
+      ${TERRAIN_DETAIL_GLSL}`)
       .replace('#include <map_fragment>', `
         vec2 tuv = (vTW.xz + tHalf) / tSize;
         vec4 alb = texture2D(albedoTex, tuv);
         vec3 wn = normalize(texture2D(normTex, tuv).xyz * 2.0 - 1.0);
         float terrainShadow = mix(1.0, texture2D(shadowTex, tuv).r, shadowOn);
-        // detail: grass/soil at two scales, rock triplanar
-        vec3 g1 = texture2D(map, vTW.xz / 23.0).rgb, g2 = texture2D(map, vTW.xz / 170.0 + 0.37).rgb;
-        vec3 bw = pow(abs(wn), vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
-        vec3 r1 = texture2D(rockTex, vTW.zy / 31.0).rgb * bw.x + texture2D(rockTex, vTW.xz / 31.0).rgb * bw.y + texture2D(rockTex, vTW.xy / 31.0).rgb * bw.z;
-        float rockMask = smoothstep(0.2, 0.42, 1.0 - wn.y);
         float dist = length(vTW - cameraPosition);
-        float snowy = smoothstep(0.62, 0.8, min(alb.r, min(alb.g, alb.b)));
-        vec3 det = mix(mix(mix(g1, g2, 0.45), r1, rockMask), vec3(0.78) + g1 * 0.08, snowy);
-        det = mix(det, vec3(0.8), smoothstep(1500.0, 6000.0, dist) * 0.6);
-        diffuseColor.rgb = alb.rgb * det * 1.5 * (0.6 + 0.4 * alb.a);
+        vec3 mul, dn; terrainDetail(vTW, wn, dist, mul, dn);
+        // snow keeps the relief but not the photo colour
+        float snowy = smoothstep(0.55, 0.72, min(alb.r, min(alb.g, alb.b)));
+        mul = mix(mul, vec3(0.92 + 0.08 * dot(mul, vec3(0.333))), snowy);
+        wn = dn;
+        diffuseColor.rgb = alb.rgb * mul * (0.6 + 0.4 * alb.a) * 1.12;
       `)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);`)
+        normal = snrm((viewMatrix * vec4(wn, 0.0)).xyz);`)
       .replace('#include <lights_fragment_begin>', THREE.ShaderChunk.lights_fragment_begin.replace(
         'getDirectionalLightInfo( directionalLight, directLight );',
         'getDirectionalLightInfo( directionalLight, directLight ); directLight.color *= terrainShadow;'));
   };
-  mat.customProgramCacheKey = () => 'terrain';
+  mat.customProgramCacheKey = () => 'terrain2';
   return mat;
 }
 
