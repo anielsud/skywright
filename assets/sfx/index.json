@@ -1,0 +1,72 @@
+{
+ "eng_piston_idle": {
+  "f0": 44.7,
+  "dur": 10.0,
+  "src": 127095
+ },
+ "eng_piston_high": {
+  "f0": 37.4,
+  "dur": 10.0,
+  "src": 127095
+ },
+ "eng_piston_cabin": {
+  "f0": 58.6,
+  "dur": 10.0,
+  "src": 325845
+ },
+ "eng_radial_idle": {
+  "f0": 74.7,
+  "dur": 7.999,
+  "src": 143556
+ },
+ "eng_radial_high": {
+  "f0": 117.2,
+  "dur": 10.0,
+  "src": 437771
+ },
+ "eng_turboprop_ext": {
+  "f0": 46.1,
+  "dur": 10.0,
+  "src": 828952
+ },
+ "eng_turboprop_idle": {
+  "f0": 52.7,
+  "dur": 10.0,
+  "src": 399371
+ },
+ "eng_turboprop_high": {
+  "f0": 65.9,
+  "dur": 10.0,
+  "src": 399371
+ },
+ "eng_jet_idle": {
+  "f0": 147.9,
+  "dur": 10.0,
+  "src": 322178
+ },
+ "eng_jet_high": {
+  "f0": 75.4,
+  "dur": 4.521,
+  "src": 128613
+ },
+ "eng_jet_ab": {
+  "f0": 205.8,
+  "dur": 10.0,
+  "src": 104883
+ },
+ "eng_fan_idle": {
+  "f0": 83.5,
+  "dur": 10.0,
+  "src": 817123
+ },
+ "eng_fan_cabin": {
+  "f0": 41.0,
+  "dur": 10.0,
+  "src": 436942
+ },
+ "eng_rocket": {
+  "f0": 41.0,
+  "dur": 10.0,
+  "src": 774245
+ }
+}

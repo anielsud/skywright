@@ -1,14 +1,29 @@
 // Fully synthesized audio (no sample files).
 // 3D-positioned engines, location reverb, layered crashes, ambient beds and hangar music.
 // Mixer channels the player can set (0..1 each). Sliders are perceptual: see dbGain.
-export const MIX_DEFAULTS = { master: 0.7, engines: 0.7, world: 0.8, fx: 0.8, music: 0.6 };
+export const MIX_DEFAULTS = { master: 0.75, engines: 0.9, world: 0.85, fx: 0.9, music: 0.75 };
+export const OLD_MIX_DEFAULTS = { master: 0.7, engines: 0.7, world: 0.8, fx: 0.8, music: 0.6 }; // 1.6.1: channels too low, stacked with master
 // Slider position -> gain. 0 is silent; otherwise -45 dB at the bottom of the travel up to 0 dB at the top,
 // so every step sounds like the same change and the lowest steps are genuinely quiet.
 export const dbGain = (v) => (v <= 0.001 ? 0 : 10 ** ((-45 * (1 - v)) / 20));
-const HEADROOM = 0.25; // -12 dB overall: a game shouldn't hit the speaker at full scale
+const HEADROOM = 0.25;
+// Recorded engine layers (assets/sfx, built by tools/sfx/process.py). Each engine blends an idle and a high-power loop
+// by RPM/spool and pitches them with it; 'cabin' layers replace the outside sound in the cockpit view.
+// rate: [playbackRate at n=0, at n=1] where n is normalised RPM (props) or spool (turbines).
+const SAMPLE_ENGINES = {
+  piston: { idle: ['eng_piston_idle', 0.8, 1.25], high: ['eng_piston_high', 0.82, 1.08], cabin: ['eng_piston_cabin', 0.85, 1.1], gain: 1 },
+  radial: { idle: ['eng_radial_idle', 0.8, 1.25], high: ['eng_radial_high', 0.75, 1.0], gain: 1 },
+  turboprop: { idle: ['eng_turboprop_ext', 0.78, 0.95], high: ['eng_turboprop_ext', 0.92, 1.12], cabinIdle: ['eng_turboprop_idle', 0.9, 1.05], cabin: ['eng_turboprop_high', 0.9, 1.05], gain: 1 },
+  jet: { idle: ['eng_jet_idle', 0.85, 1.15], high: ['eng_jet_high', 0.8, 1.08], ab: 'eng_jet_ab', gain: 1 },
+  fan: { idle: ['eng_fan_idle', 0.85, 1.2], high: ['eng_jet_high', 0.68, 0.88], cabin: ['eng_fan_cabin', 0.9, 1.1], gain: 1 },
+  rocket: { high: ['eng_rocket', 0.95, 1.05], gain: 1 },
+};
+const SAMPLE_LEVEL = { piston: 3.6, radial: 2.7, turboprop: 3.1, jet: 2.1, fan: 2.2, rocket: 3.0 }; // full power ≈ -24 dB props, -28 jets (weighted, tools/sfx measurements)
+const RPM_RANGE = { piston: [700, 2700], radial: [600, 2600], turboprop: [1000, 2000] };
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }; // -12 dB overall: a game shouldn't hit the speaker at full scale
 
 export class Audio {
-  constructor() { this.ctx = null; this.voices = {}; this.mix = { ...MIX_DEFAULTS }; this.space = null; }
+  constructor() { this.ctx = null; this.voices = {}; this.mix = { ...MIX_DEFAULTS }; this.space = null; this.buffers = {}; }
   init() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
@@ -20,7 +35,9 @@ export class Audio {
     this.subCut = this.filt('highpass', 40, 0.7); this.subCut.connect(this.comp); // nothing useful lives below 40 Hz
     this.cockpitLP = this.filt('lowpass', 20000, 0.7);
     this.bus = this.gain(1); this.bus.connect(this.cockpitLP); this.cockpitLP.connect(this.subCut);
-    this.engBus = this.gain(1); this.engBus.connect(this.bus); // engines
+    // engines: a gentle low shelf keeps recorded engine bass (mostly inaudible on a tablet) from eating the limiter's headroom
+    this.engLow = ctx.createBiquadFilter(); this.engLow.type = 'lowshelf'; this.engLow.frequency.value = 140; this.engLow.gain.value = -6;
+    this.engBus = this.gain(1); this.engBus.connect(this.engLow); this.engLow.connect(this.bus);
     this.airBus = this.gain(1); this.airBus.connect(this.bus); // wind, buffet, wheels rolling: 'world' channel
     // effects: crashes/explosions were mostly sub-bass that tablet speakers can't play but that slammed the limiter
     this.fxLow = ctx.createBiquadFilter(); this.fxLow.type = 'lowshelf'; this.fxLow.frequency.value = 150; this.fxLow.gain.value = -10;
@@ -47,7 +64,22 @@ export class Audio {
     this.pistonWave = this.makeWave((n) => (n % 2 === 0 ? 1 : 0.4) / Math.pow(n, 0.75));
     this.radialWave = this.makeWave((n) => (n % 9 === 0 ? 1.4 : n % 3 === 0 ? 0.6 : 0.3) / Math.pow(n, 0.6));
     this.setSpace('hangar');
+    this.loadSamples();
   }
+  // Fetch + decode the recorded clips. Until they arrive (or if a browser can't decode Opus) voices stay synthesized.
+  async loadSamples(base = 'assets/sfx/') {
+    try {
+      const index = await (await fetch(base + 'index.json')).json();
+      await Promise.all(Object.keys(index).map(async (n) => {
+        try { this.buffers[n] = await this.ctx.decodeAudioData(await (await fetch(`${base}${n}.ogg`)).arrayBuffer()); } catch { /* keep the synth fallback */ }
+      }));
+      // rebuild engine voices that were created as synth while loading
+      for (const k of Object.keys(SAMPLE_ENGINES)) if (this.voices[k] && !this.voices[k].sampled && this.canSample(k)) this.dropVoice(k);
+    } catch { /* offline first run etc.: synth only */ }
+  }
+  canSample(kind) { const d = SAMPLE_ENGINES[kind]; return !!d && ['idle', 'high', 'cabin', 'cabinIdle'].every((r) => !d[r] || this.buffers[d[r][0]]) && (!d.ab || this.buffers[d.ab]); }
+  dropVoice(k) { const v = this.voices[k]; delete this.voices[k]; this.set(v.out.gain, 0, 0.05); setTimeout(() => { try { v.out.disconnect(); v.pan?.disconnect(); v.layers?.forEach((l) => l.src.stop()); } catch { /* gone */ } }, 300); }
+  loop(name) { const s = this.ctx.createBufferSource(); s.buffer = this.buffers[name]; s.loop = true; s.start(0, Math.random() * s.buffer.duration); return s; }
   makeWave(ampFn, N = 64) {
     const re = new Float32Array(N), im = new Float32Array(N);
     for (let n = 1; n < N; n++) { const a = ampFn(n), ph = Math.random() * Math.PI * 2; re[n] = a * Math.cos(ph); im[n] = a * Math.sin(ph); }
@@ -95,6 +127,12 @@ export class Audio {
     const spatial = !['wind', 'roll', 'stall', 'rain', 'buffet', 'whistle'].includes(kind);
     if (spatial) { v.pan = this.panner(); v.out.connect(v.pan); v.pan.connect(this.engBus); } else v.out.connect(kind === 'stall' ? this.fx : kind === 'rain' ? this.amb : this.airBus);
     const to = (node) => node.connect(v.out);
+    if (this.canSample(kind)) { // recorded layers
+      const d = SAMPLE_ENGINES[kind]; v.sampled = true; v.layers = [];
+      for (const role of ['idle', 'high', 'cabinIdle', 'cabin']) if (d[role]) { const src = this.loop(d[role][0]), g = this.gain(0); src.connect(g); to(g); v.layers.push({ role, src, g, rate: d[role].slice(1) }); }
+      if (d.ab) { const src = this.loop(d.ab), g = this.gain(0); src.connect(g); to(g); v.layers.push({ role: 'ab', src, g, rate: [0.95, 1.05] }); }
+      return v;
+    }
     if (kind === 'piston' || kind === 'radial') {
       const rad = kind === 'radial';
       v.o1 = this.osc(null, 40, rad ? this.radialWave : this.pistonWave); this.wobble(v.o1.detune, rad ? 22 : 12);
@@ -133,9 +171,11 @@ export class Audio {
       v.b = this.noise('brown'); v.bg = this.gain(2.6); v.b.connect(v.bg); to(v.bg);
       v.cr = this.noise('crackle'); v.crg = this.gain(2.2); v.cr.connect(v.crg); to(v.crg);
     } else if (kind === 'wind') {
-      v.n = this.noise(); v.nf = this.filt('bandpass', 400, 0.6); v.n.connect(v.nf); to(v.nf);
-      v.n2 = this.noise('brown'); v.n2g = this.gain(1.5); v.n2.connect(v.n2g); to(v.n2g);
-      v.gl = this.osc('sine', 0.3); v.glg = this.gain(0.25); v.gl.connect(v.glg); v.glg.connect(v.out.gain); // gusting
+      // gusting modulates its own stage (it used to add straight onto out.gain, so wind hissed even when parked)
+      v.gust = this.gain(1); to(v.gust);
+      v.n = this.noise(); v.nf = this.filt('bandpass', 400, 0.6); v.n.connect(v.nf); v.nf.connect(v.gust);
+      v.n2 = this.noise('brown'); v.n2g = this.gain(1.5); v.n2.connect(v.n2g); v.n2g.connect(v.gust);
+      v.gl = this.osc('sine', 0.3); v.glg = this.gain(0.25); v.gl.connect(v.glg); v.glg.connect(v.gust.gain);
     } else if (kind === 'whistle') {
       v.n = this.noise(); v.nf = this.filt('bandpass', 1800, 9); v.n.connect(v.nf); to(v.nf);
     } else if (kind === 'buffet') {
@@ -175,7 +215,8 @@ export class Audio {
     if (!this.ctx) return;
     const dop = s.doppler || 1;
     if (s.listener) this.setListener(s.listener.pos, s.listener.fwd, s.listener.up);
-    this.set(this.cockpitLP.frequency, s.cockpit ? 1600 : 20000, 0.1);
+    const cabinRec = s.engines.some((e) => this.voices[e.sound]?.sampled && SAMPLE_ENGINES[e.sound]?.cabin);
+    this.set(this.cockpitLP.frequency, s.cockpit ? (cabinRec ? 5000 : 1600) : 20000, 0.1);
     const seen = new Set();
     for (const e of s.engines) {
       const v = this.voice(e.sound); seen.add(e.sound);
@@ -183,6 +224,7 @@ export class Audio {
       this.placeVoice(v, e.pos);
       const thr = e.spoolT;
       const multi = Math.sqrt(e.count);
+      if (v.sampled) { this.updateSampled(v, e, s, dop, multi); continue; }
       if (e.sound === 'piston' || e.sound === 'radial') {
         const rad = e.sound === 'radial', rps = Math.max(1, e.rpm) / 60;
         this.set(v.o1.frequency, rps * 0.5 * dop * (rad ? 1 : 2)); // two-revolution cycle
@@ -229,6 +271,31 @@ export class Audio {
     const st = this.voice('stall'); this.set(st.out.gain, s.stall && Math.floor(this.ctx.currentTime * 4) % 2 === 0 ? 0.07 : 0, 0.01);
     const rn = this.voice('rain'); this.set(rn.out.gain, s.rain * 0.13 * (s.cockpit ? 1.6 : 1), 0.3);
     this.ambience(s.amb, s.listener?.pos);
+  }
+
+  updateSampled(v, e, s, dop, multi) {
+    const kind = e.sound, rr = RPM_RANGE[kind];
+    const n = rr ? Math.min(1, Math.max(0, (e.rpm - rr[0]) / (rr[1] - rr[0]))) : e.spoolT;
+    const running = kind === 'rocket' ? e.burning : rr ? e.rpm > 50 : true;
+    const x = smooth(0.2, 0.8, n), hasCabin = v.layers.some((l) => l.role === 'cabin');
+    const inside = s.cockpit && hasCabin ? 1 : 0;
+    for (const l of v.layers) {
+      let g = 0;
+      if (l.role === 'idle') g = Math.cos(x * Math.PI / 2) * (1 - inside);
+      else if (l.role === 'high') g = (kind === 'rocket' ? 1 : Math.sin(x * Math.PI / 2)) * (1 - inside);
+      else if (l.role === 'cabin') g = inside * (v.layers.some((q) => q.role === 'cabinIdle') ? Math.sin(x * Math.PI / 2) : 1);
+      else if (l.role === 'cabinIdle') g = inside * Math.cos(x * Math.PI / 2);
+      else if (l.role === 'ab') g = e.ab ? 1.1 : 0;
+      this.set(l.g.gain, g, l.role === 'ab' ? 0.12 : 0.08);
+      this.set(l.src.playbackRate, (l.rate[0] + (l.rate[1] - l.rate[0]) * n) * dop, 0.05);
+    }
+    // overall level grows with power; balanced by measurement against the synth targets (≈-24 dB props, -26 jets at full)
+    const lvl = (SAMPLE_LEVEL[kind] || 1) * (0.32 + 0.68 * n) * multi;
+    this.set(v.out.gain, running ? lvl : 0, kind === 'rocket' ? 0.05 : 0.1);
+    if (kind === 'piston' || kind === 'radial') { // throttle chop at speed -> exhaust pops
+      if ((v.lastThr ?? 0) - e.spoolT > 0.25 && e.rpm > 1500) for (let k = 0; k < 4; k++) this.burst('crackle', 'bandpass', 600, 1, 0.5, 0.15, this.engBus, k * 0.12 + Math.random() * 0.1);
+      v.lastThr = e.spoolT;
+    }
   }
 
   // ---------- ambient world sounds ----------

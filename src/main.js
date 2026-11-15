@@ -6,7 +6,7 @@ import { Aircraft, REALISM } from './aircraft.js';
 import { World, LOCATIONS, WEATHER } from './world.js';
 import { Traffic, buildStatic, mergeByMaterial } from './traffic.js';
 import { Effects } from './effects.js';
-import { Audio, MIX_DEFAULTS } from './audio.js';
+import { Audio, MIX_DEFAULTS, OLD_MIX_DEFAULTS } from './audio.js';
 import { Controls } from './controls.js';
 import { HUD } from './hud.js';
 import { CameraRig } from './cameras.js';
@@ -46,7 +46,7 @@ post.setSamples(qualityTier() === 'high' ? 4 : 0);
 renderer.shadowMap.type = qualityTier() === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 
 // mixer: the old single linear 'volume' setting is dropped (its scale meant something else); start from the new defaults
-if (!settings.mix) settings.mix = { ...MIX_DEFAULTS }; delete settings.volume;
+if (!settings.mix || Object.keys(OLD_MIX_DEFAULTS).every((k) => settings.mix[k] === OLD_MIX_DEFAULTS[k])) settings.mix = { ...MIX_DEFAULTS }; delete settings.volume;
 const audio = new Audio(); audio.setMix(settings.mix);
 const $ = (s) => document.querySelector(s);
 const presets = makePresets();
@@ -403,6 +403,7 @@ function helpModal() {
   <h4>Fly — tablet</h4><p>Left thumb: throttle lever and rudder slider. Right thumb: the stick (pull down to climb). Or switch on <b>Tilt the tablet</b> in Settings. Drag the sky to look around; pinch to zoom.</p>
   <h4>Gamepad</h4><p>Left stick flies, right stick X is rudder, triggers set throttle, A brakes, B gear, X flaps, Y camera, LB smoke.</p>
   <h4>Tips</h4><p>Take off around the stall speed shown in the hangar. In Simulator mode, land gently (under ~3 m/s sink) or your gear will snap! Sailplanes can ride rising air under cumulus clouds and along sunny ridges.</p>
+  <h4>Credits</h4><p>Engine sounds are real recordings from <a href="https://freesound.org" target="_blank" rel="noopener">Freesound</a>: <a href="assets/sfx/CREDITS.md" target="_blank" rel="noopener">sound credits</a>.</p>
   </div><div class="modal-foot"><button data-close class="primary">Got it</button></div>`, 'wide');
 }
 

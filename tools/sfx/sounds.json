@@ -1,0 +1,17 @@
+{
+  "_doc": "Recorded sounds shipped in assets/sfx. id = Freesound id, [start, end] seconds of the source to use. loop: crossfade the ends so it loops seamlessly. Rebuild with tools/sfx/process.py.",
+  "eng_piston_idle":   { "id": 127095, "start": 30, "end": 40, "loop": true },
+  "eng_piston_high":   { "id": 127095, "start": 80, "end": 90, "loop": true },
+  "eng_piston_cabin":  { "id": 325845, "start": 2, "end": 12, "loop": true },
+  "eng_radial_idle":   { "id": 143556, "start": 7.5, "end": 15.5, "loop": true },
+  "eng_radial_high":   { "id": 437771, "start": 8, "end": 18, "loop": true },
+  "eng_turboprop_ext": { "id": 828952, "start": 5, "end": 15, "loop": true },
+  "eng_turboprop_idle":{ "id": 399371, "start": 15, "end": 25, "loop": true },
+  "eng_turboprop_high":{ "id": 399371, "start": 117, "end": 127, "loop": true },
+  "eng_jet_idle":      { "id": 322178, "start": 22, "end": 32, "loop": true },
+  "eng_jet_high":      { "id": 128613, "start": 0, "end": 5.1, "loop": true },
+  "eng_jet_ab":        { "id": 104883, "start": 12, "end": 22, "loop": true },
+  "eng_fan_idle":      { "id": 817123, "start": 64, "end": 74, "loop": true },
+  "eng_fan_cabin":     { "id": 436942, "start": 70, "end": 80, "loop": true },
+  "eng_rocket":        { "id": 774245, "start": 4, "end": 14, "loop": true }
+}
