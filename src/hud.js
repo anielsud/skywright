@@ -27,6 +27,10 @@ export class HUD {
         <span class="lamp" id="l-gear">GEAR</span><span class="lamp" id="l-flaps">FLAPS 0</span><span class="lamp" id="l-brake">BRAKE</span>
         <span class="lamp" id="l-smoke">SMOKE</span><span class="lamp warn" id="l-stall">STALL</span><span class="lamp" id="l-ab">AFTERBURNER</span><span class="lamp" id="l-g">1.0 G</span>
       </div>
+      <div class="hud-ctl" id="h-ctl">
+        <div class="ctl-thr"><b id="c-thr-v">0%</b><div class="ctl-thr-bar"><div id="c-thr"></div></div><small id="c-thr-l">THR</small><kbd>⇧ / Ctrl</kbd></div>
+        <div class="ctl-stick-col"><div class="ctl-stick"><i></i><div id="c-stick"></div></div><div class="ctl-rud"><i></i><div id="c-rud"></div></div><kbd>W A S D · Q E</kbd></div>
+      </div>
       <div id="h-arrow"><div></div></div>
       <div id="h-center"></div>
       <div id="fps-meter" style="display:none"></div>`;
@@ -68,6 +72,7 @@ export class HUD {
     const ge = this.$('l-g'); ge.textContent = `${ac.g.toFixed(1)} G`; ge.classList.toggle('warn', Math.abs(ac.g) > 6);
     this.$('h-mission').textContent = mission?.hud ? mission.hud() : '';
     this.drawADI(ac); this.drawMap(ac, world, mission, others);
+    this.updateControls(ac);
     // arrow to target
     const arrow = this.$('h-arrow');
     const tgt = mission?.target?.();
@@ -78,6 +83,17 @@ export class HUD {
       arrow.style.display = onScreen ? 'none' : '';
       if (!onScreen) { let x = v.x, y = v.y; if (behind) { x = -x; y = -y; } const a = Math.atan2(-y, x); arrow.style.transform = `translate(-50%,-50%) rotate(${a}rad)`; }
     } else arrow.style.display = 'none';
+  }
+  // What the pilot is commanding right now (keyboard / gamepad players have no on-screen stick or throttle).
+  // Hidden by CSS while the touch controls are showing, since those already show it.
+  updateControls(ac) {
+    const c = ac.ctl, t = clamp(c.throttle, 0, 1), P = 26; // stick travel in px
+    const v = t > 0.995 ? 'MAX' : `${Math.round(t * 100)}%`;
+    if (v !== this.ctlV) { this.ctlV = v; this.$('c-thr-v').textContent = v; this.$('c-thr').style.height = `${t * 100}%`; }
+    const lbl = ac.isHeli ? 'LIFT' : ac.isCar ? 'GAS' : 'THR';
+    if (lbl !== this.ctlL) { this.ctlL = lbl; this.$('c-thr-l').textContent = lbl; }
+    this.$('c-stick').style.transform = `translate(${clamp(c.roll, -1, 1) * P}px, ${clamp(c.pitch, -1, 1) * P}px)`;
+    this.$('c-rud').style.transform = `translateX(${clamp(c.yaw, -1, 1) * 34}px)`;
   }
   drawADI(ac) {
     const g = this.adi, S = 120, c = S / 2;
