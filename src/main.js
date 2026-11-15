@@ -15,6 +15,7 @@ import { clamp } from './noise.js';
 import { installFog } from './shaders.js';
 import { Post } from './post.js';
 import { VERSION, COMMIT, BUILT } from './version.js';
+import { Net } from './net.js';
 installFog();
 
 // ---------- persistence ----------
@@ -218,12 +219,13 @@ function flightModal() {
     <div class="choice-row">${Object.entries(MODES).map(([k, mo]) => `<button class="opt-card${flightCfg.mode === k ? ' on' : ''}" data-m="${k}"><b>${mo.name}</b><small>${mo.desc}</small></button>`).join('')}</div>
     <label class="lbl">Start</label>
     <div class="chips"><button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">On the runway</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}</div>
-    <div class="modal-foot"><button data-close>Back</button><button class="primary big" id="go">FLY ▶</button></div>`, 'wide');
+    <div class="modal-foot"><button data-close>Back</button><button class="big" id="mp">👥 Multiplayer</button><button class="primary big" id="go">FLY ▶</button></div>`, 'wide');
   const el = m.el;
   const pick = (attr, key) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { flightCfg[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); audio.play('click'); }));
   pick('loc', 'location'); pick('w', 'weather'); pick('r', 'realism'); pick('m', 'mode'); pick('s', 'start');
   el.querySelector('#time').addEventListener('input', (e) => { flightCfg.time = +e.target.value; el.querySelector('#tlab').textContent = timeLabel(flightCfg.time); });
   el.querySelector('#go').addEventListener('click', () => { LS.set('flight', flightCfg); m.close(); startFlight(); });
+  el.querySelector('#mp').addEventListener('click', () => { LS.set('flight', flightCfg); m.close(); net.openModal(); });
 }
 
 function buildInfo() {
@@ -288,6 +290,7 @@ const controls = new Controls($('#touch-root'), (a) => onAction(a));
 controls.invert = settings.invert; controls.setMode(settings.controlMode);
 const flightCam = new THREE.PerspectiveCamera(60, 1, 0.2, 60000);
 const rig = new CameraRig(flightCam, canvas);
+const net = new Net({ ui, hud, audio, LS, getDesign: () => hangar.design, getCfg: () => flightCfg, startFlight: (cfg) => startFlight(cfg) });
 $('#hud').addEventListener('click', (e) => { if (e.target.id === 'h-cam') onAction('camera'); if (e.target.id === 'h-pause') onAction('pause'); });
 
 function findWater(world) {
@@ -328,13 +331,14 @@ function buildFlight(cfg) {
   if (cfg.mode === 'landing') start = 'approach';
   else if (start === 'water' || (start === 'runway' && st.floats && !gearOK)) start = 'water';
   if (start === 'runway' && (!ac.hasEngine)) start = 'air';
+  const slot = cfg.mpSlot || 0, slotX = slot ? (slot % 2 ? 1 : -1) * Math.ceil(slot / 2) * 70 : 0; // multiplayer: side by side, stepped up
   const vApp = clamp(Number.isFinite(st.stall) ? st.stall * 1.45 : 45, 32, 110);
   if (start === 'runway') { ac.spawn(env, new THREE.Vector3(0, 0, world.runway.len / 2 - 60), 0); }
   else if (start === 'water') {
     const w = findWater(world);
     if (w) ac.spawn(env, w, 0); else { start = 'air'; }
   }
-  if (start === 'air') { ac.spawn(env, new THREE.Vector3(0, 0, world.runway.len / 2 + 1200), 0, { air: true, alt: world.loc.rwyH + 450, speed: vApp * 1.1 }); controls.setThrottle(ac.hasEngine ? 0.65 : 0); }
+  if (start === 'air') { ac.spawn(env, new THREE.Vector3(slotX, 0, world.runway.len / 2 + 1200 + slot * 40), 0, { air: true, alt: world.loc.rwyH + 450 + slot * 30, speed: vApp * 1.1 }); controls.setThrottle(ac.hasEngine ? 0.65 : 0); }
   else if (start === 'approach') {
     const dist = 2600;
     ac.spawn(env, new THREE.Vector3(0, 0, world.runway.len / 2 - 380 + dist), 0, { air: true, alt: world.loc.rwyH + dist * Math.tan(THREE.MathUtils.degToRad(3)) + 3, speed: vApp, pitch: -0.02 });
@@ -345,6 +349,7 @@ function buildFlight(cfg) {
   if (cfg.mode === 'rings') mission = new RingRace(scene, world, ac, cfg.realism);
   else if (cfg.mode === 'landing') mission = new LandingChallenge(world);
   F = { scene, world, ac, effects, traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
+  net.attach(F);
   rig.init = false; rig.set('chase'); rig.look.dist = 1;
   hud.setUnits(settings.units); hud.show(true);
   flightUI.style.display = ''; $('#hangar-ui').style.display = 'none';
@@ -362,8 +367,9 @@ function buildFlight(cfg) {
 }
 
 let updatePending = false;
-function endFlight() {
+function endFlight(restarting = false) {
   if (!F) return;
+  net.detach(); if (!restarting) net.leave();
   if (updatePending) { location.reload(); return; }
   const f = F; F = null;
   f.world.dispose(); f.effects.dispose(); f.traffic.dispose(); f.mission?.dispose?.();
@@ -395,13 +401,13 @@ function togglePause(force) {
   F.paused = force ?? !F.paused;
   if (F.paused) {
     audio.silence();
-    const m = ui.modal(`<h2>Paused</h2>
+    const m = ui.modal(`<h2>Paused</h2>${net.pauseHTML()}
       <div class="pause-stats">${statsHTML(F.ac)}</div>
-      <div class="col-buttons"><button class="primary big" data-a="resume">Resume</button><button data-a="restart">Restart flight</button><button data-a="calib" ${settings.controlMode !== 'tilt' ? 'hidden' : ''}>Re-centre tilt</button><button data-a="settings">Settings</button><button data-a="help">Controls help</button><button data-a="hangar" class="danger">Back to hangar</button></div>`, 'sticky');
+      <div class="col-buttons"><button class="primary big" data-a="resume">Resume</button><button data-a="restart">${net.active ? 'Respawn' : 'Restart flight'}</button><button data-a="calib" ${settings.controlMode !== 'tilt' ? 'hidden' : ''}>Re-centre tilt</button><button data-a="settings">Settings</button><button data-a="help">Controls help</button><button data-a="hangar" class="danger">Back to hangar${net.active ? ' (leave game)' : ''}</button></div>`, 'sticky');
     m.el.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', () => {
       const a = b.dataset.a; m.close();
       if (a === 'resume') F.paused = false;
-      if (a === 'restart') { const c = F.cfg; endFlight(); startFlight(c); }
+      if (a === 'restart') restartFlight();
       if (a === 'hangar') endFlight();
       if (a === 'calib') { controls.calibrate(); F.paused = false; }
       if (a === 'settings') { settingsModal(); F.paused = true; }
@@ -409,6 +415,7 @@ function togglePause(force) {
     }));
   } else { const r = $('#modal-root'); r.innerHTML = ''; r.style.display = 'none'; }
 }
+function restartFlight() { const c = F.cfg; endFlight(true); startFlight(c); }
 function statsHTML(ac) {
   const U = settings.units === 'metric' ? { s: 3.6, su: 'km/h', a: 1, au: 'm' } : { s: 1.944, su: 'kt', a: 3.28, au: 'ft' };
   const t = ac.stats;
@@ -426,10 +433,10 @@ function showEnd(title, extra = '') {
   if (!F || F.shownEnd) return;
   F.shownEnd = true;
   const m = ui.modal(`<h2>${title}</h2>${extra}<div class="pause-stats">${statsHTML(F.ac)}</div>
-    <div class="col-buttons"><button class="primary big" data-a="restart">Fly again</button><button data-a="watch">Keep watching</button><button data-a="hangar">Back to hangar (repair)</button></div>`, 'sticky');
+    <div class="col-buttons"><button class="primary big" data-a="restart">Fly again</button><button data-a="watch">Keep watching</button><button data-a="hangar">Back to hangar (repair)${net.active ? ' · leaves the game' : ''}</button></div>`, 'sticky');
   m.el.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', () => {
     const a = b.dataset.a; m.close();
-    if (a === 'restart') { const c = F.cfg; endFlight(); startFlight(c); }
+    if (a === 'restart') restartFlight();
     if (a === 'hangar') endFlight();
   }));
 }
@@ -514,6 +521,7 @@ function stepFlight(dtReal) {
     }
   }
   handleEvents(f, dt);
+  net.update(dtReal, f, flightCam, settings.units);
   f.mission?.update(dt, ac, f.events);
   ac.events.length = 0;
   for (const e of f.events.splice(0)) {
@@ -583,7 +591,7 @@ function stepFlight(dtReal) {
     scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead, cockpit, doppler, rain: world.rain.visible ? world.W.rain : 0,
     listener: { pos: flightCam.position, fwd: camFwd, up: camUp },
     amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) } });
-  hud.update(ac, world, f.mission, flightCam);
+  hud.update(ac, world, f.mission, flightCam, net.markers());
   if (f.debug) $('#debug').textContent = `α ${(ac.alpha * 57.3).toFixed(1)}° g ${ac.g.toFixed(2)} V ${ac.airspeed?.toFixed(1)} m=${Math.round(ac.mass)} com=${ac.com.toArray().map((v) => v.toFixed(2))} w=${ac.w.toArray().map((v) => v.toFixed(2))}`;
   $('#debug').style.display = f.debug ? '' : 'none';
 }
@@ -709,6 +717,6 @@ async function boot() {
       document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
     }).catch(() => {});
   }
-  window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, presets, settings, flightCfg, controls, rig };
+  window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, net, presets, settings, flightCfg, controls, rig };
 }
 boot();

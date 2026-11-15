@@ -46,7 +46,7 @@ export class HUD {
   center(text, ms = 1800) { const c = this.$('h-center'); c.textContent = text; c.classList.add('show'); clearTimeout(this.ct); this.ct = setTimeout(() => c.classList.remove('show'), ms); }
   show(on) { this.visible = on; this.root.style.display = on ? '' : 'none'; }
 
-  update(ac, world, mission, camera) {
+  update(ac, world, mission, camera, others) {
     if (!this.visible) return;
     const U = this.units;
     const spd = ac.airspeed || 0;
@@ -67,7 +67,7 @@ export class HUD {
     this.$('l-ab').style.display = ab ? '' : 'none'; L('l-ab', ab, ac.parts.some((p) => p.alive && p.engine?.burning) ? `ROCKET ${Math.max(0, Math.min(...ac.parts.filter((p) => p.alive && p.engine?.burning).map((p) => p.engine.burn))).toFixed(0)}s` : 'AFTERBURNER');
     const ge = this.$('l-g'); ge.textContent = `${ac.g.toFixed(1)} G`; ge.classList.toggle('warn', Math.abs(ac.g) > 6);
     this.$('h-mission').textContent = mission?.hud ? mission.hud() : '';
-    this.drawADI(ac); this.drawMap(ac, world, mission);
+    this.drawADI(ac); this.drawMap(ac, world, mission, others);
     // arrow to target
     const arrow = this.$('h-arrow');
     const tgt = mission?.target?.();
@@ -98,7 +98,7 @@ export class HUD {
     g.strokeStyle = '#ffcc00'; g.lineWidth = 3; g.beginPath(); g.moveTo(c - 30, c); g.lineTo(c - 10, c); g.lineTo(c, c + 6); g.lineTo(c + 10, c); g.lineTo(c + 30, c); g.stroke();
     g.strokeStyle = 'rgba(255,255,255,0.6)'; g.lineWidth = 2; g.beginPath(); g.arc(c, c, c - 2, 0, Math.PI * 2); g.stroke();
   }
-  drawMap(ac, world, mission) {
+  drawMap(ac, world, mission, others) {
     const g = this.map, S = 180, R = this.mapRange;
     const img = world.minimap, IS = img.width;
     const px = ((ac.x.x + world.half) / world.size) * IS, pz = ((ac.x.z + world.half) / world.size) * IS;
@@ -111,6 +111,12 @@ export class HUD {
     const toMap = (x, z) => [S / 2 + ((x - ac.x.x) / (R * 2)) * S, S / 2 + ((z - ac.x.z) / (R * 2)) * S];
     if (mission?.rings) {
       mission.rings.forEach((r, i) => { const [x, y] = toMap(r.p.x, r.p.z); g.fillStyle = r.passed ? 'rgba(80,255,120,0.6)' : i === mission.idx ? '#ffb020' : 'rgba(255,176,32,0.5)'; g.beginPath(); g.arc(x, y, i === mission.idx ? 5 : 3, 0, 7); g.fill(); });
+    }
+    if (others) for (const o of others) { // multiplayer: other pilots, clamped to the rim when out of range
+      let [x, y] = toMap(o.x, o.z); const dx = x - S / 2, dy = y - S / 2, d = Math.hypot(dx, dy), rim = S / 2 - 10;
+      if (d > rim) { x = S / 2 + (dx / d) * rim; y = S / 2 + (dy / d) * rim; }
+      g.save(); g.translate(x, y); g.rotate(o.hdg); g.fillStyle = o.color; g.strokeStyle = '#000'; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(0, -7); g.lineTo(5, 6); g.lineTo(0, 3); g.lineTo(-5, 6); g.closePath(); g.fill(); g.stroke(); g.restore();
     }
     g.translate(S / 2, S / 2);
     const f = ac.forward; g.rotate(Math.atan2(f.x, -f.z));

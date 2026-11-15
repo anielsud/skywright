@@ -211,3 +211,29 @@ body.touch-on .hud-bc { bottom: auto; top: calc(56px + env(safe-area-inset-top))
 #fps-meter { position: absolute; left: 12px; bottom: 12px; font-size: 12px; background: rgba(0,0,0,.5); padding: 3px 8px; border-radius: 6px; font-variant-numeric: tabular-nums; }
 body.touch-on #fps-meter { bottom: auto; top: calc(250px + env(safe-area-inset-top)); }
 .update-row { display: flex; gap: 10px; align-items: center; justify-content: center; margin-top: 8px; font-size: 13px; color: var(--dim); }
+
+/* ---------- multiplayer ---------- */
+.mp-note { opacity: .8; margin: 0 0 10px; }
+.mp-note.small { font-size: 13px; margin-top: 10px; }
+.mp-input { font: inherit; font-size: 18px; color: var(--text); background: rgba(255, 255, 255, 0.07); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; min-height: 48px; width: 100%; box-sizing: border-box; }
+.mp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+.mp-box { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, 0.03); }
+.mp-box h3 { margin: 0; font-size: 18px; }
+.mp-box p { margin: 0; flex: 1; }
+.mp-box button { min-height: 52px; }
+.mp-code-in { text-align: center; font-size: 28px; font-weight: 800; letter-spacing: .35em; text-transform: uppercase; }
+.mp-status { min-height: 1.4em; margin: 12px 0 0; font-weight: 600; }
+.mp-status.bad { color: #ffb4ae; }
+#modal-root button#mp { min-height: 48px; }
+.mp-panel { margin-top: 8px; background: rgba(0, 0, 0, .45); border-radius: 12px; padding: 8px 10px; font-size: 14px; min-width: 130px; max-width: 180px; pointer-events: none; }
+.mp-panel .mp-code { font-size: 12px; opacity: .85; margin-bottom: 4px; }
+.mp-panel .mp-code b { font-size: 16px; letter-spacing: .15em; color: var(--accent); }
+.mp-panel ul { list-style: none; margin: 0; padding: 0; }
+.mp-panel li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+.mp-panel small { opacity: .7; }
+#mp-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.mp-label { position: absolute; left: 0; top: 0; padding: 2px 8px; border-radius: 10px; background: rgba(0, 0, 0, .5); font-size: 14px; font-weight: 600; white-space: nowrap; will-change: transform; }
+.mp-label small { font-weight: 400; opacity: .8; }
+.mp-pause { margin: -4px 0 10px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 176, 32, .12); }
+.mp-pause b { font-size: 20px; letter-spacing: .15em; color: var(--accent); }
+@media (max-width: 640px) { .mp-cols { grid-template-columns: 1fr; } }
