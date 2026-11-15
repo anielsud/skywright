@@ -321,8 +321,10 @@ function buildFlight(cfg) {
   if (!ac.hasEngine) hud.toast('Glider: look for rising air under clouds and over sunny ridges.');
 }
 
+let updatePending = false;
 function endFlight() {
   if (!F) return;
+  if (updatePending) { location.reload(); return; }
   const f = F; F = null;
   f.world.dispose(); f.effects.dispose(); f.traffic.dispose(); f.mission?.dispose?.();
   f.scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
@@ -606,7 +608,19 @@ async function boot() {
   $('#splash').classList.add('hide');
   setTimeout(() => $('#splash').remove(), 900);
   document.addEventListener('pointerdown', () => { audio.init(); if (state === 'hangar') audio.music(true); }, { once: true });
-  if ('serviceWorker' in navigator && location.protocol !== 'file:' && !location.hostname.match(/^(localhost|127\.)/)) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && location.protocol !== 'file:' && !location.hostname.match(/^(localhost|127\.)/)) {
+    // Auto-update: when a newly deployed version takes over, reload straight away in the hangar,
+    // or as soon as the current flight ends (never mid-flight).
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) return; // first install, nothing to refresh
+      if (state === 'hangar') { ui.hint('Updating to the latest version…'); setTimeout(() => location.reload(), 600); } else updatePending = true;
+    });
+    navigator.serviceWorker.register('sw.js').then((reg) => {
+      setInterval(() => reg.update().catch(() => {}), 10 * 60 * 1000);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+    }).catch(() => {});
+  }
   window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, audio, hangar, get F() { return F; }, startFlight, endFlight, presets, settings, flightCfg, controls, rig };
 }
 boot();
