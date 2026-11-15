@@ -102,10 +102,12 @@ export function installFog() {
 // patch=true: draws everything (the near-camera detail mesh, and the streamed outer tiles); otherwise the coarse core mesh, which skips the patch area.
 export function terrainMaterial(maps, patch = false) {
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.93, metalness: 0 });
+  const real = !!maps.detailU?.satHi; // real-world location: satellite imagery replaces the baked ground colour
   const U = { albedoTex: { value: maps.albedo }, normTex: { value: maps.normal }, shadowTex: { value: maps.shadow },
     tOrig: { value: maps.orig }, tSpan: { value: maps.span }, sOrig: { value: maps.sOrig || maps.orig }, sSpan: { value: maps.sSpan || maps.span },
     shadowOn: { value: maps.shadowOn ?? 1 }, patchRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, ...maps.detailU };
   mat.userData.U = U;
+  if (real) mat.defines = { TERRAIN_NO_SAND: '' }; // keeps the terrain within 16 texture units with Ultra's extra shadow maps
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, U);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vTW;')
@@ -113,12 +115,14 @@ export function terrainMaterial(maps, patch = false) {
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
       varying vec3 vTW; uniform sampler2D albedoTex; uniform sampler2D normTex; uniform sampler2D shadowTex;
       uniform vec2 tOrig; uniform float tSpan; uniform vec2 sOrig; uniform float sSpan; uniform float shadowOn; uniform vec4 patchRect;
-      ${TERRAIN_DETAIL_GLSL}`)
+      ${TERRAIN_DETAIL_GLSL}
+      ${real ? REAL_SAT_GLSL : ''}`)
       .replace('#include <map_fragment>', `
         ${patch ? '' : 'if (vTW.x > patchRect.x && vTW.x < patchRect.z && vTW.z > patchRect.y && vTW.z < patchRect.w) discard;'}
         vec2 tuv = (vTW.xz - tOrig) / tSpan; // texel centres sit exactly on the bake grid points
         vec4 alb = texture2D(albedoTex, tuv);
         vec3 wn = normalize(texture2D(normTex, tuv).xyz * 2.0 - 1.0);
+        ${real ? 'alb.rgb = realGround(satColor(vTW.xz), wn); alb.a = mix(1.0, alb.a, 0.5);' : ''}
         float terrainShadow = mix(1.0, texture2D(shadowTex, (vTW.xz - sOrig) / sSpan).r, shadowOn);
         float dist = length(vTW - cameraPosition);
         vec3 mul, dn; terrainDetail(vTW, wn, dist, mul, dn);
@@ -134,9 +138,37 @@ export function terrainMaterial(maps, patch = false) {
         'getDirectionalLightInfo( directionalLight, directLight );',
         'getDirectionalLightInfo( directionalLight, directLight ); directLight.color *= terrainShadow;'));
   };
-  mat.customProgramCacheKey = () => (patch ? 'terrain2-patch' : 'terrain2');
+  mat.customProgramCacheKey = () => (patch ? 'terrain2-patch' : 'terrain2') + (real ? '-real' : '');
   return mat;
 }
+
+// Real-world locations (src/realworld.js): two nested squares of satellite imagery, the detailed one fading into
+// the coarse one at its edge. Mipmapped, so from high up it stays smooth.
+const REAL_SAT_GLSL = /* glsl */`
+  uniform sampler2D satHi; uniform sampler2D satFar; uniform vec4 satHiR; uniform vec4 satFarR;
+  vec3 satColor(vec2 p) {
+    vec2 u = (p - satHiR.xy) * satHiR.z, v = clamp((p - satFarR.xy) * satFarR.z, 0.0, 1.0);
+    float e = min(min(u.x, 1.0 - u.x), min(u.y, 1.0 - u.y));
+    vec3 far = texture2D(satFar, v).rgb, hi = texture2D(satHi, clamp(u, 0.0, 1.0)).rgb; // both sampled always: mip derivatives stay valid
+    return mix(far, hi, smoothstep(0.0, 0.01, e));
+  }
+  // the photo already has the light and shadow of the moment it was taken (satSun): take some of that out, so the
+  // game's own sun does the shading, and lift it to the game's ground brightness
+  uniform vec3 satSun; uniform float satGain; uniform float satDeshade;
+  vec3 realGround(vec3 c, vec3 n) {
+    float lit = max(dot(n, satSun), 0.0) * 0.75 + 0.25, ref = max(satSun.y, 0.2) * 0.75 + 0.25;
+    float k = mix(1.0, clamp(ref / lit, 0.65, 2.0), satDeshade);
+    // shade in the photo is lit by the blue sky: lifting it must not turn hillsides blue
+    float sh = smoothstep(1.0, 1.6, k);
+    // Sentinel-2 greens read cool next to the game's warm sunlight: warm the darker (vegetated) ground a little
+    float veg = 1.0 - smoothstep(0.08, 0.3, dot(c, vec3(0.3, 0.59, 0.11)));
+    c *= vec3(1.0 + 0.05 * veg, 1.0 + 0.02 * veg, 1.0 - 0.2 * veg);
+    // cliffs: seen from above the satellite hardly sees a wall, and smears the meadow above / forest below down it
+    float cliff = smoothstep(0.42, 0.7, 1.0 - n.y) * (1.0 - smoothstep(0.35, 0.6, dot(c, vec3(0.3, 0.59, 0.11))));
+    c = mix(c, vec3(0.15, 0.14, 0.125) * (0.8 + 0.4 * fract(sin(dot(floor(n.xz * 9.0), vec2(12.9, 78.2))) * 43758.5)), cliff * 0.75);
+    c *= vec3(1.0 + 0.06 * sh, 1.0 + 0.03 * sh, 1.0 - 0.3 * sh);
+    return min(c * k * satGain, vec3(0.92));
+  }`;
 
 // ---------- water ----------
 export function waterMaterial(o) {

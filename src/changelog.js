@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.44.0', items: [
+    'NEW PLACE: the Jungfrau Region in Switzerland, made from real satellite photos and real maps! Take off from the old Interlaken airfield, fly over Lake Thun and Lake Brienz, up the Lauterbrunnen valley past its giant cliffs, and around the real Eiger, Mönch and Jungfrau mountains.',
+    'Every house, road, railway and forest there is in its real place.',
+  ] },
   { v: '1.43.0', items: [
     'New Ultra graphics for laptops (Settings › Graphics › Ultra): shadows from buildings and trees far into the distance, soft shading where things touch, sun rays through the clouds and smoother edges.',
   ] },

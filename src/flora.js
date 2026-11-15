@@ -501,7 +501,7 @@ export class Flora {
     const rockMat = (cut) => mats['r' + cut] || (mats['r' + cut] = vegPatch(new THREE.MeshStandardMaterial({ map: rockD, normalMap: rockN, vertexColors: true, roughness: 0.95 }), { cut: cut ? this.loCut : null, band: this.band, key: 'r', leaf: false }));
     this.mats = mats;
     // species variants
-    this.groups = biome(loc, W.waterLevel); this.vars = [];
+    this.groups = biome(loc.flora ? { ...loc, id: loc.flora.biome, snowline: loc.flora.snowline } : loc, W.waterLevel); this.vars = []; // real places borrow a biome (realworld.js)
     for (const gr of this.groups) {
       gr.vars = [];
       for (let v = 0; v < gr.variants; v++) {
@@ -698,7 +698,7 @@ export class Flora {
       const gx = fx * GN, gz = fz * GN, ix = Math.min(GN - 1, gx | 0), iz = Math.min(GN - 1, gz | 0), tx = gx - ix, tz = gz - iz, k00 = iz * M + ix;
       const bil = (A) => (A[k00] * (1 - tx) + A[k00 + 1] * tx) * (1 - tz) + (A[k00 + M] * (1 - tx) + A[k00 + M + 1] * tx) * tz;
       const hg = bil(grid.h); if (hg < wl + 0.5) continue;
-      e.h = hg; e.wl = hg - wl;
+      e.h = W.loc.flora ? W.loc.flora.h(hg) : hg; e.wl = hg - wl + (W.loc.flora?.wl || 0); // real places: altitudes mapped onto the borrowed biome's
       const dhx = ((grid.h[k00 + 1] - grid.h[k00]) * (1 - tz) + (grid.h[k00 + M + 1] - grid.h[k00 + M]) * tz) / grid.st, dhz = ((grid.h[k00 + M] - grid.h[k00]) * (1 - tx) + (grid.h[k00 + M + 1] - grid.h[k00 + 1]) * tx) / grid.st;
       e.s = 1 - 1 / Math.sqrt(1 + dhx * dhx + dhz * dhz);
       e.F = bil(grid.F); e.C = bil(grid.C); e.E = e.F * (1 - e.F) * 4 * (0.5 + 0.5 * (1 - e.C)); e.open = 1 - e.F;

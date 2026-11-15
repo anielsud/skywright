@@ -66,7 +66,7 @@ export class HUD {
     const agl = ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), world.waterLevel);
     this.$('h-alt').textContent = Math.round((ac.x.y) * U.alt) + (agl < 300 ? `  (${Math.round(Math.max(0, agl - 2) * U.alt)} AGL)` : '');
     this.$('h-vs').textContent = Math.round(ac.v.y * U.vs);
-    const f = ac.forward; let hdg = Math.round(THREE.MathUtils.radToDeg(Math.atan2(f.x, -f.z)) + 360) % 360;
+    const f = ac.forward; let hdg = Math.round(THREE.MathUtils.radToDeg(Math.atan2(f.x, -f.z)) + (world.loc.north || 0) + 720) % 360; // real places: the world is turned to line up with the real runway
     this.$('h-hdg').textContent = String(hdg).padStart(3, '0');
     // Mach number and skin temperature (shown once they get interesting)
     const M = ac.mach || 0, skin = ac.skinC ?? 15;

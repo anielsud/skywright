@@ -14,6 +14,8 @@ import { TerrainTiles } from './tiles.js';
 import { erode } from './erosion.js';
 import { terrainDetailUniforms } from './terrainTex.js';
 import { CascadedShadows } from './cascades.js';
+import { REAL_LOCATIONS, realData } from './realworld.js';
+import { RealScenery } from './realBuildings.js';
 
 export const RWY = { len: 1800, width: 45 };
 // Two parallel runways (the airport is centred on the east one, which has the PAPI and the landing mission).
@@ -76,6 +78,9 @@ export const LOCATIONS = {
   },
 };
 
+// real places from baked geodata (src/realworld.js): loaded before the World is built
+Object.assign(LOCATIONS, REAL_LOCATIONS);
+
 export const WEATHER = {
   clear: { name: 'Clear', clouds: 0.25, cover: 0, fog: 0.000045, wind: 3, turb: 0.15, rain: 0, snow: 0, storm: 0, dark: 0, haze: 1, cirrus: 0.3 },
   cloudy: { name: 'Cumulus', clouds: 0.85, cover: 0, fog: 0.00006, wind: 6, turb: 0.4, rain: 0, snow: 0, storm: 0, dark: 0.1, haze: 1.6, cirrus: 0.4 },
@@ -110,6 +115,10 @@ export class World {
     this.time = opts.time ?? 10; this.weatherId = opts.weather || 'clear';
     this.waterLevel = this.loc.water;
     this.detailU = terrainDetailUniforms(this.loc.id, this.waterLevel, this.loc.snowline);
+    // real location: satellite imagery is the ground colour, OSM drives roads, buildings and forests
+    this.real = this.loc.real ? realData(this.loc) : null;
+    if (this.loc.real && !this.real) throw new Error('location data not loaded');
+    if (this.real) Object.assign(this.detailU, this.real.uniforms());
     this.size = 22000;
     this.group = new THREE.Group(); scene.add(this.group);
     this.t = 0; this.night = false;
@@ -121,7 +130,8 @@ export class World {
     this.buildRunway();
     this.buildAirport();
     this.flora = new Flora(this);
-    this.towns = new Towns(this);
+    if (this.real) this.net.towns = this.real.towns(this);
+    this.towns = this.real ? new RealScenery(this) : new Towns(this);
     this.buildClouds();
     this.buildPrecip();
     this.setWeather(this.weatherId);
@@ -145,7 +155,7 @@ export class World {
     for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) H[j * (N + 1) + i] = this.rawHeight(-half + i * step, -half + j * step);
     this.H = H;
     // road / rail network, towns and fields; flattened into the heightfield
-    this.net = planNetwork(this);
+    this.net = this.real ? this.real.network(this) : planNetwork(this);
     flattenGrid(this, this.net);
     this.road = { samples: this.net.roads[0].pts, width: 9 };
     this.roadHash = new Map();
@@ -288,6 +298,7 @@ export class World {
   }
   // Ground colour rules shared by the baked core terrain and the streamed outer tiles.
   baseColor(x, z, h, slope, c) {
+    if (this.real) return this.real.color(x, z, c);
     if (!this.pal) {
       const L = this.loc.colors;
       this.pal = { grass: L.grass.map((v) => new THREE.Color(v)), rock: new THREE.Color(L.rock), snow: new THREE.Color(L.snow), sand: new THREE.Color(L.sand), dirt: new THREE.Color(L.dirt),
@@ -395,6 +406,7 @@ export class World {
   }
 
   buildMinimap() {
+    if (this.real) { this.minimap = this.real.minimap(this, RUNWAYS, RWY.len); return; }
     const s = 256, c = document.createElement('canvas'); c.width = c.height = s;
     const g = c.getContext('2d'), img = g.createImageData(s, s);
     const col = new THREE.Color();
@@ -434,7 +446,7 @@ export class World {
     }
     g.putImageData(img, 0, 0);
     const nt = new THREE.CanvasTexture(c); nt.wrapS = nt.wrapT = THREE.RepeatWrapping;
-    const pal = this.loc.id === 'islands' ? { deep: 0x05324a, shallow: 0x19b5b0, sand: 0xe9dcb0 } : this.loc.desert ? { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 } : { deep: 0x0b2a35, shallow: 0x2f6f6a, sand: 0x6b6a55 };
+    const pal = this.loc.waterColors || (this.loc.id === 'islands' ? { deep: 0x05324a, shallow: 0x19b5b0, sand: 0xe9dcb0 } : this.loc.desert ? { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 } : { deep: 0x0b2a35, shallow: 0x2f6f6a, sand: 0x6b6a55 });
     // depth texels centred on the baked-grid vertices they come from
     const mat = waterMaterial({ depthTex: this.depthTex, normal: nt, half: this.half + this.hStep / 2, size: this.size + this.hStep, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6 });
     const w = new THREE.Mesh(new THREE.PlaneGeometry(300000, 300000), mat); // under the whole far terrain (tiles.js / farfield.js)
@@ -485,6 +497,7 @@ export class World {
     const el = THREE.MathUtils.degToRad(dayFrac >= 0 && dayFrac <= 1 ? elev : -Math.abs(Math.sin(dayFrac * Math.PI)) * 30);
     const az = THREE.MathUtils.degToRad(90 + dayFrac * 180 - 25);
     this.sunDir = new THREE.Vector3(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az)).normalize();
+    if (this.loc.north) this.sunDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(this.loc.north)); // the world is turned: keep the sun in the true south
     this.sunElev = el;
     this.applyLighting();
   }
@@ -634,7 +647,10 @@ export class World {
   }
 
   buildRunway() {
-    for (const r of RUNWAYS) this.buildRunwayStrip(r);
+    // a turned world (real places) names its runways by their real heading: 050 -> 05R / 23L ...
+    const n = Math.round((this.loc.north || 0) / 10), nm = (k) => String(((k + 35) % 36) + 1).padStart(2, '0');
+    const rwys = n ? RUNWAYS.map((r) => ({ ...r, name: nm(n) + r.name.slice(2), back: nm(n + 18) + r.back.slice(2) })) : RUNWAYS;
+    for (const r of rwys) this.buildRunwayStrip(r);
     // shoulders, taxiway, apron
     const asph = new THREE.MeshStandardMaterial({ color: 0x55565a, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4, map: this.detailTexture() });
     asph.map.repeat.set(20, 20);
@@ -644,7 +660,7 @@ export class World {
     paved(this.taxiTexture('taxi'), 36, RWY.len, 80, 0);
     const conn = this.taxiTexture('conn'); for (const z of [RWY.len / 2 - 20, -RWY.len / 2 + 20, 0]) { paved(conn, 22, 60, 50, z, true); add(160, 22, -100, z); }
     paved(this.apronTexture(), 232, 400, 214, 0);
-    this.runways = RUNWAYS.map((r) => ({ x: r.x, z: 0, h: this.loc.rwyH, len: RWY.len, width: RWY.width, name: r.name, threshold: new THREE.Vector3(r.x, this.loc.rwyH, RWY.len / 2 - 60), heading: 0 }));
+    this.runways = rwys.map((r) => ({ x: r.x, z: 0, h: this.loc.rwyH, len: RWY.len, width: RWY.width, name: r.name, threshold: new THREE.Vector3(r.x, this.loc.rwyH, RWY.len / 2 - 60), heading: 0 }));
     this.runway = this.runways[0];
     // runway & approach lights (points shown at night)
     const lp = [], lc = [];
