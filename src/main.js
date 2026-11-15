@@ -729,7 +729,9 @@ function handleEvents(f, dt) {
 // Engine start and shutdown. On a ground start the engines are off: the first throttle-up plays the start sequence and the
 // throttle waits until the engine catches. Parked with the throttle closed for a few seconds, they shut down. Air starts never
 // play a start (the engines are running already), and with ac.engineRunning set, a prop idles at zero throttle instead of stopping.
-const engineKinds = (ac) => [...new Set(ac.parts.filter((p) => p.alive && p.engine?.sound).map((p) => p.engine.sound))];
+// which engine voice a part uses: main rotors get the helicopter rotor voice (tail rotors are part of it)
+const engSound = (e) => (e.type === 'rotor' ? 'rotor' : e.sound);
+const engineKinds = (ac) => [...new Set(ac.parts.filter((p) => p.alive && p.engine && engSound(p.engine)).map((p) => engSound(p.engine)))];
 function engineSwitch(f, ac, thr, dt) {
   const E = f.eng; if (!E || ac.dead || !ac.hasEngine) return thr;
   if (E.hold > 0) { E.hold -= dt; if (E.hold <= 0) E.on = true; else thr = 0; }
@@ -825,8 +827,9 @@ function stepFlight(dtReal) {
   // audio
   const engines = {};
   if (!ac.dead) for (const p of ac.parts) {
-    if (!p.alive || !p.engine || !p.engine.sound) continue; const e = p.engine;
-    const k = e.sound; if (!engines[k]) engines[k] = { sound: k, rpm: 0, spoolT: 0, count: 0, blades: { e_turboprop: 4, e_radial: 3, e_electric: 6 }[p.p.id] || 2, ab: false, burning: false, pos: new THREE.Vector3(), fwd: ac.forward };
+    if (!p.alive || !p.engine || !engSound(p.engine)) continue; const e = p.engine;
+    const k = engSound(e); if (!engines[k]) engines[k] = { sound: k, rpm: 0, spoolT: 0, count: 0, blades: { e_turboprop: 4, e_radial: 3, e_electric: 6, r_main4: 4 }[p.p.id] || 2, ab: false, burning: false, pos: new THREE.Vector3(), fwd: ac.forward };
+    if (k === 'rotor') { engines[k].load = ac.collective ?? 0.5; engines[k].tail = ac.parts.some((q) => q.alive && q.engine?.type === 'tailrotor'); }
     const a = engines[k]; a.count++; a.rpm = Math.max(a.rpm, e.rpm || 0); a.spoolT = Math.max(a.spoolT, e.spoolT || 0); a.ab = a.ab || e.abOn; a.burning = a.burning || e.burning;
     a.pos.add(ac.worldPoint(e.pos));
   }

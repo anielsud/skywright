@@ -528,5 +528,23 @@
   "start": 0.0,
   "end": 0.4,
   "loop": false
+ },
+ "eng_rotor_idle": {
+  "id": 438604,
+  "start": 10.0,
+  "end": 18.0,
+  "loop": true
+ },
+ "eng_rotor_high": {
+  "id": 854493,
+  "start": 0.0,
+  "end": 2.0,
+  "loop": true
+ },
+ "eng_rotor_cabin": {
+  "id": 438593,
+  "start": 20.0,
+  "end": 28.0,
+  "loop": true
  }
 }

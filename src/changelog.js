@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.32.0', items: [
+    'Helicopters sound like real helicopters now: the blades go WHOP-WHOP-WHOP faster as the rotor spins up, with a turbine whine underneath and the buzz of the tail rotor. Pull up hard and the blades slap louder, and it is loudest when one flies past you sideways.',
+  ] },
   { v: '1.31.0', items: [
     'The music now gets quieter while the cockpit voice is talking and right after a big crash, so you never miss what it says. Then it fades back in.',
     'New stall warning: a wailing reed horn like a real Cessna’s, which keeps sounding for as long as you’re stalled.',

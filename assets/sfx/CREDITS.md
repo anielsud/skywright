@@ -26,6 +26,8 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "explosion01.wav" by V-ktor (CC0): https://freesound.org/people/V-ktor/sounds/434426/
 - "Commercial aircraft In-flight sounds" by Filmscore (CC0): https://freesound.org/people/Filmscore/sounds/436942/
 - "G04-07-WWII Stuka engine drone.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/437771/
+- "G36-10-Helicopter Constant Interior..wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/438593/
+- "G36-21-Helicopter-Slow Idle.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/438604/
 - "Thunder sound effect 2" by humanoide9000 (CC BY 4.0): https://freesound.org/people/humanoide9000/sounds/441836/
 - "Auto Shop Soundscape.mp3" by I5AAC (CC0): https://freesound.org/people/I5AAC/sounds/449591/
 - "Brean Sands Beach" by richwise (CC0): https://freesound.org/people/richwise/sounds/475350/
@@ -66,5 +68,6 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Illegal Explosion" by qubodup (CC0): https://freesound.org/people/qubodup/sounds/840508/
 - "Canadian Pacific local freight train arriving" by chungus43A (CC0): https://freesound.org/people/chungus43A/sounds/843361/
 - "Glass Smash" by dwswords (CC0): https://freesound.org/people/dwswords/sounds/848312/
+- "UH‑60 Black Hawk Helicopter Hover Loop 1" by qubodup (CC0): https://freesound.org/people/qubodup/sounds/854493/
 
 Voice callouts: synthesized with [Piper](https://github.com/rhasspy/piper) using the "joe" voice (trained on CC0 data, OHF-Voice/voice-datasets).
