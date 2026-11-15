@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.52.0', items: [
+    'Fixed: lake and sea shores no longer flicker or clip. The water now meets the land exactly along the shoreline, like at the lakes near the Jungfrau airfield.',
+  ] },
   { v: '1.51.0', items: [
     'Real roads: they wind up the mountains gently with switchbacks instead of going straight up, and cross valleys and lakes on tall bridges.',
     'Roads are solid now, so you can drive cars on them, over the bridges and up the mountain roads!',
