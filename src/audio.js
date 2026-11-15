@@ -17,8 +17,9 @@ export const SAMPLE_ENGINES = {
   jet: { idle: ['eng_jet_idle', 0.85, 1.15], high: ['eng_jet_high', 0.8, 1.08], ab: 'eng_jet_ab', gain: 1 },
   fan: { idle: ['eng_fan_idle', 0.85, 1.2], high: ['eng_jet_high', 0.68, 0.88], cabin: ['eng_fan_cabin', 0.9, 1.1], gain: 1 },
   rocket: { high: ['eng_rocket', 0.95, 1.05], gain: 1 },
+  rotor: { idle: ['eng_rotor_idle', 0.75, 1.15], high: ['eng_rotor_high', 0.45, 0.8], cabin: ['eng_rotor_cabin', 0.7, 1.05], gain: 1 }, // helicopter: see rotorTick
 };
-export const SAMPLE_LEVEL = { piston: 3.6, radial: 2.7, turboprop: 3.1, jet: 2.1, fan: 2.2, rocket: 3.0 }; // full power ≈ -24 dB props, -28 jets (weighted, tools/sfx measurements)
+export const SAMPLE_LEVEL = { piston: 3.6, radial: 2.7, turboprop: 3.1, jet: 2.1, fan: 2.2, rocket: 3.0, rotor: 4.5 }; // full power ≈ -24 dB props, -28 jets (weighted, tools/sfx measurements)
 // Recorded world/foley levels (linear), balanced with tools/sfx-style weighted measurements.
 const MUSIC = { hangar: 0.6, cruise: 0.7, mission: 1.3 }; // weighted avg at music 100%: hangar ≈-35, cruise ≈-38 (under the engine), mission ≈-33 dB
 const SHOT = { lever: 0.24, voice: 1.8, crash: 0.4, debris: 0.2, glass: 0.35, explosion: 0.4, boom: 0.4, chirp: 0.38, splash: 0.32, gear: 0.32, thunder: 0.3, strike: 0.6 }; // peaks: crash ≈-22, explosion ≈-18, chirp ≈-28 dB weighted
@@ -32,7 +33,7 @@ const STALL_HORN = 0.18; // ≈-28 dB weighted while stalled: over the engine at
 // mission stings (rings, countdown, results)
 const MS = { chime: 0.36, beep: 0.53, fanfare: 0.49, fail: 0.47, record: 0.75 }; // peaks (weighted, 100%): chime ≈-27, countdown ≈-29 (GO ≈-26), fanfare ≈-24.5, fail ≈-26.5, record ≈-25
 const RING_STEPS = [-5, -3, -1, 0, 2, 4, 5, 7, 9, 11, 12, 14]; // semitones: the checkpoint chime climbs a major scale, G up to the D above the octave
-export const RPM_RANGE = { piston: [700, 2700], radial: [600, 2600], turboprop: [1000, 2000] };
+export const RPM_RANGE = { piston: [700, 2700], radial: [600, 2600], turboprop: [1000, 2000], rotor: [1000, 2000] };
 // Start / shutdown sequences (see engineStart). Times in seconds from the start: catch = the engine fires, blend = the running
 // voice fades in over [from, to]. Clips are recorded (tools/sfx: Cessna start/stop, J79 start cart); radials share the
 // Cessna start played slower plus a few extra coughs. stopFade = how long the running voice takes to wind out under the stop clip.
@@ -41,8 +42,10 @@ const ENG_SEQ = {
   radial: { prop: true, clip: 'eng_start_piston', rate: 0.82, gain: 0.9, catch: 2.1, blend: [2.3, 4.3], coughs: [1.2, 1.55, 1.9], stop: 'eng_stop_piston', stopGain: 0.4, stopFade: 0.8, stopDur: 7 },
   turboprop: { clip: 'eng_spool', rate: 1.1, gain: 0.6, catch: 2.6, blend: [2.4, 4.2], stop: 'eng_stop_jet', stopGain: 0.5, stopFade: 2.5, stopDur: 8 },
   jet: { clip: 'eng_start_jet', rate: 1, gain: 0.4, catch: 3.0, blend: [3.2, 5.2], stop: 'eng_stop_jet', stopGain: 0.45, stopFade: 3, stopDur: 9 },
+  rotor: { clip: 'eng_spool', rate: 1, gain: 0.6, catch: 2.8, blend: [2.6, 4.2], stop: 'eng_stop_jet', stopGain: 0.5, stopFade: 2.5, stopDur: 8 },
   fan: { clip: 'eng_start_jet', rate: 0.9, gain: 0.4, catch: 3.3, blend: [3.6, 5.8], stop: 'eng_stop_jet', stopGain: 0.45, stopFade: 3.5, stopDur: 10 },
 };
+const ROTOR = { whop: 0.6, whine: 0.012, tail: 0.05 }; // helicopter extras (rotorTick)
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }; // -12 dB overall: a game shouldn't hit the speaker at full scale
 
 export class Audio {
@@ -280,6 +283,7 @@ export class Audio {
       }
       const thr = e.spoolT;
       const multi = Math.sqrt(e.count);
+      if (e.sound === 'rotor') this.rotorTick(v, e, s, multi);
       if (v.sampled) { this.updateSampled(v, e, s, 1, multi); continue; } // doppler comes from the delay line
       if (e.sound === 'piston' || e.sound === 'radial') {
         const rad = e.sound === 'radial', rps = Math.max(1, e.rpm) / 60;
@@ -313,7 +317,7 @@ export class Audio {
         this.set(v.out.gain, on * 0.75 * multi, 0.05);
       }
     }
-    for (const k of ['piston', 'radial', 'turboprop', 'electric', 'jet', 'fan', 'rocket']) if (!seen.has(k) && this.voices[k]) this.set(this.voices[k].out.gain, 0, 0.15);
+    for (const k of ['piston', 'radial', 'turboprop', 'electric', 'jet', 'fan', 'rocket', 'rotor']) if (!seen.has(k) && this.voices[k]) this.set(this.voices[k].out.gain, 0, 0.15);
     // airflow
     const sp = s.airspeed, ck = s.cockpit ? 0.65 : 1;
     const wAmt = Math.min(0.4, (sp / 90) ** 2 * 0.3); // wind sits under the engine, even at jet speeds
@@ -358,7 +362,7 @@ export class Audio {
       this.set(l.src.playbackRate, (l.rate[0] + (l.rate[1] - l.rate[0]) * n) * dop * (v.rateMul ?? 1), 0.05);
     }
     // overall level grows with power; balanced by measurement against the synth targets (≈-24 dB props, -26 jets at full)
-    const lvl = (SAMPLE_LEVEL[kind] || 1) * (0.32 + 0.68 * n) * multi;
+    const lvl = (SAMPLE_LEVEL[kind] || 1) * (0.32 + 0.68 * n) * multi * (v.lvlMul ?? 1);
     this.set(v.out.gain, running ? lvl : 0, kind === 'rocket' ? 0.05 : 0.1);
     if (kind === 'piston' || kind === 'radial') { // throttle chop at speed -> exhaust pops
       if ((v.lastThr ?? 0) - e.spoolT > 0.25 && e.rpm > 1500) for (let k = 0; k < 4; k++) this.burst('crackle', 'bandpass', 600, 1, 0.5, 0.15, this.engBus, k * 0.12 + Math.random() * 0.1);
@@ -478,6 +482,50 @@ export class Audio {
       this.shot(`bump_${k}`, { gain: GROUND.bump * p * (s.gear === 'wheel' ? 1 : 0.6), rate: (s.gear === 'wheel' ? 0.9 : 0.75) + Math.random() * 0.3, dest: this.rollBus });
     }
     return ok;
+  }
+
+  // ---------- helicopter rotor ----------
+  // The recorded idle / hover / cabin loops (SAMPLE_ENGINES.rotor) follow rotor speed; on top of them, synthesized:
+  // blade-slap "whop" pulses at the blade-pass rate (louder and slappier under collective and when heard from the side),
+  // the turbine whine underneath, and the tail rotor's buzz.
+  rotorTick(v, e, s, multi) {
+    if (!v.whop) this.rotorParts(v);
+    const sp = Math.min(1, Math.max(0, e.spoolT)), turning = smooth(0.03, 0.45, sp);
+    const load = Math.min(1, Math.max(0, ((e.load ?? 0.5) - 0.25) / 0.45)); // collective: ≈0.5 in a hover, 1 climbing hard, 0 descending
+    const rr = RPM_RANGE.rotor, n = Math.min(1, Math.max(0, (e.rpm - rr[0]) / (rr[1] - rr[0])));
+    // blade-pass rate: the hover recording is a 4-blade UH-60 (17.2 Hz at its own speed), so the synthesized whop follows the
+    // same playback rate to stay in step with it; four-blade rotors run it a bit faster
+    if ((e.blades || 2) > 2) v.rateMul *= 1.25;
+    const hr = SAMPLE_ENGINES.rotor.high, bp = Math.max(0.5, 17.2 * (hr[1] + (hr[2] - hr[1]) * n) * v.rateMul * sp);
+    // side-on (level with the disc, off to the side) is where blade slap carries most; never inside the cabin
+    let side = 0;
+    if (!s.cockpit && e.fwd && e.toListener) { const c = e.fwd.x * e.toListener.x + e.fwd.y * e.toListener.y + e.fwd.z * e.toListener.z; side = Math.sqrt(Math.max(0, 1 - c * c)) * (1 - Math.abs(e.toListener.y) * 0.5); }
+    // the recorded rotor: nearly silent while the blades are stopped, a little louder under load
+    v.lvlMul = (0.15 + 0.85 * turning * (0.75 + 0.5 * load)) * (s.cockpit ? 0.6 : 1); // the cabin recording is close-miked: trimmed to match
+    // the synthesized parts share v.out with the recorded layers (so silence() and the 3D chain cover them): undo its level
+    const k = v.sampled ? 1 / Math.max(0.05, SAMPLE_LEVEL.rotor * (0.32 + 0.68 * n) * v.lvlMul) : 1;
+    if (!v.sampled) this.set(v.out.gain, 1, 0.1);
+    this.set(v.whopOsc.frequency, bp, 0.05);
+    this.set(v.whop.gain, turning * (0.15 + 0.85 * load * load) * (0.45 + 0.55 * side) * (s.cockpit ? 0.35 : 1) * ROTOR.whop * k, 0.12);
+    this.set(v.whopBand.frequency, 300 + 500 * load, 0.2);
+    this.set(v.whine.frequency, 4200 + 1800 * sp, 0.2); this.set(v.whine2.frequency, (4200 + 1800 * sp) * 1.51, 0.2);
+    this.set(v.whineG.gain, ROTOR.whine * (0.35 + 0.65 * sp) * k, 0.2);
+    this.set(v.tailOsc.frequency, Math.max(15, (e.rpm / 60) * sp * 2), 0.05);
+    this.set(v.tailG.gain, e.tail ? ROTOR.tail * turning * (0.5 + 0.5 * load) * k : 0, 0.15);
+  }
+  rotorParts(v) {
+    // a narrow pulse train (cosine series with coherent phases, so it is a pulse, not a buzz) shapes noise into "whop"s
+    const N = 32, re = new Float32Array(N), im = new Float32Array(N);
+    for (let n = 1; n < N; n++) re[n] = Math.exp(-(n * n) / 16);
+    let mx = -1e9, mn = 1e9; for (let i = 0; i < 256; i++) { let x = 0; for (let n = 1; n < N; n++) x += re[n] * Math.cos((2 * Math.PI * n * i) / 256); mx = Math.max(mx, x); mn = Math.min(mn, x); }
+    v.whopOsc = this.osc(null, 10, this.ctx.createPeriodicWave(re, im));
+    const am = this.gain(-mn / mx); v.whopOsc.connect(am.gain); // offset so the gaps between pulses are silent
+    const n1 = this.noise(); v.whopBand = this.filt('bandpass', 450, 0.9); n1.connect(v.whopBand); v.whopBand.connect(am);
+    const n2 = this.noise('brown'), lp = this.filt('lowpass', 170, 0.8), g2 = this.gain(1.6); n2.connect(lp); lp.connect(g2); g2.connect(am);
+    v.whop = this.gain(0); am.connect(v.whop); v.whop.connect(v.out);
+    v.whine = this.osc('sine', 4200); v.whine2 = this.osc('sine', 6300); v.whineG = this.gain(0); const w2 = this.gain(0.4);
+    v.whine.connect(v.whineG); v.whine2.connect(w2); w2.connect(v.whineG); v.whineG.connect(v.out);
+    v.tailOsc = this.osc('sawtooth', 60); const tf = this.filt('bandpass', 520, 1.4); v.tailG = this.gain(0); v.tailOsc.connect(tf); tf.connect(v.tailG); v.tailG.connect(v.out);
   }
 
   // ---------- ambient world sounds ----------
