@@ -45,6 +45,7 @@ const ENG_SEQ = {
   rotor: { clip: 'eng_spool', rate: 1, gain: 0.6, catch: 2.8, blend: [2.6, 4.2], stop: 'eng_stop_jet', stopGain: 0.5, stopFade: 2.5, stopDur: 8 },
   fan: { clip: 'eng_start_jet', rate: 0.9, gain: 0.4, catch: 3.3, blend: [3.6, 5.8], stop: 'eng_stop_jet', stopGain: 0.45, stopFade: 3.5, stopDur: 10 },
 };
+const DMG = { pop: 0.35, fire: 1, creak: 0.6, rattle: 0.28, flutter: 0.34 }; // damage audio (engineDamage, airframe)
 const BOOM = { crack: 0.2, rumble: 0.22, cockpit: 1 }; // sonic boom (sonicBoom) peaks (weighted, 100%): ≈-23 close outside, ≈-36 at 1.5 km, cockpit thump ≈-30; limiter ≥ -2 dB
 const ROTOR = { whop: 0.6, whine: 0.012, tail: 0.05 }; // helicopter extras (rotorTick)
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }; // -12 dB overall: a game shouldn't hit the speaker at full scale
@@ -271,7 +272,7 @@ export class Audio {
     this.set(this.cockpitLP.frequency, s.cockpit ? (cabinRec ? 5000 : 1600) : 20000, 0.1);
     const seen = new Set();
     for (let e of s.engines) {
-      const v = this.voice(e.sound); seen.add(e.sound); e = this.seqTick(v, e); // start/shutdown sequence
+      const v = this.voice(e.sound); seen.add(e.sound); this.engineDamage(v, e); e = this.seqTick(v, e); // misfires; start/shutdown sequence
       if (s.cockpit && v.pan) v.pan.refDistance = 40; else if (v.pan) v.pan.refDistance = 12 + e.count * 3;
       this.placeVoice(v, e.pos);
       if (v.dl && e.pos && s.listener) {
@@ -339,6 +340,7 @@ export class Audio {
     const recRain = this.bedGain('rain', this.amb, s.rain * REC.rain * (s.cockpit ? 1.4 : 1), 0.4);
     const rn = this.voice('rain'); this.set(rn.out.gain, recRain ? 0 : s.rain * 0.13 * (s.cockpit ? 1.6 : 1), 0.3);
     this.ambience(s.amb, s.listener?.pos);
+    this.airframe(s);
     if ('music' in s) this.setTrack(s.music, s.music ? MUSIC[s.music] : 0, s.music ? 4 : 2.5);
   }
 
@@ -417,10 +419,11 @@ export class Audio {
   }
   // per frame, per engine: keep the voice gated and bend its pitch through the sequence; returns the engine state to voice
   seqTick(v, e) {
-    v.rateMul = 1;
+    v.rateMul = v.dmgR ?? 1;
     const kind = e.sound, q = this.engSeq?.[kind], mode = q?.mode ?? this.engDef ?? 'on', d = ENG_SEQ[kind];
-    if (!v.seq || !d) return e;
-    if (mode === 'on' || mode === 'off') { this.set(v.seq.gain, mode === 'on' ? 1 : 0, 0.05); return e; }
+    if (!v.seq) return e;
+    if (!d) { this.set(v.seq.gain, mode === 'off' ? 0 : v.dmgG ?? 1, 0.03); return e; } // rockets/electric: no sequence (also opens a voice created while 'off')
+    if (mode === 'on' || mode === 'off') { this.set(v.seq.gain, mode === 'on' ? v.dmgG ?? 1 : 0, 0.03); return e; }
     const t = this.ctx.currentTime - q.t0, rr = RPM_RANGE[kind];
     if (mode === 'start') {
       if (t > d.blend[1] + 0.2) { q.mode = 'on'; return e; }
@@ -483,6 +486,52 @@ export class Audio {
       this.shot(`bump_${k}`, { gain: GROUND.bump * p * (s.gear === 'wheel' ? 1 : 0.6), rate: (s.gear === 'wheel' ? 0.9 : 0.75) + Math.random() * 0.3, dest: this.rollBus });
     }
     return ok;
+  }
+
+  // ---------- damage: misfires, engine fire, airframe creaks, rattles ----------
+  // engines past 30 % damage stumble: short dips in the voice's gain and pitch with backfire pops (or a turbine's
+  // compressor-stall bang), more often and deeper as the damage grows. Sets v.dmgG / v.dmgR for seqTick to apply.
+  engineDamage(v, e) {
+    v.dmgG = 1; v.dmgR = 1;
+    const f = Math.min(1, Math.max(0, ((e.dmg || 0) - 0.3) / 0.6)); // 0 at 30 % damage, 1 at 90 %
+    if (f <= 0 || !v.air || e.sound === 'rocket' || !(e.spoolT > 0.03 || e.rpm > 50)) { v.mis = null; return; }
+    const now = this.ctx.currentTime, dt = Math.min(0.1, now - (v.dmgT ?? now)); v.dmgT = now;
+    if (v.mis && now < v.mis.end) { v.dmgG = v.mis.g; v.dmgR = v.mis.r; return; }
+    if (Math.random() >= (0.5 + 3.5 * f) * dt) return;
+    const prop = !['jet', 'fan', 'rotor'].includes(e.sound);
+    v.mis = { end: now + 0.06 + Math.random() * (0.1 + 0.25 * f), g: 1 - (0.3 + 0.5 * f) * (0.5 + 0.5 * Math.random()), r: 1 - (prop ? 0.03 + 0.07 * f : 0.04 * f) * Math.random() };
+    v.dmgG = v.mis.g; v.dmgR = v.mis.r;
+    if (Math.random() < 0.35 + 0.5 * f) {
+      if (prop) for (let k = 0, n = 1 + Math.floor(Math.random() * 3); k < n; k++) this.burst('white', 'bandpass', 500 + Math.random() * 600, 0.8, DMG.pop, 0.05, v.air, 0.03 + k * (0.05 + Math.random() * 0.07));
+      else this.burst('brown', 'lowpass', 400, 0.7, DMG.pop * 2.5, 0.25, v.air, 0.02);
+    }
+  }
+  // s.fire {amt, pos}: a burning engine; s.g: load factor; s.rattle: worst damage fraction of a part still attached; s.acPos
+  airframe(s) {
+    const now = this.ctx.currentTime, ck = !!s.cockpit, fire = s.fire?.amt || 0;
+    // fire: a recorded crackling loop, placed at the burning engine
+    if (!this.firePan) { this.firePan = this.panner(); this.firePan.refDistance = 15; this.firePan.connect(this.fx); }
+    if (s.fire?.pos) this.placeVoice({ pan: this.firePan }, s.fire.pos);
+    if (!this.bedGain('fire_loop', this.firePan, fire * DMG.fire * (ck ? 0.7 : 1), 0.4) && fire > 0 && Math.random() < 0.25) this.burst('crackle', 'highpass', 700, 0.7, 0.4 * fire, 0.4, this.firePan);
+    // high G: the airframe creaks and groans (recorded metal stress), with a cooldown so it never chatters
+    const g = Math.abs(s.g || 0);
+    if (g > 4 && now > (this.creakT ?? 0) && Math.random() < 0.05 + 0.05 * (g - 4)) {
+      const big = g > 6.5 && Math.random() < 0.5, k = Math.min(1, (g - 4) / 4);
+      const d = ck ? this.fx : this.dest(s.acPos); // inside you hear your own airframe; outside it comes from the plane
+      if (!this.shot(big ? 'groan' : `creak_${1 + Math.floor(Math.random() * 3)}`, { gain: DMG.creak * (0.5 + 0.5 * k) * (ck ? 1 : 0.6), rate: 0.85 + Math.random() * 0.3, dest: d }))
+        this.tone('sawtooth', 160 + Math.random() * 80, 120, 0.02, 0.8, 0, d);
+      this.creakT = now + 1.5 + Math.random() * 2.5;
+    }
+    // damaged but still attached: rattles, and a flutter that speeds up with airspeed
+    const r = Math.min(1, Math.max(0, ((s.rattle || 0) - 0.25) / 0.5)) * smooth(20, 90, s.airspeed || 0);
+    this.bedGain('rattle_loop', this.fx, r * DMG.rattle * (ck ? 1 : 0.6), 0.2, 0.8 + Math.min(s.airspeed || 0, 200) / 300);
+    let fl = this.voices.flutter;
+    if (!fl && r > 0) {
+      fl = this.voices.flutter = { kind: 'flutter', out: this.gain(0) }; fl.out.connect(this.fx);
+      const n = this.noise('brown'), bp = this.filt('bandpass', 220, 1.2), am = this.gain(0.5); fl.lfo = this.osc('square', 14); const lg = this.gain(0.5);
+      n.connect(bp); bp.connect(am); fl.lfo.connect(lg); lg.connect(am.gain); am.connect(fl.out);
+    }
+    if (fl) { this.set(fl.out.gain, r * DMG.flutter * (ck ? 1 : 0.6), 0.2); this.set(fl.lfo.frequency, 8 + Math.min(s.airspeed || 0, 200) / 8, 0.2); }
   }
 
   // ---------- sonic boom ----------
