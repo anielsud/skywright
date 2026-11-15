@@ -54,6 +54,25 @@ export function planNetwork(w) {
       roads.push({ pts: resample([o.clone().addScaledVector(side, -cl), o.clone().addScaledVector(side, cl)], 8), kind: 'street', width: 6.5 });
     }
   }
+  // 3b) old-town lanes: a few narrow winding streets out from the centre between the grid streets (own RNG, so the
+  // rest of the plan is unchanged)
+  {
+    const rl = mulberry32(w.loc.seed * 17 + 5);
+    for (const t of towns) {
+      const nL = t.size > 0.9 ? 3 : 2, base = Math.atan2(t.dir.z, t.dir.x);
+      for (let k = 0; k < nL; k++) {
+        let a = base + Math.PI / 4 + (k / nL) * Math.PI * 2 + (rl() - 0.5) * 0.5, p = t.c.clone().addScaledVector(new THREE.Vector3(Math.cos(a), 0, Math.sin(a)), 30);
+        const pts = [p.clone()], L = (150 + rl() * 110) * t.size;
+        for (let d = 0; d < L; d += 8) {
+          a += (rl() - 0.5) * 0.22 + Math.sin(d / 37 + k) * 0.05;
+          p = p.clone().add(new THREE.Vector3(Math.cos(a) * 8, 0, Math.sin(a) * 8));
+          if (H(p.x, p.z) < w.waterLevel + 2) break;
+          pts.push(p);
+        }
+        if (pts.length > 8) roads.push({ pts: resample(pts, 8), kind: 'street', width: 5.5, lane: true });
+      }
+    }
+  }
   // 4) highway / causeway: follow low ground away from the ring road (bridges over water)
   const highways = [];
   if (isl) {
@@ -282,7 +301,16 @@ export function buildRoadMeshes(w, net) {
   }
   // street lamps (glow at night)
   const lamps = [];
-  for (const rd of net.roads) { if (rd.kind === 'highway') continue; const every = rd.kind === 'street' ? 4 : 6; rd.pts.forEach((p, i) => { if (i % every) return; const a = rd.pts[Math.max(0, i - 1)], b = rd.pts[Math.min(rd.pts.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); const s = (i / every) % 2 ? 1 : -1; const x = p.x - d.z * (rd.width / 2 + 1.5) * s, z = p.z + d.x * (rd.width / 2 + 1.5) * s; lamps.push(x, (rd.bridge?.[i] ? p.y : w.sampleGrid(x, z)) + 7, z); }); }
+  // (town streets get their own lamp posts from towns.js, except on low quality)
+  const poles = [];
+  for (const rd of net.roads) { if (rd.kind === 'highway' || (rd.kind === 'street' && w.qName !== 'low')) continue; const every = rd.kind === 'street' ? 4 : 6; rd.pts.forEach((p, i) => { if (i % every) return; const a = rd.pts[Math.max(0, i - 1)], b = rd.pts[Math.min(rd.pts.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); const s = (i / every) % 2 ? 1 : -1; const x = p.x - d.z * (rd.width / 2 + 1.5) * s, z = p.z + d.x * (rd.width / 2 + 1.5) * s, gy = rd.bridge?.[i] ? p.y : w.sampleGrid(x, z); lamps.push(x + d.z * 1.2 * s, gy + 7, z - d.x * 1.2 * s); poles.push(x, gy, z, Math.atan2(d.z * s, -d.x * s)); }); }
+  // poles: tapered mast + outreach arm + luminaire, one instanced mesh
+  if (poles.length) {
+    const pg = mergeGeometries([new THREE.CylinderGeometry(0.07, 0.12, 7.4, 6).translate(0, 3.5, 0), new THREE.BoxGeometry(0.08, 0.08, 1.5).translate(0, 7.15, 0.65), new THREE.BoxGeometry(0.28, 0.12, 0.6).translate(0, 7.05, 1.25)].map((g) => g.toNonIndexed()));
+    const pm = new THREE.InstancedMesh(pg, new THREE.MeshStandardMaterial({ color: 0x8a8e94, metalness: 0.6, roughness: 0.45 }), poles.length / 4), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
+    for (let k = 0; k < poles.length / 4; k++) pm.setMatrixAt(k, m4.compose(new THREE.Vector3(poles[k * 4], poles[k * 4 + 1] - 0.2, poles[k * 4 + 2]), q.setFromAxisAngle(up, poles[k * 4 + 3]), one));
+    pm.count = poles.length / 4; pm.castShadow = w.qName === 'high' || w.qName === 'ultra'; group.add(pm);
+  }
   const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3));
   const lampMat = new THREE.PointsMaterial({ size: 3, color: new THREE.Color(3.2, 2.2, 1.1), map: glow(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0 });
   group.add(new THREE.Points(lg, lampMat)); group.userData.lampMat = lampMat;

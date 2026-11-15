@@ -734,7 +734,7 @@ export class World {
     A.box(373, -0.5, -186, 30, 1.0, 1.0, C.CONCRETE, 0xbbbbbb);
     // landside car park
     A.plainQuad([338, 0.04, 112], [366, 0.04, 112], [366, 0.04, 52], [338, 0.04, 52], C.CONCRETE, 0x5a5a5c);
-    const mat = buildingMaterial();
+    const mat = buildingMaterial({ cellPx: { low: 128, medium: 192, ultra: 384 }[this.qName] ?? 256, interiors: this.qName !== 'low' }); // same atlas as the towns
     this.windowMats = [mat];
     this.beacon = new THREE.Mesh(new THREE.SphereGeometry(0.6, 8, 6), M.light(0x40ff80).clone()); this.beacon.position.set(256, y + 30.9, 216.5); this.group.add(this.beacon);
     // name board on the terminal roof, lit at night

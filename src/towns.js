@@ -1,29 +1,40 @@
 // Towns, villages, farms, field fences, landmarks and animals.
-// Buildings come from the kit in buildings.js and are merged into one mesh per chunk
-// (a town, or a 2 km cell of countryside): shell (walls + roofs) always drawn, detail
-// (balconies, chimneys, porches, fences) only near the camera.
+// Buildings come from the kit in buildkit.js and are merged into one mesh per chunk (a town, or a 2 km cell of
+// countryside): shell (walls + roofs) always drawn; detail (balconies, sills, gutters, chimneys, fences, street
+// lamps) and ground (plots: lawns, drives, paths, flower beds, pools; pavements and the town square) only near
+// the camera. Yard trees borrow the vegetation models from flora.js when it exposes them.
 import * as THREE from 'three';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { mulberry32 } from './noise.js';
-import { Builder, buildingMaterial, makeBuilding, C } from './buildings.js';
+import { glowTexture } from './materials.js';
+import { Builder, buildingMaterial, C, BLD_U } from './buildings.js';
+import { makeBuilding } from './buildkit.js';
 
 function vc(g, hex, mult = 1) {
   const geo = g.index ? g.toNonIndexed() : g; const c = new THREE.Color(hex).multiplyScalar(mult), n = geo.attributes.position.count, a = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; }
   geo.setAttribute('color', new THREE.BufferAttribute(a, 3)); if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(n * 2), 2)); return geo;
 }
-const DENSITY = { low: 0.5, medium: 0.8, high: 1 };
-const DETAIL_DIST = { low: 900, medium: 1500, high: 2400 };
+// per quality tier: building density, detail / ground draw distance, detail level (0 none, 1 sills + gutters,
+// 2 + lintels, downpipes, rafters), plots, atlas cell size, interior mapping
+const TIER = {
+  low: { dens: 0.5, detail: 900, ground: 500, fine: 0, plots: false, cell: 128, interiors: false, trees: 0 },
+  medium: { dens: 0.8, detail: 1500, ground: 900, fine: 1, plots: true, cell: 192, interiors: true, trees: 0.6 },
+  high: { dens: 1, detail: 2400, ground: 1500, fine: 2, plots: true, cell: 256, interiors: true, trees: 1 },
+  ultra: { dens: 1.15, detail: 3200, ground: 2200, fine: 2, plots: true, cell: 384, interiors: true, trees: 1.3 },
+};
 
 export class Towns {
   constructor(world) {
     this.w = world; this.group = new THREE.Group(); world.group.add(this.group);
     const r = (this.r = mulberry32(world.loc.seed * 5 + 3)), W = world, st = W.loc.id;
-    this.dens = DENSITY[W.qName] ?? 0.8; this.detailDist = DETAIL_DIST[W.qName] ?? 1500;
+    const T = (this.T = TIER[W.qName] || TIER.medium);
+    this.dens = T.dens; this.detailDist = T.detail;
     this.grid = new Map(); this.chimneys = []; this.chunks = new Map(); this.foot = new Map(); this.count = 0;
+    this.parkSpots = []; this.yardTrees = []; this.lamps = [];
+    this.cover = new Map(); // 20 m hash of oriented rects (plots, paving, footprints) where no wild grass grows
     const t0 = performance.now();
     // ---- placement with footprint (oriented box) overlap tests ----
-    const fkey = (x, z) => Math.floor(x / 40) + ',' + Math.floor(z / 40);
     const overlaps = (o) => {
       const R = Math.ceil((o.rad + 20) / 40), cx = Math.floor(o.x / 40), cz = Math.floor(o.z / 40);
       for (let i = cx - R; i <= cx + R; i++) for (let j = cz - R; j <= cz + R; j++) {
@@ -33,7 +44,11 @@ export class Towns {
       return false;
     };
     const addFoot = (o) => { const R = Math.ceil(o.rad / 40), cx = Math.floor(o.x / 40), cz = Math.floor(o.z / 40); for (let i = cx - R; i <= cx + R; i++) for (let j = cz - R; j <= cz + R; j++) { const k = i + ',' + j; if (!this.foot.has(k)) this.foot.set(k, []); this.foot.get(k).push(o); } };
-    const chunkOf = (key) => { if (!this.chunks.has(key)) this.chunks.set(key, { S: new Builder(), D: new Builder(), x: 0, z: 0, n: 0 }); return this.chunks.get(key); };
+    const chunkOf = (key) => {
+      if (!this.chunks.has(key)) { const ch = { S: new Builder(), D: new Builder(), G: new Builder(), L: [], x: 0, z: 0, n: 0 }; ch.S.det = ch.D; ch.S.fine = ch.D.fine = T.fine; this.chunks.set(key, ch); }
+      return this.chunks.get(key);
+    };
+    this.chunkOf = chunkOf;
     const nearAirport = (x, z) => Math.abs(x - 140) < 380 && Math.abs(z) < 1150;
     // place a building made by makeBuilding(); (x,z) centre, yaw so local +z faces the street
     const place = (b, x, z, yaw, opts = {}) => {
@@ -49,7 +64,7 @@ export class Towns {
         mn = Math.min(mn, h); mx = Math.max(mx, h);
       }
       if (mx - mn > (opts.slope ?? 3.5)) return false;
-      addFoot(o);
+      addFoot(o); this.covered(x, z, yaw, -b.w / 2, b.w / 2, -b.d / 2, b.d / 2);
       const ch = chunkOf(opts.chunk ?? 'c' + Math.floor(x / 2000) + ',' + Math.floor(z / 2000)), y = mn + 0.05;
       ch.x += x; ch.z += z; ch.n++;
       ch.S.seed = ch.D.seed = Math.floor(r() * 255);
@@ -57,6 +72,8 @@ export class Towns {
       const key = Math.floor(x / 50) + ',' + Math.floor(z / 50); if (!this.grid.has(key)) this.grid.set(key, []);
       this.grid.get(key).push([x, y, z, b.h, Math.min(b.w, b.d) * 0.5 + 0.5]);
       if (b.chimney && st === 'alpine' && this.chimneys.length < 70 && r() < 0.35) { const [lx, ly, lz] = b.chimney; this.chimneys.push(new THREE.Vector3(x + lx * cs + lz * sn, y + ly, z - lx * sn + lz * cs)); }
+      if (T.plots && b.yard && opts.plot !== false) this.plot(ch, b, x, y, z, yaw, opts.front ?? 4 + r() * 3);
+      if (opts.after) opts.after(ch, x, y, z, yaw);
       this.count++;
       return true;
     };
@@ -67,17 +84,17 @@ export class Towns {
       return { total: L.at(-1), at(s) { let i = 1; while (i < L.length - 1 && L[i] < s) i++; const a = pts[i - 1], b = pts[i], t = (s - L[i - 1]) / Math.max(1e-6, L[i] - L[i - 1]), dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz) || 1; return { x: a.x + dx * t, z: a.z + dz * t, dx: dx / l, dz: dz / l }; } };
     };
     // line a road with buildings on both sides (front row + optional back row)
-    const lineRoad = (pts, width, s0, s1, chunk, pickType, back) => {
+    const lineRoad = (pts, width, s0, s1, chunk, pickType, back, walk = 0) => {
       const wk = walker(pts); s1 = Math.min(s1, wk.total);
       for (const side of [-1, 1]) {
         let s = s0 + r() * 6;
         while (s < s1 - 4) {
           const type = pickType(wk.at(s)), b = mk(type), center = type === 'center';
           const p = wk.at(s + b.w / 2), nx = -p.dz * side, nz = p.dx * side;
-          const off = width / 2 + (center ? 3 : 4.5 + r() * 4) + b.d / 2, x = p.x + nx * off, z = p.z + nz * off, yaw = Math.atan2(-nx, -nz);
-          const ok = place(b, x, z, yaw, { chunk, pad: center ? 0.3 : 1.2 });
-          s += ok ? b.w + (center ? 0.8 + r() * 2 : 3 + r() * 7) : 5;
-          if (ok && back && r() < back) { const b2 = mk('house'), off2 = off + b.d / 2 + 7 + r() * 5 + b2.d / 2; place(b2, p.x + nx * off2, p.z + nz * off2, yaw + (r() < 0.25 ? Math.PI : 0), { chunk }); }
+          const setback = center ? 3 + walk * 0.6 : 5 + walk + r() * 5, off = width / 2 + setback + b.d / 2, x = p.x + nx * off, z = p.z + nz * off, yaw = Math.atan2(-nx, -nz);
+          const ok = place(b, x, z, yaw, { chunk, pad: center ? 0.3 : 1.2, front: setback - walk });
+          s += ok ? b.w + (center ? 0.6 + r() * 2 : 4 + r() * 7) : 5;
+          if (ok && back && r() < back) { const b2 = mk('house'), off2 = off + b.d / 2 + 9 + r() * 6 + b2.d / 2, flip = r() < 0.25; place(b2, p.x + nx * off2, p.z + nz * off2, yaw + (flip ? Math.PI : 0), { chunk, plot: !flip, front: 4 }); }
         }
       }
     };
@@ -85,8 +102,8 @@ export class Towns {
     W.net.towns.forEach((t, ti) => {
       const chunk = 'town' + ti, side = new THREE.Vector3(-t.dir.z, 0, t.dir.x), facing = Math.atan2(t.dir.x, t.dir.z);
       const typeAt = (p) => (Math.hypot(p.x - t.c.x, p.z - t.c.z) < 150 * t.size + 30 ? 'center' : 'house');
-      // landmarks first so they get good spots
-      for (let k = 0; k < 12; k++) if (place(mk('church'), t.c.x + side.x * (34 + k * 6) + t.dir.x * (k - 4) * 9, t.c.z + side.z * (34 + k * 6) + t.dir.z * (k - 4) * 9, facing - Math.PI / 2, { chunk })) break;
+      // landmarks first so they get good spots; the church gets a paved square with a fountain
+      for (let k = 0; k < 12; k++) if (place(mk('church'), t.c.x + side.x * (40 + k * 6) + t.dir.x * (k - 4) * 9, t.c.z + side.z * (40 + k * 6) + t.dir.z * (k - 4) * 9, facing - Math.PI / 2, { chunk, pad: 6, after: (ch, x, y, z, yaw) => this.square(ch, x, y, z, yaw, st, r) })) break;
       if (st === 'canyon') {
         for (let k = 0; k < 10; k++) if (place(mk('waterTower'), t.c.x - side.x * (50 + k * 10) - t.dir.x * 60, t.c.z - side.z * (50 + k * 10) - t.dir.z * 60, 0, { chunk })) break;
         const e = t.c.clone().addScaledVector(t.dir, 520 * t.size * 0.4 + 30);
@@ -94,7 +111,7 @@ export class Towns {
       }
       for (const rd of W.net.roads) {
         const near = Math.hypot(rd.pts[0].x - t.c.x, rd.pts[0].z - t.c.z);
-        if (rd.kind === 'street' && near < 700) lineRoad(rd.pts, rd.width, 0, 1e9, chunk, typeAt, 0.8 * this.dens);
+        if (rd.kind === 'street' && near < 700) lineRoad(rd.pts, rd.width, 0, 1e9, chunk, typeAt, 0.8 * this.dens, T.plots ? 2.4 : 0);
         else if (rd.kind === 'main' && !rd.closed && near < 5) lineRoad(rd.pts, rd.width, 260 * t.size, 260 * t.size + 260 * this.dens, chunk, () => 'house', 0.3 * this.dens);
       }
       // infill between the streets
@@ -104,6 +121,7 @@ export class Towns {
       }
       // a farm or two on the edge of town
       for (let k = 0; k < 6 * t.size; k++) { const a = r() * 6.28, d = 380 * t.size + r() * 120, x = t.c.x + Math.cos(a) * d, z = t.c.z + Math.sin(a) * d; if (place(mk('barn'), x, z, a, { chunk })) place(mk('silo'), x + Math.cos(a + 1.3) * 16, z + Math.sin(a + 1.3) * 16, 0, { chunk }); }
+      this.streets(chunkOf(chunk), t, st);
     });
     // ---- villages strung along main roads and highways ----
     let villages = 0; const maxV = Math.round((st === 'islands' ? 6 : 12) * this.dens);
@@ -140,9 +158,182 @@ export class Towns {
     }
     this.buildFences();
     this.buildMeshes();
+    this.buildTrees();
     this.buildTime = performance.now() - t0;
+    // keep flora's wild grass tufts off lawns, paving and floors (wraps its per-cell generator, if it has one)
+    const gc = W.flora?.cover;
+    if (gc && typeof gc.gen === 'function' && this.cover.size && !gc._townWrap) {
+      const gen = gc.gen.bind(gc), self = this; gc._townWrap = true;
+      gc.gen = function (ci, cj) {
+        const c = gen(ci, cj), keep = (M, Cc) => { if (!M || !M.length) return [M, Cc]; const m = [], cc = []; for (let i = 0; i < M.length / 16; i++) if (!self.isCovered(M[i * 16 + 12], M[i * 16 + 14])) { for (let k = 0; k < 16; k++) m.push(M[i * 16 + k]); cc.push(Cc[i * 3], Cc[i * 3 + 1], Cc[i * 3 + 2]); } return [new Float32Array(m), new Float32Array(cc)]; };
+        if (c && c.g) { [c.g, c.gc] = keep(c.g, c.gc); [c.e, c.ec] = keep(c.e, c.ec); if (c.f) [c.f, c.fc] = keep(c.f, c.fc); }
+        return c;
+      };
+    }
     this.buildLandmarks();
     this.buildAnimals();
+  }
+
+  // ---- ground helpers (world coordinates) ----
+  // a rectangle in a building's frame (centre x,z, yaw), u from u0..u1 (local x), v from v0..v1 (local z), draped on the ground
+  covered(x, z, yaw, u0, u1, v0, v1) {
+    const cs = Math.cos(yaw), sn = Math.sin(yaw), o = { x, z, cs, sn, u0, u1, v0, v1 }, R = Math.max(-u0, u1, -v0, v1) * 1.42;
+    for (let i = Math.floor((x - R) / 20); i <= Math.floor((x + R) / 20); i++) for (let j = Math.floor((z - R) / 20); j <= Math.floor((z + R) / 20); j++) { const k = i + ',' + j; if (!this.cover.has(k)) this.cover.set(k, []); this.cover.get(k).push(o); }
+  }
+  // is (x,z) on a plot, paving or under a building? (keeps flora's wild grass tufts off lawns and drives)
+  isCovered(x, z) {
+    const arr = this.cover.get(Math.floor(x / 20) + ',' + Math.floor(z / 20)); if (!arr) return false;
+    for (const o of arr) { const dx = x - o.x, dz = z - o.z, u = dx * o.cs - dz * o.sn, v = dx * o.sn + dz * o.cs; if (u > o.u0 && u < o.u1 && v > o.v0 && v < o.v1) return true; }
+    return false;
+  }
+  drape(G, x, z, yaw, u0, u1, v0, v1, cell, col, lift = 0.1, step = 6) {
+    this.covered(x, z, yaw, u0, u1, v0, v1);
+    const W = this.w, cs = Math.cos(yaw), sn = Math.sin(yaw), nu = Math.max(1, Math.ceil((u1 - u0) / step)), nv = Math.max(1, Math.ceil((v1 - v0) / step));
+    const P = (u, v) => { const px = x + u * cs + v * sn, pz = z - u * sn + v * cs; return [px, W.sampleGrid(px, pz) + lift, pz]; };
+    G.setFrame(0, 0, 0, 0);
+    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+      const ua = u0 + (u1 - u0) * i / nu, ub = u0 + (u1 - u0) * (i + 1) / nu, va = v0 + (v1 - v0) * j / nv, vb = v0 + (v1 - v0) * (j + 1) / nv;
+      G.quad(P(ua, vb), P(ub, vb), P(ub, va), P(ua, va), [ua / 3, vb / 3, ub / 3, vb / 3, ub / 3, va / 3, ua / 3, va / 3], cell, col);
+    }
+  }
+  // a fence / hedge / wall run in a building's frame from (u0,v0) to (u1,v1)
+  fence(D, x, z, yaw, u0, v0, u1, v1, kind, col) {
+    const W = this.w, cs = Math.cos(yaw), sn = Math.sin(yaw), L = Math.hypot(u1 - u0, v1 - v0); if (L < 0.5) return;
+    const n = Math.max(1, Math.ceil(L / 7));
+    D.setFrame(0, 0, 0, 0);
+    for (let k = 0; k < n; k++) {
+      const ua = u0 + (u1 - u0) * k / n, va = v0 + (v1 - v0) * k / n, ub = u0 + (u1 - u0) * (k + 1) / n, vb = v0 + (v1 - v0) * (k + 1) / n;
+      const ax = x + ua * cs + va * sn, az = z - ua * sn + va * cs, bx = x + ub * cs + vb * sn, bz = z - ub * sn + vb * cs, ya = W.sampleGrid(ax, az), yb = W.sampleGrid(bx, bz), l = L / n;
+      if (kind === 'hedge' || kind === 'wall' || kind === 'adobe') {
+        const hgt = kind === 'hedge' ? 1.3 : kind === 'wall' ? 0.8 : 1.4, th = kind === 'hedge' ? 0.8 : 0.4, cell = kind === 'hedge' ? C.HEDGE : kind === 'wall' ? C.STONE : C.ADOBE;
+        const ux = (bx - ax) / l, uz = (bz - az) / l, hl = l / 2 + (kind === 'hedge' ? 0.2 : 0.02), y0 = Math.min(ya, yb) - 0.3, y1 = Math.min(ya, yb) + hgt, mx = (ax + bx) / 2, mz = (az + bz) / 2, px = -uz * th / 2, pz = ux * th / 2;
+        for (const sg of [1, -1]) D.plainQuad([mx - ux * hl * sg + px * sg, y0, mz - uz * hl * sg + pz * sg], [mx + ux * hl * sg + px * sg, y0, mz + uz * hl * sg + pz * sg], [mx + ux * hl * sg + px * sg, y1, mz + uz * hl * sg + pz * sg], [mx - ux * hl * sg + px * sg, y1, mz - uz * hl * sg + pz * sg], cell, col);
+        D.plainQuad([mx - ux * hl + px, y1, mz - uz * hl + pz], [mx + ux * hl + px, y1, mz + uz * hl + pz], [mx + ux * hl - px, y1, mz + uz * hl - pz], [mx - ux * hl - px, y1, mz - uz * hl - pz], cell, col);
+      } else { // picket / rail panel (double sided, alpha cut-outs) + posts
+        const hgt = kind === 'picket' ? 0.95 : 1.1;
+        D.panel([ax, ya - 0.05, az], [bx, yb - 0.05, bz], [bx, yb + hgt, bz], [ax, ya + hgt, az], kind === 'picket' ? C.RAIL_IRON : C.RAIL_WOOD, col, 3, [0, 0, l / 1.2, 0, l / 1.2, 1, 0, 1]);
+        D.obox(ax, az, (bx - ax) / l, (bz - az) / l, 0.06, 0.06, ya - 0.2, ya + hgt + 0.1, C.TRIM, col, { top: false });
+      }
+    }
+  }
+  // a detached home's plot: lawn, drive, path, flower beds, fences, trees, maybe a pool or garden shed, a car
+  plot(ch, b, x, y, z, yaw, front) {
+    const r = this.r, st = this.w.loc.id, G = ch.G, D = ch.D, cs = Math.cos(yaw), sn = Math.sin(yaw);
+    const hw = b.w / 2, hd = b.d / 2, side = b.garage || 1, dx = b.driveX ?? side * (hw + 1.8), back = 6 + r() * 8;
+    const uL = Math.min(-hw - 2 - r() * 2, dx - 2), uR = Math.max(hw + 2 + r() * 2, dx + 2), vF = hd + Math.max(1.5, front), vB = -hd - back;
+    const W = this.w, gh = W.sampleGrid(x, z), tc = W.baseColor ? W.baseColor(x, z, gh, 0, new THREE.Color()) : new THREE.Color(0.2, 0.3, 0.1);
+    // lawns: the terrain's own colour, a little brighter and greener (mown, watered); desert yards: gravel between sand and terrain
+    const lawnCol = st === 'canyon' ? new THREE.Color(0xc8a888).lerp(tc, 0.35).getHex() : tc.multiplyScalar(0.5 + r() * 0.15).lerp(new THREE.Color(0.07, 0.13, 0.03), 0.2).getHex();
+    const lift = 0.06 + r() * 0.04;
+    this.drape(G, x, z, yaw, uL, uR, vB, vF, st === 'canyon' && r() < 0.7 ? C.GRAVEL : C.LAWN, lawnCol, lift);
+    // drive + path + flower bed
+    const dcell = st === 'alpine' ? (r() < 0.5 ? C.PAVERS : C.ASPHALT) : st === 'canyon' ? C.CONCRETE : (r() < 0.5 ? C.PAVERS : C.GRAVEL);
+    this.drape(G, x, z, yaw, dx - 1.5, dx + 1.5, hd - (b.driveX != null ? 0 : 6), vF, dcell, 0xffffff, lift + 0.03);
+    const doorX = b.door ?? 0;
+    this.drape(G, x, z, yaw, doorX - 0.6, doorX + 0.6, hd, vF, C.PAVERS, 0xf0e8e0, lift + 0.04);
+    if (st !== 'canyon' || r() < 0.4) for (const [a, c] of [[-hw + 0.3, doorX - 1], [doorX + 1, Math.min(hw, dx - 1.6) - 0.3]]) if (c - a > 1) this.drape(G, x, z, yaw, a, c, hd + 0.1, hd + 1.0, C.FLOWERS, 0xffffff, lift + 0.05);
+    // boundary: front fence with gaps for path + drive, sides and back
+    const kind = st === 'alpine' ? (r() < 0.5 ? 'rail' : r() < 0.5 ? 'hedge' : 'picket') : st === 'islands' ? (r() < 0.45 ? 'picket' : r() < 0.6 ? 'hedge' : 'wall') : (r() < 0.6 ? 'adobe' : 'none');
+    const fcol = kind === 'picket' ? 0xf4f4f0 : kind === 'hedge' ? [0x8fae70, 0x7a9a60, 0x9ab878][Math.floor(r() * 3)] : kind === 'adobe' ? 0xd8a878 : kind === 'rail' ? 0xd8b890 : 0xffffff;
+    if (kind !== 'none' && this.T.fine > 0) {
+      const gaps = [[doorX - 0.8, doorX + 0.8], [dx - 1.8, dx + 1.8]].sort((a, c) => a[0] - c[0]);
+      let u = uL; for (const [a, c] of gaps) { if (a > u) this.fence(D, x, z, yaw, u, vF, Math.min(a, uR), vF, kind, fcol); u = Math.max(u, c); }
+      if (u < uR) this.fence(D, x, z, yaw, u, vF, uR, vF, kind, fcol);
+      if (kind !== 'picket' || r() < 0.5) { this.fence(D, x, z, yaw, uL, vB, uL, vF - 0.3, kind === 'picket' ? 'hedge' : kind, fcol); this.fence(D, x, z, yaw, uR, vF - 0.3, uR, vB, kind === 'picket' ? 'hedge' : kind, fcol); this.fence(D, x, z, yaw, uR, vB, uL, vB, kind === 'picket' ? 'hedge' : kind, fcol); }
+    }
+    const W2 = (u, v) => [x + u * cs + v * sn, z - u * sn + v * cs];
+    // a car on the drive
+    if (r() < 0.6) { const vc_ = front > 6 ? hd + 3.2 : hd - 3; const [px, pz] = W2(dx, vc_); this.parkSpots.push({ x: px, z: pz, yaw: yaw + (r() < 0.5 ? 0 : Math.PI) }); }
+    // trees in the back / side yard
+    for (let k = 0; k < (this.T.trees > 0 ? (r() < 0.75 ? 1 : 0) + (r() < 0.35 * this.T.trees ? 1 : 0) : 0); k++) {
+      const u = uL + 1.5 + r() * (uR - uL - 3), v = vB + 1.5 + r() * Math.max(0.5, back - 3);
+      const [px, pz] = W2(u, v); this.yardTrees.push({ x: px, z: pz, s: 0.4 + r() * 0.4, kind: k === 0 && r() < 0.3 ? 'conifer' : 'tree' });
+    }
+    if (front > 5.5 && r() < 0.4) { const [px, pz] = W2(-side * (hw * 0.6), vF - 2.5); this.yardTrees.push({ x: px, z: pz, s: 0.35 + r() * 0.3, kind: 'tree' }); }
+    // pool (islands / canyon) or a garden shed
+    if ((st === 'islands' || st === 'canyon') && back > 9 && r() < 0.45) {
+      const pw = 3.5 + r() * 2, pl = 6 + r() * 3, pu = (uL + uR) / 2 + (r() - 0.5) * 3, pv = vB + back * 0.5;
+      this.drape(G, x, z, yaw, pu - pw / 2 - 1.2, pu + pw / 2 + 1.2, pv - pl / 2 - 1.2, pv + pl / 2 + 1.2, C.PAVERS, 0xf4f0e8, lift + 0.06);
+      this.drape(G, x, z, yaw, pu - pw / 2, pu + pw / 2, pv - pl / 2, pv + pl / 2, C.POOL, 0xffffff, lift + 0.09, 20);
+    } else if (r() < 0.3 && back > 7) {
+      const sb = makeBuilding('gardenShed', st, r), [px, pz] = W2(uL + 2, vB + 2); const ys = this.w.sampleGrid(px, pz);
+      ch.S.setFrame(px, ys, pz, yaw); ch.D.setFrame(px, ys, pz, yaw); sb.draw(ch.S, ch.D);
+    }
+  }
+  // town square around the church: cobbles, a fountain, benches, trees, market stalls / umbrellas
+  square(ch, x, y, z, yaw, st, r) {
+    if (!this.T.plots) return;
+    const G = ch.G, D = ch.D, cs = Math.cos(yaw), sn = Math.sin(yaw), W2 = (u, v) => [x + u * cs + v * sn, z - u * sn + v * cs];
+    this.drape(G, x, z, yaw, -17, 17, -16, 34, st === 'canyon' ? C.PAVERS : C.COBBLE, st === 'canyon' ? 0xe8c8a0 : 0xffffff, 0.12);
+    // fountain in front of the church
+    const [fx, fz] = W2(0, 26), fy = this.w.sampleGrid(fx, fz);
+    D.setFrame(fx, fy, fz, yaw);
+    if (st === 'alpine') { // a long wooden/stone village trough with a spout column
+      D.box(0, -0.2, 0, 4.2, 0.9, 1.6, C.STONE, 0xd8d0c0, { topCell: C.STONE }); D.box(0, 0.62, 0, 3.8, 0.04, 1.2, C.POOL, 0xffffff);
+      D.box(-2.4, -0.2, 0, 0.5, 2.0, 0.5, C.STONE, 0xd8d0c0); D.box(-2.0, 1.45, 0, 0.6, 0.08, 0.08, C.METAL, 0x5a5a5a); for (let k = 0; k < 4; k++) D.box(-2.4, 1.8 + k * 0.01, 0, 0.6, 0.12, 0.6, C.FLOWERS, 0xffffff);
+    } else {
+      D.cyl(0, 0, -0.2, 0.7, 3.4, 3.4, 20, C.STONE, 0xe8e0d0, { cap: false }); D.cyl(0, 0, 0.55, 0.56, 3.2, 3.2, 20, C.POOL, 0xffffff, { cap: true, capCell: C.POOL });
+      D.cyl(0, 0, 0.5, 2.2, 0.35, 0.25, 8, C.STONE, 0xe8e0d0); D.cyl(0, 0, 2.2, 2.4, 1.2, 1.2, 12, C.STONE, 0xe8e0d0, { cap: true }); D.cyl(0, 0, 2.4, 3.0, 0.15, 0.08, 6, C.STONE, 0xe8e0d0);
+    }
+    // benches + trees around the square
+    for (const [u, v, a] of [[-12, 20, Math.PI / 2], [12, 20, -Math.PI / 2], [-12, 30, Math.PI / 2], [12, 30, -Math.PI / 2]]) {
+      const [bx, bz] = W2(u, v), by = this.w.sampleGrid(bx, bz); D.setFrame(bx, by, bz, yaw + a);
+      D.box(0, 0.42, 0, 1.8, 0.06, 0.45, C.DARKWOOD, 0xc8a070); D.box(0, 0.5, -0.22, 1.8, 0.45, 0.05, C.DARKWOOD, 0xc8a070); for (const s of [-0.8, 0.8]) D.box(s, -0.1, 0, 0.08, 0.55, 0.45, C.METAL, 0x333333);
+      const [tx, tz] = W2(u * 1.25, v - 3); this.yardTrees.push({ x: tx, z: tz, s: 0.6 + r() * 0.3, kind: st === 'islands' ? 'palm' : 'tree' });
+    }
+    // market stalls with striped awnings / umbrellas
+    if (st !== 'canyon') for (let k = 0; k < 6; k++) {
+      const [mx, mz] = W2(-10 + k * 4, 12 + (k % 2) * 1.5), my = this.w.sampleGrid(mx, mz); D.setFrame(mx, my, mz, yaw);
+      const col = [0xc8283a, 0x2e6b3f, 0x1d4e89, 0xe8a43c][k % 4];
+      D.box(0, -0.1, 0, 2.6, 0.95, 1.4, C.DARKWOOD, 0xc8a070); for (const [a, c] of [[-1.2, -0.6], [1.2, -0.6], [-1.2, 0.6], [1.2, 0.6]]) D.box(a, 0.8, c, 0.06, 1.5, 0.06, C.METAL, 0x666666, { top: false });
+      D.quad([-1.5, 2.2, 0.9], [1.5, 2.2, 0.9], [1.5, 2.6, -0.9], [-1.5, 2.6, -0.9], [0, 0, 1, 0, 1, 1, 0, 1], C.SHOP, col);
+      D.box(0, 0.86, 0, 2.4, 0.12, 1.2, C.FLOWERS, 0xffffff);
+    }
+  }
+  // pavements with kerbs, street lamps and parking bays along a town's streets
+  streets(ch, t, st) {
+    if (!this.T.plots) return;
+    const W = this.w, G = ch.G, D = ch.D, roads = W.net.roads.filter((rd) => rd.kind === 'street' && Math.hypot(rd.pts[0].x - t.c.x, rd.pts[0].z - t.c.z) < 700);
+    const others = W.net.roads.filter((rd) => !rd.closed && Math.hypot(rd.pts[0].x - t.c.x, rd.pts[0].z - t.c.z) < 1500);
+    // pavements stop where another road crosses; a road running along the same corridor (the town's connector on its
+    // main street) just widens the kerb line instead
+    const along = (o, i, ux, uz) => { const a = o.pts[Math.max(0, i - 1)], b = o.pts[Math.min(o.pts.length - 1, i + 1)], l = Math.hypot(b.x - a.x, b.z - a.z) || 1; return Math.abs(((b.x - a.x) * ux + (b.z - a.z) * uz) / l) > 0.9; };
+    const onOther = (rd, x, z, pad, ux, uz, out) => { for (const o of others) { if (o === rd) continue; for (let i = 0; i < o.pts.length; i++) { const p = o.pts[i]; if ((p.x - x) ** 2 + (p.z - z) ** 2 < (o.width / 2 + pad) ** 2) { if (along(o, i, ux, uz)) { out.w = Math.max(out.w, o.width / 2); continue; } return true; } } } return false; };
+    const pw = 2.4, kerb = 0.15, pcell = st === 'canyon' ? C.CONCRETE : C.PAVERS, pcol = st === 'canyon' ? 0xa8a29a : 0xe8e4dc;
+    for (const rd of roads) {
+      const P = rd.pts, hw = rd.width / 2;
+      let lampAcc = 0, li = 0;
+      for (let i = 0; i < P.length - 1; i++) {
+        const a = P[i], b = P[i + 1], dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz); if (L < 0.1) continue;
+        const ux = dx / L, uz = dz / L, nx = -uz, nz = ux;
+        for (const s of [-1, 1]) {
+          const mx = (a.x + b.x) / 2 + nx * s * (hw + pw / 2), mz = (a.z + b.z) / 2 + nz * s * (hw + pw / 2), wide = { w: hw };
+          if (onOther(rd, (a.x + b.x) / 2 + nx * s * hw, (a.z + b.z) / 2 + nz * s * hw, pw, ux, uz, wide) || onOther(rd, mx, mz, pw * 0.5, ux, uz, wide)) continue;
+          const kw = wide.w + 0.4 * (wide.w > hw);
+          const pa = [a.x + nx * s * kw, a.z + nz * s * kw], pb = [b.x + nx * s * kw, b.z + nz * s * kw], qa = [pa[0] + nx * s * pw, pa[1] + nz * s * pw], qb = [pb[0] + nx * s * pw, pb[1] + nz * s * pw];
+          const y = (p) => Math.max(W.sampleGrid(p[0], p[1]), a.y - 1.5) + 0.25 + kerb;
+          G.setFrame(0, 0, 0, 0); this.covered(mx, mz, Math.atan2(nx, nz), -pw / 2 - 0.3, pw / 2 + 0.3, -L / 2 - 0.5, L / 2 + 0.5);
+          const A = [pa[0], y(pa), pa[1]], B = [pb[0], y(pb), pb[1]], Aq = [qa[0], y(qa), qa[1]], Bq = [qb[0], y(qb), qb[1]];
+          const u0 = i * L / 3, u1 = (i + 1) * L / 3;
+          if (s < 0) G.quad(A, B, Bq, Aq, [u0, 0, u1, 0, u1, pw / 3, u0, pw / 3], pcell, pcol); else G.quad(B, A, Aq, Bq, [u1, 0, u0, 0, u0, pw / 3, u1, pw / 3], pcell, pcol);
+          // kerb face toward the road
+          const A0 = [A[0], A[1] - kerb - 0.05, A[2]], B0 = [B[0], B[1] - kerb - 0.05, B[2]];
+          if (s > 0) G.quad(B0, A0, A, B, [0, 0, L / 3, 0, L / 3, 0.06, 0, 0.06], C.CONCRETE, 0xd8d6d0); else G.quad(A0, B0, B, A, [0, 0, L / 3, 0, L / 3, 0.06, 0, 0.06], C.CONCRETE, 0xd8d6d0);
+          // lamps every ~26 m, alternating sides
+          if (s === (li % 2 ? 1 : -1)) {
+            lampAcc += L; if (lampAcc > 26) { lampAcc = 0; li++; this.lamp(D, ch, qa[0] - nx * s * 0.5, W.sampleGrid(qa[0], qa[1]) + 0.25 + kerb, qa[1] - nz * s * 0.5, Math.atan2(-nx * s, -nz * s), st); }
+          }
+        }
+      }
+    }
+  }
+  lamp(D, ch, x, y, z, yaw, st) {
+    D.setFrame(x, y, z, yaw);
+    const pole = st === 'islands' ? 0xf0f0ec : st === 'canyon' ? 0x8a8e94 : 0x2a2c2e;
+    D.cyl(0, 0, -0.3, 0.6, 0.16, 0.12, 6, C.METAL, pole); D.cyl(0, 0, 0.6, 5.2, 0.08, 0.06, 6, C.METAL, pole);
+    if (st === 'canyon') { D.box(0, 5.1, 0.9, 0.1, 0.1, 1.8, C.METAL, pole); D.box(0, 4.95, 1.8, 0.35, 0.18, 0.7, C.METAL, pole); ch.L.push([x, y + 4.88, z, yaw, 1.8]); }
+    else if (st === 'islands') { D.box(0, 5.15, 0, 0.12, 0.12, 0.12, C.METAL, pole); ch.L.push([x, y + 5.5, z, yaw, 0]); }
+    else { D.box(0, 5.0, 0.35, 0.06, 0.06, 0.7, C.METAL, pole); D.cyl(0, 0.7, 4.5, 4.55, 0.22, 0.22, 6, C.METAL, pole); D.cyl(0, 0.7, 4.85, 5.1, 0.25, 0.08, 6, C.METAL, pole); ch.L.push([x, y + 4.7, z, yaw, 0.7]); }
   }
   // fences / hedges / dry-stone walls around fields (detail layer)
   buildFences() {
@@ -152,7 +343,7 @@ export class Towns {
       const kind = st === 'islands' ? (r() < 0.6 ? 'hedge' : 'wall') : st === 'alpine' ? (r() < 0.6 ? 'rail' : 'hedge') : 'post';
       if (this.dens < 0.6 && (kind === 'rail' || kind === 'post')) continue; // low quality: hedges and walls only
       const ca = Math.cos(f.ang), sa = Math.sin(f.ang), toW = (u, v) => [f.x + u * ca - v * sa, f.z + u * sa + v * ca];
-      const ch = this.chunks.get('c' + Math.floor(f.x / 2000) + ',' + Math.floor(f.z / 2000)) || (this.chunks.set('c' + Math.floor(f.x / 2000) + ',' + Math.floor(f.z / 2000), { S: new Builder(), D: new Builder(), x: f.x, z: f.z, n: 1 }), this.chunks.get('c' + Math.floor(f.x / 2000) + ',' + Math.floor(f.z / 2000)));
+      const ch = this.chunkOf('c' + Math.floor(f.x / 2000) + ',' + Math.floor(f.z / 2000)); if (!ch.n) { ch.x = f.x; ch.z = f.z; ch.n = 1; }
       const B = kind === 'hedge' || kind === 'wall' ? ch.S : ch.D; B.setFrame(0, 0, 0, 0); B.seed = 0;
       const sx = f.sx + 1.5, sz = f.sz + 1.5, corners = [[-sx, -sz], [sx, -sz], [sx, sz], [-sx, sz]], gate = Math.floor(r() * 4);
       const hedgeCol = [0x6f8f50, 0x5f8048, 0x7a9658][Math.floor(r() * 3)];
@@ -180,17 +371,71 @@ export class Towns {
     }
   }
   buildMeshes() {
-    const W = this.w, mat = (this.mat = buildingMaterial());
+    const W = this.w, T = this.T;
+    const mat = (this.mat = buildingMaterial({ cellPx: T.cell, interiors: T.interiors }));
+    const gmat = (this.gmat = buildingMaterial({ cellPx: T.cell, interiors: false, ground: true }));
     W.windowMats.push(mat);
     this.chunkList = [];
-    let tris = 0;
+    let tris = 0; const lt = (this.layerTris = { S: 0, D: 0, G: 0 });
+    const lampHeads = [], glowPos = [];
+    const castDetail = W.qName === 'high' || W.qName === 'ultra';
     for (const [key, ch] of this.chunks) {
       const c = { key, x: ch.n ? ch.x / ch.n : 0, z: ch.n ? ch.z / ch.n : 0 };
-      if (!ch.S.empty) { const g = ch.S.toGeometry(); tris += g.index.count / 3; c.shell = new THREE.Mesh(g, mat); c.shell.castShadow = W.qName === 'high'; c.shell.receiveShadow = true; this.group.add(c.shell); }
-      if (!ch.D.empty) { const g = ch.D.toGeometry(); tris += g.index.count / 3; c.detail = new THREE.Mesh(g, mat); c.detail.receiveShadow = true; this.group.add(c.detail); const bs = g.boundingSphere; c.dx = bs.center.x; c.dz = bs.center.z; c.dr = bs.radius; }
+      if (!ch.S.empty) { const g = ch.S.toGeometry(); tris += g.index.count / 3; lt.S += g.index.count / 3; c.shell = new THREE.Mesh(g, mat); c.shell.castShadow = W.q.shadows && W.qName !== 'medium'; c.shell.receiveShadow = true; this.group.add(c.shell); }
+      if (!ch.D.empty) { const g = ch.D.toGeometry(); tris += g.index.count / 3; lt.D += g.index.count / 3; c.detail = new THREE.Mesh(g, mat); c.detail.receiveShadow = true; c.detail.castShadow = castDetail; this.group.add(c.detail); const bs = g.boundingSphere; c.dx = bs.center.x; c.dz = bs.center.z; c.dr = bs.radius; }
+      if (!ch.G.empty) { const g = ch.G.toGeometry(); tris += g.index.count / 3; lt.G += g.index.count / 3; c.ground = new THREE.Mesh(g, gmat); c.ground.receiveShadow = true; c.ground.renderOrder = -1; this.group.add(c.ground); const bs = g.boundingSphere; c.gx = bs.center.x; c.gz = bs.center.z; c.gr = bs.radius; }
+      for (const l of ch.L) { lampHeads.push(l); glowPos.push(l[0] + Math.sin(l[3]) * l[4], l[1], l[2] + Math.cos(l[3]) * l[4]); }
       this.chunkList.push(c);
     }
     this.tris = tris; this.chunks = null; this.foot = null;
+    // street lamp heads (glowing at night) + light pools on the ground
+    if (lampHeads.length) {
+      const st = W.loc.id;
+      const head = st === 'islands' ? new THREE.SphereGeometry(0.28, 10, 8) : st === 'canyon' ? new THREE.BoxGeometry(0.3, 0.06, 0.6) : new THREE.CylinderGeometry(0.2, 0.16, 0.36, 6);
+      this.lampMat = new THREE.MeshStandardMaterial({ color: 0xf8f0e0, emissive: 0xffd8a0, emissiveIntensity: 0, roughness: 0.3 });
+      const im = new THREE.InstancedMesh(head, this.lampMat, lampHeads.length), m4 = new THREE.Matrix4();
+      lampHeads.forEach((l, i) => { m4.makeTranslation(l[0] + Math.sin(l[3]) * l[4], l[1], l[2] + Math.cos(l[3]) * l[4]); im.setMatrixAt(i, m4); });
+      this.group.add(im); this.lampHeads = im;
+      const gg = new THREE.BufferGeometry(); gg.setAttribute('position', new THREE.Float32BufferAttribute(glowPos, 3));
+      this.glowMat = new THREE.PointsMaterial({ size: 3.2, color: new THREE.Color(3.4, 2.4, 1.3), map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0 });
+      this.glow = new THREE.Points(gg, this.glowMat); this.group.add(this.glow);
+      // pools of light on the ground
+      const pool = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+      const pc = document.createElement('canvas'); pc.width = pc.height = 64; const pg = pc.getContext('2d'); const gr = pg.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.5, 'rgba(255,255,255,0.35)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); pg.fillStyle = gr; pg.fillRect(0, 0, 64, 64);
+      this.poolMat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(pc), color: new THREE.Color(1.0, 0.72, 0.42), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 });
+      const pi = new THREE.InstancedMesh(pool, this.poolMat, lampHeads.length);
+      lampHeads.forEach((l, i) => { const x = l[0] + Math.sin(l[3]) * l[4], z = l[2] + Math.cos(l[3]) * l[4]; m4.makeScale(19, 1, 19).setPosition(x, W.sampleGrid(x, z) + 0.45, z); pi.setMatrixAt(i, m4); });
+      pi.visible = false; pi.renderOrder = 2; this.group.add(pi); this.pools = pi;
+      this.lampCount = lampHeads.length;
+    }
+  }
+  // yard / square trees: the vegetation models from flora.js when available (same materials, so they sway and
+  // match the forests), otherwise a simple vertex-coloured stand-in
+  buildTrees() {
+    const W = this.w, list = this.yardTrees; if (!list.length) return;
+    if (typeof W.flora?.addTrees === 'function') { // flora's public API: same models, impostors, collisions and sway
+      const st = W.loc.id, kind = (k) => (k === 'palm' || st === 'islands' ? 'palm' : k === 'conifer' ? 'conifer' : 'broadleaf');
+      W.flora.addTrees(list.map((t) => ({ x: t.x, z: t.z, kind: kind(t.kind), scale: t.kind === 'conifer' ? 0.35 + t.s * 0.5 : 0.45 + t.s * 0.6 })));
+      return;
+    }
+    const st = W.loc.id, vars = W.flora?.vars || [];
+    const find = (sps) => { for (const sp of sps) { const v = vars.filter((V) => V.sp === sp && V.model?.geo && V.near?.material); if (v.length) return v; } return []; };
+    const groups = { tree: find(st === 'islands' ? ['palm', 'broadleaf'] : st === 'canyon' ? ['broadleaf', 'juniper', 'shrub', 'palm'] : ['broadleaf']), conifer: find(st === 'islands' ? ['palm'] : st === 'canyon' ? ['juniper', 'broadleaf'] : ['spruce', 'broadleaf']), palm: find(['palm', 'broadleaf']) };
+    const buckets = new Map(), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), col = new THREE.Color();
+    let fallback = null;
+    for (const t of list) {
+      const g = groups[t.kind]?.length ? groups[t.kind] : groups.tree; let V = g.length ? g[Math.floor(this.r() * g.length)] : null;
+      if (!V) V = fallback || (fallback = { model: { geo: simpleTree() }, near: { material: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }) } });
+      if (!buckets.has(V)) buckets.set(V, []);
+      const y = W.sampleGrid(t.x, t.z) - 0.1, s = V === fallback ? 0.7 + t.s : (V.sp === 'spruce' ? t.s * 0.7 : V.sp === 'palm' ? 0.55 + t.s * 0.5 : 0.3 + t.s * 0.6);
+      buckets.get(V).push(m4.compose(new THREE.Vector3(t.x, y, t.z), q.setFromAxisAngle(up, this.r() * 6.28), new THREE.Vector3(s, s * (0.9 + this.r() * 0.2), s)).clone());
+    }
+    this.treeMeshes = [];
+    for (const [V, mats] of buckets) {
+      const im = new THREE.InstancedMesh(V.model.geo, V.near.material, mats.length);
+      mats.forEach((m, i) => { im.setMatrixAt(i, m); im.setColorAt(i, col.setRGB(0.85 + this.r() * 0.3, 0.85 + this.r() * 0.3, 0.85 + this.r() * 0.2)); });
+      im.castShadow = W.q.shadows; im.receiveShadow = true; im.frustumCulled = false; this.group.add(im); this.treeMeshes.push(im);
+    }
   }
   buildLandmarks() {
     const W = this.w, r = this.r;
@@ -205,7 +450,6 @@ export class Towns {
         const x = (r() - 0.5) * 14000, z = (r() - 0.5) * 14000, h = W.sampleGrid(x, z);
         if (Math.hypot(x - 140, z) < 2600 || h < W.loc.rwyH + 60 || h > (W.loc.desert ? 900 : 1100)) continue;
         if (W.groundAt(x, z).n.y < 0.93) continue;
-        // a short row of turbines
         const a = r() * 6.28;
         for (let j = 0; j < 4 && placed < 12; j++) {
           const xx = x + Math.cos(a) * j * 160, zz = z + Math.sin(a) * j * 160, hh = W.sampleGrid(xx, zz);
@@ -272,9 +516,14 @@ export class Towns {
     return null;
   }
   update(dt, t, fx, cam) {
-    const W = this.w, night = W.night || W.W.dark > 0.55;
-    if (cam) { for (const c of this.chunkList) if (c.detail) c.detail.visible = Math.hypot(c.dx - cam.x, c.dz - cam.z) < this.detailDist + c.dr; }
-    for (const s of this.spinners) { if (s.o) s.o.rotation.z += dt * s.sp * (0.6 + W.W.wind * 0.08); if (s.blink) s.blink.visible = Math.floor(t * 1.1) % 2 === 0; }
+    const W = this.w, night = W.night || (W.W?.dark ?? 0) > 0.55;
+    BLD_U.uDay.value = Math.max(0.05, Math.min(1, ((W.sunElev ?? 0.5) + 0.05) * 3)) * (1 - 0.5 * (W.W?.dark ?? 0));
+    if (cam) for (const c of this.chunkList) {
+      if (c.detail) c.detail.visible = Math.hypot(c.dx - cam.x, c.dz - cam.z) < this.detailDist + c.dr;
+      if (c.ground) c.ground.visible = Math.hypot(c.gx - cam.x, c.gz - cam.z) < this.T.ground + c.gr;
+    }
+    if (this.lampMat) { this.lampMat.emissiveIntensity = night ? 6 : 0; this.glowMat.opacity = night ? 1 : 0; this.poolMat.opacity = night ? 0.6 : 0; this.pools.visible = night; }
+    for (const s of this.spinners || []) { if (s.o) s.o.rotation.z += dt * s.sp * (0.6 + W.W.wind * 0.08); if (s.blink) s.blink.visible = Math.floor(t * 1.1) % 2 === 0; }
     if (this.lighthouse) { this.lighthouse.piv.rotation.y += dt * 0.6; this.lighthouse.beam.material.opacity = night ? 0.08 : 0; this.lighthouse.lamp.visible = true; }
     if (fx && cam) for (const c of this.chimneys) if (Math.random() < dt * 1.5 && c.distanceToSquared(cam) < 2500 * 2500) fx.smoke.add(c.x, c.y, c.z, W.windBase.x * 0.3 + (Math.random() - 0.5), 1.2, W.windBase.z * 0.3 + (Math.random() - 0.5), 9, 0.8, 7, 0.75, 0.75, 0.78, 0.35, 0.2, -0.15);
     if (this.herd) {
@@ -288,6 +537,13 @@ export class Towns {
       this.herd.instanceMatrix.needsUpdate = true;
     }
   }
+}
+
+// stand-in yard tree (if flora.js offers no models): trunk + a few leafy blobs
+function simpleTree() {
+  const g = [vc(new THREE.CylinderGeometry(0.12, 0.2, 3, 6).translate(0, 1.5, 0), 0x5a4030)];
+  for (const [x, y, z, s] of [[0, 4, 0, 2], [0.9, 3.4, 0.3, 1.4], [-0.8, 3.6, -0.4, 1.5], [0.2, 5.0, -0.2, 1.3]]) g.push(vc(new THREE.IcosahedronGeometry(s, 1).translate(x, y, z), 0x4a6a2a));
+  return mergeGeometries(g);
 }
 
 // separating-axis test for two oriented rectangles {x,z,hw,hd,ax,az,bx,bz}

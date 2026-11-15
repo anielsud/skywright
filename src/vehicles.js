@@ -126,7 +126,9 @@ export class Vehicles {
     }
     // parked cars (towns + airport lot): static instances
     this.parked = [];
-    for (const t of world.net.towns) for (let k = 0; k < 26 * t.size; k++) {
+    // driveways / squares laid out by towns.js; otherwise a few along each town's main street
+    for (const sp of world.towns?.parkSpots || []) this.parked.push({ p: new THREE.Vector3(sp.x, 0, sp.z), yaw: sp.yaw, type: TYPES[Math.floor(r() * 5)], color: PAINT[Math.floor(r() * PAINT.length)] });
+    if (!world.towns?.parkSpots?.length) for (const t of world.net.towns) for (let k = 0; k < 26 * t.size; k++) {
       const side = new THREE.Vector3(-t.dir.z, 0, t.dir.x), along = (r() - 0.5) * 480 * t.size, off = (r() < 0.5 ? -1 : 1) * 5.6;
       const p = t.c.clone().addScaledVector(t.dir, along).addScaledVector(side, off);
       this.parked.push({ p, yaw: Math.atan2(-t.dir.x, -t.dir.z) + (r() < 0.5 ? Math.PI : 0), type: TYPES[Math.floor(r() * 5)], color: PAINT[Math.floor(r() * PAINT.length)] });

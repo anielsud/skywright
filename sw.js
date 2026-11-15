@@ -3,7 +3,9 @@ const CACHE = 'skywright-v3';
 const FILES = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'icon.svg',
   'vendor/three.module.min.js', 'vendor/peerjs.min.js', 'vendor/addons/Sky.js', 'vendor/addons/BufferGeometryUtils.js', 'vendor/addons/OrbitControls.js', 'vendor/addons/RoomEnvironment.js',
   ...['postprocessing/EffectComposer', 'postprocessing/RenderPass', 'postprocessing/UnrealBloomPass', 'postprocessing/OutputPass', 'postprocessing/ShaderPass', 'postprocessing/Pass', 'postprocessing/MaskPass', 'shaders/CopyShader', 'shaders/LuminosityHighPassShader', 'shaders/OutputShader'].map((f) => `vendor/addons/${f}.js`),
-  ...['main', 'parts', 'design', 'aircraft', 'world', 'billboard', 'materials', 'noise', 'effects', 'audio', 'controls', 'hud', 'cameras', 'missions', 'hangar', 'traffic', 'shaders', 'post', 'roads', 'vehicles', 'flora', 'towns', 'version', 'tiles', 'net', 'callouts', 'worldsound', 'remote', 'erosion', 'terrainTex', 'changelog', 'planeMaterials', 'buildings', 'sky', 'clouds', 'farfield', 'analytics'].map((f) => `src/${f}.js`),
+  ...['main', 'parts', 'design', 'aircraft', 'world', 'billboard', 'materials', 'noise', 'effects', 'audio', 'controls', 'hud', 'cameras', 'missions', 'hangar', 'traffic', 'shaders', 'post', 'roads', 'vehicles', 'flora', 'towns', 'version', 'tiles', 'net', 'callouts', 'worldsound', 'remote', 'erosion', 'terrainTex', 'changelog', 'planeMaterials', 'buildings', 'buildkit', 'sky', 'clouds', 'farfield', 'analytics'].map((f) => `src/${f}.js`),
+  // CC0 ambientCG building / ground materials (keep in sync with MAT_FILES in src/buildings.js)
+  'tex/towns/mat_color.jpg', 'tex/towns/mat_normal.jpg', 'tex/towns/mat_rough.jpg',
   // CC0 ground textures (keep in sync with TEXTURE_FILES in src/terrainTex.js)
   ...['aerial_grass_rock', 'aerial_rocks_02', 'aerial_beach_01', 'dry_ground_rocks', 'cliff_side'].flatMap((n) => [`tex/${n}_d.jpg`, `tex/${n}_n.jpg`]),
   // foliage atlas (src/flora.js): the small one is precached; the 2048 one (high / ultra quality) is cached on first use
