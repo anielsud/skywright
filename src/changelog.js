@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.53.0', items: [
+    'Planes look properly built: smooth joins where the wings meet the body, engine pylons, landing gear doors, detailed engines and propellers, antennas and soot behind the exhausts.',
+    'The flaps, ailerons, elevator and rudder really move when you steer, and in the hangar you can test them with the arrow keys (or WASD, Q/E for rudder and F for flaps).',
+  ] },
   { v: '1.52.0', items: [
     'Fixed: lake and sea shores no longer flicker or clip. The water now meets the land exactly along the shoreline, like at the lakes near the Jungfrau airfield.',
   ] },
