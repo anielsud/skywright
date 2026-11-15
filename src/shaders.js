@@ -104,7 +104,7 @@ export function terrainMaterial(maps) {
 // ---------- water ----------
 export function waterMaterial(o) {
   const U = {
-    depthTex: { value: o.depthTex }, nrm: { value: o.normal }, tHalf: { value: o.half }, tSize: { value: o.size }, waterLevel: { value: o.level },
+    depthTex: { value: o.depthTex }, outerTex: { value: null }, outerOrigin: { value: new THREE.Vector2(0, 0) }, outerSize: { value: 1 }, nrm: { value: o.normal }, tHalf: { value: o.half }, tSize: { value: o.size }, waterLevel: { value: o.level },
     sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color(1, 1, 1) }, skyZen: { value: new THREE.Color(0.3, 0.5, 0.8) },
     skyHor: { value: new THREE.Color(0.7, 0.8, 0.9) }, amb: { value: 1 }, deepCol: { value: new THREE.Color(o.deep) }, shallowCol: { value: new THREE.Color(o.shallow) },
     sandCol: { value: new THREE.Color(o.sand) }, fogColor: { value: new THREE.Color(0, 0, 0) }, foamAmt: { value: o.foam ?? 1 }, rough: { value: 0.35 },
@@ -115,7 +115,7 @@ export function waterMaterial(o) {
       varying vec3 vW;
       void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
     fragmentShader: /* glsl */`
-      uniform sampler2D depthTex; uniform sampler2D nrm; uniform float tHalf; uniform float tSize; uniform float waterLevel;
+      uniform sampler2D depthTex; uniform sampler2D outerTex; uniform vec2 outerOrigin; uniform float outerSize; uniform sampler2D nrm; uniform float tHalf; uniform float tSize; uniform float waterLevel;
       uniform vec3 sunDir; uniform vec3 sunCol; uniform vec3 skyZen; uniform vec3 skyHor; uniform float amb;
       uniform vec3 deepCol; uniform vec3 shallowCol; uniform vec3 sandCol; uniform vec3 fogColor; uniform float foamAmt; uniform float rough; uniform float uTime;
       varying vec3 vW;
@@ -123,7 +123,9 @@ export function waterMaterial(o) {
       vec3 nmap(vec2 p) { return texture2D(nrm, p).xzy * 2.0 - 1.0; }
       void main() {
         vec2 tuv = (vW.xz + tHalf) / tSize;
-        float th = (tuv.x < 0.0 || tuv.y < 0.0 || tuv.x > 1.0 || tuv.y > 1.0) ? -80.0 : texture2D(depthTex, tuv).r;
+        float th = -80.0;
+        if (tuv.x >= 0.0 && tuv.y >= 0.0 && tuv.x <= 1.0 && tuv.y <= 1.0) th = texture2D(depthTex, tuv).r;
+        else if (outerSize > 1.0) { vec2 ouv = (vW.xz - outerOrigin) / outerSize; if (ouv.x >= 0.0 && ouv.y >= 0.0 && ouv.x <= 1.0 && ouv.y <= 1.0) th = texture2D(outerTex, ouv).r; }
         float depth = max(0.0, waterLevel - th);
         float dist = length(cameraPosition - vW);
         vec2 p = vW.xz;
