@@ -6,6 +6,7 @@ import { mulberry32, clamp } from './noise.js';
 import { M, glowTexture } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { Vehicles } from './vehicles.js';
+import { assemble, kitify } from './planeDetail.js';
 
 // Merge a static object tree into one mesh per material (huge draw-call saving for parked planes etc.).
 export function mergeByMaterial(root, skip = () => false) {
@@ -38,13 +39,15 @@ export function mergeByMaterial(root, skip = () => false) {
 }
 
 export function buildStatic(design) {
-  const g = new THREE.Group(); const m = new THREE.Matrix4();
-  for (const p of design.parts) {
-    const d = PARTS[p.id]; if (!d) continue;
-    const o = d.build(p.color); partMatrix(p, m); m.decompose(o.position, o.quaternion, o.scale);
-    o.traverse((c) => { if (c.isMesh) { c.castShadow = !c.material.transparent; c.receiveShadow = true; } if (c.userData.isDisc || c.userData.planeLight) c.visible = false; }); // parked: lights off
-    g.add(o);
-  }
+  const g = new THREE.Group(); const m = new THREE.Matrix4(), objs = [];
+  design.parts.forEach((p, i) => {
+    const d = PARTS[p.id]; if (!d) return;
+    const o = d.build(p.color, { detail: 1 }); partMatrix(p, m); m.decompose(o.position, o.quaternion, o.scale);
+    g.add(o); objs[i] = o;
+  });
+  assemble(design, objs, g, { near: false }); // fillets, pylons, wells and doors (merged later, so no extra draw calls)
+  kitify(g); // all small fittings share one material, so they merge into one mesh
+  for (const o of objs) if (o) o.traverse((c) => { if (c.isMesh) { c.castShadow = !c.material.transparent; c.receiveShadow = true; } if (c.userData.isDisc || c.userData.planeLight) c.visible = false; }); // parked: lights off
   // rest on the ground: lowest point at y=0
   const box = new THREE.Box3().setFromObject(g);
   g.children.forEach((c) => (c.position.y -= box.min.y));

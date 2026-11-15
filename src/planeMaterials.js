@@ -53,13 +53,22 @@ function skinDetailTexture() {
     hatch(1.62 * px, 1.75 * px, 0.36 * px, 0.2 * px);
     hatch(2.05 * px, 0.85 * px, 0.14 * px, 0.14 * px);
     h.strokeStyle = 'rgb(100,100,100)'; h.lineWidth = 2; h.beginPath(); h.arc(0.95 * px, 2.0 * px, 0.05 * px, 0, 7); h.stroke();
+    // wear (B): paint chipped to bare metal where hands and tools go: round the access panels, the filler cap and
+    // along a few seams (kept sparse: the tile repeats over the whole aircraft)
+    const wC = document.createElement('canvas'); wC.width = wC.height = S; const w = wC.getContext('2d');
+    w.fillStyle = '#000'; w.fillRect(0, 0, S, S);
+    const chips = (x0, y0, x1, y1, n, size) => { for (let i = 0; i < n; i++) { const t = rnd(), x = x0 + (x1 - x0) * t + (rnd() - 0.5) * 8, y = y0 + (y1 - y0) * t + (rnd() - 0.5) * 8, rr = size * (0.3 + rnd()); w.fillStyle = `rgb(0,0,${150 + rnd() * 105 | 0})`; w.beginPath(); w.ellipse(((x % S) + S) % S, ((y % S) + S) % S, rr, rr * (0.4 + rnd() * 0.6), rnd() * 3, 0, 7); w.fill(); } };
+    const ring = (cx, cy, ww, hh, n) => { chips(cx - ww / 2, cy - hh / 2, cx + ww / 2, cy - hh / 2, n, 2.2); chips(cx - ww / 2, cy + hh / 2, cx + ww / 2, cy + hh / 2, n, 2.2); chips(cx - ww / 2, cy - hh / 2, cx - ww / 2, cy + hh / 2, n / 2, 2.2); chips(cx + ww / 2, cy - hh / 2, cx + ww / 2, cy + hh / 2, n / 2, 2.2); };
+    ring(0.3 * px, 0.32 * px, 0.26 * px, 0.16 * px, 14); ring(1.62 * px, 1.75 * px, 0.36 * px, 0.2 * px, 16); ring(2.05 * px, 0.85 * px, 0.14 * px, 0.14 * px, 8);
+    for (let i = 0; i < 26; i++) { const a = rnd() * 7; chips(0.95 * px + Math.cos(a) * 0.06 * px, 2.0 * px + Math.sin(a) * 0.06 * px, 0.95 * px + Math.cos(a) * 0.075 * px, 2.0 * px + Math.sin(a) * 0.075 * px, 1, 2.5); }
+    chips(0.6 * px, 0, 0.6 * px, row, 30, 1.8); chips(0, row, S * 0.4, row, 26, 1.6);
     // combine (R = height/AO, G = roughness with low-frequency grime)
-    const H = h.getImageData(0, 0, S, S).data, R = r.getImageData(0, 0, S, S).data;
+    const H = h.getImageData(0, 0, S, S).data, R = r.getImageData(0, 0, S, S).data, W = w.getImageData(0, 0, S, S).data;
     const img = h.createImageData(S, S), o = img.data, n = makeNoise(5);
     for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
       const i = (y * S + x) * 4, a = (x / S) * Math.PI * 2, b = (y / S) * Math.PI * 2;
       const g = n.fbm(Math.cos(a) * 1.3 + 7, Math.sin(a) * 1.3 + Math.cos(b) * 1.1, 4) * 0.5 + n.fbm(Math.sin(b) * 2.2 + 3, Math.cos(b) * 2.2 + Math.sin(a) * 0.8, 3) * 0.5;
-      o[i] = H[i]; o[i + 1] = Math.min(255, Math.max(0, R[i] * (0.92 + g * 0.25))); o[i + 2] = 0; o[i + 3] = 255;
+      o[i] = H[i]; o[i + 1] = Math.min(255, Math.max(0, R[i] * (0.92 + g * 0.25))); o[i + 2] = W[i + 2]; o[i + 3] = 255;
     }
     const c = document.createElement('canvas'); c.width = c.height = S; c.getContext('2d').putImageData(img, 0, 0);
     const t = new THREE.CanvasTexture(c);
@@ -78,7 +87,9 @@ function skinCompile(sh) {
     #undef uv1`);
   // seams and rivets also darken the paint a little under direct sun (the aoMap alone only dims ambient light)
   sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
-    diffuseColor.rgb *= mix(1.0, texture2D(aoMap, vAoMapUv).r, 0.4);`);
+    vec3 skinT = texture2D(aoMap, vAoMapUv).rgb;
+    diffuseColor.rgb *= mix(1.0, skinT.r, 0.4);
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.58, 0.6, 0.62), skinT.b * 0.55); // chipped paint: bare aluminium`);
 }
 
 // Cabin windows for airliner tubes: channel-0 lathe UVs (u along the body 0..1, v around: 0 top, 0.25 right, 0.75 left).
@@ -195,13 +206,18 @@ let _tyre;
 function tyreTexture() {
   if (_tyre) return _tyre;
   // TorusGeometry: u runs around the wheel, v around the tube (v = 0/1 is the tread). R = bump, G = roughness.
-  const w = 8, h = 128, c = document.createElement('canvas'); c.width = w; c.height = h;
-  const g = c.getContext('2d'), img = g.createImageData(w, h);
+  // Sidewalls (v ~ 0.25 / 0.75): a moulded rib near the rim and a band of raised lettering.
+  const w = 256, h = 128, c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d'), img = g.createImageData(w, h), rnd = mulberry32(7), glyph = [];
+  for (let x = 0; x < w; x++) glyph.push((x % 64) < 40 && rnd() < 0.55); // little blocks of 'letters', three words round the tyre
   for (let y = 0; y < h; y++) {
     const v = y / h, d = Math.min(v, 1 - v); // distance from tread centre
     const groove = d < 0.12 && [0.02, 0.06, 0.1].some((q) => Math.abs(d - q) < 0.008);
-    const R = groove ? 60 : 230, G = d < 0.13 ? 255 : 200;
-    for (let x = 0; x < w; x++) { const i = (y * w + x) * 4; img.data[i] = R; img.data[i + 1] = G; img.data[i + 2] = 0; img.data[i + 3] = 255; }
+    for (let x = 0; x < w; x++) {
+      const rib = Math.abs(d - 0.31) < 0.006, letter = d > 0.2 && d < 0.24 && glyph[x] && ((y >> 1) + (x >> 2)) % 3 !== 0;
+      const R = groove ? 60 : rib ? 255 : letter ? 250 : 230, G = d < 0.13 ? 255 : letter ? 150 : 200;
+      const i = (y * w + x) * 4; img.data[i] = R; img.data[i + 1] = G; img.data[i + 2] = 0; img.data[i + 3] = 255;
+    }
   }
   g.putImageData(img, 0, 0);
   _tyre = new THREE.CanvasTexture(c);
@@ -245,4 +261,91 @@ export const PM = {
   roundel: () => decalMat('roundel', roundelTexture()),
   // wingtip position lights (green right / red left, from the mirror sign, with strobe), fin beacon, landing-light lens; see lightGeometry()
   light: lightMat,
+  // bare and treated metals for fittings, lips, nozzles and blades
+  metal: (kind = 'brushed') => cached('metal' + kind, () => {
+    const o = { brushed: [0xb9bdc3, 0.9, 0.38], polished: [0xd8dbe0, 1, 0.12], hot: [0x5a4a3e, 0.85, 0.42], titanium: [0x7d828a, 0.9, 0.45], anodised: [0x9c8c4e, 0.75, 0.35] }[kind];
+    return new THREE.MeshStandardMaterial({ color: o[0], metalness: o[1], roughness: o[2], roughnessMap: brushedTexture() });
+  }),
+  // propeller blades: matt black with yellow tips from a two-texel map (blade uv.x = 0.25, tip 0.75)
+  blade: () => cached('blade', () => {
+    const c = document.createElement('canvas'); c.width = 2; c.height = 1; const g = c.getContext('2d');
+    g.fillStyle = '#222326'; g.fillRect(0, 0, 1, 1); g.fillStyle = '#f2c300'; g.fillRect(1, 0, 1, 1);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
+    return new THREE.MeshStandardMaterial({ map: t, metalness: 0.35, roughness: 0.5 });
+  }),
+  // inside of exhaust pipes and stacks: sooty, dull
+  exhaust: () => cached('exhaust', () => new THREE.MeshStandardMaterial({ color: 0x0d0c0b, metalness: 0, roughness: 1 })),
+  // instrument faces (planar UVs 0..1)
+  dial: () => cached('dial', () => new THREE.MeshBasicMaterial({ map: dialTexture() })),
+  // decals draped on the skin (0..1 UVs): soot streaks behind exhausts, walkways, worn leading edges, wheel wells
+  soot: () => cached('soot', () => decalish({ color: 0x15120f, roughness: 1, alphaMap: sootTexture() })),
+  walkway: () => cached('walk', () => decalish({ map: walkwayTexture(), roughness: 0.9 })),
+  wear: () => cached('wear', () => decalish({ color: 0xb4b8be, metalness: 0.85, roughness: 0.35, alphaMap: wearTexture() })),
+  formation: () => cached('formation', () => new THREE.MeshBasicMaterial({ color: new THREE.Color(0.32, 0.5, 0.26) })),
+  bay: () => cached('bay', () => decalish({ color: 0x0b0c0d, roughness: 1, transparent: false })),
 };
+
+function decalish(o) {
+  return new THREE.MeshStandardMaterial({ transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4, ...o });
+}
+// Brushed-metal roughness streaks (G channel), planar or cylinder UVs.
+let _brushed;
+function brushedTexture() {
+  if (_brushed) return _brushed;
+  const W = 256, c = document.createElement('canvas'); c.width = c.height = W;
+  const g = c.getContext('2d'), img = g.createImageData(W, W), rnd = mulberry32(3), row = new Float32Array(W);
+  for (let y = 0; y < W; y++) row[y] = rnd();
+  for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
+    const v = 150 + (row[y] - 0.5) * 70 + (rnd() - 0.5) * 20 + Math.sin((x / W) * Math.PI * 2 * 3 + row[(y * 7) % W] * 6) * 8, i = (y * W + x) * 4;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = Math.max(0, Math.min(255, v)); img.data[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  _brushed = new THREE.CanvasTexture(c); _brushed.wrapS = _brushed.wrapT = THREE.RepeatWrapping;
+  return _brushed;
+}
+function dialTexture() {
+  return cached('dialTex', () => {
+    const S = 64, c = document.createElement('canvas'); c.width = c.height = S; const g = c.getContext('2d');
+    g.fillStyle = '#0c0d0f'; g.fillRect(0, 0, S, S);
+    g.strokeStyle = '#d8d8d0'; g.lineWidth = 3; g.beginPath(); g.arc(32, 32, 28, 0, 7); g.stroke();
+    g.lineWidth = 2; for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2; g.beginPath(); g.moveTo(32 + Math.cos(a) * 20, 32 + Math.sin(a) * 20); g.lineTo(32 + Math.cos(a) * 26, 32 + Math.sin(a) * 26); g.stroke(); }
+    g.strokeStyle = '#f2f2f2'; g.lineWidth = 3; g.beginPath(); g.moveTo(32, 32); g.lineTo(46, 20); g.stroke();
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  });
+}
+// u = along the streak (0 at the exhaust), v = across (0..1). alphaMap reads G.
+function sootTexture() {
+  return cached('sootTex', () => {
+    const W = 256, H = 64, c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d'), img = g.createImageData(W, H), n = makeNoise(9);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const u = x / W, v = y / H - 0.5, streak = 0.75 + 0.25 * n.fbm(u * 3, v * 14, 3);
+      const a = Math.pow(1 - u, 1.4) * Math.exp(-(v * v) / (0.02 + u * 0.06)) * streak * Math.min(1, u * 25);
+      const i = (y * W + x) * 4; img.data[i] = img.data[i + 1] = img.data[i + 2] = Math.max(0, Math.min(255, a * 300)); img.data[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    return new THREE.CanvasTexture(c);
+  });
+}
+// Non-slip walkway: dark grey grit with a black border line, "NO STEP" style hatching ends.
+function walkwayTexture() {
+  return cached('walkTex', () => {
+    const W = 128, H = 256, c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d'), rnd = mulberry32(21);
+    g.fillStyle = 'rgba(52,54,57,1)'; g.fillRect(6, 6, W - 12, H - 12);
+    for (let i = 0; i < 2500; i++) { const v = 40 + rnd() * 40 | 0; g.fillStyle = `rgb(${v},${v},${v + 2})`; g.fillRect(6 + rnd() * (W - 12), 6 + rnd() * (H - 12), 1.5, 1.5); }
+    g.strokeStyle = '#141414'; g.lineWidth = 4; g.strokeRect(3, 3, W - 6, H - 6);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t;
+  });
+}
+// Leading-edge erosion: solid along the edge (u = 0.5), breaking up into chips towards both borders.
+function wearTexture() {
+  return cached('wearTex', () => {
+    const W = 512, H = 64, c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d'), img = g.createImageData(W, H), n = makeNoise(13);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const d = Math.abs(y / H - 0.5) * 2, k = n.fbm(x / 18, y / 6, 3) * 0.5 + 0.5;
+      const a = d < 0.35 ? 1 : k > 0.35 + (d - 0.35) * 1.2 ? 1 : 0, i = (y * W + x) * 4;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = a * 255; img.data[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    const t = new THREE.CanvasTexture(c); t.wrapS = THREE.RepeatWrapping; return t;
+  });
+}

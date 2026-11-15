@@ -5,6 +5,7 @@ import { RoomEnvironment } from '../vendor/addons/RoomEnvironment.js';
 import { PARTS, CATEGORIES, PAINTS, partInfo } from './parts.js';
 import { analyze, partMatrix, partScale, sizeAxes, mirroredOf, newPart, subtree, removeParts, cloneDesign } from './design.js';
 import { makeNoise } from './noise.js';
+import { assemble, ControlPreview } from './planeDetail.js';
 
 const ghostMat = new THREE.MeshBasicMaterial({ color: 0x4fc3ff, transparent: true, opacity: 0.45, depthWrite: false });
 
@@ -28,6 +29,7 @@ export class Hangar {
     this.raycaster = new THREE.Raycaster();
     this.bindPointer();
     this.onChange = () => {};
+    this.preview = new ControlPreview(); // control check: arrows/WASD, Q/E, F
   }
 
   buildEnv() {
@@ -77,7 +79,7 @@ export class Hangar {
   }
 
   activate(on) {
-    this.controls.enabled = on; this.needsRender = true;
+    this.controls.enabled = on; this.needsRender = true; this.preview.enabled = on;
     if (on) { this.rebuild(); }
   }
 
@@ -85,7 +87,7 @@ export class Hangar {
   pushUndo() { this.undoStack.push(JSON.stringify(this.design)); if (this.undoStack.length > 80) this.undoStack.shift(); this.redoStack = []; }
   undo() { if (!this.undoStack.length) return; this.redoStack.push(JSON.stringify(this.design)); this.design = JSON.parse(this.undoStack.pop()); this.sel = -1; this.rebuild(); }
   redo() { if (!this.redoStack.length) return; this.undoStack.push(JSON.stringify(this.design)); this.design = JSON.parse(this.redoStack.pop()); this.sel = -1; this.rebuild(); }
-  load(design, frame = true) { this.design = cloneDesign(design); this.sel = -1; this.undoStack = []; this.redoStack = []; this.rebuild(); if (frame) this.frame(); }
+  load(design, frame = true) { this.design = cloneDesign(design); this.sel = -1; this.undoStack = []; this.redoStack = []; this.rebuild(); if (frame) this.frame(); this.preview.playCheck(); }
 
   partner(i) {
     // centreline-rooted pairs (wings/tailplanes mounted at x=0) count too: the mirror flag tells the twins apart
@@ -226,20 +228,22 @@ export class Hangar {
   rebuild() {
     this.designGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.designGroup.clear();
-    const m = new THREE.Matrix4();
+    const m = new THREE.Matrix4(), objs = [];
     this.design.parts.forEach((p, i) => {
       const d = PARTS[p.id]; if (!d) return;
-      const o = d.build(p.color); partMatrix(p, m); m.decompose(o.position, o.quaternion, o.scale);
+      const o = d.build(p.color, { detail: 2 }); partMatrix(p, m); m.decompose(o.position, o.quaternion, o.scale); objs[i] = o;
       o.userData.partIndex = i;
       o.traverse((c) => { if (c.isMesh) { c.castShadow = !c.material.transparent; c.receiveShadow = true; } if (c.userData.isDisc) c.visible = false; });
       this.designGroup.add(o);
     });
+    assemble(this.design, objs, this.designGroup);
     // rest on the floor: lowest point at y=0 (gear touching)
     this.designGroup.position.set(0, 0, 0); this.designGroup.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(this.designGroup);
     this.designGroup.position.y = box.isEmpty() ? 2 : -box.min.y + 0.02;
     this.designGroup.updateMatrixWorld(true);
     this.stats = analyze(this.design);
+    this.preview.attach(this.design, objs, this.stats.com);
     // markers
     const show = this.showBalance && this.design.parts.length > 0;
     this.markers.visible = show;
@@ -302,6 +306,7 @@ export class Hangar {
   // Returns true when the view changed and needs drawing (the hangar only renders on demand).
   update(dt) {
     if (this.controls.update()) this.needsRender = true;
+    if (this.preview.update(dt)) this.needsRender = true;
     if (this.selBox.visible) this.updateSelection();
     if (this.placing && this.ghost) { ghostMat.opacity = 0.35 + Math.sin(performance.now() / 200) * 0.15; this.needsRender = true; }
     const r = this.needsRender; this.needsRender = false; return r;
@@ -321,7 +326,7 @@ export function makeThumbnails(size = 96) {
   const cam = new THREE.PerspectiveCamera(30, 1, 0.01, 500);
   const out = {};
   for (const id in PARTS) {
-    const o = PARTS[id].build(PARTS[id].color); scene.add(o);
+    const o = PARTS[id].build(PARTS[id].color, { detail: 2 }); scene.add(o);
     const box = new THREE.Box3().setFromObject(o); const c = box.getCenter(new THREE.Vector3()); const s = box.getSize(new THREE.Vector3()).length();
     cam.position.copy(c).add(new THREE.Vector3(0.9, 0.55, 0.8).normalize().multiplyScalar(s * 1.75)); cam.lookAt(c);
     r.render(scene, cam); out[id] = r.domElement.toDataURL();

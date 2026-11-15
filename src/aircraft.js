@@ -5,6 +5,7 @@ import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustS
 import { M } from './materials.js';
 import { clamp, lerp } from './noise.js';
 import { keepHeatPatch } from './sonic.js';
+import { assemble, updateDetail, mergeStatic } from './planeDetail.js';
 
 export const REALISM = {
   arcade: { id: 'arcade', name: 'Arcade', aeroTorque: 0, assist: 1, liftMult: 1.6, minArea: 12, stallSharp: 0, sideslipKill: 1.6, gearMult: 2.5, crashMult: 2.6, gLimit: Infinity, thrustTorque: 0, propTorque: 0, dragMult: 0.6, autoLevel: 0.9, waveMult: 0.45 },
@@ -120,7 +121,7 @@ export class Aircraft {
     design.parts.forEach((p, i) => {
       const d = PARTS[p.id]; if (!d) return;
       const info = partInfo(p.id);
-      const obj = d.build(p.color);
+      const obj = d.build(p.color, { detail: 2 });
       partMatrix(p, m); m.decompose(obj.position, obj.quaternion, obj.scale);
       obj.traverse((o) => { if (o.isMesh) { o.castShadow = !o.material.transparent; o.receiveShadow = !o.material.transparent; } });
       this.root.add(obj);
@@ -181,6 +182,7 @@ export class Aircraft {
       }
       this.parts.push(part);
     });
+    { const objs = []; for (const p of this.parts) objs[p.i] = p.obj; assemble(design, objs, this.root); mergeStatic(objs, this.root); } // fillets, pylons, doors, skin furniture (visual only), then one mesh per material per part
     this.hasEngine = this.parts.some((p) => p.engine);
     this.hasRetract = this.parts.some((p) => p.gear?.retract);
     this.hasSmoke = this.parts.some((p) => p.smoke);
@@ -822,6 +824,7 @@ export class Aircraft {
       }
     }
     if (this.landingLight) this.landingLight.intensity = env.night ? 4000 : 0;
+    updateDetail(this, dt); // gear doors, slats, spoilers
     if (this.normalsDirty) {
       this.normalsDirty = false;
       this.root.traverse((o) => { if (o.isMesh && o.userData.dirtyNormals) { o.geometry.computeVertexNormals(); o.userData.dirtyNormals = false; } });
