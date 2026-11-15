@@ -1016,6 +1016,44 @@ export class HangarEnv {
     };
   }
 
+  // ---------- GPU residency: nothing heavy stays on the GPU during a flight ----------
+  // release() frees the textures, geometry buffers, shadow maps and render targets (their CPU-side images, canvases
+  // and arrays stay, so nothing is downloaded or decoded again); restoreStep() re-uploads the textures a few per frame
+  // on the way back. Compiled shader programs are kept (tiny, and recompiling them would hitch).
+  heavyTextures() {
+    const set = new Set(), keys = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'lightMap', 'emissiveMap'];
+    const mat = (m) => { for (const k of keys) if (m?.[k]?.isTexture) set.add(m[k]); };
+    for (const m of Object.values(this.M)) mat(m); mat(this.floorMat); mat(this.hillsMat);
+    if (this.floorU.tDecal.value) set.add(this.floorU.tDecal.value);
+    this.props?.traverse((o) => { if (o.material) [].concat(o.material).forEach(mat); });
+    return [...set];
+  }
+  release() {
+    if (this.released) return; this.released = true; this.restoreQ = null;
+    for (const t of this.heavyTextures()) t.dispose();
+    this.root.traverse((o) => { if (o.geometry && o !== this.sky) o.geometry.dispose(); });
+    for (const l of [this.sun, this.key]) { l.shadow.map?.dispose(); l.shadow.map = null; l.shadow.needsUpdate = true; }
+    this.reflRT?.dispose(); this.cubeRT?.dispose();
+  }
+  get restoring() { return !!this.restoreQ; }
+  beginRestore() {
+    if (!this.released) return false;
+    this.released = false;
+    this.restoreQ = this.heavyTextures().filter((t) => t.image).sort((a, b) => (b.image.width * b.image.height) - (a.image.width * a.image.height));
+    this.restoreFrames = 0;
+    for (const l of [this.sun, this.key]) l.shadow.needsUpdate = true;
+    return true;
+  }
+  // upload up to ~12 Mpx of textures this frame; true when everything is back
+  restoreStep() {
+    const q = this.restoreQ; if (!q) return true;
+    let px = 0;
+    while (q.length && (px < 12e6 || this.restoreFrames > 20)) { const t = q.shift(); px += t.image.width * t.image.height; this.renderer.initTexture(t); }
+    this.restoreFrames++;
+    if (q.length) return false;
+    this.restoreQ = null; return true;
+  }
+
   // keep the orbit camera inside the shell and out of the office block (pull it in along the line to the target)
   clampCamera(camera, target) {
     const d = camera.position.clone().sub(target), len = d.length(); if (len < 1e-4) return false;

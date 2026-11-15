@@ -62,7 +62,16 @@ export class Hangar {
 
   activate(on) {
     this.controls.enabled = on; this.needsRender = true; this.preview.enabled = on;
-    if (on) { if (this.env.setHour(flightHour())) this.envDirty = true; this.rebuild(); }
+    const cv = this.renderer.domElement;
+    if (on) {
+      // back from a flight: re-upload the hangar a few textures per frame behind a hidden canvas, then fade it in
+      if (this.env.beginRestore()) { cv.style.transition = 'none'; cv.style.opacity = '0'; }
+      if (this.env.setHour(flightHour())) this.envDirty = true;
+      this.rebuild();
+    } else {
+      cv.style.transition = 'none'; cv.style.opacity = ''; // the flight shares the canvas
+      this.env.release(); // none of the hangar's GPU memory stays around during the flight
+    }
   }
 
   // ---------- design editing ----------
@@ -289,6 +298,11 @@ export class Hangar {
   }
   // Returns true when the view changed and needs drawing (the hangar only renders on demand).
   update(dt) {
+    if (this.env.restoring) {
+      if (!this.env.restoreStep()) return false;
+      const cv = this.renderer.domElement; requestAnimationFrame(() => { cv.style.transition = 'opacity 0.25s'; cv.style.opacity = ''; });
+      this.shadowsDirty(); this.needsRender = true;
+    }
     if (this.controls.update()) this.needsRender = true;
     if (this.preview.update(dt)) this.needsRender = true;
     if (this.env.clampCamera(this.camera, this.controls.target)) this.needsRender = true; // walls, office block
