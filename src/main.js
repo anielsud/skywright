@@ -230,6 +230,20 @@ function buildInfo() {
   const when = BUILT ? new Date(BUILT).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'local dev build';
   return `Skywright ${VERSION} · build ${COMMIT} · ${when}`;
 }
+// Ask the server which build is live; if it's newer, clear the offline cache and reload straight into it.
+async function updateNow(status) {
+  status.textContent = 'Checking…';
+  try {
+    const txt = await (await fetch(`src/version.js?t=${Date.now()}`, { cache: 'no-store' })).text();
+    const live = (txt.match(/COMMIT = '([^']+)'/) || [])[1];
+    if (live && live === COMMIT && COMMIT !== 'dev') { status.textContent = 'You have the latest version ✓'; return; }
+    status.textContent = live && live !== 'dev' ? `Updating to build ${live}…` : 'Reloading…';
+    const reg = await navigator.serviceWorker?.getRegistration();
+    await reg?.update().catch(() => {});
+    if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+    setTimeout(() => location.reload(), 400);
+  } catch (e) { status.textContent = 'Couldn’t reach the server. Are you online?'; }
+}
 function settingsModal() {
   const m = ui.modal(`
     <h2>Settings</h2>
@@ -241,10 +255,12 @@ function settingsModal() {
     <label class="check"><input type="checkbox" id="inv" ${settings.invert ? 'checked' : ''}> Invert pitch (push stick forward / up-arrow to climb)</label>
     <label class="lbl">Volume</label><input type="range" min="0" max="1" step="0.05" value="${settings.volume}" id="vol">
     <p class="version">${buildInfo()}</p>
+    <div class="update-row"><button id="upd">Check for updates</button><span id="upd-status"></span></div>
     <div class="modal-foot"><button data-close class="primary">Done</button></div>`);
   const el = m.el;
   const pick = (attr, key, after) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { settings[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); LS.set('settings', settings); after?.(); }));
   pick('q', 'quality', () => { perf.scale = 1; perf.level = 0; applyQuality(); });
+  el.querySelector('#upd').addEventListener('click', () => updateNow(el.querySelector('#upd-status')));
   el.querySelector('#fps').addEventListener('change', (e) => { settings.showFps = e.target.checked; LS.set('settings', settings); });
   pick('u', 'units', renderInspector); pick('cm', 'controlMode', () => controls.setMode(settings.controlMode)); pick('t', 'touch');
   el.querySelector('#inv').addEventListener('change', (e) => { settings.invert = e.target.checked; controls.invert = settings.invert; LS.set('settings', settings); });
@@ -655,8 +671,16 @@ function onResize() {
 window.addEventListener('resize', onResize);
 // Long-presses on a tablet must never open the browser's context menu or start a text selection:
 // both cancel the touch and leave the controls stuck.
-document.addEventListener('contextmenu', (e) => { if (!e.target.closest('input, textarea')) e.preventDefault(); });
-document.addEventListener('selectstart', (e) => { if (!e.target.closest('input, textarea')) e.preventDefault(); });
+const notText = (e) => !(e.target.closest && e.target.closest('input, textarea'));
+for (const t of [window, document]) {
+  t.addEventListener('contextmenu', (e) => { if (notText(e)) { e.preventDefault(); e.stopPropagation(); } }, { capture: true });
+  t.addEventListener('selectstart', (e) => { if (notText(e)) e.preventDefault(); }, { capture: true });
+}
+window.oncontextmenu = (e) => !notText(e) || false;
+// Stop the long-press gesture itself on the 3D view and the flight controls (Chrome/Android shows its menu
+// from the touch, not only via the contextmenu event). Pointer events still arrive, so nothing else changes.
+const noTouchDefault = (el) => el.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+noTouchDefault(canvas); noTouchDefault(document.getElementById('touch-root'));
 document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'flight' && F && !F.paused) togglePause(true); });
 
 // ---------- boot ----------
