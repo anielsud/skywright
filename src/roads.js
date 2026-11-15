@@ -4,26 +4,63 @@ import * as THREE from 'three';
 import { mulberry32, smoothstep, lerp, clamp } from './noise.js';
 import { glowTexture as glow } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
+import { GRADE, VERGE, gridSampler, planGrid, regrid, markRoad, trimShared, unloop, crossings, route, highestReachable, smoothPath, simplifyPath, relaxCurves, profileRoad, carveGrid, RoadSurface } from './roadgrade.js';
 
 const RWY_HALF = 900;
 
 export function planNetwork(w) {
+  const tStart = performance.now();
   const r = mulberry32(w.loc.seed * 13 + 1);
   const H = (x, z) => w.sampleGrid(x, z);
-  const isl = w.loc.id === 'islands', desert = !!w.loc.desert;
+  const isl = w.loc.id === 'islands', desert = !!w.loc.desert, wl = w.waterLevel;
+  // routing and profiles read the raw fine heights (w.Hh0), with the towns flattened in once they are placed
+  const raw = gridSampler(w, w.Hh0, w.hR0), towns = [];
+  const terr = (x, z) => {
+    let h = raw(x, z);
+    for (const t of towns) { const k = 1 - smoothstep(420 * t.size * 0.6, 420 * t.size * 1.4, Math.hypot(x - t.c.x, z - t.c.z)); if (k > 0) h = lerp(h, t.h, k); }
+    return h;
+  };
+  const LA = [0, 0, 0, 0], wetLand = !!(w.bake && !w.bake.dry);
+  const wetAt = (x, z, h) => h < wl + 0.6 || (wetLand && w.landAt(x, z, LA)[0] > 0.55);
+  const apt = (x, z) => Math.abs(x - 100) < 470 && Math.abs(z) < RWY_HALF + 350;
+  const G = planGrid(w, terr, wetAt, (x, z) => apt(x, z) || Math.abs(x) > w.half - 400 || Math.abs(z) > w.half - 400);
+  const go = (a, b, o) => route(G, a.x, a.z, b.x, b.z, o);
   const roads = [];
-  // 1) ring road around the airport
+  // 1) ring road around the airport: eight waypoints on an ellipse (pulled in or out off high or wet ground),
+  // joined by grade-limited routes
   {
-    const pts = [], rx = isl ? 650 : 900, rz = isl ? 1250 : 2300;
-    for (let k = 0; k < 240; k++) {
-      const a = (k / 240) * Math.PI * 2, wob = 1 + w.noise.n2(Math.cos(a) * 1.3, Math.sin(a) * 1.3) * 0.18;
-      pts.push(new THREE.Vector3(Math.cos(a) * rx * wob + 140, 0, Math.sin(a) * rz * wob));
+    const rx = isl ? 650 : 900, rz = isl ? 1250 : 2300, wps = [];
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2; let best = null, bs = 1e9;
+      for (let f = 1.15; f >= 0.6; f -= 0.05) {
+        const x = Math.cos(a) * rx * f + 140, z = Math.sin(a) * rz * f; if (apt(x, z)) break;
+        const h = terr(x, z), sc = Math.max(0, h - w.loc.rwyH - 15) + (wetAt(x, z, h) ? 500 : 0) + Math.abs(f - 1) * 40;
+        if (sc < bs) { bs = sc; best = new THREE.Vector3(x, 0, z); }
+      }
+      wps.push(best);
     }
-    roads.push({ pts: resample(new THREE.CatmullRomCurve3(pts, true).getSpacedPoints(800).slice(0, -1), 8, true), closed: true, kind: 'main', width: 9 });
+    const pts = [];
+    for (let k = 0; k < 8; k++) {
+      const leg = go(wps[k], wps[(k + 1) % 8], { gmax: GRADE.main, water: 10, margin: 1200 });
+      pts.push(...(leg ? simplifyPath(leg, 14) : [wps[k], wps[(k + 1) % 8]]).slice(0, -1));
+    }
+    const R20 = resample(pts, 20, true); // legs that run out and back up a side valley to a waypoint: cut the spur
+    roads.push({ pts: resample(relaxCurves(resample(smoothPath(simplifyPath(unloop(R20, 70, Math.floor(R20.length * 0.35)), 10), { closed: true }), 8, true), 30, true), 8, true), closed: true, kind: 'main', width: 9 });
   }
   const ring = roads[0].pts;
+  markRoad(G, ring);
+  // roads join the network where they meet it: the stretch routed along an existing road is dropped, the end snaps
+  // to the road point it meets (and its profile is pinned to that point's height)
+  const snap = (p) => { let best = null, bd = 1e18; for (const q of roads) if (q.kind !== 'street') for (const s of q.pts) { const d = (s.x - p.x) ** 2 + (s.z - p.z) ** 2; if (d < bd) { bd = d; best = s; } } return best; };
+  // (and it starts where it is clear of the road it leaves: no stretch of two roads side by side, overlapping)
+  const near = (p, d) => roads.some((q) => q.kind !== 'street' && q.pts.some((s) => (s.x - p.x) ** 2 + (s.z - p.z) ** 2 < d * d));
+  const branch = (leg, o) => {
+    const T = trimShared(G, leg, false); let P = resample(relaxCurves(unloop(resample(smoothPath(T, o), 8), 14, 25), o.rmin ?? 18, false, 200), 8), k = 0;
+    while (k < P.length - 4 && near(P[k], 17)) k++;
+    const from = snap(P[k]);
+    return { pts: resample([from.clone(), ...P.slice(k)], 8), from };
+  };
   // 2) town sites: flat, dry, away from the runway
-  const towns = [];
   const nTowns = isl ? 2 : 3;
   for (let tries = 0; tries < 900 && towns.length < nTowns; tries++) {
     const a = r() * Math.PI * 2, d = (isl ? 700 : 1200) + r() * (isl ? 1000 : 2200);
@@ -40,12 +77,25 @@ export function planNetwork(w) {
     const dir = new THREE.Vector3(tgt.x - x, 0, tgt.z - z).normalize();
     towns.push({ c: new THREE.Vector3(x, (mn + mx) / 2, z), dir, size: towns.length === 0 ? 1 : 0.7, ringIdx: best, h: (mn + mx) / 2 });
   }
-  // 3) connectors + streets
+  // the towns are flattened, so is the cost grid there; and (as World.dryLand does) no rivers in them
+  for (const t of towns) { const R = 420 * t.size * 1.4; regrid(G, terr, t.c.x - R, t.c.z - R, t.c.x + R, t.c.z + R); }
+  if (wetLand && towns.length) {
+    w.net = { towns, roads: [] }; w.dryLand();
+    for (let k = 0; k < G.h.length; k++) if (G.wet[k]) G.wet[k] = wetAt(G.x0 + (k % G.n) * G.cell, G.x0 + Math.floor(k / G.n) * G.cell, G.h[k]) ? 1 : 0;
+  }
+  // 3) connectors (from the end of the main street to the ring, routed) + streets
+  const connectors = [];
   for (const t of towns) {
-    const tgt = ring[t.ringIdx];
-    roads.push({ pts: resample([t.c.clone(), tgt.clone()], 8), kind: 'main', width: 8 });
-    const L = 520 * t.size, side = new THREE.Vector3(-t.dir.z, 0, t.dir.x);
-    roads.push({ pts: resample([t.c.clone().addScaledVector(t.dir, -L * 0.6), t.c.clone().addScaledVector(t.dir, L * 0.4)], 8), kind: 'street', width: 7 });
+    const tgt = ring[t.ringIdx], L = 520 * t.size, e = t.c.clone().addScaledVector(t.dir, L * 0.4);
+    const leg = go(e, tgt, { gmax: GRADE.main, water: 10, margin: 1500 });
+    const P = leg ? trimShared(G, leg, true) : [e, tgt.clone()], to = snap(P.at(-1));
+    let Q = relaxCurves(resample([t.c.clone(), ...(leg ? smoothPath(P) : P)], 8), 20, false, 200);
+    while (Q.length > 4 && Q.at(-2).distanceTo(to) < 16) Q.pop(); // meet the road square on, no hook at the end
+    Q[Q.length - 1] = to.clone();
+    const rd = { pts: resample(Q, 8), kind: 'main', width: 8, town: t, to };
+    roads.push(rd); connectors.push(rd); markRoad(G, rd.pts);
+    const side = new THREE.Vector3(-t.dir.z, 0, t.dir.x);
+    roads.push({ pts: resample([t.c.clone().addScaledVector(t.dir, -L * 0.6), t.c.clone().addScaledVector(t.dir, L * 0.4)], 8), kind: 'street', width: 7, mainOf: t });
     const nCross = t.size > 0.9 ? 4 : 3;
     t.streets = [];
     for (let k = 0; k < nCross; k++) {
@@ -73,58 +123,75 @@ export function planNetwork(w) {
       }
     }
   }
-  // 4) highway / causeway: follow low ground away from the ring road (bridges over water)
-  const highways = [];
-  if (isl) {
-    const a = ring.reduce((b, p) => (p.x - p.z > b.x - b.z ? p : b), ring[0]); // NE side of the ring
-    const tgt = new THREE.Vector3(5200 - 900, 0, -3800 + 700);
-    const pts = []; for (let k = 0; k <= 60; k++) { const t = k / 60; pts.push(new THREE.Vector3(lerp(a.x, tgt.x, t) + Math.sin(t * 3) * 180, 0, lerp(a.z, tgt.z, t))); }
-    highways.push(resample(new THREE.CatmullRomCurve3(pts).getSpacedPoints(300), 8));
-  } else {
-    for (const endIdx of [0, Math.floor(ring.length / 2), Math.floor(ring.length / 4), Math.floor(ring.length * 3 / 4)]) {
-      if (highways.length >= (desert ? 3 : 2)) break;
-      const start = ring[endIdx];
-      let p = start.clone(), heading = Math.atan2(start.x - 140, -start.z) + Math.PI; // pointing away from centre
-      heading = Math.atan2(start.x - 140, start.z) ; // direction outward (x,z)
-      const pts = [p.clone()];
-      let ang = Math.atan2(start.z, start.x - 140);
-      for (let s = 0; s < 70; s++) {
-        let bestA = ang, bestS = 1e12;
-        for (let c = -3; c <= 3; c++) {
-          const aa = ang + c * 0.12, q = p.clone().add(new THREE.Vector3(Math.cos(aa) * 130, 0, Math.sin(aa) * 130));
-          const hh = H(q.x, q.z), score = Math.abs(hh - H(p.x, p.z)) * 3 + hh * 0.3 + Math.abs(c) * 4 + (Math.hypot(q.x, q.z) > 10200 ? 1e6 : 0);
-          if (score < bestS) { bestS = score; bestA = aa; }
-        }
-        ang = bestA; p = p.clone().add(new THREE.Vector3(Math.cos(ang) * 130, 0, Math.sin(ang) * 130));
-        if (Math.abs(p.x) > 10300 || Math.abs(p.z) > 10300) break;
-        pts.push(p);
-      }
-      if (pts.length > 20) highways.push(resample(new THREE.CatmullRomCurve3(pts).getSpacedPoints(pts.length * 16), 8));
+  // 4) highways: out along the valleys under the ruling grade (bridges over water; a causeway on the islands)
+  const fromRing = (tgt) => ring.reduce((b, p) => ((p.x - tgt.x) ** 2 + (p.z - tgt.z) ** 2 < (b.x - tgt.x) ** 2 + (b.z - tgt.z) ** 2 ? p : b), ring[0]);
+  const targets = [];
+  if (isl) targets.push(new THREE.Vector3(5200 - 900, 0, -3800 + 700));
+  else {
+    // the lowest dry ground ~9 km out (the valley floors), spread round the compass
+    const cand = [];
+    for (let k = 0; k < 90; k++) {
+      const a = (k / 90) * Math.PI * 2, x = 140 + Math.cos(a) * 9000, z = Math.sin(a) * 9000;
+      if (Math.abs(x) > w.half - 700 || Math.abs(z) > w.half - 700) continue;
+      const h = terr(x, z); cand.push({ a, p: new THREE.Vector3(x, 0, z), s: h + (wetAt(x, z, h) ? 80 : 0) });
+    }
+    cand.sort((p, q) => p.s - q.s);
+    for (const c of cand) {
+      if (targets.length >= (desert ? 3 : 2)) break;
+      if (targets.some((t) => Math.abs(Math.atan2(Math.sin(t.a - c.a), Math.cos(t.a - c.a))) < 1.75)) continue;
+      targets.push(Object.assign(c.p, { a: c.a }));
     }
   }
-  for (const pts of highways) roads.push({ pts, kind: 'highway', width: 10 });
-  // heights: smoothed along each road, bridges where crossing water
-  for (const rd of roads) {
-    const n = rd.pts.length;
-    let hs = rd.pts.map((p) => H(p.x, p.z));
-    rd.bridge = hs.map((h) => h < w.waterLevel + 0.8);
-    // widen bridge spans a little so ramps start on land
-    const br = rd.bridge.slice(); for (let i = 0; i < n; i++) if (rd.bridge[i]) for (let k = -4; k <= 4; k++) if (i + k >= 0 && i + k < n) br[i + k] = true; rd.bridge = br;
-    hs = hs.map((h, i) => (rd.bridge[i] ? Math.max(h, w.waterLevel + 9) : h));
-    for (let it = 0; it < 40; it++) hs = hs.map((h, i) => { const a = hs[rd.closed ? (i - 1 + n) % n : Math.max(0, i - 1)], b = hs[rd.closed ? (i + 1) % n : Math.min(n - 1, i + 1)]; return (a + h * 2 + b) / 4; });
-    rd.pts.forEach((p, i) => (p.y = hs[i]));
+  const highways = [];
+  for (const tgt of targets) {
+    const leg = go(fromRing(tgt), tgt, { gmax: GRADE.highway, water: isl ? 4 : 7, margin: 2500, alt: 0.4, h0: w.loc.rwyH, turn: 0.6 });
+    if (!leg) continue;
+    const rd = Object.assign(branch(leg, { tol: 18, maxL: 60, rmin: 40 }), { kind: 'highway', width: 10 });
+    highways.push(rd); roads.push(rd); markRoad(G, rd.pts);
   }
-  // 5) railway alongside the first highway (mountains + desert)
+  // 4b) mountain roads: from the ring (or the end of the causeway) up to the highest ground a minor road can reach
+  // within its grade (a hamlet, a viewpoint, the volcano's flank). Nothing forces a shape: the switchbacks are what
+  // the grade leaves. (The alpine walls are mostly steeper than 1:1, so these stay a few hundred metres up.)
+  const climbs = [], cg = GRADE.lane;
+  const starts = isl ? (highways[0] ? [highways[0].pts.at(-1)] : []) : [ring.reduce((b, p) => (p.x > b.x ? p : b)), ring.reduce((b, p) => (p.x < b.x ? p : b))];
+  for (const a of starts) {
+    const tgt = highestReachable(G, a.x, a.z, cg * 0.9, isl ? 3000 : 3500, 500);
+    if (tgt && tgt.y - terr(a.x, a.z) > 60 && !climbs.some((c) => c.tgt.distanceTo(tgt) < 1200)) climbs.push({ tgt, from: a });
+  }
+  for (const m of climbs) {
+    const leg = go(m.from, m.tgt, { gmax: cg, water: 10, margin: 1500, turn: 0.4 });
+    if (!leg) continue;
+    const rd = Object.assign(branch(leg, { tol: 10, maxL: 45, rmin: 15 }), { kind: 'main', width: 6.5, g: cg, mountain: true });
+    roads.push(rd); markRoad(G, rd.pts);
+  }
+  // vertical profiles: the ring first, then the streets, then the roads that join them (pinned to them), each also
+  // pinned to meet the roads it crosses at grade
+  const done = [];
+  const cross = (rd) => done.flatMap((q) => crossings(rd.pts, q.pts, q.closed)).filter((c) => c.i > 2 && c.i < rd.pts.length - 3);
+  const prof = (rd, pins = []) => { profileRoad(rd, { g: rd.g ?? (rd.lane ? GRADE.lane : GRADE[rd.kind]), terr, wetAt, wl, clear: rd.kind === 'highway' ? 9 : rd.kind === 'main' ? 7 : 5, pins: [...pins, ...cross(rd)], smooth: rd.kind === 'street' ? 2 : 3 }); if (rd.kind !== 'street') done.push(rd); };
+  const nearest = (P, p) => { let bi = 0, bd = 1e18; P.forEach((q, i) => { const d = (q.x - p.x) ** 2 + (q.z - p.z) ** 2; if (d < bd) { bd = d; bi = i; } }); return P[bi]; };
+  prof(roads[0]);
+  for (const rd of roads) if (rd.kind === 'street') prof(rd);
+  for (const rd of connectors) {
+    const main = roads.find((q) => q.mainOf === rd.town), pins = [{ i: rd.pts.length - 1, y: rd.to.y }];
+    if (main) pins.push({ i: 0, y: nearest(main.pts, rd.pts[0]).y });
+    prof(rd, pins);
+  }
+  for (const rd of roads) if (rd.from) prof(rd, [{ i: 0, y: rd.from.y }]); // in the order they were built
+  // 5) railway alongside the first highway (mountains + desert): a broad offset of its line, at a railway's grade
   let rail = null;
   if (!isl && highways[0]) {
-    const hw = highways[0];
-    const pts = hw.map((p, i) => { const a = hw[Math.max(0, i - 1)], b = hw[Math.min(hw.length - 1, i + 1)]; const d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); return new THREE.Vector3(p.x - d.z * 40, p.y, p.z + d.x * 40); });
-    rail = { pts: resample(pts, 6), width: 5 };
-    let hs = rail.pts.map((p) => H(p.x, p.z)); const n = hs.length;
-    rail.bridge = hs.map((h) => h < w.waterLevel + 0.8); hs = hs.map((h, i) => (rail.bridge[i] ? Math.max(h, w.waterLevel + 8) : h));
-    for (let it = 0; it < 80; it++) hs = hs.map((h, i) => (hs[Math.max(0, i - 1)] + h * 2 + hs[Math.min(n - 1, i + 1)]) / 4);
-    rail.pts.forEach((p, i) => (p.y = hs[i]));
+    const hw = smoothPath(simplifyPath(highways[0].pts, 60), { maxL: 120, iters: 4 });
+    const side = (o) => hw.map((p, i) => { const a = hw[Math.max(0, i - 1)], b = hw[Math.min(hw.length - 1, i + 1)]; const d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); return new THREE.Vector3(p.x - d.z * o, 0, p.z + d.x * o); });
+    const rough = (P) => P.reduce((s, p, i) => s + (i ? Math.abs(terr(p.x, p.z) - terr(P[i - 1].x, P[i - 1].z)) : 0), 0);
+    const [L, R] = [side(40), side(-40)]; // the side with the gentler ground
+    rail = { pts: resample(rough(L) <= rough(R) ? L : R, 6), width: 5, kind: 'rail' };
+    // level crossings, and level wherever it runs close beside a road (no track a few metres above a carriageway)
+    const beside = [];
+    for (const q of done) rail.pts.forEach((p, i) => { const s = nearest(q.pts, p); if ((s.x - p.x) ** 2 + (s.z - p.z) ** 2 < ((q.width + 5) / 2 + 4) ** 2) beside.push({ i, y: s.y }); });
+    profileRoad(rail, { g: GRADE.rail, terr, wetAt, wl, clear: 8, smooth: 6, pins: [...cross(rail), ...beside] });
   }
+  w.planMs = Math.round(performance.now() - tStart);
   // 6) farm fields (or pivot-irrigation circles in the desert)
   const fields = [];
   const roadNear = (x, z, d) => roads.some((rd) => rd.pts.some((p, i) => i % 3 === 0 && (p.x - x) ** 2 + (p.z - z) ** 2 < d * d));
@@ -164,7 +231,7 @@ export function resample(pts, step, closed = false) {
   return out;
 }
 
-// Flatten the coarse heightfield along roads / rail and under towns.
+// Flatten the coarse heightfield under towns, then cut and fill the roads / rail into it.
 export function flattenGrid(w, net) {
   const { N, step, half, H } = w;
   const flat = (p, radius, target) => {
@@ -177,10 +244,10 @@ export function flattenGrid(w, net) {
     }
   };
   for (const t of net.towns) flat(t.c, 420 * t.size, t.h);
-  for (const rd of [...net.roads, ...(net.rail ? [net.rail] : [])]) rd.pts.forEach((p, i) => { if (!rd.bridge?.[i]) flat(p, Math.max(step * 0.9, rd.width * 2), p.y - 0.3); });
+  carveGrid(w, allRoads(net), H, N, step, 0.6);
 }
 
-// Same idea for the hi-res bake heights (so normals show the road cuttings)
+// Same for the hi-res bake heights: what physics, placement and the near-camera ground use
 export function flattenHi(w, net, Hh, R) {
   const st = w.size / R, W = R + 1, half = w.half;
   const flat = (p, radius, target) => {
@@ -193,9 +260,28 @@ export function flattenHi(w, net, Hh, R) {
     }
   };
   for (const t of net.towns) flat(t.c, 420 * t.size, t.h);
-  for (const rd of [...net.roads, ...(net.rail ? [net.rail] : [])]) rd.pts.forEach((p, i) => { if (!rd.bridge?.[i] && i % 2 === 0) flat(p, Math.max(st * 1.2, rd.width * 1.4), p.y - 0.3); });
+  carveGrid(w, allRoads(net), Hh, R, st, 0.75);
 }
+const allRoads = (net) => [...net.roads, ...(net.rail ? [net.rail] : [])];
+// embankment/cutting width beside a road on a heightfield of spacing st (physics and the skirt meshes)
+export const skirtWidth = (st) => Math.min(60, st * 0.75 + 10);
+// The road surface index World.sampleGrid / groundAt read (built once the fine heights are carved)
+export function roadSurface(w, net) { return new RoadSurface(w, allRoads(net), skirtWidth(w.hStep)); }
 
+// Real places: OSM roads get a profile too (smoothed, grade-limited, mapped bridges kept as straight decks), so they
+// can be carved in and driven like the planned ones. Reads the raw fine heights (w.Hh0).
+export function gradeReal(w, net) {
+  const terr = gridSampler(w, w.Hh0, w.hR0), wl = w.waterLevel;
+  // ways meet end to end (or end on another way): each one's ends are pinned to the ways already done, longest first
+  const hash = new Map(), key = (x, z) => Math.floor(x / 10) + ',' + Math.floor(z / 10);
+  const at = (p) => { let best = null, bd = 9; for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const q of hash.get(key(p.x + i * 10, p.z + j * 10)) || []) { const d = (q.x - p.x) ** 2 + (q.z - p.z) ** 2; if (d < bd) { bd = d; best = q; } } return best; };
+  for (const rd of net.roads) { // (sorted longest first by RealData.network)
+    const fixed = rd.bridge && rd.bridge.some(Boolean) ? rd.bridge.slice() : null, pins = [];
+    for (const i of [0, rd.pts.length - 1]) { const q = at(rd.pts[i]); if (q) pins.push({ i, y: q.y }); }
+    profileRoad(rd, { g: GRADE.real, terr, wetAt: () => false, wl, clear: 0, smooth: 2, bridges: false, fixed, pins });
+    for (const p of rd.pts) { const k = key(p.x, p.z); if (!hash.has(k)) hash.set(k, []); hash.get(k).push(p); }
+  }
+}
 // Paint fields / road verges into the baked albedo at texel (x,z). Returns a colour or null.
 export function makePainter(w, net) {
   const cell = 300, grid = new Map();
@@ -254,56 +340,104 @@ export function buildRoadMeshes(w, net) {
   const mats = {};
   const mat = (kind) => mats[kind] || (mats[kind] = new THREE.MeshStandardMaterial({ map: roadTexture(kind), roughness: kind === 'rail' ? 1 : 0.88, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }));
   const verge = new THREE.MeshStandardMaterial({ color: 0x4a4538, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
-  const concrete = new THREE.MeshStandardMaterial({ color: 0x9a978f, roughness: 0.8 });
+  const concrete = new THREE.MeshStandardMaterial({ color: 0x9a978f, roughness: 0.8, side: THREE.DoubleSide });
   const steel = new THREE.MeshStandardMaterial({ color: 0x8b9097, metalness: 0.9, roughness: 0.35 });
-  const bridgeGeos = [], railGeos = [], pending = new Map(); // ribbons are merged per material at the end (fewer draw calls)
-  const ribbon = (rd, width, yOff, material, vScale, kind) => {
-    const P = rd.pts, n = P.length, closed = !!rd.closed, pos = [], uv = [], idx = [];
+  const pending = new Map(); // ribbons are merged per material at the end (fewer draw calls)
+  const add = (material, g) => { if (!pending.has(material)) pending.set(material, []); pending.get(material).push(g); };
+  const frame = (P, i, closed) => { // unit direction and right vector at point i
+    const n = P.length, a = P[closed ? (i - 1 + n) % n : Math.max(0, i - 1)], b = P[closed ? (i + 1) % n : Math.min(n - 1, i + 1)];
+    const d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); return [d, new THREE.Vector3(-d.z, 0, d.x)];
+  };
+  // a strip across the road at every point: rows of lateral offsets (heights from hf(i, x, z, off)), quads only on
+  // the segments seg(i) allows
+  const strip = (rd, offs, hf, seg, material, uvf, gap = -1) => { // gap: a column left open (the verges either side of the tarmac)
+    const P = rd.pts, n = P.length, closed = !!rd.closed, m = offs.length, pos = [], uv = [], idx = [];
     let dist = 0;
     for (let k = 0; k <= (closed ? n : n - 1); k++) {
-      const i = k % n, p = P[i], a = P[closed ? (i - 1 + n) % n : Math.max(0, i - 1)], b = P[closed ? (i + 1) % n : Math.min(n - 1, i + 1)];
-      const d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(), rt = new THREE.Vector3(-d.z, 0, d.x);
+      const i = k % n, p = P[i], [, rt] = frame(P, i, closed);
       if (k > 0) dist += P[i].distanceTo(P[(i - 1 + n) % n]);
-      const br = rd.bridge?.[i];
-      for (const s of [-1, 1]) {
-        const x = p.x + rt.x * width * 0.5 * s, z = p.z + rt.z * width * 0.5 * s;
-        const y = br ? p.y + yOff : Math.max(w.sampleGrid(x, z), p.y - 1.5) + yOff;
-        pos.push(x, y, z); uv.push(s < 0 ? 0 : 1, dist / vScale);
-      }
-      if (k > 0) { const o = (k - 1) * 2; idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2); }
-      if (br && kind && (k % 5 === 0)) { // bridge deck slab + pillar
-        const deck = new THREE.BoxGeometry(width + 1.5, 1.2, 10).rotateY(Math.atan2(d.x, d.z)).translate(p.x, p.y + yOff - 0.65, p.z); bridgeGeos.push(deck);
-        const gh = w.sampleGrid(p.x, p.z), ph = p.y - Math.min(gh, w.waterLevel - 3);
-        if (k % 10 === 0 && ph > 2) bridgeGeos.push(new THREE.CylinderGeometry(0.9, 1.1, ph, 10).translate(p.x, p.y - ph / 2 - 1, p.z));
-        for (const s of [-1, 1]) railGeos.push(new THREE.BoxGeometry(0.12, 0.9, 10.2).rotateY(Math.atan2(d.x, d.z)).translate(p.x + rt.x * (width / 2 + 0.6) * s, p.y + yOff + 0.45, p.z + rt.z * (width / 2 + 0.6) * s));
-      }
+      for (let c = 0; c < m; c++) { const x = p.x + rt.x * offs[c], z = p.z + rt.z * offs[c]; pos.push(x, hf(i, x, z, offs[c]), z); uv.push(...uvf(c, dist)); }
+      if (k > 0 && seg((k - 1) % n)) { const o = (k - 1) * m; for (let c = 0; c < m - 1; c++) if (c !== gap) idx.push(o + c, o + c + 1, o + m + c, o + c + 1, o + m + c + 1, o + m + c); }
     }
+    if (!idx.length) return;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
-    if (!pending.has(material)) pending.set(material, []); pending.get(material).push(g);
+    add(material, g);
   };
-  for (const rd of net.roads) { ribbon(rd, rd.width + 3, 0.12, verge, 10); ribbon(rd, rd.width, 0.25, mat(rd.kind), 14, rd.kind); }
+  const isBr = (rd, i) => !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % rd.pts.length]);
+  // embankment skirts: the ground the physics sees just off the road (World.sampleGrid), drawn with the terrain's own
+  // material where the baked grid is too coarse to show it (only there)
+  const skirtMat = new THREE.MeshStandardMaterial({ roughness: w.patchMat.roughness, metalness: 0 }); // (not clone(): that JSON-copies userData, the terrain textures)
+  Object.assign(skirtMat, { onBeforeCompile: w.patchMat.onBeforeCompile, defines: w.patchMat.defines, userData: w.patchMat.userData, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+  const SW = skirtWidth(w.hStep), meshH = (x, z) => { const fx = (x + w.half) / w.hStep, fz = (z + w.half) / w.hStep; return fx >= 0 && fz >= 0 && fx < w.hR && fz < w.hR ? w.triAt(w.Hh, w.hR + 1, fx, fz) : w.sampleCoarse(x, z); };
+  const skirts = (rd) => {
+    const P = rd.pts, n = P.length, hw = rd.width / 2 + VERGE, rows = [0, 1.5, 4, 8, 13, 20, 30, 42, 60].filter((o) => o < SW).concat([SW]);
+    const need = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      if (rd.bridge?.[i]) continue;
+      const p = P[i], [, rt] = frame(P, i, rd.closed);
+      for (const s of [-1, 1]) for (const o of rows) { const x = p.x + rt.x * (hw + o) * s, z = p.z + rt.z * (hw + o) * s; if (Math.abs(w.sampleGrid(x, z) - meshH(x, z)) > 0.12) { need[i] = 1; break; } }
+    }
+    const ok = (i) => !isBr(rd, i) && (need[i] || need[(i + 1) % n] || need[(i - 1 + n) % n] || need[(i + 2) % n]);
+    for (const s of [-1, 1]) {
+      const offs = (s < 0 ? rows.slice().reverse() : rows).map((o) => s * (hw + o));
+      strip(rd, offs, (i, x, z, off) => (Math.abs(off) <= hw + 0.01 ? P[i].y : w.sampleGrid(x, z)), ok, skirtMat, (c, d) => [c, d]);
+    }
+  };
+  for (const rd of net.roads) {
+    const hw = rd.width / 2;
+    strip(rd, [-hw - VERGE, -hw, hw, hw + VERGE], (i) => rd.pts[i].y, (i) => !isBr(rd, i), verge, (c, d) => [c, d / 10], 1);
+    strip(rd, [-hw, hw], (i) => rd.pts[i].y + 0.02, () => true, mat(rd.kind), (c, d) => [c, d / 14]);
+    skirts(rd);
+  }
+  const bridgeGeos = [], railGeos = [];
   if (net.rail) {
     const rl = net.rail;
-    ribbon(rl, 4.6, 0.3, mat('rail'), 8, 'rail');
+    strip(rl, [-2.3, 2.3], (i) => rl.pts[i].y + 0.05, () => true, mat('rail'), (c, d) => [c, d / 8]);
+    strip(rl, [-2.5 - VERGE, -2.3, 2.3, 2.5 + VERGE], (i) => rl.pts[i].y, (i) => !isBr(rl, i), verge, (c, d) => [c, d / 10], 1);
+    skirts(rl);
     // the two rails
-    for (const s of [-0.72, 0.72]) {
-      const P = rl.pts, pos = [], idx = [];
-      P.forEach((p, i) => {
-        const a = P[Math.max(0, i - 1)], b = P[Math.min(P.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize();
-        const x = p.x - d.z * s, z = p.z + d.x * s, y = rl.bridge[i] ? p.y + 0.5 : Math.max(w.sampleGrid(x, z), p.y - 1.5) + 0.5;
-        pos.push(x + d.z * 0.05, y, z - d.x * 0.05, x - d.z * 0.05, y, z + d.x * 0.05); // left then right, like the road ribbons, so faces point up
-        if (i > 0) { const o = (i - 1) * 2; idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2); }
-      });
-      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
-      group.add(new THREE.Mesh(g, steel));
+    for (const s of [-0.72, 0.72]) strip(rl, [s - 0.05, s + 0.05], (i) => rl.pts[i].y + 0.25, () => true, steel, () => [0, 0]);
+  }
+  // bridges: a deck slab with parapets, piers down to the ground or river bed, and abutments at both ends
+  for (const rd of [...net.roads, ...(net.rail ? [net.rail] : [])]) {
+    const P = rd.pts, n = P.length, closed = !!rd.closed; if (!rd.bridge?.some(Boolean)) continue;
+    const hw = rd.width / 2 + 1, pos = [];
+    const quad = (a, b, c, d) => pos.push(...a, ...b, ...c, ...a, ...c, ...d);
+    let runLen = 0;
+    for (let i = 0; i < (closed ? n : n - 1); i++) {
+      if (!isBr(rd, i)) { runLen = 0; continue; }
+      const j = (i + 1) % n, A = P[i], B = P[j], [, ra] = frame(P, i, closed), [, rb] = frame(P, j, closed);
+      const at = (p, r, o, dy) => [p.x + r.x * o, p.y + dy, p.z + r.z * o];
+      // deck: top, both sides, underside (the tarmac ribbon lies on top)
+      quad(at(A, ra, -hw, -0.01), at(A, ra, hw, -0.01), at(B, rb, hw, -0.01), at(B, rb, -hw, -0.01));
+      for (const s of [-1, 1]) {
+        const o = hw * s;
+        quad(at(A, ra, o, -1.4), at(B, rb, o, -1.4), at(B, rb, o, 1.0), at(A, ra, o, 1.0)); // outer face + parapet
+        quad(at(A, ra, o - 0.3 * s, 1.0), at(B, rb, o - 0.3 * s, 1.0), at(B, rb, o - 0.3 * s, -0.01), at(A, ra, o - 0.3 * s, -0.01)); // parapet inner face
+        quad(at(A, ra, o, 1.0), at(B, rb, o, 1.0), at(B, rb, o - 0.3 * s, 1.0), at(A, ra, o - 0.3 * s, 1.0)); // parapet top
+      }
+      quad(at(A, ra, hw, -1.4), at(A, ra, -hw, -1.4), at(B, rb, -hw, -1.4), at(B, rb, hw, -1.4));
+      // piers every ~32 m where the deck is clear of the ground; abutments where a span starts or ends
+      runLen += A.distanceTo(B);
+      const start = !isBr(rd, (i - 1 + n) % n) || (!closed && i === 0), end = !isBr(rd, j) || (!closed && j === n - 1);
+      for (const [p, r, isEnd] of [[A, ra, start], [B, rb, end]]) {
+        const bed = Math.min(w.sampleGrid(p.x, p.z), meshH(p.x, p.z)) - 1.5, ht = p.y - 1.4 - bed;
+        if (isEnd) { if (ht > 0.2) bridgeGeos.push(new THREE.BoxGeometry(hw * 2 + 0.4, ht + 1.4, 2.5).rotateY(Math.atan2(-r.z, r.x)).translate(p.x, bed + (ht + 1.4) / 2, p.z)); continue; }
+        if (p !== B || runLen < 32 || ht < 2.5 || end) continue;
+        runLen = 0;
+        const yaw = Math.atan2(-r.z, r.x);
+        bridgeGeos.push(new THREE.BoxGeometry(hw * 2 - 0.5, 1.2, 2.2).rotateY(yaw).translate(p.x, p.y - 2.0, p.z)); // pier cap
+        for (const s of [-1, 1]) { const cx = p.x + r.x * hw * 0.5 * s, cz = p.z + r.z * hw * 0.5 * s, cb = Math.min(w.sampleGrid(cx, cz), meshH(cx, cz)) - 1.5, ch = p.y - 2.6 - cb; if (ch > 0.5) bridgeGeos.push(new THREE.CylinderGeometry(0.75, 0.95, ch, 10).translate(cx, cb + ch / 2, cz)); }
+      }
     }
+    if (pos.length) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); bridgeGeos.push(g); }
   }
   // street lamps (glow at night)
   const lamps = [];
   // (town streets get their own lamp posts from towns.js, except on low quality)
   const poles = [];
-  for (const rd of net.roads) { if (rd.kind === 'highway' || (rd.kind === 'street' && w.qName !== 'low')) continue; const every = rd.kind === 'street' ? 4 : 6; rd.pts.forEach((p, i) => { if (i % every) return; const a = rd.pts[Math.max(0, i - 1)], b = rd.pts[Math.min(rd.pts.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); const s = (i / every) % 2 ? 1 : -1; const x = p.x - d.z * (rd.width / 2 + 1.5) * s, z = p.z + d.x * (rd.width / 2 + 1.5) * s, gy = rd.bridge?.[i] ? p.y : w.sampleGrid(x, z); lamps.push(x + d.z * 1.2 * s, gy + 7, z - d.x * 1.2 * s); poles.push(x, gy, z, Math.atan2(d.z * s, -d.x * s)); }); }
+  for (const rd of net.roads) { if (rd.kind === 'highway' || rd.mountain || (rd.kind === 'street' && w.qName !== 'low')) continue; const every = rd.kind === 'street' ? 4 : 6; rd.pts.forEach((p, i) => { if (i % every) return; const a = rd.pts[Math.max(0, i - 1)], b = rd.pts[Math.min(rd.pts.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); const s = (i / every) % 2 ? 1 : -1; const off = rd.bridge?.[i] ? rd.width / 2 + 0.6 : rd.width / 2 + 1.5, x = p.x - d.z * off * s, z = p.z + d.x * off * s, gy = rd.bridge?.[i] ? p.y + 1 : w.sampleGrid(x, z); lamps.push(x + d.z * 1.2 * s, gy + 7, z - d.x * 1.2 * s); poles.push(x, gy, z, Math.atan2(d.z * s, -d.x * s)); }); }
   // poles: tapered mast + outreach arm + luminaire, one instanced mesh
   if (poles.length) {
     const pg = mergeGeometries([new THREE.CylinderGeometry(0.07, 0.12, 7.4, 6).translate(0, 3.5, 0), new THREE.BoxGeometry(0.08, 0.08, 1.5).translate(0, 7.15, 0.65), new THREE.BoxGeometry(0.28, 0.12, 0.6).translate(0, 7.05, 1.25)].map((g) => g.toNonIndexed()));

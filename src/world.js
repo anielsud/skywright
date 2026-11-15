@@ -6,7 +6,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { FOG, FOG_GLSL, terrainMaterial, waterMaterial, swayMaterial } from './shaders.js';
 import { Atmosphere, skyMaterial, cloudNoiseTexture } from './sky.js';
 import { CloudField, deckMaterial } from './clouds.js';
-import { planNetwork, flattenGrid, flattenHi, makePainter, buildRoadMeshes } from './roads.js';
+import { planNetwork, flattenGrid, flattenHi, makePainter, buildRoadMeshes, gradeReal, roadSurface } from './roads.js';
 import { Flora } from './flora.js';
 import { Towns } from './towns.js';
 import { Builder, buildingMaterial, C } from './buildings.js';
@@ -212,7 +212,9 @@ export class World {
     for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) H[j * (N + 1) + i] = this.rawHeight(-half + i * step, -half + j * step);
     this.H = H;
     // road / rail network, towns and fields; flattened into the heightfield
+    this.rawFine(); // the fine grid's raw heights: routing and road profiles read them, then they are carved and baked
     this.net = this.real ? this.real.network(this) : planNetwork(this);
+    if (this.real) gradeReal(this, this.net);
     this.dryLand(); // no-op without a terrain bake (real places)
     flattenGrid(this, this.net);
     this.road = { samples: this.net.roads[0].pts, width: 9 };
@@ -243,14 +245,21 @@ export class World {
     this.buildMinimap();
     this.buildPatch();
   }
+  // The fine grid's heights straight from the height function (before towns and roads are carved in).
+  rawFine() {
+    const R = this.bakeRes(), half = this.half, st = this.size / R, W = R + 1, Hh = new Float32Array(W * W);
+    for (let j = 0; j <= R; j++) for (let i = 0; i <= R; i++) Hh[j * W + i] = this.rawHeight(-half + i * st, -half + j * st);
+    this.Hh0 = Hh; this.hR0 = R;
+  }
   // Bake high-resolution albedo (+AO) and normal maps from the analytic height function.
   bakeTerrain() {
     const R = this.bakeRes(), S = this.size, half = this.half, st = S / R, W = R + 1;
-    const Hh = new Float32Array(W * W);
-    for (let j = 0; j <= R; j++) for (let i = 0; i <= R; i++) Hh[j * W + i] = this.rawHeight(-half + i * st, -half + j * st);
+    if (this.hR0 !== R) this.rawFine();
+    const Hh = this.Hh0; this.Hh0 = null;
     flattenHi(this, this.net, Hh, R);
     const paint = makePainter(this, this.net);
     this.Hh = Hh; this.hR = R; this.hStep = st;
+    this.roadSurf = roadSurface(this, this.net); // from here on sampleGrid/groundAt stand on the roads and bridges
     // heights padded beyond the core edge, so AO and normals at the border match the streamed tiles next to it
     const pad = this.bakePad(st), PW = W + 2 * pad, Hp = new Float32Array(PW * PW);
     for (let j = 0; j < PW; j++) for (let i = 0; i < PW; i++) {
@@ -370,10 +379,12 @@ export class World {
   // Ground height. Once the high-res bake exists (Hh: ~21-57 m, roads/towns flattened) it is the truth: the near-camera
   // detail patch is built from exactly these triangles, so physics and placed objects match what's drawn up close.
   // Before the bake (network planning) and outside the core it falls back to the coarse mesh / streamed tiles.
+  // Roads: inside a road's footprint the ground is the road's own profile (the grid is too coarse to hold an 8 m
+  // road exactly), and just beside it the embankment/cutting down to the grid (roads.js draws both the same way).
   sampleGrid(x, z) {
     if (this.Hh) {
       const R = this.hR, st = this.hStep, fx = (x + this.half) / st, fz = (z + this.half) / st;
-      if (fx >= 0 && fz >= 0 && fx < R && fz < R) return this.triAt(this.Hh, R + 1, fx, fz);
+      if (fx >= 0 && fz >= 0 && fx < R && fz < R) { const h = this.triAt(this.Hh, R + 1, fx, fz), S = this.roadSurf; return S && S.q(x, z) ? S.over(h) : h; }
     }
     return this.sampleCoarse(x, z);
   }
@@ -425,11 +436,18 @@ export class World {
     this.terrainMat.userData.U.patchRect.value.set(-half + i0 * st, -half + j0 * st, -half + (i0 + P) * st, -half + (j0 + P) * st);
   }
   heightAt(x, z) { return this.sampleGrid(x, z); }
-  maxGround(x, z) { return Math.max(this.sampleGrid(x, z), this.waterLevel) + (this.inAirportBox(x, z) ? 25 : 0); }
+  maxGround(x, z) {
+    const S = this.roadSurf, deck = S && S.q(x, z, true) ? S.y : -Infinity; // bridge decks count
+    return Math.max(this.sampleGrid(x, z), this.waterLevel, deck) + (this.inAirportBox(x, z) ? 25 : 0);
+  }
   inAirportBox(x, z) { return x > 150 && x < 420 && Math.abs(z) < 260; }
-  groundAt(x, z) {
-    const e = 1.5;
+  // y (optional): height of the point asking. A bridge deck is the ground for anything not well below it, so cars
+  // drive over and planes can still fly under.
+  groundAt(x, z, y) {
+    const e = 1.5, S = this.roadSurf;
+    if (S && S.q(x, z, true, y ?? Infinity)) return { h: S.y, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: 'runway' };
     const h = this.sampleGrid(x, z);
+    if (S && S.q(x, z) && S.e <= 0) return { h, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: 'runway' }; // on a road
     if (h < this.waterLevel) return { h: this.waterLevel, n: new THREE.Vector3(0, 1, 0), type: 'water' };
     if (this.bake && !this.bake.dry && this.landAt(x, z, this.gL || (this.gL = [0, 0, 0, 0]))[0] > 0.6) return { h, n: new THREE.Vector3(0, 1, 0), type: 'water' }; // rivers, lakes
     const hx = this.sampleGrid(x + e, z), hz = this.sampleGrid(x, z + e);
