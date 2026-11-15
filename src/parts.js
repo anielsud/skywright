@@ -312,6 +312,35 @@ function float_({ len, r, color }) {
   return g;
 }
 
+// Helicopter rotor: mast up from the origin, blades spinning in the horizontal plane (a disc of radius R).
+// side = true builds a tail rotor instead: no mast, disc facing sideways (+X).
+function rotorHead({ R, blades, chord, mast = 0, side = false, color }) {
+  const g = new THREE.Group();
+  if (mast) { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, mast, 12), M.steel()); m.position.y = mast / 2; g.add(m); }
+  const spin = new THREE.Group();
+  const bgeo = new THREE.BoxGeometry(R * 0.94, Math.max(0.03, chord * 0.12), chord); bgeo.translate(R * 0.5, 0, 0);
+  for (let b = 0; b < blades; b++) {
+    const piv = new THREE.Object3D(); piv.rotation.z = (b / blades) * Math.PI * 2;
+    const bl = new THREE.Mesh(bgeo, M.prop()); bl.rotation.x = Math.PI / 2 + 0.12; piv.add(bl); // flat in the disc plane, slight pitch
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(R * 0.06, chord * 1.02, 0.05), M.propTip()); tip.position.x = R * 0.95; piv.add(tip);
+    spin.add(piv);
+  }
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(chord * 0.6, chord * 0.6, chord * 0.5, 14), M.paint(color)); hub.rotation.x = Math.PI / 2; spin.add(hub);
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(R, 48), M.propDisc()); disc.userData.isDisc = true;
+  const holder = new THREE.Group(); holder.add(spin); holder.add(disc);
+  holder.userData.spinner = spin; holder.userData.disc = disc;
+  if (side) holder.rotation.y = Math.PI / 2; else { holder.rotation.x = -Math.PI / 2; holder.position.y = mast; }
+  g.add(holder); g.userData.prop = holder;
+  return g;
+}
+function skid({ len, h, color }) {
+  const g = new THREE.Group();
+  const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, len, 10), M.paint(color)); tube.rotation.x = Math.PI / 2; tube.position.y = -h; g.add(tube);
+  const tipF = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.06, 8, 12, Math.PI / 2), M.paint(color)); tipF.rotation.y = Math.PI / 2; tipF.position.set(0, -h + 0.22, -len / 2); g.add(tipF);
+  for (const dz of [-len * 0.25, len * 0.25]) { const st = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, h, 8), M.steel()); st.position.set(0, -h / 2, dz); g.add(st); }
+  return g;
+}
+
 // ---------- the library ----------
 const C = { white: 0xf2f2ee, red: 0xc8102e, yellow: 0xf2b705, blue: 0x1d4e89, gray: 0x8a9099, darkgray: 0x4a4f57, orange: 0xe8601c, green: 0x2e6b3f, navy: 0x1b2a41 };
 
@@ -451,6 +480,19 @@ def({ id: 'e_rocket', cat: 'engine', name: 'Rocket Booster', desc: 'Pure chaos: 
   engine: { type: 'rocket', thrust: 90000, burn: 20, sound: 'rocket' },
   build: (c) => rocket({ len: 3.2, radius: 0.32, color: c }) });
 
+// --- Helicopter rotors ---
+// Main rotors lift straight up along the mast. Throttle is the collective: in Arcade, middle = hover.
+// A single main rotor twists the body the other way; a tail rotor cancels that and gives rudder control.
+def({ id: 'r_main', cat: 'rotor', name: 'Main Rotor', desc: 'Two-blade helicopter rotor. Mount on top, over the middle. Needs a tail rotor!', mass: 220, hp: 900, color: C.darkgray,
+  engine: { type: 'rotor', thrust: 12000, sound: 'turboprop', idleRpm: 1000, maxRpm: 2000, spool: 2.5 },
+  build: (c) => rotorHead({ R: 4.2, blades: 2, chord: 0.3, mast: 0.7, color: c }) });
+def({ id: 'r_main4', cat: 'rotor', name: 'Four-Blade Rotor', desc: 'Bigger, smoother four-blade rotor for heavier helicopters.', mass: 600, hp: 2000, color: C.darkgray,
+  engine: { type: 'rotor', thrust: 52000, sound: 'turboprop', idleRpm: 1000, maxRpm: 2000, spool: 3 },
+  build: (c) => rotorHead({ R: 6.5, blades: 4, chord: 0.45, mast: 0.9, color: c }) });
+def({ id: 'r_tail', cat: 'rotor', name: 'Tail Rotor', desc: 'Small side rotor for the end of the tail. Stops the spin and lets the rudder turn you.', mass: 30, hp: 300, color: C.darkgray,
+  engine: { type: 'tailrotor', thrust: 0, idleRpm: 1000, maxRpm: 2000 },
+  build: (c) => rotorHead({ R: 0.75, blades: 2, chord: 0.14, side: true, color: c }) });
+
 // --- Landing gear (origin = strut top; wheel ray down) ---
 const gearDef = (id, name, desc, mass, hp, opts, gearInfo) => def({ id, cat: 'gear', name, desc, mass, hp, color: 0xdddddd, attach: 'gear', gear: gearInfo,
   build: (c) => gearLeg({ ...opts, color: c }) });
@@ -463,6 +505,8 @@ gearDef('g_retract_nose', 'Retractable Nose Gear', 'Steerable nose gear that fol
 gearDef('g_bogie', 'Heavy Bogie', 'Four-wheel airliner bogie. Handles huge weights.', 900, 9000, { len: 2.8, r: 0.6, bogie: true }, { len: 2.8, r: 0.6, steer: false, brake: true, retract: true, limit: 4.0, k: 40, wheels: 4 });
 def({ id: 'g_float', cat: 'gear', name: 'Float', desc: 'Pontoon float. Land on water! (Skids on ground.)', mass: 90, hp: 700, color: C.white, attach: 'gear',
   gear: { float: true, len: 1.0, r: 0.35, flen: 5.2, limit: 6, k: 3 }, build: (c) => float_({ len: 5.2, r: 0.4, color: c }) });
+def({ id: 'g_skid', cat: 'gear', name: 'Helicopter Skid', desc: 'Landing skid for helicopters. Use one each side.', mass: 30, hp: 600, color: 0x4a4f57, attach: 'gear',
+  gear: { float: true, skid: true, flen: 3.0, clen: 0.95, cr: 0.11, limit: 6, k: 3 }, build: (c) => skid({ len: 3.0, h: 1.0, color: c }) });
 
 // --- Extras ---
 def({ id: 'x_nosecone', cat: 'extra', name: 'Nose Cone', desc: 'Pointy aerodynamic nose cap.', mass: 30, hp: 300, color: C.darkgray,
@@ -495,6 +539,7 @@ export const CATEGORIES = [
   { id: 'tail', name: 'Tails', icon: '▲' },
   { id: 'engine', name: 'Engines', icon: '✇' },
   { id: 'gear', name: 'Gear', icon: '◉' },
+  { id: 'rotor', name: 'Rotors', icon: '✢' },
   { id: 'extra', name: 'Extras', icon: '✦' },
 ];
 

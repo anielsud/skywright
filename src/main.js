@@ -229,13 +229,14 @@ function renderInspector() {
     <div class="stat-grid">
       <div><label>Mass</label><b>${fmt(s.mass)} kg</b></div>
       <div><label>Parts</label><b>${d.parts.length}</b></div>
-      <div><label>Thrust/Weight</label><b>${fmt(s.tw, 2)}</b></div>
+      ${s.heli ? `<div><label>Lift/Weight</label><b>${fmt(s.hover, 2)}</b></div>
+      <div><label>Rotors</label><b>${s.rotors} + ${s.tailRotors} tail</b></div>` : `<div><label>Thrust/Weight</label><b>${fmt(s.tw, 2)}</b></div>
       <div><label>Engines</label><b>${s.engines}</b></div>
       <div><label>Wing area</label><b>${fmt(s.wingArea, 1)} m²</b></div>
-      <div><label>Stall speed</label><b>${Number.isFinite(s.stall) ? fmt(s.stall * (settings.units === 'metric' ? 3.6 : 1.944)) + (settings.units === 'metric' ? ' km/h' : ' kt') : '—'}</b></div>
+      <div><label>Stall speed</label><b>${Number.isFinite(s.stall) ? fmt(s.stall * (settings.units === 'metric' ? 3.6 : 1.944)) + (settings.units === 'metric' ? ' km/h' : ' kt') : '—'}</b></div>`}
     </div>
-    <label class="lbl">Balance <small>(<span style="color:#ffd400">●</span> mass &nbsp;<span style="color:#3ab0ff">●</span> lift)</small></label>
-    <div class="balance"><div class="zone"></div><div class="needle" style="left:${balPos}%"></div><span class="l">tail-heavy</span><span class="r">nose-heavy</span></div>
+    ${s.heli ? '' : `<label class="lbl">Balance <small>(<span style="color:#ffd400">●</span> mass &nbsp;<span style="color:#3ab0ff">●</span> lift)</small></label>
+    <div class="balance"><div class="zone"></div><div class="needle" style="left:${balPos}%"></div><span class="l">tail-heavy</span><span class="r">nose-heavy</span></div>`}
     <ul class="warnings">${s.warnings.map(([k, t]) => `<li class="${k}">${t}</li>`).join('')}</ul>`;
   $('#btn-sym').classList.toggle('on', hangar.symmetry);
   $('#btn-bal').classList.toggle('on', hangar.showBalance);
@@ -477,13 +478,14 @@ function buildFlight(cfg) {
     const w = findWater(world);
     if (w) ac.spawn(env, w, 0); else { start = 'air'; }
   }
-  if (start === 'air') { ac.spawn(env, new THREE.Vector3(slotX, 0, world.runway.len / 2 + 1200 + slot * 40), 0, { air: true, alt: world.loc.rwyH + 450 + slot * 30, speed: vApp * 1.1 }); controls.setThrottle(ac.hasEngine ? 0.65 : 0); }
+  if (start === 'air') { ac.spawn(env, new THREE.Vector3(slotX, 0, world.runway.len / 2 + 1200 + slot * 40), 0, { air: true, alt: world.loc.rwyH + (st.heli ? 120 : 450) + slot * 30, speed: st.heli ? 0 : vApp * 1.1 }); controls.setThrottle(st.heli ? 0.5 : ac.hasEngine ? 0.65 : 0); } // helicopters start hovering
   else if (start === 'approach') {
     const dist = 2600;
-    ac.spawn(env, new THREE.Vector3(0, 0, world.runway.len / 2 - 380 + dist), 0, { air: true, alt: world.loc.rwyH + dist * Math.tan(THREE.MathUtils.degToRad(3)) + 3, speed: vApp, pitch: -0.02 });
-    ac.gearDown = true; ac.gearT = 1; ac.flaps = 1; controls.setThrottle(0.55);
+    ac.spawn(env, new THREE.Vector3(0, 0, world.runway.len / 2 - 380 + dist), 0, { air: true, alt: world.loc.rwyH + dist * Math.tan(THREE.MathUtils.degToRad(3)) + 3, speed: st.heli ? 20 : vApp, pitch: -0.02 });
+    ac.gearDown = true; ac.gearT = 1; ac.flaps = 1; controls.setThrottle(st.heli ? 0.45 : 0.55);
   } else controls.setThrottle(0);
   if (start === 'air') { ac.flaps = 0; }
+  if (st.heli) setTimeout(() => ui.hint(cfg.realism === 'sim' ? 'Helicopter: throttle is the collective. Good luck!' : 'Helicopter: throttle to the middle to hover, more to climb'), 1500);
   let mission = null;
   if (cfg.mode === 'rings') mission = new RingRace(scene, world, ac, cfg.realism);
   else if (cfg.mode === 'landing') mission = new LandingChallenge(world);
@@ -707,7 +709,7 @@ function stepFlight(dtReal) {
   // audio
   const engines = {};
   if (!ac.dead) for (const p of ac.parts) {
-    if (!p.alive || !p.engine) continue; const e = p.engine;
+    if (!p.alive || !p.engine || !p.engine.sound) continue; const e = p.engine;
     const k = e.sound; if (!engines[k]) engines[k] = { sound: k, rpm: 0, spoolT: 0, count: 0, blades: { e_turboprop: 4, e_radial: 3, e_electric: 6 }[p.p.id] || 2, ab: false, burning: false, pos: new THREE.Vector3(), fwd: ac.forward };
     const a = engines[k]; a.count++; a.rpm = Math.max(a.rpm, e.rpm || 0); a.spoolT = Math.max(a.spoolT, e.spoolT || 0); a.ab = a.ab || e.abOn; a.burning = a.burning || e.burning;
     a.pos.add(ac.worldPoint(e.pos));
