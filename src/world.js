@@ -14,7 +14,7 @@ import { TerrainTiles } from './tiles.js';
 import { erode } from './erosion.js';
 import { terrainDetailUniforms } from './terrainTex.js';
 
-const RWY = { len: 1800, width: 45 };
+export const RWY = { len: 1800, width: 45 };
 // Two parallel runways (the airport is centred on the east one, which has the PAPI and the landing mission).
 // Facing north the west one is on the left, so it is 36L / 18R; the east one is 36R / 18L.
 export const RUNWAYS = [{ x: 0, name: '36R', back: '18L' }, { x: -200, name: '36L', back: '18R' }];
