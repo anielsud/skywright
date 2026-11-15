@@ -222,7 +222,9 @@ body.touch-on .hud-ctl { display: none; }
 .t-btn { position: relative; width: 104px; height: 66px; font-size: 13px; font-weight: 800; background: rgba(0, 0, 0, .45); border-color: rgba(255, 255, 255, .25); border-radius: 14px; }
 .t-btn::before { content: ''; position: absolute; inset: -7px; }
 .t-btn.on { background: var(--bad); }
-body.touch-on .hud-bc { bottom: auto; top: calc(56px + env(safe-area-inset-top)); }
+body.touch-on .hud-tc { top: calc(12px + env(safe-area-inset-top)); width: min(64vw, 640px); }
+body.touch-on .hud-tc .hud-bc { position: static; transform: none; }
+body.touch-on #h-mission:empty { display: none; }
 #hud .hud-btns button { width: 56px; height: 50px; }
 
 /* ---------- small screens ---------- */

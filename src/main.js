@@ -593,6 +593,7 @@ function buildFlight(cfg) {
   const showTouch = settings.touch === 'on' || (settings.touch === 'auto' && isTouch);
   controls.showTouch(showTouch); controls.enabled = true;
   document.body.classList.toggle('touch-on', showTouch);
+  hud.setTouch(showTouch);
   hangar.activate(false);
   audio.music(false);
   state = 'flight';
@@ -918,6 +919,21 @@ function governPerf(dt) {
     perf.fastT = 0; perf.lastChange = now; applyQuality();
   }
 }
+// Depth precision is set almost entirely by the near plane: at 0.2 m a 24-bit depth buffer resolves only ~250 m steps
+// 30 km out, so from high up the far sea, skirt and terrain tiles z-fight in horizontal bands. Push the near plane out
+// as far as the closest things allow (our own plane's bounding sphere, the ground below the camera); the cockpit view,
+// a close orbit and crashes keep the default.
+function fitNearPlane(f) {
+  const cam = flightCam, ac = f.ac, w = f.world, p = cam.position;
+  let room = 0;
+  if (!ac.dead && !ac.wrecked) {
+    const dAc = p.distanceTo(ac.x) - ac.radius * 1.3;
+    const dGnd = p.y - Math.max(w.heightAt(p.x, p.z), w.waterLevel) - 60; // trees, buildings, hills nearby
+    room = Math.min(dAc, dGnd);
+  }
+  const near = clamp(room * 0.5, 0.2, w.rain?.visible || w.snow?.visible ? 0.5 : 20); // rain/snow streaks right in front of the lens
+  if (Math.abs(near - cam.near) > 0.02) { cam.near = near; cam.updateProjectionMatrix(); }
+}
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
@@ -939,6 +955,7 @@ function frame(now) {
       post.flare(new THREE.Vector2(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5), onScreen ? F.sunVis * (1 - w.W.dark) : 0, w.sun.color, flightCam.aspect);
       const golden = Math.max(0, 1 - Math.abs(w.sunElev - 0.08) / 0.3);
       post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: 1.1 + golden * 0.1 - w.W.dark * 0.25, vignette: 0.3 });
+      fitNearPlane(F);
       post.render(F.scene, flightCam, dt);
     }
   }
