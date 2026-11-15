@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.17.0', items: [
+    'Real music: a cheerful tune in the hangar, a dreamy one when you cruise up high, and a heroic one during missions. It fades away near the ground so you can hear your landing. Set the Music volume in Settings.',
+  ] },
   { v: '1.16.0', items: [
     'Cars! The new Car tab has a Car Engine, Car Wheels, Steering Wheels and giant Monster Wheels. Throttle to go, stick to steer, pull the stick back to reverse. Try the ready-made Dune Buggy.',
     'Flipped your car? Wait two seconds and it pops back onto its wheels (Arcade and Pilot).',

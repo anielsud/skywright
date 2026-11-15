@@ -20,6 +20,7 @@ const SAMPLE_ENGINES = {
 };
 const SAMPLE_LEVEL = { piston: 3.6, radial: 2.7, turboprop: 3.1, jet: 2.1, fan: 2.2, rocket: 3.0 }; // full power ≈ -24 dB props, -28 jets (weighted, tools/sfx measurements)
 // Recorded world/foley levels (linear), balanced with tools/sfx-style weighted measurements.
+const MUSIC = { hangar: 0.6, cruise: 0.7, mission: 1.3 }; // weighted avg at music 100%: hangar ≈-35, cruise ≈-38 (under the engine), mission ≈-33 dB
 const SHOT = { voice: 1.8, crash: 0.4, debris: 0.2, glass: 0.35, explosion: 0.4, boom: 0.4, chirp: 0.38, splash: 0.32, gear: 0.32, thunder: 0.3 }; // peaks: crash ≈-22, explosion ≈-18, chirp ≈-28 dB weighted
 const REC = { windExt: 2.66, windCk: 4.6, roll: 2, rain: 2, day: 0.73, night: 0.52, sea: 1.38, lake: 1.46 }; // wind@120 m/s ≈-32, roll ≈-30, rain ≈-30, day bed ≈-40 dB weighted
 const RPM_RANGE = { piston: [700, 2700], radial: [600, 2600], turboprop: [1000, 2000] };
@@ -308,6 +309,7 @@ export class Audio {
     const recRain = this.bedGain('rain', this.amb, s.rain * REC.rain * (s.cockpit ? 1.4 : 1), 0.4);
     const rn = this.voice('rain'); this.set(rn.out.gain, recRain ? 0 : s.rain * 0.13 * (s.cockpit ? 1.6 : 1), 0.3);
     this.ambience(s.amb, s.listener?.pos);
+    if ('music' in s) this.setTrack(s.music, s.music ? MUSIC[s.music] : 0, s.music ? 4 : 2.5);
   }
 
   updateSampled(v, e, s, dop, multi) {
@@ -464,9 +466,34 @@ export class Audio {
     }
   }
 
-  // ---------- hangar music: warm generative pad + soft arpeggio, through the hangar reverb ----------
+  // ---------- music: streamed tracks (assets/music, Kevin MacLeod, CC BY 4.0), crossfaded by context ----------
+  // Streamed through a media element rather than decoded: a decoded 3-minute track would take ~70 MB on a tablet.
+  track(key) {
+    this.trk ||= {};
+    if (key in this.trk) return this.trk[key];
+    const el = document.createElement('audio');
+    if (!el.canPlayType('audio/ogg; codecs=opus')) return (this.trk[key] = null);
+    el.src = `assets/music/${key}.ogg`; el.loop = true; el.preload = 'auto';
+    const g = this.gain(0); this.ctx.createMediaElementSource(el).connect(g); g.connect(this.musBus);
+    return (this.trk[key] = { el, g, on: false, level: 0 });
+  }
+  // fade `key` in to `level` and everything else out (key null: all out). false if the track can't play here.
+  setTrack(key, level = 1, fade = 2.5) {
+    if (!this.ctx) return false;
+    for (const [k, t] of Object.entries(this.trk || {})) if (t && k !== key && t.on) {
+      t.on = false; t.level = 0; this.set(t.g.gain, 0, fade / 3); clearTimeout(t.stop); t.stop = setTimeout(() => { if (!t.on) t.el.pause(); }, fade * 1000 + 600);
+    }
+    if (!key) return true;
+    const t = this.track(key); if (!t) return false;
+    if (!t.on) { t.on = true; clearTimeout(t.stop); t.el.play().catch(() => {}); }
+    if (Math.abs(t.level - level) > 0.01) { t.level = level; this.set(t.g.gain, level, fade / 3); }
+    return true;
+  }
+  // ---------- hangar music: recorded track, or the old generative pad + arpeggio if it can't play ----------
   music(on) {
     if (!this.ctx) return;
+    if (on && this.setTrack('hangar', MUSIC.hangar)) { this.setSpace('hangar'); return; }
+    if (!on) this.setTrack(null);
     if (on && !this.mus) {
       this.setSpace('hangar');
       const out = this.gain(0); out.connect(this.musBus);

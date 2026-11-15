@@ -450,7 +450,7 @@ function helpModal() {
   <h4>Fly — tablet</h4><p>Left thumb: throttle lever and rudder slider. Right thumb: the stick (pull down to climb). Or switch on <b>Tilt the tablet</b> in Settings. Drag the sky to look around; pinch to zoom.</p>
   <h4>Gamepad</h4><p>Left stick flies, right stick X is rudder, triggers set throttle, A brakes, B gear, X flaps, Y camera, LB smoke.</p>
   <h4>Tips</h4><p>Take off around the stall speed shown in the hangar. In Simulator mode, land gently (under ~3 m/s sink) or your gear will snap! Sailplanes can ride rising air under cumulus clouds and along sunny ridges.</p>
-  <h4>Credits</h4><p>Voice callouts use the open-source Piper voice "joe". Engines, wind, tyres, weather, nature and crash sounds are real recordings from <a href="https://freesound.org" target="_blank" rel="noopener">Freesound</a>: <a href="assets/sfx/CREDITS.md" target="_blank" rel="noopener">sound credits</a>.</p>
+  <h4>Credits</h4><p>Voice callouts use the open-source Piper voice "joe". Engines, wind, tyres, weather, nature and crash sounds are real recordings from <a href="https://freesound.org" target="_blank" rel="noopener">Freesound</a>: <a href="assets/sfx/CREDITS.md" target="_blank" rel="noopener">sound credits</a>. Music: “Easy Lemon”, “Floating Cities” and “Heroic Age” by Kevin MacLeod (incompetech.com), licensed under <a href="http://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>.</p>
   </div><div class="modal-foot"><button data-close class="primary">Got it</button></div>`, 'wide');
 }
 
@@ -766,13 +766,22 @@ function stepFlight(dtReal) {
     onGround: ac.onGround && ac.parts.some((p) => p.alive && p.gear?.wheels.some((w) => w.contact)), groundSpeed: gs, surface: surf,
     scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead, cockpit, doppler, rain: world.rain.visible ? world.W.rain : 0,
     listener: { pos: flightCam.position, fwd: camFwd, up: camUp },
-    amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) } });
+    amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) },
+    music: flightMusic(f, ac, world) });
   f.callouts?.update(world, dtReal);
   hud.update(ac, world, f.mission, flightCam, net.markers());
   if (f.debug) $('#debug').textContent = `α ${(ac.alpha * 57.3).toFixed(1)}° g ${ac.g.toFixed(2)} V ${ac.airspeed?.toFixed(1)} m=${Math.round(ac.mass)} com=${ac.com.toArray().map((v) => v.toFixed(2))} w=${ac.w.toArray().map((v) => v.toFixed(2))}`;
   $('#debug').style.display = f.debug ? '' : 'none';
 }
 
+// Which music track suits the moment: the heroic one during a mission, a quiet one when cruising high, nothing near the ground or after a crash.
+function flightMusic(f, ac, world) {
+  if (ac.dead || ac.wrecked) return null;
+  if (f.mission && !f.mission.done) return 'mission';
+  const h = ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), world.waterLevel);
+  f.musicHigh = h > (f.musicHigh ? 120 : 250); // hysteresis so it doesn't flicker around the threshold
+  return f.musicHigh && !ac.onGround ? 'cruise' : null;
+}
 // 0..1: how close the camera is to open water (sampled in rings, refreshed twice a second)
 function waterProximity(f, world, p) {
   if (f.waterT && f.t - f.waterT < 0.5) return f.waterNear;
