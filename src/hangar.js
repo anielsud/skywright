@@ -17,7 +17,7 @@ export class Hangar {
     this.controls = new OrbitControls(this.camera, renderer.domElement);
     this.controls.enableDamping = true; this.controls.maxPolarAngle = Math.PI * 0.97; // can swing under the plane: the floor is one-sided, so it vanishes from below this.controls.minDistance = 3; this.controls.maxDistance = 150;
     this.controls.enabled = false;
-    this.symmetry = true; this.showBalance = true; this.step = 0.1;
+    this.symmetry = true; this.showBalance = true;
     this.design = { name: 'My Plane', parts: [] };
     this.undoStack = []; this.redoStack = [];
     this.sel = -1; this.placing = null; this.ghost = null;
@@ -92,23 +92,28 @@ export class Hangar {
     const p = this.design.parts[i]; if (!p) return -1;
     return this.design.parts.findIndex((q, j) => j !== i && q.id === p.id && q.mirror !== p.mirror && Math.abs(q.pos[0] + p.pos[0]) < 0.02 && Math.abs(q.pos[1] - p.pos[1]) < 0.02 && Math.abs(q.pos[2] - p.pos[2]) < 0.02);
   }
-  edit(fn) {
+  edit(fn, undo = true) {
     if (this.sel < 0) return;
-    this.pushUndo();
+    if (undo) this.pushUndo();
     const i = this.sel, j = this.symmetry ? this.partner(i) : -1;
     fn(this.design.parts[i]);
     if (j >= 0) { const m = mirroredOf(this.design.parts[i]); m.parent = this.design.parts[j].parent; m.color = this.design.parts[i].color; this.design.parts[j] = m; }
     this.rebuild();
   }
-  nudge(axis, d) { this.edit((p) => { p.pos[axis] = +(p.pos[axis] + d * this.step).toFixed(3); }); this.audio.play('click'); }
-  rotate(axis, deg) {
+  // Fine placement. Move/rotate take absolute values so the inspector can drive them with sliders;
+  // pass undo=false for follow-up steps of one slider drag or button hold.
+  setPos(axis, v, undo = true) { this.edit((p) => { p.pos[axis] = +v.toFixed(3); }, undo); }
+  // Rotation as yaw/pitch/roll Euler degrees (order YXZ: yaw about Y, then pitch about X, then roll about Z).
+  euler() {
+    const p = this.design.parts[this.sel]; if (!p) return [0, 0, 0];
+    const e = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(...p.quat), 'YXZ');
+    return [e.x, e.y, e.z].map((r) => +THREE.MathUtils.radToDeg(r).toFixed(1));
+  }
+  setEuler(deg, undo = true) {
     this.edit((p) => {
-      const q = new THREE.Quaternion(...p.quat);
-      const ax = new THREE.Vector3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0);
-      q.premultiply(new THREE.Quaternion().setFromAxisAngle(ax, THREE.MathUtils.degToRad(deg)));
+      const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(...deg.map((d) => THREE.MathUtils.degToRad(d)), 'YXZ'));
       p.quat = [q.x, q.y, q.z, q.w];
-    });
-    this.audio.play('click');
+    }, undo);
   }
   resetRotation() { this.edit((p) => { p.quat = [0, 0, 0, 1]; }); }
   // Part sizing. axis is a sizeSliders() key (len/dia/span/chord/size). Pass undo=false for follow-up steps of one slider drag.
