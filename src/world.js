@@ -157,8 +157,9 @@ export class World {
     }
     geo.computeVertexNormals();
     this.bakeTerrain();
-    const mat = terrainMaterial({ detailU: this.detailU, albedo: this.albedoTex, normal: this.normalTex, shadow: this.shadowTex, half, size: S });
-    this.terrainMat = mat;
+    const maps = { detailU: this.detailU, albedo: this.albedoTex, normal: this.normalTex, shadow: this.shadowTex, half, size: S };
+    const mat = terrainMaterial(maps);
+    this.terrainMat = mat; this.patchMat = terrainMaterial(maps, true);
     const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true;
     this.terrain = mesh; this.group.add(mesh);
     // far skirt so the edge isn't visible
@@ -166,6 +167,7 @@ export class World {
     skirt.rotation.x = -Math.PI / 2; skirt.position.y = this.loc.id === 'islands' ? -50 : this.loc.desert ? 60 : -20; this.group.add(skirt); this.skirt = skirt;
     this.roadGroup = buildRoadMeshes(this, this.net); this.group.add(this.roadGroup);
     this.buildMinimap();
+    this.buildPatch();
   }
   // Bake high-resolution albedo (+AO) and normal maps from the analytic height function.
   bakeTerrain() {
@@ -278,15 +280,62 @@ export class World {
     if (h < this.waterLevel - 1) c.lerp(seabed, 0.6);
     return c;
   }
+  // Ground height. Once the high-res bake exists (Hh: ~21-57 m, roads/towns flattened) it is the truth: the near-camera
+  // detail patch is built from exactly these triangles, so physics and placed objects match what's drawn up close.
+  // Before the bake (network planning) and outside the core it falls back to the coarse mesh / streamed tiles.
   sampleGrid(x, z) {
+    if (this.Hh) {
+      const R = this.hR, st = this.hStep, fx = (x + this.half) / st, fz = (z + this.half) / st;
+      if (fx >= 0 && fz >= 0 && fx < R && fz < R) return this.triAt(this.Hh, R + 1, fx, fz);
+    }
+    return this.sampleCoarse(x, z);
+  }
+  // triangle interpolation matching PlaneGeometry's split: (a,b,d) + (b,c,d)
+  triAt(H, W, fx, fz) {
+    const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j;
+    const a = H[j * W + i], b = H[(j + 1) * W + i], cc = H[(j + 1) * W + i + 1], d = H[j * W + i + 1];
+    if (u + v <= 1) return a + (d - a) * u + (b - a) * v;
+    return cc + (b - cc) * (1 - u) + (d - cc) * (1 - v);
+  }
+  sampleCoarse(x, z) {
     const N = this.N, step = this.step, half = this.half;
     const fx = (x + half) / step, fz = (z + half) / step;
     if (fx < 0 || fz < 0 || fx >= N || fz >= N) return this.tiles ? this.tiles.sample(x, z) : this.height(x, z);
-    const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, W = N + 1, H = this.H;
-    const a = H[j * W + i], b = H[(j + 1) * W + i], cc = H[(j + 1) * W + i + 1], d = H[j * W + i + 1];
-    // PlaneGeometry triangles: (a,b,d) and (b,c,d) - split along b-d
-    if (u + v <= 1) return a + (d - a) * u + (b - a) * v;
-    return cc + (b - cc) * (1 - u) + (d - cc) * (1 - v);
+    return this.triAt(this.H, N + 1, fx, fz);
+  }
+  // ---- near-camera detail patch: the coarse core mesh is ~50-120 m triangles; around the camera draw the baked
+  // grid itself (P x P cells). Its outer ring takes the coarse mesh heights so the seam is closed, and the coarse
+  // mesh discards its pixels inside the patch rectangle.
+  buildPatch() {
+    const P = this.qName === 'high' ? 160 : this.qName === 'low' ? 80 : 128;
+    this.patchP = P;
+    const n = P + 1, pos = new Float32Array(n * n * 3), nor = new Float32Array(n * n * 3), idx = [];
+    for (let k = 0; k < n * n; k++) nor[k * 3 + 1] = 1;
+    for (let j = 0; j < P; j++) for (let i = 0; i < P; i++) { const a = j * n + i, b = (j + 1) * n + i, c = b + 1, d = a + 1; idx.push(a, b, d, b, c, d); }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nor, 3)); g.setIndex(idx);
+    const mesh = new THREE.Mesh(g, this.patchMat); mesh.receiveShadow = true; mesh.visible = false;
+    this.patch = mesh; this.group.add(mesh); this.patchAt = null;
+  }
+  updatePatch(cp) {
+    if (!this.patch) return;
+    const st = this.hStep, R = this.hR, P = this.patchP, half = this.half;
+    // snap to the bake grid, keep inside the core
+    let i0 = Math.round((cp.x + half) / st) - P / 2, j0 = Math.round((cp.z + half) / st) - P / 2;
+    i0 = Math.max(0, Math.min(R - P, i0)); j0 = Math.max(0, Math.min(R - P, j0));
+    const far = Math.abs(cp.x) > half + P * st * 0.3 || Math.abs(cp.z) > half + P * st * 0.3;
+    if (far) { if (this.patch.visible) { this.patch.visible = false; this.terrainMat.userData.U.patchRect.value.set(1e9, 1e9, -1e9, -1e9); } return; }
+    if (this.patchAt && Math.abs(i0 - this.patchAt[0]) < P / 6 && Math.abs(j0 - this.patchAt[1]) < P / 6) return;
+    this.patchAt = [i0, j0];
+    const n = P + 1, pos = this.patch.geometry.attributes.position.array, H = this.Hh, W = R + 1;
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const gi = i0 + i, gj = j0 + j, x = -half + gi * st, z = -half + gj * st, k = (j * n + i) * 3;
+      const edge = i === 0 || j === 0 || i === P || j === P;
+      pos[k] = x; pos[k + 2] = z; pos[k + 1] = edge ? this.sampleCoarse(x, z) : H[gj * W + gi];
+    }
+    const g = this.patch.geometry; g.attributes.position.needsUpdate = true; g.computeBoundingSphere();
+    this.patch.visible = true;
+    this.terrainMat.userData.U.patchRect.value.set(-half + i0 * st, -half + j0 * st, -half + (i0 + P) * st, -half + (j0 + P) * st);
   }
   heightAt(x, z) { return this.sampleGrid(x, z); }
   maxGround(x, z) { return Math.max(this.sampleGrid(x, z), this.waterLevel) + (this.inAirportBox(x, z) ? 25 : 0); }
@@ -460,7 +509,7 @@ export class World {
       U.skyZen.value.copy(skyC).multiplyScalar(0.55 + 0.45 * day); U.skyHor.value.copy(fogC).lerp(new THREE.Color(1, 0.75, 0.5), golden * 0.3);
       U.amb.value = 0.25 + 0.75 * day; U.rough.value = W.turb * 0.5;
     }
-    if (this.terrainMat) this.terrainMat.userData.U.shadowOn.value = 1 - dark * 0.8;
+    for (const m of [this.terrainMat, this.patchMat]) if (m) m.userData.U.shadowOn.value = 1 - dark * 0.8;
     this.fogColor = fogC.clone();
     this.sky.visible = true;
     this.skyDarken = dark;
@@ -758,6 +807,7 @@ export class World {
     // endless world: stream terrain tiles, keep the sea, far skirt and clouds centred on the camera
     const cp = camera.position;
     this.tiles?.update(cp);
+    this.updatePatch(cp);
     const snap = (v, g) => Math.round(v / g) * g;
     this.water.position.x = snap(cp.x, 2000); this.water.position.z = snap(cp.z, 2000);
     this.skirt.position.x = snap(cp.x, 2000); this.skirt.position.z = snap(cp.z, 2000);

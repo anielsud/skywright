@@ -64,10 +64,11 @@ export function installFog() {
 }
 
 // ---------- terrain material ----------
-export function terrainMaterial(maps) {
+// patch=true: the near-camera detail mesh (draws everything); otherwise the coarse core mesh, which skips the patch area.
+export function terrainMaterial(maps, patch = false) {
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.93, metalness: 0 });
   const U = { albedoTex: { value: maps.albedo }, normTex: { value: maps.normal }, shadowTex: { value: maps.shadow },
-    tHalf: { value: maps.half }, tSize: { value: maps.size }, shadowOn: { value: 1 }, ...maps.detailU };
+    tHalf: { value: maps.half }, tSize: { value: maps.size }, shadowOn: { value: 1 }, patchRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, ...maps.detailU };
   mat.userData.U = U;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, U);
@@ -75,9 +76,10 @@ export function terrainMaterial(maps) {
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
       varying vec3 vTW; uniform sampler2D albedoTex; uniform sampler2D normTex; uniform sampler2D shadowTex;
-      uniform float tHalf; uniform float tSize; uniform float shadowOn;
+      uniform float tHalf; uniform float tSize; uniform float shadowOn; uniform vec4 patchRect;
       ${TERRAIN_DETAIL_GLSL}`)
       .replace('#include <map_fragment>', `
+        ${patch ? '' : 'if (vTW.x > patchRect.x && vTW.x < patchRect.z && vTW.z > patchRect.y && vTW.z < patchRect.w) discard;'}
         vec2 tuv = (vTW.xz + tHalf) / tSize;
         vec4 alb = texture2D(albedoTex, tuv);
         vec3 wn = normalize(texture2D(normTex, tuv).xyz * 2.0 - 1.0);
@@ -96,7 +98,7 @@ export function terrainMaterial(maps) {
         'getDirectionalLightInfo( directionalLight, directLight );',
         'getDirectionalLightInfo( directionalLight, directLight ); directLight.color *= terrainShadow;'));
   };
-  mat.customProgramCacheKey = () => 'terrain2';
+  mat.customProgramCacheKey = () => (patch ? 'terrain2-patch' : 'terrain2');
   return mat;
 }
 
