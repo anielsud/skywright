@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.16.0', items: [
+    'Cars! The new Car tab has a Car Engine, Car Wheels, Steering Wheels and giant Monster Wheels. Throttle to go, stick to steer, pull the stick back to reverse. Try the ready-made Dune Buggy.',
+    'Flipped your car? Wait two seconds and it pops back onto its wheels (Arcade and Pilot).',
+  ] },
   { v: '1.15.0', items: [
     'Cockpit voice callouts: it counts down your height as you land (“fifty… forty… thirty…”), says “Rotate” and “Positive rate” on takeoff, and warns “Stall!”, “Sink rate!”, “Pull up!” and “Too low, gear!”. Turn them off in Settings.',
   ] },

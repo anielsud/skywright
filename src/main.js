@@ -233,13 +233,14 @@ function renderInspector() {
     <div class="stat-grid">
       <div><label>Mass</label><b>${fmt(s.mass)} kg</b></div>
       <div><label>Parts</label><b>${d.parts.length}</b></div>
-      ${s.heli ? `<div><label>Lift/Weight</label><b>${fmt(s.hover, 2)}</b></div>
+      ${s.car && !s.heli && s.wingArea < 0.5 ? `<div><label>Power/Weight</label><b>${fmt(s.grip, 2)}</b></div>
+      <div><label>Wheels</label><b>${s.wheels} (${s.driveWheels} driven)</b></div>` : s.heli ? `<div><label>Lift/Weight</label><b>${fmt(s.hover, 2)}</b></div>
       <div><label>Rotors</label><b>${s.rotors} + ${s.tailRotors} tail</b></div>` : `<div><label>Thrust/Weight</label><b>${fmt(s.tw, 2)}</b></div>
       <div><label>Engines</label><b>${s.engines}</b></div>
       <div><label>Wing area</label><b>${fmt(s.wingArea, 1)} m²</b></div>
       <div><label>Stall speed</label><b>${Number.isFinite(s.stall) ? fmt(s.stall * (settings.units === 'metric' ? 3.6 : 1.944)) + (settings.units === 'metric' ? ' km/h' : ' kt') : '—'}</b></div>`}
     </div>
-    ${s.heli ? '' : `<label class="lbl">Balance <small>(<span style="color:#ffd400">●</span> mass &nbsp;<span style="color:#3ab0ff">●</span> lift)</small></label>
+    ${s.heli || (s.car && s.wingArea < 0.5) ? '' : `<label class="lbl">Balance <small>(<span style="color:#ffd400">●</span> mass &nbsp;<span style="color:#3ab0ff">●</span> lift)</small></label>
     <div class="balance"><div class="zone"></div><div class="needle" style="left:${balPos}%"></div><span class="l">tail-heavy</span><span class="r">nose-heavy</span></div>`}
     <ul class="warnings">${s.warnings.map(([k, t]) => `<li class="${k}">${t}</li>`).join('')}</ul>`;
   $('#btn-sym').classList.toggle('on', hangar.symmetry);
@@ -503,6 +504,7 @@ function buildFlight(cfg) {
   if (cfg.mode === 'landing') start = 'approach';
   else if (start === 'water' || (start === 'runway' && st.floats && !gearOK)) start = 'water';
   if (start === 'runway' && (!ac.hasEngine)) start = 'air';
+  if (st.car && st.wingArea < 0.5 && (start === 'air' || start === 'approach')) start = 'runway'; // cars without wings start on the ground
   const slot = cfg.mpSlot || 0, slotX = slot ? (slot % 2 ? 1 : -1) * Math.ceil(slot / 2) * 70 : 0; // multiplayer: side by side, stepped up
   const vApp = clamp(Number.isFinite(st.stall) ? st.stall * 1.45 : 45, 32, 110);
   if (start === 'runway') { ac.spawn(env, new THREE.Vector3(0, 0, world.runway.len / 2 - 60), 0); }
@@ -517,6 +519,7 @@ function buildFlight(cfg) {
     ac.gearDown = true; ac.gearT = 1; ac.flaps = 1; controls.setThrottle(st.heli ? 0.45 : 0.55);
   } else controls.setThrottle(0);
   if (start === 'air') { ac.flaps = 0; }
+  if (st.car && !st.heli) setTimeout(() => ui.hint('Car: throttle to go, stick to steer, pull the stick back to reverse'), 1500);
   if (st.heli) setTimeout(() => ui.hint(cfg.realism === 'sim' ? 'Helicopter: throttle is the collective. Good luck!' : 'Helicopter: throttle to the middle to hover, more to climb'), 1500);
   let mission = null;
   if (cfg.mode === 'rings') mission = new RingRace(scene, world, ac, cfg.realism);
@@ -668,7 +671,7 @@ function stepFlight(dtReal) {
   const dt = Math.min(dtReal, 1 / 20) * f.timeScale;
   const c = controls.update(dtReal);
   ac.setControls({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: c.throttle });
-  ac.brake = c.brake || (c.throttle < 0.03 && ac.onGround && ac.v.length() < 3 ? 1 : 0); // parking brake
+  ac.brake = c.brake || (c.throttle < 0.03 && ac.onGround && ac.v.length() < 3 && !(ac.isCar && c.pitch > 0.2) ? 1 : 0); // parking brake (not while a car reverses)
   ac.step(dt, f.env);
   // trees
   if (!ac.dead && ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), 0) < 30) {

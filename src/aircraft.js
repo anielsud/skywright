@@ -134,7 +134,7 @@ export class Aircraft {
         const gi = d.gear, ls = linScale(p); // ls: resized gear (wheel/strut sizes are in metres, the mesh is in part-local units)
         const wheels = [];
         if (gi.float) for (const dz of [-gi.flen * 0.32, gi.flen * 0.32, 0]) wheels.push({ top: new THREE.Vector3(0, 0, dz).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: (gi.clen ?? 1.0) * ls, r: (gi.cr ?? 0.3) * ls, ls, steer: false, brake: false, float: true, comp: 0, contact: false });
-        else wheels.push({ top: new THREE.Vector3(0, 0, 0).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: gi.len * ls, r: gi.r * ls, ls, steer: gi.steer, brake: gi.brake, comp: 0, contact: false, spin: 0 });
+        else wheels.push({ top: new THREE.Vector3(0, 0, 0).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: gi.len * ls, r: gi.r * ls, ls, steer: gi.steer, brake: gi.brake, drive: !!gi.drive, comp: 0, contact: false, spin: 0 });
         part.gear = { ...gi, wheels, strut: obj.userData.strut, wheelObj: obj.userData.wheels };
       }
       if (d.smoke) part.smoke = { pos: new THREE.Vector3(0, 0, info.box.max.z).applyMatrix4(m), color: new THREE.Color(p.color) };
@@ -173,6 +173,8 @@ export class Aircraft {
     this.hasSmoke = this.parts.some((p) => p.smoke);
     this.hasAB = this.parts.some((p) => p.engine?.ab);
     this.isHeli = this.parts.some((p) => p.engine?.type === 'rotor');
+    this.isCar = this.parts.some((p) => p.engine?.type === 'drive');
+    this.driveF = 0; this.flipT = 0;
     this.updateMass(true);
     this.initialMass = this.mass;
     let r = 1; for (const p of this.parts) for (const h of p.hull) r = Math.max(r, h.distanceTo(this.com)); for (const p of this.parts) if (p.gear) r = Math.max(r, p.gear.wheels[0].top.distanceTo(this.com) + p.gear.wheels[0].len + 0.5);
@@ -263,9 +265,29 @@ export class Aircraft {
     const dt = dtFrame / n;
     const v0 = this.v.clone();
     for (let i = 0; i < n; i++) this.substep(dt, env);
+    if (this.isCar) this.carRecover(dtFrame);
     if (dtFrame > 0) { const acc = this.v.clone().sub(v0).divideScalar(dtFrame); this.gSmooth = lerp(this.gSmooth ?? 1, (acc.dot(this.up) + G * this.up.y) / G, Math.min(1, dtFrame * 8)); this.g = this.gSmooth; }
     this.time += dtFrame; this.stats.time += dtFrame;
     this.updateVisuals(dtFrame, env);
+  }
+
+  // ---- car ----
+  // Stick left/right steers (as well as the rudder). Pull the stick back to reverse.
+  steerCmd() { return this.isCar ? clamp(this.ctl.yaw + this.ctl.roll, -1, 1) : this.ctl.yaw; }
+  steerAngle() {
+    if (!this.isCar) return -this.ctl.yaw * 0.55 * clamp(1 - this.airspeed / 45, 0.15, 1);
+    // cars: the faster you go, the less the wheels turn, keeping corners under ~0.6 g so it slides before it tips
+    return -this.steerCmd() * Math.min(0.55, Math.atan(2.5 * 6 / Math.max(1, this.airspeed ** 2)));
+  }
+  // Arcade and Pilot: a car stuck on its roof or side for 2 s is set back on its wheels.
+  carRecover(dt) {
+    const stuck = this.R.assist > 0 && this.onGround && this.up.y < 0.3 && this.v.length() < 2;
+    this.flipT = stuck ? this.flipT + dt : 0;
+    if (this.flipT < 2) return;
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.q); fwd.y = 0;
+    this.q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(-fwd.x, -fwd.z));
+    this.x.y += 1.5; this.v.set(0, 0, 0); this.w.set(0, 0, 0); this.wW.set(0, 0, 0); this.flipT = 0;
+    this.emit('msg', { text: 'Back on your wheels!' });
   }
 
   // ---- helicopter ----
@@ -407,8 +429,19 @@ export class Aircraft {
     // ---- engines ----
     const fwdSpeed = -vAirB.z;
     if (this.isHeli) this.rotors(dt, rho, ctl, F, T, q, _qi);
+    this.driveF = 0;
     for (const p of this.parts) {
       const e = p.engine; if (!e || !p.alive || e.type === 'rotor' || e.type === 'tailrotor') continue;
+      if (e.type === 'drive') { // force goes through the driven wheels (see contacts)
+        const rev = this.onGround && ctl.throttle < 0.05 ? clamp((ctl.pitch - 0.2) / 0.6, 0, 1) : 0;
+        e.spoolT = (e.spoolT || 0) + (Math.max(ctl.throttle, rev) - (e.spoolT || 0)) * Math.min(1, dt / 0.25);
+        const dmgF = (1 - clamp(p.dmg / p.hp, 0, 1) * 0.7) * (p.dmg > p.hp * 0.75 ? 0.2 : 1);
+        this.driveF += rev > 0 ? -e.thrust * 0.5 * e.spoolT * Math.max(0, 1 - (Math.max(0, -fwdSpeed) / 10) ** 2) * dmgF
+          : e.thrust * e.spoolT * Math.max(0, 1 - (Math.max(0, fwdSpeed) / e.vmax) ** 2) * dmgF;
+        e.thrustNow = 0;
+        e.rpm = lerp(e.idleRpm, e.maxRpm, Math.max(e.spoolT * 0.6, clamp(Math.abs(fwdSpeed) / e.vmax, 0, 1)));
+        continue;
+      }
       let target = ctl.throttle;
       if (e.type === 'rocket') {
         if (!e.burning && ctl.throttle > 0.5 && e.burn > 0) { e.burning = true; this.emit('msg', { text: 'Rocket ignition!' }); this.emit('rocket', {}); }
@@ -441,7 +474,11 @@ export class Aircraft {
     // ---- arcade/pilot assistance ----
     T.addScaledVector(Taero, R.aeroTorque);
     if (this.isHeli) this.heliAssist(F, T, ctl, q, _qi, fwdSpeed);
-    else if (R.assist > 0) {
+    else if (this.isCar && this.onGround && R.assist > 0) { // Arcade/Pilot: stability control keeps the wheels down
+      const right = _v2.set(1, 0, 0).applyQuaternion(q), bank = Math.asin(clamp(right.y, -1, 1));
+      T.add(_v3.set(0, 0, -bank * 6 * R.assist - this.w.z * 3 * R.assist).applyMatrix3(this.I));
+    }
+    else if (R.assist > 0 && !(this.isCar && this.onGround)) {
       const sf = clamp((V - 6) / 22, 0, 1);
       const des = new THREE.Vector3(ctl.pitch * 1.3, -ctl.yaw * 0.7, -ctl.roll * 2.4);
       const beta = Math.atan2(vAirB.x, Math.max(1, -vAirB.z));
@@ -505,7 +542,7 @@ export class Aircraft {
     let anyWheel = false, maxPen = 0;
     const R = this.R;
     // count wheels for stiffness
-    let nW = 0; for (const p of this.parts) if (p.alive && p.gear && (this.gearT > 0.95 || !p.gear.retract)) nW += p.gear.wheels.length;
+    let nW = 0, nDrive = 0; for (const p of this.parts) if (p.alive && p.gear && (this.gearT > 0.95 || !p.gear.retract)) { nW += p.gear.wheels.length; nDrive += p.gear.wheels.filter((w) => w.drive).length; }
     const kBase = (this.mass * G) / (0.09 * Math.max(2, nW));
     const cBase = 2 * Math.sqrt(kBase * this.mass / Math.max(2, nW)) * 0.6;
     const top = new THREE.Vector3(), pt = new THREE.Vector3(), rr = new THREE.Vector3(), vpt = new THREE.Vector3();
@@ -539,7 +576,7 @@ export class Aircraft {
         if (w.float && !water) N *= 1; // skid on ground
         // directions
         const fwdW = fwdB.clone();
-        if (w.steer) fwdW.applyAxisAngle(new THREE.Vector3(0, 1, 0), -this.ctl.yaw * 0.55 * clamp(1 - this.airspeed / 45, 0.15, 1));
+        if (w.steer) fwdW.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.steerAngle());
         fwdW.applyQuaternion(q);
         fwdW.addScaledVector(g.n, -fwdW.dot(g.n)).normalize();
         const latW = new THREE.Vector3().crossVectors(g.n, fwdW).normalize();
@@ -552,7 +589,11 @@ export class Aircraft {
         const DBG = globalThis.__dbg || {};
         const Ff = -clamp(vf / 0.4, -1, 1) * muRoll * N * (DBG.roll ?? 1);
         const Fl = -clamp(vl / 0.25, -1, 1) * muLat * N * (DBG.lat ?? 1);
-        const Fw = g.n.clone().multiplyScalar(N).addScaledVector(fwdW, Ff).addScaledVector(latW, Fl);
+        const Fd = w.drive && nDrive ? clamp(this.driveF / nDrive, -0.8 * N, 0.8 * N) * (water ? 0.15 : 1) : 0; // engine through the tyre
+        // one grip budget per tyre: pushing and cornering share it, so a spinning wheel slides instead of adding grip
+        let Fx = Ff + Fd, Fy = Fl; const cap = Math.max(muLat, muRoll) * N, tot = Math.hypot(Fx, Fy);
+        if (Fd && tot > cap) { Fx *= cap / tot; Fy *= cap / tot; }
+        const Fw = g.n.clone().multiplyScalar(N).addScaledVector(fwdW, Fx).addScaledVector(latW, Fy);
         // apply as impulse
         applyImpulse(this, rr, Fw.multiplyScalar(dt));
         w.spin = (w.spin || 0) + (vf / Math.max(0.1, w.r)) * dt;
@@ -736,7 +777,7 @@ export class Aircraft {
         if (p.gear.wheelObj && !w.float) {
           p.gear.wheelObj.position.y = (-w.len + w.comp) / w.ls;
           p.gear.wheelObj.children.forEach((c) => { if (!p.d.gear.wheels) c.rotation.x = -(w.spin || 0); });
-          if (w.steer) p.gear.wheelObj.rotation.y = -this.ctl.yaw * 0.55 * clamp(1 - this.airspeed / 45, 0.15, 1);
+          if (w.steer) p.gear.wheelObj.rotation.y = this.steerAngle();
         }
       }
       if (p.light?.bulb && p.light.type === 'nav') {

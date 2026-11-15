@@ -341,6 +341,18 @@ function skid({ len, h, color }) {
   return g;
 }
 
+// Car engine: a chunky block with a blower and side pipes (it drives the wheels, not a propeller).
+function carMotor({ color }) {
+  const g = new THREE.Group();
+  const block = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.45, 0.9), M.paint(color)); block.position.y = 0.22; g.add(block);
+  const blower = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.22, 0.5), M.chrome()); blower.position.y = 0.56; g.add(blower);
+  const scoop = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.12, 0.3), M.darkMetal()); scoop.position.set(0, 0.73, -0.05); g.add(scoop);
+  for (const sx of [-1, 1]) {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 1.1, 10), M.chrome()); pipe.rotation.x = Math.PI / 2; pipe.position.set(sx * 0.42, 0.12, 0.2); g.add(pipe);
+  }
+  return g;
+}
+
 // ---------- the library ----------
 const C = { white: 0xf2f2ee, red: 0xc8102e, yellow: 0xf2b705, blue: 0x1d4e89, gray: 0x8a9099, darkgray: 0x4a4f57, orange: 0xe8601c, green: 0x2e6b3f, navy: 0x1b2a41 };
 
@@ -508,6 +520,16 @@ def({ id: 'g_float', cat: 'gear', name: 'Float', desc: 'Pontoon float. Land on w
 def({ id: 'g_skid', cat: 'gear', name: 'Helicopter Skid', desc: 'Landing skid for helicopters. Use one each side.', mass: 30, hp: 600, color: 0x4a4f57, attach: 'gear',
   gear: { float: true, skid: true, flen: 3.0, clen: 0.95, cr: 0.11, limit: 6, k: 3 }, build: (c) => skid({ len: 3.0, h: 1.0, color: c }) });
 
+// --- Car parts: a Car Engine drives every wheel marked drive. Throttle = go, stick left/right = steer, pull back = reverse.
+def({ id: 'c_motor', cat: 'car', name: 'Car Engine', desc: 'V8 with a blower. Drives the car wheels. Throttle to go, pull the stick back to reverse.', mass: 220, hp: 900, color: C.red,
+  engine: { type: 'drive', thrust: 5000, vmax: 50, sound: 'piston', idleRpm: 800, maxRpm: 2700, cyl: 8 },
+  build: (c) => carMotor({ color: c }) });
+const carWheel = (id, name, desc, mass, r, len, w, steer) => def({ id, cat: 'car', name, desc, mass, hp: 700, color: 0x2a2a2a, attach: 'gear',
+  gear: { len, r, steer, brake: true, drive: true, limit: 8, k: 3 }, build: (c) => gearLeg({ len, r, w, steer, color: c }) });
+carWheel('c_wheel', 'Car Wheel', 'Driven wheel with a fat tyre. Put them at the back.', 30, 0.36, 0.35, 0.3, false);
+carWheel('c_wheel_steer', 'Steering Wheel', 'Driven wheel that steers. Put them at the front.', 32, 0.36, 0.35, 0.3, true);
+carWheel('c_monster', 'Monster Wheel', 'Huge bouncy monster-truck wheel. Drives and steers.', 120, 0.8, 0.6, 0.6, true);
+
 // --- Extras ---
 def({ id: 'x_nosecone', cat: 'extra', name: 'Nose Cone', desc: 'Pointy aerodynamic nose cap.', mass: 30, hp: 300, color: C.darkgray,
   build: (c) => { const g = new THREE.Group(); g.add(new THREE.Mesh(revolve(smoothProfile([[-1.6, 0], [-1.2, 0.18], [-0.5, 0.38], [0, 0.45]], 16).concat([[0.001, 0]]), { segs: 28 }), M.paint(c))); return g; } });
@@ -540,6 +562,7 @@ export const CATEGORIES = [
   { id: 'engine', name: 'Engines', icon: '✇' },
   { id: 'gear', name: 'Gear', icon: '◉' },
   { id: 'rotor', name: 'Rotors', icon: '✢' },
+  { id: 'car', name: 'Car', icon: '🚗' },
   { id: 'extra', name: 'Extras', icon: '✦' },
 ];
 
