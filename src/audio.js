@@ -143,7 +143,9 @@ export class Audio {
   makeVoice(kind) {
     const v = { kind, out: this.gain(0) };
     const spatial = !['wind', 'roll', 'stall', 'rain', 'buffet', 'whistle'].includes(kind);
-    if (spatial) { v.pan = this.panner(); v.out.connect(v.pan); v.pan.connect(this.engBus); } else v.out.connect(kind === 'stall' ? this.fx : kind === 'rain' ? this.amb : this.airBus);
+    // engines: out -> air absorption (distant = duller) -> propagation delay (sound arrives d/343 s late; a changing delay
+    // is also physically correct Doppler) -> 3D panner
+    if (spatial) { v.pan = this.panner(); v.air = this.filt('lowpass', 22000, 0.5); v.dl = this.ctx.createDelay(4); v.out.connect(v.air); v.air.connect(v.dl); v.dl.connect(v.pan); v.pan.connect(this.engBus); } else v.out.connect(kind === 'stall' ? this.fx : kind === 'rain' ? this.amb : this.airBus);
     const to = (node) => node.connect(v.out);
     if (this.canSample(kind)) { // recorded layers
       const d = SAMPLE_ENGINES[kind]; v.sampled = true; v.layers = [];
@@ -240,9 +242,17 @@ export class Audio {
       const v = this.voice(e.sound); seen.add(e.sound);
       if (s.cockpit && v.pan) v.pan.refDistance = 40; else if (v.pan) v.pan.refDistance = 12 + e.count * 3;
       this.placeVoice(v, e.pos);
+      if (v.dl && e.pos && s.listener) {
+        const d = s.cockpit ? 0 : Math.hypot(e.pos.x - s.listener.pos.x, e.pos.y - s.listener.pos.y, e.pos.z - s.listener.pos.z);
+        const target = Math.min(3.5, d / 343), now = this.ctx.currentTime;
+        // a camera cut (chase -> tower) would make the delay sweep and the pitch swoop: jump instead
+        if (Math.abs(target - v.dl.delayTime.value) > 0.12) { v.dl.delayTime.cancelScheduledValues(now); v.dl.delayTime.setValueAtTime(target, now); } else v.dl.delayTime.setTargetAtTime(target, now, 0.06);
+        this.set(v.air.frequency, Math.max(900, 22000 * Math.exp(-d / 550)), 0.1);
+        e.toListener = d > 0.01 ? { x: (s.listener.pos.x - e.pos.x) / d, y: (s.listener.pos.y - e.pos.y) / d, z: (s.listener.pos.z - e.pos.z) / d } : null;
+      }
       const thr = e.spoolT;
       const multi = Math.sqrt(e.count);
-      if (v.sampled) { this.updateSampled(v, e, s, dop, multi); continue; }
+      if (v.sampled) { this.updateSampled(v, e, s, 1, multi); continue; } // doppler comes from the delay line
       if (e.sound === 'piston' || e.sound === 'radial') {
         const rad = e.sound === 'radial', rps = Math.max(1, e.rpm) / 60;
         this.set(v.o1.frequency, rps * 0.5 * dop * (rad ? 1 : 2)); // two-revolution cycle
@@ -304,13 +314,17 @@ export class Audio {
     const running = kind === 'rocket' ? e.burning : rr ? e.rpm > 50 : true;
     const x = smooth(0.2, 0.8, n), hasCabin = v.layers.some((l) => l.role === 'cabin');
     const inside = s.cockpit && hasCabin ? 1 : 0;
+    // turbines are directional: compressor whine radiates forwards, exhaust roar backwards (c: +1 listener in front, -1 behind)
+    const c = e.fwd && e.toListener && !s.cockpit ? e.fwd.x * e.toListener.x + e.fwd.y * e.toListener.y + e.fwd.z * e.toListener.z : 0;
+    const turb = (kind === 'jet' || kind === 'fan' || kind === 'rocket') && !s.cockpit;
+    const front = turb ? 0.7 + 0.6 * Math.max(0, c) : 1, rear = turb ? 0.65 + 0.35 * Math.max(0, -c) - 0.25 * Math.max(0, c) : 1;
     for (const l of v.layers) {
       let g = 0;
-      if (l.role === 'idle') g = Math.cos(x * Math.PI / 2) * (1 - inside);
-      else if (l.role === 'high') g = (kind === 'rocket' ? 1 : Math.sin(x * Math.PI / 2)) * (1 - inside);
+      if (l.role === 'idle') g = Math.cos(x * Math.PI / 2) * (1 - inside) * front;
+      else if (l.role === 'high') g = (kind === 'rocket' ? 1 : Math.sin(x * Math.PI / 2)) * (1 - inside) * rear;
       else if (l.role === 'cabin') g = inside * (v.layers.some((q) => q.role === 'cabinIdle') ? Math.sin(x * Math.PI / 2) : 1);
       else if (l.role === 'cabinIdle') g = inside * Math.cos(x * Math.PI / 2);
-      else if (l.role === 'ab') g = e.ab ? 1.1 : 0;
+      else if (l.role === 'ab') g = e.ab ? 1.1 * rear : 0;
       this.set(l.g.gain, g, l.role === 'ab' ? 0.12 : 0.08);
       this.set(l.src.playbackRate, (l.rate[0] + (l.rate[1] - l.rate[0]) * n) * dop, 0.05);
     }
