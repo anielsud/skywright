@@ -55,6 +55,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "boat knocks fiberglass water laps on hull.flac" by kyles (CC0): https://freesound.org/people/kyles/sounds/637206/
 - "water movements big splashes and waves.flac" by kyles (CC0): https://freesound.org/people/kyles/sounds/637952/
 - "wind draft loop 1" by nsstudios (CC BY 4.0): https://freesound.org/people/nsstudios/sounds/651541/
+- "Sonic boom from Falcon 9 rocket landing" by g0ggs (CC0): https://freesound.org/people/g0ggs/sounds/668561/
 - "forest heavy rain loop.wav" by Victormaa (CC0): https://freesound.org/people/Victormaa/sounds/671409/
 - "S37-14 Two cars crash foley; good metallic bump.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/675466/
 - "Game Success Fanfare Short" by el_boss (CC0): https://freesound.org/people/el_boss/sounds/677858/
