@@ -71,35 +71,6 @@ export const M = {
   visor: () => cached('visor', () => new THREE.MeshStandardMaterial({ color: 0x332200, metalness: 0.9, roughness: 0.1 })),
 };
 
-// Canvas texture for airliner cabin windows (mapped onto lathe UVs: u around, v along length)
-export function windowTexture(rows = 1, count = 40) {
-  return cached('win' + rows + count, () => {
-    const w = 1024, h = 256, c = document.createElement('canvas'); c.width = w; c.height = h;
-    const g = c.getContext('2d');
-    g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);
-    // lathe u runs around the body; windows at u≈0.25 & 0.75 (the sides) - we draw along v (x axis here = v)
-    g.fillStyle = '#1b2430';
-    for (const side of [0.25, 0.75]) {
-      const y = side * h - 6;
-      for (let i = 0; i < count; i++) {
-        const x = w * (0.18 + 0.64 * (i / count));
-        g.beginPath(); g.roundRect(x, y - 6, 9, 13, 4); g.fill();
-      }
-      // door outlines
-      g.strokeStyle = '#9aa3ad'; g.lineWidth = 2;
-      g.strokeRect(w * 0.15, y - 14, 14, 30); g.strokeRect(w * 0.83, y - 14, 14, 30);
-    }
-    // cheatline
-    g.fillStyle = 'rgba(0,0,0,0.08)';
-    for (const side of [0.25, 0.75]) g.fillRect(w * 0.05, side * h + 12, w * 0.9, 3);
-    const t = new THREE.CanvasTexture(c);
-    t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
-    // lathe uv: u = around (x of texture), v = along. Rotate so canvas x maps to v.
-    t.center.set(0.5, 0.5); t.rotation = Math.PI / 2;
-    return t;
-  });
-}
-
 // Soft round puff texture (clouds/smoke)
 export function puffTexture() {
   return cached('puff', () => {
