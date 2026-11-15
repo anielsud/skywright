@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.43.0', items: [
+    'New Ultra graphics for laptops (Settings › Graphics › Ultra): shadows from buildings and trees far into the distance, soft shading where things touch, sun rays through the clouds and smoother edges.',
+  ] },
   { v: '1.42.0', items: [
     'Towns look real now: brick, wood and plaster houses with tiled roofs, chimneys and balconies, windows you can almost see into, gardens with lawns, fences, pools and parked cars.',
     'Pavements, street lamps that light up the streets at night, and a church square with a fountain and market stalls.',
