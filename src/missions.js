@@ -92,6 +92,6 @@ export class LandingChallenge {
     if (ac.wrecked && !this.done) { this.done = true; this.score = 0; events.push({ type: 'landingDone', score: 0, crashed: true }); }
   }
   target() { return this.done ? null : new THREE.Vector3(0, this.world.loc.rwyH, this.world.runway.len / 2 - 380); }
-  hud() { return this.done ? `Score: ${this.score}` : this.touch ? `Touchdown ${this.touch.vs.toFixed(1)} m/s — now stop!` : 'Land on runway 36 · aim for the big white blocks'; }
+  hud() { return this.done ? `Score: ${this.score}` : this.touch ? `Touchdown ${this.touch.vs.toFixed(1)} m/s — now stop!` : 'Land on runway 36R · aim for the big white blocks'; }
   dispose() {}
 }
