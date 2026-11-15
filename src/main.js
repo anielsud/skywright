@@ -652,6 +652,10 @@ function onResize() {
   hangar.resize(w, h); flightCam.aspect = w / h; flightCam.updateProjectionMatrix();
 }
 window.addEventListener('resize', onResize);
+// Long-presses on a tablet must never open the browser's context menu or start a text selection:
+// both cancel the touch and leave the controls stuck.
+document.addEventListener('contextmenu', (e) => { if (!e.target.closest('input, textarea')) e.preventDefault(); });
+document.addEventListener('selectstart', (e) => { if (!e.target.closest('input, textarea')) e.preventDefault(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'flight' && F && !F.paused) togglePause(true); });
 
 // ---------- boot ----------
