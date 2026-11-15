@@ -45,6 +45,7 @@ const ENG_SEQ = {
   rotor: { clip: 'eng_spool', rate: 1, gain: 0.6, catch: 2.8, blend: [2.6, 4.2], stop: 'eng_stop_jet', stopGain: 0.5, stopFade: 2.5, stopDur: 8 },
   fan: { clip: 'eng_start_jet', rate: 0.9, gain: 0.4, catch: 3.3, blend: [3.6, 5.8], stop: 'eng_stop_jet', stopGain: 0.45, stopFade: 3.5, stopDur: 10 },
 };
+const BOOM = { crack: 0.2, rumble: 0.22, cockpit: 1 }; // sonic boom (sonicBoom) peaks (weighted, 100%): ≈-23 close outside, ≈-36 at 1.5 km, cockpit thump ≈-30; limiter ≥ -2 dB
 const ROTOR = { whop: 0.6, whine: 0.012, tail: 0.05 }; // helicopter extras (rotorTick)
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }; // -12 dB overall: a game shouldn't hit the speaker at full scale
 
@@ -484,6 +485,42 @@ export class Audio {
     return ok;
   }
 
+  // ---------- sonic boom ----------
+  // An N-wave: the pressure jumps up at the bow shock, falls steadily, and snaps back at the tail shock, so it is heard as two
+  // sharp cracks 0.14 s apart ("ba-BOOM", the same gap as the two visible shock rings), followed by a recorded rolling rumble
+  // (Falcon 9 landing boom, Freesound 668561). `delay`: seconds until it reaches the listener (distance / 343).
+  // In the cockpit the pilot never hears their own boom, only a muffled thump through the airframe.
+  sonicBoom(P = 1, pos = null, delay = 0, cockpit = false) {
+    if (!this.ctx) return;
+    if (!this.nwave) {
+      const sr = this.ctx.sampleRate, T = 0.14, len = Math.floor(sr * (T + 0.05)), b = this.ctx.createBuffer(1, len, sr), x = b.getChannelData(0), rise = sr * 0.0006;
+      for (let i = 0; i < len; i++) { const t = i / sr; x[i] = t < T ? 1 - (2 * t) / T : -Math.exp(-(t - T) * 900); }
+      for (let i = 0; i < rise; i++) x[i] *= i / rise; // ~0.6 ms shock rise: sharp, but not a digital click
+      this.nwave = b;
+    }
+    const t0 = this.ctx.currentTime + Math.max(0, delay), keep = (Math.max(0, delay) + 6) * 1000;
+    let d;
+    if (cockpit) { d = this.filt('lowpass', 220, 0.7); d.connect(this.fx); }
+    else {
+      d = this.panner(); d.refDistance = 400; d.rolloffFactor = 0.8; // a boom carries for miles
+      if (pos) { if (d.positionX) { d.positionX.value = pos.x; d.positionY.value = pos.y; d.positionZ.value = pos.z; } else d.setPosition(pos.x, pos.y, pos.z); }
+      d.connect(this.fx);
+    }
+    setTimeout(() => d.disconnect(), keep);
+    const src = this.ctx.createBufferSource(); src.buffer = this.nwave;
+    // its bass is mostly what a tablet can't play but would slam the limiter: keep the cracks, shelve off the body (except the cockpit thump)
+    const hp = this.filt('highpass', cockpit ? 40 : 280, 0.7), hp2 = this.filt('highpass', cockpit ? 40 : 280, 0.7), g = this.gain(BOOM.crack * P * (cockpit ? BOOM.cockpit : 1));
+    src.connect(hp); hp.connect(hp2); hp2.connect(g); g.connect(d); src.start(t0); src.onended = () => g.disconnect();
+    // the rolling rumble after it (fades out over its last second)
+    const rb = this.buffers.sonic_rumble;
+    if (rb) {
+      const r = this.ctx.createBufferSource(); r.buffer = rb; r.playbackRate.value = 0.9 + Math.random() * 0.15;
+      const rg = this.gain(0), L = rb.duration / r.playbackRate.value, v = BOOM.rumble * P * (cockpit ? BOOM.cockpit : 1);
+      rg.gain.setValueAtTime(v, t0); rg.gain.setValueAtTime(v, t0 + L - 1.2); rg.gain.linearRampToValueAtTime(0, t0 + L);
+      const rh = this.filt('highpass', cockpit ? 40 : 110, 0.7); r.connect(rh); rh.connect(rg); rg.connect(d); r.start(t0); r.onended = () => rg.disconnect();
+    } else this.burst('brown', 'lowpass', 300, 0.5, 0.9 * P, 2.2, d, Math.max(0, delay) + 0.05, 60);
+  }
+
   // ---------- helicopter rotor ----------
   // The recorded idle / hover / cabin loops (SAMPLE_ENGINES.rotor) follow rotor speed; on top of them, synthesized:
   // blade-slap "whop" pulses at the blade-pass rate (louder and slappier under collective and when heard from the side),
@@ -653,11 +690,7 @@ export class Audio {
       case 'pop': this.tone('sine', 400, 900, 0.1, 0.08); break;
       case 'ring': [880, 1320, 1760].forEach((f, i) => this.tone('sine', f, f, 0.12, 0.6, i * 0.06)); break;
       case 'win': [523, 659, 784, 1046, 1318].forEach((f, i) => { this.tone('triangle', f, f, 0.13, 0.9, i * 0.11); this.tone('sine', f * 2, f * 2, 0.04, 0.6, i * 0.11); }); break;
-      case 'sonicboom': // N-wave: two sharp cracks (bow and tail shock) over a deep thump
-        for (const t of [0, 0.13]) { this.burst('white', 'lowpass', 6000, 0.5, 0.9 * P, 0.22, d, t, 900); this.tone('sine', 75, 28, 0.8 * P, 0.7, t, d); }
-        this.shot('boom', { gain: SHOT.boom * 1.2 * P, rate: 0.75 + Math.random() * 0.1, dest: d });
-        this.burst('brown', 'lowpass', 300, 0.5, 0.9 * P, 2.2, d, 0.05, 60);
-        break;
+      case 'sonicboom': this.sonicBoom(P, pos); break; // see sonicBoom (callers delay it by distance themselves)
       case 'rocket': this.burst('white', 'lowpass', 3000, 0.5, 1, 0.8, d); this.tone('sine', 60, 40, 0.8, 0.8, 0, d); break;
       case 'warn': this.tone('square', 800, 800, 0.05, 0.12); this.tone('square', 600, 600, 0.05, 0.12, 0.15); break;
     }

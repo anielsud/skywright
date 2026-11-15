@@ -576,5 +576,11 @@
   "start": 10,
   "end": 20,
   "loop": true
+ },
+ "sonic_rumble": {
+  "id": 668561,
+  "start": 1.78,
+  "end": 5.6,
+  "loop": false
  }
 }

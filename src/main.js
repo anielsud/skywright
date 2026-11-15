@@ -576,7 +576,8 @@ function buildFlight(cfg) {
   if (cfg.mode === 'rings') mission = new RingRace(scene, world, ac, cfg.realism);
   else if (cfg.mode === 'landing') mission = new LandingChallenge(world);
   sonic.onBoom = (pos) => {
-    audio.play('sonicboom', 1.5, rig.mode === 'cockpit' ? null : pos);
+    const ck = rig.mode === 'cockpit'; // outside, the boom reaches the camera distance/343 s later, from where the shock formed
+    audio.sonicBoom(1.5, pos, ck ? 0 : Math.min(8, flightCam.position.distanceTo(pos) / 343), ck);
     hud.center('MACH 1!', 2200); if (!ac.boomed) hud.toast('You broke the sound barrier!', 'good');
     ac.boomed = true; rig.shake(1.4); post.shock(0.45);
   };
