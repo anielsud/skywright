@@ -33,7 +33,21 @@ def match_loudness(x):
     return np.clip(y * g, -0.99, 0.99).astype(np.float32)
 index = json.loads((OUT / 'index.json').read_text()) if (OUT / 'index.json').exists() else {}
 credits = {}
+PIPER = pathlib.Path.home() / '.cache/skywright/piper'  # venv with piper-tts + the en_US-joe-medium voice (CC0 data)
+RADIO = 'highpass=f=320:p=2,lowpass=f=3600:p=2,acompressor=threshold=-20dB:ratio=4:attack=5:release=60,volume=2'
+def tts(text, name):
+    wav = CACHE / f'tts_{name}.wav'
+    subprocess.run([str(PIPER / 'venv/bin/piper'), '-m', str(PIPER / 'en_US-joe-medium.onnx'), '-f', str(wav), '--length-scale', '0.9'], input=text.encode(), check=True, capture_output=True)
+    raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(wav), '-ac', '1', '-ar', str(SR), '-af', f'silenceremove=start_periods=1:start_threshold=-50dB,areverse,silenceremove=start_periods=1:start_threshold=-50dB,areverse,{RADIO}', '-f', 'f32le', '-'], capture_output=True, check=True).stdout
+    return np.frombuffer(raw, np.float32).astype(np.float64)
 for name, c in man.items():
+    if 'tts' in c:  # synthesized voice callout: cockpit-radio band-limited
+        if only and name not in only: continue
+        x = tts(c['tts'], name); a_ = int(0.004 * SR); x[:a_] *= np.linspace(0, 1, a_); x[-a_:] *= np.linspace(1, 0, a_)
+        x = match_loudness(x)
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'f32le', '-ar', str(SR), '-ac', '1', '-i', '-', '-c:a', 'libopus', '-b:a', '48k', str(OUT / f'{name}.ogg')], input=x.tobytes(), check=True)
+        index[name] = {'dur': round(len(x) / SR, 3), 'tts': c['tts']}
+        print(f"{name:20} {len(x)/SR:5.2f}s  “{c['tts']}”"); continue
     meta = json.loads((CACHE / f"{c['id']}.json").read_text()) if (CACHE / f"{c['id']}.json").exists() else None
     if meta is None:
         subprocess.run([sys.executable, str(ROOT / 'tools/sfx/fs.py'), 'get', str(c['id']), str(CACHE)], check=True)
@@ -56,4 +70,5 @@ for name, c in man.items():
 lic = lambda u: 'CC0' if 'zero' in u else 'CC BY 4.0' if '/by/4' in u else 'CC BY 3.0' if '/by/3' in u else u
 lines = ['# Sound credits', '', 'Recordings from [Freesound](https://freesound.org), trimmed, looped and level-matched for the game.', '']
 for i, m in sorted(credits.items()): lines.append(f"- \"{m['name']}\" by {m['username']} ({lic(m['license'])}): {m['url']}")
+lines += ['', 'Voice callouts: synthesized with [Piper](https://github.com/rhasspy/piper) using the "joe" voice (trained on CC0 data, OHF-Voice/voice-datasets).']
 (OUT / 'CREDITS.md').write_text('\n'.join(lines) + '\n')

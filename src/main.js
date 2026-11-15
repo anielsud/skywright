@@ -7,6 +7,7 @@ import { World, LOCATIONS, WEATHER } from './world.js';
 import { Traffic, buildStatic, mergeByMaterial } from './traffic.js';
 import { Effects } from './effects.js';
 import { Audio, MIX_DEFAULTS, OLD_MIX_DEFAULTS } from './audio.js';
+import { Callouts } from './callouts.js';
 import { Controls } from './controls.js';
 import { HUD } from './hud.js';
 import { CameraRig } from './cameras.js';
@@ -27,7 +28,7 @@ const LS = {
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 // Must be read before anything below writes to storage (the settings migration does, for every new player).
 const returningPlayer = LS.get('settings', null) !== null || LS.get('current', null) !== null;
-const settings = Object.assign({ quality: 'auto', units: 'imperial', invert: false, controlMode: 'stick', mix: null, touch: 'auto', showFps: false }, LS.get('settings', {}));
+const settings = Object.assign({ callouts: true, quality: 'auto', units: 'imperial', invert: false, controlMode: 'stick', mix: null, touch: 'auto', showFps: false }, LS.get('settings', {}));
 if ((settings.v || 1) < 2) { settings.quality = 'auto'; settings.v = 2; LS.set('settings', settings); } // move everyone onto adaptive quality once
 // 'auto' = medium features on tablets / high on desktops, plus resolution that adapts to the frame rate
 const qualityTier = () => (settings.quality === 'auto' ? (isTouch ? 'medium' : 'high') : settings.quality);
@@ -50,7 +51,7 @@ renderer.shadowMap.type = qualityTier() === 'high' ? THREE.PCFSoftShadowMap : TH
 
 // mixer: the old single linear 'volume' setting is dropped (its scale meant something else); start from the new defaults
 if (!settings.mix || Object.keys(OLD_MIX_DEFAULTS).every((k) => settings.mix[k] === OLD_MIX_DEFAULTS[k])) settings.mix = { ...MIX_DEFAULTS }; delete settings.volume;
-const audio = new Audio(); audio.setMix(settings.mix);
+const audio = new Audio(); audio.setMix(settings.mix); audio.callouts = settings.callouts;
 const $ = (s) => document.querySelector(s);
 const presets = makePresets();
 
@@ -418,6 +419,7 @@ function settingsModal() {
     <label class="lbl">On-screen controls</label><div class="chips">${['auto', 'on', 'off'].map((t) => `<button data-t="${t}" class="${settings.touch === t ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>
     <label class="check"><input type="checkbox" id="inv" ${settings.invert ? 'checked' : ''}> Invert pitch (push stick forward / up-arrow to climb)</label>
     <label class="lbl">Sound</label>
+    <label class="check"><input type="checkbox" id="callouts" ${settings.callouts ? 'checked' : ''}> Voice callouts (altitude on landing, stall, pull up)</label>
     <div class="mixer">${[['master', 'Volume'], ['engines', 'Engines'], ['world', 'Wind & world'], ['fx', 'Effects'], ['music', 'Music']].map(([k, n]) =>
       `<label>${n}</label><input type="range" min="0" max="1" step="0.02" value="${settings.mix[k]}" data-mix="${k}"><b data-mixv="${k}">${Math.round(settings.mix[k] * 100)}</b>`).join('')}</div>
     <p class="version">${buildInfo()}</p>
@@ -431,6 +433,7 @@ function settingsModal() {
   el.querySelector('#fps').addEventListener('change', (e) => { settings.showFps = e.target.checked; LS.set('settings', settings); });
   pick('u', 'units', renderInspector); pick('cm', 'controlMode', () => controls.setMode(settings.controlMode)); pick('t', 'touch');
   el.querySelector('#inv').addEventListener('change', (e) => { settings.invert = e.target.checked; controls.invert = settings.invert; LS.set('settings', settings); });
+  el.querySelector('#callouts').addEventListener('change', (e) => { settings.callouts = audio.callouts = e.target.checked; LS.set('settings', settings); });
   el.querySelectorAll('[data-mix]').forEach((r) => r.addEventListener('input', () => {
     const k = r.dataset.mix; settings.mix[k] = +r.value; el.querySelector(`[data-mixv="${k}"]`).textContent = Math.round(r.value * 100);
     audio.setMix(settings.mix); LS.set('settings', settings);
@@ -446,7 +449,7 @@ function helpModal() {
   <h4>Fly — tablet</h4><p>Left thumb: throttle lever and rudder slider. Right thumb: the stick (pull down to climb). Or switch on <b>Tilt the tablet</b> in Settings. Drag the sky to look around; pinch to zoom.</p>
   <h4>Gamepad</h4><p>Left stick flies, right stick X is rudder, triggers set throttle, A brakes, B gear, X flaps, Y camera, LB smoke.</p>
   <h4>Tips</h4><p>Take off around the stall speed shown in the hangar. In Simulator mode, land gently (under ~3 m/s sink) or your gear will snap! Sailplanes can ride rising air under cumulus clouds and along sunny ridges.</p>
-  <h4>Credits</h4><p>Engines, wind, tyres, weather, nature and crash sounds are real recordings from <a href="https://freesound.org" target="_blank" rel="noopener">Freesound</a>: <a href="assets/sfx/CREDITS.md" target="_blank" rel="noopener">sound credits</a>.</p>
+  <h4>Credits</h4><p>Voice callouts use the open-source Piper voice "joe". Engines, wind, tyres, weather, nature and crash sounds are real recordings from <a href="https://freesound.org" target="_blank" rel="noopener">Freesound</a>: <a href="assets/sfx/CREDITS.md" target="_blank" rel="noopener">sound credits</a>.</p>
   </div><div class="modal-foot"><button data-close class="primary">Got it</button></div>`, 'wide');
 }
 
@@ -519,6 +522,7 @@ function buildFlight(cfg) {
   if (cfg.mode === 'rings') mission = new RingRace(scene, world, ac, cfg.realism);
   else if (cfg.mode === 'landing') mission = new LandingChallenge(world);
   F = { scene, world, ac, effects, traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
+  F.callouts = new Callouts(audio, ac);
   net.attach(F);
   rig.init = false; rig.set('chase'); rig.look.dist = 1;
   hud.setUnits(settings.units); hud.show(true);
@@ -627,7 +631,7 @@ function handleEvents(f, dt) {
       }
       case 'touch': if (e.water || e.float) { effects.splash(e.pos, e.speed * 3); audio.play('splash', 0.4, e.pos); } else { effects.tireSmoke(e.pos, e.speed); audio.play('chirp', Math.min(1.5, e.speed / 2)); } break;
       case 'landing': {
-        const vs = e.vs; const ok = vs < 1.0 ? 'Butter! ' : vs < 2 ? 'Nice landing! ' : vs < 3.2 ? 'Firm landing. ' : 'Ouch! ';
+        const vs = e.vs; F?.callouts?.landing(vs); const ok = vs < 1.0 ? 'Butter! ' : vs < 2 ? 'Nice landing! ' : vs < 3.2 ? 'Firm landing. ' : 'Ouch! ';
         hud.toast(`${ok}${vs.toFixed(1)} m/s`, vs < 2 ? 'good' : ''); break;
       }
       case 'scrape': if (e.surf !== 'water') { effects.sparks(e.pos, ac.v, 4); effects.dust(e.pos, ac.v, e.surf, 2); } f.scrapeT = 0.2; f.scrape = e.speed; break;
@@ -760,6 +764,7 @@ function stepFlight(dtReal) {
     scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead, cockpit, doppler, rain: world.rain.visible ? world.W.rain : 0,
     listener: { pos: flightCam.position, fwd: camFwd, up: camUp },
     amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) } });
+  f.callouts?.update(world, dtReal);
   hud.update(ac, world, f.mission, flightCam, net.markers());
   if (f.debug) $('#debug').textContent = `α ${(ac.alpha * 57.3).toFixed(1)}° g ${ac.g.toFixed(2)} V ${ac.airspeed?.toFixed(1)} m=${Math.round(ac.mass)} com=${ac.com.toArray().map((v) => v.toFixed(2))} w=${ac.w.toArray().map((v) => v.toFixed(2))}`;
   $('#debug').style.display = f.debug ? '' : 'none';

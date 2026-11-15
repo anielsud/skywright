@@ -191,5 +191,50 @@
   "id": 848312,
   "start": 0.55,
   "end": 2.2
+ },
+ "vo_100": {
+  "tts": "One hundred."
+ },
+ "vo_50": {
+  "tts": "Fifty."
+ },
+ "vo_40": {
+  "tts": "Forty."
+ },
+ "vo_30": {
+  "tts": "Thirty."
+ },
+ "vo_20": {
+  "tts": "Twenty."
+ },
+ "vo_10": {
+  "tts": "Ten."
+ },
+ "vo_stall": {
+  "tts": "Stall! Stall!"
+ },
+ "vo_pullup": {
+  "tts": "Pull up! Pull up!"
+ },
+ "vo_sinkrate": {
+  "tts": "Sink rate!"
+ },
+ "vo_gear": {
+  "tts": "Too low. Gear!"
+ },
+ "vo_bank": {
+  "tts": "Bank angle! Bank angle!"
+ },
+ "vo_rotate": {
+  "tts": "Rotate."
+ },
+ "vo_posrate": {
+  "tts": "Positive rate."
+ },
+ "vo_smooth": {
+  "tts": "Smooth landing!"
+ },
+ "vo_firm": {
+  "tts": "Firm landing."
  }
 }

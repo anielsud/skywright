@@ -20,7 +20,7 @@ const SAMPLE_ENGINES = {
 };
 const SAMPLE_LEVEL = { piston: 3.6, radial: 2.7, turboprop: 3.1, jet: 2.1, fan: 2.2, rocket: 3.0 }; // full power ≈ -24 dB props, -28 jets (weighted, tools/sfx measurements)
 // Recorded world/foley levels (linear), balanced with tools/sfx-style weighted measurements.
-const SHOT = { crash: 0.4, debris: 0.2, glass: 0.35, explosion: 0.4, boom: 0.4, chirp: 0.38, splash: 0.32, gear: 0.32, thunder: 0.3 }; // peaks: crash ≈-22, explosion ≈-18, chirp ≈-28 dB weighted
+const SHOT = { voice: 1.8, crash: 0.4, debris: 0.2, glass: 0.35, explosion: 0.4, boom: 0.4, chirp: 0.38, splash: 0.32, gear: 0.32, thunder: 0.3 }; // peaks: crash ≈-22, explosion ≈-18, chirp ≈-28 dB weighted
 const REC = { windExt: 2.66, windCk: 4.6, roll: 2, rain: 2, day: 0.73, night: 0.52, sea: 1.38, lake: 1.46 }; // wind@120 m/s ≈-32, roll ≈-30, rain ≈-30, day bed ≈-40 dB weighted
 const RPM_RANGE = { piston: [700, 2700], radial: [600, 2600], turboprop: [1000, 2000] };
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }; // -12 dB overall: a game shouldn't hit the speaker at full scale
@@ -84,6 +84,8 @@ export class Audio {
   dropVoice(k) { const v = this.voices[k]; delete this.voices[k]; this.set(v.out.gain, 0, 0.05); setTimeout(() => { try { v.out.disconnect(); v.pan?.disconnect(); v.layers?.forEach((l) => l.src.stop()); } catch { /* gone */ } }, 300); }
   loop(name) { const s = this.ctx.createBufferSource(); s.buffer = this.buffers[name]; s.loop = true; s.start(0, Math.random() * s.buffer.duration); return s; }
   has(name) { return !!this.buffers[name]; }
+  // cockpit voice callout (src/callouts.js); goes through the Effects channel, never muffled by the cockpit filter
+  say(name) { return !!name && this.callouts !== false && this.shot(name, { gain: SHOT.voice, dest: this.fx }); }
   // one-shot recording; returns false (so callers fall back to synthesis) if it isn't loaded
   shot(name, { gain = 1, rate = 1, dest = this.fx, delay = 0 } = {}) {
     const b = this.buffers[name]; if (!b || !this.ctx) return false;

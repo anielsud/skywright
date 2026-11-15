@@ -168,5 +168,65 @@
   "f0": 15.4,
   "dur": 1.65,
   "src": 848312
+ },
+ "vo_100": {
+  "dur": 0.648,
+  "tts": "One hundred."
+ },
+ "vo_50": {
+  "dur": 0.303,
+  "tts": "Fifty."
+ },
+ "vo_40": {
+  "dur": 0.308,
+  "tts": "Forty."
+ },
+ "vo_30": {
+  "dur": 0.28,
+  "tts": "Thirty."
+ },
+ "vo_20": {
+  "dur": 0.387,
+  "tts": "Twenty."
+ },
+ "vo_10": {
+  "dur": 0.209,
+  "tts": "Ten."
+ },
+ "vo_stall": {
+  "dur": 1.318,
+  "tts": "Stall! Stall!"
+ },
+ "vo_pullup": {
+  "dur": 1.171,
+  "tts": "Pull up! Pull up!"
+ },
+ "vo_sinkrate": {
+  "dur": 0.445,
+  "tts": "Sink rate!"
+ },
+ "vo_gear": {
+  "dur": 1.093,
+  "tts": "Too low. Gear!"
+ },
+ "vo_bank": {
+  "dur": 1.619,
+  "tts": "Bank angle! Bank angle!"
+ },
+ "vo_rotate": {
+  "dur": 0.349,
+  "tts": "Rotate."
+ },
+ "vo_posrate": {
+  "dur": 0.712,
+  "tts": "Positive rate."
+ },
+ "vo_smooth": {
+  "dur": 0.676,
+  "tts": "Smooth landing!"
+ },
+ "vo_firm": {
+  "dur": 0.665,
+  "tts": "Firm landing."
  }
 }
