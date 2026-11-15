@@ -6,7 +6,7 @@ import { Aircraft, REALISM } from './aircraft.js';
 import { World, LOCATIONS, WEATHER } from './world.js';
 import { Traffic, buildStatic, mergeByMaterial } from './traffic.js';
 import { Effects } from './effects.js';
-import { Audio } from './audio.js';
+import { Audio, MIX_DEFAULTS } from './audio.js';
 import { Controls } from './controls.js';
 import { HUD } from './hud.js';
 import { CameraRig } from './cameras.js';
@@ -24,7 +24,7 @@ const LS = {
   set(k, v) { try { localStorage.setItem('skywright.' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
-const settings = Object.assign({ quality: 'auto', units: 'imperial', invert: false, controlMode: 'stick', volume: 0.8, touch: 'auto', showFps: false }, LS.get('settings', {}));
+const settings = Object.assign({ quality: 'auto', units: 'imperial', invert: false, controlMode: 'stick', mix: null, touch: 'auto', showFps: false }, LS.get('settings', {}));
 if ((settings.v || 1) < 2) { settings.quality = 'auto'; settings.v = 2; LS.set('settings', settings); } // move everyone onto adaptive quality once
 // 'auto' = medium features on tablets / high on desktops, plus resolution that adapts to the frame rate
 const qualityTier = () => (settings.quality === 'auto' ? (isTouch ? 'medium' : 'high') : settings.quality);
@@ -45,7 +45,9 @@ post.enabled = qualityTier() !== 'low';
 post.setSamples(qualityTier() === 'high' ? 4 : 0);
 renderer.shadowMap.type = qualityTier() === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 
-const audio = new Audio(); audio.volume = settings.volume;
+// mixer: the old single linear 'volume' setting is dropped (its scale meant something else); start from the new defaults
+if (!settings.mix) settings.mix = { ...MIX_DEFAULTS }; delete settings.volume;
+const audio = new Audio(); audio.setMix(settings.mix);
 const $ = (s) => document.querySelector(s);
 const presets = makePresets();
 
@@ -311,7 +313,9 @@ function settingsModal() {
     <label class="lbl">Touch steering</label><div class="chips"><button data-cm="stick" class="${settings.controlMode === 'stick' ? 'on' : ''}">On-screen stick</button><button data-cm="tilt" class="${settings.controlMode === 'tilt' ? 'on' : ''}">Tilt the tablet</button></div>
     <label class="lbl">On-screen controls</label><div class="chips">${['auto', 'on', 'off'].map((t) => `<button data-t="${t}" class="${settings.touch === t ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>
     <label class="check"><input type="checkbox" id="inv" ${settings.invert ? 'checked' : ''}> Invert pitch (push stick forward / up-arrow to climb)</label>
-    <label class="lbl">Volume</label><input type="range" min="0" max="1" step="0.05" value="${settings.volume}" id="vol">
+    <label class="lbl">Sound</label>
+    <div class="mixer">${[['master', 'Volume'], ['engines', 'Engines'], ['world', 'Wind & world'], ['fx', 'Effects'], ['music', 'Music']].map(([k, n]) =>
+      `<label>${n}</label><input type="range" min="0" max="1" step="0.02" value="${settings.mix[k]}" data-mix="${k}"><b data-mixv="${k}">${Math.round(settings.mix[k] * 100)}</b>`).join('')}</div>
     <p class="version">${buildInfo()}</p>
     <div class="update-row"><button id="upd">Check for updates</button><span id="upd-status"></span></div>
     <div class="modal-foot"><button data-close class="primary">Done</button></div>`);
@@ -322,7 +326,10 @@ function settingsModal() {
   el.querySelector('#fps').addEventListener('change', (e) => { settings.showFps = e.target.checked; LS.set('settings', settings); });
   pick('u', 'units', renderInspector); pick('cm', 'controlMode', () => controls.setMode(settings.controlMode)); pick('t', 'touch');
   el.querySelector('#inv').addEventListener('change', (e) => { settings.invert = e.target.checked; controls.invert = settings.invert; LS.set('settings', settings); });
-  el.querySelector('#vol').addEventListener('input', (e) => { settings.volume = +e.target.value; audio.setVolume(settings.volume); LS.set('settings', settings); });
+  el.querySelectorAll('[data-mix]').forEach((r) => r.addEventListener('input', () => {
+    const k = r.dataset.mix; settings.mix[k] = +r.value; el.querySelector(`[data-mixv="${k}"]`).textContent = Math.round(r.value * 100);
+    audio.setMix(settings.mix); LS.set('settings', settings);
+  }));
 }
 function helpModal() {
   ui.modal(`<h2>How to play</h2>

@@ -236,3 +236,7 @@ body.touch-on #fps-meter { bottom: auto; top: calc(250px + env(safe-area-inset-t
 .mp-pause { margin: -4px 0 10px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 176, 32, .12); }
 .mp-pause b { font-size: 20px; letter-spacing: .15em; color: var(--accent); }
 @media (max-width: 640px) { .mp-cols { grid-template-columns: 1fr; } }
+.mixer { display: grid; grid-template-columns: auto 1fr 2.5em; gap: 6px 12px; align-items: center; margin: 4px 0 10px; }
+.mixer label { font-size: 14px; opacity: 0.85; }
+.mixer b { text-align: right; font-variant-numeric: tabular-nums; opacity: 0.7; font-weight: 600; }
+.mixer input[type=range] { width: 100%; }

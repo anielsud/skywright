@@ -1,22 +1,43 @@
 // Fully synthesized audio (no sample files).
 // 3D-positioned engines, location reverb, layered crashes, ambient beds and hangar music.
+// Mixer channels the player can set (0..1 each). Sliders are perceptual: see dbGain.
+export const MIX_DEFAULTS = { master: 0.7, engines: 0.7, world: 0.8, fx: 0.8, music: 0.6 };
+// Slider position -> gain. 0 is silent; otherwise -45 dB at the bottom of the travel up to 0 dB at the top,
+// so every step sounds like the same change and the lowest steps are genuinely quiet.
+export const dbGain = (v) => (v <= 0.001 ? 0 : 10 ** ((-45 * (1 - v)) / 20));
+const HEADROOM = 0.25; // -12 dB overall: a game shouldn't hit the speaker at full scale
+
 export class Audio {
-  constructor() { this.ctx = null; this.voices = {}; this.volume = 0.8; this.space = null; }
+  constructor() { this.ctx = null; this.voices = {}; this.mix = { ...MIX_DEFAULTS }; this.space = null; }
   init() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
     const ctx = (this.ctx = new AC());
-    this.master = ctx.createGain(); this.master.gain.value = this.volume;
-    this.comp = ctx.createDynamicsCompressor(); this.comp.threshold.value = -16; this.comp.ratio.value = 5; this.comp.attack.value = 0.004; this.comp.release.value = 0.2;
+    this.master = ctx.createGain();
+    // Safety limiter only. (A DynamicsCompressor adds automatic make-up gain, so a low threshold makes everything LOUDER;
+    // the old -16 dB / 5:1 setting is why the mix was hot even at low volume.)
+    this.comp = ctx.createDynamicsCompressor(); this.comp.threshold.value = -3; this.comp.knee.value = 0; this.comp.ratio.value = 20; this.comp.attack.value = 0.002; this.comp.release.value = 0.15;
+    this.subCut = this.filt('highpass', 40, 0.7); this.subCut.connect(this.comp); // nothing useful lives below 40 Hz
     this.cockpitLP = this.filt('lowpass', 20000, 0.7);
-    this.bus = this.gain(1); this.bus.connect(this.cockpitLP); this.cockpitLP.connect(this.comp);
-    this.fx = this.gain(1); this.fx.connect(this.comp);
-    this.amb = this.gain(1); this.amb.connect(this.comp);
+    this.bus = this.gain(1); this.bus.connect(this.cockpitLP); this.cockpitLP.connect(this.subCut);
+    this.engBus = this.gain(1); this.engBus.connect(this.bus); // engines
+    this.airBus = this.gain(1); this.airBus.connect(this.bus); // wind, buffet, wheels rolling: 'world' channel
+    // effects: crashes/explosions were mostly sub-bass that tablet speakers can't play but that slammed the limiter
+    this.fxLow = ctx.createBiquadFilter(); this.fxLow.type = 'lowshelf'; this.fxLow.frequency.value = 150; this.fxLow.gain.value = -10;
+    this.fx = this.gain(1); this.fx.connect(this.fxLow); this.fxLow.connect(this.subCut);
+    this.amb = this.gain(1); this.amb.connect(this.subCut);
+    this.musBus = this.gain(1); this.musBus.connect(this.subCut);
     // reverb send
-    this.verb = ctx.createConvolver(); this.verbOut = this.gain(0.9); this.verb.connect(this.verbOut); this.verbOut.connect(this.comp);
+    this.verb = ctx.createConvolver(); this.verbOut = this.gain(0.9); this.verb.connect(this.verbOut); this.verbOut.connect(this.subCut);
     this.sendBus = this.gain(0.12); this.bus.connect(this.sendBus); this.sendBus.connect(this.verb);
     this.sendFx = this.gain(0.4); this.fx.connect(this.sendFx); this.sendFx.connect(this.verb);
+    this.musSend = this.gain(0.8); this.musBus.connect(this.musSend); this.musSend.connect(this.verb);
     this.comp.connect(this.master); this.master.connect(ctx.destination);
+    // meter for tests / balancing, weighted like a tablet speaker heard by a person: little below ~250 Hz, presence boosted (≈K-weighting)
+    this.meter = ctx.createAnalyser(); this.meter.fftSize = 2048;
+    const mhp = this.filt('highpass', 250, 0.7), msh = ctx.createBiquadFilter(); msh.type = 'highshelf'; msh.frequency.value = 1500; msh.gain.value = 4;
+    this.master.connect(mhp); mhp.connect(msh); msh.connect(this.meter);
+    this.applyMix(0);
     const len = ctx.sampleRate * 2;
     this.white = ctx.createBuffer(1, len, ctx.sampleRate); const w = this.white.getChannelData(0); for (let i = 0; i < len; i++) w[i] = Math.random() * 2 - 1;
     this.brown = ctx.createBuffer(1, len, ctx.sampleRate); const b = this.brown.getChannelData(0); let last = 0; for (let i = 0; i < len; i++) { last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; b[i] = last * 3.5; }
@@ -45,7 +66,15 @@ export class Audio {
     }
     this.verb.buffer = buf; this.set(this.verbOut.gain, cfg.wet, 0.3);
   }
-  setVolume(v) { this.volume = v; if (this.master) this.set(this.master.gain, v, 0.05); }
+  setMix(mix) { Object.assign(this.mix, mix); this.applyMix(); }
+  applyMix(t = 0.05) {
+    if (!this.ctx) return;
+    const m = this.mix, g = (k) => dbGain(m[k] ?? MIX_DEFAULTS[k]), at = (p, v) => (t ? this.set(p, v, t) : (p.value = v));
+    at(this.master.gain, g('master') * HEADROOM); at(this.engBus.gain, g('engines')); at(this.airBus.gain, g('world')); at(this.amb.gain, g('world'));
+    at(this.fx.gain, g('fx') * 2.5); at(this.musBus.gain, g('music') * 2); // trims from loudness measurements
+  }
+  // RMS level of the output in dBFS (after master volume), for balancing tests.
+  level() { const a = new Float32Array(this.meter.fftSize); this.meter.getFloatTimeDomainData(a); let s = 0; for (const x of a) s += x * x; return 10 * Math.log10(s / a.length + 1e-12); }
   noise(type = 'white') { const s = this.ctx.createBufferSource(); s.buffer = type === 'brown' ? this.brown : type === 'crackle' ? this.crackle : this.white; s.loop = true; s.start(0, Math.random() * 1.5); return s; }
   osc(type, f, wave) { const o = this.ctx.createOscillator(); if (wave) o.setPeriodicWave(wave); else o.type = type; o.frequency.value = f; o.start(); return o; }
   filt(type, f, Q = 1) { const b = this.ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = Q; return b; }
@@ -64,7 +93,7 @@ export class Audio {
   makeVoice(kind) {
     const v = { kind, out: this.gain(0) };
     const spatial = !['wind', 'roll', 'stall', 'rain', 'buffet', 'whistle'].includes(kind);
-    if (spatial) { v.pan = this.panner(); v.out.connect(v.pan); v.pan.connect(this.bus); } else v.out.connect(kind === 'stall' ? this.fx : kind === 'rain' ? this.amb : this.bus);
+    if (spatial) { v.pan = this.panner(); v.out.connect(v.pan); v.pan.connect(this.engBus); } else v.out.connect(kind === 'stall' ? this.fx : kind === 'rain' ? this.amb : this.airBus);
     const to = (node) => node.connect(v.out);
     if (kind === 'piston' || kind === 'radial') {
       const rad = kind === 'radial';
@@ -161,16 +190,16 @@ export class Audio {
         const bp = rps * e.blades * dop;
         this.set(v.pb.frequency, bp); this.set(v.pbf.frequency, bp * 3); this.set(v.pbg.gain, 0.05 + thr * 0.2);
         this.set(v.pl.frequency, bp); this.set(v.plg.gain, 0.25 * thr); this.set(v.pf.frequency, 400 + thr * 900); this.set(v.pam.gain, 0.1 + thr * 0.3);
-        this.set(v.out.gain, e.rpm > 50 ? (0.2 + thr * 0.28) * multi * (rad ? 1.25 : 1) : 0);
+        this.set(v.out.gain, e.rpm > 50 ? (0.2 + thr * 0.28) * multi * (rad ? 0.84 : 0.85) : 0); // balanced by measurement: full throttle ≈ -24 dB weighted
         // throttle chop at speed -> exhaust pops
-        if ((v.lastThr ?? 0) - thr > 0.25 && e.rpm > 1500) for (let k = 0; k < 4; k++) this.burst('crackle', 'bandpass', 600, 1, 0.5, 0.15, this.bus, k * 0.12 + Math.random() * 0.1);
+        if ((v.lastThr ?? 0) - thr > 0.25 && e.rpm > 1500) for (let k = 0; k < 4; k++) this.burst('crackle', 'bandpass', 600, 1, 0.5, 0.15, this.engBus, k * 0.12 + Math.random() * 0.1);
         v.lastThr = thr;
       } else if (e.sound === 'turboprop' || e.sound === 'electric') {
         const el = e.sound === 'electric';
         this.set(v.whine.frequency, (el ? 400 + thr * 2600 : 2600 + thr * 2400) * dop); this.set(v.w2.frequency, (el ? 200 + thr * 1300 : 1300 + thr * 800) * dop);
         this.set(v.buzz.frequency, (e.rpm / 60) * e.blades * dop); this.set(v.pl.frequency, (e.rpm / 60) * e.blades * 0.25 * dop);
         this.set(v.nf.frequency, 500 + thr * 900);
-        this.set(v.out.gain, (0.14 + thr * 0.32) * multi);
+        this.set(v.out.gain, (0.14 + thr * 0.32) * multi * (el ? 1.6 : 1.4));
       } else if (e.sound === 'jet' || e.sound === 'fan') {
         const fan = e.sound === 'fan';
         this.set(v.nf.frequency, (300 + thr * 1500) * dop);
@@ -189,8 +218,8 @@ export class Audio {
     for (const k of ['piston', 'radial', 'turboprop', 'electric', 'jet', 'fan', 'rocket']) if (!seen.has(k) && this.voices[k]) this.set(this.voices[k].out.gain, 0, 0.15);
     // airflow
     const sp = s.airspeed, ck = s.cockpit ? 0.65 : 1;
-    const wv = this.voice('wind'); this.set(wv.nf.frequency, 250 + sp * 9); this.set(wv.out.gain, Math.min(0.9, (sp / 90) ** 2 * 0.55) * ck);
-    const wh = this.voice('whistle'); this.set(wh.nf.frequency, 900 + sp * 14); this.set(wh.out.gain, Math.max(0, (sp - 60) / 200) ** 2 * 0.5 * ck);
+    const wv = this.voice('wind'); this.set(wv.nf.frequency, 250 + Math.min(sp, 130) * 9); this.set(wv.out.gain, Math.min(0.4, (sp / 90) ** 2 * 0.3) * ck); // wind sits under the engine, even at jet speeds
+    const wh = this.voice('whistle'); this.set(wh.nf.frequency, 900 + sp * 14); this.set(wh.out.gain, Math.max(0, (sp - 60) / 200) ** 2 * 0.1 * ck);
     const bf = this.voice('buffet'); this.set(bf.out.gain, Math.min(1.2, (s.buffet || 0) * 3) * (s.cockpit ? 1.5 : 0.7), 0.05); this.set(bf.lfo.frequency, 6 + Math.random() * 6);
     // ground roll
     const rv = this.voice('roll');
@@ -314,8 +343,7 @@ export class Audio {
     if (!this.ctx) return;
     if (on && !this.mus) {
       this.setSpace('hangar');
-      const out = this.gain(0); out.connect(this.comp);
-      const send = this.gain(0.8); out.connect(send); send.connect(this.verb);
+      const out = this.gain(0); out.connect(this.musBus);
       const lp = this.filt('lowpass', 900, 0.5); lp.connect(out);
       const delay = this.ctx.createDelay(1); delay.delayTime.value = 0.375; const fb = this.gain(0.38); delay.connect(fb); fb.connect(delay); delay.connect(lp);
       const oscs = [];
