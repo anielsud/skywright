@@ -9,6 +9,7 @@ import { FOG, terrainMaterial, waterMaterial, swayMaterial } from './shaders.js'
 import { planNetwork, flattenGrid, flattenHi, makePainter, buildRoadMeshes } from './roads.js';
 import { Flora } from './flora.js';
 import { Towns } from './towns.js';
+import { TerrainTiles } from './tiles.js';
 
 const RWY = { len: 1800, width: 45 };
 
@@ -18,7 +19,10 @@ export const LOCATIONS = {
     colors: { grass: [0x4a6b2a, 0x5f7f35, 0x3f5d27], rock: 0x6b6660, snow: 0xf4f6f8, sand: 0x9a8d6a, dirt: 0x6f5a3c }, snowline: 1250, balloons: true,
     height(n, x, z) {
       const vx = x - Math.sin(z / 2600) * 900; // valley centre line meanders
-      const dv = Math.abs(vx);
+      let dv = Math.abs(vx);
+      // more parallel valleys every 9.5 km, so the endless mountains stay flyable
+      const k0 = Math.round(x / 9500);
+      for (const k of [k0 - 1, k0, k0 + 1]) if (k) dv = Math.min(dv, Math.abs(x - k * 9500 - Math.sin(z / 2600 + k * 1.7) * 900));
       const mask = smoothstep(500, 2600, dv);
       const peaks = n.ridged(x / 3800, z / 3800, 6) * 2100 + n.fbm(x / 1500, z / 1500, 4) * 220;
       let h = 25 + n.fbm(x / 1200, z / 1200, 3) * 18 + mask * peaks;
@@ -36,6 +40,17 @@ export const LOCATIONS = {
       for (const [ix, iz, r, hh] of isl) { const d = Math.hypot(x - ix, z - iz); if (d < r * 1.6) h = Math.max(h, hh * Math.max(0, 1 - d / r) ** 1.6 + n.fbm(x / 500, z / 500, 4) * 40 - 15 * (d / r)); }
       // volcano crater on the big island
       const dv = Math.hypot(x - 5200, z + 3800); if (dv < 260) h -= (260 - dv) * 0.9;
+      // open ocean beyond the home islands (no sandbar speckle), dotted with procedural islands
+      const r1 = Math.hypot(x, z); h -= smoothstep(6000, 11000, r1) * 30;
+      const C = 7000, gx = Math.floor(x / C), gz = Math.floor(z / C);
+      for (let a = gx - 1; a <= gx + 1; a++) for (let b = gz - 1; b <= gz + 1; b++) {
+        if (Math.abs(a * C + C / 2) < 12500 && Math.abs(b * C + C / 2) < 12500) continue; // keep the home map as designed
+        const hs = (k) => { const v = Math.sin(a * 127.1 + b * 311.7 + k * 74.7) * 43758.5453; return v - Math.floor(v); };
+        if (hs(1) > 0.5) continue;
+        const ix = a * C + C * (0.25 + hs(2) * 0.5), iz = b * C + C * (0.25 + hs(3) * 0.5), r = 700 + hs(4) * 1300, hh = 60 + hs(5) * 380;
+        const d = Math.hypot(x - ix, z - iz);
+        if (d < r * 1.6) h = Math.max(h, hh * Math.max(0, 1 - d / r) ** 1.6 + n.fbm(x / 500, z / 500, 4) * 40 - 15 * (d / r));
+      }
       h = Math.max(h, -45 + n.fbm(x / 2000, z / 2000, 3) * 20);
       return h;
     },
@@ -96,6 +111,7 @@ export class World {
     this.buildPrecip();
     this.setWeather(this.weatherId);
     this.setTime(this.time);
+    this.tiles = new TerrainTiles(this); // endless land beyond the detailed core
   }
 
   // ---------------- terrain ----------------
@@ -140,8 +156,8 @@ export class World {
     const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true;
     this.terrain = mesh; this.group.add(mesh);
     // far skirt so the edge isn't visible
-    const skirt = new THREE.Mesh(new THREE.RingGeometry(S * 0.49, S * 4, 64, 1), new THREE.MeshStandardMaterial({ color: this.loc.id === 'islands' ? 0x0d3b4a : new THREE.Color(L.grass[0]).multiplyScalar(this.loc.desert ? 0.9 : 0.6), roughness: 1 }));
-    skirt.rotation.x = -Math.PI / 2; skirt.position.y = this.loc.id === 'islands' ? -50 : this.loc.desert ? 110 : 20; this.group.add(skirt);
+    const skirt = new THREE.Mesh(new THREE.RingGeometry(S * 1.05, S * 6, 64, 1), new THREE.MeshStandardMaterial({ color: this.loc.id === 'islands' ? 0x0d3b4a : new THREE.Color(L.grass[0]).multiplyScalar(this.loc.desert ? 0.9 : 0.6), roughness: 1 }));
+    skirt.rotation.x = -Math.PI / 2; skirt.position.y = this.loc.id === 'islands' ? -50 : this.loc.desert ? 60 : -20; this.group.add(skirt); this.skirt = skirt;
     this.roadGroup = buildRoadMeshes(this, this.net); this.group.add(this.roadGroup);
     this.buildMinimap();
   }
@@ -161,33 +177,14 @@ export class World {
     };
     const b1 = blur(Hh, 2), b2 = blur(Hh, 10);
     const alb = new Uint8Array(W * W * 4), nor = new Uint8Array(W * W * 4);
-    const L = this.loc.colors;
-    const grass = L.grass.map((h) => new THREE.Color(h)), rock = new THREE.Color(L.rock), snow = new THREE.Color(L.snow), sand = new THREE.Color(L.sand), dirt = new THREE.Color(L.dirt);
-    const seabed = new THREE.Color(this.loc.id === 'islands' ? 0xd8c79a : 0x4a4636), forest = new THREE.Color(this.loc.trees === 'pine' ? 0x2a4220 : 0x355a26);
-    const c = new THREE.Color(), tmp = new THREE.Color(), n = new THREE.Vector3();
+    const c = new THREE.Color(), n = new THREE.Vector3();
     const at = (i, j) => Hh[Math.min(R, Math.max(0, j)) * W + Math.min(R, Math.max(0, i))];
     for (let j = 0; j <= R; j++) for (let i = 0; i <= R; i++) {
       const k = j * W + i, h = Hh[k], x = -half + i * st, z = -half + j * st;
       n.set(at(i - 1, j) - at(i + 1, j), 2 * st, at(i, j - 1) - at(i, j + 1)).normalize();
       nor[k * 4] = (n.x * 0.5 + 0.5) * 255; nor[k * 4 + 1] = (n.y * 0.5 + 0.5) * 255; nor[k * 4 + 2] = (n.z * 0.5 + 0.5) * 255; nor[k * 4 + 3] = 255;
       const slope = 1 - n.y;
-      const nv = this.noise.fbm(x / 700, z / 700, 3) * 0.5 + 0.5, nd = this.noise.n2(x / 90, z / 90) * 0.5 + 0.5, nf = this.noise.fbm(x / 260 + 7, z / 260, 3);
-      c.copy(grass[0]).lerp(grass[1], nv).lerp(grass[2], nd * 0.5);
-      if (this.loc.desert) {
-        const band = Math.sin(h / 14 + this.noise.n2(x / 400, z / 400) * 1.5) * 0.5 + 0.5;
-        const band2 = Math.sin(h / 3.7 + nd * 2) * 0.5 + 0.5;
-        c.lerp(tmp.copy(rock).lerp(sand, band).multiplyScalar(0.85 + band2 * 0.25), smoothstep(0.06, 0.22, slope));
-        c.lerp(sand, smoothstep(0.3, 0, slope) * 0.3);
-      } else {
-        // forests darken the lower slopes where trees grow
-        if (h < this.loc.snowline - 150 && h > this.waterLevel + 3) c.lerp(forest, smoothstep(0.0, 0.25, nf) * 0.55 * (1 - smoothstep(0.25, 0.4, slope)));
-        c.lerp(dirt, smoothstep(0.12, 0.25, slope) * 0.6);
-        c.lerp(rock, smoothstep(0.22, 0.42, slope + (h > 700 ? 0.12 : 0) + nd * 0.06));
-        const sl = this.loc.snowline + nd * 150 - smoothstep(0.0, 0.3, nf) * 120;
-        if (h > sl) c.lerp(snow, smoothstep(sl, sl + 120, h) * (1 - smoothstep(0.55, 0.85, slope - (h - sl) * 0.0003)));
-      }
-      if (h < this.waterLevel + 4) c.lerp(sand, 1 - smoothstep(this.waterLevel + 1, this.waterLevel + 4, h));
-      if (h < this.waterLevel - 1) c.lerp(seabed, 0.6);
+      this.baseColor(x, z, h, slope, c);
       if (h > this.waterLevel + 0.5 && slope < 0.25) paint(x, z, c);
       // ambient occlusion from local concavity
       const ao = clamp(1 - Math.max(0, b1[k] - h) * 0.04 - Math.max(0, b2[k] - h) * 0.006, 0.35, 1);
@@ -250,10 +247,36 @@ export class World {
     const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
     return t;
   }
+  // Ground colour rules shared by the baked core terrain and the streamed outer tiles.
+  baseColor(x, z, h, slope, c) {
+    if (!this.pal) {
+      const L = this.loc.colors;
+      this.pal = { grass: L.grass.map((v) => new THREE.Color(v)), rock: new THREE.Color(L.rock), snow: new THREE.Color(L.snow), sand: new THREE.Color(L.sand), dirt: new THREE.Color(L.dirt),
+        seabed: new THREE.Color(this.loc.id === 'islands' ? 0xd8c79a : 0x4a4636), forest: new THREE.Color(this.loc.trees === 'pine' ? 0x2a4220 : 0x355a26), tmp: new THREE.Color() };
+    }
+    const { grass, rock, snow, sand, dirt, seabed, forest, tmp } = this.pal;
+    const nv = this.noise.fbm(x / 700, z / 700, 3) * 0.5 + 0.5, nd = this.noise.n2(x / 90, z / 90) * 0.5 + 0.5, nf = this.noise.fbm(x / 260 + 7, z / 260, 3);
+    c.copy(grass[0]).lerp(grass[1], nv).lerp(grass[2], nd * 0.5);
+    if (this.loc.desert) {
+      const band = Math.sin(h / 14 + this.noise.n2(x / 400, z / 400) * 1.5) * 0.5 + 0.5;
+      const band2 = Math.sin(h / 3.7 + nd * 2) * 0.5 + 0.5;
+      c.lerp(tmp.copy(rock).lerp(sand, band).multiplyScalar(0.85 + band2 * 0.25), smoothstep(0.06, 0.22, slope));
+      c.lerp(sand, smoothstep(0.3, 0, slope) * 0.3);
+    } else {
+      if (h < this.loc.snowline - 150 && h > this.waterLevel + 3) c.lerp(forest, smoothstep(0.0, 0.25, nf) * 0.55 * (1 - smoothstep(0.25, 0.4, slope)));
+      c.lerp(dirt, smoothstep(0.12, 0.25, slope) * 0.6);
+      c.lerp(rock, smoothstep(0.22, 0.42, slope + (h > 700 ? 0.12 : 0) + nd * 0.06));
+      const sl = this.loc.snowline + nd * 150 - smoothstep(0.0, 0.3, nf) * 120;
+      if (h > sl) c.lerp(snow, smoothstep(sl, sl + 120, h) * (1 - smoothstep(0.55, 0.85, slope - (h - sl) * 0.0003)));
+    }
+    if (h < this.waterLevel + 4) c.lerp(sand, 1 - smoothstep(this.waterLevel + 1, this.waterLevel + 4, h));
+    if (h < this.waterLevel - 1) c.lerp(seabed, 0.6);
+    return c;
+  }
   sampleGrid(x, z) {
     const N = this.N, step = this.step, half = this.half;
     const fx = (x + half) / step, fz = (z + half) / step;
-    if (fx < 0 || fz < 0 || fx >= N || fz >= N) return this.loc.id === 'islands' ? -50 : this.loc.desert ? 110 : 20;
+    if (fx < 0 || fz < 0 || fx >= N || fz >= N) return this.tiles ? this.tiles.sample(x, z) : this.loc.height(this.noise, x, z);
     const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, W = N + 1, H = this.H;
     const a = H[j * W + i], b = H[(j + 1) * W + i], cc = H[(j + 1) * W + i + 1], d = H[j * W + i + 1];
     // PlaneGeometry triangles: (a,b,d) and (b,c,d) - split along b-d
@@ -639,6 +662,15 @@ export class World {
     }
     return vis * smoothstep(-0.02, 0.08, d.y);
   }
+  // clouds live in a 26 km square that wraps around the camera, so the sky never runs out
+  wrapClouds(cp) {
+    if (!this.puffs) return;
+    const S = 26000, wrap = (v, c) => c + ((((v - c + S / 2) % S) + S) % S) - S / 2;
+    for (const q of this.puffs) { if (!q) continue; const nx = wrap(q[7], cp.x), nz = wrap(q[9], cp.z), dx = nx - q[7], dz = nz - q[9]; if (dx || dz) { q[0] += dx; q[2] += dz; q[7] = nx; q[9] = nz; } }
+    for (const c of this.cloudList || []) { c.x = wrap(c.x, cp.x); c.z = wrap(c.z, cp.z); }
+    for (const t of this.thermals || []) { t.x = wrap(t.x, cp.x); t.z = wrap(t.z, cp.z); }
+    this.shadeClouds();
+  }
   inCloud(p) {
     let best = 0;
     if (this.cloudList) for (const c of this.cloudList) { const d = Math.hypot(p.x - c.x, (p.y - c.y) * 1.6, p.z - c.z); if (d < c.r) best = Math.max(best, 1 - d / c.r); }
@@ -718,6 +750,13 @@ export class World {
     this.gust.lerp(this.gustT, Math.min(1, dt * 2));
     // water anim
     FOG.uTime.value = this.t;
+    // endless world: stream terrain tiles, keep the sea, far skirt and clouds centred on the camera
+    const cp = camera.position;
+    this.tiles?.update(cp);
+    const snap = (v, g) => Math.round(v / g) * g;
+    this.water.position.x = snap(cp.x, 2000); this.water.position.z = snap(cp.z, 2000);
+    this.skirt.position.x = snap(cp.x, 2000); this.skirt.position.z = snap(cp.z, 2000);
+    if (!this.cloudAnchor || Math.hypot(cp.x - this.cloudAnchor.x, cp.z - this.cloudAnchor.z) > 3000) { this.cloudAnchor = cp.clone(); this.wrapClouds(cp); }
     // lights follow camera
     const tgt = camera.userData.focus || camera.position;
     this.sun.target.position.copy(tgt);
@@ -769,6 +808,7 @@ export class World {
 
   dispose() {
     this.scene.remove(this.group, this.sky, this.sun, this.sun.target, this.hemi, this.stars, this.moon, this.deck, this.deck2, this.clouds.mesh, this.rain, this.snow);
+    this.tiles?.dispose();
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     if (this.envRT) this.envRT.dispose();
     this.pmrem.dispose();
