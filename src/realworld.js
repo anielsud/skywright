@@ -27,6 +27,22 @@ export const REAL_LOCATIONS = {
     colors: { grass: [0x4a6b2a, 0x5f7f35, 0x3f5d27], rock: 0x6b6660, snow: 0xf4f6f8, sand: 0x9a8d6a, dirt: 0x6f5a3c },
     height(n, x, z) { const D = cache.get(this.id); return D ? D.height(x, z) : this.rwyH; },
   },
+  // Bora Bora and the Leeward Society Islands. Keeps the Coral Islands' id (and its tropical palms, boats, reef water,
+  // gulls and surf), so saved settings and online sessions from before land here. The airport is on Motu Mute, the
+  // reef islet north of the main island; the lagoon and reef depths are estimated from the imagery (tools/realworld/sea.py)
+  islands: {
+    id: 'islands', name: 'Bora Bora', real: true,
+    desc: 'The real Bora Bora from satellite data: Mt Otemanu, a turquoise lagoon inside the coral reef, palm-covered motus, and Taha’a and Raiatea on the horizon.',
+    credit: 'Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) · Heights: AWS Terrain Tiles · Lagoon depths estimated from the imagery · Map data © OpenStreetMap contributors',
+    seed: 23, rwyH: 2.5, water: 0, north: 124.6, cloudBase: 1100, trees: 'palm', snowline: 99999, erosion: false, boats: true,
+    waterStart: [800, -2300], // seaplanes start in the lagoon off the airport, facing south-east along it
+    padBlend: 160, // the airport sits on a narrow reef islet: its apron meets the sea within ~160 m
+    townScale: 0.45, // small villages strung along the coast road: keep the palms between the houses
+    osmStyle: 'tropical', // realBuildings.js: painted houses under metal roofs, thatched resorts, overwater bungalows
+    waterColors: { deep: 0x0b3474, shallow: 0x12bcc8, sand: 0x9ae8dc }, waterReef: 0.15, // sapphire ocean, turquoise lagoon over pale sand
+    colors: { grass: [0x3f7a2c, 0x56913a, 0x2f6125], rock: 0x5a524a, snow: 0x5a524a, sand: 0xe3d3a3, dirt: 0x7a6040 },
+    height(n, x, z) { const D = cache.get(this.id); return D ? D.height(x, z) : this.rwyH; },
+  },
 };
 
 async function gunzip(buf) {
@@ -63,7 +79,7 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   const opt = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
   const [hiBmp, farBmp, coverBmp] = await Promise.all([
     createImageBitmap(hiB, texSize < 4096 ? { resizeWidth: texSize, resizeHeight: texSize, resizeQuality: 'high' } : {}),
-    createImageBitmap(farB), createImageBitmap(coverB, opt),
+    createImageBitmap(farB, texSize < 4096 ? { resizeWidth: texSize, resizeHeight: texSize, resizeQuality: 'high' } : {}), createImageBitmap(coverB, opt),
   ]);
   const D = new RealData(loc, meta, decodeHeights(await gunzip(hiZ), meta.hi.n), decodeHeights(await gunzip(farZ), meta.far.n), hiBmp, farBmp, coverBmp, osm);
   D.key = key;
@@ -81,7 +97,7 @@ class RealData {
     this.hiBmp = hiBmp; this.farBmp = farBmp;
     // CPU copies of the imagery for vertex colours (far terrain, grass tint, roofs): 2048 px is plenty
     this.hiPx = { ...meta.hi, n: 2048, d: pixels(hiBmp, 2048) };
-    this.farPx = { ...meta.far, n: farBmp.width, d: pixels(farBmp, farBmp.width) };
+    this.farPx = { ...meta.far, n: Math.min(2048, farBmp.width), d: pixels(farBmp, Math.min(2048, farBmp.width)) };
     const cn = coverBmp.width, cd = pixels(coverBmp, cn), cover = new Uint8Array(cn * cn);
     for (let k = 0; k < cover.length; k++) cover[k] = cd[k * 4];
     this.cover = { ...meta.hi, n: cn, d: cover }; // (meta's n is the height grid's)
@@ -179,7 +195,7 @@ class RealData {
     for (const [name, x, z, type] of this.osm.places) {
       if (Math.abs(x) > w.half - 200 || Math.abs(z) > w.half - 200) continue;
       const h = w.sampleGrid(x, z);
-      out.push({ name, c: new THREE.Vector3(x, h, z), dir: new THREE.Vector3(1, 0, 0), size: type === 'village' ? 0.35 : 0.7, h });
+      out.push({ name, c: new THREE.Vector3(x, h, z), dir: new THREE.Vector3(1, 0, 0), size: (type === 'village' ? 0.35 : 0.7) * (this.loc.townScale ?? 1), h });
     }
     return out.sort((a, b) => b.size - a.size || Math.hypot(a.c.x, a.c.z) - Math.hypot(b.c.x, b.c.z));
   }

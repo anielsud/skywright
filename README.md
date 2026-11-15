@@ -57,7 +57,7 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 - Fire, smoke, sparks, explosions, plus slow motion on big crashes.
 
 **World**
-- Three locations: Alpine Valley, Coral Islands and Red Canyon, plus a real one: the Jungfrau Region (Interlaken, Lauterbrunnen, Eiger, Mönch and Jungfrau) built from real elevation, satellite imagery and OpenStreetMap data (`tools/realworld/bake.py`, `src/realworld.js`).
+- Locations: Alpine Valley and Red Canyon, plus real places built from real elevation, satellite imagery and OpenStreetMap data (`tools/realworld/bake.py`, `src/realworld.js`): the Jungfrau Region (Interlaken, Lauterbrunnen, Eiger, Mönch and Jungfrau) and Bora Bora (Mt Otemanu, the lagoon and its reef, the motus and their overwater bungalows, with Taha'a, Raiatea and Maupiti on the horizon; the lagoon and reef depths are estimated from the imagery by `tools/realworld/sea.py`). Bora Bora replaced the fictional Coral Islands and keeps its id (`islands`).
 - Time-of-day sky, stars and moon.
 - Seven weather types, including thunderstorms with lightning and thunder. Clouds you can fly through.
 - Wind, gusts, ridge lift and thermals.
@@ -67,10 +67,10 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 **A living world**
 - **Roads:** a ring road, highways, town streets and long bridges (one crosses the sea to the volcano island).
 - **Traffic:** 8 kinds of procedurally modelled vehicles (cars, SUVs, pickups, vans, buses, lorries and tankers). They follow lanes, keep their distance, show brake lights, and use headlights at night.
-- **Towns:** houses, apartments, shops, churches and stations. Building style follows the location: chalets in the Alps, colourful cottages and hotels on the islands, adobe in the desert. Windows light up at night, chimneys smoke, and street lamps glow.
+- **Towns:** houses, apartments, shops, churches and stations. Building style follows the location: chalets in the Alps, adobe in the desert, painted houses, thatched resorts and overwater bungalows on Bora Bora. Windows light up at night, chimneys smoke, and street lamps glow.
 - **Farmland:** fields of crops (pivot-irrigation circles in the desert), plus farms with barns and silos, and grazing sheep or cows.
 - **Plants:** procedural trees in many variants (pines, broadleaf, birch, palms, saguaro cacti, shrubs, rocks), with near/far detail levels and grass near the ground.
-- **More life:** a railway with a train in the mountains and the desert, wind turbines, a helicopter shuttle, a radio mast, and a lighthouse with harbour on the islands.
+- **More life:** a railway with a train in the mountains and the desert, wind turbines, a helicopter shuttle, a radio mast, and boats in the Bora Bora lagoon.
 - **Obstacles:** you can crash into buildings and trees.
 
 **Graphics**
@@ -148,6 +148,7 @@ The sky's atmosphere model (Rayleigh/Mie/ozone coefficients, single scattering i
 Real-world locations (`assets/real/`, baked by `tools/realworld/bake.py`):
 - Satellite imagery: [Sentinel-2 cloudless](https://s2maps.eu) 2016 by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Shadows lifted and colours graded for the game.
 - Elevation: [Terrain Tiles on AWS](https://registry.opendata.aws/terrain-tiles/) (Mapzen / Tilezen terrarium tiles; sources include SRTM, GMTED, ETOPO1 and EU-DEM, see their attribution page).
-- Buildings, roads, railways, cable cars, lakes, forests and place names: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, available under the Open Database License (ODbL); `assets/real/*/osm.json` and `cover.png` are derived databases under the same licence.
+- Sea floor (Bora Bora): estimated from the Sentinel-2 imagery above (satellite-derived bathymetry, `tools/realworld/sea.py`), not surveyed depths; summit heights of a few peaks from OpenStreetMap.
+- Buildings, roads, railways, cable cars, piers, coastlines, lakes, forests, peaks and place names: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, available under the Open Database License (ODbL); `assets/real/*/osm.json` and `cover.png` are derived databases under the same licence.
 
 Vegetation (`src/flora.js`): the foliage atlas `assets/flora/foliage_*.webp` is assembled by `tools/flora/build_atlas.py` from CC0 [Poly Haven](https://polyhaven.com) leaf, twig, bark and fern scans (fir_tree_01, pine_tree_01, island_tree_02, shrub_02, shrub_04, fern_02, jacaranda_tree); grass blades, flowers, desert scrub and birch bark are drawn by the same script; boulders reuse the CC0 Poly Haven rock textures above (aerial_rocks_02, cliff_side).
