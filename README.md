@@ -126,9 +126,10 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 | `src/aircraft.js` | Rigid-body flight model, ground contact, damage, deformation, break-up, debris |
 | `src/world.js` | Terrain, water, sky, lighting, weather, clouds, airport, trees, village |
 | `src/traffic.js` | Cars, birds, balloons, boats, the circuit plane |
-| `src/effects.js`, `src/billboard.js` | Particles and instanced billboards (shared with clouds) |
+| `src/effects.js`, `src/billboard.js` | Particles and instanced billboards |
 | `src/roads.js`, `src/vehicles.js`, `src/flora.js`, `src/towns.js` | Road/rail network, traffic, vegetation, towns and landmarks |
 | `src/shaders.js`, `src/post.js` | Height fog, terrain/water/foliage shaders, post-processing |
+| `src/sky.js`, `src/clouds.js` | Physically based sky (atmosphere LUT, aerial perspective, stars, cirrus) and lit cumulus / overcast cloud layers |
 | `src/audio.js` | Synthesized sound |
 | `src/controls.js`, `src/cameras.js`, `src/hud.js` | Input, cameras, HUD |
 | `src/missions.js` | Ring Race and Landing Challenge |
@@ -140,3 +141,5 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 ## Credits
 
 Ground textures in `tex/` are CC0 from [Poly Haven](https://polyhaven.com) (aerial_grass_rock, aerial_rocks_02, aerial_beach_01, dry_ground_rocks, cliff_side).
+
+The sky's atmosphere model (Rayleigh/Mie/ozone coefficients, single scattering into a sky-view lookup table) follows Eric Bruneton's *Precomputed Atmospheric Scattering* and Sébastien Hillaire's *A Scalable and Production Ready Sky and Atmosphere Rendering Technique* (EGSR 2020); the code is our own.

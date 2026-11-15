@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.26.0', items: [
+    'A brand-new sky: blue at noon, glowing orange sunsets, deep blue twilight and starry nights. Far-away mountains fade into the haze like in real life.',
+    'Fluffy new clouds with bright sunny tops and dark bottoms. Fly above the overcast and you’ll find a sunny sea of clouds.',
+  ] },
   { v: '1.25.0', items: [
     'Start your engines! On the runway, push the throttle and listen: propeller planes whirr and cough before they roar to life, and jets whine as they spool up and light with a WHOOMP.',
     'Park with the throttle at zero and the engine shuts down: the propeller winds down with a few last chuffs, and jets whine down to silence.',

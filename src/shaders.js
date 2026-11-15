@@ -1,6 +1,7 @@
 // Shared shader upgrades: height fog with sun in-scattering, terrain splatting, water, foliage sway.
 import * as THREE from 'three';
 import { TERRAIN_DETAIL_GLSL } from './terrainTex.js';
+import { SKY_LOOKUP_GLSL } from './sky.js';
 
 // ---------- global height fog ----------
 // One shared set of uniforms, attached by reference to every built-in material at compile time,
@@ -12,10 +13,17 @@ export const FOG = {
   fogFalloff: { value: 1 / 900 },
   fogLin: { value: 0.00008 },
   uTime: { value: 0 },
+  // aerial perspective: distant things fade towards the actual sky colour in their direction (sky-view LUT),
+  // with blue light scattered in sooner than red
+  skyLUT: { value: null },
+  fogSkyMix: { value: 0 },
+  fogExt: { value: new THREE.Vector3(1, 1, 1) },
 };
 
 export const FOG_GLSL = /* glsl */`
   uniform vec3 fogSunDir; uniform vec3 fogSunColor; uniform float fogBase; uniform float fogFalloff; uniform float fogLin;
+  uniform sampler2D skyLUT; uniform float fogSkyMix; uniform vec3 fogExt;
+  ${SKY_LOOKUP_GLSL}
   vec3 applyHeightFog(vec3 col, vec3 wp, vec3 fogCol) {
     vec3 rd = wp - cameraPosition;
     float dist = length(rd);
@@ -23,9 +31,25 @@ export const FOG_GLSL = /* glsl */`
     float k = fogFalloff, dh = h1 - h0;
     float e0 = exp(-k * max(h0, -200.0));
     float integ = abs(dh) > 1.0 ? (e0 - exp(-k * max(h1, -200.0))) / (k * dh) : e0;
-    float amt = 1.0 - exp(-fogLin * dist * clamp(integ, 0.0, 4.0));
-    float s = max(dot(rd / max(dist, 1e-3), fogSunDir), 0.0);
-    vec3 fc = fogCol + fogSunColor * (pow(s, 8.0) * 0.55 + pow(s, 48.0) * 0.6);
+    float od = fogLin * dist * clamp(integ, 0.0, 4.0);
+    vec3 vd = rd / max(dist, 1e-3);
+    float s = max(dot(vd, fogSunDir), 0.0);
+    // a black fog colour means "fade to black" (additive particles): no sky tint then
+    float sm = fogSkyMix * step(1e-4, fogCol.r + fogCol.g + fogCol.b);
+    vec3 base = fogCol;
+    vec3 ext = vec3(1.0);
+    if (sm > 0.001) {
+      // looking down, the haze between us and the ground is the colour of the horizon in that direction
+      vec2 hd = vd.xz / max(length(vd.xz), 1e-4);
+      float el = max(vd.y, 0.03);
+      float hc = sqrt(1.0 - el * el);
+      vec3 sky = skyLook(skyLUT, vec3(hd.x * hc, el, hd.y * hc));
+      sky = sky / (1.0 + max(max(sky.r, sky.g), sky.b) * 0.25); // keep the low sun's glow out of bloom range
+      base = mix(fogCol, sky, sm);
+      ext = mix(vec3(1.0), fogExt, sm);
+    }
+    vec3 amt = 1.0 - exp(-od * ext);
+    vec3 fc = base + fogSunColor * (pow(s, 8.0) * 0.55 + pow(s, 48.0) * 0.6) * (1.0 - sm * 0.6);
     return mix(col, fc, amt);
   }`;
 
