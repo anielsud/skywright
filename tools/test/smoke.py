@@ -65,8 +65,6 @@ def launch_chrome(cdp_port, profile, size):
     if platform.system() == 'Linux':
         # CI runners have no GPU (WebGL via SwiftShader) and restrict the sandbox's user namespaces.
         args[1:1] = ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-dev-shm-usage']
-    if os.environ.get('SMOKE_SWIFTSHADER'):
-        args[1:1] = ['--use-angle=swiftshader', '--enable-unsafe-swiftshader']
     proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     deadline = time.time() + 20
     while time.time() < deadline:
@@ -105,7 +103,11 @@ class CDP:
         fut = asyncio.get_event_loop().create_future()
         self.pending[self.n] = fut
         await self.ws.send(json.dumps({'id': self.n, 'method': method, 'params': params}))
-        m = await asyncio.wait_for(fut, _timeout)
+        try:
+            m = await asyncio.wait_for(fut, _timeout)
+        except asyncio.TimeoutError:
+            # the page's main thread can be busy for many seconds (world generation on a software GPU)
+            raise RuntimeError(f'{method}: no reply in {_timeout:.0f} s (page busy or hung)') from None
         if 'error' in m:
             raise RuntimeError(f"{method}: {m['error'].get('message')}")
         return m.get('result', {})
@@ -277,8 +279,12 @@ async def run(args, url, ws_url, shots):
 
         for i, name in enumerate(names):
             async def fly(name=name, shoot=(i == 0)):
+                # a previous step that failed mid-flight may have left its flight running: never measure that one
+                if await cdp.js(f'!!{S}.F'):
+                    await cdp.js(f'{S}.endFlight()')
+                await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 30, 'the hangar')
                 await cdp.js(f'{S}.hangar.load({S}.presets.find((d) => d.name === {json.dumps(name)})); {S}.startFlight()')
-                await cdp.wait_for(f'{S}.F && {S}.F.ac && {S}.F.t > 0', 30, 'the flight to start')
+                await cdp.wait_for(f'{S}.F && {S}.F.ac && {S}.F.t > 0', 90, 'the flight to start')
                 await cdp.js(f'{S}.controls.setThrottle(1)')
                 t0 = await cdp.js(f'{S}.F.t')
                 await asyncio.sleep(FLIGHT_SECONDS)
@@ -301,7 +307,7 @@ async def run(args, url, ws_url, shots):
                 await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 10, 'the hangar')
                 return (f"{s['speed']:.0f} m/s, alt {s['alt']:.0f} m, {s['alive']}/{s['parts']} parts, "
                         f"{ran / FLIGHT_SECONDS * 100:.0f}% realtime")
-            await r.step(f'fly: {name}', fly, timeout=60)
+            await r.step(f'fly: {name}', fly, timeout=150)
         return r.results
 
 
@@ -314,6 +320,7 @@ def main():
     ap.add_argument('--cdp-port', type=int, default=0, help='Chrome debugging port (default: a free one)')
     ap.add_argument('--size', default='1280x800', help='window size WxH')
     args = ap.parse_args()
+    sys.stdout.reconfigure(line_buffering=True)  # keep step lines in order when piped (CI logs)
 
     port, cdp_port = args.port or free_port(), args.cdp_port or free_port()
     shots = os.path.abspath(args.out) if args.out else tempfile.mkdtemp(prefix='skywright-smoke-')

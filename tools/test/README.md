@@ -26,7 +26,7 @@ python3 tools/test/smoke.py     # serves the repo root itself on a free port; no
 | `--port N` / `--cdp-port N` | fixed ports for the static server / Chrome debugger (default: free ones) |
 
 Chrome is found at the usual macOS path, or `google-chrome` / `chromium` on Linux. Set `CHROME=/path/to/chrome` to override.
-On Linux it uses SwiftShader for WebGL (no GPU needed); `SMOKE_SWIFTSHADER=1` forces that elsewhere.
+On Linux it uses SwiftShader for WebGL (no GPU needed), which is how it runs in CI.
 
 ## When
 
