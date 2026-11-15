@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.47.0', items: [
+    'Rivers and mountain streams now rush and splash! Fly low along a valley and follow the sound of the water. Big rivers roar, little streams babble.',
+  ] },
   { v: '1.46.0', items: [
     'The Jungfrau Region sounds alive: fly low over the meadows and hear the cowbells of the grazing herds!',
     'The Staubbach, Trümmelbach and Mürrenbach waterfalls roar as you fly past their cliffs.',
