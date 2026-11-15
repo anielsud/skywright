@@ -2,8 +2,11 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
-  { v: '1.12.0', items: [
+  { v: '1.13.0', items: [
     'This “What’s new” popup! After each update it tells you what changed. Find it again any time in Settings.',
+  ] },
+  { v: '1.12.0', items: [
+    'Helicopters! Build one with a main rotor, tail rotor and skids, or try the ready-made Dragonfly. They can hover.',
   ] },
   { v: '1.11.0', items: [
     'Sound travels: you see a jet fly past before you hear it, far-away planes sound muffled, and jets are loudest behind them.',
