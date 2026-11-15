@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.20.0', items: [
+    'Every airport now has two side-by-side runways, 36L and 36R, joined by taxiways, so there is room for a friend to take off next to you.',
+  ] },
   { v: '1.19.0', items: [
     'Go supersonic! Push a jet past the sound barrier for a vapour cloud, a sonic BOOM and “MACH 1!”. Go really fast with rockets and your plane glows red, then orange, then white-hot. Watch your Mach number and skin temperature on the screen.',
   ] },
