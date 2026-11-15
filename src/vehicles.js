@@ -114,7 +114,7 @@ export class Vehicles {
     // traffic on the lanes
     this.paths = lanePaths(world.net);
     this.cars = [];
-    const want = { low: 70, medium: 140, high: 240 }[world.qName] || 140;
+    const want = { low: 70, medium: 140, high: 240 }[world.qBase] || 140;
     const totalLen = this.paths.reduce((a, p) => a + p.total, 0);
     for (const p of this.paths) {
       const n = Math.max(1, Math.round((want * p.total) / totalLen));
@@ -144,7 +144,7 @@ export class Vehicles {
     for (const c of [...this.cars, ...this.parked]) counts[c.type] = (counts[c.type] || 0) + 1;
     for (const t in counts) {
       const m = (this.models[t] = CAR[t]());
-      const im = new THREE.InstancedMesh(m.geo, mat, counts[t]); im.castShadow = world.qName === 'high'; im.receiveShadow = true; im.frustumCulled = false;
+      const im = new THREE.InstancedMesh(m.geo, mat, counts[t]); im.castShadow = world.qBase === 'high'; im.receiveShadow = true; im.frustumCulled = false;
       im.count = 0; this.meshes[t] = im; this.group.add(im);
     }
     const col = new THREE.Color();
@@ -152,7 +152,7 @@ export class Vehicles {
     for (const c of this.parked) { c.slot = (idx[c.type] = (idx[c.type] ?? -1) + 1); this.meshes[c.type].setColorAt(c.slot, col.set(c.color)); }
     this.parkedCount = {}; for (const t in idx) this.parkedCount[t] = idx[t] + 1;
     for (const t in this.meshes) { this.meshes[t].count = this.parkedCount[t] || 0; if (!this.meshes[t].instanceColor) this.meshes[t].setColorAt(0, col.set(0xffffff)); this.meshes[t].instanceColor.needsUpdate = true; }
-    this.drawDist = { low: 1200, medium: 1800, high: 3000 }[world.qName] || 1800;
+    this.drawDist = { low: 1200, medium: 1800, high: 3000 }[world.qBase] || 1800;
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1);
     for (const c of this.parked) { c.p.y = world.sampleGrid(c.p.x, c.p.z) + 0.25; q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), c.yaw); m4.compose(c.p, q, one); this.meshes[c.type].setMatrixAt(c.slot, m4); }
     // lights (points): 2 head + 2 tail per moving car
