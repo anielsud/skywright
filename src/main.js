@@ -551,7 +551,8 @@ function startFlight(cfgOverride) {
   const fail = (e) => { console.error(e); $('#loading').classList.remove('show'); state = 'hangar'; ui.hint('Something went wrong: ' + e.message); };
   // real-world places load their baked geodata first (cached by the service worker after the first visit)
   const loc = LOCATIONS[cfg.location], msg = $('#loading p'), msg0 = msg.textContent;
-  const ready = loc?.real ? loadReal(loc, qualityTier(), (f) => (msg.textContent = `Loading ${loc.name}… ${Math.round(f * 100)}%`)) : Promise.resolve();
+  // the built-in places fetch their offline landscape-evolution bake (src/terrainBake.js; never rejects)
+  const ready = loc?.real ? loadReal(loc, qualityTier(), (f) => (msg.textContent = `Loading ${loc.name}… ${Math.round(f * 100)}%`)) : World.prepare(cfg.location);
   ready.then(() => setTimeout(() => {
     msg.textContent = msg0;
     try { buildFlight(cfg); } catch (e) { fail(e); }

@@ -107,7 +107,9 @@ export function terrainMaterial(maps, patch = false) {
     tOrig: { value: maps.orig }, tSpan: { value: maps.span }, sOrig: { value: maps.sOrig || maps.orig }, sSpan: { value: maps.sSpan || maps.span },
     shadowOn: { value: maps.shadowOn ?? 1 }, patchRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, ...maps.detailU };
   mat.userData.U = U;
-  if (real) mat.defines = { TERRAIN_NO_SAND: '' }; // keeps the terrain within 16 texture units with Ultra's extra shadow maps
+  // real-world: no beach detail and no baked hydrology (the imagery has both); keeps the terrain within 16 texture
+  // units with Ultra's extra shadow maps. Elsewhere the baked rivers/lakes map is one more sampler (see world.js).
+  mat.defines = real ? { TERRAIN_NO_SAND: '' } : { TERRAIN_LAND: '' };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, U);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vTW;')
@@ -115,30 +117,66 @@ export function terrainMaterial(maps, patch = false) {
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
       varying vec3 vTW; uniform sampler2D albedoTex; uniform sampler2D normTex; uniform sampler2D shadowTex;
       uniform vec2 tOrig; uniform float tSpan; uniform vec2 sOrig; uniform float sSpan; uniform float shadowOn; uniform vec4 patchRect;
+      #ifdef TERRAIN_LAND
+      uniform sampler2D landTex; uniform float landOn; uniform float landDry; uniform vec2 landOrig; uniform float landSpan; uniform vec3 waterTint; uniform float uTime;
+      #endif
       ${TERRAIN_DETAIL_GLSL}
-      ${real ? REAL_SAT_GLSL : ''}`)
+      ${real ? REAL_SAT_GLSL : ''}
+      ${(!real && maps.detailU?.glsl) || 'vec3 fieldShade(vec2 p, float farm, vec3 base, float dist, out float isField) { isField = 0.0; return base; }'}`)
       .replace('#include <map_fragment>', `
         ${patch ? '' : 'if (vTW.x > patchRect.x && vTW.x < patchRect.z && vTW.z > patchRect.y && vTW.z < patchRect.w) discard;'}
         vec2 tuv = (vTW.xz - tOrig) / tSpan; // texel centres sit exactly on the bake grid points
         vec4 alb = texture2D(albedoTex, tuv);
-        vec3 wn = normalize(texture2D(normTex, tuv).xyz * 2.0 - 1.0);
-        ${real ? 'alb.rgb = realGround(satColor(vTW.xz), wn); alb.a = mix(1.0, alb.a, 0.5);' : ''}
+        vec4 nrmS = texture2D(normTex, tuv);
+        vec3 wn = normalize(nrmS.xyz * 2.0 - 1.0);
+        ${real ? 'alb.rgb = realGround(satColor(vTW.xz), wn); alb.a = mix(1.0, alb.a, 0.5); nrmS.a = 0.0;' : ''}
         float terrainShadow = mix(1.0, texture2D(shadowTex, (vTW.xz - sOrig) / sSpan).r, shadowOn);
         float dist = length(vTW - cameraPosition);
+        // farm parcels (farmland mask in the normal map's alpha), crisp up close
+        float isField; alb.rgb = fieldShade(vTW.xz, nrmS.a, alb.rgb, dist, isField);
         vec3 mul, dn; terrainDetail(vTW, wn, dist, mul, dn);
         // snow keeps the relief but not the photo colour
         float snowy = smoothstep(0.55, 0.72, min(alb.r, min(alb.g, alb.b)));
         mul = mix(mul, vec3(0.92 + 0.08 * dot(mul, vec3(0.333))), snowy);
+        mul = mix(mul, vec3(1.0) + (mul - 1.0) * 0.6, isField); // fields: their own colour, softer photo texture
         wn = dn;
+        // rivers, streams and lakes from the baked hydrology: a still or flowing water surface with wet banks
+        float tRough = -1.0, river = 0.0;
+        #ifdef TERRAIN_LAND
+        if (landOn > 0.5) {
+          vec4 land = texture2D(landTex, (vTW.xz - landOrig) / landSpan);
+          float aa = fwidth(land.r) * 0.75 + 0.02;
+          float steep = smoothstep(0.22, 0.45, 1.0 - normalize(nrmS.xyz * 2.0 - 1.0).y); // mountain streams: white water, not mirrors
+          river = smoothstep(0.5 - aa, 0.5 + aa, land.r) * (1.0 - landDry) * (1.0 - steep);
+          float bank = smoothstep(0.06, 0.45, land.r) * (1.0 - river) * (1.0 - landDry);
+          float wetG = smoothstep(0.62, 0.85, land.a) * (1.0 - landDry) * (1.0 - snowy);
+          alb.rgb *= 1.0 - bank * 0.35 - wetG * 0.12;
+          if (bank + wetG > 0.0) tRough = mix(0.93, 0.45, max(bank, wetG * 0.6));
+          if (river > 0.0) {
+            // ripples drifting downstream-ish, fading to a mirror with distance
+            vec2 rp = vTW.xz / 9.0;
+            vec2 rn = (texture2D(gN, rp + vec2(uTime * 0.05, uTime * 0.031)).xy + texture2D(gN, rp * 1.7 - vec2(uTime * 0.04, -uTime * 0.06)).xy - 1.0) * 0.12 * (1.0 - smoothstep(60.0, 900.0, dist));
+            wn = normalize(mix(wn, normalize(vec3(rn.x, 1.0, rn.y)), river));
+            mul = mix(mul, vec3(1.0), river);
+            alb.rgb = mix(alb.rgb, waterTint, river);
+            alb.a = mix(alb.a, 1.0, river);
+            tRough = mix(tRough < 0.0 ? 0.93 : tRough, 0.06, river);
+          }
+        }
+        #endif
+        // snow glitter: tiny facets catching the sun up close
+        if (snowy > 0.5 && dist < 220.0) { vec2 gc = floor(vTW.xz * 2.5); float gl = fract(sin(dot(gc, vec2(12.9898, 78.233))) * 43758.5453); if (gl > 0.985) tRough = 0.08; }
         diffuseColor.rgb = alb.rgb * mul * (0.6 + 0.4 * alb.a) * 1.12;
       `)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        if (tRough >= 0.0) roughnessFactor = tRough;`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         normal = snrm((viewMatrix * vec4(wn, 0.0)).xyz);`)
       .replace('#include <lights_fragment_begin>', THREE.ShaderChunk.lights_fragment_begin.replace(
         'getDirectionalLightInfo( directionalLight, directLight );',
         'getDirectionalLightInfo( directionalLight, directLight ); directLight.color *= terrainShadow;'));
   };
-  mat.customProgramCacheKey = () => (patch ? 'terrain2-patch' : 'terrain2') + (real ? '-real' : '');
+  mat.customProgramCacheKey = () => (patch ? 'terrain3-patch-' : 'terrain3-') + (real ? 'real' : maps.detailU?.key || '');
   return mat;
 }
 
@@ -176,7 +214,7 @@ export function waterMaterial(o) {
     depthTex: { value: o.depthTex }, outerTex: { value: null }, outerOrigin: { value: new THREE.Vector2(0, 0) }, outerSize: { value: 1 }, nrm: { value: o.normal }, tHalf: { value: o.half }, tSize: { value: o.size }, waterLevel: { value: o.level },
     sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color(1, 1, 1) }, skyZen: { value: new THREE.Color(0.3, 0.5, 0.8) },
     skyHor: { value: new THREE.Color(0.7, 0.8, 0.9) }, amb: { value: 1 }, deepCol: { value: new THREE.Color(o.deep) }, shallowCol: { value: new THREE.Color(o.shallow) },
-    sandCol: { value: new THREE.Color(o.sand) }, fogColor: { value: new THREE.Color(0, 0, 0) }, foamAmt: { value: o.foam ?? 1 }, rough: { value: 0.35 },
+    sandCol: { value: new THREE.Color(o.sand) }, fogColor: { value: new THREE.Color(0, 0, 0) }, foamAmt: { value: o.foam ?? 1 }, rough: { value: 0.35 }, reef: { value: o.reef ?? 0 },
     // tile-grid cells known to be dry land all over (farfield.js): no water drawn there at all
     farMask: { value: null }, farMaskOrigin: { value: new THREE.Vector2() }, farMaskSize: { value: 0 }, farCell: { value: 1 },
   };
@@ -188,7 +226,9 @@ export function waterMaterial(o) {
     fragmentShader: /* glsl */`
       uniform sampler2D depthTex; uniform sampler2D outerTex; uniform vec2 outerOrigin; uniform float outerSize; uniform sampler2D nrm; uniform float tHalf; uniform float tSize; uniform float waterLevel;
       uniform vec3 sunDir; uniform vec3 sunCol; uniform vec3 skyZen; uniform vec3 skyHor; uniform float amb;
-      uniform vec3 deepCol; uniform vec3 shallowCol; uniform vec3 sandCol; uniform vec3 fogColor; uniform float foamAmt; uniform float rough; uniform float uTime;
+      uniform vec3 deepCol; uniform vec3 shallowCol; uniform vec3 sandCol; uniform vec3 fogColor; uniform float foamAmt; uniform float rough; uniform float uTime; uniform float reef;
+      float wh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float vnoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(wh(i), wh(i + vec2(1.0, 0.0)), f.x), mix(wh(i + vec2(0.0, 1.0)), wh(i + 1.0), f.x), f.y); }
       uniform sampler2D farMask; uniform vec2 farMaskOrigin; uniform float farMaskSize; uniform float farCell;
       varying vec3 vW;
       ${FOG_GLSL}
@@ -220,7 +260,15 @@ export function waterMaterial(o) {
         // body colour: shallow -> deep, seabed showing through in the shallows
         float dk = 1.0 - exp(-depth * 0.09);
         vec3 body = mix(shallowCol, deepCol, dk);
-        body = mix(sandCol * 0.9, body, smoothstep(0.0, 7.0, depth));
+        // seabed showing through: sand with ripples, and on the islands coral heads and patch reefs in the shallows
+        vec3 seabed = sandCol * 0.9;
+        float coral = 0.0;
+        if (reef > 0.0 && depth > 0.2 && depth < 16.0 && dist < 25000.0) {
+          float rn = vnoise(p / 46.0) * 0.55 + vnoise(p / 13.0) * 0.3 + vnoise(p / 3.7) * 0.15;
+          coral = smoothstep(0.5, 0.6, rn) * smoothstep(16.0, 5.0, depth) * smoothstep(0.2, 1.0, depth) * reef;
+          seabed = mix(seabed * (0.92 + 0.16 * vnoise(p / 2.1)), vec3(0.19, 0.16, 0.11) + vec3(0.05, 0.08, 0.02) * vnoise(p / 5.0), coral * 0.8);
+        }
+        body = mix(seabed, body, smoothstep(0.0, 7.0 + coral * 5.0, depth));
         float lit = clamp(dot(vec3(0.0, 1.0, 0.0), sunDir) * 0.8 + 0.2, 0.0, 1.0);
         body *= (amb * 0.55 + lit * length(sunCol) * 0.45);
         vec3 col = mix(body, sky, fres) + spec;
