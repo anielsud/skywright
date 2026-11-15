@@ -23,7 +23,10 @@ const SAMPLE_LEVEL = { piston: 3.6, radial: 2.7, turboprop: 3.1, jet: 2.1, fan: 
 const MUSIC = { hangar: 0.6, cruise: 0.7, mission: 1.3 }; // weighted avg at music 100%: hangar ≈-35, cruise ≈-38 (under the engine), mission ≈-33 dB
 const SHOT = { voice: 1.8, crash: 0.4, debris: 0.2, glass: 0.35, explosion: 0.4, boom: 0.4, chirp: 0.38, splash: 0.32, gear: 0.32, thunder: 0.3 }; // peaks: crash ≈-22, explosion ≈-18, chirp ≈-28 dB weighted
 const REC = { windExt: 2.66, windCk: 4.6, roll: 2, rain: 2, day: 0.73, night: 0.52, sea: 1.38, lake: 1.46 }; // wind@120 m/s ≈-32, roll ≈-30, rain ≈-30, day bed ≈-40 dB weighted
-const RPM_RANGE = { piston: [700, 2700], radial: [600, 2600], turboprop: [1000, 2000] };
+// workshop foley (hangar building) levels, and the synth each falls back to while clips load
+const WS = { place: 0.48, clunk: 0.37, ratchet: 0.29, tick: 0.25, spray: 0.72, select: 0.25, toolbox: 0.35, button: 0.22, room: 0.23 }; // peaks (weighted, 100%): place ≈-29, remove ≈-28, paint/rotate/flip ≈-31, select/undo ≈-32, ticks ≈-36; room tone ≈-47 avg
+const WS_FALLBACK = { place: 'clank', remove: 'clank', paint: 'pop', select: 'click', rotate: 'click', move: 'click', flip: 'click', undo: 'click', redo: 'click', load: 'clank', save: 'clank' };
+const RPM_RANGE ={ piston: [700, 2700], radial: [600, 2600], turboprop: [1000, 2000] };
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }; // -12 dB overall: a game shouldn't hit the speaker at full scale
 
 export class Audio {
@@ -79,6 +82,7 @@ export class Audio {
       }));
       // rebuild engine voices that were created as synth while loading
       for (const k of Object.keys(SAMPLE_ENGINES)) if (this.voices[k] && !this.voices[k].sampled && this.canSample(k)) this.dropVoice(k);
+      if (this.roomOn) this.roomTone(true); // the hangar opened before its room tone had loaded
     } catch { /* offline first run etc.: synth only */ }
   }
   canSample(kind) { const d = SAMPLE_ENGINES[kind]; return !!d && ['idle', 'high', 'cabin', 'cabinIdle'].every((r) => !d[r] || this.buffers[d[r][0]]) && (!d.ab || this.buffers[d.ab]); }
@@ -416,6 +420,7 @@ export class Audio {
   }
   play(name, p = 1, pos = null) {
     if (!this.ctx) return;
+    if (name in WS_FALLBACK) { if (this.workshop(name)) return; name = WS_FALLBACK[name]; }
     const P = Math.min(2, p), d = this.dest(pos);
     switch (name) {
       // recorded where we have it (vary pitch so repeats don't sound identical); synthesis as the fallback
@@ -471,6 +476,45 @@ export class Audio {
     }
   }
 
+  // ---------- workshop (hangar building) sounds ----------
+  // Recorded tool foley for building actions, with several takes and random pitch so repeats never sound identical.
+  // play('place'|'remove'|...) routes here; false (clips not loaded) lets play() fall back to the old synth blips.
+  wsShot(base, n, gain, lo = 0.92, hi = 1.1, delay = 0) {
+    this.wsLast ||= {};
+    let i = 1 + Math.floor(Math.random() * n); if (n > 1 && i === this.wsLast[base]) i = (i % n) + 1; // never the same take twice running
+    this.wsLast[base] = i;
+    return this.shot(n > 1 ? `${base}_${i}` : base, { gain, rate: lo + Math.random() * (hi - lo), delay });
+  }
+  workshop(action) {
+    switch (action) {
+      case 'place': // impact-wrench "brrt" bolting the part on, then a little metal settle
+        if (!this.wsShot('ws_place', 3, WS.place, 0.95, 1.12)) return false;
+        this.wsShot('ws_select', 2, WS.select * 0.5, 0.7, 0.85, 0.12); return true;
+      case 'remove': return this.wsShot('ws_clunk', 3, WS.clunk, 0.9, 1.12); // metal dropped on the concrete floor
+      case 'paint': return this.wsShot('ws_spray', 2, WS.spray, 0.9, 1.15);
+      case 'select': return this.wsShot('ws_select', 2, WS.select, 0.95, 1.15);
+      case 'rotate': return this.wsShot('ws_ratchet', 2, WS.ratchet, 0.9, 1.15);
+      case 'move': return this.wsShot('ws_tick', 2, WS.tick, 1.3, 1.6);
+      case 'flip': if (!this.wsShot('ws_ratchet', 2, WS.ratchet, 1.15, 1.3)) return false; this.wsShot('ws_select', 2, WS.select * 0.6, 1.0, 1.1, 0.25); return true;
+      case 'undo': return this.wsShot('ws_button', 1, WS.button, 0.8, 0.86);
+      case 'redo': return this.wsShot('ws_button', 1, WS.button, 1.1, 1.18);
+      case 'load': return this.wsShot('ws_toolbox', 1, WS.toolbox, 0.92, 1.08); // toolbox clatter as the plane rolls in
+      case 'save': if (!this.wsShot('ws_button', 1, WS.button, 0.7, 0.75)) return false; this.wsShot('ws_clunk', 3, WS.clunk * 0.35, 1.3, 1.45, 0.06); return true;
+    }
+    return false;
+  }
+  // Repeating ticks while a slider is dragged or a move/turn button is held, rate-limited so a fast drag doesn't machine-gun.
+  // v (0..1, optional) raises the pitch with the slider value.
+  tick(kind = 'slide', v = 0.5) {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime, gap = kind === 'ratchet' ? 0.3 : 0.075;
+    this.wsTick ||= {}; if (now - (this.wsTick[kind] || 0) < gap) return; this.wsTick[kind] = now;
+    if (kind === 'ratchet') { if (!this.workshop('rotate')) this.play('click'); return; }
+    if (!this.wsShot('ws_tick', 2, WS.tick * 0.8, 1.2 + v * 0.6, 1.3 + v * 0.6)) this.tone('triangle', 1500 + v * 800, 1100, 0.03, 0.03);
+  }
+  // quiet room tone under the hangar music: a big workshop with tools going far off ('world' channel)
+  roomTone(on) { this.roomOn = on; if (this.ctx) this.bedGain('amb_hangar', this.amb, on ? WS.room : 0, on ? 1.5 : 0.4); }
+
   // ---------- music: streamed tracks (assets/music, Kevin MacLeod, CC BY 4.0), crossfaded by context ----------
   // Streamed through a media element rather than decoded: a decoded 3-minute track would take ~70 MB on a tablet.
   track(key) {
@@ -497,6 +541,7 @@ export class Audio {
   // ---------- hangar music: recorded track, or the old generative pad + arpeggio if it can't play ----------
   music(on) {
     if (!this.ctx) return;
+    this.roomTone(on);
     if (on && this.setTrack('hangar', MUSIC.hangar)) { this.setSpace('hangar'); return; }
     if (!on) this.setTrack(null);
     if (on && !this.mus) {

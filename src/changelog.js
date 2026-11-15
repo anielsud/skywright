@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.22.0', items: [
+    'The hangar sounds like a real workshop now! Parts go on with a “brrrt” from the air wrench, removed parts clang onto the concrete, paint hisses out of a spray can, turning a part clicks a ratchet and sliders tick as you drag them.',
+    'Loading a plane rattles the toolbox, and you can hear a busy workshop far off in the background (turn it down with the World slider).',
+  ] },
   { v: '1.21.0', items: [
     'Shiny new planes: real panel lines and rivets, glossy paint that reflects the sky, see-through canopies with a seat and dashboard inside, and proper rows of windows on airliners.',
     'Lights! Red and green lights on the wingtips, flashing white strobes and a red beacon on the tail — they look great at night.',

@@ -149,7 +149,7 @@ export class Hangar {
     });
   }
   flip() { this.edit((p) => { p.mirror = !p.mirror; }); }
-  paint(color) { this.edit((p) => { p.color = color; }); this.audio.play('pop'); }
+  paint(color) { this.edit((p) => { p.color = color; }); this.audio.play('paint'); }
   deleteSel() {
     if (this.sel < 0) return;
     this.pushUndo();
@@ -158,7 +158,7 @@ export class Hangar {
     if (j >= 0) idxs = idxs.concat(subtree(this.design.parts, j));
     if (this.sel === 0) idxs = this.design.parts.map((_, k) => k);
     removeParts(this.design, [...new Set(idxs)]);
-    this.sel = -1; this.rebuild(); this.audio.play('clank');
+    this.sel = -1; this.rebuild(); this.audio.play('remove');
   }
   clear() { this.pushUndo(); this.design.parts = []; this.sel = -1; this.rebuild(); }
 
@@ -217,7 +217,7 @@ export class Hangar {
     this.cancelPlacing();
     this.sel = i;
     this.rebuild();
-    this.audio.play('clank');
+    this.audio.play('place');
     if (this.design.parts.length === 1) this.frame();
   }
   partIndexOf(obj) { let o = obj; while (o && o.userData.partIndex === undefined) o = o.parent; return o ? o.userData.partIndex : -1; }
@@ -291,7 +291,7 @@ export class Hangar {
       if (this.placing) { if (hit) this.place(hit); else this.ui.hint('Tap on your plane to attach the part'); return; }
       this.sel = hit ? this.partIndexOf(hit.object) : -1;
       this.updateSelection(); this.onChange();
-      if (this.sel >= 0) this.audio.play('click');
+      if (this.sel >= 0) this.audio.play('select');
     });
   }
   pick(v) {
