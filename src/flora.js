@@ -27,6 +27,8 @@ import { FOG } from './shaders.js';
 const V3 = THREE.Vector3;
 const CELL = 275; // 22000 / 80: cells tile the core map and the 5500 m outer tiles exactly
 const STRIDE = 6; // per instance: x, y, z, scale, variant, yaw
+const IMP_CH = 6; // impostor chunks: 6 x 6 cells (1650 m), each its own draw with a bounding sphere (frustum culled)
+const SMALL_FAR = 1400; // shrubs, logs and stones vanish into the ground texture beyond this
 const AT = 2048; // foliage atlas layout size (the 1024 version is the same layout scaled)
 // atlas regions in AT pixels -- mirrored in tools/flora/build_atlas.py (REG)
 const REG = {
@@ -429,8 +431,8 @@ function impostorMaterial(F) {
         ${OCT_GLSL}`)
       .replace('#include <uv_vertex>', `#include <uv_vertex>
         vec4 vr = uVar[int(iData.x + 0.5)];
-        float R = vr.z * iPos.w;
-        vec3 C = iPos.xyz + vec3(0.0, vr.w * iPos.w, 0.0);
+        float sc = abs(iPos.w), R = vr.z * sc; // negative scale: a small variant (shrub, log, stone)
+        vec3 C = iPos.xyz + vec3(0.0, vr.w * sc, 0.0);
         vec3 toCam = cameraPosition - C; float cDist = length(toCam); vec3 vw = toCam / max(cDist, 1e-3);
         float cy = cos(iData.y), sy = sin(iData.y); vYaw = vec2(cy, sy);
         vec3 vo = vec3(cy * vw.x - sy * vw.z, vw.y, sy * vw.x + cy * vw.z); // view direction in the tree's frame
@@ -454,7 +456,7 @@ function impostorMaterial(F) {
         vFadeT = smoothstep(uLoCut - uBand, uLoCut, cDist);`)
       .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vw;')
       .replace('#include <begin_vertex>', `vec3 transformed = C + (bx * position.x + by * position.y) * 2.0 * R;
-        if (cDist < uLoCut - uBand) transformed = C;`);
+        if (cDist < uLoCut - uBand || (iPos.w < 0.0 && cDist > ${SMALL_FAR.toFixed(1)})) transformed = C; // full model here / too small to see`);
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
         uniform sampler2D tImpN; uniform vec2 uDims; uniform float uTransl;
         varying vec2 vL0; varying vec2 vL1; varying vec2 vL2; varying vec4 vB01; varying vec2 vB2; varying vec3 vWt; varying vec2 vYaw; varying vec3 vTint; varying float vFadeT;
@@ -463,12 +465,13 @@ function impostorMaterial(F) {
         if (ign(gl_FragCoord.xy) >= vFadeT) discard;
         vec2 u0 = (vB01.xy + clamp(vL0, 0.004, 0.996)) / uDims, u1 = (vB01.zw + clamp(vL1, 0.004, 0.996)) / uDims, u2 = (vB2 + clamp(vL2, 0.004, 0.996)) / uDims;
         vec4 a0 = texture2D(map, u0), a1 = texture2D(map, u1), a2 = texture2D(map, u2);
-        vec4 impA = a0 * vWt.x + a1 * vWt.y + a2 * vWt.z;
-        vec3 impN = (texture2D(tImpN, u0).xyz * vWt.x + texture2D(tImpN, u1).xyz * vWt.y + texture2D(tImpN, u2).xyz * vWt.z) * 2.0 - 1.0;`)
+        vec4 impA = a0 * vWt.x + a1 * vWt.y + a2 * vWt.z;`)
       .replace('#include <map_fragment>', `diffuseColor *= vec4(impA.rgb * vTint * 0.8, impA.a); // no shadow map out here: stand-in for the crown's self-shadowing
         { vec2 mt = u0 * vec2(textureSize(map, 0)); vec2 dx = dFdx(mt), dy = dFdy(mt);
           diffuseColor.a *= 1.0 + max(0.0, 0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 1e-8))) * 0.28; }`)
-      .replace('#include <normal_fragment_begin>', `vec3 impNO = normalize(impN);
+      .replace('#include <normal_fragment_begin>', `// (the normals are read after the alpha test: most of a distant forest's fragments are discarded)
+        vec3 impN = (texture2D(tImpN, u0).xyz * vWt.x + texture2D(tImpN, u1).xyz * vWt.y + texture2D(tImpN, u2).xyz * vWt.z) * 2.0 - 1.0;
+        vec3 impNO = normalize(impN);
         vec3 impNW = vec3(vYaw.x * impNO.x + vYaw.y * impNO.z, impNO.y, -vYaw.y * impNO.x + vYaw.x * impNO.z);
         vec3 normal = normalize((viewMatrix * vec4(impNW, 0.0)).xyz); vec3 nonPerturbedNormal = normal;`)
       .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + TRANSLUCENCY_GLSL);
@@ -478,6 +481,10 @@ function impostorMaterial(F) {
   return mat;
 }
 
+// flag an instanced mesh's first n instances for upload (not its whole capacity: the buffers keep growth room)
+function upload(m, n) {
+  for (const a of [m.instanceMatrix, m.instanceColor]) { a.clearUpdateRanges(); a.addUpdateRange(0, n * a.itemSize); a.needsUpdate = true; }
+}
 const hash2 = (i, j, s) => ((Math.imul(i, 73856093) ^ Math.imul(j, 19349663) ^ Math.imul(s, 83492791)) >>> 0);
 let lastFlora = null;
 const GN = 12; // per-cell grid of terrain / forest samples (23 m apart) that candidates interpolate
@@ -507,7 +514,7 @@ export class Flora {
       for (let v = 0; v < gr.variants; v++) {
         const m = SPECIES[gr.sp](r, gr.opts || {}), idx = this.vars.length;
         const V = { idx, sp: gr.sp, model: m, rock: !!m.rock, hit: !m.rock && !m.noHit, cast: !m.rock && !m.small, small: !!m.small || !!m.rock, nNear: 0, nHi: 0 };
-        V.near = this.mkInst(m.geo, m.rock ? rockMat(false) : leafMat(m.sway, false), 64); V.near.castShadow = V.cast && W.q.shadows; V.near.receiveShadow = true;
+        V.near = this.mkInst(m.geo, m.rock ? rockMat(false) : leafMat(m.sway, false), 64); V.near.castShadow = V.cast && W.q.shadows; V.near.receiveShadow = true; W.nearShadow?.(V.near);
         V.hi = this.mkInst(m.geo, m.rock ? rockMat(true) : leafMat(m.sway, true), 256); V.hi.receiveShadow = W.qName === 'high' || W.qName === 'ultra';
         gr.vars.push(V); this.vars.push(V);
       }
@@ -525,11 +532,14 @@ export class Flora {
     this.uVar = { value: this.vars.map((V, i) => { const bs = V.model.geo.boundingSphere; V.bR = bs.radius * 1.02; V.bC = bs.center.clone(); return new THREE.Vector4(i % gx, Math.floor(i / gx), V.bR, bs.center.y); }) };
     this.captured = false;
     this.impMat = impostorMaterial(this);
-    this.impBufs = [this.impBuf(this.T.imp), this.impBuf(this.T.imp)];
-    this.imp = new THREE.Mesh(this.impBufs[0].g, this.impMat); this.imp.frustumCulled = false; this.imp.visible = false; this.group.add(this.imp);
+    // impostors live in spatial chunks: off-screen chunks are culled, and a chunk is rebuilt (and re-uploaded) only when
+    // one of its cells changes, not the whole forest every time
+    this.imp = new THREE.Group(); this.imp.visible = false; this.group.add(this.imp);
+    this.impCh = new Map(); this.impDirtyCh = new Set(); this.impN = 0; this.impTmp = { pos: new Float32Array(0), data: new Float32Array(0) };
+    for (const V of this.vars) V.ext = Math.abs(V.bC.y) + V.bR * 1.42; // reach of a quad from the tree's foot, per unit scale
     if (this.atlas.ready) this.capture();
     // streamed cells
-    this.cells = new Map(); this.queue = []; this.wantAt = null; this.nearAt = null; this.impAt = null; this.impDirty = true; this.nearDirty = true; this.frame = 0; this.lastImp = -99;
+    this.cells = new Map(); this.queue = []; this.wantAt = null; this.nearAt = null; this.impDirty = true; this.nearDirty = true; this.frame = 0; this.lastImp = -99; this.cellMs = 1;
     this.felled = new Map();
     this.cover = new GroundCover(this);
     this.buildMs = performance.now() - t0;
@@ -542,17 +552,17 @@ export class Flora {
   }
   grow(V, which, need) {
     const old = V[which], cap = Math.max(need, old.instanceMatrix.count * 2), m = this.mkInst(old.geometry, old.material, cap);
-    m.castShadow = old.castShadow; m.receiveShadow = old.receiveShadow;
+    m.castShadow = old.castShadow; m.receiveShadow = old.receiveShadow; m.layers.mask = old.layers.mask;
     this.group.remove(old); old.dispose(); V[which] = m;
   }
-  // impostor instance buffers: two of them, so a rebuild can be spread over frames and swapped in when done
+  // an impostor chunk's instance buffers
   impBuf(cap) {
     const g = new THREE.InstancedBufferGeometry(), q = new THREE.PlaneGeometry(1, 1);
     g.index = q.index; g.setAttribute('position', q.attributes.position); g.setAttribute('uv', q.attributes.uv); g.setAttribute('normal', q.attributes.normal);
     const pos = new Float32Array(cap * 4), data = new Float32Array(cap * 2);
     g.setAttribute('iPos', new THREE.InstancedBufferAttribute(pos, 4).setUsage(THREE.DynamicDrawUsage));
     g.setAttribute('iData', new THREE.InstancedBufferAttribute(data, 2).setUsage(THREE.DynamicDrawUsage));
-    g.instanceCount = 0;
+    g.instanceCount = 0; g.boundingSphere = new THREE.Sphere();
     return { g, pos, data, cap };
   }
   // Photograph every variant from oct x oct directions over the upper hemisphere into the impostor atlas:
@@ -636,12 +646,14 @@ export class Flora {
       const gr = this.kinds[t.kind] || this.kinds.broadleaf || this.kinds.conifer || this.groups[0], key = this.key(Math.floor(t.x / CELL), Math.floor(t.z / CELL));
       let a = this.extra.get(key); if (!a) this.extra.set(key, (a = []));
       a.push(t.x, t.z, t.scale || 0.8 + ((t.x * 7.13 + t.z * 3.7) % 1 + 1) % 1 * 0.4, gr.vars[Math.abs(Math.floor(t.x * 13 + t.z * 7)) % gr.vars.length].idx); this.extraN++;
-      const c = this.cells.get(key); if (c) c.data = null;
+      const c = this.cells.get(key); if (c) { c.data = null; this.cellChanged(c); }
     }
     this.wantAt = null;
   }
   clearTrees() { this.extra.clear(); this.extraN = 0; this.reset(); }
-  reset() { this.cells.clear(); this.felled.clear(); this.wantAt = null; this.impDirty = true; this.nearDirty = true; }
+  reset() { for (const c of this.cells.values()) this.cellChanged(c); this.cells.clear(); this.felled.clear(); this.wantAt = null; this.nearDirty = true; }
+  // a cell's trees changed (generated, densified, thinned, dropped): its impostor chunk needs a rebuild
+  cellChanged(c) { this.impDirtyCh.add(Math.floor(c.ci / IMP_CH) + ',' + Math.floor(c.cj / IMP_CH)); this.impDirty = true; }
 
   // ------------------------------------------------ placement
   key(i, j) { return i + ',' + j; }
@@ -759,11 +771,11 @@ export class Flora {
       const key = this.key(i, j), dense = d < Rd; let c = this.cells.get(key);
       if (!c) { c = { ci: i, cj: j, key, data: null, n: 0, nBase: 0, dense: false, tile: null }; this.cells.set(key, c); }
       c.mark = this.frame; c.d = d;
-      if (c.data && c.tile !== undefined && c.tile !== this.tileOf(c)) c.data = null; // the ground under it was re-meshed
-      if (c.data && !dense && c.dense) { c.dense = false; c.n = c.nBase; c.data = c.data.slice(0, c.nBase * STRIDE); this.impDirty = true; }
+      if (c.data && c.tile !== undefined && c.tile !== this.tileOf(c)) { c.data = null; this.cellChanged(c); } // the ground under it was re-meshed
+      if (c.data && !dense && c.dense) { c.dense = false; c.n = c.nBase; c.data = c.data.slice(0, c.nBase * STRIDE); this.cellChanged(c); }
       if (!c.data || (dense && !c.dense)) { c.wantDense = dense; want.push(c); }
     }
-    for (const [key, c] of this.cells) if (c.mark !== this.frame && c.d > Rf * 1.05) { this.cells.delete(key); this.impDirty = true; }
+    for (const [key, c] of this.cells) if (c.mark !== this.frame && c.d > Rf * 1.05) { this.cells.delete(key); this.cellChanged(c); }
     // sparse far layer first everywhere close, then densify nearest-first
     this.queue = want.sort((a, b) => a.d - b.d);
   }
@@ -774,16 +786,25 @@ export class Flora {
     if (this.captured && !this.rockCaptured && this.rockTex.image && this.rockTex.image.width) this.capture();
     // time-sliced generation
     const t0 = performance.now(), budget = budgetMs ?? (this.started ? this.T.budget : 40); this.started = true;
-    while (this.queue.length && performance.now() - t0 < budget) {
+    // a cell is only started if it should fit in what's left of the budget (one is always allowed): overrunning the
+    // budget by a whole cell is what made a streaming frame miss the display's refresh
+    let done = 0;
+    while (this.queue.length && performance.now() - t0 + (done ? this.cellMs : 0) < budget) {
       const c = this.queue.shift();
       if (!this.cells.has(c.key)) continue;
       if (this.tileOf(c) === undefined) continue; // outer tile not built yet: try again when it is
-      this.genCell(c, c.wantDense);
-      this.impDirty = true; if (c.d < this.T.lo + 600) this.nearDirty = true;
+      const t1 = performance.now();
+      this.genCell(c, c.wantDense); done++;
+      this.cellMs += (performance.now() - t1 - this.cellMs) * 0.2; // typical cost of one cell (EMA)
+      this.cellChanged(c); if (c.d < this.T.lo + 600) this.nearDirty = true;
     }
     this.updateNear(cam);
-    if (!this.impJob && ((this.impDirty && this.frame - this.lastImp > 12) || !this.impAt || this.impAt.distanceToSquared(cam) > 70 * 70)) this.impJob = this.updateImpostors(cam);
-    if (this.impJob) { const t1 = performance.now(), b2 = Math.max(1.2, budget - (t1 - t0)); while (performance.now() - t1 < b2) if (this.impJob.next().done) { this.impJob = null; break; } }
+    if (!this.impJob && this.impDirty && this.frame - this.lastImp > 12) this.impJob = this.updateImpostors();
+    if (this.impJob) {
+      const t1 = performance.now(), b2 = Math.max(1.2, budget - (t1 - t0)); this.impUp = 0;
+      while (performance.now() - t1 < b2) { const r = this.impJob.next(); if (r.done) { this.impJob = null; break; } if (r.value === 'frame') break; }
+    }
+    this.placeImpostors(cam);
     this.cover.update(cam);
   }
   // full models for trees within the LOD distance (+ margin; the shader hides the ones past it exactly)
@@ -815,36 +836,63 @@ export class Flora {
       if (!overflow) break;
       for (const V of vars) { if (V.nNear > V.near.instanceMatrix.count) this.grow(V, 'near', V.nNear * 1.5 | 0); if (V.nHi > V.hi.instanceMatrix.count) this.grow(V, 'hi', V.nHi * 1.5 | 0); V.nNear = V.nHi = 0; }
     }
-    for (const V of vars) for (const [m, n] of [[V.near, V.nNear], [V.hi, V.nHi]]) { m.count = n; m.visible = n > 0; if (n) { m.instanceMatrix.needsUpdate = true; m.instanceColor.needsUpdate = true; } }
+    for (const V of vars) for (const [m, n] of [[V.near, V.nNear], [V.hi, V.nHi]]) { m.count = n; m.visible = n > 0; if (n) upload(m, n); }
   }
-  // every tree beyond the LOD distance as one impostor quad (sparse far cells + dense near cells).
-  // A generator: fills the back buffer a slice at a time, then swaps it in.
-  *updateImpostors(cam) {
-    this.impDirty = false; this.impAt = cam.clone(); this.lastImp = this.frame;
-    const cx = cam.x, cy = cam.y, cz = cam.z, inner = Math.max(0, this.loCut.value - this.band.value - 40), in2 = inner * inner, sm2 = 1400 * 1400, vars = this.vars;
-    let B = this.impBufs[1], n = 0, budget = 0;
-    for (const c of [...this.cells.values()]) {
-      if (!c.data) continue;
-      const cnt = c.dense ? c.n : c.nBase, d = c.data;
-      const fx = Math.max(Math.abs(c.ci * CELL - cx), Math.abs((c.ci + 1) * CELL - cx)), fz = Math.max(Math.abs(c.cj * CELL - cz), Math.abs((c.cj + 1) * CELL - cz));
-      const fy = Math.max(Math.abs(cy - c.y0), Math.abs(cy - c.y1));
-      if (fx * fx + fz * fz + fy * fy < in2) continue; // cell entirely inside the full-model range
-      if (n + cnt > B.cap) { // grow the back buffer, keeping what's written so far
-        const nb = this.impBuf(Math.ceil((n + cnt) * 1.4)); nb.pos.set(B.pos.subarray(0, n * 4)); nb.data.set(B.data.subarray(0, n * 2));
-        B.g.dispose(); this.impBufs[1] = B = nb;
-      }
-      const P = B.pos, D = B.data;
-      for (let k = 0; k < cnt; k++) {
-        const o = k * STRIDE, x = d[o], y = d[o + 1], z = d[o + 2], dd = (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2;
-        if (dd < in2) continue;
-        if (dd > sm2 && vars[d[o + 4]].small) continue; // shrubs, logs and stones vanish into the ground texture far away
-        P[n * 4] = x; P[n * 4 + 1] = y; P[n * 4 + 2] = z; P[n * 4 + 3] = d[o + 3]; D[n * 2] = d[o + 4]; D[n * 2 + 1] = d[o + 5]; n++;
-      }
-      if ((budget += cnt + 8) > 8000) { budget = 0; yield; }
+  // Chunks entirely beyond SMALL_FAR skip their small things (stored last): no re-upload, just a shorter draw
+  placeImpostors(cam) {
+    for (const [key, ch] of this.impCh) {
+      const sp = ch.B.g.boundingSphere, d = Math.hypot(sp.center.x - cam.x, sp.center.y - cam.y, sp.center.z - cam.z) - sp.radius;
+      const far = d > SMALL_FAR + (ch.far ? 0 : 150); // (hysteresis; a far chunk is always wholly past SMALL_FAR)
+      if (far !== ch.far) { ch.far = far; ch.B.g.instanceCount = far ? ch.nBig : ch.n; }
+      ch.mesh.visible = ch.B.g.instanceCount > 0;
     }
-    const g = B.g; g.instanceCount = n;
-    for (const a of [g.attributes.iPos, g.attributes.iData]) { a.clearUpdateRanges?.(); a.addUpdateRange?.(0, n * a.itemSize); a.needsUpdate = true; }
-    this.impBufs.reverse(); this.imp.geometry = g;
+  }
+  // Every tree as one impostor quad (the shader collapses the ones inside the full-model range, and small ones far
+  // away), grouped in spatial chunks. Only chunks whose cells changed are rebuilt; each is swapped in whole (its
+  // count and upload flagged once it's filled). A generator: a slice at a time, and at most ~3 MB of uploads a frame.
+  *updateImpostors() {
+    this.impDirty = false; this.lastImp = this.frame;
+    const vars = this.vars, keys = [...this.impDirtyCh]; this.impDirtyCh.clear();
+    let budget = 0;
+    for (const key of keys) {
+      const [ki, kj] = key.split(',').map(Number), list = [];
+      let cnt = 0;
+      for (let i = ki * IMP_CH; i < (ki + 1) * IMP_CH; i++) for (let j = kj * IMP_CH; j < (kj + 1) * IMP_CH; j++) {
+        const c = this.cells.get(this.key(i, j)); if (!c || !c.data) continue;
+        list.push(c); cnt += c.dense ? c.n : c.nBase;
+      }
+      let ch = this.impCh.get(key);
+      if (!cnt) { if (ch) { this.imp.remove(ch.mesh); ch.B.g.dispose(); this.impN -= ch.n; this.impCh.delete(key); } continue; }
+      if (!ch) { const B = this.impBuf(Math.ceil(cnt * 1.3)), mesh = new THREE.Mesh(B.g, this.impMat); this.imp.add(mesh); this.impCh.set(key, (ch = { B, mesh, n: 0 })); }
+      // filled into scratch arrays over several slices, then copied into the chunk's buffers in one go: the chunk keeps
+      // drawing (and, if it was off screen, uploading) its old content consistently until then
+      const T = this.impTmp; if (T.pos.length < cnt * 4) { T.pos = new Float32Array(cnt * 4 * 1.3 | 0); T.data = new Float32Array(cnt * 2 * 1.3 | 0); }
+      const P = T.pos, D = T.data;
+      // trees first, then the small things: a chunk that is all far away just draws fewer (see placeImpostors)
+      let n = 0, nBig = 0, x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity, ext = 0;
+      for (let pass = 0; pass < 2; pass++) {
+        for (const c of list) {
+          const d = c.data, m = c.dense ? c.n : c.nBase;
+          for (let k = 0; k < m; k++) {
+            const o = k * STRIDE, V = vars[d[o + 4]]; if (V.small !== (pass === 1)) continue;
+            const x = d[o], y = d[o + 1], z = d[o + 2], sc = d[o + 3];
+            P[n * 4] = x; P[n * 4 + 1] = y; P[n * 4 + 2] = z; P[n * 4 + 3] = pass ? -sc : sc; D[n * 2] = d[o + 4]; D[n * 2 + 1] = d[o + 5]; n++;
+            if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (z < z0) z0 = z; if (z > z1) z1 = z;
+            const e = V.ext * sc; if (e > ext) ext = e;
+          }
+          if ((budget += m + 8) > 8000) { budget = 0; yield; }
+        }
+        if (!pass) nBig = n;
+      }
+      const B = n > ch.B.cap ? this.impBuf(Math.ceil(n * 1.3)) : ch.B, g = B.g;
+      B.pos.set(P.subarray(0, n * 4)); B.data.set(D.subarray(0, n * 2));
+      g.boundingSphere.center.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+      g.boundingSphere.radius = Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 2 + ext;
+      for (const a of [g.attributes.iPos, g.attributes.iData]) { a.clearUpdateRanges(); a.addUpdateRange(0, n * a.itemSize); a.needsUpdate = true; }
+      if (B !== ch.B) { ch.B.g.dispose(); ch.B = B; ch.mesh.geometry = g; }
+      this.impN += n - ch.n; ch.n = n; ch.nBig = nBig; ch.far = null; // placeImpostors sets the count
+      if ((this.impUp += n * 24) > 3e6) yield 'frame'; // spread big re-uploads over frames
+    }
   }
   setPerf(level) {
     this.perfLevel = level;
@@ -856,7 +904,7 @@ export class Flora {
   stats() {
     let cells = 0, trees = 0; for (const c of this.cells.values()) if (c.data) { cells++; trees += c.dense ? c.n : c.nBase; }
     let models = 0; for (const V of this.vars) models += V.nNear + V.nHi;
-    return { buildMs: Math.round(this.buildMs), captureMs: Math.round(this.captureMs || 0), variants: this.vars.length, cells, trees, models, impostors: this.imp.geometry.instanceCount, grass: this.cover.grass?.count || 0, impAtlas: `${this.impRT.width}x${this.impRT.height}`, oct: this.oct };
+    return { buildMs: Math.round(this.buildMs), captureMs: Math.round(this.captureMs || 0), variants: this.vars.length, cells, trees, models, impostors: this.impN, impChunks: this.impCh.size, grass: this.cover.grass?.count || 0, impAtlas: `${this.impRT.width}x${this.impRT.height}`, oct: this.oct };
   }
   hit(p) {
     const c = this.cells.get(this.key(Math.floor(p.x / CELL), Math.floor(p.z / CELL))); if (!c || !c.data) return null;
@@ -872,7 +920,7 @@ export class Flora {
     return null;
   }
   dispose() {
-    this.impRT.dispose(); this.impBufs?.forEach((b) => b.g.dispose()); this.impMat?.dispose(); this.cover?.dispose();
+    this.impRT.dispose(); for (const ch of this.impCh?.values() || []) ch.B.g.dispose(); this.impMat?.dispose(); this.cover?.dispose();
     for (const m of Object.values(this.mats || {})) m.dispose();
     for (const V of this.vars || []) V.model.geo.dispose();
   }
@@ -977,7 +1025,7 @@ class GroundCover {
     for (const [m, a, b] of [[this.grass, 'g', 'gc'], [this.extra, 'e', 'ec'], [this.fern, 'f', 'fc']]) {
       const cap = m.instanceMatrix.count; let n = 0;
       for (const c of list) { const cnt = Math.min(c[a].length / 16, cap - n); if (cnt <= 0) break; m.instanceMatrix.array.set(c[a].subarray(0, cnt * 16), n * 16); m.instanceColor.array.set(c[b].subarray(0, cnt * 3), n * 3); n += cnt; }
-      m.count = n; m.instanceMatrix.needsUpdate = true; m.instanceColor.needsUpdate = true;
+      m.count = n; if (n) upload(m, n);
     }
   }
   dispose() { this.cells.clear(); this.mat?.dispose(); for (const m of [this.grass, this.extra, this.fern]) m?.geometry.dispose(); }

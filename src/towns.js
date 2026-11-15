@@ -382,7 +382,7 @@ export class Towns {
     for (const [key, ch] of this.chunks) {
       const c = { key, x: ch.n ? ch.x / ch.n : 0, z: ch.n ? ch.z / ch.n : 0 };
       if (!ch.S.empty) { const g = ch.S.toGeometry(); tris += g.index.count / 3; lt.S += g.index.count / 3; c.shell = new THREE.Mesh(g, mat); c.shell.castShadow = W.q.shadows && W.qName !== 'medium'; c.shell.receiveShadow = true; this.group.add(c.shell); }
-      if (!ch.D.empty) { const g = ch.D.toGeometry(); tris += g.index.count / 3; lt.D += g.index.count / 3; c.detail = new THREE.Mesh(g, mat); c.detail.receiveShadow = true; c.detail.castShadow = castDetail; this.group.add(c.detail); const bs = g.boundingSphere; c.dx = bs.center.x; c.dz = bs.center.z; c.dr = bs.radius; }
+      if (!ch.D.empty) { const g = ch.D.toGeometry(); tris += g.index.count / 3; lt.D += g.index.count / 3; c.detail = new THREE.Mesh(g, mat); c.detail.receiveShadow = true; c.detail.castShadow = castDetail; W.nearShadow?.(c.detail); this.group.add(c.detail); const bs = g.boundingSphere; c.dx = bs.center.x; c.dz = bs.center.z; c.dr = bs.radius; }
       if (!ch.G.empty) { const g = ch.G.toGeometry(); tris += g.index.count / 3; lt.G += g.index.count / 3; c.ground = new THREE.Mesh(g, gmat); c.ground.receiveShadow = true; c.ground.renderOrder = -1; this.group.add(c.ground); const bs = g.boundingSphere; c.gx = bs.center.x; c.gz = bs.center.z; c.gr = bs.radius; }
       for (const l of ch.L) { lampHeads.push(l); glowPos.push(l[0] + Math.sin(l[3]) * l[4], l[1], l[2] + Math.cos(l[3]) * l[4]); }
       this.chunkList.push(c);

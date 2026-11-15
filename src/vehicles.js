@@ -144,7 +144,7 @@ export class Vehicles {
     for (const c of [...this.cars, ...this.parked]) counts[c.type] = (counts[c.type] || 0) + 1;
     for (const t in counts) {
       const m = (this.models[t] = CAR[t]());
-      const im = new THREE.InstancedMesh(m.geo, mat, counts[t]); im.castShadow = world.qBase === 'high'; im.receiveShadow = true; im.frustumCulled = false;
+      const im = new THREE.InstancedMesh(m.geo, mat, counts[t]); im.castShadow = world.qBase === 'high'; im.receiveShadow = true; im.frustumCulled = false; world.nearShadow?.(im);
       im.count = 0; this.meshes[t] = im; this.group.add(im);
     }
     const col = new THREE.Color();
@@ -193,6 +193,7 @@ export class Vehicles {
       }
     }
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), d = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0), fw = new THREE.Vector3(0, 0, -1);
+    const eu = new THREE.Euler(), lv = new THREE.Vector3(); // reused per car (no garbage per car per frame)
     const vis = {}; for (const t in this.meshes) vis[t] = this.parkedCount[t] || 0;
     const R2 = this.drawDist * this.drawDist;
     this.cars.forEach((c, ci) => {
@@ -205,11 +206,11 @@ export class Vehicles {
       const yaw = Math.atan2(-d.x, -d.z);
       const fz = this.world.sampleGrid(p.x + d.x * mdl.L * 0.4, p.z + d.z * mdl.L * 0.4), bz = this.world.sampleGrid(p.x - d.x * mdl.L * 0.4, p.z - d.z * mdl.L * 0.4);
       const pitch = c.path.bridge ? 0 : Math.atan2(fz - bz, mdl.L * 0.8);
-      q.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+      q.setFromEuler(eu.set(pitch, yaw, 0, 'YXZ'));
       m4.compose(p, q, one); this.meshes[c.type].setMatrixAt(c.slot, m4);
       // lights
       const show = night ? 1 : 0, brk = c.brake ? 1 : 0;
-      const put = (k, lp, col, on) => { const v = new THREE.Vector3(...lp).applyQuaternion(q).add(p); this.lp[o + k * 3] = v.x; this.lp[o + k * 3 + 1] = v.y; this.lp[o + k * 3 + 2] = v.z; this.lc[o + k * 3] = col[0] * on; this.lc[o + k * 3 + 1] = col[1] * on; this.lc[o + k * 3 + 2] = col[2] * on; };
+      const put = (k, lp, col, on) => { const v = lv.set(lp[0], lp[1], lp[2]).applyQuaternion(q).add(p); this.lp[o + k * 3] = v.x; this.lp[o + k * 3 + 1] = v.y; this.lp[o + k * 3 + 2] = v.z; this.lc[o + k * 3] = col[0] * on; this.lc[o + k * 3 + 1] = col[1] * on; this.lc[o + k * 3 + 2] = col[2] * on; };
       put(0, mdl.head[0], [1, 0.95, 0.8], show); put(1, mdl.head[1], [1, 0.95, 0.8], show);
       put(2, mdl.tail[0], [1, 0.08, 0.04], Math.max(show * 0.5, brk)); put(3, mdl.tail[1], [1, 0.08, 0.04], Math.max(show * 0.5, brk));
     });

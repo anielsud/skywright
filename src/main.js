@@ -631,7 +631,16 @@ function buildFlight(cfg) {
   F.track = { location: cfg.location, realism: cfg.realism, mode: cfg.mode, start, time_of_day: cfg.time, weather: cfg.weather, online: !!net.active, plane: planeLabel(design), kind: planeKind(st), engine: ac.hasEngine };
   Object.assign(F, { t0: performance.now(), frames: 0, activeT: 0, fpsLow: Infinity, maxLevel: perf.level, playersMax: net.count });
   analytics.capture('flight_start', { ...F.track, parts: design.parts.length, part_types: [...new Set(design.parts.map((p) => p.id))], quality: settings.quality, touch: showTouch, control_mode: settings.controlMode });
-  $('#loading').classList.remove('show');
+  // The loading screen stays up while every shader compiles (the hidden things' too: tree LODs, night lights, far town
+  // detail), and over the first frame, which draws the hidden shadow casters for their shadow shaders (see warmShaders)
+  const warm = (F.warm = { t: performance.now(), n: 0, pending: true }), compiled = () => { warm.pending = false; warm.t = performance.now(); };
+  setTimeout(compiled, 15000); // (never stuck behind the loading screen)
+  // (into the post-processing target, as the scene really renders: tone mapping and output encoding are part of a
+  // shader; and with the reflection environment in place, which the first world update would otherwise add)
+  world.updateEnv();
+  renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null);
+  renderer.compileAsync(scene, flightCam).catch(() => {}).then(compiled);
+  renderer.setRenderTarget(null);
   onResize();
   const msg = { runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.' }[start];
   hud.center(msg, 3500);
@@ -1021,7 +1030,7 @@ function frame(now) {
       if (isHigh(qualityTier()) && perf.level < 2) post.render(hangar.scene, hangar.camera, dt); else renderer.render(hangar.scene, hangar.camera);
     }
   }
-  else if (state === 'flight' && F) {
+  else if (state === 'flight' && F && !F.warm?.pending) {
     stepFlight(dt);
     if (F) {
       // sun flare + per-time-of-day grade
@@ -1036,9 +1045,35 @@ function frame(now) {
       const golden = Math.max(0, 1 - Math.abs(w.sunElev - 0.08) / 0.3);
       post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: 1.1 + golden * 0.1 - w.W.dark * 0.25, vignette: 0.3 });
       fitNearPlane(F);
+      const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene) : null;
       post.render(F.scene, flightCam, dt);
+      if (restore) { restore(); compileWith(F.scene, F.effects.boom, warm); } // and every shader as lit by a crash's explosion flash (effects.js)
+      // ...and until the ground photos have arrived (their upload, and the rock impostors' re-capture, would hitch)
+      else if (warm && (F.world.loaded?.() !== false || performance.now() - warm.t > 3000)) { F.warm = null; $('#loading').classList.remove('show'); }
     }
   }
+}
+// The first flight frame (still under the loading screen) also draws every shadow caster that is hidden or off screen
+// (tree LODs nobody is near yet, far town detail) into the shadow maps: the shadow-depth shaders, which
+// renderer.compileAsync doesn't cover, then compile behind the loading screen instead of as a hitch in flight.
+// Compile the scene's shaders as they'd be with one more light in it, holding the loading screen (warm.pending) until
+// they're done: a compile left running stalls the frames after it. renderer.compile sets up the lights it sees, so a
+// last pass without the light puts them back for the next frame's shadow maps.
+function compileWith(scene, light, warm) {
+  const target = () => renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null);
+  warm.pending = true;
+  target(); scene.add(light); const done = renderer.compileAsync(scene, flightCam); scene.remove(light); renderer.setRenderTarget(null);
+  const finish = () => { if (!warm.pending) return; target(); renderer.compile(scene, flightCam); renderer.setRenderTarget(null); warm.pending = false; warm.t = performance.now(); };
+  done.catch(() => {}).then(finish); setTimeout(finish, 15000);
+}
+function warmShaders(scene) {
+  const undo = [];
+  scene.traverse((o) => {
+    if (!o.castShadow) return;
+    for (let p = o; p; p = p.parent) if (!p.visible) { const q = p; q.visible = true; undo.push(() => (q.visible = false)); }
+    if (o.frustumCulled) { o.frustumCulled = false; undo.push(() => (o.frustumCulled = true)); }
+  });
+  return () => { for (const u of undo.reverse()) u(); };
 }
 function onResize() {
   const w = window.innerWidth, h = window.innerHeight;

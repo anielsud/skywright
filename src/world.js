@@ -13,7 +13,7 @@ import { Builder, buildingMaterial, C } from './buildings.js';
 import { TerrainTiles } from './tiles.js';
 import { erode } from './erosion.js';
 import { terrainDetailUniforms } from './terrainTex.js';
-import { CascadedShadows } from './cascades.js';
+import { CascadedShadows, NEAR_SHADOW } from './cascades.js';
 import { REAL_LOCATIONS, realData } from './realworld.js';
 import { RealScenery } from './realBuildings.js';
 import { BAKED, preloadBake, bakeFor, withBake, landAt } from './terrainBake.js';
@@ -837,10 +837,12 @@ export class World {
     sockG.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
     this.sock = new THREE.Mesh(sockG, new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.8 })); this.sock.position.set(-45, y + 7.6, 600); this.group.add(this.sock);
   }
+  // Ultra: small things cast into the nearer shadow cascades only (see cascades.js NEAR_SHADOW)
+  nearShadow(o) { if (this.cascades) o.traverse((c) => c.layers.set(NEAR_SHADOW)); return o; }
   addParked(objs) { // place parked aircraft meshes on the apron stands (painted in apronTexture)
     const spots = [[200, -160, 1.2], [200, -80, 1.6], [190, 40, 1.4], [230, 160, 1.8], [200, 100, 1.5], [200, -20, 1.3]];
     const all = spots.map((s, i) => (i < objs.length ? objs[i] : objs[i % objs.length].clone()));
-    spots.forEach((s, i) => { const o = all[i]; o.position.x += s[0]; o.position.y += this.loc.rwyH; o.position.z += s[1]; o.rotation.y = s[2]; this.group.add(o); });
+    spots.forEach((s, i) => { const o = all[i]; o.position.x += s[0]; o.position.y += this.loc.rwyH; o.position.z += s[1]; o.rotation.y = s[2]; this.group.add(this.nearShadow(o)); });
   }
 
   // ---------------- vegetation ----------------
@@ -1034,6 +1036,12 @@ export class World {
     this.updateEnv();
   }
 
+  // false while textures the first frames need are still loading (the photo ground detail; the rock impostors are
+  // re-captured once the rock photo is in): main.js keeps the loading screen up meanwhile (at most a few seconds)
+  loaded() {
+    for (const u of Object.values(this.detailU)) if (u?.value?.isTexture && !u.value.image) return false;
+    return !this.flora || !this.flora.captured || !!this.flora.rockCaptured;
+  }
   dispose() {
     this.cascades?.dispose(this.scene);
     this.scene.remove(this.group, this.sky, this.sun, this.sun.target, this.hemi, this.moon, this.deck, this.deck2, this.clouds.mesh, this.rain, this.snow);

@@ -50,7 +50,10 @@ export class Effects {
     this.scene = scene;
     this.smoke = new Pool(3000, puffTexture(), false, scene);
     this.fire = new Pool(1500, glowTexture(), true, scene);
-    this.lights = []; // transient point lights for explosions
+    // One flash light for explosions, reused: the number of lights in the scene is part of every lit shader, so a new
+    // light would recompile them all on impact. It's in the scene only while it glows (main.js compiles the shaders
+    // with it present too, before the flight starts).
+    this.boom = new THREE.PointLight(0xffa040, 0, 300, 1.5); this.boom.userData = { t: 0, d: 1.2, i: 0 };
   }
   setLighting(world, camera) {
     for (const pool of [this.smoke, this.fire]) pool.bb.updateCamera(camera, world.scene.fog);
@@ -59,8 +62,8 @@ export class Effects {
   }
   update(dt, wind) {
     this.smoke.update(dt, wind); this.fire.update(dt, wind);
-    for (const l of this.lights) { l.userData.t += dt; l.intensity = l.userData.i * Math.max(0, 1 - l.userData.t / l.userData.d); }
-    this.lights = this.lights.filter((l) => { if (l.userData.t > l.userData.d) { this.scene.remove(l); return false; } return true; });
+    const l = this.boom, u = l.userData;
+    if (l.parent) { u.t += dt; l.intensity = u.i * Math.max(0, 1 - u.t / u.d); if (u.t > u.d) this.scene.remove(l); }
   }
   rnd(s) { return (Math.random() - 0.5) * s; }
   puff(p, v, opt = {}) {
@@ -110,7 +113,8 @@ export class Effects {
     }
     for (let i = 0; i < 40 * power; i++) this.smoke.add(p.x + this.rnd(6), p.y + 2 + Math.random() * 4, p.z + this.rnd(6), this.rnd(8), 3 + Math.random() * 8, this.rnd(8), 6 + Math.random() * 6, 4, 22 * power, 0.12, 0.11, 0.1, 0.75, 0.8, -0.6);
     this.sparks(p, { x: 0, z: 0 }, 40);
-    const l = new THREE.PointLight(0xffa040, 0, 300, 1.5); l.position.copy(p).y += 3; l.userData = { t: 0, d: 1.2, i: 2000 * power }; this.scene.add(l); this.lights.push(l);
+    const l = this.boom, u = l.userData, live = l.parent ? Math.max(0, 1 - u.t / u.d) : 0; // (a second blast re-fires it)
+    l.position.copy(p).y += 3; u.i = Math.max(2000 * power, u.i * live); u.t = 0; l.intensity = 0; this.scene.add(l);
   }
-  dispose() { this.scene.remove(this.smoke.bb.mesh, this.fire.bb.mesh); for (const l of this.lights) this.scene.remove(l); }
+  dispose() { this.scene.remove(this.smoke.bb.mesh, this.fire.bb.mesh); this.scene.remove(this.boom); }
 }

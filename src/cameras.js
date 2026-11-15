@@ -3,13 +3,14 @@ import * as THREE from 'three';
 import { clamp } from './noise.js';
 
 export const CAM_MODES = ['chase', 'cockpit', 'orbit', 'tower', 'flyby'];
+const _want = new THREE.Vector3(), _mv = new THREE.Vector3(), _off = new THREE.Vector3();
 const CAM_NAMES = { chase: 'Chase cam', cockpit: 'Cockpit', orbit: 'Orbit (drag to look)', tower: 'Tower cam', flyby: 'Fly-by' };
 
 export class CameraRig {
   constructor(camera, dom) {
     this.cam = camera; this.mode = 'chase';
     this.look = { yaw: 0, pitch: 0, dist: 1 }; this.dragging = false;
-    this.pos = new THREE.Vector3(); this.vel = new THREE.Vector3(); this.prev = new THREE.Vector3();
+    this.pos = new THREE.Vector3(); this.vel = new THREE.Vector3(); this.prev = new THREE.Vector3(); this.wantPrev = new THREE.Vector3();
     this.shakeAmt = 0; this.flyPos = null; this.init = false;
     this.lookAt = new THREE.Vector3();
     let last = null, pinch = null;
@@ -35,7 +36,7 @@ export class CameraRig {
   shake(a) { this.shakeAmt = Math.min(2, this.shakeAmt + a); }
 
   update(dt, ac, world, focusOverride) {
-    const cam = this.cam;
+    const cam = this.cam; this.frame = (this.frame || 0) + 1;
     const target = focusOverride || ac.x;
     const R = Math.max(4, ac.radius);
     const k = 1 - Math.exp(-dt * 6);
@@ -50,9 +51,15 @@ export class CameraRig {
       const d = (R * 2.2 + 8) * this.look.dist;
       const off = flat.clone().multiplyScalar(-d).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.look.yaw);
       off.y = d * 0.28 + this.look.pitch * d * 0.6 - dir.y * d * 0.5;
-      const want = target.clone().add(off);
+      const want = _want.copy(target).add(off);
       if (!this.init) { this.pos.copy(want); this.init = true; }
-      this.pos.lerp(want, 1 - Math.exp(-dt * 5));
+      if (this.chaseFrame !== this.frame - 1) this.wantPrev.copy(want); // (re)entering chase: no motion history yet
+      // Lag behind the wanted spot as a first-order follower, integrated exactly for a spot moving at a steady velocity
+      // over the step: the offset from the plane then doesn't depend on the frame time (a plain lerp's lag shrinks on a
+      // long frame and grows back on the next, which the eye reads as the plane twitching against the camera).
+      const E = Math.exp(-dt * 5), mv = _mv.copy(want).sub(this.wantPrev), off0 = _off.copy(this.pos).sub(this.wantPrev);
+      this.pos.copy(want).addScaledVector(off0, E).addScaledVector(mv, dt > 1e-4 ? -(1 - E) / (5 * dt) : -1);
+      this.wantPrev.copy(want); this.chaseFrame = this.frame;
       // stay a fixed distance (avoid lag stretching at high speed)
       const rel = this.pos.clone().sub(target); rel.setLength(clamp(rel.length(), d * 0.8, d * 1.25)); this.pos.copy(target).add(rel);
       this.lookAt.copy(target).addScaledVector(dir, R * 0.6);
