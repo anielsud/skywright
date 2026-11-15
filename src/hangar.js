@@ -15,7 +15,7 @@ export class Hangar {
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 2000);
     this.camera.position.set(14, 7, 16);
     this.controls = new OrbitControls(this.camera, renderer.domElement);
-    this.controls.enableDamping = true; this.controls.maxPolarAngle = Math.PI * 0.495; this.controls.minDistance = 3; this.controls.maxDistance = 150;
+    this.controls.enableDamping = true; this.controls.maxPolarAngle = Math.PI * 0.97; // can swing under the plane: the floor is one-sided, so it vanishes from below this.controls.minDistance = 3; this.controls.maxDistance = 150;
     this.controls.enabled = false;
     this.symmetry = true; this.showBalance = true; this.step = 0.1;
     this.design = { name: 'My Plane', parts: [] };
