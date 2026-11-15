@@ -1,0 +1,238 @@
+// Sounds of the living world around you: road traffic, the train (with its horn and level-crossing bells),
+// other players' planes, the airfield's circuit plane and helicopter, and bird flocks.
+// Everything is positional and goes through the same "far = quieter, duller and later" chain as the engines
+// (panner distance roll-off + air-absorption low-pass + propagation delay, which also gives Doppler).
+// Cheap on purpose: a few pooled voices for the nearest sources only, ranked a few times a second; everything
+// out of earshot has its source stopped, not just muted.
+import * as THREE from 'three';
+import { SAMPLE_ENGINES, SAMPLE_LEVEL, RPM_RANGE } from './audio.js';
+
+// Linear trims (clips are normalised to ≈-26 dB weighted, then the master's -12 dB headroom applies).
+// Weighted dBFS at the reference distance, sliders at 100%: car ≈-32 @10 m, truck ≈-30, train ≈-32 @30 m,
+// horn ≈-27 @80 m, bell ≈-36 @15 m, flock flaps ≈-36 @20 m, calls ≈-37 @25 m; another plane at full power ≈-33 @15 m
+// (a few dB under your own engine in the chase view).
+const LVL = { car: 1.5, truck: 2, train: 5, horn: 3.6, bell: 1.1, flock: 1.4, call: 1.1, plane: 1.4 };
+const CAR_VOICES = 3, CAR_RANGE = 240, TRAIN_RANGE = 1600, PLANE_VOICES = 3, PLANE_RANGE = 3500, FLOCK_RANGE = 160;
+const HEAVY = { truck: 1, tanker: 1, bus: 1 };
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+// One positional voice: gain -> air absorption -> delay -> panner -> bus. Sources are attached/stopped on demand.
+class Spot {
+  constructor(A, dest, ref, rolloff = 1) {
+    this.A = A; this.out = A.gain(0); this.air = A.filt('lowpass', 22000, 0.5); this.dl = A.ctx.createDelay(6);
+    this.pan = A.ctx.createPanner(); this.pan.panningModel = 'equalpower'; // HRTF per voice is too heavy for a tablet
+    this.pan.distanceModel = 'inverse'; this.pan.refDistance = ref; this.pan.rolloffFactor = rolloff; this.pan.maxDistance = 1e5;
+    this.out.connect(this.air); this.air.connect(this.dl); this.dl.connect(this.pan); this.pan.connect(dest);
+    this.layers = []; this.owner = null; this.d = 1e9;
+  }
+  // start looping clips (one per layer); returns false if any clip is missing
+  start(names) {
+    this.kill(); const A = this.A;
+    if (!names.every((n) => A.has(n))) return false;
+    this.layers = names.map((n) => { const src = A.loop(n), g = A.gain(names.length > 1 ? 0 : 1); src.connect(g); g.connect(this.out); return { src, g }; });
+    return true;
+  }
+  kill() { for (const l of this.layers) { try { l.src.stop(); l.g.disconnect(); } catch { /* gone */ } } this.layers = []; }
+  // fade out, then stop the sources (a stopped voice costs nothing)
+  release() {
+    if (!this.layers.length) { this.owner = null; return; }
+    const old = this.layers; this.layers = []; this.owner = null;
+    for (const l of old) this.A.set(l.g.gain, 0, 0.12); // fade the layers, not `out`: a new owner may start right away
+    setTimeout(() => { for (const l of old) { try { l.src.stop(); l.g.disconnect(); } catch { /* gone */ } } }, 600);
+  }
+  get on() { return this.layers.length > 0; }
+  place(p, lp) {
+    const A = this.A, t = A.ctx.currentTime, pan = this.pan;
+    if (pan.positionX) { pan.positionX.setTargetAtTime(p.x, t, 0.03); pan.positionY.setTargetAtTime(p.y, t, 0.03); pan.positionZ.setTargetAtTime(p.z, t, 0.03); } else pan.setPosition(p.x, p.y, p.z);
+    const d = (this.d = Math.hypot(p.x - lp.x, p.y - lp.y, p.z - lp.z)), target = Math.min(5, d / 343);
+    if (Math.abs(target - this.dl.delayTime.value) > 0.12) { this.dl.delayTime.cancelScheduledValues(t); this.dl.delayTime.setValueAtTime(target, t); } else this.dl.delayTime.setTargetAtTime(target, t, 0.08);
+    A.set(this.air.frequency, Math.max(700, 22000 * Math.exp(-d / 500)), 0.1);
+    return d;
+  }
+  level(v, t = 0.08) { this.A.set(this.out.gain, v, t); }
+  rate(r) { for (const l of this.layers) this.A.set(l.src.playbackRate, r, 0.1); }
+  dispose() { this.kill(); try { this.pan.disconnect(); } catch { /* gone */ } }
+}
+
+export class WorldSound {
+  constructor(audio, world, traffic) {
+    this.A = audio; this.world = world; this.traffic = traffic; this.t = 0; this.rankT = -1; this.on = !!audio.ctx;
+    if (!this.on) return;
+    const A = audio;
+    // 'world' slider; muffled by the cockpit filter like wind. Low shelf: truck/train bass a tablet can't play only eats limiter headroom
+    this.low = A.ctx.createBiquadFilter(); this.low.type = 'lowshelf'; this.low.frequency.value = 160; this.low.gain.value = -8;
+    this.bus = A.gain(1); this.bus.connect(this.low); this.low.connect(A.airBus);
+    this.cars = Array.from({ length: CAR_VOICES }, () => new Spot(A, this.bus, 10));
+    this.train = new Spot(A, this.bus, 30); this.bell = new Spot(A, this.bus, 15);
+    this.planes = Array.from({ length: PLANE_VOICES }, () => new Spot(A, A.engBus, 14)); // engines slider
+    this.v = { p: new THREE.Vector3(), d: new THREE.Vector3() };
+    this.hornT = 20 + Math.random() * 20; this.crossings = this.findCrossings(); this.crossHorn = new Map();
+    this.flockT = new Map();
+  }
+  // level crossings: rail points that sit on a road (bridges excluded), as arc lengths along the train's out-and-back path
+  findCrossings() {
+    const net = this.world.net, rail = net?.rail, T = this.traffic?.vehicles?.train; if (!rail || !T) return [];
+    const cell = 20, grid = new Map(), key = (x, z) => `${Math.floor(x / cell)},${Math.floor(z / cell)}`;
+    for (const rd of net.roads) rd.pts.forEach((p, i) => { if (!rd.bridge?.[i]) { const k = key(p.x, p.z); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(p); } });
+    const out = [], n = rail.pts.length;
+    rail.pts.forEach((p, i) => {
+      if (rail.bridge[i] || out.some((c) => c.p.distanceTo(p) < 120)) return;
+      const cx = Math.floor(p.x / cell), cz = Math.floor(p.z / cell);
+      for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (const q of grid.get(`${cx + a},${cz + b}`) || []) {
+        if ((q.x - p.x) ** 2 + (q.z - p.z) ** 2 < 49 && !out.some((c) => c.i === i)) out.push({ i, p: p.clone(), s: [T.path.len[i], T.path.len[2 * n - 1 - i]] });
+      }
+    });
+    return out;
+  }
+
+  update(f, lp, dt, players) {
+    if (!this.on || !lp) return;
+    this.t += dt;
+    const rank = this.t - this.rankT > 0.25; if (rank) this.rankT = this.t;
+    const agl = lp.y - Math.max(this.world.heightAt(lp.x, lp.z), this.world.waterLevel);
+    this.updateCars(lp, rank, agl);
+    this.updateTrain(lp, dt);
+    this.updatePlanes(f, lp, rank, players);
+    if (rank) this.updateFlocks(lp);
+  }
+
+  // ---------- road traffic: the nearest few cars get a pooled tyre/engine hum ----------
+  updateCars(lp, rank, agl) {
+    const V = this.traffic?.vehicles; if (!V) return;
+    const { p, d } = this.v;
+    if (rank) {
+      const best = [];
+      if (agl < CAR_RANGE) for (const c of V.cars) {
+        V.pathPoint(c.path, c.s, p, d);
+        const dd = (p.x - lp.x) ** 2 + (p.z - lp.z) ** 2;
+        if (dd > CAR_RANGE * CAR_RANGE || c.v < 1) continue;
+        if (best.length < CAR_VOICES) best.push([dd, c]); else if (dd < best[best.length - 1][0]) best[best.length - 1] = [dd, c]; else continue;
+        best.sort((a, b) => a[0] - b[0]);
+      }
+      const want = new Set(best.map((b) => b[1]));
+      for (const s of this.cars) if (s.owner && !want.has(s.owner)) s.release();
+      for (const c of want) {
+        if (this.cars.some((s) => s.owner === c)) continue;
+        const s = this.cars.find((x) => !x.owner); if (!s) break;
+        if (s.start(['veh_road'])) { s.owner = c; s.out.gain.value = 0; }
+      }
+    }
+    for (const s of this.cars) {
+      const c = s.owner; if (!c) continue;
+      V.pathPoint(c.path, c.s, p, d); p.y += 0.8;
+      const dist = s.place(p, lp), heavy = HEAVY[c.type];
+      const sp = Math.min(1, c.v / 22);
+      s.rate((heavy ? 0.72 : 0.9) + sp * (heavy ? 0.25 : 0.35));
+      s.level((heavy ? LVL.truck : LVL.car) * (0.35 + 0.65 * sp) * (1 - smooth(CAR_RANGE * 0.65, CAR_RANGE, dist)), 0.15);
+    }
+  }
+
+  // ---------- train: rumble at the nearest carriage, horn now and then and before level crossings, crossing bells ----------
+  updateTrain(lp, dt) {
+    const T = this.traffic?.vehicles?.train; if (!T) return;
+    let near = null, nd = 1e18;
+    for (const m of T.cars) { const q = m.position, dd = (q.x - lp.x) ** 2 + (q.y - lp.y) ** 2 + (q.z - lp.z) ** 2; if (dd < nd) { nd = dd; near = q; } }
+    const dist = Math.sqrt(nd), moving = Math.min(1, T.v / 25);
+    if (dist < TRAIN_RANGE && T.v > 0.5) {
+      if (!this.train.on) this.train.start(['train_rumble']);
+      this.train.place(near, lp); this.train.rate(0.65 + 0.4 * moving);
+      this.train.level(LVL.train * (0.25 + 0.75 * moving) * (1 - smooth(TRAIN_RANGE * 0.7, TRAIN_RANGE, dist)), 0.3);
+    } else if (this.train.on) this.train.release();
+    const loco = T.cars[0].position, ld = loco.distanceTo(lp);
+    // level crossings: horn on the approach (long, long, short, long), bell while the train is close to it
+    let bellAt = null, bellAmt = 0;
+    for (const c of this.crossings) {
+      const ahead = Math.min(...c.s.map((s) => (s - T.s + T.path.total) % T.path.total));
+      const near2 = Math.min(ahead, c.p.distanceTo(loco));
+      if (near2 < 260) { const a = 1 - near2 / 260; if (a > bellAmt) { bellAmt = a; bellAt = c.p; } }
+      if (ahead > 80 && ahead < 260 && T.v > 3 && ld < TRAIN_RANGE && this.t - (this.crossHorn.get(c) ?? -99) > 40) { this.crossHorn.set(c, this.t); this.horn(loco, lp, [0, 1.6, 3.2]); }
+    }
+    if (bellAt && bellAt.distanceTo(lp) < 600) {
+      if (!this.bell.on) this.bell.start(['train_bell']);
+      this.bell.place(bellAt, lp); this.bell.level(LVL.bell * Math.min(1, bellAmt * 2.5), 0.3);
+    } else if (this.bell.on) this.bell.release();
+    // and now and then out on the line
+    this.hornT -= dt;
+    if (this.hornT < 0) { this.hornT = 35 + Math.random() * 40; if (ld < TRAIN_RANGE && T.v > 5) this.horn(loco, lp, Math.random() < 0.5 ? [0] : [0, 1.5]); }
+  }
+  horn(pos, lp, times) {
+    const d = pos.distanceTo(lp);
+    for (const t of times) this.shotAt('train_horn', pos, lp, { gain: LVL.horn, ref: 80, delay: t + d / 343, rate: 0.97 + Math.random() * 0.05 });
+  }
+
+  // ---------- other planes: remote players, the circuit plane and the shuttle helicopter, with the recorded engine layers ----------
+  updatePlanes(f, lp, rank, players) {
+    if (rank) {
+      const list = [];
+      for (const pl of players || []) { const ac = pl.remote?.ac; if (ac && !ac.dead && ac.root.visible) list.push({ key: pl, pos: ac.x, ...this.remoteEngine(ac) }); }
+      const P = this.traffic?.pattern; if (P) list.push({ key: P, pos: P.obj.position, kind: 'piston', n: 0.62, count: 1 });
+      const H = this.traffic?.heli; if (H) list.push({ key: H, pos: H.g.position, kind: 'turboprop', n: 0.75, count: 1 });
+      const near = list.filter((x) => x.kind && x.pos.distanceTo(lp) < PLANE_RANGE).sort((a, b) => a.pos.distanceTo(lp) - b.pos.distanceTo(lp)).slice(0, PLANE_VOICES);
+      for (const s of this.planes) if (s.owner && !near.some((x) => x.key === s.owner.key && x.kind === s.owner.kind)) s.release();
+      for (const x of near) {
+        const s = this.planes.find((v) => v.owner && v.owner.key === x.key); if (s) { s.owner = x; continue; }
+        const free = this.planes.find((v) => !v.owner); if (!free) break;
+        const def = SAMPLE_ENGINES[x.kind]; if (!def) continue;
+        const roles = ['idle', 'high'].filter((r) => def[r]);
+        if (free.start(roles.map((r) => def[r][0]))) { free.owner = x; free.roles = roles.map((r) => def[r]); free.out.gain.value = 0; }
+      }
+    }
+    for (const s of this.planes) {
+      const x = s.owner; if (!x) continue;
+      // remote players' throttle changes between ranks: re-read it every frame
+      if (x.key.remote) Object.assign(x, this.remoteEngine(x.key.remote.ac));
+      const dist = s.place(x.pos, lp), n = x.n ?? 0, k = smooth(0.2, 0.8, n), A = this.A;
+      s.layers.forEach((l, i) => {
+        const role = s.roles[i], two = s.layers.length > 1;
+        A.set(l.g.gain, two ? (i === 0 ? Math.cos(k * Math.PI / 2) : Math.sin(k * Math.PI / 2)) : 1, 0.1);
+        A.set(l.src.playbackRate, role[1] + (role[2] - role[1]) * n, 0.1);
+      });
+      s.level(LVL.plane * (SAMPLE_LEVEL[x.kind] || 1) * (0.32 + 0.68 * n) * Math.sqrt(x.count || 1) * (x.running === false ? 0 : 1) * (1 - smooth(PLANE_RANGE * 0.7, PLANE_RANGE, dist)), 0.15);
+    }
+  }
+  // the dominant engine sound of a remote plane and how hard it's working (0..1)
+  remoteEngine(ac) {
+    let kind = null, n = 0, count = 0, running = false;
+    for (const p of ac.parts) {
+      const e = p.alive && p.engine; if (!e?.sound || !SAMPLE_ENGINES[e.sound]) continue;
+      if (kind && e.sound !== kind) continue;
+      kind = e.sound; count++;
+      const rr = RPM_RANGE[kind];
+      n = Math.max(n, rr ? Math.min(1, Math.max(0, ((e.rpm || 0) - rr[0]) / (rr[1] - rr[0]))) : e.spoolT || 0);
+      running = running || (kind === 'rocket' ? !!e.burning : rr ? (e.rpm || 0) > 50 : true);
+    }
+    return { kind, n, count, running };
+  }
+
+  // ---------- bird flocks: wing flaps and calls when you're close ----------
+  updateFlocks(lp) {
+    for (const fl of this.traffic?.flocks || []) {
+      const d = fl.c.distanceTo(lp); if (d > FLOCK_RANGE) continue;
+      const next = this.flockT.get(fl) ?? 0; if (this.t < next) continue;
+      const alive = fl.birds.filter((b) => b.alive).length; if (!alive) continue;
+      const any = fl.birds.find((b) => b.alive).p;
+      if (Math.random() < 0.5) this.shotAt('bird_flock', any, lp, { gain: LVL.flock * Math.min(1, alive / 10), ref: 20, rate: fl.seagull ? 0.85 : 0.95 + Math.random() * 0.15 });
+      else this.shotAt(fl.seagull ? 'bird_gull' : 'bird_crow', any, lp, { gain: LVL.call, ref: 25, rate: 0.9 + Math.random() * 0.2 });
+      this.flockT.set(fl, this.t + 3 + Math.random() * 5);
+    }
+  }
+
+  // positional one-shot with distance roll-off, air absorption and travel delay
+  shotAt(name, pos, lp, { gain = 1, ref = 20, delay = 0, rate = 1 } = {}) {
+    const A = this.A, b = A.buffers[name]; if (!b) return false;
+    const d = Math.hypot(pos.x - lp.x, pos.y - lp.y, pos.z - lp.z);
+    const src = A.ctx.createBufferSource(); src.buffer = b; src.playbackRate.value = rate;
+    const g = A.gain(gain), lpf = A.filt('lowpass', Math.max(700, 22000 * Math.exp(-d / 500)), 0.5);
+    const pan = A.ctx.createPanner(); pan.panningModel = 'equalpower'; pan.distanceModel = 'inverse'; pan.refDistance = ref; pan.rolloffFactor = 1; pan.maxDistance = 1e5;
+    if (pan.positionX) { pan.positionX.value = pos.x; pan.positionY.value = pos.y; pan.positionZ.value = pos.z; } else pan.setPosition(pos.x, pos.y, pos.z);
+    src.connect(g); g.connect(lpf); lpf.connect(pan); pan.connect(this.bus);
+    src.start(A.ctx.currentTime + delay); src.onended = () => { g.disconnect(); pan.disconnect(); };
+    return true;
+  }
+
+  dispose() {
+    if (!this.on) return; this.on = false;
+    for (const s of [...this.cars, ...this.planes, this.train, this.bell]) s.dispose();
+    this.A.set(this.bus.gain, 0, 0.05); setTimeout(() => { try { this.bus.disconnect(); } catch { /* gone */ } }, 300);
+  }
+}

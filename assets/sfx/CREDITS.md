@@ -8,6 +8,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Fw-190 Taxiing" by Fight2FlyPhoto (CC BY 3.0): https://freesound.org/people/Fight2FlyPhoto/sounds/143556/
 - "balfron thunder M.wav" by hokstnator (CC BY 4.0): https://freesound.org/people/hokstnator/sounds/151201/
 - "Jet Plane Wind Noise Loop of a KC-135 Stratotanker 4.flac" by qubodup (CC0): https://freesound.org/people/qubodup/sounds/162414/
+- "Body_Hit_Coat_Against_Wall.wav" by jcdecha (CC0): https://freesound.org/people/jcdecha/sounds/235451/
 - "F16 fighter jet start up.aif" by ikbenraar (CC0): https://freesound.org/people/ikbenraar/sounds/322178/
 - "Deep thunder clap 03.wav" by klankbeeld (CC BY 4.0): https://freesound.org/people/klankbeeld/sounds/322210/
 - "Airplane inside ambient- cessna 414. condenser .mp3" by Daveshu88 (CC0): https://freesound.org/people/Daveshu88/sounds/325845/
@@ -24,14 +25,17 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Auto Shop Soundscape.mp3" by I5AAC (CC0): https://freesound.org/people/I5AAC/sounds/449591/
 - "Brean Sands Beach" by richwise (CC0): https://freesound.org/people/richwise/sounds/475350/
 - "spray can" by richwise (CC0): https://freesound.org/people/richwise/sounds/476839/
+- "R01-71-Close up Seagull.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/479595/
 - "R03-19-Old Auto Tire Skid.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/481668/
 - "Meadow with many insects chirps atmo field recording" by Garuda1982 (CC0): https://freesound.org/people/Garuda1982/sounds/529573/
+- "Crow.wav" by Ambientsoundapp (CC0): https://freesound.org/people/Ambientsoundapp/sounds/537988/
 - "Foley_Object_Toolbox_Drops_&_Movements_&_Searching_Stereo_H5.wav" by Nox_Sound (CC0): https://freesound.org/people/Nox_Sound/sounds/550341/
 - "BGSaSc Beach Light Waves Close Water Greece 14" by Profispiesser (CC0): https://freesound.org/people/Profispiesser/sounds/550926/
 - "Foley_Mechanism_Camera_Button_Mono_H5.wav" by Nox_Sound (CC0): https://freesound.org/people/Nox_Sound/sounds/553077/
 - "Quiet summer night tone with steady close crickets and other animal calls 1" by leonelmail (CC0): https://freesound.org/people/leonelmail/sounds/579572/
 - "Car rolling on asphalt .wav" by orlandorizo (CC0): https://freesound.org/people/orlandorizo/sounds/591079/
 - "Ratchet Wrench Avg Speed Multiple" by Rudmer_Rotteveel (CC0): https://freesound.org/people/Rudmer_Rotteveel/sounds/591524/
+- "121003 Pigeon flock fly away, wing flaps, Toronto.wav" by TRP (CC0): https://freesound.org/people/TRP/sounds/616623/
 - "water movements big splashes and waves.flac" by kyles (CC0): https://freesound.org/people/kyles/sounds/637952/
 - "wind draft loop 1" by nsstudios (CC BY 4.0): https://freesound.org/people/nsstudios/sounds/651541/
 - "forest heavy rain loop.wav" by Victormaa (CC0): https://freesound.org/people/Victormaa/sounds/671409/
@@ -39,10 +43,14 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Big falling debris (crash)" by xkeril (CC0): https://freesound.org/people/xkeril/sounds/703247/
 - "Fall debris (crash)" by xkeril (CC0): https://freesound.org/people/xkeril/sounds/703248/
 - "Rocket Launch Boost and Burning (Version A)" by TheLittleCrow (CC0): https://freesound.org/people/TheLittleCrow/sounds/774245/
+- "truck driving sound" by joni_ompong (CC0): https://freesound.org/people/joni_ompong/sounds/785698/
+- "Locomotive Train Horn" by thet00nedl00n (CC0): https://freesound.org/people/thet00nedl00n/sounds/799291/
 - "Airport Jet Idle" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/817123/
 - "Airplane Turboprop (Outside Perspective) 2" by Saladsounds (CC0): https://freesound.org/people/Saladsounds/sounds/828952/
 - "UIMvmt_Equip Item, Weapon or Armor, Metallic Selection x4" by harrisonlace (CC0): https://freesound.org/people/harrisonlace/sounds/829499/
+- "Cargo Train 2" by Julian_Eftei (CC0): https://freesound.org/people/Julian_Eftei/sounds/831430/
 - "Illegal Explosion" by qubodup (CC0): https://freesound.org/people/qubodup/sounds/840508/
+- "Canadian Pacific local freight train arriving" by chungus43A (CC0): https://freesound.org/people/chungus43A/sounds/843361/
 - "Glass Smash" by dwswords (CC0): https://freesound.org/people/dwswords/sounds/848312/
 
 Voice callouts: synthesized with [Piper](https://github.com/rhasspy/piper) using the "joe" voice (trained on CC0 data, OHF-Voice/voice-datasets).
