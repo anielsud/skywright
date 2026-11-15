@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { PARTS, CATEGORIES, PAINTS } from './parts.js';
-import { makePresets, encodeDesign, decodeDesign, cloneDesign, analyze, sizeSliders, sizeValue } from './design.js';
+import { makePresets, encodeDesign, decodeDesign, cloneDesign, analyze, sizeSliders, sizeValue, thrustScale, partPower, partBurn, POWER_RANGE, BURN_RANGE } from './design.js';
 import { Hangar, makeThumbnails } from './hangar.js';
 import { Aircraft, REALISM } from './aircraft.js';
 import { World, LOCATIONS, WEATHER } from './world.js';
@@ -87,9 +87,22 @@ function ctlRows(p) {
   const x = (v) => `${v.toFixed(2)}×`;
   return [
     ['Size', sizeSliders(p.id).map(([a, name, lo, hi]) => ({ k: 's' + a, name, v: sizeValue(p, a), lo, hi, step: 0.01, fine: 0.01, fmt: x }))],
+    ['Engine', engineRows(p)],
   ].filter(([, rows]) => rows.length);
 }
-function applyCtl(k, v, undo) { hangar.resizePart(k.slice(1), v, undo); }
+// Power: % of stock thrust, shown with the resulting kN. Rockets also get a burn time.
+function engineRows(p) {
+  const e = PARTS[p.id].engine; if (!e) return [];
+  const kN = (v) => `${Math.round(v * 100)}% · ${Math.round((e.ab || e.thrust) * thrustScale(p) * v / 1000)} kN`;
+  return [
+    { k: 'tpower', name: 'Power', v: partPower(p), lo: POWER_RANGE[0], hi: POWER_RANGE[1], step: 0.05, fine: 0.05, fmt: kN, stock: 1 },
+    ...(e.type === 'rocket' ? [{ k: 'tburn', name: 'Burn time', v: partBurn(p), lo: BURN_RANGE[0], hi: BURN_RANGE[1], step: 1, fine: 1, fmt: (v) => `${Math.round(v)} s`, stock: e.burn }] : []),
+  ];
+}
+function applyCtl(k, v, undo) {
+  if (k[0] === 't') { const p = hangar.design.parts[hangar.sel], e = PARTS[p.id].engine; hangar.setTune(k.slice(1), v, k === 'tburn' ? e.burn : 1, undo); }
+  else hangar.resizePart(k.slice(1), v, undo);
+}
 // Press-and-hold repeat for a button: tick(first, held, ticks) once on press, then every 60 ms after a short pause.
 // held = seconds since the repeat started and ticks = 60 ms periods since the last call, both from the clock,
 // so a hold moves at the same speed even when a busy tablet fires the timer late.

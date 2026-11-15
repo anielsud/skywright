@@ -39,6 +39,10 @@ function massScale(p) {
 export const partMass = (p) => PARTS[p.id].mass * massScale(p);
 export const partHp = (p) => PARTS[p.id].hp * Math.sqrt(massScale(p)); // bigger parts are a bit tougher
 export const thrustScale = (p) => Math.cbrt(volScale(p)) ** 2; // thrust grows with intake / prop disc area
+// Engine tuning: power multiplies stock thrust (0.25–3); rockets also carry a burn time in seconds.
+export const POWER_RANGE = [0.25, 3], BURN_RANGE = [5, 120];
+export const partPower = (p) => p.power ?? 1;
+export const partBurn = (p) => p.burn ?? PARTS[p.id].engine?.burn ?? 0;
 export const linScale = (p) => Math.cbrt(volScale(p)); // gear: wheel radius and strut length
 // A lifting surface (part-local arrays) after the part is scaled: span/chord stretch area, chord and aspect ratio;
 // n comes back pre-divided by scale², so transformDirection(partMatrix) yields R·S⁻¹·n: still perpendicular to the stretched skin.
@@ -98,7 +102,7 @@ export function analyze(design) {
   for (const { p, d, info, m: mm } of items) {
     if (d.engine) {
       engines++; if (d.engine.type === 'jet') jets++; else if (d.engine.type === 'rocket') rockets++; else props++;
-      const t = (d.engine.ab || d.engine.thrust) * thrustScale(p); thrust += t;
+      const t = (d.engine.ab || d.engine.thrust) * thrustScale(p) * partPower(p); thrust += t;
       latThrust += (info.center.clone().applyMatrix4(mm).x - com.x) * t;
     }
     if (d.gear) { gear++; if (d.gear.float) floats++; }
@@ -292,10 +296,12 @@ export function makePresets() {
 
 export function cloneDesign(d) { return JSON.parse(JSON.stringify(d)); }
 export function encodeDesign(d) {
-  const slim = { n: d.name, p: d.parts.map((p) => [p.id, p.pos.map((v) => +v.toFixed(3)), p.quat.map((v) => +v.toFixed(4)), p.mirror ? 1 : 0, p.color, p.parent, ...(p.scale ? [p.scale.map((v) => +v.toFixed(3))] : [])]) };
+  const slim = { n: d.name, p: d.parts.map((p) => [p.id, p.pos.map((v) => +v.toFixed(3)), p.quat.map((v) => +v.toFixed(4)), p.mirror ? 1 : 0, p.color, p.parent, ...(p.scale || p.power != null || p.burn != null ? [p.scale ? p.scale.map((v) => +v.toFixed(3)) : 0] : []), ...(p.power != null || p.burn != null ? [{ w: p.power, b: p.burn }] : [])]) };
   return btoa(unescape(encodeURIComponent(JSON.stringify(slim))));
 }
+const inRange = (v, [lo, hi]) => Number.isFinite(v) && v >= lo && v <= hi;
+const tuneOf = (t) => (t && typeof t === 'object' ? { ...(inRange(t.w, POWER_RANGE) ? { power: t.w } : {}), ...(inRange(t.b, BURN_RANGE) ? { burn: t.b } : {}) } : {});
 export function decodeDesign(s) {
   const slim = JSON.parse(decodeURIComponent(escape(atob(s.trim()))));
-  return { name: slim.n || 'Imported', parts: slim.p.filter((a) => PARTS[a[0]]).map((a) => ({ id: a[0], pos: a[1], quat: a[2], mirror: !!a[3], color: a[4], parent: a[5], ...(Array.isArray(a[6]) && a[6].length === 3 && a[6].every((v) => Number.isFinite(v) && v > 0) ? { scale: a[6] } : {}) })) };
+  return { name: slim.n || 'Imported', parts: slim.p.filter((a) => PARTS[a[0]]).map((a) => ({ id: a[0], pos: a[1], quat: a[2], mirror: !!a[3], color: a[4], parent: a[5], ...(Array.isArray(a[6]) && a[6].length === 3 && a[6].every((v) => Number.isFinite(v) && v > 0) ? { scale: a[6] } : {}), ...tuneOf(a[7]) })) };
 }

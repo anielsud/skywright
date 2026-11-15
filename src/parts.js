@@ -447,7 +447,7 @@ def({ id: 'e_jet_ab', cat: 'engine', name: 'Afterburning Turbojet', desc: 'Fight
 def({ id: 'e_turbofan', cat: 'engine', name: 'Big Turbofan', desc: 'High-bypass airliner engine. Huge thrust, slow spool.', mass: 2600, hp: 4000, color: C.white,
   engine: { type: 'jet', thrust: 70000, spool: 5, sound: 'fan' },
   build: (c) => jetEngine({ len: 4.0, radius: 1.15, color: c, fan: true }) });
-def({ id: 'e_rocket', cat: 'engine', name: 'Rocket Booster', desc: '20 seconds of pure chaos. Fires when throttle > 50%. No refills!', mass: 450, hp: 700, color: C.orange,
+def({ id: 'e_rocket', cat: 'engine', name: 'Rocket Booster', desc: 'Pure chaos: fires when throttle > 50%, burns 20 s unless you change it. No refills!', mass: 450, hp: 700, color: C.orange,
   engine: { type: 'rocket', thrust: 90000, burn: 20, sound: 'rocket' },
   build: (c) => rocket({ len: 3.2, radius: 0.32, color: c }) });
 
