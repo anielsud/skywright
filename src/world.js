@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { makeNoise, mulberry32, clamp, lerp, smoothstep } from './noise.js';
 import { glowTexture, M } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
-import { FOG, terrainMaterial, waterMaterial, swayMaterial } from './shaders.js';
+import { FOG, FOG_GLSL, terrainMaterial, waterMaterial, swayMaterial } from './shaders.js';
 import { Atmosphere, skyMaterial, cloudNoiseTexture } from './sky.js';
 import { CloudField, deckMaterial } from './clouds.js';
 import { planNetwork, flattenGrid, flattenHi, makePainter, buildRoadMeshes } from './roads.js';
@@ -166,11 +166,6 @@ export class World {
     this.terrainMat = mat; this.patchMat = terrainMaterial(maps, true);
     const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true;
     this.terrain = mesh; this.group.add(mesh);
-    // far skirt so the edge isn't visible
-    const skirt = new THREE.Mesh(new THREE.RingGeometry(S * 1.05, S * 6, 64, 1), new THREE.MeshStandardMaterial({ color: this.loc.id === 'islands' ? 0x0d3b4a : new THREE.Color(L.grass[0]).multiplyScalar(this.loc.desert ? 0.9 : 0.6), roughness: 1 }));
-    // It only shows past the 90 km sea plane (or above it in the desert); kept well clear of the water so they can't z-fight from altitude.
-    skirt.rotation.x = -Math.PI / 2; skirt.position.y = this.loc.desert ? 60 : this.waterLevel - 250;
-    if (this.loc.desert) { skirt.material.polygonOffset = true; skirt.material.polygonOffsetUnits = -4; skirt.material.polygonOffsetFactor = -1; } this.group.add(skirt); this.skirt = skirt;
     this.roadGroup = buildRoadMeshes(this, this.net); this.group.add(this.roadGroup);
     this.buildMinimap();
     this.buildPatch();
@@ -437,7 +432,7 @@ export class World {
     const pal = this.loc.id === 'islands' ? { deep: 0x05324a, shallow: 0x19b5b0, sand: 0xe9dcb0 } : this.loc.desert ? { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 } : { deep: 0x0b2a35, shallow: 0x2f6f6a, sand: 0x6b6a55 };
     // depth texels centred on the baked-grid vertices they come from
     const mat = waterMaterial({ depthTex: this.depthTex, normal: nt, half: this.half + this.hStep / 2, size: this.size + this.hStep, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6 });
-    const w = new THREE.Mesh(new THREE.PlaneGeometry(90000, 90000), mat);
+    const w = new THREE.Mesh(new THREE.PlaneGeometry(300000, 300000), mat); // under the whole far terrain (tiles.js / farfield.js)
     w.rotation.x = -Math.PI / 2; w.position.y = this.waterLevel;
     this.waterMat = mat;
     this.water = w; this.group.add(w);
@@ -448,7 +443,8 @@ export class World {
     // physically based sky: atmosphere LUT shared by the dome, the reflection map and the aerial-perspective fog
     this.atmo = new Atmosphere(this.renderer);
     FOG.skyLUT.value = this.atmo.texture;
-    const sky = new THREE.Mesh(new THREE.SphereGeometry(1000, 48, 24), skyMaterial(this.atmo.texture));
+    this.scene.fog = new THREE.FogExp2(0xbfd1e5, 0.00005);
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(1000, 48, 24), skyMaterial(this.atmo.texture, { fog: { glsl: FOG_GLSL, uniforms: FOG, color: this.scene.fog.color } }));
     sky.frustumCulled = false; sky.renderOrder = -10;
     this.sky = sky; this.scene.add(sky);
     this.sun = new THREE.DirectionalLight(0xffffff, 3);
@@ -458,7 +454,6 @@ export class World {
     this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 0.05;
     this.scene.add(this.sun); this.scene.add(this.sun.target);
     this.hemi = new THREE.HemisphereLight(0xbcd6ff, 0x5a5040, 0.8); this.scene.add(this.hemi);
-    this.scene.fog = new THREE.FogExp2(0xbfd1e5, 0.00005);
     this.pmrem = new THREE.PMREMGenerator(this.renderer);
     this.envScene = new THREE.Scene();
     this.envSky = new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), skyMaterial(this.atmo.texture, { env: true })); this.envScene.add(this.envSky);
@@ -805,6 +800,7 @@ export class World {
   // Auto quality (perf level 0..3): at level 2+ thin the clouds out and drop the cirrus layer.
   // Rebuilds the cloud layout, but the governor only changes level every few seconds at most.
   setPerfLevel(level) {
+    this.tiles?.far.setPerfLevel(level);
     const k = level >= 2 ? 0.6 : 1, lite = level >= 2;
     if (lite !== !!this.skyLite) { this.skyLite = lite; this.applyLighting(); }
     if ((this.cloudDetail ?? 1) === k) return;
@@ -906,13 +902,12 @@ export class World {
     this.gust.lerp(this.gustT, Math.min(1, dt * 2));
     // water anim
     FOG.uTime.value = this.t;
-    // endless world: stream terrain tiles, keep the sea, far skirt and clouds centred on the camera
+    // endless world: stream terrain tiles (and the far terrain), keep the sea and clouds centred on the camera
     const cp = camera.position;
     this.tiles?.update(cp);
     this.updatePatch(cp);
     const snap = (v, g) => Math.round(v / g) * g;
     this.water.position.x = snap(cp.x, 2000); this.water.position.z = snap(cp.z, 2000);
-    this.skirt.position.x = snap(cp.x, 2000); this.skirt.position.z = snap(cp.z, 2000);
     if (!this.cloudAnchor || Math.hypot(cp.x - this.cloudAnchor.x, cp.z - this.cloudAnchor.z) > 3000) { this.cloudAnchor = cp.clone(); this.wrapClouds(cp); }
     // lights follow camera
     const tgt = camera.userData.focus || camera.position;

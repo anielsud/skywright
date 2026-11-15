@@ -136,12 +136,15 @@ export function cloudNoiseTexture() {
 }
 
 // Sky dome: atmosphere + sun disc + stars + a high cirrus/altocumulus layer.
-export function skyMaterial(lut, { env = false } = {}) {
+// fog: { glsl, uniforms, color } (the world's haze): below the horizon the dome shows exactly the colour the far terrain
+// fades into, so the edge of the world melts into it.
+export function skyMaterial(lut, { env = false, fog = null } = {}) {
   const U = {
     skyLUT: { value: lut }, noiseTex: { value: cloudNoiseTexture() }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunDisc: { value: new THREE.Color(0, 0, 0) },
     stars: { value: 0 }, cirrus: { value: 0 }, cirrusOff: { value: new THREE.Vector2() }, cirrusLit: { value: new THREE.Color(1, 1, 1) }, cirrusAmb: { value: new THREE.Color(0.5, 0.6, 0.7) },
     grey: { value: 0 }, greyCol: { value: new THREE.Color(0.5, 0.5, 0.5) }, uTime: { value: 0 },
   };
+  if (fog) { for (const k in fog.uniforms) if (k.startsWith('fog')) U[k] = fog.uniforms[k]; U.fogColor = { value: fog.color }; }
   return new THREE.ShaderMaterial({
     uniforms: U, depthWrite: false, depthTest: false, side: THREE.BackSide, fog: false,
     defines: env ? { ENV: 1 } : {},
@@ -149,10 +152,10 @@ export function skyMaterial(lut, { env = false } = {}) {
       varying vec3 vDir;
       void main() { vDir = position; vec4 p = projectionMatrix * viewMatrix * vec4(position + cameraPosition, 1.0); gl_Position = p; gl_Position.z = p.w * 0.99999; }`,
     fragmentShader: /* glsl */`
-      uniform sampler2D skyLUT; uniform sampler2D noiseTex; uniform vec3 sunDir; uniform vec3 sunDisc; uniform float stars; uniform float cirrus; uniform vec2 cirrusOff;
+      ${fog ? "" : "uniform sampler2D skyLUT; "}uniform sampler2D noiseTex; uniform vec3 sunDir; uniform vec3 sunDisc; uniform float stars; uniform float cirrus; uniform vec2 cirrusOff;
       uniform vec3 cirrusLit; uniform vec3 cirrusAmb; uniform float grey; uniform vec3 greyCol; uniform float uTime;
       varying vec3 vDir;
-      ${SKY_LOOKUP_GLSL}
+      ${fog ? 'uniform vec3 fogColor;\n' + fog.glsl : SKY_LOOKUP_GLSL}
       float hash3(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
       void main() {
         vec3 d = normalize(vDir);
@@ -160,6 +163,7 @@ export function skyMaterial(lut, { env = false } = {}) {
         float below = clamp(-d.y * 6.0, 0.0, 1.0);
         float cs = dot(d, sunDir);
         col *= 1.0 - below * 0.45; // below the horizon: the haze over the ground is a little darker
+        ${fog ? 'vec3 fext; col = mix(col, fogTarget(d, fogColor, fext), smoothstep(0.0, -0.012, d.y));' : ''}
         #ifndef ENV
         // stars (procedural, so haze and clouds hide them) with a little twinkle
         if (stars > 0.002 && d.y > -0.02) {

@@ -945,7 +945,10 @@ function fitNearPlane(f) {
     room = Math.min(dAc, dGnd);
   }
   const near = clamp(room * 0.5, 0.2, w.rain?.visible || w.snow?.visible ? 0.5 : 20); // rain/snow streaks right in front of the lens
-  if (Math.abs(near - cam.near) > 0.02) { cam.near = near; cam.updateProjectionMatrix(); }
+  // the far plane reaches the edge of the far terrain (where the haze has swallowed everything); depth precision is
+  // set by the near plane, so the long far plane costs next to nothing
+  const far = Math.max(60000, w.tiles?.far.viewDist() ?? 0);
+  if (Math.abs(near - cam.near) > 0.02 || far !== cam.far) { cam.near = near; cam.far = far; cam.updateProjectionMatrix(); }
 }
 function frame(now) {
   requestAnimationFrame(frame);
