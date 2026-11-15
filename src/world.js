@@ -426,7 +426,8 @@ export class World {
     g.putImageData(img, 0, 0);
     const nt = new THREE.CanvasTexture(c); nt.wrapS = nt.wrapT = THREE.RepeatWrapping;
     const pal = this.loc.id === 'islands' ? { deep: 0x05324a, shallow: 0x19b5b0, sand: 0xe9dcb0 } : this.loc.desert ? { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 } : { deep: 0x0b2a35, shallow: 0x2f6f6a, sand: 0x6b6a55 };
-    const mat = waterMaterial({ depthTex: this.depthTex, normal: nt, half: this.half, size: this.size, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6 });
+    // depth texels centred on the coarse mesh vertices they come from, so shorelines line up with the streamed tiles' depth
+    const mat = waterMaterial({ depthTex: this.depthTex, normal: nt, half: this.half + this.step / 2, size: this.size + this.step, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6 });
     const w = new THREE.Mesh(new THREE.PlaneGeometry(90000, 90000), mat);
     w.rotation.x = -Math.PI / 2; w.position.y = this.waterLevel;
     this.waterMat = mat;
