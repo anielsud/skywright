@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.54.0', items: [
+    'SPACE! Fly a rocket plane up past 100 km: the sky goes black, stars come out, and you can see the round Earth with clouds below and city lights at night.',
+    'Try the new Stardust rocket plane: full throttle, pull up steeply and keep going. New RCS Thrusters part lets you steer in space.',
+  ] },
   { v: '1.53.0', items: [
     'Planes look properly built: smooth joins where the wings meet the body, engine pylons, landing gear doors, detailed engines and propellers, antennas and soot behind the exhausts.',
     'The flaps, ailerons, elevator and rudder really move when you steer, and in the hangar you can test them with the arrow keys (or WASD, Q/E for rudder and F for flaps).',
