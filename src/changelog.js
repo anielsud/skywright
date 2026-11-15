@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.41.0', items: [
+    'Much more realistic trees with real leaf and bark textures. Forests look thick and leafy from above, trees glow when the sun shines through them, and distant forests look right from any angle.',
+    'Different trees at different heights in the mountains, palm groves and rainforest on the islands, ferns and flowers under the trees.',
+  ] },
   { v: '1.40.0', items: [
     'New in Settings: share anonymous stats (no names) so we can see which planes and places get flown and make the game run smoother on your tablet. You can switch it off any time.',
   ] },
