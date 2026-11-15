@@ -34,7 +34,7 @@ const returningPlayer = LS.get('settings', null) !== null || LS.get('current', n
 const settings = Object.assign({ callouts: true, quality: 'auto', units: 'imperial', invert: false, controlMode: 'stick', mix: null, touch: 'auto', showFps: false, analytics: true }, LS.get('settings', {}));
 const analytics = new Analytics({ version: VERSION, commit: COMMIT, enabled: settings.analytics !== false });
 if ((settings.v || 1) < 2) { settings.quality = 'auto'; settings.v = 2; LS.set('settings', settings); } // move everyone onto adaptive quality once
-// 'auto' = medium features on tablets / high on desktops / ultra on desktops with a fast GPU (set once the renderer
+// 'auto' = medium features on tablets / high on desktops (Ultra is opt-in for now) (set once the renderer
 // exists), plus resolution and effects that adapt to the frame rate
 let autoTier = isTouch ? 'medium' : 'high';
 const qualityTier = () => (settings.quality === 'auto' ? autoTier : settings.quality);
@@ -52,7 +52,7 @@ renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadow
 renderer.localClippingEnabled = true; // retracting gear is clipped at the skin so it tucks into its bay
 // A dedicated desktop GPU (or Apple silicon) gets Ultra on Auto; integrated / software / mobile GPUs stay on High.
 const gpuStr = (() => { try { const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info'); return String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER)); } catch { return ''; } })();
-if (!isTouch && /nvidia|geforce|rtx|radeon|apple m\d|arc\(tm\)|intel.*arc/i.test(gpuStr) && !/swiftshader|llvmpipe|software|mali|adreno|powervr/i.test(gpuStr)) autoTier = 'ultra';
+if (!isTouch && /nvidia|geforce|rtx|radeon|apple m\d|arc\(tm\)|intel.*arc/i.test(gpuStr) && !/swiftshader|llvmpipe|software|mali|adreno|powervr/i.test(gpuStr)) autoTier = 'high'; // Ultra stays opt-in (Settings > Graphics) until frame pacing is verified on real laptops (#63)
 // Ultra also supersamples a little on 1x screens (1.5x internal resolution) and renders at 2x on high-DPI ones
 const pixelRatio = () => { const t = qualityTier(), dpr = window.devicePixelRatio || 1; return Math.max(0.5, (t === 'ultra' ? Math.min(2, Math.max(1.5, dpr)) : Math.min(dpr, { low: 1, medium: 1.25, high: 2 }[t])) * (settings.quality === 'auto' ? perf.scale : 1)); };
 renderer.setPixelRatio(pixelRatio());
