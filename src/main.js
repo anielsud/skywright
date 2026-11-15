@@ -240,6 +240,7 @@ $('#btn-sym').addEventListener('click', () => { hangar.symmetry = !hangar.symmet
 $('#btn-bal').addEventListener('click', () => { hangar.showBalance = !hangar.showBalance; hangar.rebuild(); });
 $('#btn-frame').addEventListener('click', () => hangar.frame());
 $('#placing-bar button').addEventListener('click', () => { hangar.cancelPlacing(); buildPalette(); });
+$('#btn-save').addEventListener('click', () => { audio.init(); saveCurrent(); });
 $('#btn-planes').addEventListener('click', () => { audio.init(); planesModal(); });
 $('#btn-settings').addEventListener('click', () => settingsModal());
 $('#btn-help').addEventListener('click', () => helpModal());
@@ -253,6 +254,16 @@ window.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.shiftKey ? hangar.redo() : hangar.undo(); e.preventDefault(); }
 });
 
+// Save the plane on the hangar floor into "My planes" under its name (same name = overwrite that save).
+function saveCurrent() {
+  if (!hangar.design.parts.length) { ui.hint('Build something first!'); return; }
+  const mine = LS.get('designs', []), name = (hangar.design.name || '').trim() || 'My Plane';
+  hangar.design.name = name; $('#plane-name').value = name;
+  const i = mine.findIndex((d) => d.name === name), c = cloneDesign(hangar.design);
+  if (i >= 0) mine[i] = c; else mine.push(c);
+  LS.set('designs', mine); audio.play('clank');
+  ui.hint(`Saved “${name}” — find it in Planes`);
+}
 function planesModal() {
   const mine = LS.get('designs', []);
   const card = (d, i, kind) => { const s = analyze(d); return `<div class="plane-card"><b>${d.name}</b><small>${d.desc || `${d.parts.length} parts · ${fmt(s.mass)} kg`}</small><div class="row2"><button data-load="${kind}:${i}" class="primary">Load</button>${kind === 'mine' ? `<button data-delp="${i}" class="danger">Delete</button>` : ''}</div></div>`; };
@@ -275,7 +286,7 @@ function planesModal() {
   el.querySelectorAll('[data-load]').forEach((b) => b.addEventListener('click', () => { const [k, i] = b.dataset.load.split(':'); hangar.load(k === 'preset' ? presets[+i] : mine[+i]); audio.play('clank'); m.close(); }));
   el.querySelectorAll('[data-delp]').forEach((b) => b.addEventListener('click', () => { mine.splice(+b.dataset.delp, 1); LS.set('designs', mine); m.close(); planesModal(); }));
   el.querySelector('[data-new]').addEventListener('click', () => { hangar.load({ name: 'My Plane', parts: [] }); activeCat = 'fuselage'; buildPalette(); m.close(); ui.hint('Pick a body to start'); });
-  el.querySelector('[data-save]').addEventListener('click', () => { const i = mine.findIndex((d) => d.name === hangar.design.name); const c = cloneDesign(hangar.design); if (i >= 0) mine[i] = c; else mine.push(c); LS.set('designs', mine); ui.hint('Saved!'); m.close(); });
+  el.querySelector('[data-save]').addEventListener('click', () => { saveCurrent(); m.close(); });
   el.querySelector('#copy-code').addEventListener('click', () => { const t = el.querySelector('#share-code'); t.select(); navigator.clipboard?.writeText(t.value).then(() => ui.hint('Copied!'), () => document.execCommand('copy')); });
   el.querySelector('#import-btn').addEventListener('click', () => { try { hangar.load(decodeDesign(el.querySelector('#import-code').value)); m.close(); ui.hint('Imported!'); } catch (e) { ui.hint('That code didn’t work'); } });
 }
