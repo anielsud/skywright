@@ -152,6 +152,9 @@ export function waterMaterial(o) {
         float th = -80.0;
         if (tuv.x >= 0.0 && tuv.y >= 0.0 && tuv.x <= 1.0 && tuv.y <= 1.0) th = texture2D(depthTex, tuv).r;
         else if (outerSize > 1.0) { vec2 ouv = (vW.xz - outerOrigin) / outerSize; if (ouv.x >= 0.0 && ouv.y >= 0.0 && ouv.x <= 1.0 && ouv.y <= 1.0) th = texture2D(outerTex, ouv).r; }
+        // dry land: leave it to the terrain. Deciding here (not by depth test against nearly-level beaches,
+        // which flickers at a distance) keeps the shoreline stable.
+        if (th > waterLevel + 0.1) discard;
         float depth = max(0.0, waterLevel - th);
         float dist = length(cameraPosition - vW);
         vec2 p = vW.xz;
@@ -181,6 +184,8 @@ export function waterMaterial(o) {
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
+    // where it IS water, win the depth test against the nearly-level seabed just below it (no shimmering shallows)
+    polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: -2,
   });
   mat.userData.U = U;
   return mat;

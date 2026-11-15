@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.33.0', items: [
+    'Fixed: water and beaches no longer flicker or poke through each other, and the waves and foam now line up with the real shoreline.',
+  ] },
   { v: '1.32.0', items: [
     'Helicopters sound like real helicopters now: the blades go WHOP-WHOP-WHOP faster as the rotor spins up, with a turbine whine underneath and the buzz of the tail rotor. Pull up hard and the blades slap louder, and it is loudest when one flies past you sideways.',
   ] },

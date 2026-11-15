@@ -198,9 +198,11 @@ export class World {
     this.shadowTex = this.dataTex(this.shadowData, SR); this.shadowTex.generateMipmaps = false; this.shadowTex.minFilter = THREE.LinearFilter;
     this.shadowR = SR;
     // coarse heights for water depth (matches the rendered mesh)
-    const N = this.N, hd = new Uint16Array((N + 1) * (N + 1));
-    for (let k = 0; k < hd.length; k++) hd[k] = THREE.DataUtils.toHalfFloat(this.H[k]);
-    this.depthTex = new THREE.DataTexture(hd, N + 1, N + 1, THREE.RedFormat, THREE.HalfFloatType);
+    // ground heights for the water shader (shore, foam, where water is drawn at all): the fine baked grid, which is
+    // what the ground near the camera is drawn from (and what physics uses), so the shoreline matches the land
+    const hd = new Uint16Array(W * W);
+    for (let k = 0; k < hd.length; k++) hd[k] = THREE.DataUtils.toHalfFloat(Hh[k]);
+    this.depthTex = new THREE.DataTexture(hd, W, W, THREE.RedFormat, THREE.HalfFloatType);
     this.depthTex.magFilter = this.depthTex.minFilter = THREE.LinearFilter; this.depthTex.needsUpdate = true;
   }
   // Padding (texels) a bake needs around its grid: the wider AO blur radius, plus one for normals.
@@ -433,8 +435,8 @@ export class World {
     g.putImageData(img, 0, 0);
     const nt = new THREE.CanvasTexture(c); nt.wrapS = nt.wrapT = THREE.RepeatWrapping;
     const pal = this.loc.id === 'islands' ? { deep: 0x05324a, shallow: 0x19b5b0, sand: 0xe9dcb0 } : this.loc.desert ? { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 } : { deep: 0x0b2a35, shallow: 0x2f6f6a, sand: 0x6b6a55 };
-    // depth texels centred on the coarse mesh vertices they come from, so shorelines line up with the streamed tiles' depth
-    const mat = waterMaterial({ depthTex: this.depthTex, normal: nt, half: this.half + this.step / 2, size: this.size + this.step, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6 });
+    // depth texels centred on the baked-grid vertices they come from
+    const mat = waterMaterial({ depthTex: this.depthTex, normal: nt, half: this.half + this.hStep / 2, size: this.size + this.hStep, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6 });
     const w = new THREE.Mesh(new THREE.PlaneGeometry(90000, 90000), mat);
     w.rotation.x = -Math.PI / 2; w.position.y = this.waterLevel;
     this.waterMat = mat;
