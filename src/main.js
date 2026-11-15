@@ -14,7 +14,7 @@ import { Controls } from './controls.js';
 import { HUD } from './hud.js';
 import { CameraRig } from './cameras.js';
 import { MODES, RingRace, LandingChallenge } from './missions.js';
-import { clamp } from './noise.js';
+import { clamp, smoothstep } from './noise.js';
 import { installFog } from './shaders.js';
 import { Post } from './post.js';
 import { VERSION, COMMIT, BUILT } from './version.js';
@@ -34,8 +34,11 @@ const returningPlayer = LS.get('settings', null) !== null || LS.get('current', n
 const settings = Object.assign({ callouts: true, quality: 'auto', units: 'imperial', invert: false, controlMode: 'stick', mix: null, touch: 'auto', showFps: false, analytics: true }, LS.get('settings', {}));
 const analytics = new Analytics({ version: VERSION, commit: COMMIT, enabled: settings.analytics !== false });
 if ((settings.v || 1) < 2) { settings.quality = 'auto'; settings.v = 2; LS.set('settings', settings); } // move everyone onto adaptive quality once
-// 'auto' = medium features on tablets / high on desktops, plus resolution that adapts to the frame rate
-const qualityTier = () => (settings.quality === 'auto' ? (isTouch ? 'medium' : 'high') : settings.quality);
+// 'auto' = medium features on tablets / high on desktops (Ultra is opt-in for now) (set once the renderer
+// exists), plus resolution and effects that adapt to the frame rate
+let autoTier = isTouch ? 'medium' : 'high';
+const qualityTier = () => (settings.quality === 'auto' ? autoTier : settings.quality);
+const isHigh = (t) => t === 'high' || t === 'ultra'; // Ultra keeps everything High has
 const perf = { scale: 1, level: 0, ema: 16.7, slowT: 0, fastT: 0, lastChange: 0, fps: 60 };
 const flightCfg = Object.assign({ location: 'alpine', time: 10, weather: 'clear', realism: 'pilot', mode: 'free', start: 'runway', online: true }, LS.get('flight', {}));
 const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -47,12 +50,17 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.localClippingEnabled = true; // retracting gear is clipped at the skin so it tucks into its bay
-const pixelRatio = () => Math.max(0.5, Math.min(window.devicePixelRatio || 1, { low: 1, medium: 1.25, high: 2 }[qualityTier()]) * (settings.quality === 'auto' ? perf.scale : 1));
+// A dedicated desktop GPU (or Apple silicon) gets Ultra on Auto; integrated / software / mobile GPUs stay on High.
+const gpuStr = (() => { try { const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info'); return String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER)); } catch { return ''; } })();
+if (!isTouch && /nvidia|geforce|rtx|radeon|apple m\d|arc\(tm\)|intel.*arc/i.test(gpuStr) && !/swiftshader|llvmpipe|software|mali|adreno|powervr/i.test(gpuStr)) autoTier = 'high'; // Ultra stays opt-in (Settings > Graphics) until frame pacing is verified on real laptops (#63)
+// Ultra also supersamples a little on 1x screens (1.5x internal resolution) and renders at 2x on high-DPI ones
+const pixelRatio = () => { const t = qualityTier(), dpr = window.devicePixelRatio || 1; return Math.max(0.5, (t === 'ultra' ? Math.min(2, Math.max(1.5, dpr)) : Math.min(dpr, { low: 1, medium: 1.25, high: 2 }[t])) * (settings.quality === 'auto' ? perf.scale : 1)); };
 renderer.setPixelRatio(pixelRatio());
 const post = new Post(renderer);
 post.enabled = qualityTier() !== 'low';
-post.setSamples(qualityTier() === 'high' ? 4 : 0);
-renderer.shadowMap.type = qualityTier() === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+post.setSamples(isHigh(qualityTier()) ? 4 : 0);
+post.setUltra(qualityTier() === 'ultra');
+renderer.shadowMap.type = isHigh(qualityTier()) ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 
 // mixer: the old single linear 'volume' setting is dropped (its scale meant something else); start from the new defaults
 if (!settings.mix || Object.keys(OLD_MIX_DEFAULTS).every((k) => settings.mix[k] === OLD_MIX_DEFAULTS[k])) settings.mix = { ...MIX_DEFAULTS }; delete settings.volume;
@@ -468,7 +476,8 @@ function maybeShowWhatsNew() {
 function settingsModal() {
   const m = ui.modal(`
     <h2>Settings</h2>
-    <label class="lbl">Graphics</label><div class="chips">${['auto', 'low', 'medium', 'high'].map((q) => `<button data-q="${q}" class="${settings.quality === q ? 'on' : ''}">${q === 'auto' ? 'Auto (recommended)' : q[0].toUpperCase() + q.slice(1)}</button>`).join('')}</div>
+    <label class="lbl">Graphics</label><div class="chips">${['auto', 'low', 'medium', 'high', 'ultra'].map((q) => `<button data-q="${q}" class="${settings.quality === q ? 'on' : ''}">${q === 'auto' ? 'Auto (recommended)' : q[0].toUpperCase() + q.slice(1)}</button>`).join('')}</div>
+    <p class="version" style="margin:6px 0 4px;text-align:left">Auto picks ${autoTier[0].toUpperCase() + autoTier.slice(1)} on this device. Ultra adds far-reaching shadows, ambient occlusion, sun shafts and sharper edges: for desktop graphics cards. A new tier applies fully from the next flight.</p>
     <label class="check"><input type="checkbox" id="fps" ${settings.showFps ? 'checked' : ''}> Show frame rate</label>
     <label class="lbl">Units</label><div class="chips"><button data-u="imperial" class="${settings.units === 'imperial' ? 'on' : ''}">Knots &amp; feet</button><button data-u="metric" class="${settings.units === 'metric' ? 'on' : ''}">km/h &amp; metres</button></div>
     <label class="lbl">Touch steering</label><div class="chips"><button data-cm="stick" class="${settings.controlMode === 'stick' ? 'on' : ''}">On-screen stick</button><button data-cm="tilt" class="${settings.controlMode === 'tilt' ? 'on' : ''}">Tilt the tablet</button></div>
@@ -592,6 +601,7 @@ function buildFlight(cfg) {
   };
   sonic.onMilestone = (n) => { hud.center(`MACH ${n}!`, 1800); audio.play('ring'); };
   F = { scene, world, ac, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
+  applyQuality(); // the tier may have changed since the last flight (post effects, shadow cascades)
   F.callouts = new Callouts(audio, ac);
   F.worldSound = new WorldSound(audio, world, traffic);
   // engines: already running for air starts; on the ground they start with the first throttle-up (see engineSwitch)
@@ -931,9 +941,10 @@ function applyQuality() {
   const tier = qualityTier();
   renderer.setPixelRatio(pixelRatio());
   post.enabled = tier !== 'low' && perf.level < 2;
-  post.setSamples(tier === 'high' && perf.level < 1 ? 4 : 0);
-  renderer.shadowMap.type = tier === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
-  if (F) F.world.sun.castShadow = F.world.q.shadows && perf.level < 3;
+  post.setSamples(isHigh(tier) && perf.level < 1 ? 4 : 0);
+  post.setUltra(tier === 'ultra' && perf.level < 1); // AO, sun shafts, SMAA: the first things Auto sheds on Ultra
+  renderer.shadowMap.type = isHigh(tier) ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+  if (F) { if (F.world.cascades) F.world.cascades.enabled = F.world.q.shadows && perf.level < 3; else F.world.sun.castShadow = F.world.q.shadows && perf.level < 3; }
   if (F) F.world.detailU.tDetail.value = perf.level < 3 ? 1 : 0; // photo ground detail goes last, with shadows
   if (F) F.world.setPerfLevel?.(perf.level); // thinner clouds, no cirrus when struggling
   if (F) F.world.flora.setPerf?.(perf.level); // grass ring, then tree LOD range shrink under load
@@ -953,7 +964,8 @@ function governPerf(dt) {
   if (perf.ema > 22) { perf.slowT += dt; perf.fastT = 0; } else if (perf.ema < 17.5) { perf.fastT += dt; perf.slowT = 0; } else { perf.slowT = perf.fastT = 0; }
   if (now - perf.lastChange < 1500) return;
   if (perf.slowT > 1.5) {
-    if (perf.scale > 0.55) perf.scale = Math.max(0.55, perf.scale - 0.12); else if (perf.level < 3) perf.level++;
+    if (qualityTier() === 'ultra' && perf.level === 0 && perf.scale < 0.95) perf.level = 1; // Ultra: shed the post effects after one resolution step
+    else if (perf.scale > 0.55) perf.scale = Math.max(0.55, perf.scale - 0.12); else if (perf.level < 3) perf.level++;
     perf.slowT = 0; perf.lastChange = now; applyQuality();
   } else if (perf.fastT > 5 && (perf.scale < 1 || perf.level > 0)) {
     if (perf.level > 0 && perf.scale >= 0.9) perf.level--; else perf.scale = Math.min(1, perf.scale + 0.08);
@@ -985,7 +997,8 @@ function frame(now) {
   if (state === 'hangar') {
     if (hangar.update(dt)) {
       post.look({ bloom: 0.3, threshold: 3.0, vignette: 0.35, warmth: 0.3 });
-      if (qualityTier() === 'high' && perf.level < 2) post.render(hangar.scene, hangar.camera, dt); else renderer.render(hangar.scene, hangar.camera);
+      post.ambientOcclusion({ radiusK: 0.03, rMin: 0.12, rMax: 1.2, maxDist: 250, strength: 1.1 }); post.shafts(post.atmos.sunUV, 0); // Ultra: contact shadows under the plane
+      if (isHigh(qualityTier()) && perf.level < 2) post.render(hangar.scene, hangar.camera, dt); else renderer.render(hangar.scene, hangar.camera);
     }
   }
   else if (state === 'flight' && F) {
@@ -997,6 +1010,9 @@ function frame(now) {
       const sp = flightCam.position.clone().addScaledVector(w.sunDir, 1000).project(flightCam);
       const onScreen = sp.z < 1 && Math.abs(sp.x) < 1.4 && Math.abs(sp.y) < 1.4;
       post.flare(new THREE.Vector2(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5), onScreen ? F.sunVis * (1 - w.W.dark) : 0, w.sun.color, flightCam.aspect);
+      // Ultra: sun shafts from the open sky around the sun (also when the sun itself is just behind a ridge or a cloud)
+      post.ambientOcclusion({ radiusK: 0.04, rMin: 1.5, rMax: 8, maxDist: 1200, strength: 1.8 });
+      post.shafts(new THREE.Vector2(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5), sp.z < 1 && w.sunDir.y > -0.03 ? (1 - w.W.dark) * smoothstep(1.8, 1.0, Math.max(Math.abs(sp.x), Math.abs(sp.y))) : 0, w.sun.color);
       const golden = Math.max(0, 1 - Math.abs(w.sunElev - 0.08) / 0.3);
       post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: 1.1 + golden * 0.1 - w.W.dark * 0.25, vignette: 0.3 });
       fitNearPlane(F);

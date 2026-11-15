@@ -13,6 +13,7 @@ import { Builder, buildingMaterial, C } from './buildings.js';
 import { TerrainTiles } from './tiles.js';
 import { erode } from './erosion.js';
 import { terrainDetailUniforms } from './terrainTex.js';
+import { CascadedShadows } from './cascades.js';
 
 export const RWY = { len: 1800, width: 45 };
 // Two parallel runways (the airport is centred on the east one, which has the PAPI and the landing mission).
@@ -89,14 +90,18 @@ const QUALITY = {
   low: { res: 180, bake: 384, trees: 6000, shadows: false, shadowSize: 1024, clouds: 0.45, cirrus: false, pixel: 1, post: false },
   medium: { res: 220, bake: 640, trees: 12000, shadows: true, shadowSize: 1024, clouds: 0.65, cirrus: true, pixel: 1.25, post: true },
   high: { res: 420, bake: 1024, trees: 32000, shadows: true, shadowSize: 4096, clouds: 1, cirrus: true, pixel: 2, post: true },
+  // desktop GPUs: everything High has, plus cascaded shadows out to ~3.6 km (and AO, sun shafts, SMAA in post.js)
+  ultra: { res: 420, bake: 1024, trees: 32000, shadows: true, shadowSize: 4096, clouds: 1, cirrus: true, pixel: 2, post: true, cascades: true },
 };
+// Tables keyed by tier that predate Ultra: look Ultra up as High (World.qBase). Content that wants more on Ultra checks qName.
+export const baseTier = (q) => (q === 'ultra' ? 'high' : q);
 export { QUALITY };
 
 export class World {
   constructor(renderer, scene, opts) {
     this.renderer = renderer; this.scene = scene;
     this.loc = LOCATIONS[opts.location] || LOCATIONS.alpine;
-    this.q = QUALITY[opts.quality] || QUALITY.medium; this.qName = opts.quality || 'medium';
+    this.q = QUALITY[opts.quality] || QUALITY.medium; this.qName = opts.quality || 'medium'; this.qBase = baseTier(this.qName);
     this.noise = makeNoise(this.loc.seed);
     // the one height function everything uses (core bake, streamed tiles, physics fallback): location shape + erosion
     const base = (x, z) => this.loc.height(this.noise, x, z);
@@ -334,7 +339,7 @@ export class World {
   // grid itself (P x P cells). Its outer ring takes the coarse mesh heights so the seam is closed, and the coarse
   // mesh discards its pixels inside the patch rectangle.
   buildPatch() {
-    const P = this.qName === 'high' ? 160 : this.qName === 'low' ? 80 : 128;
+    const P = this.qBase === 'high' ? 160 : this.qName === 'low' ? 80 : 128;
     this.patchP = P;
     const n = P + 1, pos = new Float32Array(n * n * 3), nor = new Float32Array(n * n * 3), idx = [];
     for (let k = 0; k < n * n; k++) nor[k * 3 + 1] = 1;
@@ -453,6 +458,13 @@ export class World {
     const sc = this.sun.shadow.camera; sc.left = sc.bottom = -60; sc.right = sc.top = 60; sc.near = 1; sc.far = 1500;
     this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 0.05;
     this.scene.add(this.sun); this.scene.add(this.sun.target);
+    // Ultra: the sun's map becomes the near cascade; three more (added right after it, so they sort in order) reach out
+    if (this.q.cascades && this.q.shadows) {
+      this.cascades = new CascadedShadows(this.scene, this.sun, { sizes: [this.q.shadowSize, 2048, 2048, 2048] });
+      // the core terrain casts too, so houses and trees in a mountain's shadow are shaded like the ground around them.
+      // Back faces only: a heightfield then never shadows its own sunlit slopes (no acne at any cascade's texel size).
+      for (const m of [this.terrain, this.patch]) if (m) { m.castShadow = true; m.material.shadowSide = THREE.BackSide; }
+    }
     this.hemi = new THREE.HemisphereLight(0xbcd6ff, 0x5a5040, 0.8); this.scene.add(this.hemi);
     this.pmrem = new THREE.PMREMGenerator(this.renderer);
     this.envScene = new THREE.Scene();
@@ -914,6 +926,7 @@ export class World {
     this.sun.target.position.copy(tgt);
     this.sun.position.copy(tgt).addScaledVector(this.lightDir, 600);
     this.sun.shadow.camera.updateProjectionMatrix();
+    this.cascades?.update(camera, this.lightDir);
     this.moon.position.add(camera.position.clone().sub(this.lastCam || camera.position));
     this.lastCam = camera.position.clone();
     this.deck.position.x = camera.position.x - (camera.position.x % 4000); this.deck.position.z = camera.position.z - (camera.position.z % 4000);
@@ -961,6 +974,7 @@ export class World {
   }
 
   dispose() {
+    this.cascades?.dispose(this.scene);
     this.scene.remove(this.group, this.sky, this.sun, this.sun.target, this.hemi, this.moon, this.deck, this.deck2, this.clouds.mesh, this.rain, this.snow);
     this.tiles?.dispose();
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });

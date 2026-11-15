@@ -321,7 +321,7 @@ def main():
     ap.add_argument('--out', metavar='DIR', help='screenshot directory (implies --keep)')
     ap.add_argument('--port', type=int, default=0, help='static server port (default: a free one)')
     ap.add_argument('--cdp-port', type=int, default=0, help='Chrome debugging port (default: a free one)')
-    ap.add_argument('--quality', choices=['auto', 'low', 'medium', 'high'],
+    ap.add_argument('--quality', choices=['auto', 'low', 'medium', 'high', 'ultra'],
                     help="graphics setting for the flights (CI uses 'low': software WebGL is slow)")
     ap.add_argument('--min-realtime', type=float, default=0.25, metavar='R',
                     help='fail a flight if its clock runs slower than R x realtime (default 0.25; 0 = any frame '

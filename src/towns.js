@@ -28,7 +28,7 @@ export class Towns {
   constructor(world) {
     this.w = world; this.group = new THREE.Group(); world.group.add(this.group);
     const r = (this.r = mulberry32(world.loc.seed * 5 + 3)), W = world, st = W.loc.id;
-    const T = (this.T = TIER[W.qName] || TIER.medium);
+    const T = (this.T = TIER[W.qName] || TIER[W.qBase] || TIER.medium);
     this.dens = T.dens; this.detailDist = T.detail;
     this.grid = new Map(); this.chimneys = []; this.chunks = new Map(); this.foot = new Map(); this.count = 0;
     this.parkSpots = []; this.yardTrees = []; this.lamps = [];

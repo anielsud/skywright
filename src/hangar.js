@@ -306,7 +306,7 @@ export class Hangar {
     if (this.placing && this.ghost) { ghostMat.opacity = 0.35 + Math.sin(performance.now() / 200) * 0.15; this.needsRender = true; }
     const r = this.needsRender; this.needsRender = false; return r;
   }
-  setQuality(tier) { const n = tier === 'high' ? 2048 : 1024; if (this.key.shadow.mapSize.x !== n) { this.key.shadow.mapSize.set(n, n); this.key.shadow.map?.dispose(); this.key.shadow.map = null; } this.needsRender = true; }
+  setQuality(tier) { const n = tier === 'ultra' ? 4096 : tier === 'high' ? 2048 : 1024; if (this.key.shadow.mapSize.x !== n) { this.key.shadow.mapSize.set(n, n); this.key.shadow.map?.dispose(); this.key.shadow.map = null; } this.needsRender = true; }
   resize(w, h) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); this.needsRender = true; }
   render() { this.renderer.render(this.scene, this.camera); }
 }
