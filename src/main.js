@@ -55,11 +55,14 @@ renderer.localClippingEnabled = true; // retracting gear is clipped at the skin 
 const gpuStr = (() => { try { const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info'); return String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER)); } catch { return ''; } })();
 if (!isTouch && /nvidia|geforce|rtx|radeon|apple m\d|arc\(tm\)|intel.*arc/i.test(gpuStr) && !/swiftshader|llvmpipe|software|mali|adreno|powervr/i.test(gpuStr)) autoTier = 'high'; // Ultra stays opt-in (Settings > Graphics) until frame pacing is verified on real laptops (#63)
 // Ultra also supersamples a little on 1x screens (1.5x internal resolution) and renders at 2x on high-DPI ones
-const pixelRatio = () => { const t = qualityTier(), dpr = window.devicePixelRatio || 1; return Math.max(0.5, (t === 'ultra' ? Math.min(2, Math.max(1.5, dpr)) : Math.min(dpr, { low: 1, medium: 1.25, high: 2 }[t])) * (settings.quality === 'auto' ? perf.scale : 1)); };
+// Render resolution: richness over pixels. High/Ultra render at most 1.25x (not the full 2x of a Retina screen: 2x
+// was ~2.4x slower for little visible gain) and a contrast-adaptive sharpen restores crispness; the frame-rate
+// governor then scales resolution (never content) on every setting.
+const pixelRatio = () => { const t = qualityTier(), dpr = window.devicePixelRatio || 1; return Math.max(0.5, Math.min(dpr, t === 'low' ? 1 : 1.25) * perf.scale); };
 renderer.setPixelRatio(pixelRatio());
 const post = new Post(renderer);
 post.enabled = qualityTier() !== 'low';
-post.setSamples(isHigh(qualityTier()) ? 4 : 0);
+post.setSamples(0); post.setSMAA(isHigh(qualityTier()));
 post.setUltra(qualityTier() === 'ultra');
 renderer.shadowMap.type = isHigh(qualityTier()) ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 
@@ -950,8 +953,10 @@ function applyQuality() {
   const tier = qualityTier();
   renderer.setPixelRatio(pixelRatio());
   post.enabled = tier !== 'low' && perf.level < 2;
-  post.setSamples(isHigh(tier) && perf.level < 1 ? 4 : 0);
-  post.setUltra(tier === 'ultra' && perf.level < 1); // AO, sun shafts, SMAA: the first things Auto sheds on Ultra
+  post.setSamples(0); // MSAA cost 7-22 ms/frame at these resolutions; SMAA does the job for ~1 ms
+  post.setSMAA(isHigh(tier) && perf.level < 2);
+  post.setUltra(tier === 'ultra' && perf.level < 1); // AO and sun shafts: the first things Auto sheds on Ultra
+  post.setSharpen(renderer.getPixelRatio() < (window.devicePixelRatio || 1) - 0.01 ? 0.6 : 0.2);
   renderer.shadowMap.type = isHigh(tier) ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
   if (F) { if (F.world.cascades) F.world.cascades.enabled = F.world.q.shadows && perf.level < 3; else F.world.sun.castShadow = F.world.q.shadows && perf.level < 3; }
   if (F) F.world.detailU.tDetail.value = perf.level < 3 ? 1 : 0; // photo ground detail goes last, with shadows
@@ -967,11 +972,17 @@ function governPerf(dt) {
   if (state === 'flight' && F?.t0) { if (ms < 1000) { F.frames++; F.activeT += dt; } if (!F.paused && performance.now() - F.t0 > 8000 && ms < 1000) F.fpsLow = Math.min(F.fpsLow, perf.fps); F.maxLevel = Math.max(F.maxLevel, perf.level); if (net.count > F.playersMax) F.playersMax = net.count; }
   const fpsEl = document.getElementById('fps-meter');
   if (fpsEl) { fpsEl.style.display = settings.showFps && state === 'flight' ? '' : 'none'; if (settings.showFps) fpsEl.textContent = `${Math.round(perf.fps)} fps · ${Math.round(renderer.getPixelRatio() * 100)}% res${perf.level ? ' · lite ' + perf.level : ''}`; }
-  if (settings.quality !== 'auto' || (state !== 'flight' && state !== 'hangar')) return;
+  if (state !== 'flight' && state !== 'hangar') return;
+  const manual = settings.quality !== 'auto'; // a chosen tier keeps all its content; only the resolution adapts
   const now = performance.now();
   if (ms > 100) return; // ignore hitches (loading, tab switches)
   if (perf.ema > 22) { perf.slowT += dt; perf.fastT = 0; } else if (perf.ema < 17.5) { perf.fastT += dt; perf.slowT = 0; } else { perf.slowT = perf.fastT = 0; }
   if (now - perf.lastChange < 1500) return;
+  if (manual) {
+    if (perf.slowT > 1.5 && perf.scale > 0.6) { perf.scale = Math.max(0.6, perf.scale - 0.1); perf.slowT = 0; perf.lastChange = now; applyQuality(); }
+    else if (perf.fastT > 5 && perf.scale < 1) { perf.scale = Math.min(1, perf.scale + 0.08); perf.fastT = 0; perf.lastChange = now; applyQuality(); }
+    return;
+  }
   if (perf.slowT > 1.5) {
     if (qualityTier() === 'ultra' && perf.level === 0 && perf.scale < 0.95) perf.level = 1; // Ultra: shed the post effects after one resolution step
     else if (perf.scale > 0.55) perf.scale = Math.max(0.55, perf.scale - 0.12); else if (perf.level < 3) perf.level++;

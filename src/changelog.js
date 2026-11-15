@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.48.0', items: [
+    'Much smoother! The game draws a little fewer pixels and sharpens the picture, so it runs up to twice as fast with all the same trees, towns and effects.',
+  ] },
   { v: '1.47.0', items: [
     'Rivers and mountain streams now rush and splash! Fly low along a valley and follow the sound of the water. Big rivers roar, little streams babble.',
   ] },
