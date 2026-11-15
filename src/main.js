@@ -761,6 +761,7 @@ function applyQuality() {
   post.setSamples(tier === 'high' && perf.level < 1 ? 4 : 0);
   renderer.shadowMap.type = tier === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
   if (F) F.world.sun.castShadow = F.world.q.shadows && perf.level < 3;
+  if (F) F.world.detailU.tDetail.value = perf.level < 3 ? 1 : 0; // photo ground detail goes last, with shadows
   hangar.setQuality(tier);
   onResize();
 }

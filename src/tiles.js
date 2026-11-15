@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { mulberry32 } from './noise.js';
 import { FOG } from './shaders.js';
+import { TERRAIN_DETAIL_GLSL } from './terrainTex.js';
 
 const RADIUS = 4.3; // tiles (centre distance) kept around the camera
 
@@ -13,16 +14,25 @@ export class TerrainTiles {
     this.size = world.size / 4; // the core map is exactly 4x4 tiles: indices -2..1
     this.tiles = new Map(); this.queue = [];
     this.group = new THREE.Group(); world.group.add(this.group);
-    const detail = world.detailTexture();
-    this.mat = new THREE.MeshStandardMaterial({ vertexColors: true, map: detail, roughness: 0.95 });
+    // same photo detail as the core terrain; macro colour from vertex colours, macro normal from the mesh
+    this.mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
     this.mat.onBeforeCompile = (sh) => {
-      Object.assign(sh.uniforms, FOG);
-      sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `#ifdef USE_MAP
-          vec4 t1 = texture2D(map, vMapUv); vec4 t2 = texture2D(map, vMapUv * 0.137 + 0.31);
-          diffuseColor.rgb *= mix(t1.rgb, t2.rgb, 0.5) * 1.3;
-        #endif`);
+      Object.assign(sh.uniforms, FOG, world.detailU);
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vTW;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+          varying vec3 vTW;
+          ${TERRAIN_DETAIL_GLSL}`)
+        .replace('#include <map_fragment>', `
+          vec3 tgn = snrm(cross(dFdx(vTW), dFdy(vTW))); if (tgn.y < 0.0) tgn = -tgn; // macro normal from the mesh facets
+          vec3 tmul, tdn; terrainDetail(vTW, tgn, length(vTW - cameraPosition), tmul, tdn);
+          float tsn = smoothstep(0.55, 0.72, min(diffuseColor.r, min(diffuseColor.g, diffuseColor.b)));
+          diffuseColor.rgb *= mix(tmul, vec3(0.92 + 0.08 * dot(tmul, vec3(0.333))), tsn) * 1.05;`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          vec3 tsm = inverseTransformDirection(normal, viewMatrix); // smooth mesh normal, world space
+          normal = snrm((viewMatrix * vec4(snrm(tsm + (tdn - tgn)), 0.0)).xyz);`);
     };
-    this.mat.customProgramCacheKey = () => 'outer-terrain';
+    this.mat.customProgramCacheKey = () => 'outer-terrain2';
     this.trees = new Map(); // flora kind -> pooled InstancedMesh for all outer tiles
     this.lastCam = null;
   }
@@ -64,7 +74,7 @@ export class TerrainTiles {
     const W = this.w, T = this.size, x0 = i * T, z0 = j * T, st = T / segs, n = segs + 1;
     const H = new Float32Array(n * n);
     let anyLand = false;
-    for (let b = 0; b < n; b++) { for (let a = 0; a < n; a++) { const h = W.loc.height(W.noise, x0 + a * st, z0 + b * st); H[b * n + a] = h; if (h > W.waterLevel + 0.5) anyLand = true; } if (b % 8 === 7) yield; }
+    for (let b = 0; b < n; b++) { for (let a = 0; a < n; a++) { const h = W.height(x0 + a * st, z0 + b * st); H[b * n + a] = h; if (h > W.waterLevel + 0.5) anyLand = true; } if (b % 8 === 7) yield; }
     const tile = { i, j, segs, H, st, x0, z0, n, mesh: null, trees: [] };
     if (!anyLand) return tile; // open water: nothing to draw, the sea plane covers it
     const pos = new Float32Array(n * n * 3), col = new Float32Array(n * n * 3), uv = new Float32Array(n * n * 2), c = new THREE.Color();
@@ -141,7 +151,7 @@ export class TerrainTiles {
   sample(x, z, tile = null) {
     const T = this.size;
     const t = tile || this.tiles.get(this.key(Math.floor(x / T), Math.floor(z / T)));
-    if (!t) return this.w.loc.height(this.w.noise, x, z);
+    if (!t) return this.w.height(x, z);
     const fx = Math.min(t.segs - 1e-6, Math.max(0, (x - t.x0) / t.st)), fz = Math.min(t.segs - 1e-6, Math.max(0, (z - t.z0) / t.st));
     const a0 = Math.floor(fx), b0 = Math.floor(fz), u = fx - a0, v = fz - b0, n = t.n, H = t.H;
     const A = H[b0 * n + a0], B = H[(b0 + 1) * n + a0], C = H[(b0 + 1) * n + a0 + 1], D = H[b0 * n + a0 + 1];
