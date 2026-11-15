@@ -35,7 +35,8 @@ if ((settings.v || 1) < 2) { settings.quality = 'auto'; settings.v = 2; LS.set('
 // 'auto' = medium features on tablets / high on desktops, plus resolution that adapts to the frame rate
 const qualityTier = () => (settings.quality === 'auto' ? (isTouch ? 'medium' : 'high') : settings.quality);
 const perf = { scale: 1, level: 0, ema: 16.7, slowT: 0, fastT: 0, lastChange: 0, fps: 60 };
-const flightCfg = Object.assign({ location: 'alpine', time: 10, weather: 'clear', realism: 'pilot', mode: 'free', start: 'runway' }, LS.get('flight', {}));
+const flightCfg = Object.assign({ location: 'alpine', time: 10, weather: 'clear', realism: 'pilot', mode: 'free', start: 'runway', online: true }, LS.get('flight', {}));
+const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 // ---------- renderer ----------
 const canvas = document.getElementById('c');
@@ -319,7 +320,12 @@ function flightModal() {
   const m = ui.modal(`
     <h2>Ready for take-off: ${hangar.design.name}</h2>
     <label class="lbl">Location</label>
-    <div class="choice-row">${Object.values(LOCATIONS).map((l) => `<button class="loc-card ${l.id}${flightCfg.location === l.id ? ' on' : ''}" data-loc="${l.id}"><b>${l.name}</b><small>${l.desc}</small></button>`).join('')}</div>
+    <div class="choice-row">${Object.values(LOCATIONS).map((l) => `<button class="loc-card ${l.id}${flightCfg.location === l.id ? ' on' : ''}" data-loc="${l.id}"><span class="loc-online" data-online="${l.id}"></span><b>${l.name}</b><small>${l.desc}</small></button>`).join('')}</div>
+    <div class="mp-online">
+      <div class="mp-head"><b>Fly together</b><div class="chips"><button data-on="1" class="${flightCfg.online !== false ? 'on' : ''}">With others</button><button data-on="0" class="${flightCfg.online === false ? 'on' : ''}">Alone</button></div>
+        <label class="mp-name">Your name <input id="mp-name" maxlength="16" autocomplete="off" spellcheck="false" value="${esc(net.name)}"></label></div>
+      <div id="mp-list"></div>
+    </div>
     <label class="lbl">Time of day <span id="tlab">${timeLabel(flightCfg.time)}</span></label>
     <input type="range" min="0" max="24" step="0.25" value="${flightCfg.time}" id="time" class="time-slider">
     <label class="lbl">Weather</label>
@@ -330,13 +336,52 @@ function flightModal() {
     <div class="choice-row">${Object.entries(MODES).map(([k, mo]) => `<button class="opt-card${flightCfg.mode === k ? ' on' : ''}" data-m="${k}"><b>${mo.name}</b><small>${mo.desc}</small></button>`).join('')}</div>
     <label class="lbl">Start</label>
     <div class="chips"><button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">On the runway</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}</div>
-    <div class="modal-foot"><button data-close>Back</button><button class="big" id="mp">👥 Multiplayer</button><button class="primary big" id="go">FLY ▶</button></div>`, 'wide');
+    <div class="modal-foot"><button data-close>Back</button><button class="primary big" id="go">FLY ▶</button></div>`, 'wide');
   const el = m.el;
   const pick = (attr, key) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { flightCfg[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); audio.play('click'); }));
   pick('loc', 'location'); pick('w', 'weather'); pick('r', 'realism'); pick('m', 'mode'); pick('s', 'start');
   el.querySelector('#time').addEventListener('input', (e) => { flightCfg.time = +e.target.value; el.querySelector('#tlab').textContent = timeLabel(flightCfg.time); });
-  el.querySelector('#go').addEventListener('click', () => { LS.set('flight', flightCfg); m.close(); startFlight(); });
-  el.querySelector('#mp').addEventListener('click', () => { LS.set('flight', flightCfg); m.close(); net.openModal(); });
+  // ----- online sessions: everyone at a location flies together unless they pick "Alone" -----
+  const list = el.querySelector('#mp-list');
+  const renderOnline = () => {
+    if (!list.isConnected) return;
+    const on = flightCfg.online !== false, loc = flightCfg.location;
+    el.querySelector('.mp-online').classList.toggle('off', !on);
+    for (const b of el.querySelectorAll('[data-online]')) {
+      const n = net.sessionsAt(b.dataset.online).reduce((a, r) => a + Math.max(0, r.count), 0);
+      b.textContent = on && n ? `👥 ${n} flying` : ''; b.hidden = !(on && n);
+    }
+    if (!on) { list.innerHTML = '<p class="mp-note">You’ll fly on your own. Nobody else will see your plane.</p>'; return; }
+    const rows = net.sessionsAt(loc).filter((r) => r.count > 0);
+    const target = rows.find((r) => r.count < r.max);
+    const sess = rows.map((r) => `<div class="mp-row${r === target ? ' target' : ''}"><div><b>Session ${r.n}</b> · ${r.count} pilot${r.count === 1 ? '' : 's'}: ${r.names.slice(0, 4).map(esc).join(', ')}${r.names.length > 4 ? '…' : ''}
+        <small>${esc(WEATHER[r.cfg.weather]?.name || '')}${Number.isFinite(r.cfg.time) ? ` · ${timeLabel(r.cfg.time)}` : ''}</small></div>
+        <button data-join="${r.n}" ${r.count >= r.max ? 'disabled' : ''}>${r.count >= r.max ? 'Full' : 'Join'}</button></div>`).join('');
+    const status = net.scanning && !rows.length ? 'Looking for other pilots…'
+      : net.scanError ? 'Couldn’t check who’s online. FLY will try again, or fly alone if there’s no internet.'
+      : target ? `FLY joins <b>Session ${target.n}</b> (it keeps its own time of day and weather).`
+      : `Nobody’s flying at ${esc(LOCATIONS[loc].name)} yet. FLY starts a session, and anyone who flies here joins you.`;
+    list.innerHTML = `${sess}<p class="mp-note">${status}</p>${rows.length ? `<button class="mp-new" data-newsess>+ Start a new session with my time and weather</button>` : ''}`;
+    list.querySelectorAll('[data-join]').forEach((b) => b.addEventListener('click', () => fly({ join: +b.dataset.join })));
+    list.querySelector('[data-newsess]')?.addEventListener('click', () => fly({ host: true }));
+  };
+  const scan = () => { if (flightCfg.online !== false && !net.scanning) net.scan(Object.keys(LOCATIONS), renderOnline); renderOnline(); };
+  el.querySelectorAll('[data-loc]').forEach((b) => b.addEventListener('click', renderOnline));
+  el.querySelectorAll('[data-on]').forEach((b) => b.addEventListener('click', () => { flightCfg.online = b.dataset.on === '1'; el.querySelectorAll('[data-on]').forEach((x) => x.classList.toggle('on', x === b)); audio.play('click'); scan(); }));
+  el.querySelector('#mp-name').addEventListener('input', (e) => net.setName(e.target.value));
+  const rescan = setInterval(() => { if (!list.isConnected) { clearInterval(rescan); return; } scan(); }, 15000);
+  scan();
+  const fly = async (choice) => {
+    LS.set('flight', flightCfg); m.close(); clearInterval(rescan);
+    if (!choice) { startFlight(); return; }
+    const load = $('#loading'), txt = load.querySelector('p'); load.classList.add('show'); txt.textContent = 'Finding other pilots…';
+    let o = null, err = null;
+    try { o = await net.connect(flightCfg, choice); } catch (e) { console.warn(e); err = e; net.leave(); }
+    txt.textContent = 'Generating world…';
+    startFlight(o || {});
+    if (err) setTimeout(() => hud.toast(choice.auto ? 'Couldn’t go online, so you’re flying alone.' : `${err.message} Flying alone.`, 'bad'), 1500);
+  };
+  el.querySelector('#go').addEventListener('click', () => fly(flightCfg.online !== false ? { auto: true } : null));
 }
 
 function buildInfo() {
@@ -467,7 +512,7 @@ const controls = new Controls($('#touch-root'), (a) => onAction(a));
 controls.invert = settings.invert; controls.setMode(settings.controlMode);
 const flightCam = new THREE.PerspectiveCamera(60, 1, 0.2, 60000);
 const rig = new CameraRig(flightCam, canvas);
-const net = new Net({ ui, hud, audio, LS, getDesign: () => hangar.design, getCfg: () => flightCfg, startFlight: (cfg) => startFlight(cfg) });
+const net = new Net({ ui, hud, audio, LS, getDesign: () => hangar.design, getCfg: () => flightCfg });
 $('#hud').addEventListener('click', (e) => { if (e.target.id === 'h-cam') onAction('camera'); if (e.target.id === 'h-pause') onAction('pause'); });
 
 function findWater(world) {
@@ -512,7 +557,7 @@ function buildFlight(cfg) {
   if (st.car && st.wingArea < 0.5 && (start === 'air' || start === 'approach')) start = 'runway'; // cars without wings start on the ground
   const slot = cfg.mpSlot || 0, slotX = slot ? (slot % 2 ? 1 : -1) * Math.ceil(slot / 2) * 70 : 0; // multiplayer: side by side, stepped up
   const vApp = clamp(Number.isFinite(st.stall) ? st.stall * 1.45 : 45, 32, 110);
-  const rwy = world.runways[cfg.rwy || 0] || world.runway;
+  const rwy = world.runways[net.active ? net.freeRunway(world) : cfg.rwy || 0] || world.runway; // online: a runway nobody is on
   if (start === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0); }
   else if (start === 'water') {
     const w = findWater(world);
