@@ -18,26 +18,21 @@ export const FOG = {
   skyLUT: { value: null },
   fogSkyMix: { value: 0 },
   fogExt: { value: new THREE.Vector3(1, 1, 1) },
+  // distance (m) by which everything has faded fully into the haze: the edge of the far terrain
+  fogEnd: { value: 1e9 },
 };
 
 export const FOG_GLSL = /* glsl */`
   uniform vec3 fogSunDir; uniform vec3 fogSunColor; uniform float fogBase; uniform float fogFalloff; uniform float fogLin;
-  uniform sampler2D skyLUT; uniform float fogSkyMix; uniform vec3 fogExt;
+  uniform sampler2D skyLUT; uniform float fogSkyMix; uniform vec3 fogExt; uniform float fogEnd;
   ${SKY_LOOKUP_GLSL}
-  vec3 applyHeightFog(vec3 col, vec3 wp, vec3 fogCol) {
-    vec3 rd = wp - cameraPosition;
-    float dist = length(rd);
-    float h0 = cameraPosition.y - fogBase, h1 = wp.y - fogBase;
-    float k = fogFalloff, dh = h1 - h0;
-    float e0 = exp(-k * max(h0, -200.0));
-    float integ = abs(dh) > 1.0 ? (e0 - exp(-k * max(h1, -200.0))) / (k * dh) : e0;
-    float od = fogLin * dist * clamp(integ, 0.0, 4.0);
-    vec3 vd = rd / max(dist, 1e-3);
+  // the colour fully hazed-out things take on, looking along vd (also what the sky dome shows below the horizon)
+  vec3 fogTarget(vec3 vd, vec3 fogCol, out vec3 ext) {
     float s = max(dot(vd, fogSunDir), 0.0);
     // a black fog colour means "fade to black" (additive particles): no sky tint then
     float sm = fogSkyMix * step(1e-4, fogCol.r + fogCol.g + fogCol.b);
     vec3 base = fogCol;
-    vec3 ext = vec3(1.0);
+    ext = vec3(1.0);
     if (sm > 0.001) {
       // looking down, the haze between us and the ground is the colour of the horizon in that direction
       vec2 hd = vd.xz / max(length(vd.xz), 1e-4);
@@ -48,8 +43,24 @@ export const FOG_GLSL = /* glsl */`
       base = mix(fogCol, sky, sm);
       ext = mix(vec3(1.0), fogExt, sm);
     }
+    return base + fogSunColor * (pow(s, 8.0) * 0.55 + pow(s, 48.0) * 0.6) * (1.0 - sm * 0.6);
+  }
+  vec3 applyHeightFog(vec3 col, vec3 wp, vec3 fogCol) {
+    vec3 rd = wp - cameraPosition;
+    float dist = length(rd);
+    float h0 = cameraPosition.y - fogBase, h1 = wp.y - fogBase;
+    float k = fogFalloff, dh = h1 - h0;
+    float e0 = exp(-k * max(h0, -200.0));
+    float integ = abs(dh) > 1.0 ? (e0 - exp(-k * max(h1, -200.0))) / (k * dh) : e0;
+    // a little haze at any height, so from high up the far land still fades with distance (aerial perspective) ...
+    float od = fogLin * dist * clamp(integ, 0.3, 4.0);
+    // ... and is gone completely by the edge of the far terrain, which then meets the sky below the horizon seamlessly
+    float fend = max(fogEnd, 1.0), fe = clamp((dist - fend * 0.45) / (fend * 0.55), 0.0, 1.0);
+    od += fe * fe * 8.0;
+    vec3 vd = rd / max(dist, 1e-3);
+    vec3 ext;
+    vec3 fc = fogTarget(vd, fogCol, ext);
     vec3 amt = 1.0 - exp(-od * ext);
-    vec3 fc = base + fogSunColor * (pow(s, 8.0) * 0.55 + pow(s, 48.0) * 0.6) * (1.0 - sm * 0.6);
     return mix(col, fc, amt);
   }`;
 
@@ -134,6 +145,8 @@ export function waterMaterial(o) {
     sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color(1, 1, 1) }, skyZen: { value: new THREE.Color(0.3, 0.5, 0.8) },
     skyHor: { value: new THREE.Color(0.7, 0.8, 0.9) }, amb: { value: 1 }, deepCol: { value: new THREE.Color(o.deep) }, shallowCol: { value: new THREE.Color(o.shallow) },
     sandCol: { value: new THREE.Color(o.sand) }, fogColor: { value: new THREE.Color(0, 0, 0) }, foamAmt: { value: o.foam ?? 1 }, rough: { value: 0.35 },
+    // tile-grid cells known to be dry land all over (farfield.js): no water drawn there at all
+    farMask: { value: null }, farMaskOrigin: { value: new THREE.Vector2() }, farMaskSize: { value: 0 }, farCell: { value: 1 },
   };
   const mat = new THREE.ShaderMaterial({
     uniforms: Object.assign(U, FOG),
@@ -144,6 +157,7 @@ export function waterMaterial(o) {
       uniform sampler2D depthTex; uniform sampler2D outerTex; uniform vec2 outerOrigin; uniform float outerSize; uniform sampler2D nrm; uniform float tHalf; uniform float tSize; uniform float waterLevel;
       uniform vec3 sunDir; uniform vec3 sunCol; uniform vec3 skyZen; uniform vec3 skyHor; uniform float amb;
       uniform vec3 deepCol; uniform vec3 shallowCol; uniform vec3 sandCol; uniform vec3 fogColor; uniform float foamAmt; uniform float rough; uniform float uTime;
+      uniform sampler2D farMask; uniform vec2 farMaskOrigin; uniform float farMaskSize; uniform float farCell;
       varying vec3 vW;
       ${FOG_GLSL}
       vec3 nmap(vec2 p) { return texture2D(nrm, p).xzy * 2.0 - 1.0; }
@@ -155,6 +169,11 @@ export function waterMaterial(o) {
         // dry land: leave it to the terrain. Deciding here (not by depth test against nearly-level beaches,
         // which flickers at a distance) keeps the shoreline stable.
         if (th > waterLevel + 0.1) discard;
+        // beyond the depth maps: tile-grid cells known to be dry land all over (farfield.js)
+        if (farMaskSize > 0.0) {
+          vec2 muv = (floor(vW.xz / farCell) - farMaskOrigin + 0.5) / farMaskSize;
+          if (muv.x > 0.0 && muv.y > 0.0 && muv.x < 1.0 && muv.y < 1.0) { float m = floor(texture2D(farMask, muv).r * 3.0 + 0.5); if (mod(m, 2.0) > 0.5) discard; }
+        }
         float depth = max(0.0, waterLevel - th);
         float dist = length(cameraPosition - vW);
         vec2 p = vW.xz;

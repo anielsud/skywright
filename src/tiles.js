@@ -5,6 +5,7 @@
 // core's terrain material, so crossing the edge of the core map doesn't change the look of the ground.
 import * as THREE from 'three';
 import { terrainMaterial } from './shaders.js';
+import { FarField } from './farfield.js';
 
 const RADIUS = 4.3; // tiles (centre distance) kept around the camera
 
@@ -18,6 +19,7 @@ export class TerrainTiles {
     this.texR = Math.round(world.q.bake / 4);
     this.white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1); this.white.needsUpdate = true;
     this.lastCam = null; this.treeCam = null;
+    this.far = new FarField(world, this); // coarse land beyond the tiles, out to the haze
   }
   key(i, j) { return i + ',' + j; }
   inCore(i, j) { return i >= -2 && i <= 1 && j >= -2 && j <= 1; }
@@ -35,7 +37,7 @@ export class TerrainTiles {
         const d = Math.hypot(i + 0.5 - ci, j + 0.5 - cj); if (d > RADIUS) continue;
         want.set(this.key(i, j), { i, j, d, lod: this.lodFor(d) });
       }
-      for (const [k, t] of this.tiles) if (!want.has(k)) { this.drop(t); this.tiles.delete(k); this.treesDirty = true; }
+      for (const [k, t] of this.tiles) if (!want.has(k)) { this.drop(t); this.tiles.delete(k); this.treesDirty = true; this.far.maskDirty = true; }
       this.queue = [...want.values()].filter((t) => { const have = this.tiles.get(this.key(t.i, t.j)); return !have || have.lod !== t.lod; }).sort((a, b) => a.d - b.d);
     }
     // work is time-sliced (a few ms per frame) so streaming never causes a hitch, even on a tablet
@@ -48,10 +50,11 @@ export class TerrainTiles {
       }
       const r = this.job.it.next();
       if (r.done) {
-        if (this.job.t) { const t = this.job.t, k = this.key(t.i, t.j), old = this.tiles.get(k); if (old) this.drop(old); this.tiles.set(k, r.value); this.treesDirty = true; }
+        if (this.job.t) { const t = this.job.t, k = this.key(t.i, t.j), old = this.tiles.get(k); if (old) this.drop(old); this.tiles.set(k, r.value); this.treesDirty = true; this.far.maskDirty = true; }
         this.job = null;
       }
     }
+    this.far.update(cam, this.queue.length || this.job ? 1.5 : 3);
     // vegetation lives in Flora; tell it when the tiles under it change
     if (!this.treeCam || this.treeCam.distanceToSquared(cam) > 40 * 40) { this.treeCam = cam.clone(); this.layoutTrees(cam); }
   }
@@ -63,7 +66,8 @@ export class TerrainTiles {
     const H = new Float32Array(n * n);
     let anyLand = false;
     for (let b = 0; b < n; b++) { for (let a = 0; a < n; a++) { const h = W.height(x0 + a * 2 * st, z0 + b * 2 * st); H[b * n + a] = h; if (h > W.waterLevel + 0.5) anyLand = true; } if (b % 8 === 7) yield; }
-    const tile = { i, j, lod, segs, H, st: 2 * st, x0, z0, n, mesh: null, trees: [], hit: new Map() };
+    let minH = Infinity; for (let k = 0; k < H.length; k++) if (H[k] < minH) minH = H[k];
+    const tile = { i, j, lod, segs, H, st: 2 * st, x0, z0, n, mesh: null, trees: [], hit: new Map(), land: minH > W.waterLevel + 20 };
     if (!anyLand) return tile; // open water: nothing to draw, the sea plane covers it
     // texel heights, padded so AO and normals continue across tile edges (and into the core)
     const pad = W.bakePad(st), TW = R + 1, PW = TW + 2 * pad, Hp = new Float32Array(PW * PW);
@@ -138,5 +142,6 @@ export class TerrainTiles {
   dispose() {
     for (const t of this.tiles.values()) this.drop(t);
     this.white.dispose(); this.w.group.remove(this.group);
+    this.far.dispose();
   }
 }
