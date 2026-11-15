@@ -57,7 +57,7 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 - Fire, smoke, sparks, explosions, plus slow motion on big crashes.
 
 **World**
-- Three locations: Alpine Valley, Coral Islands and Red Canyon.
+- Three locations: Alpine Valley, Coral Islands and Red Canyon, plus a real one: the Jungfrau Region (Interlaken, Lauterbrunnen, Eiger, Mönch and Jungfrau) built from real elevation, satellite imagery and OpenStreetMap data (`tools/realworld/bake.py`, `src/realworld.js`).
 - Time-of-day sky, stars and moon.
 - Seven weather types, including thunderstorms with lightning and thunder. Clouds you can fly through.
 - Wind, gusts, ridge lift and thermals.
@@ -145,4 +145,9 @@ Ground textures in `tex/` are CC0 from [Poly Haven](https://polyhaven.com) (aeri
 Building and town materials in `tex/towns/` are CC0 from [ambientCG](https://ambientcg.com) (Plaster001, Plaster007, WoodSiding001, WoodSiding008, WoodSiding009, Planks037A, Bricks085, Bricks076A, RoofingTiles003, RoofingTiles013A, RoofingTiles014A, CorrugatedSteel009, ThatchedRoof001A, PavingStones128, PavingStones142, Gravel023, Asphalt031, Grass005, Concrete034), packed into one colour / normal / roughness sheet by `tools/towns/bake_materials.py`. Windows, doors, shutters, signs, railings and the rooms behind the glass are painted procedurally on top at start-up.
 
 The sky's atmosphere model (Rayleigh/Mie/ozone coefficients, single scattering into a sky-view lookup table) follows Eric Bruneton's *Precomputed Atmospheric Scattering* and Sébastien Hillaire's *A Scalable and Production Ready Sky and Atmosphere Rendering Technique* (EGSR 2020); the code is our own.
+Real-world locations (`assets/real/`, baked by `tools/realworld/bake.py`):
+- Satellite imagery: [Sentinel-2 cloudless](https://s2maps.eu) 2016 by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Shadows lifted and colours graded for the game.
+- Elevation: [Terrain Tiles on AWS](https://registry.opendata.aws/terrain-tiles/) (Mapzen / Tilezen terrarium tiles; sources include SRTM, GMTED, ETOPO1 and EU-DEM, see their attribution page).
+- Buildings, roads, railways, cable cars, lakes, forests and place names: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, available under the Open Database License (ODbL); `assets/real/*/osm.json` and `cover.png` are derived databases under the same licence.
+
 Vegetation (`src/flora.js`): the foliage atlas `assets/flora/foliage_*.webp` is assembled by `tools/flora/build_atlas.py` from CC0 [Poly Haven](https://polyhaven.com) leaf, twig, bark and fern scans (fir_tree_01, pine_tree_01, island_tree_02, shrub_02, shrub_04, fern_02, jacaranda_tree); grass blades, flowers, desert scrub and birch bark are drawn by the same script; boulders reuse the CC0 Poly Haven rock textures above (aerial_rocks_02, cliff_side).

@@ -119,6 +119,7 @@ body.hide-right .inspector { transform: translateX(310px); }
 .loc-card.alpine { background-image: linear-gradient(180deg, rgba(0,0,0,0) 30%, rgba(0,0,0,.6)), linear-gradient(160deg, #a8c8f0 0%, #e8f0fa 35%, #6b7a6e 50%, #3e5a30 100%); }
 .loc-card.islands { background-image: linear-gradient(180deg, rgba(0,0,0,0) 30%, rgba(0,0,0,.6)), linear-gradient(170deg, #7cc8f2 0%, #bfe8f5 40%, #1aa0b0 55%, #e8d8a8 70%, #2f7a3a 100%); }
 .loc-card.canyon { background-image: linear-gradient(180deg, rgba(0,0,0,0) 30%, rgba(0,0,0,.6)), linear-gradient(170deg, #f5c890 0%, #f0dcc0 35%, #c06a3a 55%, #8e4a2c 80%, #5a2a1a 100%); }
+.loc-card.lauterbrunnen { background-image: linear-gradient(180deg, rgba(0,0,0,0) 30%, rgba(0,0,0,.6)), url(assets/real/lauterbrunnen/card.jpg); background-color: #4a6a8a; }
 .loc-card.on, .opt-card.on { outline: 3px solid var(--accent); color: var(--text); background-color: rgba(255, 176, 32, .12); }
 .opt-card.on { background: rgba(255, 176, 32, .18); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }

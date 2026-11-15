@@ -21,6 +21,7 @@ import { VERSION, COMMIT, BUILT } from './version.js';
 import { CHANGELOG, changesSince, newer } from './changelog.js';
 import { Net } from './net.js';
 import { Analytics } from './analytics.js';
+import { loadReal } from './realworld.js';
 installFog();
 
 // ---------- persistence ----------
@@ -518,6 +519,7 @@ function helpModal() {
   <h4>Gamepad</h4><p>Left stick flies, right stick X is rudder, triggers set throttle, A brakes, B gear, X flaps, Y camera, LB smoke.</p>
   <h4>Tips</h4><p>Take off around the stall speed shown in the hangar. In Simulator mode, land gently (under ~3 m/s sink) or your gear will snap! Sailplanes can ride rising air under cumulus clouds and along sunny ridges.</p>
   <h4>Credits</h4><p>Voice callouts use the open-source Piper voice "joe". Engines, wind, tyres, weather, nature and crash sounds are real recordings from <a href="https://freesound.org" target="_blank" rel="noopener">Freesound</a>: <a href="assets/sfx/CREDITS.md" target="_blank" rel="noopener">sound credits</a>. Music: “Easy Lemon”, “Floating Cities” and “Heroic Age” by Kevin MacLeod (incompetech.com), licensed under <a href="http://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>.</p>
+  <p>Jungfrau Region: satellite imagery <a href="https://s2maps.eu" target="_blank" rel="noopener">Sentinel-2 cloudless 2016</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016, CC BY 4.0); elevation from Terrain Tiles on AWS; map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</p>
   </div><div class="modal-foot"><button data-close class="primary">Got it</button></div>`, 'wide');
 }
 
@@ -546,9 +548,14 @@ function startFlight(cfgOverride) {
   const cfg = { ...flightCfg, ...cfgOverride };
   state = 'loading';
   $('#loading').classList.add('show');
-  setTimeout(() => {
-    try { buildFlight(cfg); } catch (e) { console.error(e); $('#loading').classList.remove('show'); state = 'hangar'; ui.hint('Something went wrong: ' + e.message); }
-  }, 50);
+  const fail = (e) => { console.error(e); $('#loading').classList.remove('show'); state = 'hangar'; ui.hint('Something went wrong: ' + e.message); };
+  // real-world places load their baked geodata first (cached by the service worker after the first visit)
+  const loc = LOCATIONS[cfg.location], msg = $('#loading p'), msg0 = msg.textContent;
+  const ready = loc?.real ? loadReal(loc, qualityTier(), (f) => (msg.textContent = `Loading ${loc.name}… ${Math.round(f * 100)}%`)) : Promise.resolve();
+  ready.then(() => setTimeout(() => {
+    msg.textContent = msg0;
+    try { buildFlight(cfg); } catch (e) { fail(e); }
+  }, 50), (e) => { msg.textContent = msg0; fail(new Error(`couldn’t load ${loc.name} (it needs the internet the first time): ${e.message}`)); });
 }
 function buildFlight(cfg) {
   const scene = new THREE.Scene();
@@ -624,6 +631,7 @@ function buildFlight(cfg) {
   onResize();
   const msg = { runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.' }[start];
   hud.center(msg, 3500);
+  if (world.loc.credit) setTimeout(() => { if (F?.world === world) hud.toast(world.loc.credit); }, 4000); // real places: data attribution
   if (!ac.hasEngine) hud.toast('Glider: look for rising air under clouds and over sunny ridges.');
 }
 
