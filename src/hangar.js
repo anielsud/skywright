@@ -33,7 +33,7 @@ export class Hangar {
   buildEnv() {
     const pm = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.55;
+    this.scene.environmentIntensity = 0.85;
     this.scene.background = new THREE.Color(0x1d2126);
     this.scene.fog = new THREE.Fog(0x1d2126, 60, 160);
     // concrete floor
@@ -50,13 +50,12 @@ export class Hangar {
     shell.rotation.z = Math.PI / 2; shell.rotation.y = Math.PI / 2; shell.scale.set(1, 1, 0.6); shell.position.y = 0; this.scene.add(shell);
     for (let z = -60; z <= 60; z += 15) { const rib = new THREE.Mesh(new THREE.TorusGeometry(69, 0.6, 6, 40, Math.PI), new THREE.MeshStandardMaterial({ color: 0x555b63, metalness: 0.7, roughness: 0.4 })); rib.position.z = z; rib.scale.set(1, 0.6, 1); this.scene.add(rib); }
     // lights
-    this.scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x3a3530, 0.6));
+    this.scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x3a3530, 1.0)); // the room environment map does the soft fill (no point lights: much cheaper on tablets)
     const key = new THREE.DirectionalLight(0xfff3e0, 2.2); key.position.set(15, 30, 12); key.castShadow = true;
-    key.shadow.mapSize.set(2048, 2048); const sc = key.shadow.camera; sc.left = sc.bottom = -40; sc.right = sc.top = 40; sc.far = 120; key.shadow.bias = -0.0005;
+    key.shadow.mapSize.set(1024, 1024); this.key = key; const sc = key.shadow.camera; sc.left = sc.bottom = -40; sc.right = sc.top = 40; sc.far = 120; key.shadow.bias = -0.0005;
     this.scene.add(key);
     for (const [x, z] of [[-15, -15], [15, -15], [-15, 15], [15, 15]]) {
       const lamp = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.6, 0.6, 16), new THREE.MeshBasicMaterial({ color: 0xfff6e0 })); lamp.position.set(x, 38, z); this.scene.add(lamp);
-      const pl = new THREE.PointLight(0xfff0d8, 300, 80, 1.6); pl.position.set(x, 34, z); this.scene.add(pl);
     }
     // tool cart & crates for flavour
     const crate = new THREE.MeshStandardMaterial({ color: 0x8a6a3e, roughness: 0.85 });
@@ -78,7 +77,7 @@ export class Hangar {
   }
 
   activate(on) {
-    this.controls.enabled = on;
+    this.controls.enabled = on; this.needsRender = true;
     if (on) { this.rebuild(); }
   }
 
@@ -217,6 +216,7 @@ export class Hangar {
     this.onChange();
   }
   updateSelection() {
+    this.needsRender = true;
     const o = this.designGroup.children.find((c) => c.userData.partIndex === this.sel);
     if (o) { this.selBox.setFromObject(o); this.selBox.visible = true; } else this.selBox.visible = false;
   }
@@ -261,12 +261,15 @@ export class Hangar {
     const hits = this.raycaster.intersectObject(this.designGroup, true).filter((h) => h.object.visible && !h.object.userData.isDisc && h.face);
     return hits[0] || null;
   }
+  // Returns true when the view changed and needs drawing (the hangar only renders on demand).
   update(dt) {
-    this.controls.update();
+    if (this.controls.update()) this.needsRender = true;
     if (this.selBox.visible) this.updateSelection();
-    if (this.placing && this.ghost) ghostMat.opacity = 0.35 + Math.sin(performance.now() / 200) * 0.15;
+    if (this.placing && this.ghost) { ghostMat.opacity = 0.35 + Math.sin(performance.now() / 200) * 0.15; this.needsRender = true; }
+    const r = this.needsRender; this.needsRender = false; return r;
   }
-  resize(w, h) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); }
+  setQuality(tier) { const n = tier === 'high' ? 2048 : 1024; if (this.key.shadow.mapSize.x !== n) { this.key.shadow.mapSize.set(n, n); this.key.shadow.map?.dispose(); this.key.shadow.map = null; } this.needsRender = true; }
+  resize(w, h) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); this.needsRender = true; }
   render() { this.renderer.render(this.scene, this.camera); }
 }
 

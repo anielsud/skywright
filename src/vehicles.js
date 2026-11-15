@@ -142,13 +142,15 @@ export class Vehicles {
     for (const c of [...this.cars, ...this.parked]) counts[c.type] = (counts[c.type] || 0) + 1;
     for (const t in counts) {
       const m = (this.models[t] = CAR[t]());
-      const im = new THREE.InstancedMesh(m.geo, mat, counts[t]); im.castShadow = true; im.receiveShadow = true; im.frustumCulled = false;
+      const im = new THREE.InstancedMesh(m.geo, mat, counts[t]); im.castShadow = world.qName === 'high'; im.receiveShadow = true; im.frustumCulled = false;
       im.count = 0; this.meshes[t] = im; this.group.add(im);
     }
     const col = new THREE.Color();
     const idx = {};
-    for (const c of [...this.cars, ...this.parked]) { c.slot = (idx[c.type] = (idx[c.type] ?? -1) + 1); this.meshes[c.type].setColorAt(c.slot, col.set(c.color)); }
-    for (const t in this.meshes) { this.meshes[t].count = counts[t]; this.meshes[t].instanceColor.needsUpdate = true; }
+    for (const c of this.parked) { c.slot = (idx[c.type] = (idx[c.type] ?? -1) + 1); this.meshes[c.type].setColorAt(c.slot, col.set(c.color)); }
+    this.parkedCount = {}; for (const t in idx) this.parkedCount[t] = idx[t] + 1;
+    for (const t in this.meshes) { this.meshes[t].count = this.parkedCount[t] || 0; if (!this.meshes[t].instanceColor) this.meshes[t].setColorAt(0, col.set(0xffffff)); this.meshes[t].instanceColor.needsUpdate = true; }
+    this.drawDist = { low: 1200, medium: 1800, high: 3000 }[world.qName] || 1800;
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1);
     for (const c of this.parked) { c.p.y = world.sampleGrid(c.p.x, c.p.z) + 0.25; q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), c.yaw); m4.compose(c.p, q, one); this.meshes[c.type].setMatrixAt(c.slot, m4); }
     // lights (points): 2 head + 2 tail per moving car
@@ -189,9 +191,14 @@ export class Vehicles {
       }
     }
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), d = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0), fw = new THREE.Vector3(0, 0, -1);
+    const vis = {}; for (const t in this.meshes) vis[t] = this.parkedCount[t] || 0;
+    const R2 = this.drawDist * this.drawDist;
     this.cars.forEach((c, ci) => {
       const mdl = this.models[c.type];
       this.pathPoint(c.path, c.s, p, d);
+      const o = ci * 12;
+      if (camPos && (p.x - camPos.x) ** 2 + (p.z - camPos.z) ** 2 > R2) { this.lc.fill(0, o, o + 12); c.slot = undefined; return; } // too far to see: simulate only
+      c.slot = vis[c.type]++;
       // pitch from front/back wheel heights
       const yaw = Math.atan2(-d.x, -d.z);
       const fz = this.world.sampleGrid(p.x + d.x * mdl.L * 0.4, p.z + d.z * mdl.L * 0.4), bz = this.world.sampleGrid(p.x - d.x * mdl.L * 0.4, p.z - d.z * mdl.L * 0.4);
@@ -199,13 +206,15 @@ export class Vehicles {
       q.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
       m4.compose(p, q, one); this.meshes[c.type].setMatrixAt(c.slot, m4);
       // lights
-      const o = ci * 12;
       const show = night ? 1 : 0, brk = c.brake ? 1 : 0;
       const put = (k, lp, col, on) => { const v = new THREE.Vector3(...lp).applyQuaternion(q).add(p); this.lp[o + k * 3] = v.x; this.lp[o + k * 3 + 1] = v.y; this.lp[o + k * 3 + 2] = v.z; this.lc[o + k * 3] = col[0] * on; this.lc[o + k * 3 + 1] = col[1] * on; this.lc[o + k * 3 + 2] = col[2] * on; };
       put(0, mdl.head[0], [1, 0.95, 0.8], show); put(1, mdl.head[1], [1, 0.95, 0.8], show);
       put(2, mdl.tail[0], [1, 0.08, 0.04], Math.max(show * 0.5, brk)); put(3, mdl.tail[1], [1, 0.08, 0.04], Math.max(show * 0.5, brk));
     });
-    for (const t in this.meshes) this.meshes[t].instanceMatrix.needsUpdate = true;
+    const col = new THREE.Color();
+    for (const t in this.meshes) { const m = this.meshes[t]; m.count = vis[t]; m.instanceMatrix.needsUpdate = true; }
+    for (const c of this.cars) if (c.slot !== undefined && c.slot >= (this.parkedCount[c.type] || 0) && c.slot < vis[c.type]) this.meshes[c.type].setColorAt(c.slot, col.set(c.color));
+    for (const t in this.meshes) if (this.meshes[t].instanceColor) this.meshes[t].instanceColor.needsUpdate = true;
     this.lights.geometry.attributes.position.needsUpdate = true; this.lights.geometry.attributes.color.needsUpdate = true;
     this.updateTrain(dt);
   }

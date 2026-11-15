@@ -170,38 +170,42 @@ export class Flora {
     // instanced meshes: hi + lo for each variant
     for (const k of this.kinds) {
       if (!k.inst.length) continue;
-      k.hi = new THREE.InstancedMesh(k.model.geo, k.mat, k.inst.length); k.hi.castShadow = W.q.shadows; k.hi.receiveShadow = true; k.hi.frustumCulled = false;
-      k.lo = new THREE.InstancedMesh(k.model.lo(), k.loMat, k.inst.length); k.lo.receiveShadow = true; k.lo.frustumCulled = false;
+      // three tiers: near (casts shadows), hi (detailed, no shadow work), lo (simple shapes far away)
+      k.near = new THREE.InstancedMesh(k.model.geo, k.mat, k.inst.length); k.near.castShadow = W.q.shadows; k.near.receiveShadow = true; k.near.frustumCulled = false;
+      k.hi = new THREE.InstancedMesh(k.model.geo, k.mat, k.inst.length); k.hi.frustumCulled = false;
+      k.lo = new THREE.InstancedMesh(k.model.lo(), k.loMat, k.inst.length); k.lo.frustumCulled = false;
       const tint = new THREE.Color();
-      k.inst.forEach((_, i) => { tint.setHSL(0.08 + r() * 0.05, 0.2 * r(), 0.42 + r() * 0.16).multiplyScalar(2.2); k.hi.setColorAt(i, tint); k.lo.setColorAt(i, tint); });
-      k.hi.count = k.lo.count = 0;
-      this.group.add(k.hi, k.lo);
+      k.inst.forEach((_, i) => { tint.setHSL(0.08 + r() * 0.05, 0.2 * r(), 0.42 + r() * 0.16).multiplyScalar(2.2); k.near.setColorAt(i, tint); k.hi.setColorAt(i, tint); k.lo.setColorAt(i, tint); });
+      k.near.count = k.hi.count = k.lo.count = 0;
+      this.group.add(k.near, k.hi, k.lo);
     }
-    this.loDist = { low: 450, medium: 800, high: 1300 }[W.qName] || 800;
+    this.loDist = { low: 400, medium: 650, high: 1300 }[W.qName] || 650;
+    this.farDist = { low: 4500, medium: 6000, high: 9000 }[W.qName] || 6000;
     this.lastLod = null;
     this.buildGrass();
   }
   // re-bucket instances into near (detailed) / far (simple) meshes
   updateLod(cam) {
-    if (this.lastLod && this.lastLod.distanceToSquared(cam) < 60 * 60) return;
+    if (this.lastLod && this.lastLod.distanceToSquared(cam) < 40 * 40) return;
     this.lastLod = cam.clone();
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
-    const d2 = this.loDist * this.loDist, far2 = 9000 * 9000;
+    const d2 = this.loDist * this.loDist, far2 = this.farDist * this.farDist, n2 = 170 * 170;
     for (const k of this.kinds) {
       if (!k.hi) continue;
-      let nh = 0, nl = 0;
+      let nn = 0, nh = 0, nl = 0;
       for (const [x, y, z, sc, yaw] of k.inst) {
         const dd = (x - cam.x) ** 2 + (z - cam.z) ** 2; if (dd > far2) continue;
         p.set(x, y, z); q.setFromAxisAngle(up, yaw); s.set(sc, sc, sc); m.compose(p, q, s);
-        if (dd < d2) k.hi.setMatrixAt(nh++, m); else k.lo.setMatrixAt(nl++, m);
+        if (dd < n2) k.near.setMatrixAt(nn++, m); else if (dd < d2) k.hi.setMatrixAt(nh++, m); else k.lo.setMatrixAt(nl++, m);
       }
-      k.hi.count = nh; k.lo.count = nl; k.hi.instanceMatrix.needsUpdate = true; k.lo.instanceMatrix.needsUpdate = true;
+      k.near.count = nn; k.hi.count = nh; k.lo.count = nl;
+      for (const mm of [k.near, k.hi, k.lo]) mm.instanceMatrix.needsUpdate = true;
     }
   }
   // tufts of grass that follow the camera when low
   buildGrass() {
     if (this.w.loc.desert && false) return;
-    const n = { low: 0, medium: 9000, high: 20000 }[this.w.qName] ?? 9000; if (!n) return;
+    const n = { low: 0, medium: 3500, high: 20000 }[this.w.qName] ?? 3500; if (!n) return;
     const pos = [], col = [], c = new THREE.Color(), base = new THREE.Color(this.w.loc.desert ? 0xb89a5a : 0x5b7d33);
     for (let k = 0; k < 5; k++) { const a = (k / 5) * Math.PI, lean = (k % 2 ? 0.15 : -0.12); const cx = Math.cos(a) * 0.12, cz = Math.sin(a) * 0.12; pos.push(-cx, 0, -cz, cx, 0, cz, Math.sin(a) * lean, 1, Math.cos(a) * lean); for (let v = 0; v < 3; v++) { c.copy(base).multiplyScalar(v === 2 ? 1.25 : 0.6); col.push(c.r, c.g, c.b); } }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); g.computeVertexNormals();

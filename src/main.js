@@ -4,7 +4,7 @@ import { makePresets, encodeDesign, decodeDesign, cloneDesign, analyze } from '.
 import { Hangar, makeThumbnails } from './hangar.js';
 import { Aircraft, REALISM } from './aircraft.js';
 import { World, LOCATIONS, WEATHER } from './world.js';
-import { Traffic, buildStatic } from './traffic.js';
+import { Traffic, buildStatic, mergeByMaterial } from './traffic.js';
 import { Effects } from './effects.js';
 import { Audio } from './audio.js';
 import { Controls } from './controls.js';
@@ -23,7 +23,11 @@ const LS = {
   set(k, v) { try { localStorage.setItem('skywright.' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
-const settings = Object.assign({ quality: isTouch ? 'medium' : 'high', units: 'imperial', invert: false, controlMode: 'stick', volume: 0.8, touch: 'auto' }, LS.get('settings', {}));
+const settings = Object.assign({ quality: 'auto', units: 'imperial', invert: false, controlMode: 'stick', volume: 0.8, touch: 'auto', showFps: false }, LS.get('settings', {}));
+if ((settings.v || 1) < 2) { settings.quality = 'auto'; settings.v = 2; LS.set('settings', settings); } // move everyone onto adaptive quality once
+// 'auto' = medium features on tablets / high on desktops, plus resolution that adapts to the frame rate
+const qualityTier = () => (settings.quality === 'auto' ? (isTouch ? 'medium' : 'high') : settings.quality);
+const perf = { scale: 1, level: 0, ema: 16.7, slowT: 0, fastT: 0, lastChange: 0, fps: 60 };
 const flightCfg = Object.assign({ location: 'alpine', time: 10, weather: 'clear', realism: 'pilot', mode: 'free', start: 'runway' }, LS.get('flight', {}));
 
 // ---------- renderer ----------
@@ -32,10 +36,12 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPrefere
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-const pixelRatio = () => Math.min(window.devicePixelRatio || 1, { low: 1, medium: 1.5, high: 2 }[settings.quality]);
+const pixelRatio = () => Math.max(0.5, Math.min(window.devicePixelRatio || 1, { low: 1, medium: 1.25, high: 2 }[qualityTier()]) * (settings.quality === 'auto' ? perf.scale : 1));
 renderer.setPixelRatio(pixelRatio());
 const post = new Post(renderer);
-post.enabled = settings.quality !== 'low';
+post.enabled = qualityTier() !== 'low';
+post.setSamples(qualityTier() === 'high' ? 4 : 0);
+renderer.shadowMap.type = qualityTier() === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 
 const audio = new Audio(); audio.volume = settings.volume;
 const $ = (s) => document.querySelector(s);
@@ -211,7 +217,8 @@ function buildInfo() {
 function settingsModal() {
   const m = ui.modal(`
     <h2>Settings</h2>
-    <label class="lbl">Graphics</label><div class="chips">${['low', 'medium', 'high'].map((q) => `<button data-q="${q}" class="${settings.quality === q ? 'on' : ''}">${q[0].toUpperCase() + q.slice(1)}</button>`).join('')}</div>
+    <label class="lbl">Graphics</label><div class="chips">${['auto', 'low', 'medium', 'high'].map((q) => `<button data-q="${q}" class="${settings.quality === q ? 'on' : ''}">${q === 'auto' ? 'Auto (recommended)' : q[0].toUpperCase() + q.slice(1)}</button>`).join('')}</div>
+    <label class="check"><input type="checkbox" id="fps" ${settings.showFps ? 'checked' : ''}> Show frame rate</label>
     <label class="lbl">Units</label><div class="chips"><button data-u="imperial" class="${settings.units === 'imperial' ? 'on' : ''}">Knots &amp; feet</button><button data-u="metric" class="${settings.units === 'metric' ? 'on' : ''}">km/h &amp; metres</button></div>
     <label class="lbl">Touch steering</label><div class="chips"><button data-cm="stick" class="${settings.controlMode === 'stick' ? 'on' : ''}">On-screen stick</button><button data-cm="tilt" class="${settings.controlMode === 'tilt' ? 'on' : ''}">Tilt the tablet</button></div>
     <label class="lbl">On-screen controls</label><div class="chips">${['auto', 'on', 'off'].map((t) => `<button data-t="${t}" class="${settings.touch === t ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>
@@ -221,7 +228,8 @@ function settingsModal() {
     <div class="modal-foot"><button data-close class="primary">Done</button></div>`);
   const el = m.el;
   const pick = (attr, key, after) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { settings[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); LS.set('settings', settings); after?.(); }));
-  pick('q', 'quality', () => { renderer.setPixelRatio(pixelRatio()); post.enabled = settings.quality !== 'low'; onResize(); });
+  pick('q', 'quality', () => { perf.scale = 1; perf.level = 0; applyQuality(); });
+  el.querySelector('#fps').addEventListener('change', (e) => { settings.showFps = e.target.checked; LS.set('settings', settings); });
   pick('u', 'units', renderInspector); pick('cm', 'controlMode', () => controls.setMode(settings.controlMode)); pick('t', 'touch');
   el.querySelector('#inv').addEventListener('change', (e) => { settings.invert = e.target.checked; controls.invert = settings.invert; LS.set('settings', settings); });
   el.querySelector('#vol').addEventListener('input', (e) => { settings.volume = +e.target.value; audio.setVolume(settings.volume); LS.set('settings', settings); });
@@ -269,8 +277,8 @@ function startFlight(cfgOverride) {
 }
 function buildFlight(cfg) {
   const scene = new THREE.Scene();
-  const world = new World(renderer, scene, { location: cfg.location, quality: settings.quality, time: cfg.time, weather: cfg.weather });
-  world.addParked([buildStatic(presets[2]), buildStatic(presets[0]), buildStatic(presets[4]), buildStatic(presets[7])]);
+  const world = new World(renderer, scene, { location: cfg.location, quality: qualityTier(), time: cfg.time, weather: cfg.weather });
+  world.addParked([2, 0, 4, 7].map((i) => mergeByMaterial(buildStatic(presets[i]))));
   const realism = REALISM[cfg.realism];
   const design = cloneDesign(hangar.design);
   const ac = new Aircraft(design, realism);
@@ -568,10 +576,45 @@ function waterProximity(f, world, p) {
 
 // ---------- main loop ----------
 let last = performance.now();
+function applyQuality() {
+  const tier = qualityTier();
+  renderer.setPixelRatio(pixelRatio());
+  post.enabled = tier !== 'low' && perf.level < 2;
+  post.setSamples(tier === 'high' && perf.level < 1 ? 4 : 0);
+  renderer.shadowMap.type = tier === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+  if (F) F.world.sun.castShadow = F.world.q.shadows && perf.level < 3;
+  hangar.setQuality(tier);
+  onResize();
+}
+// Adaptive quality: keep the frame rate up by lowering the render resolution, then
+// switching off the most expensive effects (MSAA -> bloom/post -> shadows) if needed.
+function governPerf(dt) {
+  const ms = dt * 1000; perf.ema += (ms - perf.ema) * 0.05; perf.fps = 1000 / perf.ema;
+  const fpsEl = document.getElementById('fps-meter');
+  if (fpsEl) { fpsEl.style.display = settings.showFps && state === 'flight' ? '' : 'none'; if (settings.showFps) fpsEl.textContent = `${Math.round(perf.fps)} fps · ${Math.round(renderer.getPixelRatio() * 100)}% res${perf.level ? ' · lite ' + perf.level : ''}`; }
+  if (settings.quality !== 'auto' || (state !== 'flight' && state !== 'hangar')) return;
+  const now = performance.now();
+  if (ms > 100) return; // ignore hitches (loading, tab switches)
+  if (perf.ema > 22) { perf.slowT += dt; perf.fastT = 0; } else if (perf.ema < 17.5) { perf.fastT += dt; perf.slowT = 0; } else { perf.slowT = perf.fastT = 0; }
+  if (now - perf.lastChange < 1500) return;
+  if (perf.slowT > 1.5) {
+    if (perf.scale > 0.55) perf.scale = Math.max(0.55, perf.scale - 0.12); else if (perf.level < 3) perf.level++;
+    perf.slowT = 0; perf.lastChange = now; applyQuality();
+  } else if (perf.fastT > 5 && (perf.scale < 1 || perf.level > 0)) {
+    if (perf.level > 0 && perf.scale >= 0.9) perf.level--; else perf.scale = Math.min(1, perf.scale + 0.08);
+    perf.fastT = 0; perf.lastChange = now; applyQuality();
+  }
+}
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
-  if (state === 'hangar') { hangar.update(dt); post.look({ bloom: 0.3, threshold: 3.0, vignette: 0.35, warmth: 0.3 }); post.render(hangar.scene, hangar.camera, dt); }
+  governPerf(dt);
+  if (state === 'hangar') {
+    if (hangar.update(dt)) {
+      post.look({ bloom: 0.3, threshold: 3.0, vignette: 0.35, warmth: 0.3 });
+      if (qualityTier() === 'high' && perf.level < 2) post.render(hangar.scene, hangar.camera, dt); else renderer.render(hangar.scene, hangar.camera);
+    }
+  }
   else if (state === 'flight' && F) {
     stepFlight(dt);
     if (F) {
@@ -603,6 +646,7 @@ async function boot() {
   hangar.load(saved && saved.parts?.length ? saved : presets[0]);
   try { thumbs = makeThumbnails(); } catch (e) { console.warn('thumbnails failed', e); }
   buildPalette(); renderInspector();
+  hangar.setQuality(qualityTier());
   hangar.activate(true);
   requestAnimationFrame(frame);
   $('#splash').classList.add('hide');
@@ -621,6 +665,6 @@ async function boot() {
       document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
     }).catch(() => {});
   }
-  window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, audio, hangar, get F() { return F; }, startFlight, endFlight, presets, settings, flightCfg, controls, rig };
+  window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, presets, settings, flightCfg, controls, rig };
 }
 boot();

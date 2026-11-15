@@ -66,7 +66,7 @@ export const WEATHER = {
 
 const QUALITY = {
   low: { res: 180, bake: 384, trees: 6000, shadows: false, shadowSize: 1024, clouds: 0.5, pixel: 1, post: false },
-  medium: { res: 280, bake: 640, trees: 16000, shadows: true, shadowSize: 2048, clouds: 0.8, pixel: 1.5, post: true },
+  medium: { res: 220, bake: 640, trees: 12000, shadows: true, shadowSize: 1024, clouds: 0.6, pixel: 1.25, post: true },
   high: { res: 420, bake: 1024, trees: 32000, shadows: true, shadowSize: 4096, clouds: 1, pixel: 2, post: true },
 };
 export { QUALITY };

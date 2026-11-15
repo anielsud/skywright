@@ -28,7 +28,8 @@ export class HUD {
         <span class="lamp" id="l-smoke">SMOKE</span><span class="lamp warn" id="l-stall">STALL</span><span class="lamp" id="l-ab">AFTERBURNER</span><span class="lamp" id="l-g">1.0 G</span>
       </div>
       <div id="h-arrow"><div></div></div>
-      <div id="h-center"></div>`;
+      <div id="h-center"></div>
+      <div id="fps-meter" style="display:none"></div>`;
     this.$ = (id) => root.querySelector('#' + id);
     this.adi = this.$('h-adi').getContext('2d'); this.map = this.$('h-map').getContext('2d');
     this.toasts = this.$('h-toasts');

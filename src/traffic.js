@@ -7,6 +7,35 @@ import { M, glowTexture } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { Vehicles } from './vehicles.js';
 
+// Merge a static object tree into one mesh per material (huge draw-call saving for parked planes etc.).
+export function mergeByMaterial(root, skip = () => false) {
+  root.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(root.matrixWorld).invert(), m = new THREE.Matrix4();
+  const buckets = new Map(), skipped = new Set();
+  root.traverse((o) => {
+    if (skip(o)) { o.traverse((c) => skipped.add(c)); return; }
+    if (skipped.has(o) || !o.isMesh || !o.visible || o.isInstancedMesh) return;
+    m.multiplyMatrices(inv, o.matrixWorld);
+    let g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+    if (!g.attributes.normal) g.computeVertexNormals();
+    if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+    g.applyMatrix4(m);
+    if (m.determinant() < 0) { // mirrored: restore outward winding
+      for (const k of ['position', 'normal', 'uv']) { const a = g.attributes[k], n = a.itemSize; for (let t = 0; t < a.count; t += 3) for (let c = 0; c < n; c++) { const x = a.array[(t + 1) * n + c]; a.array[(t + 1) * n + c] = a.array[(t + 2) * n + c]; a.array[(t + 2) * n + c] = x; } }
+    }
+    g.clearGroups();
+    const key = o.material.uuid; if (!buckets.has(key)) buckets.set(key, { mat: o.material, geos: [], shadow: o.castShadow });
+    buckets.get(key).geos.push(g);
+  });
+  const out = new THREE.Group();
+  out.position.copy(root.position); out.quaternion.copy(root.quaternion); out.scale.copy(root.scale);
+  for (const { mat, geos, shadow } of buckets.values()) {
+    const mesh = new THREE.Mesh(mergeGeometries(geos), mat); mesh.castShadow = shadow && !mat.transparent; mesh.receiveShadow = true; out.add(mesh);
+  }
+  return out;
+}
+
 export function buildStatic(design) {
   const g = new THREE.Group(); const m = new THREE.Matrix4();
   for (const p of design.parts) {
@@ -97,12 +126,13 @@ export class Traffic {
       const g = env.clone(); const pos = g.attributes.position; const col = new Float32Array(pos.count * 3); const c1 = new THREE.Color(pal[0]), c2 = new THREE.Color(pal[1]);
       for (let v = 0; v < pos.count; v++) { const ang = Math.atan2(pos.getZ(v), pos.getX(v)); const c = Math.floor((ang + Math.PI) / (Math.PI * 2) * 12) % 2 ? c1 : c2; col.set([c.r, c.g, c.b], v * 3); }
       g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-      const b = new THREE.Group();
+      let b = new THREE.Group();
       const em = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, side: THREE.DoubleSide })); em.position.y = 16; b.add(em);
       const basket = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.1, 1.4), new THREE.MeshStandardMaterial({ color: 0x7a5a36, roughness: 1 })); b.add(basket);
       const burner = new THREE.Mesh(new THREE.SphereGeometry(0.4, 8, 6), M.light(0xffa040).clone()); burner.position.y = 3; b.add(burner);
       for (const [x, z] of [[-0.6, -0.6], [0.6, -0.6], [-0.6, 0.6], [0.6, 0.6]]) { const r = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 4.5), M.black()); r.position.set(x * 1.5, 2.6, z * 1.5); b.add(r); }
       b.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+      const bm = mergeByMaterial(b, (o) => o === burner); bm.add(burner); b = bm;
       const x = (this.r() - 0.5) * 6000, z = (this.r() - 0.5) * 6000;
       b.position.set(x, Math.max(this.world.heightAt(x, z), 0) + 250 + this.r() * 500, z);
       b.userData = { burner, t: this.r() * 10, base: b.position.y };
@@ -156,12 +186,16 @@ export class Traffic {
     const design = JSON.parse(JSON.stringify(d)); design.parts.forEach((p, i) => { if (p.id === 'fus_light') p.color = 0x1d4e89; });
     const obj = new THREE.Group(); const m = new THREE.Matrix4();
     for (const p of design.parts) { const o = PARTS[p.id].build(p.color); partMatrix(p, m); m.decompose(o.position, o.quaternion, o.scale); o.traverse((c) => { if (c.isMesh) c.castShadow = true; }); obj.add(o); }
-    obj.userData.props = []; obj.traverse((c) => { if (c.userData.prop) obj.userData.props.push(c.userData.prop); });
+    const props = []; obj.traverse((c) => { if (c.userData.prop) props.push(c.userData.prop); });
+    const merged = mergeByMaterial(obj, (o) => props.includes(o));
+    obj.updateMatrixWorld(true);
+    for (const pr of props) { const mw = pr.matrixWorld.clone(); merged.add(pr); mw.decompose(pr.position, pr.quaternion, pr.scale); }
+    merged.userData.props = props;
     const h = this.world.loc.rwyH + 320;
     const pts = [[-700, -1400], [-700, 1400], [-450, 1900], [0, 2050], [450, 1900], [700, 1400], [700, -1400], [450, -1900], [0, -2050], [-450, -1900]].map(([x, z]) => new THREE.Vector3(x - 600, h, z));
-    this.pattern = { obj, curve: new THREE.CatmullRomCurve3(pts, true), t: 0, speed: 52 };
+    this.pattern = { obj: merged, curve: new THREE.CatmullRomCurve3(pts, true), t: 0, speed: 52 };
     this.pattern.len = this.pattern.curve.getLength();
-    this.group.add(obj);
+    this.group.add(merged);
   }
   updatePattern(dt) {
     const P = this.pattern; if (!P) return;
