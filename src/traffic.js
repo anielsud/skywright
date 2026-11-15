@@ -17,12 +17,12 @@ export function mergeByMaterial(root, skip = () => false) {
     if (skipped.has(o) || !o.isMesh || !o.visible || o.isInstancedMesh) return;
     m.multiplyMatrices(inv, o.matrixWorld);
     let g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
-    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv', 'uv1'].includes(k)) g.deleteAttribute(k);
     if (!g.attributes.normal) g.computeVertexNormals();
     if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
     g.applyMatrix4(m);
     if (m.determinant() < 0) { // mirrored: restore outward winding
-      for (const k of ['position', 'normal', 'uv']) { const a = g.attributes[k], n = a.itemSize; for (let t = 0; t < a.count; t += 3) for (let c = 0; c < n; c++) { const x = a.array[(t + 1) * n + c]; a.array[(t + 1) * n + c] = a.array[(t + 2) * n + c]; a.array[(t + 2) * n + c] = x; } }
+      for (const k of ['position', 'normal', 'uv', 'uv1']) { const a = g.attributes[k]; if (!a) continue; const n = a.itemSize; for (let t = 0; t < a.count; t += 3) for (let c = 0; c < n; c++) { const x = a.array[(t + 1) * n + c]; a.array[(t + 1) * n + c] = a.array[(t + 2) * n + c]; a.array[(t + 2) * n + c] = x; } }
     }
     g.clearGroups();
     const key = o.material.uuid; if (!buckets.has(key)) buckets.set(key, { mat: o.material, geos: [], shadow: o.castShadow });
@@ -31,6 +31,7 @@ export function mergeByMaterial(root, skip = () => false) {
   const out = new THREE.Group();
   out.position.copy(root.position); out.quaternion.copy(root.quaternion); out.scale.copy(root.scale);
   for (const { mat, geos, shadow } of buckets.values()) {
+    if (!geos.every((g) => g.attributes.uv1)) for (const g of geos) g.deleteAttribute('uv1'); // panel-skin uv1 only if every piece has it
     const mesh = new THREE.Mesh(mergeGeometries(geos), mat); mesh.castShadow = shadow && !mat.transparent; mesh.receiveShadow = true; out.add(mesh);
   }
   return out;
@@ -41,7 +42,7 @@ export function buildStatic(design) {
   for (const p of design.parts) {
     const d = PARTS[p.id]; if (!d) continue;
     const o = d.build(p.color); partMatrix(p, m); m.decompose(o.position, o.quaternion, o.scale);
-    o.traverse((c) => { if (c.isMesh) { c.castShadow = !c.material.transparent; c.receiveShadow = true; } if (c.userData.isDisc) c.visible = false; });
+    o.traverse((c) => { if (c.isMesh) { c.castShadow = !c.material.transparent; c.receiveShadow = true; } if (c.userData.isDisc || c.userData.planeLight) c.visible = false; }); // parked: lights off
     g.add(o);
   }
   // rest on the ground: lowest point at y=0
