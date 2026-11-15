@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.36.0', items: [
+    'Real forests! Thick pine and birch woods in the mountains, palm groves on the islands, and cactus, juniper and desert bushes in the canyon.',
+    'Boulders on the hillsides and grass and flowers when you fly low.',
+  ] },
   { v: '1.35.0', items: [
     'A better sonic BOOM: a sharp double crack (ba-BOOM!) and a long rolling rumble. Watch from the tower and you see the plane first and hear the boom a moment later, like real life. Inside the cockpit you only feel a muffled thump.',
   ] },
