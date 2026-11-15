@@ -2,6 +2,11 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.31.0', items: [
+    'The music now gets quieter while the cockpit voice is talking and right after a big crash, so you never miss what it says. Then it fades back in.',
+    'New stall warning: a wailing reed horn like a real Cessna’s, which keeps sounding for as long as you’re stalled.',
+    'Hear the “clack” of the lever in the cockpit when you move the landing gear or the flaps, just before the motors start.',
+  ] },
   { v: '1.30.1', items: [
     'Behind the scenes: an automatic check now flies every plane before each update, to catch anything broken before it reaches you.',
   ] },

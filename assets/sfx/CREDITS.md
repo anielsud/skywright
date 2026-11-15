@@ -43,6 +43,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Ratchet Wrench Avg Speed Multiple" by Rudmer_Rotteveel (CC0): https://freesound.org/people/Rudmer_Rotteveel/sounds/591524/
 - "Canoe moving through water" by TheFlyFishingFilmmaker (CC BY 4.0): https://freesound.org/people/TheFlyFishingFilmmaker/sounds/592836/
 - "121003 Pigeon flock fly away, wing flaps, Toronto.wav" by TRP (CC0): https://freesound.org/people/TRP/sounds/616623/
+- "switching_a_rattling_lever_with_room_ambience.wav" by mediatheksuche (CC0): https://freesound.org/people/mediatheksuche/sounds/623712/
 - "You've succeeded (game jingle)" by Rolly-SFX (CC0): https://freesound.org/people/Rolly-SFX/sounds/626259/
 - "boat knocks fiberglass water laps on hull.flac" by kyles (CC0): https://freesound.org/people/kyles/sounds/637206/
 - "water movements big splashes and waves.flac" by kyles (CC0): https://freesound.org/people/kyles/sounds/637952/
@@ -58,6 +59,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Locomotive Train Horn" by thet00nedl00n (CC0): https://freesound.org/people/thet00nedl00n/sounds/799291/
 - "Countdown for race, game start" by Pastew (CC0): https://freesound.org/people/Pastew/sounds/813525/
 - "Airport Jet Idle" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/817123/
+- "lever1.wav" by Mihacappy (CC0): https://freesound.org/people/Mihacappy/sounds/827344/
 - "Airplane Turboprop (Outside Perspective) 2" by Saladsounds (CC0): https://freesound.org/people/Saladsounds/sounds/828952/
 - "UIMvmt_Equip Item, Weapon or Armor, Metallic Selection x4" by harrisonlace (CC0): https://freesound.org/people/harrisonlace/sounds/829499/
 - "Cargo Train 2" by Julian_Eftei (CC0): https://freesound.org/people/Julian_Eftei/sounds/831430/

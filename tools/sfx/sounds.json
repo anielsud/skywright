@@ -516,5 +516,17 @@
   "id": 675466,
   "start": 2.58,
   "end": 2.95
+ },
+ "sw_gear": {
+  "id": 623712,
+  "start": 0.0,
+  "end": 0.5,
+  "loop": false
+ },
+ "sw_flaps": {
+  "id": 827344,
+  "start": 0.0,
+  "end": 0.4,
+  "loop": false
  }
 }
