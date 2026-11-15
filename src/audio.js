@@ -27,6 +27,16 @@ const REC = { windExt: 2.66, windCk: 4.6, roll: 2, rain: 2, day: 0.73, night: 0.
 const WS = { place: 0.48, clunk: 0.37, ratchet: 0.29, tick: 0.25, spray: 0.72, select: 0.25, toolbox: 0.35, button: 0.22, room: 0.23 }; // peaks (weighted, 100%): place ≈-29, remove ≈-28, paint/rotate/flip ≈-31, select/undo ≈-32, ticks ≈-36; room tone ≈-47 avg
 const WS_FALLBACK = { place: 'clank', remove: 'clank', paint: 'pop', select: 'click', rotate: 'click', move: 'click', flip: 'click', undo: 'click', redo: 'click', load: 'clank', save: 'clank' };
 export const RPM_RANGE = { piston: [700, 2700], radial: [600, 2600], turboprop: [1000, 2000] };
+// Start / shutdown sequences (see engineStart). Times in seconds from the start: catch = the engine fires, blend = the running
+// voice fades in over [from, to]. Clips are recorded (tools/sfx: Cessna start/stop, J79 start cart); radials share the
+// Cessna start played slower plus a few extra coughs. stopFade = how long the running voice takes to wind out under the stop clip.
+const ENG_SEQ = {
+  piston: { prop: true, clip: 'eng_start_piston', rate: 1, gain: 1.1, catch: 1.7, blend: [1.9, 3.4], stop: 'eng_stop_piston', stopGain: 0.4, stopFade: 0.6, stopDur: 5.8 },
+  radial: { prop: true, clip: 'eng_start_piston', rate: 0.82, gain: 0.9, catch: 2.1, blend: [2.3, 4.3], coughs: [1.2, 1.55, 1.9], stop: 'eng_stop_piston', stopGain: 0.4, stopFade: 0.8, stopDur: 7 },
+  turboprop: { clip: 'eng_spool', rate: 1.1, gain: 0.6, catch: 2.6, blend: [2.4, 4.2], stop: 'eng_stop_jet', stopGain: 0.5, stopFade: 2.5, stopDur: 8 },
+  jet: { clip: 'eng_start_jet', rate: 1, gain: 0.4, catch: 3.0, blend: [3.2, 5.2], stop: 'eng_stop_jet', stopGain: 0.45, stopFade: 3, stopDur: 9 },
+  fan: { clip: 'eng_start_jet', rate: 0.9, gain: 0.4, catch: 3.3, blend: [3.6, 5.8], stop: 'eng_stop_jet', stopGain: 0.45, stopFade: 3.5, stopDur: 10 },
+};
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }; // -12 dB overall: a game shouldn't hit the speaker at full scale
 
 export class Audio {
@@ -152,7 +162,7 @@ export class Audio {
     const spatial = !['wind', 'roll', 'stall', 'rain', 'buffet', 'whistle'].includes(kind);
     // engines: out -> air absorption (distant = duller) -> propagation delay (sound arrives d/343 s late; a changing delay
     // is also physically correct Doppler) -> 3D panner
-    if (spatial) { v.pan = this.panner(); v.air = this.filt('lowpass', 22000, 0.5); v.dl = this.ctx.createDelay(4); v.out.connect(v.air); v.air.connect(v.dl); v.dl.connect(v.pan); v.pan.connect(this.engBus); } else v.out.connect(kind === 'stall' ? this.fx : kind === 'rain' ? this.amb : this.airBus);
+    if (spatial) { v.pan = this.panner(); v.air = this.filt('lowpass', 22000, 0.5); v.dl = this.ctx.createDelay(4); v.seq = this.gain(this.seqGain(kind)); v.out.connect(v.seq); v.seq.connect(v.air); v.air.connect(v.dl); v.dl.connect(v.pan); v.pan.connect(this.engBus); } else v.out.connect(kind === 'stall' ? this.fx : kind === 'rain' ? this.amb : this.airBus);
     const to = (node) => node.connect(v.out);
     if (this.canSample(kind)) { // recorded layers
       const d = SAMPLE_ENGINES[kind]; v.sampled = true; v.layers = [];
@@ -245,8 +255,8 @@ export class Audio {
     const cabinRec = s.engines.some((e) => this.voices[e.sound]?.sampled && SAMPLE_ENGINES[e.sound]?.cabin);
     this.set(this.cockpitLP.frequency, s.cockpit ? (cabinRec ? 5000 : 1600) : 20000, 0.1);
     const seen = new Set();
-    for (const e of s.engines) {
-      const v = this.voice(e.sound); seen.add(e.sound);
+    for (let e of s.engines) {
+      const v = this.voice(e.sound); seen.add(e.sound); e = this.seqTick(v, e); // start/shutdown sequence
       if (s.cockpit && v.pan) v.pan.refDistance = 40; else if (v.pan) v.pan.refDistance = 12 + e.count * 3;
       this.placeVoice(v, e.pos);
       if (v.dl && e.pos && s.listener) {
@@ -334,7 +344,7 @@ export class Audio {
       else if (l.role === 'cabinIdle') g = inside * Math.cos(x * Math.PI / 2);
       else if (l.role === 'ab') g = e.ab ? 1.1 * rear : 0;
       this.set(l.g.gain, g, l.role === 'ab' ? 0.12 : 0.08);
-      this.set(l.src.playbackRate, (l.rate[0] + (l.rate[1] - l.rate[0]) * n) * dop, 0.05);
+      this.set(l.src.playbackRate, (l.rate[0] + (l.rate[1] - l.rate[0]) * n) * dop * (v.rateMul ?? 1), 0.05);
     }
     // overall level grows with power; balanced by measurement against the synth targets (≈-24 dB props, -26 jets at full)
     const lvl = (SAMPLE_LEVEL[kind] || 1) * (0.32 + 0.68 * n) * multi;
@@ -343,6 +353,89 @@ export class Audio {
       if ((v.lastThr ?? 0) - e.spoolT > 0.25 && e.rpm > 1500) for (let k = 0; k < 4; k++) this.burst('crackle', 'bandpass', 600, 1, 0.5, 0.15, this.engBus, k * 0.12 + Math.random() * 0.1);
       v.lastThr = e.spoolT;
     }
+  }
+
+  // ---------- engine start / shutdown ----------
+  // main.js decides when the engines start (first throttle-up on a ground start) and stop (parked at idle). Every engine voice
+  // has a `seq` gain stage in front of its 3D chain. The start recording plays into that same chain (so it is placed, delayed and
+  // muffled like the engine), then the running voice fades in under it from a low catch pitch, so the recording hands over smoothly.
+  // States per sound kind: 'off' (silent) -> 'start' -> 'on' -> 'stop' -> 'off'. Kinds without an entry use engDef.
+  engState(kind) { return this.engSeq?.[kind]?.mode ?? this.engDef ?? 'on'; }
+  seqGain(kind) { return this.engState(kind) === 'off' ? 0 : 1; }
+  // new flight: engines already running (air start, approach) or off (on the runway / water)
+  engineReset(on) {
+    this.engSeq = {}; this.engDef = on ? 'on' : 'off';
+    if (this.ctx) for (const k in this.voices) { const v = this.voices[k]; if (v.seq) { v.seq.gain.cancelScheduledValues(this.ctx.currentTime); v.seq.gain.value = on ? 1 : 0; } }
+  }
+  // play the start sequence for these sound kinds; returns how long (s) the throttle should wait for the engine to catch
+  engineStart(kinds) {
+    if (!this.ctx) return 0;
+    this.engSeq ||= {};
+    let hold = 0;
+    for (const kind of kinds) {
+      const d = ENG_SEQ[kind], st = this.engState(kind);
+      if (!d || (st !== 'off' && st !== 'stop')) { this.engSeq[kind] = { mode: 'on' }; continue; } // rockets, electric: instant
+      const v = this.voice(kind), now = this.ctx.currentTime, g = v.seq.gain;
+      g.cancelScheduledValues(now); g.setValueAtTime(0, now); g.setValueAtTime(0, now + d.blend[0]); g.linearRampToValueAtTime(1, now + d.blend[1]);
+      if (!this.shot(d.clip, { gain: d.gain, rate: d.rate, dest: v.air })) this.synthStart(d, v.air);
+      if (d.coughs) for (const t of d.coughs) this.burst('crackle', 'bandpass', 380 + Math.random() * 200, 0.8, 0.9, 0.22, v.air, t + Math.random() * 0.08);
+      this.engSeq[kind] = { mode: 'start', t0: now };
+      hold = Math.max(hold, d.catch + 0.6);
+    }
+    return hold;
+  }
+  engineStop(kinds) {
+    if (!this.ctx) return;
+    this.engSeq ||= {};
+    for (const kind of kinds) {
+      const d = ENG_SEQ[kind], st = this.engState(kind);
+      if (st === 'off' || st === 'stop') continue;
+      const v = this.voices[kind]; if (!d || !v?.seq) { this.engSeq[kind] = { mode: 'off' }; continue; }
+      const now = this.ctx.currentTime, g = v.seq.gain;
+      g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(0, now + d.stopFade);
+      if (!this.shot(d.stop, { gain: d.stopGain, rate: d.rate, dest: v.air }) && !d.prop) this.sweep('sine', 2200, 180, 0.05, 0.05, 0.5, 3.5, v.air);
+      // props: a few last chuffs as it stops turning
+      if (d.prop) [0.35, 0.8, 1.4].forEach((t, i) => this.burst('brown', 'lowpass', 260, 1, 0.9 / (i + 1), 0.25, v.air, t * (1 / d.rate) + Math.random() * 0.06));
+      this.engSeq[kind] = { mode: 'stop', t0: now };
+    }
+  }
+  // per frame, per engine: keep the voice gated and bend its pitch through the sequence; returns the engine state to voice
+  seqTick(v, e) {
+    v.rateMul = 1;
+    const kind = e.sound, q = this.engSeq?.[kind], mode = q?.mode ?? this.engDef ?? 'on', d = ENG_SEQ[kind];
+    if (!v.seq || !d) return e;
+    if (mode === 'on' || mode === 'off') { this.set(v.seq.gain, mode === 'on' ? 1 : 0, 0.05); return e; }
+    const t = this.ctx.currentTime - q.t0, rr = RPM_RANGE[kind];
+    if (mode === 'start') {
+      if (t > d.blend[1] + 0.2) { q.mode = 'on'; return e; }
+      // props catch low and flare a little before settling; turbines come up from a slow spool
+      const u = Math.min(1, Math.max(0, (t - d.blend[0]) / (d.blend[1] - d.blend[0])));
+      v.rateMul = d.prop ? (u < 0.5 ? 0.75 + 0.7 * u : 1.1 - 0.2 * (u - 0.5)) : 0.6 + 0.4 * u;
+      return e;
+    }
+    // stop: keep the voice "running" at idle while its pitch winds down and the seq gain fades it out
+    if (t > d.stopDur) { q.mode = 'off'; this.set(v.seq.gain, 0, 0.05); return e; }
+    v.rateMul = 1 - (d.prop ? 0.55 : 0.6) * Math.min(1, t / d.stopFade);
+    return { ...e, rpm: Math.max(e.rpm, rr ? rr[0] : 0), spoolT: 0, ab: false };
+  }
+  // synthesized start when the recording isn't loaded
+  synthStart(d, dest) {
+    if (d.prop) { // starter grind: compression chugs + starter motor whine, then it fires
+      for (let t = 0; t < d.catch; t += 0.14) this.burst('brown', 'lowpass', 320, 1, 0.7, 0.1, dest, t);
+      this.sweep('sawtooth', 150, 230, 0.03, 0.15, d.catch - 0.3, 0.2, dest);
+      for (let k = 0; k < 4; k++) this.burst('crackle', 'bandpass', 500, 0.8, 0.8, 0.2, dest, d.catch + k * 0.12);
+    } else { // turbine: starter whine and a rising spool, then the light-off rumble
+      this.sweep('sine', 250, 2400, 0.05, d.catch, 1, 1, dest);
+      this.burst('white', 'bandpass', 200, 0.6, 0.4, d.catch + 1, dest, 0, 1200);
+      this.burst('brown', 'lowpass', 220, 0.7, 1.4, 1.8, dest, d.catch);
+    }
+  }
+  sweep(type, f0, f1, peak, a, hold, r, dest = this.fx, delay = 0) {
+    const o = this.ctx.createOscillator(); o.type = type; const g = this.gain(0); o.connect(g); g.connect(dest);
+    const t = this.ctx.currentTime + delay, T = a + hold + r;
+    o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + T);
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(peak, t + a); g.gain.setValueAtTime(peak, t + a + hold); g.gain.linearRampToValueAtTime(0, t + T);
+    o.start(t); o.stop(t + T + 0.05);
   }
 
   // ---------- ambient world sounds ----------

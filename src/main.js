@@ -539,6 +539,8 @@ function buildFlight(cfg) {
   F = { scene, world, ac, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
   F.callouts = new Callouts(audio, ac);
   F.worldSound = new WorldSound(audio, world, traffic);
+  // engines: already running for air starts; on the ground they start with the first throttle-up (see engineSwitch)
+  F.eng = { on: start === 'air' || start === 'approach', hold: 0, idleT: 0 }; ac.engineRunning = F.eng.on; audio.engineReset(F.eng.on);
   net.attach(F);
   rig.init = false; rig.set('chase'); rig.look.dist = 1;
   hud.setUnits(settings.units); hud.show(true);
@@ -678,15 +680,29 @@ function handleEvents(f, dt) {
   }
 }
 
+// Engine start and shutdown. On a ground start the engines are off: the first throttle-up plays the start sequence and the
+// throttle waits until the engine catches. Parked with the throttle closed for a few seconds, they shut down. Air starts never
+// play a start (the engines are running already), and with ac.engineRunning set, a prop idles at zero throttle instead of stopping.
+const engineKinds = (ac) => [...new Set(ac.parts.filter((p) => p.alive && p.engine?.sound).map((p) => p.engine.sound))];
+function engineSwitch(f, ac, thr, dt) {
+  const E = f.eng; if (!E || ac.dead || !ac.hasEngine) return thr;
+  if (E.hold > 0) { E.hold -= dt; if (E.hold <= 0) E.on = true; else thr = 0; }
+  else if (!E.on && thr > 0.02) { E.hold = audio.engineStart(engineKinds(ac)); if (E.hold > 0) thr = 0; else E.on = true; }
+  else if (E.on && ac.onGround && thr < 0.02 && ac.v.length() < 0.5) { E.idleT += dt; if (E.idleT > 6) { E.on = false; E.idleT = 0; audio.engineStop(engineKinds(ac)); } }
+  else E.idleT = 0;
+  ac.engineRunning = E.on || E.hold > 0;
+  return thr;
+}
+
 function stepFlight(dtReal) {
   const f = F; if (!f || f.paused) return;
   const { ac, world, effects, traffic } = f;
   f.t = (f.t || 0) + dtReal;
   if (f.slowmo > 0) { f.slowmo -= dtReal; f.timeScale = 0.3; } else f.timeScale = Math.min(1, f.timeScale + dtReal * 2);
   const dt = Math.min(dtReal, 1 / 20) * f.timeScale;
-  const c = controls.update(dtReal);
-  ac.setControls({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: c.throttle });
-  ac.brake = c.brake || (c.throttle < 0.03 && ac.onGround && ac.v.length() < 3 && !(ac.isCar && c.pitch > 0.2) ? 1 : 0); // parking brake (not while a car reverses)
+  const c = controls.update(dtReal), thr = engineSwitch(f, ac, c.throttle, dtReal);
+  ac.setControls({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: thr });
+  ac.brake = c.brake || (thr < 0.03 && ac.onGround && ac.v.length() < 3 && !(ac.isCar && c.pitch > 0.2) ? 1 : 0); // parking brake (not while a car reverses)
   ac.step(dt, f.env);
   // trees
   if (!ac.dead && ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), 0) < 30) {

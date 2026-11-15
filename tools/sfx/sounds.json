@@ -381,5 +381,35 @@
   "id": 235451,
   "start": 0,
   "end": 0.95
+ },
+ "eng_start_piston": {
+  "id": 141519,
+  "start": 0.0,
+  "end": 3.8,
+  "loop": false
+ },
+ "eng_stop_piston": {
+  "id": 141519,
+  "start": 25.0,
+  "end": 30.8,
+  "loop": false
+ },
+ "eng_start_jet": {
+  "id": 704945,
+  "start": 7.0,
+  "end": 12.4,
+  "loop": false
+ },
+ "eng_spool": {
+  "id": 704945,
+  "start": 6.0,
+  "end": 10.0,
+  "loop": false
+ },
+ "eng_stop_jet": {
+  "id": 704945,
+  "start": 102.0,
+  "end": 111.5,
+  "loop": false
  }
 }
