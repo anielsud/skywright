@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.30.0', items: [
+    'Super-fast planes now glow like real hot metal: the nose and the front edges of the wings glow brightest, and the back of the plane stays cooler. Flying really high no longer makes stripes on the far-away ground, and messages no longer cover the lights at the top of the screen.',
+  ] },
   { v: '1.29.0', items: [
     'Hear what you’re rolling on: soft rumbly grass, crunchy dirt and sand, squeaky snow, and real bumps and knocks when the ground gets rough.',
     'Float planes splash and swish across the water, and little waves slap against the floats while you sit still.',
