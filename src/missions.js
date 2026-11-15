@@ -14,6 +14,7 @@ export class RingRace {
     this.R = realism === 'arcade' ? 32 : realism === 'pilot' ? 26 : 22;
     this.R = Math.max(this.R, ac.radius * 1.6);
     this.rings = []; this.idx = 0; this.time = 0; this.done = false; this.started = false;
+    this.cdT = 0; this.cdNext = 3; // 3-2-1-GO countdown; the clock starts at GO (or as soon as you move off)
     const pts = [];
     let p = new THREE.Vector3(0, world.loc.rwyH + 150, -1500), heading = 0; // north = -Z
     const rnd = (() => { let s = world.loc.seed * 31; return () => ((s = (s * 16807) % 2147483647) / 2147483647); })();
@@ -46,6 +47,10 @@ export class RingRace {
   }
   update(dt, ac, events) {
     if (this.done) return;
+    if (this.cdNext >= 0) { // a beat every second: 3 at 0.6 s, 2, 1, then GO
+      this.cdT += dt;
+      if (this.cdT >= 0.6 + (3 - this.cdNext)) { events.push({ type: 'count', n: this.cdNext }); if (this.cdNext-- === 0) this.started = true; }
+    }
     if (!this.started && ac.airspeed > 5) this.started = true;
     if (this.started) this.time += dt;
     const r = this.rings[this.idx];

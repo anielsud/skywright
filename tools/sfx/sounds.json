@@ -411,5 +411,65 @@
   "start": 102.0,
   "end": 111.5,
   "loop": false
+ },
+ "ms_chime": {
+  "id": 373364,
+  "start": 0.0,
+  "end": 1.6,
+  "loop": false
+ },
+ "ms_beep": {
+  "id": 813525,
+  "start": 0.0,
+  "end": 0.85,
+  "loop": false
+ },
+ "ms_go": {
+  "id": 813525,
+  "start": 2.92,
+  "end": 4.0,
+  "loop": false
+ },
+ "ms_fanfare": {
+  "id": 677858,
+  "start": 0.45,
+  "end": 3.4,
+  "loop": false
+ },
+ "ms_fail": {
+  "id": 362205,
+  "start": 0.0,
+  "end": 3.8,
+  "loop": false
+ },
+ "ms_record": {
+  "id": 626259,
+  "start": 0.0,
+  "end": 4.1,
+  "loop": false
+ },
+ "vo_checkpoint": {
+  "tts": "Checkpoint!"
+ },
+ "vo_record": {
+  "tts": "New record!"
+ },
+ "vo_complete": {
+  "tts": "Mission complete!"
+ },
+ "vo_three": {
+  "tts": "Three!"
+ },
+ "vo_two": {
+  "tts": "Two!"
+ },
+ "vo_one": {
+  "tts": "One!"
+ },
+ "vo_go": {
+  "tts": "Go!"
+ },
+ "vo_aww": {
+  "tts": "Oh no! Try again!"
  }
 }

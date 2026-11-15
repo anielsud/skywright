@@ -732,9 +732,10 @@ function stepFlight(dtReal) {
   f.mission?.update(dt, ac, f.events);
   ac.events.length = 0;
   for (const e of f.events.splice(0)) {
-    if (e.type === 'ring') { audio.play('ring'); hud.center(`${e.n} / ${e.total}`, 900); }
-    if (e.type === 'raceDone') { audio.play('win'); const best = LS.get('best', {}); const key = `${f.cfg.location}:${hangar.design.name}`; const pb = !best[key] || e.time < best[key]; if (pb) { best[key] = e.time; LS.set('best', best); } setTimeout(() => showEnd(`Course complete: ${e.time.toFixed(1)} s`, pb ? '<p class="good">New personal best!</p>' : `<p>Best: ${best[key].toFixed(1)} s</p>`), 1500); }
-    if (e.type === 'landingDone') { audio.play(e.score > 500 ? 'win' : 'warn'); const stars = '★'.repeat(Math.round(e.score / 200)) + '☆'.repeat(5 - Math.round(e.score / 200)); setTimeout(() => showEnd(e.crashed ? 'Crashed on landing' : `Landing score: ${e.score}`, e.crashed ? '' : `<p class="stars">${stars}</p><p>Sink rate ${e.vs.toFixed(1)} m/s · ${Math.abs(e.cl).toFixed(1)} m off centreline · ${Math.round(Math.abs(e.aim))} m ${e.aim > 0 ? 'short of' : 'past'} the aim point${e.onRwy ? '' : ' · missed the runway!'}</p>`), 800); }
+    if (e.type === 'count') { audio.mission(e.n ? 'count' : 'go', e.n); hud.center(e.n ? `${e.n}` : 'GO!', 800); }
+    if (e.type === 'ring') { audio.mission('checkpoint', e.n, e.total); hud.center(`${e.n} / ${e.total}`, 900); }
+    if (e.type === 'raceDone') { audio.mission('win'); const best = LS.get('best', {}); const key = `${f.cfg.location}:${hangar.design.name}`; const pb = !best[key] || e.time < best[key]; if (pb) { best[key] = e.time; LS.set('best', best); setTimeout(() => audio.mission('record'), 2600); } setTimeout(() => showEnd(`Course complete: ${e.time.toFixed(1)} s`, pb ? '<p class="good">New personal best!</p>' : `<p>Best: ${best[key].toFixed(1)} s</p>`), 1500); }
+    if (e.type === 'landingDone') { audio.mission(e.crashed || e.score < 300 ? 'fail' : e.score > 500 ? 'win' : 'ok'); const stars = '★'.repeat(Math.round(e.score / 200)) + '☆'.repeat(5 - Math.round(e.score / 200)); setTimeout(() => showEnd(e.crashed ? 'Crashed on landing' : `Landing score: ${e.score}`, e.crashed ? '' : `<p class="stars">${stars}</p><p>Sink rate ${e.vs.toFixed(1)} m/s · ${Math.abs(e.cl).toFixed(1)} m off centreline · ${Math.round(Math.abs(e.aim))} m ${e.aim > 0 ? 'short of' : 'past'} the aim point${e.onRwy ? '' : ' · missed the runway!'}</p>`), 800); }
     if (e.type === 'thunder') setTimeout(() => audio.play('thunder', e.power), e.delay * 1000);
   }
   // debris

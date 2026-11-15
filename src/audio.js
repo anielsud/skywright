@@ -26,6 +26,9 @@ const REC = { windExt: 2.66, windCk: 4.6, roll: 2, rain: 2, day: 0.73, night: 0.
 // workshop foley (hangar building) levels, and the synth each falls back to while clips load
 const WS = { place: 0.48, clunk: 0.37, ratchet: 0.29, tick: 0.25, spray: 0.72, select: 0.25, toolbox: 0.35, button: 0.22, room: 0.23 }; // peaks (weighted, 100%): place ≈-29, remove ≈-28, paint/rotate/flip ≈-31, select/undo ≈-32, ticks ≈-36; room tone ≈-47 avg
 const WS_FALLBACK = { place: 'clank', remove: 'clank', paint: 'pop', select: 'click', rotate: 'click', move: 'click', flip: 'click', undo: 'click', redo: 'click', load: 'clank', save: 'clank' };
+// mission stings (rings, countdown, results)
+const MS = { chime: 0.36, beep: 0.53, fanfare: 0.49, fail: 0.47, record: 0.75 }; // peaks (weighted, 100%): chime ≈-27, countdown ≈-29 (GO ≈-26), fanfare ≈-24.5, fail ≈-26.5, record ≈-25
+const RING_STEPS = [-5, -3, -1, 0, 2, 4, 5, 7, 9, 11, 12, 14]; // semitones: the checkpoint chime climbs a major scale, G up to the D above the octave
 export const RPM_RANGE = { piston: [700, 2700], radial: [600, 2600], turboprop: [1000, 2000] };
 // Start / shutdown sequences (see engineStart). Times in seconds from the start: catch = the engine fires, blend = the running
 // voice fades in over [from, to]. Clips are recorded (tools/sfx: Cessna start/stop, J79 start cart); radials share the
@@ -609,6 +612,48 @@ export class Audio {
   }
   // quiet room tone under the hangar music: a big workshop with tools going far off ('world' channel)
   roomTone(on) { this.roomOn = on; if (this.ctx) this.bedGain('amb_hangar', this.amb, on ? WS.room : 0, on ? 1.5 : 0.4); }
+
+  // ---------- mission sounds (rings, countdown, results) ----------
+  // Recorded stings, each with a synth fallback, plus optional voice lines (audio.say: off with the callouts setting).
+  // kind: 'checkpoint' (n of total: the chime climbs a scale ring by ring), 'count' (n = 3, 2, 1), 'go', 'win', 'ok', 'fail', 'record'
+  mission(kind, n = 1, total = 12) {
+    if (!this.ctx) return;
+    switch (kind) {
+      case 'checkpoint': {
+        const last = n >= total, i = Math.round(((Math.min(n, total) - 1) / Math.max(1, total - 1)) * (RING_STEPS.length - 1));
+        const semi = RING_STEPS[i], rate = 2 ** (semi / 12);
+        if (this.shot('ms_chime', { gain: MS.chime, rate })) {
+          if (last) [4, 7, 12].forEach((s, k) => this.shot('ms_chime', { gain: MS.chime * 0.7, rate: rate * 2 ** (s / 12), delay: 0.07 * (k + 1) })); // final ring: a sparkling chord
+        } else { const f = 1046 * rate; this.tone('sine', f, f, 0.12, 0.6); this.tone('sine', f * 2, f * 2, 0.03, 0.4); if (last) [1.26, 1.5, 2].forEach((m, k) => this.tone('sine', f * m, f * m, 0.08, 0.6, 0.07 * (k + 1))); }
+        if (!last) this.sayLater('vo_checkpoint', 0.35);
+        break;
+      }
+      case 'count':
+        if (!this.shot('ms_beep', { gain: MS.beep })) this.tone('sine', 880, 880, 0.1, 0.35);
+        this.say({ 3: 'vo_three', 2: 'vo_two', 1: 'vo_one' }[n]);
+        break;
+      case 'go':
+        if (!this.shot('ms_go', { gain: MS.beep, rate: 1.5 })) this.tone('sine', 1320, 1320, 0.12, 0.8);
+        this.say('vo_go');
+        break;
+      case 'win': // mission complete: fanfare, then the voice once the brass has had its moment
+        if (!this.shot('ms_fanfare', { gain: MS.fanfare })) [523, 659, 784, 1046, 1318].forEach((f, k) => { this.tone('triangle', f, f, 0.13, 0.9, k * 0.11); this.tone('sine', f * 2, f * 2, 0.04, 0.6, k * 0.11); });
+        this.sayLater('vo_complete', 1.1);
+        break;
+      case 'ok': // finished, but not brilliantly: a friendly two-note chime
+        if (!this.shot('ms_chime', { gain: MS.chime, rate: 1 }) || !this.shot('ms_chime', { gain: MS.chime, rate: 2 ** (7 / 12), delay: 0.16 })) { this.tone('sine', 1046, 1046, 0.1, 0.6); this.tone('sine', 1568, 1568, 0.1, 0.6, 0.16); }
+        break;
+      case 'fail': // "wah wah wahhh"
+        if (!this.shot('ms_fail', { gain: MS.fail })) [392, 370, 349, 330].forEach((f, k) => this.tone('sawtooth', f, k === 3 ? f * 0.94 : f, 0.04, k === 3 ? 1.1 : 0.4, k * 0.45));
+        this.sayLater('vo_aww', 2.6);
+        break;
+      case 'record':
+        if (!this.shot('ms_record', { gain: MS.record })) [784, 988, 1175, 1568].forEach((f, k) => this.tone('triangle', f, f, 0.1, 0.5, k * 0.09));
+        this.sayLater('vo_record', 0.5);
+        break;
+    }
+  }
+  sayLater(name, s) { setTimeout(() => this.say(name), s * 1000); }
 
   // ---------- music: streamed tracks (assets/music, Kevin MacLeod, CC BY 4.0), crossfaded by context ----------
   // Streamed through a media element rather than decoded: a decoded 3-minute track would take ~70 MB on a tablet.

@@ -2,6 +2,11 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.27.0', items: [
+    'Ring Race now starts with a countdown: “Three! Two! One! GO!” and the clock starts on GO.',
+    'Every ring rings a bell, and each one plays a higher note than the last, so you can hear yourself getting closer to the finish. The final ring plays a sparkly chord!',
+    'Finish a mission and a fanfare plays. Beat your best time and you hear “New record!”. A bumpy landing gets a sad “wah wah wahhh”.',
+  ] },
   { v: '1.26.0', items: [
     'A brand-new sky: blue at noon, glowing orange sunsets, deep blue twilight and starry nights. Far-away mountains fade into the haze like in real life.',
     'Fluffy new clouds with bright sunny tops and dark bottoms. Fly above the overcast and you’ll find a sunny sea of clouds.',
