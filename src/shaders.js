@@ -64,11 +64,12 @@ export function installFog() {
 }
 
 // ---------- terrain material ----------
-// patch=true: the near-camera detail mesh (draws everything); otherwise the coarse core mesh, which skips the patch area.
+// patch=true: draws everything (the near-camera detail mesh, and the streamed outer tiles); otherwise the coarse core mesh, which skips the patch area.
 export function terrainMaterial(maps, patch = false) {
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.93, metalness: 0 });
   const U = { albedoTex: { value: maps.albedo }, normTex: { value: maps.normal }, shadowTex: { value: maps.shadow },
-    tHalf: { value: maps.half }, tSize: { value: maps.size }, shadowOn: { value: 1 }, patchRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, ...maps.detailU };
+    tOrig: { value: maps.orig }, tSpan: { value: maps.span }, sOrig: { value: maps.sOrig || maps.orig }, sSpan: { value: maps.sSpan || maps.span },
+    shadowOn: { value: maps.shadowOn ?? 1 }, patchRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, ...maps.detailU };
   mat.userData.U = U;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, U);
@@ -76,14 +77,14 @@ export function terrainMaterial(maps, patch = false) {
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
       varying vec3 vTW; uniform sampler2D albedoTex; uniform sampler2D normTex; uniform sampler2D shadowTex;
-      uniform float tHalf; uniform float tSize; uniform float shadowOn; uniform vec4 patchRect;
+      uniform vec2 tOrig; uniform float tSpan; uniform vec2 sOrig; uniform float sSpan; uniform float shadowOn; uniform vec4 patchRect;
       ${TERRAIN_DETAIL_GLSL}`)
       .replace('#include <map_fragment>', `
         ${patch ? '' : 'if (vTW.x > patchRect.x && vTW.x < patchRect.z && vTW.z > patchRect.y && vTW.z < patchRect.w) discard;'}
-        vec2 tuv = (vTW.xz + tHalf) / tSize;
+        vec2 tuv = (vTW.xz - tOrig) / tSpan; // texel centres sit exactly on the bake grid points
         vec4 alb = texture2D(albedoTex, tuv);
         vec3 wn = normalize(texture2D(normTex, tuv).xyz * 2.0 - 1.0);
-        float terrainShadow = mix(1.0, texture2D(shadowTex, tuv).r, shadowOn);
+        float terrainShadow = mix(1.0, texture2D(shadowTex, (vTW.xz - sOrig) / sSpan).r, shadowOn);
         float dist = length(vTW - cameraPosition);
         vec3 mul, dn; terrainDetail(vTW, wn, dist, mul, dn);
         // snow keeps the relief but not the photo colour

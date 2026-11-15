@@ -136,7 +136,8 @@ export class Flora {
     this.w = world; this.group = new THREE.Group(); world.group.add(this.group);
     const r = mulberry32(world.loc.seed * 3 + 11), W = world, loc = W.loc;
     const kinds = biome(loc);
-    const total = W.q.trees;
+    // the whole core is planted (right up to its edge, where the streamed tiles carry on at the same density)
+    const total = Math.round(W.q.trees / 0.86 ** 2);
     this.kinds = [];
     const swayCache = {};
     const mkMat = (sway, dbl) => swayCache[sway + '' + dbl] || (swayCache[sway + '' + dbl] = swayMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: dbl ? THREE.DoubleSide : THREE.FrontSide }), sway));
@@ -147,11 +148,11 @@ export class Flora {
     }
     // scatter
     const wsum = this.kinds.reduce((a, k) => a + k.w / k.variants, 0);
-    const pick = () => { let x = r() * wsum; for (const k of this.kinds) { x -= k.w / k.variants; if (x <= 0) return k; } return this.kinds[0]; };
-    this.grid = new Map(); let placed = 0;
+    const pick = this.pick = (r) => { let x = r() * wsum; for (const k of this.kinds) { x -= k.w / k.variants; if (x <= 0) return k; } return this.kinds[0]; };
+    this.grid = new Map(); let placed = 0, tries = 0;
     const towns = W.net.towns, fields = W.net.fields;
-    for (let tries = 0; tries < total * 25 && placed < total; tries++) {
-      const x = (r() - 0.5) * W.size * 0.86, z = (r() - 0.5) * W.size * 0.86;
+    for (; tries < total * 25 && placed < total; tries++) {
+      const x = (r() - 0.5) * W.size, z = (r() - 0.5) * W.size;
       if (Math.abs(x - 140) < 520 && Math.abs(z) < 1400) continue;
       const g = W.groundAt(x, z); if (g.type === 'water' || g.type === 'runway') continue;
       const h = g.h, s = 1 - g.n.y, n = W.noise.n2(x / 90, z / 90), f = W.noise.fbm(x / 260 + 7, z / 260, 3);
@@ -161,12 +162,14 @@ export class Flora {
       if (fields.some((fl) => Math.abs(x - fl.x) < fl.sx + fl.sz && Math.abs(z - fl.z) < fl.sx + fl.sz)) continue;
       if (W.nearRoad(x, z, 12)) continue;
       const nearWater = W.sampleGrid(x + 60, z) < W.waterLevel + 1 || W.sampleGrid(x - 60, z) < W.waterLevel + 1 || W.sampleGrid(x, z + 60) < W.waterLevel + 1 || W.sampleGrid(x, z - 60) < W.waterLevel + 1;
-      const k = pick(); if (!k.where(h, s, n, f, nearWater)) continue;
+      const k = pick(r); if (!k.where(h, s, n, f, nearWater)) continue;
       const sc = 0.75 + r() * 0.55, yaw = r() * Math.PI * 2;
       k.inst.push([x, h - 0.15, z, sc, yaw]);
       if (!k.model.rock) { const key = Math.floor(x / 50) + ',' + Math.floor(z / 50); if (!this.grid.has(key)) this.grid.set(key, []); this.grid.get(key).push([x, h, z, k.model.H * sc, Math.max(1.2, k.model.R * sc * 0.5)]); }
       placed++;
     }
+    // the outer tiles make the same number of attempts per m² as were needed here, so they end up just as wooded
+    this.rate = { tries: tries / W.size ** 2, max: 3 * total / W.size ** 2 };
     // instanced meshes: hi + lo for each variant
     for (const k of this.kinds) {
       if (!k.inst.length) continue;
@@ -175,7 +178,7 @@ export class Flora {
       k.hi = new THREE.InstancedMesh(k.model.geo, k.mat, k.inst.length); k.hi.frustumCulled = false;
       k.lo = new THREE.InstancedMesh(k.model.lo(), k.loMat, k.inst.length); k.lo.frustumCulled = false;
       const tint = new THREE.Color();
-      k.inst.forEach((_, i) => { tint.setHSL(0.08 + r() * 0.05, 0.2 * r(), 0.42 + r() * 0.16).multiplyScalar(2.2); k.near.setColorAt(i, tint); k.hi.setColorAt(i, tint); k.lo.setColorAt(i, tint); });
+      k.inst.forEach((_, i) => { Flora.tint(r, tint); k.near.setColorAt(i, tint); k.hi.setColorAt(i, tint); k.lo.setColorAt(i, tint); });
       k.near.count = k.hi.count = k.lo.count = 0;
       this.group.add(k.near, k.hi, k.lo);
     }
@@ -184,6 +187,9 @@ export class Flora {
     this.lastLod = null;
     this.buildGrass();
   }
+  static tint(r, c) { return c.setHSL(0.08 + r() * 0.05, 0.2 * r(), 0.42 + r() * 0.16).multiplyScalar(2.2); }
+  // shared simple far-away shape for a kind (also used by the outer tiles, even for kinds the core didn't place)
+  loGeo(k) { return k.lo ? k.lo.geometry : (k.loGeoCache ||= k.model.lo()); }
   // re-bucket instances into near (detailed) / far (simple) meshes
   updateLod(cam) {
     if (this.lastLod && this.lastLod.distanceToSquared(cam) < 40 * 40) return;
