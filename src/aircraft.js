@@ -7,19 +7,47 @@ import { clamp, lerp } from './noise.js';
 import { keepHeatPatch } from './sonic.js';
 import { assemble, updateDetail, mergeStatic } from './planeDetail.js';
 
+// spaceRCS: every plane can turn in space (no RCS part needed). rocketHigh: rockets push up to 1 + rocketHigh times harder
+// in the thin air above ~10 km (a generous shove towards space). Nothing changes lower down.
 export const REALISM = {
-  arcade: { id: 'arcade', name: 'Arcade', aeroTorque: 0, assist: 1, liftMult: 1.6, minArea: 12, stallSharp: 0, sideslipKill: 1.6, gearMult: 2.5, crashMult: 2.6, gLimit: Infinity, thrustTorque: 0, propTorque: 0, dragMult: 0.6, autoLevel: 0.9, waveMult: 0.45 },
+  arcade: { id: 'arcade', name: 'Arcade', aeroTorque: 0, assist: 1, liftMult: 1.6, minArea: 12, stallSharp: 0, sideslipKill: 1.6, gearMult: 2.5, crashMult: 2.6, gLimit: Infinity, thrustTorque: 0, propTorque: 0, dragMult: 0.6, autoLevel: 0.9, waveMult: 0.45, spaceRCS: 1, rocketHigh: 0.5 },
   pilot: { id: 'pilot', name: 'Pilot', aeroTorque: 0.55, assist: 0.45, liftMult: 1.15, minArea: 0, stallSharp: 0.5, sideslipKill: 0.25, gearMult: 1.5, crashMult: 1.6, gLimit: 16, thrustTorque: 0.4, propTorque: 0, dragMult: 0.85, autoLevel: 0.15, waveMult: 0.75 },
   sim: { id: 'sim', name: 'Simulator', aeroTorque: 1, assist: 0, liftMult: 1, minArea: 0, stallSharp: 1, sideslipKill: 0, gearMult: 1, crashMult: 1, gLimit: 10, thrustTorque: 1, propTorque: 1, dragMult: 1, autoLevel: 0, waveMult: 1 },
 };
 
 const G = 9.81;
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _qi = new THREE.Quaternion();
-export const airDensity = (h) => 1.225 * Math.exp(-Math.max(0, h) / 9000);
-// ISA air temperature (K): -6.5 °C per km up to the tropopause at 11 km, then a constant -56.5 °C
-export const airTemp = (h) => 288.15 - 0.0065 * clamp(h, 0, 11000);
+// ---- the atmosphere, from the runway to space ----
+// Air density (kg/m³): the old exponential (a near-perfect fit to the ISA troposphere) up to 11 km, then the
+// US Standard Atmosphere 1976, interpolated log-linearly: 1/14 of sea level at 20 km, 1/1000 at 48 km, ~0 above 100 km.
+const RHO_UP = [[11000, 1.225 * Math.exp(-11000 / 9000)], [20000, 0.08803], [32000, 0.01322], [47000, 0.00143], [51000, 0.00086], [71000, 6.42e-5],
+  [86000, 6.96e-6], [100000, 5.6e-7], [120000, 2.22e-8], [150000, 2.08e-9], [200000, 2.54e-10], [300000, 1.92e-11]].map(([h, r]) => [h, Math.log(r)]);
+export function airDensity(h) {
+  if (!(h > 11000)) return 1.225 * Math.exp(-Math.max(0, h || 0) / 9000);
+  const T = RHO_UP; let i = 1; while (i < T.length - 1 && h > T[i][0]) i++;
+  const [h0, l0] = T[i - 1], [h1, l1] = T[i];
+  return Math.exp(l0 + (l1 - l0) * (h - h0) / (h1 - h0)); // (extrapolates the last layer above 300 km)
+}
+// ISA air temperature (K): -6.5 °C per km up to the tropopause at 11 km, -56.5 °C to 20 km, warmer in the ozone layer
+// (stratopause ~0 °C at 47-51 km), coldest at the mesopause (86 km, -86 °C). The hot, near-empty thermosphere above is left out.
+const T_UP = [[11000, 216.65], [20000, 216.65], [32000, 228.65], [47000, 270.65], [51000, 270.65], [71000, 214.65], [86000, 186.95]];
+export function airTemp(h) {
+  if (!(h > 11000)) return 288.15 - 0.0065 * clamp(h || 0, 0, 11000);
+  let i = 1; while (i < T_UP.length && h > T_UP[i][0]) i++;
+  if (i >= T_UP.length) return T_UP[T_UP.length - 1][1];
+  const [h0, t0] = T_UP[i - 1], [h1, t1] = T_UP[i];
+  return t0 + (t1 - t0) * (h - h0) / (h1 - h0);
+}
 // speed of sound (m/s): 340 at sea level, 295 above 11 km
 export const speedOfSound = (h) => 20.05 * Math.sqrt(airTemp(h));
+// Gravity weakens with height (inverse square from the Earth's centre). The world is flat, so a fast plane also gets the
+// lift a curved Earth would give it: horizontal speed bends the path round the planet, v²/r (enough to float at ~7.9 km/s).
+export const EARTH_R = 6371000;
+export const gravityAt = (h, vh2 = 0) => G * (EARTH_R / (EARTH_R + Math.max(0, h))) ** 2 - vh2 / (EARTH_R + Math.max(0, h));
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+// How much the air still does, 0..1: 1 everywhere below ~22 km; higher up, only while dynamic pressure is still useful
+// (a hypersonic rocket's fins work for a while at 40 km; nothing works at 100 km). Scales the magic assists too.
+export const airAuthority = (rho, q) => Math.max(smooth(0.015, 0.08, rho), smooth(40, 400, q));
 // Extra parasite drag from shock waves, as a multiple of the normal drag (0 below Mach 0.8).
 // It climbs steeply through the transonic band ("the sound barrier"), peaks just past Mach 1, then eases off,
 // so punching through takes full power (or a dive) and it gets easier once you're supersonic.
@@ -190,6 +218,8 @@ export class Aircraft {
     this.isHeli = this.parts.some((p) => p.engine?.type === 'rotor');
     this.isCar = this.parts.some((p) => p.engine?.type === 'drive');
     this.driveF = 0; this.flipT = 0;
+    this.hasRCS = this.parts.some((p) => p.d.rcs || p.engine?.type === 'rocket'); // little gas jets (or the rockets' own) turn you in space
+    this.rho = airDensity(0); this.airFx = 1; this.rcsFire = 0;
     this.updateMass(true);
     this.initialMass = this.mass;
     let r = 1; for (const p of this.parts) for (const h of p.hull) r = Math.max(r, h.distanceTo(this.com)); for (const p of this.parts) if (p.gear) r = Math.max(r, p.gear.wheels[0].top.distanceTo(this.com) + p.gear.wheels[0].len + 0.5);
@@ -375,6 +405,7 @@ export class Aircraft {
     _qi.copy(q).invert();
     const alt = this.x.y;
     const rho = airDensity(alt);
+    this.rho = rho;
     const wind = env.windAt(this.x);
     const vAirB = _v.copy(this.v).sub(wind).applyQuaternion(_qi).clone();
     const V = vAirB.length();
@@ -382,6 +413,7 @@ export class Aircraft {
     const mach = V / speedOfSound(alt);
     this.mach = mach;
     const wave = 1 + waveDrag(mach) * (R.waveMult ?? 1);
+    const air = airAuthority(rho, 0.5 * rho * V * V); // 1 below ~22 km: the assists below fade only in near-vacuum
     const F = new THREE.Vector3(), T = new THREE.Vector3(), Taero = new THREE.Vector3();
     const ctl = this.ctl;
     const flapDefl = [0, 0.18, 0.35, 0.6][this.flaps];
@@ -451,7 +483,7 @@ export class Aircraft {
       }
     }
     this.alpha = maxAlpha;
-    this.stalled = R.stallSharp > 0 && maxAlpha > 0.29 && V > 8 && !this.onGround;
+    this.stalled = R.stallSharp > 0 && maxAlpha > 0.29 && V > 8 && !this.onGround && air > 0.5; // (no stalling in a vacuum)
     // ---- engines ----
     const fwdSpeed = -vAirB.z;
     if (this.isHeli) this.rotors(dt, rho, ctl, F, T, q, _qi);
@@ -478,13 +510,18 @@ export class Aircraft {
       e.spoolT = (e.spoolT || 0) + (target - (e.spoolT || 0)) * Math.min(1, dt / (spool * 0.5));
       const dmgF = 1 - clamp(p.dmg / p.hp, 0, 1) * 0.7;
       let thrust = 0;
-      if (e.type === 'prop') thrust = e.thrust * e.spoolT * Math.max(0, 1 - (Math.max(0, fwdSpeed) / e.vmax) ** 1.6);
+      if (e.type === 'prop') thrust = e.thrust * e.spoolT * Math.max(0, 1 - (Math.max(0, fwdSpeed) / e.vmax) ** 1.6) * smooth(0.03, 0.25, rho); // props bite on nothing above ~15 km
       else if (e.type === 'jet') {
         thrust = e.thrust * (0.04 + 0.96 * e.spoolT) * (1 + 0.25 * Math.min(1, fwdSpeed / 300));
         e.abOn = !!e.ab && ctl.throttle > 0.95 && e.spoolT > 0.9;
         if (e.abOn) thrust += (e.ab - e.thrust);
         if (e.ab) thrust *= 1 + 0.9 * clamp((mach - 0.8) / 1.2, 0, 1); // fighter intakes: ram air adds thrust at supersonic speed
-      } else if (e.type === 'rocket') thrust = e.burning ? e.thrust : 0;
+        // too little air to burn the fuel: jets fade above ~18 km and flame out by ~25 km (they relight lower down)
+        const lit = smooth(0.04, 0.11, rho); thrust *= lit;
+        if (lit < 0.05 && e.spoolT > 0.3 && !e.flamedOut) { e.flamedOut = true; this.emit('msg', { text: 'Flameout! The air is too thin for jet engines', bad: true }); }
+        else if (lit > 0.6) e.flamedOut = false;
+        if (lit < 0.5) e.abOn = false;
+      } else if (e.type === 'rocket') thrust = e.burning ? e.thrust * (1 + (R.rocketHigh ?? 0) * smooth(8000, 30000, alt)) : 0;
       thrust *= (rho / 1.225) ** (e.type === 'rocket' ? 0 : 0.7) * dmgF;
       if (p.dmg > p.hp * 0.75 && e.type !== 'rocket') thrust *= 0.2;
       e.thrustNow = thrust;
@@ -497,7 +534,7 @@ export class Aircraft {
       if (e.type === 'prop') T.addScaledVector(e.dir, -thrust * 0.035 * e.spinDir * R.propTorque);
     }
     // ---- gravity ----
-    F.add(_v2.set(0, -G * mass, 0).applyQuaternion(_qi));
+    F.add(_v2.set(0, -gravityAt(alt, this.v.x * this.v.x + this.v.z * this.v.z) * mass, 0).applyQuaternion(_qi));
     // ---- arcade/pilot assistance ----
     T.addScaledVector(Taero, R.aeroTorque);
     if (this.isHeli) this.heliAssist(F, T, ctl, q, _qi, fwdSpeed);
@@ -516,12 +553,22 @@ export class Aircraft {
       const upside = new THREE.Vector3(0, 1, 0).applyQuaternion(q).y < 0;
       if (Math.abs(ctl.roll) < 0.1 && !upside) des.z += -bank * 1.5 * R.autoLevel;
       // coordinated turn: yaw with bank
-      const k = 7 * R.assist * sf;
+      const k = 7 * R.assist * sf * air;
       const err = des.sub(this.w).multiplyScalar(k);
       if (!this.ctrlAuthority.yaw) err.y *= 0.3;
       T.add(err.applyMatrix3(this.I));
       // kill sideslip
-      if (R.sideslipKill > 0) F.x -= vAirB.x * mass * R.sideslipKill * sf;
+      if (R.sideslipKill > 0) F.x -= vAirB.x * mass * R.sideslipKill * sf * air;
+    }
+    // ---- reaction control: in near-vacuum the stick fires attitude jets (rate command: let go and the spin stops) ----
+    const rcs = (this.hasRCS || R.spaceRCS) && !this.onGround && !this.isCar ? 1 - air : 0;
+    this.rcsFire = 0;
+    if (rcs > 0.001) {
+      const des = _v3.set(ctl.pitch * 0.9, -ctl.yaw * 0.6, -ctl.roll * 1.4);
+      const up = _v2.set(0, 1, 0).applyQuaternion(q);
+      if (R.autoLevel > 0 && Math.abs(ctl.roll) < 0.1 && up.y > 0) des.z += -Math.asin(clamp(_v2.set(1, 0, 0).applyQuaternion(q).y, -1, 1)) * 1.2 * R.autoLevel;
+      des.sub(this.w); this.rcsFire = Math.min(1, des.length() * rcs);
+      T.add(des.multiplyScalar(3 * rcs).applyMatrix3(this.I));
     }
     // ---- integrate forces (contacts applied as impulses after) ----
     const Fw = F.applyQuaternion(q);
@@ -759,6 +806,7 @@ export class Aircraft {
     this.updateMass();
     if (this.mass < before * 0.35 || !this.parts[0].alive) { this.wrecked = true; }
     this.hasEngine = this.parts.some((p) => p.alive && p.engine);
+    this.hasRCS = this.parts.some((p) => p.alive && (p.d.rcs || p.engine?.type === 'rocket'));
   }
 
   updateVisuals(dt, env) {
@@ -770,7 +818,10 @@ export class Aircraft {
     this.mach = (this.airspeed || 0) / speedOfSound(this.x.y);
     if (!Number.isFinite(this.mach)) this.mach = 0;
     this.stats.maxMach = Math.max(this.stats.maxMach || 0, this.mach);
-    const tSkin = tAmb * (1 + 0.2 * this.mach * this.mach);
+    // ...but only where there is air to squeeze: full heating below ~42 km, fading out towards space (re-entry glows at 40-60 km)
+    const rho = airDensity(this.x.y), heatK = Math.min(1, Math.sqrt(rho / 0.003));
+    this.rho = rho; this.airFx = smooth(1e-5, 5e-4, rho); // (sonic.js: no booms, vapour or plasma in a vacuum)
+    const tSkin = tAmb * (1 + 0.2 * this.mach * this.mach * heatK);
     if (!(this.skinK > 0)) this.skinK = tAmb;
     this.skinK += (tSkin - this.skinK) * (1 - Math.exp(-dt / (tSkin > this.skinK ? 6 : 12)));
     this.skinC = this.skinK - 273.15;

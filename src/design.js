@@ -342,6 +342,20 @@ export function makePresets() {
     b.pair('c_wheel', [0.78, -0.2, 1.1], { parent: f });
     P.push(b.d);
   }
+  { // Stardust — rocket plane for the edge of space
+    const b = new PB('Stardust', 'Rocket plane for the edge of space. Full throttle, pull up until you point at the sky, and hold on!');
+    const f = b.add('fus_fighter', [0, 0, 0], { color: 0x1b1b1f });
+    b.add('ck_fighter', [0, 0.6, -3.4], { parent: f, color: 0x1b1b1f });
+    b.pair('w_swept', [0.95, -0.15, 1.3], { parent: f, color: 0x1b1b1f });
+    const r = b.add('e_rocket', [0, 0, 1.9], { parent: f, color: 0xf2f2ee });
+    Object.assign(b.d.parts[r], { power: 2.5, burn: 65 });
+    b.pair('t_jet_hstab', [0.6, -0.05, 4.7], { parent: f, color: 0x1b1b1f });
+    b.add('t_jet_vfin', [0, 0.55, 3.6], { parent: f, color: 0x1b1b1f });
+    b.add('x_rcs', [0, 0.1, -5.2], { parent: f, color: 0xf2f2ee });
+    b.add('g_retract_nose', [0, -0.3, -3.9], { parent: f });
+    b.pair('g_retract', [1.7, -0.3, 2.5], { parent: f });
+    P.push(b.d);
+  }
   return P;
 }
 

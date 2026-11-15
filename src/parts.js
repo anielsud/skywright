@@ -700,6 +700,10 @@ def({ id: 'x_navlight', cat: 'extra', name: 'Strobe Light', desc: 'Blinking posi
 def({ id: 'x_landlight', cat: 'extra', name: 'Landing Light', desc: 'Bright spotlight for night landings.', mass: 4, hp: 80, color: 0xcccccc, light: 'landing',
   build: (c) => { const g = new THREE.Group(); const h = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.09, 0.15, 14), PM.skin(c)); h.rotation.x = Math.PI / 2; g.add(h);
     const lens = new THREE.Mesh(lightGeometry(new THREE.CircleGeometry(0.11, 14), 2), PM.light()); lens.userData.planeLight = true; lens.position.z = -0.08; lens.rotation.y = Math.PI; g.add(lens); return g; } });
+def({ id: 'x_rcs', cat: 'extra', name: 'RCS Thrusters', desc: 'Little gas jets for steering in space, where wings and rudders do nothing. Rockets have some built in.', mass: 40, hp: 300, color: C.white, rcs: true,
+  build: (c) => { const g = new THREE.Group(); g.add(new THREE.Mesh(revolve(smoothProfile([[-0.35, 0], [-0.25, 0.12], [0.25, 0.14], [0.35, 0]], 10), { segs: 16 }), PM.skin(c)));
+    for (let i = 0; i < 4; i++) { const n = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.1, 8, 1, true), M.darkMetal()); const p = new THREE.Object3D(); p.rotation.z = i * Math.PI / 2; n.position.y = 0.16; p.add(n); g.add(p); }
+    return g; } });
 def({ id: 'x_strut', cat: 'extra', name: 'Strut', desc: 'Structural strut. Connect wings for biplanes.', mass: 12, hp: 400, color: 0x888888,
   build: (c, lv) => { const g = new THREE.Group(); const s = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.6, 8), PM.skin(c)); g.add(s); if (lv) strutDetail(g, c); return g; } });
 def({ id: 'x_pylon', cat: 'extra', name: 'Pylon', desc: 'Vertical mounting pylon. Hang engines lower or higher.', mass: 40, hp: 600, color: C.gray,

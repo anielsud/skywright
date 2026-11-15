@@ -523,6 +523,7 @@ function helpModal() {
   <h4>Tips</h4><p>Take off around the stall speed shown in the hangar. In Simulator mode, land gently (under ~3 m/s sink) or your gear will snap! Sailplanes can ride rising air under cumulus clouds and along sunny ridges.</p>
   <h4>Credits</h4><p>Voice callouts use the open-source Piper voice "joe". Engines, wind, tyres, weather, nature and crash sounds are real recordings from <a href="https://freesound.org" target="_blank" rel="noopener">Freesound</a>: <a href="assets/sfx/CREDITS.md" target="_blank" rel="noopener">sound credits</a>. Music: “Easy Lemon”, “Floating Cities” and “Heroic Age” by Kevin MacLeod (incompetech.com), licensed under <a href="http://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>.</p>
   <p>Jungfrau Region: satellite imagery <a href="https://s2maps.eu" target="_blank" rel="noopener">Sentinel-2 cloudless 2016</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016, CC BY 4.0); elevation from Terrain Tiles on AWS; map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</p>
+  <p>Earth from space: NASA Visible Earth (<a href="https://visibleearth.nasa.gov" target="_blank" rel="noopener">Blue Marble Next Generation and Earth at Night</a>, public domain).</p>
   </div><div class="modal-foot"><button data-close class="primary">Got it</button></div>`, 'wide');
 }
 
@@ -919,13 +920,38 @@ function stepFlight(dtReal) {
     gear: contactGear(ac), scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead, cockpit, doppler, rain: world.rain.visible ? world.W.rain : 0,
     listener: { pos: flightCam.position, fwd: camFwd, up: camUp },
     amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) },
-    fire: dmgAudio.fire, rattle: dmgAudio.rattle, g: ac.dead ? 0 : ac.g, acPos: ac.x,
+    fire: dmgAudio.fire, rattle: dmgAudio.rattle, g: ac.dead ? 0 : ac.g, acPos: ac.x, airDensity: ac.rho ?? 1.225, // (kg/m³: wind and engines could fade in thin air)
     music: flightMusic(f, ac, world) });
   f.worldSound?.update(f, flightCam.position, dtReal, net.players?.values(), cockpit);
   f.callouts?.update(world, dtReal);
+  spaceMilestones(f, ac);
   hud.update(ac, world, f.mission, flightCam, net.markers());
   if (f.debug) $('#debug').textContent = `α ${(ac.alpha * 57.3).toFixed(1)}° g ${ac.g.toFixed(2)} V ${ac.airspeed?.toFixed(1)} m=${Math.round(ac.mass)} com=${ac.com.toArray().map((v) => v.toFixed(2))} w=${ac.w.toArray().map((v) => v.toFixed(2))}`;
   $('#debug').style.display = f.debug ? '' : 'none';
+}
+
+// Flying high: a toast (or a big moment) the first time each height is passed in a flight, and RCS puffs in space.
+const HEIGHTS = [
+  [15000, 'Above the weather, in the stratosphere!'], [20000, 'The sky is getting darker…'], [30000, 'You can see stars in the daytime!'],
+  [50000, 'Halfway to space!'], [80000, 'Astronaut wings! (80 km)'], [100000, 'SPACE'],
+];
+function spaceMilestones(f, ac) {
+  if (ac.dead) return;
+  const h = ac.x.y, next = HEIGHTS[f.heightN || 0];
+  if (next && h > next[0]) {
+    f.heightN = (f.heightN || 0) + 1;
+    if (next[1] === 'SPACE') {
+      hud.center('SPACE!', 3500); hud.toast('You flew into space! Above the Kármán line, 100 km up', 'good');
+      audio.mission('checkpoint', 12, 12); rig.shake(0.3); analytics.capture('space', { ...f.track, speed_kmh: Math.round(ac.v.length() * 3.6) });
+    } else { hud.toast(next[1], next[0] >= 80000 ? 'good' : ''); if (next[0] >= 50000) audio.play('ring'); }
+  }
+  if (h > 25000 && ac.v.y < -300 && (ac.skinC ?? 0) > 400 && !f.reentry) { f.reentry = true; hud.toast('Re-entry! The air is squeezed so hard it glows', 'bad'); }
+  // attitude jets: little white puffs from RCS pods while they fire
+  if (ac.rcsFire > 0.08 && !ac.onGround) for (const p of ac.parts) {
+    if (!p.alive || !p.d.rcs || Math.random() > ac.rcsFire) continue;
+    const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+    f.effects.puff(ac.worldPoint(p.center), dir.multiplyScalar(6).add(ac.v), { color: [1, 1, 1], s0: 0.15, s1: 0.9, life: 0.35, a: 0.55, drag: 0, grav: 0 });
+  }
 }
 
 // Which music track suits the moment: the heroic one during a mission, a quiet one when cruising high, nothing near the ground or after a crash.
@@ -1048,7 +1074,7 @@ function fitNearPlane(f) {
   const near = clamp(room * 0.5, 0.2, w.rain?.visible || w.snow?.visible ? 0.5 : 20); // rain/snow streaks right in front of the lens
   // the far plane reaches the edge of the far terrain (where the haze has swallowed everything); depth precision is
   // set by the near plane, so the long far plane costs next to nothing
-  const far = Math.max(60000, w.tiles?.far.viewDist() ?? 0);
+  const view = w.tiles?.far.viewDist() ?? 0, far = Math.max(60000, view, p.y > 5000 ? Math.hypot(view, p.y) * 1.1 : 0); // up high: still reach the world's far edge
   if (Math.abs(near - cam.near) > 0.02 || far !== cam.far) { cam.near = near; cam.far = far; cam.updateProjectionMatrix(); }
 }
 function frame(now) {
