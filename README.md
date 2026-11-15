@@ -64,8 +64,20 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 - Runway lights and PAPI lights.
 - Traffic: cars and trucks with headlights, bird flocks (bird strikes!), hot-air balloons, boats and a plane flying the circuit.
 
+**Graphics**
+- High-resolution baked terrain textures with ambient occlusion and soft sun shadows from the mountains.
+- Per-pixel blending of grass, rock and snow.
+- Height fog with sun glow, so valleys get hazy at dawn.
+- Water shader with depth colour, lagoons, shoreline foam and sun glints.
+- Clouds lit from the sun's side, with silver linings.
+- Swaying trees.
+- Panel lines and rivets on aircraft skins.
+- HDR bloom, lens flare, colour grading and a camera shake on crashes.
+
 **Audio**
 - All sound is synthesized with the Web Audio API, with no sound files.
+- Engines are positioned in 3D, and reverb changes by location (hangar, mountain echoes, canyon walls).
+- Ambient sound: birdsong, gulls, surf and crickets at night.
 - Engines: piston, radial, turboprop, electric, jet, turbofan and rocket. Engine sound has Doppler on fly-bys.
 - Wind, tyres, crash noises, stall horn, rain, thunder, and gentle hangar music.
 
@@ -106,6 +118,7 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 | `src/world.js` | Terrain, water, sky, lighting, weather, clouds, airport, trees, village |
 | `src/traffic.js` | Cars, birds, balloons, boats, the circuit plane |
 | `src/effects.js`, `src/billboard.js` | Particles and instanced billboards (shared with clouds) |
+| `src/shaders.js`, `src/post.js` | Height fog, terrain/water/foliage shaders, post-processing |
 | `src/audio.js` | Synthesized sound |
 | `src/controls.js`, `src/cameras.js`, `src/hud.js` | Input, cameras, HUD |
 | `src/missions.js` | Ring Race and Landing Challenge |

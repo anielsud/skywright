@@ -139,7 +139,7 @@ export class Aircraft {
         part.light = { type: d.light, pos: info.center.clone().applyMatrix4(m), bulb: obj.userData.bulb };
         if (d.light === 'nav' && part.light.bulb) {
           const x = part.light.pos.x; part.light.color = x < -0.5 ? 0xff2020 : x > 0.5 ? 0x20ff40 : 0xffffff;
-          part.light.bulb.material.color.setHex(part.light.color);
+          part.light.bulb.material.color.setHex(part.light.color).multiplyScalar(6);
         }
         if (d.light === 'landing' && !this.landingLight) {
           const sl = new THREE.SpotLight(0xfff2dd, 0, 450, 0.35, 0.5, 1.2); sl.position.copy(part.light.pos);

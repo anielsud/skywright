@@ -5,6 +5,7 @@ import { makeNoise, mulberry32, clamp, lerp, smoothstep } from './noise.js';
 import { Billboards } from './billboard.js';
 import { puffTexture, glowTexture, M } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
+import { FOG, terrainMaterial, waterMaterial, swayMaterial } from './shaders.js';
 
 const RWY = { len: 1800, width: 45 };
 
@@ -61,9 +62,9 @@ export const WEATHER = {
 };
 
 const QUALITY = {
-  low: { res: 180, trees: 2500, shadows: false, shadowSize: 1024, clouds: 0.5, pixel: 1 },
-  medium: { res: 260, trees: 6000, shadows: true, shadowSize: 1024, clouds: 0.8, pixel: 1.5 },
-  high: { res: 360, trees: 12000, shadows: true, shadowSize: 2048, clouds: 1, pixel: 2 },
+  low: { res: 180, bake: 384, trees: 2500, shadows: false, shadowSize: 1024, clouds: 0.5, pixel: 1, post: false },
+  medium: { res: 280, bake: 640, trees: 7000, shadows: true, shadowSize: 2048, clouds: 0.8, pixel: 1.5, post: true },
+  high: { res: 420, bake: 1024, trees: 16000, shadows: true, shadowSize: 4096, clouds: 1, pixel: 2, post: true },
 };
 export { QUALITY };
 
@@ -153,37 +154,9 @@ export class World {
       pos.setY(v, h);
     }
     geo.computeVertexNormals();
-    const nrm = geo.attributes.normal;
-    for (let v = 0; v < pos.count; v++) {
-      const x = pos.getX(v), z = pos.getZ(v), h = pos.getY(v);
-      const slope = 1 - nrm.getY(v);
-      const nv = this.noise.fbm(x / 700, z / 700, 3) * 0.5 + 0.5, nd = this.noise.n2(x / 90, z / 90) * 0.5 + 0.5;
-      c.copy(grass[0]).lerp(grass[1], nv).lerp(grass[2], nd * 0.5);
-      if (this.loc.desert) { // strata bands
-        const band = Math.sin(h / 14 + this.noise.n2(x / 400, z / 400) * 1.5) * 0.5 + 0.5;
-        c.lerp(tmp.copy(rock).lerp(sand, band), smoothstep(0.08, 0.25, slope));
-        c.lerp(sand, smoothstep(0.3, 0, slope) * 0.3);
-      } else {
-        c.lerp(dirt, smoothstep(0.12, 0.25, slope) * 0.6);
-        c.lerp(rock, smoothstep(0.2, 0.42, slope + (h > 700 ? 0.12 : 0)));
-        const sl = this.loc.snowline + nd * 150;
-        if (h > sl) c.lerp(snow, smoothstep(sl, sl + 160, h) * (1 - smoothstep(0.35, 0.6, slope)));
-      }
-      if (h < this.waterLevel + 4) c.lerp(sand, 1 - smoothstep(this.waterLevel + 1, this.waterLevel + 4, h));
-      if (h < this.waterLevel - 1) c.lerp(this.loc.id === 'islands' ? tmp.set(0xd8c79a) : tmp.set(0x4a4636), 0.6);
-      colors[v * 3] = c.r; colors[v * 3 + 1] = c.g; colors[v * 3 + 2] = c.b;
-    }
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const detail = this.detailTexture();
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, map: detail, roughness: 0.95, metalness: 0 });
-    mat.onBeforeCompile = (sh) => {
-      sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>',
-        `#ifdef USE_MAP
-          vec4 t1 = texture2D(map, vMapUv); vec4 t2 = texture2D(map, vMapUv * 0.137 + 0.31);
-          diffuseColor.rgb *= mix(t1.rgb, t2.rgb, 0.5) * 1.25;
-        #endif`);
-    };
-    geo.attributes.uv.array.forEach((_, k, arr) => { arr[k] *= S / 40; });
+    this.bakeTerrain();
+    const mat = terrainMaterial({ detail: this.detailTexture(), rock: this.rockTexture(), albedo: this.albedoTex, normal: this.normalTex, shadow: this.shadowTex, half, size: S });
+    this.terrainMat = mat;
     const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true;
     this.terrain = mesh; this.group.add(mesh);
     // far skirt so the edge isn't visible
@@ -192,18 +165,104 @@ export class World {
     this.buildRoadMesh();
     this.buildMinimap();
   }
-  detailTexture() {
+  // Bake high-resolution albedo (+AO) and normal maps from the analytic height function.
+  bakeTerrain() {
+    const R = this.q.bake, S = this.size, half = this.half, st = S / R, W = R + 1;
+    const Hh = new Float32Array(W * W);
+    for (let j = 0; j <= R; j++) for (let i = 0; i <= R; i++) Hh[j * W + i] = this.rawHeight(-half + i * st, -half + j * st);
+    // blend in the flattened road bed from the coarse grid near the road
+    this.Hh = Hh; this.hR = R; this.hStep = st;
+    const blur = (src, r) => { // separable box blur
+      const a = new Float32Array(W * W), b = new Float32Array(W * W);
+      for (let j = 0; j < W; j++) { let acc = 0; for (let i = -r; i <= r; i++) acc += src[j * W + Math.min(W - 1, Math.max(0, i))]; for (let i = 0; i < W; i++) { a[j * W + i] = acc / (2 * r + 1); acc += src[j * W + Math.min(W - 1, i + r + 1)] - src[j * W + Math.max(0, i - r)]; } }
+      for (let i = 0; i < W; i++) { let acc = 0; for (let j = -r; j <= r; j++) acc += a[Math.min(W - 1, Math.max(0, j)) * W + i]; for (let j = 0; j < W; j++) { b[j * W + i] = acc / (2 * r + 1); acc += a[Math.min(W - 1, j + r + 1) * W + i] - a[Math.max(0, j - r) * W + i]; } }
+      return b;
+    };
+    const b1 = blur(Hh, 2), b2 = blur(Hh, 10);
+    const alb = new Uint8Array(W * W * 4), nor = new Uint8Array(W * W * 4);
+    const L = this.loc.colors;
+    const grass = L.grass.map((h) => new THREE.Color(h)), rock = new THREE.Color(L.rock), snow = new THREE.Color(L.snow), sand = new THREE.Color(L.sand), dirt = new THREE.Color(L.dirt);
+    const seabed = new THREE.Color(this.loc.id === 'islands' ? 0xd8c79a : 0x4a4636), forest = new THREE.Color(this.loc.trees === 'pine' ? 0x2a4220 : 0x355a26);
+    const c = new THREE.Color(), tmp = new THREE.Color(), n = new THREE.Vector3();
+    const at = (i, j) => Hh[Math.min(R, Math.max(0, j)) * W + Math.min(R, Math.max(0, i))];
+    for (let j = 0; j <= R; j++) for (let i = 0; i <= R; i++) {
+      const k = j * W + i, h = Hh[k], x = -half + i * st, z = -half + j * st;
+      n.set(at(i - 1, j) - at(i + 1, j), 2 * st, at(i, j - 1) - at(i, j + 1)).normalize();
+      nor[k * 4] = (n.x * 0.5 + 0.5) * 255; nor[k * 4 + 1] = (n.y * 0.5 + 0.5) * 255; nor[k * 4 + 2] = (n.z * 0.5 + 0.5) * 255; nor[k * 4 + 3] = 255;
+      const slope = 1 - n.y;
+      const nv = this.noise.fbm(x / 700, z / 700, 3) * 0.5 + 0.5, nd = this.noise.n2(x / 90, z / 90) * 0.5 + 0.5, nf = this.noise.fbm(x / 260 + 7, z / 260, 3);
+      c.copy(grass[0]).lerp(grass[1], nv).lerp(grass[2], nd * 0.5);
+      if (this.loc.desert) {
+        const band = Math.sin(h / 14 + this.noise.n2(x / 400, z / 400) * 1.5) * 0.5 + 0.5;
+        const band2 = Math.sin(h / 3.7 + nd * 2) * 0.5 + 0.5;
+        c.lerp(tmp.copy(rock).lerp(sand, band).multiplyScalar(0.85 + band2 * 0.25), smoothstep(0.06, 0.22, slope));
+        c.lerp(sand, smoothstep(0.3, 0, slope) * 0.3);
+      } else {
+        // forests darken the lower slopes where trees grow
+        if (h < this.loc.snowline - 150 && h > this.waterLevel + 3) c.lerp(forest, smoothstep(0.0, 0.25, nf) * 0.55 * (1 - smoothstep(0.25, 0.4, slope)));
+        c.lerp(dirt, smoothstep(0.12, 0.25, slope) * 0.6);
+        c.lerp(rock, smoothstep(0.22, 0.42, slope + (h > 700 ? 0.12 : 0) + nd * 0.06));
+        const sl = this.loc.snowline + nd * 150 - smoothstep(0.0, 0.3, nf) * 120;
+        if (h > sl) c.lerp(snow, smoothstep(sl, sl + 120, h) * (1 - smoothstep(0.55, 0.85, slope - (h - sl) * 0.0003)));
+      }
+      if (h < this.waterLevel + 4) c.lerp(sand, 1 - smoothstep(this.waterLevel + 1, this.waterLevel + 4, h));
+      if (h < this.waterLevel - 1) c.lerp(seabed, 0.6);
+      // ambient occlusion from local concavity
+      const ao = clamp(1 - Math.max(0, b1[k] - h) * 0.04 - Math.max(0, b2[k] - h) * 0.006, 0.35, 1);
+      alb[k * 4] = Math.min(255, c.r * 255); alb[k * 4 + 1] = Math.min(255, c.g * 255); alb[k * 4 + 2] = Math.min(255, c.b * 255); alb[k * 4 + 3] = ao * 255;
+    }
+    const mk = (data, w, fmt = THREE.RGBAFormat) => { const t = new THREE.DataTexture(data, w, w, fmt); t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; t.anisotropy = 8; t.needsUpdate = true; return t; };
+    this.albedoTex = mk(alb, W); this.albedoTex.colorSpace = THREE.SRGBColorSpace;
+    this.normalTex = mk(nor, W);
+    const SR = Math.floor(R / 2) + 1;
+    this.shadowData = new Uint8Array(SR * SR * 4).fill(255);
+    this.shadowTex = mk(this.shadowData, SR); this.shadowTex.generateMipmaps = false; this.shadowTex.minFilter = THREE.LinearFilter;
+    this.shadowR = SR;
+    // coarse heights for water depth (matches the rendered mesh)
+    const N = this.N, hd = new Uint16Array((N + 1) * (N + 1));
+    for (let k = 0; k < hd.length; k++) hd[k] = THREE.DataUtils.toHalfFloat(this.H[k]);
+    this.depthTex = new THREE.DataTexture(hd, N + 1, N + 1, THREE.RedFormat, THREE.HalfFloatType);
+    this.depthTex.magFilter = this.depthTex.minFilter = THREE.LinearFilter; this.depthTex.needsUpdate = true;
+  }
+  sampleHi(x, z) {
+    const R = this.hR, W = R + 1, fx = clamp((x + this.half) / this.hStep, 0, R - 0.001), fz = clamp((z + this.half) / this.hStep, 0, R - 0.001);
+    const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, H = this.Hh;
+    return (H[j * W + i] * (1 - u) + H[j * W + i + 1] * u) * (1 - v) + (H[(j + 1) * W + i] * (1 - u) + H[(j + 1) * W + i + 1] * u) * v;
+  }
+  // Soft terrain self-shadowing for the current sun direction (long mountain shadows at golden hour).
+  bakeShadows() {
+    if (!this.shadowData || !this.lightDir) return;
+    const SR = this.shadowR, st = this.size / (SR - 1), half = this.half, d = this.lightDir;
+    const hl = Math.hypot(d.x, d.z), tanE = d.y / Math.max(1e-3, hl), dx = d.x / Math.max(1e-3, hl), dz = d.z / Math.max(1e-3, hl);
+    const out = this.shadowData;
+    for (let j = 0; j < SR; j++) for (let i = 0; i < SR; i++) {
+      const x = -half + i * st, z = -half + j * st, h0 = this.sampleHi(x, z) + 2;
+      let sh = 1, t = st * 0.7;
+      for (let s = 0; s < 48 && t < 9000; s++) {
+        const px = x + dx * t, pz = z + dz * t;
+        const diff = h0 + t * tanE - this.sampleHi(px, pz);
+        sh = Math.min(sh, (diff / t) * 14 + 0.5);
+        if (sh <= 0) break;
+        t += st * (0.6 + s * 0.12);
+      }
+      out[(j * SR + i) * 4] = clamp(sh, 0, 1) * 255;
+    }
+    this.shadowTex.needsUpdate = true;
+  }
+  rockTexture() { return this.tileNoise(123, [[4, 0.35], [8, 0.25], [16, 0.2], [48, 0.12], [128, 0.08]], [1, 0.97, 0.93], 3.0, 130, 140); }
+  detailTexture() { return this.tileNoise(99, [[8, 0.45], [16, 0.25], [32, 0.15], [64, 0.1], [128, 0.05]], [1, 1.01, 0.96], 1, 150, 120); }
+  tileNoise(seed, octs, tint, stretch, base, amp) {
     const s = 256, c = document.createElement('canvas'); c.width = c.height = s;
-    const g = c.getContext('2d'), img = g.createImageData(s, s), r = mulberry32(99);
-    // tileable value noise: lattice with period P per octave
-    const oct = [[8, 0.45], [16, 0.25], [32, 0.15], [64, 0.1], [128, 0.05]].map(([P, amp]) => { const L = new Float32Array(P * P); for (let i = 0; i < L.length; i++) L[i] = r(); return { P, amp, L }; });
+    const g = c.getContext('2d'), img = g.createImageData(s, s), r = mulberry32(seed);
+    const oct = octs.map(([P, a]) => { const L = new Float32Array(P * P); for (let i = 0; i < L.length; i++) L[i] = r(); return { P, a, L }; });
     const val = (o, x, y) => { const fx = (x / s) * o.P, fy = (y / s) * o.P; const i = Math.floor(fx), j = Math.floor(fy); const u = fx - i, v = fy - j; const P = o.P;
       const at = (a, b) => o.L[((b % P + P) % P) * P + ((a % P + P) % P)]; const su = u * u * (3 - 2 * u), sv = v * v * (3 - 2 * v);
       return (at(i, j) * (1 - su) + at(i + 1, j) * su) * (1 - sv) + (at(i, j + 1) * (1 - su) + at(i + 1, j + 1) * su) * sv; };
     for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
-      let v = 0; for (const o of oct) v += val(o, x, y) * o.amp;
-      const k = 150 + v * 120 + (r() - 0.5) * 24;
-      const i = (y * s + x) * 4; img.data[i] = k; img.data[i + 1] = k * 1.01; img.data[i + 2] = k * 0.96; img.data[i + 3] = 255;
+      let v = 0; for (const o of oct) v += val(o, x, stretch > 1 ? (y / stretch) % s : y) * o.a;
+      if (stretch > 1) v = v * 0.7 + Math.abs(Math.sin(y / s * Math.PI * 2 * 12 + v * 6)) * 0.3; // strata/cracks for rock
+      const k = base + v * amp + (r() - 0.5) * 24;
+      const i = (y * s + x) * 4; img.data[i] = k * tint[0]; img.data[i + 1] = k * tint[1]; img.data[i + 2] = k * tint[2]; img.data[i + 3] = 255;
     }
     g.putImageData(img, 0, 0);
     const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
@@ -282,22 +341,29 @@ export class World {
 
   // ---------------- water ----------------
   buildWater() {
+    // tileable ocean normal map from a sum of plane waves with integer wave numbers
     const s = 256, c = document.createElement('canvas'); c.width = c.height = s;
-    const g = c.getContext('2d'), img = g.createImageData(s, s), n = makeNoise(5);
-    const hf = (x, y) => { const a = (x / s) * Math.PI * 2, b = (y / s) * Math.PI * 2; return n.fbm(Math.cos(a) * 1.6 + 3, Math.sin(a) * 1.6 + Math.cos(b) * 1.6, 4) + n.fbm(Math.sin(b) * 1.6 + 9, Math.cos(b) * 1.6, 3) * 0.6; };
+    const g = c.getContext('2d'), img = g.createImageData(s, s), r = mulberry32(5);
+    const waves = [];
+    for (let k = 0; k < 48; k++) {
+      const f = 1 + Math.floor(r() ** 1.6 * 22), a = r() * Math.PI * 2;
+      let kx = Math.round(Math.cos(a) * f), ky = Math.round(Math.sin(a) * f); if (!kx && !ky) kx = 1;
+      waves.push([kx, ky, 1 / Math.pow(Math.hypot(kx, ky), 1.25), r() * 6.28]);
+    }
     for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
-      const dx = hf(x + 1, y) - hf(x - 1, y), dy = hf(x, y + 1) - hf(x, y - 1);
-      const v = new THREE.Vector3(-dx * 6, -dy * 6, 1).normalize();
+      let dx = 0, dy = 0;
+      for (const [kx, ky, amp, ph] of waves) { const th = (2 * Math.PI * (kx * x + ky * y)) / s + ph; const cs = Math.cos(th) * amp; dx += cs * kx; dy += cs * ky; }
+      const v = new THREE.Vector3(-dx * 0.09, -dy * 0.09, 1).normalize();
       const i = (y * s + x) * 4; img.data[i] = (v.x * 0.5 + 0.5) * 255; img.data[i + 1] = (v.y * 0.5 + 0.5) * 255; img.data[i + 2] = (v.z * 0.5 + 0.5) * 255; img.data[i + 3] = 255;
     }
     g.putImageData(img, 0, 0);
-    const nt = new THREE.CanvasTexture(c); nt.wrapS = nt.wrapT = THREE.RepeatWrapping; nt.repeat.set(1400, 1400);
-    const nt2 = nt.clone(); nt2.repeat.set(230, 230); nt2.needsUpdate = true;
-    const color = this.loc.id === 'islands' ? 0x0f6f80 : this.loc.desert ? 0x3d6b5f : 0x2b5866;
-    const mat = new THREE.MeshPhysicalMaterial({ color, roughness: 0.06, metalness: 0.0, normalMap: nt, normalScale: new THREE.Vector2(0.35, 0.35), transparent: true, opacity: 0.86, clearcoat: 0.3, clearcoatNormalMap: nt2, clearcoatNormalScale: new THREE.Vector2(0.4, 0.4) });
+    const nt = new THREE.CanvasTexture(c); nt.wrapS = nt.wrapT = THREE.RepeatWrapping;
+    const pal = this.loc.id === 'islands' ? { deep: 0x05324a, shallow: 0x19b5b0, sand: 0xe9dcb0 } : this.loc.desert ? { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 } : { deep: 0x0b2a35, shallow: 0x2f6f6a, sand: 0x6b6a55 };
+    const mat = waterMaterial({ depthTex: this.depthTex, normal: nt, half: this.half, size: this.size, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6 });
     const w = new THREE.Mesh(new THREE.PlaneGeometry(90000, 90000), mat);
-    w.rotation.x = -Math.PI / 2; w.position.y = this.waterLevel; w.receiveShadow = true;
-    this.water = w; this.waterNormals = [nt, nt2]; this.group.add(w);
+    w.rotation.x = -Math.PI / 2; w.position.y = this.waterLevel;
+    this.waterMat = mat;
+    this.water = w; this.group.add(w);
   }
 
   // ---------------- sky / light ----------------
@@ -387,8 +453,20 @@ export class World {
     const fogNight = new THREE.Color(0x0b1220);
     const fogC = fogNight.clone().lerp(fogDay, day).lerp(new THREE.Color(0x9aa1aa).multiplyScalar(0.25 + 0.75 * day), dark * 0.9);
     if (this.loc.desert) fogC.lerp(new THREE.Color(0xe8c9a6).multiplyScalar(0.2 + 0.8 * day), 0.2 * day);
-    this.scene.fog.color.copy(fogC); this.fogBase = W.fog * (this.q.res < 200 ? 1.4 : 1);
-    this.scene.fog.density = this.fogBase;
+    this.scene.fog.color.copy(fogC); this.fogBase = W.fog * (this.weatherId === 'clear' ? 1.0 : 1.5) * (this.q.res < 200 ? 1.3 : 1);
+    this.scene.fog.density = W.fog;
+    FOG.fogLin.value = this.fogBase;
+    FOG.fogBase.value = this.loc.id === 'alpine' ? this.loc.rwyH - 40 : this.waterLevel;
+    FOG.fogFalloff.value = this.weatherId === 'fog' ? 1 / 220 : W.cover ? 1 / 1400 : 1 / 750;
+    FOG.fogSunDir.value.copy(this.sunDir);
+    FOG.fogSunColor.value.copy(sunCol).multiplyScalar((0.25 + golden * 0.9) * day * (1 - dark * 0.9));
+    if (this.waterMat) {
+      const U = this.waterMat.userData.U;
+      U.sunDir.value.copy(lightDir); U.sunCol.value.copy(this.sun.color).multiplyScalar(this.sun.intensity / 3.2);
+      U.skyZen.value.copy(skyC).multiplyScalar(0.55 + 0.45 * day); U.skyHor.value.copy(fogC).lerp(new THREE.Color(1, 0.75, 0.5), golden * 0.3);
+      U.amb.value = 0.25 + 0.75 * day; U.rough.value = W.turb * 0.5;
+    }
+    if (this.terrainMat) this.terrainMat.userData.U.shadowOn.value = 1 - dark * 0.8;
     this.fogColor = fogC.clone();
     this.sky.visible = true;
     this.skyDarken = dark;
@@ -408,10 +486,13 @@ export class World {
       const lit = sunCol.clone().lerp(new THREE.Color(1, 1, 1), 0.45).multiplyScalar((0.35 + day * 0.95) * (1 - dark * 0.55)).add(new THREE.Color(0.12, 0.13, 0.16));
       const shade = new THREE.Color(0.56, 0.6, 0.68).lerp(new THREE.Color(0.32, 0.34, 0.38), dark).multiplyScalar(0.18 + 0.82 * day).lerp(new THREE.Color(0.75, 0.5, 0.45), golden * 0.25);
       this.clouds.uniforms.litColor.value.copy(lit); this.clouds.uniforms.shadeColor.value.copy(shade);
+      this.clouds.uniforms.sunDir.value.copy(this.sunDir); this.clouds.uniforms.sunGlow.value.copy(sunCol).multiplyScalar(day * (1 - dark) * (0.6 + golden));
+      this.shadeClouds();
     }
+    if (!this.lastBakeDir || this.lastBakeDir.distanceTo(lightDir) > 0.01) { this.lastBakeDir = lightDir.clone(); this.bakeShadows(); }
     // night lights
     if (this.lightsMat) this.lightsMat.opacity = this.night || dark > 0.55 ? 1 : 0;
-    if (this.windowMats) for (const m of this.windowMats) m.emissiveIntensity = this.night ? 1.4 : 0;
+    if (this.windowMats) for (const m of this.windowMats) m.emissiveIntensity = this.night ? 3.5 : 0;
     this.envDirty = true;
   }
   updateEnv() {
@@ -469,13 +550,13 @@ export class World {
     for (let k = 1; k <= 12; k++) for (let x = -8; x <= 8; x += 4) push(x, RWY.len / 2 + k * 30, 0xffffff, 1 + k * 0.4);
     for (let z = -RWY.len / 2; z <= RWY.len / 2; z += 40) { push(62, z, 0x3070ff); push(98, z, 0x3070ff); }
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3)); lg.setAttribute('color', new THREE.Float32BufferAttribute(lc, 3));
-    this.lightsMat = new THREE.PointsMaterial({ size: 3.2, vertexColors: true, map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0, fog: false });
+    this.lightsMat = new THREE.PointsMaterial({ size: 3.2, color: new THREE.Color(3, 3, 3), vertexColors: true, map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0, fog: false });
     this.group.add(new THREE.Points(lg, this.lightsMat));
     // PAPI (4 lights left of runway near threshold): colour depends on viewer angle
     const pg = new THREE.BufferGeometry();
     const pp = []; for (let k = 0; k < 4; k++) pp.push(-RWY.width / 2 - 12 - k * 9, this.loc.rwyH + 1, RWY.len / 2 - 300);
     pg.setAttribute('position', new THREE.Float32BufferAttribute(pp, 3)); pg.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(12).fill(1), 3));
-    this.papi = new THREE.Points(pg, new THREE.PointsMaterial({ size: 4.5, vertexColors: true, map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+    this.papi = new THREE.Points(pg, new THREE.PointsMaterial({ size: 4.5, color: new THREE.Color(3, 3, 3), vertexColors: true, map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
     this.group.add(this.papi);
     for (let k = 0; k < 4; k++) { const b = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1, 1), M.paint(0x333333)); b.position.set(pp[k * 3], this.loc.rwyH + 0.5, pp[k * 3 + 2] + 0.7); this.group.add(b); }
   }
@@ -529,7 +610,11 @@ export class World {
     const col = (g, c) => { const n = g.attributes.position.count, a = new Float32Array(n * 3); const cc = new THREE.Color(c); for (let i = 0; i < n; i++) { a[i * 3] = cc.r; a[i * 3 + 1] = cc.g; a[i * 3 + 2] = cc.b; } g.setAttribute('color', new THREE.BufferAttribute(a, 3)); return g.toNonIndexed ? (g.index ? g.toNonIndexed() : g) : g; };
     if (kind === 'pine') {
       parts.push(col(new THREE.CylinderGeometry(0.25, 0.35, 3, 5).translate(0, 1.5, 0), 0x4a3423));
-      for (let k = 0; k < 3; k++) parts.push(col(new THREE.ConeGeometry(2.6 - k * 0.65, 4.2 - k * 0.6, 7).translate(0, 3.2 + k * 2.4, 0), [0x1f3d22, 0x274a29, 0x2f5530][k]));
+      for (let k = 0; k < 5; k++) {
+        const cg = new THREE.ConeGeometry(2.9 - k * 0.52, 3.4 - k * 0.35, 9, 1);
+        const cp = cg.attributes.position; for (let i = 0; i < cp.count; i++) if (cp.getY(i) < 0) { cp.setX(i, cp.getX(i) * (0.9 + Math.random() * 0.25)); cp.setZ(i, cp.getZ(i) * (0.9 + Math.random() * 0.25)); cp.setY(i, cp.getY(i) - Math.random() * 0.35); }
+        parts.push(col(cg.translate(0, 2.6 + k * 1.75, 0), [0x173219, 0x1d3c20, 0x234626, 0x2a502c, 0x325a32][k]));
+      }
     } else if (kind === 'palm') {
       const trunk = new THREE.CylinderGeometry(0.18, 0.3, 9, 6, 4); const tp = trunk.attributes.position;
       for (let i = 0; i < tp.count; i++) { const y = tp.getY(i) + 4.5; tp.setX(i, tp.getX(i) + (y / 9) ** 2 * 1.4); }
@@ -556,7 +641,7 @@ export class World {
   buildTrees() {
     const kind = this.loc.trees, n = this.q.trees;
     const geo = this.treeGeometry(kind);
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: kind === 'palm' ? THREE.DoubleSide : THREE.FrontSide });
+    const mat = swayMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: kind === 'palm' ? THREE.DoubleSide : THREE.FrontSide }), kind === 'palm' ? 0.6 : kind === 'cactus' ? 0 : 0.3);
     const mesh = new THREE.InstancedMesh(geo, mat, n);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
     let k = 0, tries = 0; const tint = new THREE.Color();
@@ -640,7 +725,7 @@ export class World {
     if (!this.clouds) return;
     const W = this.W, r = mulberry32(this.loc.seed + this.weatherId.length * 13);
     const n = Math.round(W.clouds * 70 * this.q.clouds);
-    this.cloudList = []; this.thermals = [];
+    this.cloudList = []; this.thermals = []; this.puffs = [];
     let k = 0;
     const base = this.loc.cloudBase * (W.cover ? 0.75 : 1);
     for (let c = 0; c < n && k < 1550; c++) {
@@ -657,13 +742,37 @@ export class World {
         const px = cx + Math.cos(a) * d * 1.3, pz = cz + Math.sin(a) * d, py = cy + r() * 260 * big * h;
         const size = (260 + r() * 260) * big * (0.6 + 0.6 * h);
         const shade = 0.72 + (py - cy) / (260 * big) * 0.45;
-        this.clouds.set(k++, px, py + size * 0.25, pz, size, r() * 6.28, shade, shade, shade, 0.9);
+        this.puffs[k] = [px, py + size * 0.25, pz, size, r() * 6.28, shade, 0.9, cx, cy + 120 * big, cz]; this.clouds.set(k++, px, py + size * 0.25, pz, size, this.puffs[k - 1][4], shade, shade, shade, 0.9);
       }
       // flat dark base
-      for (let p = 0; p < 4 && k < 1550; p++) { const a = r() * 6.28, d = r() * R * 0.6; this.clouds.set(k++, cx + Math.cos(a) * d, cy, cz + Math.sin(a) * d, R * 1.1, r() * 6.28, 0.62, 0.62, 0.64, 0.8); }
+      for (let p = 0; p < 4 && k < 1550; p++) { const a = r() * 6.28, d = r() * R * 0.6; this.puffs[k] = [cx + Math.cos(a) * d, cy, cz + Math.sin(a) * d, R * 1.1, r() * 6.28, 0.6, 0.8, cx, cy + 300, cz]; k++; }
+    }
+    this.cloudCount = k; this.shadeClouds();
+  }
+  shadeClouds() { // light each puff by which side of its cloud faces the sun
+    if (!this.puffs || !this.sunDir) return;
+    const d = this.sunDir; let k = 0;
+    for (const q of this.puffs) {
+      if (!q) continue;
+      const ox = q[0] - q[7], oy = (q[1] - q[8]) * 1.6, oz = q[2] - q[9], L = Math.hypot(ox, oy, oz) || 1;
+      const side = (ox * d.x + oy * d.y + oz * d.z) / L;
+      const sh = q[5] * (0.62 + 0.38 * side) + 0.12;
+      this.clouds.set(k++, q[0], q[1], q[2], q[3], q[4], sh, sh, sh, q[6]);
     }
     this.clouds.commit(k);
-    this.cloudCount = k;
+  }
+  // How visible is the sun from the camera? (terrain, clouds and overcast block it)
+  sunVisibility(cam) {
+    const d = this.sunDir; if (!d || d.y < -0.02) return 0;
+    if (this.W.cover && cam.position.y < this.deck2.position.y + 50) return 0;
+    const p = cam.position.clone(); let vis = 1;
+    for (let i = 1; i <= 36; i++) {
+      const t = i * i * 9; p.copy(cam.position).addScaledVector(d, t);
+      if (Math.abs(p.x) < this.half && Math.abs(p.z) < this.half && this.sampleGrid(p.x, p.z) > p.y) return 0;
+      if (i % 3 === 0) vis = Math.min(vis, 1 - this.inCloud(p) * 3);
+      if (vis <= 0) return 0;
+    }
+    return vis * smoothstep(-0.02, 0.08, d.y);
   }
   inCloud(p) {
     let best = 0;
@@ -743,8 +852,7 @@ export class World {
     if (Math.random() < dt * 1.5) this.gustT.set((Math.random() - 0.5) * 2, (Math.random() - 0.5) * 1.2, (Math.random() - 0.5) * 2).multiplyScalar(W.turb * 4);
     this.gust.lerp(this.gustT, Math.min(1, dt * 2));
     // water anim
-    this.waterNormals[0].offset.x += dt * 0.006; this.waterNormals[0].offset.y += dt * 0.004;
-    this.waterNormals[1].offset.x -= dt * 0.01;
+    FOG.uTime.value = this.t;
     // lights follow camera
     const tgt = camera.userData.focus || camera.position;
     this.sun.target.position.copy(tgt);
@@ -761,14 +869,15 @@ export class World {
     this.clouds.updateCamera(camera, this.scene.fog);
     // in-cloud whiteout
     const ic = this.inCloud(camera.position);
-    this.scene.fog.density = this.fogBase + ic * 0.012;
+    FOG.fogLin.value = this.fogBase + ic * 0.03;
     if (ic > 0) this.scene.fog.color.copy(this.fogColor).lerp(new THREE.Color(0xd8dde3).multiplyScalar(0.3 + 0.7 * smoothstep(-0.1, 0.25, this.sunElev)), ic);
     else this.scene.fog.color.copy(this.fogColor);
     // above deck: clear fog
     const aboveDeck = W.cover && camera.position.y > this.deck2.position.y + 50;
-    if (aboveDeck) this.scene.fog.density = 0.00002;
+    if (aboveDeck) FOG.fogLin.value = 0.00003;
     this.sky.visible = !W.cover || aboveDeck;
     this.renderer.setClearColor(this.scene.fog.color);
+    this.waterMat.userData.U.fogColor.value.copy(this.scene.fog.color);
     this.updatePrecip(dt, camera, camVel);
     // lightning
     if (W.storm) {
@@ -781,7 +890,7 @@ export class World {
     const w = this.windBase.clone().add(this.gust);
     if (w.lengthSq() > 0.01) { this.sock.lookAt(this.sock.position.clone().add(w)); this.sock.rotateX(-0.35 * Math.max(0, 1 - w.length() / 12)); }
     // beacon
-    this.beacon.material.color.setHex(Math.floor(this.t * 1.2) % 2 ? 0x40ff80 : 0xffffff);
+    this.beacon.material.color.setHex(Math.floor(this.t * 1.2) % 2 ? 0x40ff80 : 0xffffff).multiplyScalar(5);
     // PAPI
     const thr = new THREE.Vector3(-RWY.width / 2 - 25, this.loc.rwyH, RWY.len / 2 - 300);
     const rel = camera.position.clone().sub(thr);

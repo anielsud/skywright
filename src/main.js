@@ -12,6 +12,9 @@ import { HUD } from './hud.js';
 import { CameraRig } from './cameras.js';
 import { MODES, RingRace, LandingChallenge } from './missions.js';
 import { clamp } from './noise.js';
+import { installFog } from './shaders.js';
+import { Post } from './post.js';
+installFog();
 
 // ---------- persistence ----------
 const LS = {
@@ -30,6 +33,8 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const pixelRatio = () => Math.min(window.devicePixelRatio || 1, { low: 1, medium: 1.5, high: 2 }[settings.quality]);
 renderer.setPixelRatio(pixelRatio());
+const post = new Post(renderer);
+post.enabled = settings.quality !== 'low';
 
 const audio = new Audio(); audio.volume = settings.volume;
 const $ = (s) => document.querySelector(s);
@@ -210,7 +215,7 @@ function settingsModal() {
     <div class="modal-foot"><button data-close class="primary">Done</button></div>`);
   const el = m.el;
   const pick = (attr, key, after) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { settings[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); LS.set('settings', settings); after?.(); }));
-  pick('q', 'quality', () => { renderer.setPixelRatio(pixelRatio()); onResize(); });
+  pick('q', 'quality', () => { renderer.setPixelRatio(pixelRatio()); post.enabled = settings.quality !== 'low'; onResize(); });
   pick('u', 'units', renderInspector); pick('cm', 'controlMode', () => controls.setMode(settings.controlMode)); pick('t', 'touch');
   el.querySelector('#inv').addEventListener('change', (e) => { settings.invert = e.target.checked; controls.invert = settings.invert; LS.set('settings', settings); });
   el.querySelector('#vol').addEventListener('input', (e) => { settings.volume = +e.target.value; audio.setVolume(settings.volume); LS.set('settings', settings); });
@@ -270,7 +275,7 @@ function buildFlight(cfg) {
   const env = {
     groundAt: (x, z) => world.groundAt(x, z), maxGround: (x, z) => world.maxGround(x, z), windAt: (p) => world.windAt(p),
     get night() { return world.night || world.W.dark > 0.6; }, groundHeightAtSpawn: world.loc.rwyH,
-    onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40); },
+    onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40, p.clone()); },
   };
   let start = cfg.start;
   const gearOK = ac.parts.some((p) => p.gear && !p.gear.float);
@@ -319,7 +324,7 @@ function endFlight() {
   audio.silence();
   flightUI.style.display = 'none'; $('#hangar-ui').style.display = '';
   controls.enabled = false; controls.showTouch(false);
-  state = 'hangar'; hangar.activate(true); audio.music(true);
+  state = 'hangar'; hangar.activate(true); audio.music(true); audio.setSpace('hangar');
   onResize();
 }
 
@@ -329,7 +334,7 @@ function onAction(a) {
   audio.init();
   switch (a) {
     case 'gear': ac.toggleGear(); break;
-    case 'flaps': ac.cycleFlaps(); audio.play('click'); break;
+    case 'flaps': ac.cycleFlaps(); audio.play('flaps'); break;
     case 'camera': hud.toast(rig.next()); break;
     case 'smoke': if (ac.hasSmoke) { ac.smokeOn = !ac.smokeOn; hud.toast(ac.smokeOn ? 'Smoke on!' : 'Smoke off'); } else hud.toast('Add a Smoke Generator in the hangar for airshow smoke'); break;
     case 'pause': togglePause(); break;
@@ -392,11 +397,11 @@ function handleEvents(f, dt) {
         const p = Math.min(2, e.speed / 18);
         if (e.surf === 'water') effects.splash(e.pos, e.speed);
         else { effects.sparks(e.pos, ac.v, 12); effects.dust(e.pos, ac.v, e.surf, 4); }
-        if (!f.lastImpact || f.t - f.lastImpact > 0.15) { audio.play(e.surf === 'water' ? 'splash' : 'impact', p); f.lastImpact = f.t; }
-        rig.shake(p);
+        if (!f.lastImpact || f.t - f.lastImpact > 0.15) { audio.play(e.surf === 'water' ? 'splash' : 'impact', p, e.pos); f.lastImpact = f.t; }
+        rig.shake(p); if (p > 0.6) post.shock(p * 0.6);
         break;
       }
-      case 'touch': if (e.water || e.float) { effects.splash(e.pos, e.speed * 3); audio.play('splash', 0.4); } else { effects.tireSmoke(e.pos, e.speed); audio.play('chirp', Math.min(1.5, e.speed / 2)); } break;
+      case 'touch': if (e.water || e.float) { effects.splash(e.pos, e.speed * 3); audio.play('splash', 0.4, e.pos); } else { effects.tireSmoke(e.pos, e.speed); audio.play('chirp', Math.min(1.5, e.speed / 2)); } break;
       case 'landing': {
         const vs = e.vs; const ok = vs < 1.0 ? 'Butter! ' : vs < 2 ? 'Nice landing! ' : vs < 3.2 ? 'Firm landing. ' : 'Ouch! ';
         hud.toast(`${ok}${vs.toFixed(1)} m/s`, vs < 2 ? 'good' : ''); break;
@@ -408,7 +413,7 @@ function handleEvents(f, dt) {
       case 'rocket': audio.play('rocket'); break;
       case 'debris': {
         f.debris.push(e.debris); f.scene.add(e.debris.group);
-        audio.play('crack', 1); rig.shake(1.2);
+        audio.play('crack', 1, e.pos); if (e.names.some((n) => /Canopy|Cockpit|Nose/.test(n))) audio.play('glass', 1, e.pos); rig.shake(1.2);
         effects.sparks(e.pos, ac.v, 25);
         effects.puff(e.pos, { x: 0, y: 1, z: 0 }, { color: [0.3, 0.3, 0.3], s0: 2, s1: 10, life: 3 });
         if (e.speed > 12 && f.t - f.lastSlowmo > 8) { f.slowmo = 2.2; f.lastSlowmo = f.t; }
@@ -416,8 +421,9 @@ function handleEvents(f, dt) {
         break;
       }
       case 'wreck': {
-        if (e.speed > 25 || ac.parts.some((p) => p.engine)) { effects.explosion(e.pos, Math.min(2, 0.6 + e.speed / 50)); audio.play('explosion'); }
-        else audio.play('impact', 2);
+        post.shock(1.2);
+        if (e.speed > 25 || ac.parts.some((p) => p.engine)) { effects.explosion(e.pos, Math.min(2, 0.6 + e.speed / 50)); audio.play('explosion', 1, e.pos); }
+        else audio.play('impact', 2, e.pos);
         rig.shake(2); f.slowmo = 2.5; f.lastSlowmo = f.t;
         hud.center('CRASH!', 2500);
         break;
@@ -443,7 +449,7 @@ function stepFlight(dtReal) {
       const wp = ac.worldPoint(p.center, _v);
       const t = world.treeHit(wp);
       if (t && ac.v.length() > 5) {
-        effects.leaves(wp); audio.play('impact', 0.5); rig.shake(0.5);
+        effects.leaves(wp); audio.play('impact', 0.5, wp.clone()); rig.shake(0.5);
         ac.damage(p, ac.v.length() * 8 / ac.R.crashMult, wp);
         ac.v.multiplyScalar(0.92);
         t[3] = 0; // flatten the tree so we don't hit it forever
@@ -454,7 +460,7 @@ function stepFlight(dtReal) {
   if (!ac.dead) {
     const hits = traffic.birdStrikes(ac.x, ac.radius * 0.7);
     for (const h of hits) {
-      effects.feathers(h); audio.play('bird');
+      effects.feathers(h); audio.play('bird', 1, h);
       let best = null, bd = 1e9; for (const p of ac.parts) { if (!p.alive) continue; const d = ac.worldPoint(p.center).distanceTo(h); if (d < bd) { bd = d; best = p; } }
       if (best) { ac.damage(best, best.engine ? best.hp * 0.35 : best.hp * 0.08, h); hud.toast(best.engine ? `Bird strike! ${best.name} damaged` : 'Bird strike!', 'bad'); }
     }
@@ -508,25 +514,48 @@ function stepFlight(dtReal) {
   const engines = {};
   if (!ac.dead) for (const p of ac.parts) {
     if (!p.alive || !p.engine) continue; const e = p.engine;
-    const k = e.sound; if (!engines[k]) engines[k] = { sound: k, rpm: 0, spoolT: 0, count: 0, blades: p.obj.userData.prop ? (PARTS[p.p.id].id === 'e_turboprop' ? 4 : PARTS[p.p.id].id === 'e_radial' ? 3 : PARTS[p.p.id].id === 'e_electric' ? 6 : 2) : 0, ab: false, burning: false };
+    const k = e.sound; if (!engines[k]) engines[k] = { sound: k, rpm: 0, spoolT: 0, count: 0, blades: { e_turboprop: 4, e_radial: 3, e_electric: 6 }[p.p.id] || 2, ab: false, burning: false, pos: new THREE.Vector3() };
     const a = engines[k]; a.count++; a.rpm = Math.max(a.rpm, e.rpm || 0); a.spoolT = Math.max(a.spoolT, e.spoolT || 0); a.ab = a.ab || e.abOn; a.burning = a.burning || e.burning;
+    a.pos.add(ac.worldPoint(e.pos));
   }
+  for (const k in engines) engines[k].pos.divideScalar(engines[k].count);
   const cockpit = rig.mode === 'cockpit' && !ac.dead;
-  let doppler = 1, atten = 1;
+  let doppler = 1;
   if (!cockpit) {
-    const toCam = flightCam.position.clone().sub(ac.x); const dist = toCam.length(); toCam.normalize();
-    const vs = ac.v.dot(toCam), vl = rig.vel.dot(toCam);
-    doppler = clamp((343 - vl) / (343 - vs), 0.5, 2);
-    atten = clamp((ac.radius * 3 + 15) / Math.max(1, dist), 0.02, 1.2);
+    const toCam = flightCam.position.clone().sub(ac.x).normalize();
+    doppler = clamp((343 - rig.vel.dot(toCam)) / (343 - ac.v.dot(toCam)), 0.5, 2);
   }
   f.scrapeT = (f.scrapeT || 0) - dtReal;
   const gs = ac.v.length();
   const surf = world.groundAt(ac.x.x, ac.x.z).type;
-  audio.update({ engines: Object.values(engines), airspeed: ac.dead ? 0 : (ac.airspeed || 0), alphaWind: ac.stalled ? 1 : 0, onGround: ac.onGround && ac.parts.some((p) => p.alive && p.gear?.wheels.some((w) => w.contact)), groundSpeed: gs, surface: surf,
-    scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead, cockpit, doppler, atten, rain: world.rain.visible ? world.W.rain : 0 });
+  const camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(flightCam.quaternion), camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(flightCam.quaternion);
+  const agl = flightCam.position.y - Math.max(world.heightAt(flightCam.position.x, flightCam.position.z), world.waterLevel);
+  audio.update({ engines: Object.values(engines), airspeed: ac.dead ? 0 : (ac.airspeed || 0), buffet: ac.dead || ac.onGround ? 0 : Math.max(0, ac.alpha - 0.22) + (ac.stalled ? 0.15 : 0),
+    onGround: ac.onGround && ac.parts.some((p) => p.alive && p.gear?.wheels.some((w) => w.contact)), groundSpeed: gs, surface: surf,
+    scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead, cockpit, doppler, rain: world.rain.visible ? world.W.rain : 0,
+    listener: { pos: flightCam.position, fwd: camFwd, up: camUp },
+    amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) } });
   hud.update(ac, world, f.mission, flightCam);
   if (f.debug) $('#debug').textContent = `α ${(ac.alpha * 57.3).toFixed(1)}° g ${ac.g.toFixed(2)} V ${ac.airspeed?.toFixed(1)} m=${Math.round(ac.mass)} com=${ac.com.toArray().map((v) => v.toFixed(2))} w=${ac.w.toArray().map((v) => v.toFixed(2))}`;
   $('#debug').style.display = f.debug ? '' : 'none';
+}
+
+// 0..1: how close the camera is to open water (sampled in rings, refreshed twice a second)
+function waterProximity(f, world, p) {
+  if (f.waterT && f.t - f.waterT < 0.5) return f.waterNear;
+  f.waterT = f.t;
+  let best = 1e9;
+  for (const r of [0, 30, 70, 130, 220, 340, 500]) {
+    for (let k = 0; k < (r ? 12 : 1); k++) {
+      const a = (k / 12) * Math.PI * 2;
+      if (world.sampleGrid(p.x + Math.cos(a) * r, p.z + Math.sin(a) * r) < world.waterLevel) { best = r; break; }
+    }
+    if (best < 1e9) break;
+  }
+  // height above the water also counts as distance
+  const d = Math.hypot(best, Math.max(0, p.y - world.waterLevel));
+  f.waterNear = best < 1e9 ? Math.max(0, 1 - d / 450) : 0;
+  return f.waterNear;
 }
 
 // ---------- main loop ----------
@@ -534,15 +563,26 @@ let last = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
-  if (state === 'hangar') { hangar.update(dt); hangar.render(); }
+  if (state === 'hangar') { hangar.update(dt); post.look({ bloom: 0.3, threshold: 3.0, vignette: 0.35, warmth: 0.3 }); post.render(hangar.scene, hangar.camera, dt); }
   else if (state === 'flight' && F) {
     stepFlight(dt);
-    if (F) renderer.render(F.scene, flightCam);
+    if (F) {
+      // sun flare + per-time-of-day grade
+      const w = F.world, vis = w.sunVisibility(flightCam);
+      F.sunVis = (F.sunVis ?? 0) + (vis - (F.sunVis ?? 0)) * Math.min(1, dt * 6);
+      const sp = flightCam.position.clone().addScaledVector(w.sunDir, 1000).project(flightCam);
+      const onScreen = sp.z < 1 && Math.abs(sp.x) < 1.4 && Math.abs(sp.y) < 1.4;
+      post.flare(new THREE.Vector2(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5), onScreen ? F.sunVis * (1 - w.W.dark) : 0, w.sun.color, flightCam.aspect);
+      const golden = Math.max(0, 1 - Math.abs(w.sunElev - 0.08) / 0.3);
+      post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: 1.1 + golden * 0.1 - w.W.dark * 0.25, vignette: 0.3 });
+      post.render(F.scene, flightCam, dt);
+    }
   }
 }
 function onResize() {
   const w = window.innerWidth, h = window.innerHeight;
   renderer.setSize(w, h, false); canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+  post.setSize(w, h, renderer.getPixelRatio());
   hangar.resize(w, h); flightCam.aspect = w / h; flightCam.updateProjectionMatrix();
 }
 window.addEventListener('resize', onResize);
@@ -561,6 +601,6 @@ async function boot() {
   setTimeout(() => $('#splash').remove(), 900);
   document.addEventListener('pointerdown', () => { audio.init(); if (state === 'hangar') audio.music(true); }, { once: true });
   if ('serviceWorker' in navigator && location.protocol !== 'file:' && !location.hostname.match(/^(localhost|127\.)/)) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, hangar, get F() { return F; }, startFlight, endFlight, presets, settings, flightCfg, controls, rig };
+  window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, audio, hangar, get F() { return F; }, startFlight, endFlight, presets, settings, flightCfg, controls, rig };
 }
 boot();
