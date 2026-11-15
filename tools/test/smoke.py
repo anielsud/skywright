@@ -230,6 +230,8 @@ async def run(args, url, ws_url, shots):
             info = await cdp.js(f'({{ presets: {S}.presets.length, gl: !!{S}.renderer.getContext() }})')
             if not info['gl']:
                 raise AssertionError('no WebGL context')
+            if args.quality:
+                await cdp.js(f'{S}.settings.quality = {json.dumps(args.quality)}')
             return f"{info['presets']} presets"
 
         if not await r.step('boot', boot):
@@ -318,6 +320,8 @@ def main():
     ap.add_argument('--out', metavar='DIR', help='screenshot directory (implies --keep)')
     ap.add_argument('--port', type=int, default=0, help='static server port (default: a free one)')
     ap.add_argument('--cdp-port', type=int, default=0, help='Chrome debugging port (default: a free one)')
+    ap.add_argument('--quality', choices=['auto', 'low', 'medium', 'high'],
+                    help="graphics setting for the flights (CI uses 'low': software WebGL is slow)")
     ap.add_argument('--size', default='1280x800', help='window size WxH')
     args = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)  # keep step lines in order when piped (CI logs)

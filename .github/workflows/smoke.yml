@@ -25,7 +25,7 @@ jobs:
       - name: Install websockets
         run: python -m pip install websockets
       - name: Smoke test
-        run: python tools/test/smoke.py --out smoke-shots
+        run: python tools/test/smoke.py --out smoke-shots --quality low --size 800x500
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
