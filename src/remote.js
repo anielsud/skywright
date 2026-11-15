@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { Aircraft, REALISM } from './aircraft.js';
 import { clamp } from './noise.js';
+import { SonicFX } from './sonic.js';
 
 export const PLAYER_COLORS = ['#ff5fa2', '#4fd1ff', '#7dff6a', '#ff8a3d', '#b48cff', '#ffffff'];
 const DELAY = 120; // ms of buffering
@@ -72,6 +73,7 @@ export class RemotePlane {
     this.ac.ctl.throttle = 0;
     scene.add(this.ac.root);
     this.ac.root.visible = false; // until the first snapshot
+    this.sonic = new SonicFX(this.ac, scene); // vapour cone, glow and sonic booms for other players too
     this.st = { x: new THREE.Vector3(), q: new THREE.Quaternion(), v: new THREE.Vector3() };
     this.first = true;
     this.label = document.createElement('div'); this.label.className = 'mp-label';
@@ -80,7 +82,7 @@ export class RemotePlane {
     labelRoot.appendChild(this.label);
     for (const i of player.broken) this.breakSilently(i);
   }
-  dispose() { this.scene.remove(this.ac.root); this.label.remove(); }
+  dispose() { this.scene.remove(this.ac.root); this.sonic.dispose(); this.label.remove(); }
   // replay damage for someone who broke parts before we arrived: no effects
   breakSilently(i) { this.ac.breakPart(i, 'impact'); for (const e of this.ac.events) if (e.type === 'debris') e.debris.group.clear(); this.ac.events.length = 0; }
 

@@ -144,7 +144,14 @@ export class Net {
   }
   spawnRemote(pl) {
     if (!pl.design.parts.length) return;
-    try { pl.remote = new RemotePlane(pl, this.F.scene, this.labels); } catch (e) { console.warn('remote plane failed', e); }
+    try { pl.remote = new RemotePlane(pl, this.F.scene, this.labels); } catch (e) { console.warn('remote plane failed', e); return; }
+    // someone else broke the sound barrier: the boom reaches us at the speed of sound
+    pl.remote.sonic.onBoom = (pos) => {
+      const d = this.lastCam ? this.lastCam.distanceTo(pos) : 0;
+      if (d > 12000) return;
+      setTimeout(() => { if (this.F) this.ctx.audio.play('sonicboom', Math.max(0.3, 1.5 - d / 6000), pos); }, Math.min(20, d / 340) * 1000);
+      this.ctx.hud.toast(`${pl.name} broke the sound barrier!`, 'good');
+    };
   }
 
   send(m) { if (this.role === 'client') { if (this.conn?.open) this.conn.send(m); } else if (this.role === 'host') this.broadcast(m); }
@@ -264,9 +271,11 @@ export class Net {
       this.sendT += dt;
       if (this.sendT >= SEND_DT) { this.sendT %= SEND_DT; if (!f.ac.dead) this.send(packState(this.myId, f.ac)); }
     }
+    this.lastCam = camera.position.clone();
     for (const p of this.players.values()) {
       const r = p.remote; if (!r) continue;
       r.update(dt, f.env); r.effects(f.effects); r.updateLabel(camera, units);
+      r.sonic.update(dt, { effects: f.effects, world: f.world });
     }
   }
   // remote planes for the minimap

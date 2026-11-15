@@ -6,6 +6,7 @@ import { Aircraft, REALISM } from './aircraft.js';
 import { World, LOCATIONS, WEATHER } from './world.js';
 import { Traffic, buildStatic, mergeByMaterial } from './traffic.js';
 import { Effects } from './effects.js';
+import { SonicFX } from './sonic.js';
 import { Audio, MIX_DEFAULTS, OLD_MIX_DEFAULTS } from './audio.js';
 import { Callouts } from './callouts.js';
 import { Controls } from './controls.js';
@@ -493,6 +494,7 @@ function buildFlight(cfg) {
   const ac = new Aircraft(design, realism);
   scene.add(ac.root);
   const effects = new Effects(scene);
+  const sonic = new SonicFX(ac, scene);
   const traffic = new Traffic(scene, world, presets);
   const st = analyze(design);
   const env = {
@@ -525,7 +527,13 @@ function buildFlight(cfg) {
   let mission = null;
   if (cfg.mode === 'rings') mission = new RingRace(scene, world, ac, cfg.realism);
   else if (cfg.mode === 'landing') mission = new LandingChallenge(world);
-  F = { scene, world, ac, effects, traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
+  sonic.onBoom = (pos) => {
+    audio.play('sonicboom', 1.5, rig.mode === 'cockpit' ? null : pos);
+    hud.center('MACH 1!', 2200); if (!ac.boomed) hud.toast('You broke the sound barrier!', 'good');
+    ac.boomed = true; rig.shake(1.4); post.shock(0.45);
+  };
+  sonic.onMilestone = (n) => { hud.center(`MACH ${n}!`, 1800); audio.play('ring'); };
+  F = { scene, world, ac, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
   F.callouts = new Callouts(audio, ac);
   net.attach(F);
   rig.init = false; rig.set('chase'); rig.look.dist = 1;
@@ -549,7 +557,7 @@ function endFlight(restarting = false) {
   net.detach(); if (!restarting) net.leave();
   if (updatePending) { reloadFresh(); return; }
   const f = F; F = null;
-  f.world.dispose(); f.effects.dispose(); f.traffic.dispose(); f.mission?.dispose?.();
+  f.world.dispose(); f.effects.dispose(); f.sonic.dispose(); post.shimmer(null); f.traffic.dispose(); f.mission?.dispose?.();
   f.scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
   renderer.renderLists.dispose();
   audio.silence();
@@ -604,7 +612,8 @@ function statsHTML(ac) {
     <div><label>Landings</label><b>${t.landings}</b></div>
     <div><label>Softest landing</label><b>${t.bestLanding === null ? '—' : t.bestLanding.toFixed(1) + ' m/s'}</b></div>
     <div><label>Distance</label><b>${(t.distance / 1000).toFixed(1)} km</b></div>
-    <div><label>Parts lost</label><b>${t.partsLost}</b></div></div>`;
+    <div><label>Parts lost</label><b>${t.partsLost}</b></div>${t.maxMach >= 0.8 ? `
+    <div><label>Top Mach</label><b>${t.maxMach.toFixed(2)}</b></div>` : ''}</div>`;
 }
 function showEnd(title, extra = '') {
   if (!F || F.shownEnd) return;
@@ -725,6 +734,7 @@ function stepFlight(dtReal) {
   }
   // wingtip contrails / vortices when pulling hard in humid air
   if (!ac.dead && Math.abs(ac.g) > 4 && ac.airspeed > 60) for (const p of ac.parts) if (p.alive && p.d.wing && p.d.cat === 'wing') { const tip = p.surfaces.at(-1); if (tip && Math.random() < 0.5) effects.puff(ac.worldPoint(tip.pos), ac.v.clone().multiplyScalar(0.8), { color: [1, 1, 1], s0: 0.3, s1: 1.5, life: 0.5, a: 0.4, drag: 2 }); }
+  f.sonic.update(dt, { effects, world });
   traffic.update(dt, effects, flightCam.position);
   const wind = world.windBase.clone().add(world.gust);
   effects.update(dt, wind);
@@ -735,6 +745,7 @@ function stepFlight(dtReal) {
   ac.setCockpitView(rig.mode === 'cockpit' && !focus);
   world.update(dtReal, flightCam, rig.vel, f.events);
   effects.setLighting(world, flightCam);
+  post.shimmer(f.sonic.shimmer(flightCam, f.shim), perf.level < 1 && qualityTier() !== 'low'); // heat haze is the first thing Auto quality sheds
   // end of flight detection
   const stopped = ac.v.length() < 0.6;
   if (!f.shownEnd && f.mission?.done !== true) {

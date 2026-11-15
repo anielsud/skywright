@@ -461,6 +461,11 @@ export class Audio {
       case 'pop': this.tone('sine', 400, 900, 0.1, 0.08); break;
       case 'ring': [880, 1320, 1760].forEach((f, i) => this.tone('sine', f, f, 0.12, 0.6, i * 0.06)); break;
       case 'win': [523, 659, 784, 1046, 1318].forEach((f, i) => { this.tone('triangle', f, f, 0.13, 0.9, i * 0.11); this.tone('sine', f * 2, f * 2, 0.04, 0.6, i * 0.11); }); break;
+      case 'sonicboom': // N-wave: two sharp cracks (bow and tail shock) over a deep thump
+        for (const t of [0, 0.13]) { this.burst('white', 'lowpass', 6000, 0.5, 0.9 * P, 0.22, d, t, 900); this.tone('sine', 75, 28, 0.8 * P, 0.7, t, d); }
+        this.shot('boom', { gain: SHOT.boom * 1.2 * P, rate: 0.75 + Math.random() * 0.1, dest: d });
+        this.burst('brown', 'lowpass', 300, 0.5, 0.9 * P, 2.2, d, 0.05, 60);
+        break;
       case 'rocket': this.burst('white', 'lowpass', 3000, 0.5, 1, 0.8, d); this.tone('sine', 60, 40, 0.8, 0.8, 0, d); break;
       case 'warn': this.tone('square', 800, 800, 0.05, 0.12); this.tone('square', 600, 600, 0.05, 0.12, 0.15); break;
     }
