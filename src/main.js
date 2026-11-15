@@ -79,7 +79,57 @@ function buildPalette() {
 }
 
 function fmt(n, d = 0) { return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }) : '—'; }
-let sizeDrag = false;
+let sizeDrag = false; // a slider drag or +/- hold is in progress: don't rebuild the panel under the finger
+// Inspector sliders: [group, rows]. Each row has an absolute slider for coarse moves and +/- buttons
+// (tap = one fine step, hold = repeat) for exact placement.
+function ctlRows(p) {
+  const L = Math.max(4, Math.ceil(Math.max(...hangar.design.parts.flatMap((q) => q.pos.map(Math.abs)))) + 2);
+  const m = (v) => `${v.toFixed(2)} m`, deg = (v) => `${Math.round(v)}°`, x = (v) => `${v.toFixed(2)}×`;
+  const e = hangar.euler();
+  return [
+    ['Move', [['m0', 'Side', 0], ['m1', 'Height', 1], ['m2', 'Fore / aft', 2]].map(([k, name, i]) => ({ k, name, v: p.pos[i], lo: -L, hi: L, step: 0.01, fine: 0.01, fmt: m }))],
+    ['Rotate', [['r0', 'Pitch', 0, 90], ['r1', 'Yaw', 1, 180], ['r2', 'Roll', 2, 180]].map(([k, name, i, lim]) => ({ k, name, v: e[i], lo: -lim, hi: lim, step: 0.5, fine: 1, fmt: deg }))],
+    ['Size', sizeSliders(p.id).map(([a, name, lo, hi]) => ({ k: 's' + a, name, v: sizeValue(p, a), lo, hi, step: 0.01, fine: 0.01, fmt: x }))],
+  ].filter(([, rows]) => rows.length);
+}
+function applyCtl(k, v, undo, base) {
+  const t = k[0], a = k.slice(1);
+  if (t === 'm') hangar.setPos(+a, v, undo);
+  else if (t === 'r') { const e = [...base]; e[+a] = v; hangar.setEuler(e, undo); }
+  else hangar.resizePart(a, v, undo);
+}
+function wireCtls(sp, sel) {
+  const rows = Object.fromEntries(ctlRows(sel).flatMap(([, r]) => r).map((c) => [c.k, c]));
+  let base = null, raf = 0, pending = null; // base: Euler at gesture start, so editing one angle never disturbs the others
+  const show = (k, v) => { sp.querySelector(`[data-cv="${k}"]`).textContent = rows[k].fmt(v); };
+  const begin = () => { base = hangar.euler(); };
+  const step = (k, v, first) => {
+    if (first) { applyCtl(k, v, true, base); return; }
+    pending = [k, v];
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; applyCtl(...pending, false, base); }); // at most one rebuild per frame
+  };
+  const end = (k, v) => { cancelAnimationFrame(raf); raf = 0; if (sizeDrag) { applyCtl(k, v, false, base); sizeDrag = false; renderInspector(); } };
+  sp.querySelectorAll('[data-ctl]').forEach((r) => {
+    const k = r.dataset.ctl;
+    r.addEventListener('input', () => { const first = !sizeDrag; if (first) begin(); sizeDrag = true; show(k, +r.value); step(k, +r.value, first); });
+    r.addEventListener('change', () => end(k, +r.value));
+  });
+  sp.querySelectorAll('[data-fine]').forEach((b) => {
+    const [k, dir] = b.dataset.fine.split(','), c = rows[k], slider = sp.querySelector(`[data-ctl="${k}"]`);
+    let timer = 0, v = c.v;
+    const tick = (first) => {
+      v = Math.min(c.hi, Math.max(c.lo, +(v + dir * c.fine).toFixed(3)));
+      slider.value = v; show(k, v); step(k, v, first); if (first) audio.play('click');
+    };
+    const stop = () => { if (!timer) return; clearTimeout(timer); clearInterval(timer); timer = 0; end(k, v); };
+    b.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault(); b.setPointerCapture?.(ev.pointerId);
+      v = +slider.value; begin(); sizeDrag = true; tick(true);
+      timer = setTimeout(() => { timer = setInterval(() => tick(false), 60); }, 400); // hold to repeat
+    });
+    for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(t, stop);
+  });
+}
 function renderInspector() {
   const d = hangar.design, s = hangar.stats || analyze(d);
   $('#plane-name').value = d.name || '';
@@ -91,45 +141,20 @@ function renderInspector() {
     sp.hidden = false;
     sp.innerHTML = `<h3>${def.name}${hangar.partner(hangar.sel) >= 0 && hangar.symmetry ? ' <span class="pill">×2 mirrored</span>' : ''}</h3>
       <p class="desc">${def.desc}</p>
-      <div class="pad">
-        <div class="pad-group"><label>Move</label>
-          <div class="grid3">
-            <span></span><button data-n="1,1" title="Up">▲</button><span></span>
-            <button data-n="0,-1" title="Left">◀</button><button data-step class="step">${hangar.step >= 0.25 ? 'BIG' : 'FINE'}</button><button data-n="0,1" title="Right">▶</button>
-            <span></span><button data-n="1,-1" title="Down">▼</button><span></span>
-          </div>
-          <div class="row2"><button data-n="2,-1">Forward</button><button data-n="2,1">Back</button></div>
-        </div>
-        <div class="pad-group"><label>Rotate</label>
-          <div class="row2"><button data-r="0,-15">Pitch −</button><button data-r="0,15">Pitch +</button></div>
-          <div class="row2"><button data-r="1,15">Yaw −</button><button data-r="1,-15">Yaw +</button></div>
-          <div class="row2"><button data-r="2,15">Roll −</button><button data-r="2,-15">Roll +</button></div>
-          <div class="row2"><button data-flip>Flip</button><button data-reset>Reset</button></div>
-        </div>
-      </div>
-      <div class="sizer">${sizeSliders(sel.id).map(([a, n, lo, hi]) => { const v = sizeValue(sel, a);
-        return `<label class="lbl">${n} <b data-sv="${a}">${v.toFixed(1)}×</b></label><input type="range" data-size="${a}" min="${lo}" max="${hi}" step="0.05" value="${v}">`; }).join('')}</div>
+      ${ctlRows(sel).map(([group, rows]) => `<label class="lbl grp">${group}</label>` + rows.map((c) => `
+        <div class="ctl"><label class="lbl">${c.name} <b data-cv="${c.k}">${c.fmt(c.v)}</b></label>
+          <div class="ctl-row"><button data-fine="${c.k},-1" aria-label="${c.name} down">−</button>
+          <input type="range" data-ctl="${c.k}" min="${c.lo}" max="${c.hi}" step="${c.step}" value="${c.v}">
+          <button data-fine="${c.k},1" aria-label="${c.name} up">+</button></div></div>`).join('')).join('')}
+      <div class="row2"><button data-flip>Flip</button><button data-reset>Straighten</button></div>
       <label class="lbl">Paint</label>
       <div class="swatches">${PAINTS.map((c) => `<button style="background:#${c.toString(16).padStart(6, '0')}" data-c="${c}" class="${c === sel.color ? 'on' : ''}"></button>`).join('')}</div>
       <button class="danger wide" data-del>🗑 Remove part${hangar.sel === 0 ? ' (and everything)' : ''}</button>`;
-    sp.querySelectorAll('[data-n]').forEach((b) => b.addEventListener('click', () => { const [a, dd] = b.dataset.n.split(',').map(Number); hangar.nudge(a, dd); }));
-    sp.querySelectorAll('[data-r]').forEach((b) => b.addEventListener('click', () => { const [a, dd] = b.dataset.r.split(',').map(Number); hangar.rotate(a, dd); }));
-    sp.querySelector('[data-step]').addEventListener('click', () => { hangar.step = hangar.step >= 0.25 ? 0.05 : 0.5; renderInspector(); });
     sp.querySelector('[data-flip]').addEventListener('click', () => hangar.flip());
     sp.querySelector('[data-reset]').addEventListener('click', () => hangar.resetRotation());
     sp.querySelectorAll('[data-c]').forEach((b) => b.addEventListener('click', () => hangar.paint(+b.dataset.c)));
     sp.querySelector('[data-del]').addEventListener('click', () => hangar.deleteSel());
-    sp.querySelectorAll('[data-size]').forEach((r) => {
-      const a = r.dataset.size; let raf = 0;
-      // one undo entry per drag; rebuild at most once per frame while dragging
-      r.addEventListener('input', () => {
-        sp.querySelector(`[data-sv="${a}"]`).textContent = `${(+r.value).toFixed(1)}×`;
-        const first = !sizeDrag; sizeDrag = true;
-        if (first) hangar.resizePart(a, +r.value, true);
-        else if (!raf) raf = requestAnimationFrame(() => { raf = 0; hangar.resizePart(a, +r.value, false); });
-      });
-      r.addEventListener('change', () => { cancelAnimationFrame(raf); raf = 0; if (sizeDrag) { sizeDrag = false; hangar.resizePart(a, +r.value, false); } });
-    });
+    wireCtls(sp, sel);
   } else sp.hidden = true;
   const marginPct = clamp(s.margin, -0.5, 1);
   const balPos = clamp(50 + marginPct * 60, 4, 96);
