@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.49.0', items: [
+    'Smooth as butter: no more stutters or camera jitter while flying, and no more long pause when you crash.',
+  ] },
   { v: '1.48.0', items: [
     'Much smoother! The game draws a little fewer pixels and sharpens the picture, so it runs up to twice as fast with all the same trees, towns and effects.',
   ] },
