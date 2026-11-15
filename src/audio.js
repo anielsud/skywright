@@ -317,9 +317,9 @@ export class Audio {
     // ground roll
     const rv = this.voice('roll');
     const rollAmt = s.onGround ? Math.min(1, s.groundSpeed / 30) : 0;
-    // runway: recorded tyres on asphalt; grass/dirt keep the synthesized bumpy rumble
-    const recRoll = this.bedGain('roll_runway', this.airBus, s.surface === 'runway' ? rollAmt * REC.roll : 0, 0.05, 0.6 + Math.min(s.groundSpeed, 60) / 100);
-    this.set(rv.out.gain, rollAmt * (s.surface === 'runway' ? (recRoll ? 0 : 0.45) : 1.0), 0.05);
+    // recorded rolling per surface (see groundSurface); the synth rumble only stands in where a recording is missing
+    const recRoll = this.groundSurface(s, rollAmt);
+    this.set(rv.out.gain, recRoll || s.surface === 'water' ? 0 : rollAmt * (s.surface === 'runway' ? 0.45 : 1.0), 0.05);
     this.set(rv.nf.frequency, s.surface === 'runway' ? 120 : 260); this.set(rv.bg.gain, s.surface === 'runway' ? 0.4 : 2.2);
     this.set(rv.cg.gain, s.scrape ? Math.min(0.5, s.scrape / 40) : 0, 0.05);
     const st = this.voice('stall'); this.set(st.out.gain, s.stall && Math.floor(this.ctx.currentTime * 4) % 2 === 0 ? 0.07 : 0, 0.01);
@@ -439,6 +439,37 @@ export class Audio {
     o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + T);
     g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(peak, t + a); g.gain.setValueAtTime(peak, t + a + hold); g.gain.linearRampToValueAtTime(0, t + T);
     o.start(t); o.stop(t + T + 0.05);
+  }
+
+  // ---------- ground surfaces: recorded rolling per surface, float/water taxiing, bumps on rough ground ----------
+  // s.surface: world.groundAt().type ('runway'|'grass'|'sand'|'rock'|'snow'|'water'); s.gear: 'wheel'|'float'|'skid' (what touches).
+  // Returns false if the clip for this surface isn't loaded (the caller keeps the synth rumble).
+  groundSurface(s, amt) {
+    const surf = s.surface, gs = s.groundSpeed || 0, water = surf === 'water', on = s.onGround;
+    const want = water ? null : GROUND.bed[surf] || 'roll_grass';
+    const rate = (GROUND.rate[surf] || 1) * (0.6 + Math.min(gs, 60) / 100);
+    // tyre/hull rumble below ~160 Hz is inaudible on a tablet but was pushing the limiter (-3 dB on the runway): shelve it off
+    if (!this.rollBus) { this.rollBus = this.gain(1); const ls = this.ctx.createBiquadFilter(); ls.type = 'lowshelf'; ls.frequency.value = 160; ls.gain.value = -9; this.rollBus.connect(ls); ls.connect(this.airBus); }
+    // a bed is only created (and starts looping) the first time it's needed
+    const bed = (name, v, t, r) => (!this.has(name) ? false : v <= 0 && !this.beds?.[name] ? true : this.bedGain(name, this.rollBus, v, t, r));
+    let ok = true;
+    for (const name of ['roll_runway', 'roll_grass', 'roll_dirt', 'roll_snow']) {
+      const r = bed(name, name === want ? amt * GROUND.level[name] : 0, 0.06, name === want ? rate : undefined);
+      if (name === want && !r) ok = false;
+    }
+    // on the water: hull/float swish grows with speed; small waves slapping the floats even when stopped
+    const wAmt = on && water ? Math.min(1, gs / 18) : 0;
+    const slap = on && water ? 0.45 + 0.55 * Math.min(1, gs / 6) - 0.5 * Math.min(1, Math.max(0, gs - 12) / 20) : 0;
+    const okW = bed('water_taxi', wAmt * GROUND.level.water_taxi, 0.1, 0.75 + Math.min(gs, 40) / 80) & bed('float_slap', slap * GROUND.level.float_slap, 0.3, 0.9 + Math.min(gs, 20) / 100);
+    if (water) ok = !!okW;
+    // bumps: random knocks through the gear on rough ground, more often the faster you go
+    const now = this.ctx.currentTime, dt = Math.min(0.1, now - (this.bumpT ?? now)); this.bumpT = now;
+    const rough = on && !water ? GROUND.rough[surf] ?? 0.4 : 0;
+    if (rough && gs > 2 && Math.random() < rough * Math.min(1, gs / 15) * 3.5 * dt) {
+      const k = 1 + Math.floor(Math.random() * 3), p = Math.min(1, 0.35 + gs / 25) * (0.6 + Math.random() * 0.4);
+      this.shot(`bump_${k}`, { gain: GROUND.bump * p * (s.gear === 'wheel' ? 1 : 0.6), rate: (s.gear === 'wheel' ? 0.9 : 0.75) + Math.random() * 0.3, dest: this.rollBus });
+    }
+    return ok;
   }
 
   // ---------- ambient world sounds ----------
@@ -712,3 +743,13 @@ export class Audio {
     }
   }
 }
+
+// ---------- ground surfaces: which recording each surface uses, and levels (weighted, sliders 100%: rolling at 30 m/s ≈-29..-31,
+// float slap ≈-37, water taxi ≈-31, bumps peak ≈-30) ----------
+const GROUND = {
+  bed: { runway: 'roll_runway', grass: 'roll_grass', sand: 'roll_dirt', rock: 'roll_dirt', snow: 'roll_snow' },
+  rate: { sand: 0.85, rock: 1.1, snow: 0.9 },
+  rough: { runway: 0.03, grass: 0.5, sand: 0.4, rock: 1.2, snow: 0.25 },
+  level: { roll_runway: 2, roll_grass: 1.9, roll_dirt: 2, roll_snow: 2.1, water_taxi: 2.2, float_slap: 0.8 },
+  bump: 0.8,
+};
