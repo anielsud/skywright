@@ -578,7 +578,7 @@ function buildFlight(cfg) {
     get night() { return world.night || world.W.dark > 0.6; }, groundHeightAtSpawn: world.loc.rwyH,
     onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40, p.clone()); },
   };
-  let start = cfg.start;
+  let start = cfg.start; let F_approach = null;
   const gearOK = ac.parts.some((p) => p.gear && (!p.gear.float || p.gear.skid)); // skids can sit on a runway
   if (cfg.mode === 'landing') start = 'approach';
   else if (start === 'water' || (start === 'runway' && st.floats && !gearOK)) start = 'water';
@@ -592,10 +592,13 @@ function buildFlight(cfg) {
     const w = findWater(world);
     if (w) ac.spawn(env, w, 0); else { start = 'air'; }
   }
-  if (start === 'air') { ac.spawn(env, new THREE.Vector3(slotX, 0, world.runway.len / 2 + 1200 + slot * 40), 0, { air: true, alt: world.loc.rwyH + (st.heli ? 120 : 450) + slot * 30, speed: st.heli ? 0 : vApp * 1.1 }); controls.setThrottle(st.heli ? 0.5 : ac.hasEngine ? 0.65 : 0); } // helicopters start hovering
+  if (start === 'air') { // on the extended centreline of whichever runway end has room, high enough to clear the hills ahead
+    const sp = planAirStart(world, rwy, st.heli ? 120 : 450);
+    ac.spawn(env, new THREE.Vector3(rwy.x + slotX, 0, sp.s * (rwy.len / 2 + 1200 + slot * 40)), sp.heading, { air: true, alt: sp.alt + slot * 30, speed: st.heli ? 0 : vApp * 1.1 });
+    controls.setThrottle(st.heli ? 0.5 : ac.hasEngine ? 0.65 : 0); } // helicopters start hovering
   else if (start === 'approach') {
-    const dist = 2600;
-    ac.spawn(env, new THREE.Vector3(0, 0, world.runway.len / 2 - 380 + dist), 0, { air: true, alt: world.loc.rwyH + dist * Math.tan(THREE.MathUtils.degToRad(3)) + 3, speed: st.heli ? 20 : vApp, pitch: -0.02 });
+    const ap = (F_approach = { ...planApproach(world, rwy), x: rwy.x }); F_approach.name = ap.s > 0 ? rwy.name : rwy.back || rwy.name; // a glide path that clears the terrain (real places have mountains off the runway ends)
+    ac.spawn(env, new THREE.Vector3(rwy.x, 0, ap.s * (rwy.len / 2 - 380 + ap.dist)), ap.heading, { air: true, alt: ap.alt, speed: st.heli ? 20 : vApp, pitch: -0.02 });
     ac.gearDown = true; ac.gearT = 1; ac.flaps = 1; controls.setThrottle(st.heli ? 0.45 : 0.55);
   } else controls.setThrottle(0);
   if (start === 'air') { ac.flaps = 0; }
@@ -603,7 +606,7 @@ function buildFlight(cfg) {
   if (st.heli) setTimeout(() => ui.hint(cfg.realism === 'sim' ? 'Helicopter: throttle is the collective. Good luck!' : 'Helicopter: throttle to the middle to hover, more to climb'), 1500);
   let mission = null;
   if (cfg.mode === 'rings') mission = new RingRace(scene, world, ac, cfg.realism);
-  else if (cfg.mode === 'landing') mission = new LandingChallenge(world);
+  else if (cfg.mode === 'landing') mission = new LandingChallenge(world, F_approach?.s ?? 1, F_approach?.x ?? 0, F_approach?.name);
   sonic.onBoom = (pos) => {
     const ck = rig.mode === 'cockpit'; // outside, the boom reaches the camera distance/343 s later, from where the shock formed
     audio.sonicBoom(1.5, pos, ck ? 0 : Math.min(8, flightCam.position.distanceTo(pos) / 343), ck);
@@ -956,6 +959,35 @@ function waterProximity(f, world, p) {
   return f.waterNear;
 }
 
+// ---------- spawn planning ----------
+// Starts in the air used to be fixed offsets from the runway, which put planes inside hillsides wherever there is high
+// ground off a runway end (Jungfrau, Alpine). Sample the terrain and pick a runway end / glide angle / distance that clears it.
+const SPAWN_MARGIN = 30;
+function groundMax(world, x, z, r = 60) { let m = world.waterLevel; for (const [dx, dz] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]]) m = Math.max(m, world.heightAt(x + dx, z + dz)); return m; }
+// s = +1 approaches over +z flying towards -z (heading 0), s = -1 from -z (heading pi)
+function planApproach(world, rwy) {
+  const L = rwy.len, h = rwy.h ?? world.loc.rwyH;
+  let best = null;
+  for (const dist of [2600, 2000, 1500, 1100]) for (const deg of [3, 4, 5, 6.5]) for (const s of [1, -1]) {
+    const t = Math.tan(THREE.MathUtils.degToRad(deg)); let worst = Infinity;
+    for (let d = 0; d <= dist; d += 40) { const need = h + d * t + 3, g = groundMax(world, rwy.x, s * (L / 2 - 380 + d)); worst = Math.min(worst, need - g - (d > 500 ? SPAWN_MARGIN : 0)); }
+    const c = { s, dist, deg, worst, heading: s > 0 ? 0 : Math.PI, alt: h + dist * t + 3 };
+    if (worst >= 0) return c;
+    if (!best || worst > best.worst) best = c;
+  }
+  best.alt -= best.worst; // nothing clean: steepen the best one until it clears
+  return best;
+}
+function planAirStart(world, rwy, above) {
+  const L = rwy.len, h = rwy.h ?? world.loc.rwyH;
+  const plan = (s) => { // the start point and the 3 km run in towards the runway
+    let need = h + above;
+    for (let d = 0; d <= 3000; d += 100) { const z = s * (L / 2 + 1200 - d); need = Math.max(need, groundMax(world, rwy.x, z, 300) + 250); }
+    return { s, heading: s > 0 ? 0 : Math.PI, alt: need };
+  };
+  const a = plan(1), b = plan(-1);
+  return b.alt < a.alt - 50 ? b : a; // prefer the usual side unless the other one is clearly lower
+}
 // ---------- main loop ----------
 let last = performance.now();
 function applyQuality() {

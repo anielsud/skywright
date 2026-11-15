@@ -73,12 +73,12 @@ export class RingRace {
 }
 
 export class LandingChallenge {
-  constructor(world) { this.world = world; this.done = false; this.score = null; this.touch = null; this.time = 0; }
+  constructor(world, side = 1, rwyX = 0, rwyName = '36R') { this.world = world; this.side = side; this.rwyX = rwyX; this.rwyName = rwyName; this.done = false; this.score = null; this.touch = null; this.time = 0; } // side: +1 = approach from +z (the spawn planner may pick the other end)
   update(dt, ac, events) {
     this.time += dt;
     if (this.done) return;
     for (const e of ac.events) if (e.type === 'landing' && !this.touch) {
-      const x = ac.x.x, z = ac.x.z;
+      const x = ac.x.x - this.rwyX, z = ac.x.z * this.side; // runway-relative, as if approaching from +z
       const onRwy = Math.abs(x) < this.world.runway.width / 2 && Math.abs(z) < this.world.runway.len / 2;
       this.touch = { vs: e.vs, x, z, onRwy };
     }
@@ -89,7 +89,7 @@ export class LandingChallenge {
       const sVs = clamp(1 - (t.vs - 0.6) / 3, 0, 1) * 400;
       const sCl = clamp(1 - Math.abs(t.x) / 18, 0, 1) * 250;
       const sAim = clamp(1 - Math.abs(t.z - aim) / 500, 0, 1) * 250;
-      const sStop = Math.abs(ac.x.x) < this.world.runway.width / 2 && Math.abs(ac.x.z) < this.world.runway.len / 2 ? 100 : 0;
+      const sStop = Math.abs(ac.x.x - this.rwyX) < this.world.runway.width / 2 && Math.abs(ac.x.z) < this.world.runway.len / 2 ? 100 : 0;
       const intact = ac.stats.partsLost === 0 ? 1 : 0.3;
       this.score = Math.round((t.onRwy ? sVs + sCl + sAim + sStop : (sVs * 0.5)) * intact);
       events.push({ type: 'landingDone', score: this.score, vs: t.vs, cl: t.x, aim: t.z - aim, parts: ac.stats.partsLost, onRwy: t.onRwy });
@@ -97,6 +97,6 @@ export class LandingChallenge {
     if (ac.wrecked && !this.done) { this.done = true; this.score = 0; events.push({ type: 'landingDone', score: 0, crashed: true }); }
   }
   target() { return this.done ? null : new THREE.Vector3(0, this.world.loc.rwyH, this.world.runway.len / 2 - 380); }
-  hud() { return this.done ? `Score: ${this.score}` : this.touch ? `Touchdown ${this.touch.vs.toFixed(1)} m/s — now stop!` : 'Land on runway 36R · aim for the big white blocks'; }
+  hud() { return this.done ? `Score: ${this.score}` : this.touch ? `Touchdown ${this.touch.vs.toFixed(1)} m/s — now stop!` : `Land on runway ${this.rwyName} · aim for the big white blocks`; }
   dispose() {}
 }

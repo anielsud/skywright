@@ -705,7 +705,7 @@ export class World {
     paved(this.taxiTexture('taxi'), 36, RWY.len, 80, 0);
     const conn = this.taxiTexture('conn'); for (const z of [RWY.len / 2 - 20, -RWY.len / 2 + 20, 0]) { paved(conn, 22, 60, 50, z, true); add(160, 22, -100, z); }
     paved(this.apronTexture(), 232, 400, 214, 0);
-    this.runways = rwys.map((r) => ({ x: r.x, z: 0, h: this.loc.rwyH, len: RWY.len, width: RWY.width, name: r.name, threshold: new THREE.Vector3(r.x, this.loc.rwyH, RWY.len / 2 - 60), heading: 0 }));
+    this.runways = rwys.map((r) => ({ x: r.x, z: 0, h: this.loc.rwyH, len: RWY.len, width: RWY.width, name: r.name, back: r.back, threshold: new THREE.Vector3(r.x, this.loc.rwyH, RWY.len / 2 - 60), heading: 0 }));
     this.runway = this.runways[0];
     // runway & approach lights (points shown at night)
     const lp = [], lc = [];
