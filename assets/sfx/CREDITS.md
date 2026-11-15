@@ -34,3 +34,5 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Airplane Turboprop (Outside Perspective) 2" by Saladsounds (CC0): https://freesound.org/people/Saladsounds/sounds/828952/
 - "Illegal Explosion" by qubodup (CC0): https://freesound.org/people/qubodup/sounds/840508/
 - "Glass Smash" by dwswords (CC0): https://freesound.org/people/dwswords/sounds/848312/
+
+Voice callouts: synthesized with [Piper](https://github.com/rhasspy/piper) using the "joe" voice (trained on CC0 data, OHF-Voice/voice-datasets).

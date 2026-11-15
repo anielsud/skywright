@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.15.0', items: [
+    'Cockpit voice callouts: it counts down your height as you land (“fifty… forty… thirty…”), says “Rotate” and “Positive rate” on takeoff, and warns “Stall!”, “Sink rate!”, “Pull up!” and “Too low, gear!”. Turn them off in Settings.',
+  ] },
   { v: '1.13.0', items: [
     'This “What’s new” popup! After each update it tells you what changed. Find it again any time in Settings.',
   ] },
