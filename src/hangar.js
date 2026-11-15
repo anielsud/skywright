@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from '../vendor/addons/OrbitControls.js';
 import { RoomEnvironment } from '../vendor/addons/RoomEnvironment.js';
 import { PARTS, CATEGORIES, PAINTS, partInfo } from './parts.js';
-import { analyze, partMatrix, partScale, mirroredOf, newPart, subtree, removeParts, cloneDesign } from './design.js';
+import { analyze, partMatrix, partScale, sizeAxes, mirroredOf, newPart, subtree, removeParts, cloneDesign } from './design.js';
 import { makeNoise } from './noise.js';
 
 const ghostMat = new THREE.MeshBasicMaterial({ color: 0x4fc3ff, transparent: true, opacity: 0.45, depthWrite: false });
@@ -88,7 +88,8 @@ export class Hangar {
   load(design, frame = true) { this.design = cloneDesign(design); this.sel = -1; this.undoStack = []; this.redoStack = []; this.rebuild(); if (frame) this.frame(); }
 
   partner(i) {
-    const p = this.design.parts[i]; if (!p || Math.abs(p.pos[0]) < 0.05) return -1;
+    // centreline-rooted pairs (wings/tailplanes mounted at x=0) count too: the mirror flag tells the twins apart
+    const p = this.design.parts[i]; if (!p) return -1;
     return this.design.parts.findIndex((q, j) => j !== i && q.id === p.id && q.mirror !== p.mirror && Math.abs(q.pos[0] + p.pos[0]) < 0.02 && Math.abs(q.pos[1] - p.pos[1]) < 0.02 && Math.abs(q.pos[2] - p.pos[2]) < 0.02);
   }
   edit(fn) {
@@ -110,7 +111,7 @@ export class Hangar {
     this.audio.play('click');
   }
   resetRotation() { this.edit((p) => { p.quat = [0, 0, 0, 1]; }); }
-  // Body sizing. axis 'len' scales local z, 'dia' local x+y. Pass undo=false for follow-up steps of one slider drag.
+  // Part sizing. axis is a sizeSliders() key (len/dia/span/chord/size). Pass undo=false for follow-up steps of one slider drag.
   resizePart(axis, v, undo = true) {
     if (this.sel < 0) return;
     if (undo) this.pushUndo();
@@ -121,7 +122,7 @@ export class Hangar {
   scalePart(i, axis, v) {
     const parts = this.design.parts, p = parts[i];
     const oldM = partMatrix(p), s = [...partScale(p)];
-    if (axis === 'len') s[2] = v; else s[0] = s[1] = v;
+    for (const k of sizeAxes(p.id, axis)) s[k] = v;
     if (s.every((x) => Math.abs(x - 1) < 1e-6)) delete p.scale; else p.scale = s;
     // attached parts ride the surface: map each direct child's origin through old->new body scale, carry its subtree along rigidly
     const toNew = partMatrix(p).multiply(oldM.invert()), a = new THREE.Vector3(), b = new THREE.Vector3();

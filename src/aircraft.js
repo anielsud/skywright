@@ -1,7 +1,7 @@
 // Runtime aircraft: rigid-body flight model built from parts, ground contact, damage & break-up.
 import * as THREE from 'three';
 import { PARTS, partInfo } from './parts.js';
-import { partMatrix, partScale, partMass, partHp, subtree } from './design.js';
+import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale } from './design.js';
 import { M } from './materials.js';
 import { clamp, lerp } from './noise.js';
 
@@ -116,7 +116,8 @@ export class Aircraft {
       const part = { i, p, d, obj, m: m.clone(), rot, size, alive: true, hp: partHp(p), dmg: 0, mass: partMass(p), info, scorched: false,
         center: info.centroid.clone().applyMatrix4(m), surfaces: [], engine: null, gear: null, hull: [], dragA: null, name: d.name };
       const ctrlObjs = obj.userData.controls || (obj.children[0]?.userData?.controls) || [];
-      for (const s of info.surfaces) {
+      for (const s0 of info.surfaces) {
+        const s = scaleSurface(s0, partScale(p));
         const sv = { pos: new THREE.Vector3(...s.pos).applyMatrix4(m), n: new THREE.Vector3(...s.n).transformDirection(m), f: new THREE.Vector3(...s.f).transformDirection(m),
           s: new THREE.Vector3(...s.s).transformDirection(m), area: s.area, ar: s.ar, role: s.role, chord: s.chord, cl0: (d.wing?.camber || 0) * 9,
           delta: 0, mix: { pitch: 0, roll: 0, yaw: 0 }, ctrlObj: null, load: 0, part };
@@ -125,15 +126,15 @@ export class Aircraft {
       }
       ctrlObjs.forEach((c) => { if (part.surfaces[c.strip]) part.surfaces[c.strip].ctrlObj = c.obj; });
       if (d.engine) {
-        const e = d.engine;
-        part.engine = { ...e, pos: info.center.clone().applyMatrix4(m), dir: new THREE.Vector3(0, 0, -1).transformDirection(m), spool: 0, rpm: 0, thrustNow: 0,
+        const e = d.engine, ts = thrustScale(p);
+        part.engine = { ...e, thrust: e.thrust * ts, ab: e.ab ? e.ab * ts : 0, pos: info.center.clone().applyMatrix4(m), dir: new THREE.Vector3(0, 0, -1).transformDirection(m), spool: 0, rpm: 0, thrustNow: 0,
           burn: e.burn || 0, burning: false, ab: 0, prop: obj.userData.prop, fan: obj.userData.fan, flame: obj.userData.flame, flameCore: obj.userData.flameCore, spinDir: p.mirror ? -1 : 1, angle: 0, smokeT: 0 };
       }
       if (d.gear) {
-        const gi = d.gear;
+        const gi = d.gear, ls = linScale(p); // ls: resized gear (wheel/strut sizes are in metres, the mesh is in part-local units)
         const wheels = [];
-        if (gi.float) for (const dz of [-gi.flen * 0.32, gi.flen * 0.32, 0]) wheels.push({ top: new THREE.Vector3(0, 0, dz).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: 1.0, r: 0.3, steer: false, brake: false, float: true, comp: 0, contact: false });
-        else wheels.push({ top: new THREE.Vector3(0, 0, 0).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: gi.len, r: gi.r, steer: gi.steer, brake: gi.brake, comp: 0, contact: false, spin: 0 });
+        if (gi.float) for (const dz of [-gi.flen * 0.32, gi.flen * 0.32, 0]) wheels.push({ top: new THREE.Vector3(0, 0, dz).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: 1.0 * ls, r: 0.3 * ls, ls, steer: false, brake: false, float: true, comp: 0, contact: false });
+        else wheels.push({ top: new THREE.Vector3(0, 0, 0).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: gi.len * ls, r: gi.r * ls, ls, steer: gi.steer, brake: gi.brake, comp: 0, contact: false, spin: 0 });
         part.gear = { ...gi, wheels, strut: obj.userData.strut, wheelObj: obj.userData.wheels };
       }
       if (d.smoke) part.smoke = { pos: new THREE.Vector3(0, 0, info.box.max.z).applyMatrix4(m), color: new THREE.Color(p.color) };
@@ -361,8 +362,8 @@ export class Aircraft {
       if (e.type === 'prop') thrust = e.thrust * e.spoolT * Math.max(0, 1 - (Math.max(0, fwdSpeed) / e.vmax) ** 1.6);
       else if (e.type === 'jet') {
         thrust = e.thrust * (0.04 + 0.96 * e.spoolT) * (1 + 0.25 * Math.min(1, fwdSpeed / 300));
-        e.abOn = !!(PARTS[p.p.id].engine.ab) && ctl.throttle > 0.95 && e.spoolT > 0.9;
-        if (e.abOn) thrust += (PARTS[p.p.id].engine.ab - e.thrust);
+        e.abOn = !!e.ab && ctl.throttle > 0.95 && e.spoolT > 0.9;
+        if (e.abOn) thrust += (e.ab - e.thrust);
       } else if (e.type === 'rocket') thrust = e.burning ? e.thrust : 0;
       thrust *= (rho / 1.225) ** (e.type === 'rocket' ? 0 : 0.7) * dmgF;
       if (p.dmg > p.hp * 0.75 && e.type !== 'rocket') thrust *= 0.2;
@@ -672,7 +673,7 @@ export class Aircraft {
         if (p.gear.retract && p.gear.strut) this.animateRetract(p);
         const w = p.gear.wheels[0];
         if (p.gear.wheelObj && !w.float) {
-          p.gear.wheelObj.position.y = -w.len + w.comp;
+          p.gear.wheelObj.position.y = (-w.len + w.comp) / w.ls;
           p.gear.wheelObj.children.forEach((c) => { if (!p.d.gear.wheels) c.rotation.x = -(w.spin || 0); });
           if (w.steer) p.gear.wheelObj.rotation.y = -this.ctl.yaw * 0.55 * clamp(1 - this.airspeed / 45, 0.15, 1);
         }

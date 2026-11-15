@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { PARTS, CATEGORIES, PAINTS } from './parts.js';
-import { makePresets, encodeDesign, decodeDesign, cloneDesign, analyze } from './design.js';
+import { makePresets, encodeDesign, decodeDesign, cloneDesign, analyze, sizeSliders, sizeValue } from './design.js';
 import { Hangar, makeThumbnails } from './hangar.js';
 import { Aircraft, REALISM } from './aircraft.js';
 import { World, LOCATIONS, WEATHER } from './world.js';
@@ -107,8 +107,8 @@ function renderInspector() {
           <div class="row2"><button data-flip>Flip</button><button data-reset>Reset</button></div>
         </div>
       </div>
-      ${def.cat === 'fuselage' ? `<div class="sizer">${[['len', 'Length', 0.5, 3, (sel.scale || [1, 1, 1])[2]], ['dia', 'Diameter', 0.5, 2.5, (sel.scale || [1, 1, 1])[0]]].map(([a, n, lo, hi, v]) =>
-        `<label class="lbl">${n} <b data-sv="${a}">${v.toFixed(1)}×</b></label><input type="range" data-size="${a}" min="${lo}" max="${hi}" step="0.05" value="${v}">`).join('')}</div>` : ''}
+      <div class="sizer">${sizeSliders(sel.id).map(([a, n, lo, hi]) => { const v = sizeValue(sel, a);
+        return `<label class="lbl">${n} <b data-sv="${a}">${v.toFixed(1)}×</b></label><input type="range" data-size="${a}" min="${lo}" max="${hi}" step="0.05" value="${v}">`; }).join('')}</div>
       <label class="lbl">Paint</label>
       <div class="swatches">${PAINTS.map((c) => `<button style="background:#${c.toString(16).padStart(6, '0')}" data-c="${c}" class="${c === sel.color ? 'on' : ''}"></button>`).join('')}</div>
       <button class="danger wide" data-del>🗑 Remove part${hangar.sel === 0 ? ' (and everything)' : ''}</button>`;
