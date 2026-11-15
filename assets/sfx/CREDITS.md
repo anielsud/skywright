@@ -10,6 +10,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Fw-190 Taxiing" by Fight2FlyPhoto (CC BY 3.0): https://freesound.org/people/Fight2FlyPhoto/sounds/143556/
 - "balfron thunder M.wav" by hokstnator (CC BY 4.0): https://freesound.org/people/hokstnator/sounds/151201/
 - "Jet Plane Wind Noise Loop of a KC-135 Stratotanker 4.flac" by qubodup (CC0): https://freesound.org/people/qubodup/sounds/162414/
+- "cowbell mountain pastures" by nawerwohl02 (CC0): https://freesound.org/people/nawerwohl02/sounds/184477/
 - "Body_Hit_Coat_Against_Wall.wav" by jcdecha (CC0): https://freesound.org/people/jcdecha/sounds/235451/
 - "Tires on Gravel Road 2" by OBXJohn (CC0): https://freesound.org/people/OBXJohn/sounds/251662/
 - "F16 fighter jet start up.aif" by ikbenraar (CC0): https://freesound.org/people/ikbenraar/sounds/322178/
@@ -47,6 +48,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "BGSaSc Beach Light Waves Close Water Greece 14" by Profispiesser (CC0): https://freesound.org/people/Profispiesser/sounds/550926/
 - "Foley_Mechanism_Camera_Button_Mono_H5.wav" by Nox_Sound (CC0): https://freesound.org/people/Nox_Sound/sounds/553077/
 - "Quiet summer night tone with steady close crickets and other animal calls 1" by leonelmail (CC0): https://freesound.org/people/leonelmail/sounds/579572/
+- "Mountain River 001.wav" by Auxide_Audio (CC0): https://freesound.org/people/Auxide_Audio/sounds/588179/
 - "Car rolling on asphalt .wav" by orlandorizo (CC0): https://freesound.org/people/orlandorizo/sounds/591079/
 - "Ratchet Wrench Avg Speed Multiple" by Rudmer_Rotteveel (CC0): https://freesound.org/people/Rudmer_Rotteveel/sounds/591524/
 - "Canoe moving through water" by TheFlyFishingFilmmaker (CC BY 4.0): https://freesound.org/people/TheFlyFishingFilmmaker/sounds/592836/
@@ -65,6 +67,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Big falling debris (crash)" by xkeril (CC0): https://freesound.org/people/xkeril/sounds/703247/
 - "Fall debris (crash)" by xkeril (CC0): https://freesound.org/people/xkeril/sounds/703248/
 - "Jet Engine Start Cart.wav" by C-V (CC0): https://freesound.org/people/C-V/sounds/704945/
+- "Rushing Waterfall" by Colonnades (CC0): https://freesound.org/people/Colonnades/sounds/760050/
 - "Rocket Launch Boost and Burning (Version A)" by TheLittleCrow (CC0): https://freesound.org/people/TheLittleCrow/sounds/774245/
 - "truck driving sound" by joni_ompong (CC0): https://freesound.org/people/joni_ompong/sounds/785698/
 - "metal groans and squeaks" by sup_dude (CC0): https://freesound.org/people/sup_dude/sounds/794554/

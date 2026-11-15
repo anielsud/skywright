@@ -1,5 +1,6 @@
 // Sounds of the living world around you: road traffic, the train (with its horn and level-crossing bells),
-// other players' planes, the airfield's circuit plane and helicopter, and bird flocks.
+// other players' planes, the airfield's circuit plane and helicopter, bird flocks, and the sounds of real places
+// (waterfalls, cowbells on the alpine pastures, train horns along the real railways).
 // Everything is positional and goes through the same "far = quieter, duller and later" chain as the engines
 // (panner distance roll-off + air-absorption low-pass + propagation delay, which also gives Doppler).
 // Cheap on purpose: a few pooled voices for the nearest sources only, ranked a few times a second; everything
@@ -14,7 +15,19 @@ import { SAMPLE_ENGINES, SAMPLE_LEVEL, RPM_RANGE } from './audio.js';
 const LVL = { car: 1.5, truck: 2, train: 5, horn: 3.6, bell: 1.1, flock: 1.4, call: 1.1, plane: 1.4 };
 // Ambience beds (weighted dBFS at full amount, measured over 7 s): airport ≈-40 (under an idling engine), town ≈-39 (bells to ≈-31),
 // high wind ≈-38 (gusts to ≈-33), storm wind ≈-34, canopy rain in a storm ≈-35 (on top of the existing rain bed). Nature beds sit at -41..-34.
-const AMB = { airport: 0.7, town: 0.7, high: 1, storm: 1, canopy: 0.55 };
+const AMB = { airport: 0.7, town: 0.7, high: 1, storm: 1, canopy: 0.55, cows: 1.3 };
+// Real-place sounds (weighted dBFS, sliders at 100%): a waterfall ≈-30 at its foot, ≈-40 at 300 m; cowbells ≈-37 over open
+// meadow (bells to ≈-28); a train horn down the valley ≈-38 peak at 500 m, plus a quieter echo off the cliffs.
+const LVL_FALL = 3, LVL_VHORN = 2 * LVL.horn, FALL_RANGE = 1800, RAIL_RANGE = 2200;
+// the famous falls (real positions, game metres; h = drop): where to hang a roaring water bed on the cliff
+const FALLS = {
+  lauterbrunnen: [
+    { name: 'Staubbach', x: 8674, z: 4540, h: 297 },
+    { name: 'Trümmelbach', x: 11170, z: 5977, h: 140 },
+    { name: 'Mürrenbach', x: 10807, z: 7136, h: 417 },
+  ],
+};
+const COWS = { lauterbrunnen: 1, alpine: 1 }; // places with alpine pastures
 const CAR_VOICES = 3, CAR_RANGE = 240, TRAIN_RANGE = 1600, PLANE_VOICES = 3, PLANE_RANGE = 3500, FLOCK_RANGE = 160;
 const HEAVY = { truck: 1, tanker: 1, bus: 1 };
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -71,6 +84,7 @@ export class WorldSound {
     this.v = { p: new THREE.Vector3(), d: new THREE.Vector3() };
     this.hornT = 20 + Math.random() * 20; this.crossings = this.findCrossings(); this.crossHorn = new Map();
     this.flockT = new Map();
+    this.fall = new Spot(A, this.bus, 100); this.falls = this.findFalls(); this.rails = this.railPoints(); this.railHornT = 15 + Math.random() * 25;
   }
   // level crossings: rail points that sit on a road (bridges excluded), as arc lengths along the train's out-and-back path
   findCrossings() {
@@ -98,6 +112,7 @@ export class WorldSound {
     this.updatePlanes(f, lp, rank, players);
     if (rank) this.updateFlocks(lp);
     this.updateAmbience(lp, dt, agl, cockpit);
+    this.updatePlaces(lp, dt, agl);
   }
 
   // ---------- road traffic: the nearest few cars get a pooled tyre/engine hum ----------
@@ -238,6 +253,7 @@ export class WorldSound {
     this.ambBed('amb_town', this.bus, w.town * night * AMB.town);
     this.ambBed('wind_high', this.bus, w.high * (0.45 + 0.75 * this.gust) * AMB.high * (1 - 0.5 * storm), 0.8 + 0.25 * this.gust);
     this.ambBed('wind_storm', this.bus, storm * AMB.storm * (0.7 + 0.5 * this.gust));
+    this.ambBed('amb_cowbells', this.bus, w.cows * (W.night ? 0.25 : 1) * (1 - 0.8 * storm) * AMB.cows);
     // inside the canopy: drumming rain, heavier in a storm (not muffled: it's on the glass right next to you)
     this.ambBed('rain_canopy', A.amb, cockpit ? Math.min(1.6, rain) * AMB.canopy : 0);
   }
@@ -261,7 +277,19 @@ export class WorldSound {
       peak = Math.max(peak, smooth(-300, -40, h - lp.y) * smooth(500, 1100, h - W.waterLevel));
     }
     const high = Math.max(smooth(600, 2000, agl), peak);
-    return { airport, town, high };
+    // alpine pastures: open grass (no forest, no village) around you, low enough to hear the herd
+    let cows = 0;
+    if (COWS[W.loc.id] && agl < 300) {
+      let open = 0;
+      for (let k = 0; k < 5; k++) {
+        const a = (k / 4) * Math.PI * 2, r = k ? 120 : 0, x = lp.x + Math.cos(a) * r, z = lp.z + Math.sin(a) * r;
+        if (W.groundAt(x, z).type !== 'grass') continue;
+        const fo = W.real ? W.real.forest(x, z) : W.forestAt?.(x, z);
+        open += 1 - Math.min(1, (fo ?? 0) * 1.5);
+      }
+      cows = (open / 5) * (1 - smooth(30, 300, agl)) * (1 - town) * (1 - airport);
+    }
+    return { airport, town, high, cows };
   }
   // a looping bed that only exists while it's audible: created on fade-in, stopped a few seconds after fading out
   ambBed(name, dest, v, rate) {
@@ -272,6 +300,53 @@ export class WorldSound {
     this.A.set(b.g.gain, Math.max(0, v), 1.2); if (rate) this.A.set(b.src.playbackRate, rate, 0.8);
     b.quiet = v > 0.002 ? 0 : b.quiet + 1;
     if (b.quiet > 400) { try { b.src.stop(); b.g.disconnect(); } catch { /* gone */ } delete this.beds[name]; } // ~6 s of silence at 60 fps
+  }
+
+  // ---------- real places: waterfalls roaring down the cliffs, trains hooting along the real railways ----------
+  // each fall is a vertical line from its foot to its lip: the sound sits at the point of that line nearest to you
+  findFalls() {
+    const W = this.world;
+    return (FALLS[W.loc.id] || []).map((f) => {
+      let foot = W.heightAt(f.x, f.z);
+      for (let k = 0; k < 8; k++) { const a = (k / 8) * Math.PI * 2; foot = Math.min(foot, W.heightAt(f.x + Math.cos(a) * 120, f.z + Math.sin(a) * 120)); }
+      return { ...f, foot, p: new THREE.Vector3(f.x, foot, f.z) };
+    });
+  }
+  // the real railways (OSM), thinned to a point every ~150 m
+  railPoints() {
+    const out = [];
+    for (const [, , flat] of this.world.real?.osm?.rails || []) {
+      let lx = 1e9, lz = 1e9;
+      for (let k = 0; k < flat.length; k += 2) { const x = flat[k], z = flat[k + 1]; if ((x - lx) ** 2 + (z - lz) ** 2 > 150 * 150) { out.push(x, z); lx = x; lz = z; } }
+    }
+    return out;
+  }
+  updatePlaces(lp, dt, agl) {
+    // the nearest waterfall
+    let best = null, bd = FALL_RANGE;
+    for (const f of this.falls) {
+      f.p.y = Math.min(f.foot + f.h, Math.max(f.foot, lp.y));
+      const d = f.p.distanceTo(lp); if (d < bd) { bd = d; best = f; }
+    }
+    if (best) {
+      if (!this.fall.on) { this.fall.start(['amb_waterfall']); this.fall.out.gain.value = 0; }
+      this.fall.place(best.p, lp);
+      this.fall.level(LVL_FALL * (1 - smooth(FALL_RANGE * 0.6, FALL_RANGE, bd)), 0.4);
+    } else if (this.fall.on) this.fall.release();
+    // a train somewhere down the valley sounds its horn now and then (with the echo off the cliffs)
+    const R = this.rails; if (!R.length) return;
+    this.railHornT -= dt; if (this.railHornT > 0) return;
+    this.railHornT = 40 + Math.random() * 50;
+    if (agl > 900) return;
+    let bi = -1, bd2 = RAIL_RANGE * RAIL_RANGE;
+    for (let k = 0; k < R.length; k += 2) { const d2 = (R[k] - lp.x) ** 2 + (R[k + 1] - lp.z) ** 2; if (d2 < bd2 && d2 > 250 * 250) { bd2 = d2; bi = k; } }
+    if (bi < 0) return;
+    const p = new THREE.Vector3(R[bi], this.world.heightAt(R[bi], R[bi + 1]) + 4, R[bi + 1]), d = p.distanceTo(lp);
+    const times = Math.random() < 0.5 ? [0] : [0, 1.4], echo = 1.6 + Math.random() * 1.6, rate = 1.02 + Math.random() * 0.08;
+    for (const t of times) {
+      this.shotAt('train_horn', p, lp, { gain: LVL_VHORN, ref: 80, delay: t + d / 343, rate });
+      this.shotAt('train_horn', p, lp, { gain: LVL_VHORN * 0.3, ref: 80, delay: t + d / 343 + echo, rate });
+    }
   }
 
   // positional one-shot with distance roll-off, air absorption and travel delay
@@ -289,7 +364,7 @@ export class WorldSound {
 
   dispose() {
     if (!this.on) return; this.on = false;
-    for (const s of [...this.cars, ...this.planes, this.train, this.bell]) s.dispose();
+    for (const s of [...this.cars, ...this.planes, this.train, this.bell, this.fall]) s.dispose();
     for (const b of Object.values(this.beds || {})) { this.A.set(b.g.gain, 0, 0.05); setTimeout(() => { try { b.src.stop(); b.g.disconnect(); } catch { /* gone */ } }, 300); }
     this.A.set(this.bus.gain, 0, 0.05); setTimeout(() => { try { this.bus.disconnect(); } catch { /* gone */ } }, 300);
   }
