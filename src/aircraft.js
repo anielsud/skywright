@@ -127,13 +127,13 @@ export class Aircraft {
       ctrlObjs.forEach((c) => { if (part.surfaces[c.strip]) part.surfaces[c.strip].ctrlObj = c.obj; });
       if (d.engine) {
         const e = d.engine, ts = thrustScale(p) * partPower(p);
-        part.engine = { ...e, thrust: e.thrust * ts, ab: e.ab ? e.ab * ts : 0, pos: info.center.clone().applyMatrix4(m), dir: new THREE.Vector3(0, 0, -1).transformDirection(m), spool: 0, rpm: 0, thrustNow: 0,
+        part.engine = { ...e, thrust: e.thrust * ts, ab: e.ab ? e.ab * ts : 0, pos: info.center.clone().applyMatrix4(m), dir: new THREE.Vector3(0, e.type === 'rotor' ? 1 : 0, e.type === 'rotor' ? 0 : -1).transformDirection(m), spool: 0, rpm: 0, thrustNow: 0,
           burn: partBurn(p), burning: false, prop: obj.userData.prop, fan: obj.userData.fan, flame: obj.userData.flame, flameCore: obj.userData.flameCore, spinDir: p.mirror ? -1 : 1, angle: 0, smokeT: 0 };
       }
       if (d.gear) {
         const gi = d.gear, ls = linScale(p); // ls: resized gear (wheel/strut sizes are in metres, the mesh is in part-local units)
         const wheels = [];
-        if (gi.float) for (const dz of [-gi.flen * 0.32, gi.flen * 0.32, 0]) wheels.push({ top: new THREE.Vector3(0, 0, dz).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: 1.0 * ls, r: 0.3 * ls, ls, steer: false, brake: false, float: true, comp: 0, contact: false });
+        if (gi.float) for (const dz of [-gi.flen * 0.32, gi.flen * 0.32, 0]) wheels.push({ top: new THREE.Vector3(0, 0, dz).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: (gi.clen ?? 1.0) * ls, r: (gi.cr ?? 0.3) * ls, ls, steer: false, brake: false, float: true, comp: 0, contact: false });
         else wheels.push({ top: new THREE.Vector3(0, 0, 0).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: gi.len * ls, r: gi.r * ls, ls, steer: gi.steer, brake: gi.brake, comp: 0, contact: false, spin: 0 });
         part.gear = { ...gi, wheels, strut: obj.userData.strut, wheelObj: obj.userData.wheels };
       }
@@ -172,6 +172,7 @@ export class Aircraft {
     this.hasRetract = this.parts.some((p) => p.gear?.retract);
     this.hasSmoke = this.parts.some((p) => p.smoke);
     this.hasAB = this.parts.some((p) => p.engine?.ab);
+    this.isHeli = this.parts.some((p) => p.engine?.type === 'rotor');
     this.updateMass(true);
     this.initialMass = this.mass;
     let r = 1; for (const p of this.parts) for (const h of p.hull) r = Math.max(r, h.distanceTo(this.com)); for (const p of this.parts) if (p.gear) r = Math.max(r, p.gear.wheels[0].top.distanceTo(this.com) + p.gear.wheels[0].len + 0.5);
@@ -267,6 +268,64 @@ export class Aircraft {
     this.updateVisuals(dtFrame, env);
   }
 
+  // ---- helicopter ----
+  // Main rotors push along their mast. Throttle is the collective: in Arcade and Pilot it sets the climb rate
+  // (middle = hover, the rotor works out the lift); in Sim it is raw lift. The stick tilts the rotor disc (cyclic).
+  // Each spinning rotor twists the body the other way; a working tail rotor cancels that.
+  rotors(dt, rho, ctl, F, T, q, qi) {
+    const R = this.R, mass = this.mass, run = ctl.throttle > 0.02 || !this.onGround ? 1 : 0;
+    let maxT = 0;
+    const mains = [], tails = [];
+    for (const p of this.parts) {
+      const e = p.engine; if (!e || !p.alive) continue;
+      if (e.type === 'tailrotor') { tails.push(p); continue; }
+      if (e.type !== 'rotor') continue;
+      e.spoolT = (e.spoolT || 0) + (run - (e.spoolT || 0)) * Math.min(1, dt / e.spool);
+      e.health = (1 - clamp(p.dmg / p.hp, 0, 1) * 0.7) * (p.dmg > p.hp * 0.75 ? 0.3 : 1);
+      maxT += e.thrust * e.spoolT * e.health * (rho / 1.225); mains.push(p);
+    }
+    const upY = _v2.set(0, 1, 0).applyQuaternion(q).y;
+    let total;
+    if (R.assist > 0) {
+      const vd = (ctl.throttle - 0.5) * 2 * 7; // m/s: full = climb 7, zero = sink 7
+      total = ctl.throttle < 0.02 && this.onGround ? 0 : mass * (G + 1.6 * (vd - this.v.y)) / Math.max(0.5, upY);
+    } else total = maxT * ctl.throttle;
+    total = clamp(total, 0, maxT);
+    this.collective = maxT > 0 ? total / maxT : 0;
+    let twist = 0;
+    const Fs = new THREE.Vector3(), r = new THREE.Vector3();
+    for (const p of mains) {
+      const e = p.engine, share = maxT > 0 ? e.thrust * e.spoolT * e.health * (rho / 1.225) / maxT : 0, thrust = total * share;
+      e.thrustNow = thrust;
+      e.rpm = lerp(e.idleRpm, e.maxRpm, e.spoolT * (0.75 + 0.25 * this.collective));
+      Fs.copy(e.dir); Fs.z += ctl.pitch * 0.1; Fs.x += ctl.roll * 0.1; Fs.normalize().multiplyScalar(thrust); // cyclic
+      F.add(Fs);
+      r.copy(e.pos).sub(this.com);
+      T.addScaledVector(_v3.copy(r).cross(Fs), R.thrustTorque);
+      twist += thrust * 0.05 * e.spinDir;
+      T.addScaledVector(e.dir, -thrust * 0.05 * e.spinDir);
+    }
+    const spool = mains.reduce((a, p) => Math.max(a, p.engine.spoolT), 0);
+    for (const p of tails) { const e = p.engine; e.spoolT = spool; e.rpm = lerp(e.idleRpm, e.maxRpm, spool); }
+    this.tailOK = tails.length > 0 && spool > 0.3;
+    if (this.tailOK) T.y += twist * mains.reduce((a, p) => a + Math.abs(p.engine.dir.y), 0) / Math.max(1, mains.length); // anti-torque
+  }
+  heliAssist(F, T, ctl, q, qi, fwdSpeed) {
+    const a = this.R.assist;
+    const fwd = _v2.set(0, 0, -1).applyQuaternion(q), pitch = Math.asin(clamp(fwd.y, -1, 1));
+    const right = _v3.set(1, 0, 0).applyQuaternion(q), bank = Math.asin(clamp(right.y, -1, 1));
+    // Arcade/Pilot: the stick sets the attitude (let go = level hover). Sim: only the rotor's natural damping.
+    const kp = 7 * a, kd = 4 * a + 1.2;
+    const err = new THREE.Vector3(kp * (ctl.pitch * 0.35 - pitch) - kd * this.w.x, 0, kp * (-ctl.roll * 0.4 - bank) - kd * this.w.z);
+    // tail rotor = rudder (yaw rate); in Arcade the stick also turns you when moving forward
+    if (this.tailOK) err.y = 4 * (-ctl.yaw * 1.2 - (a > 0 ? ctl.roll * clamp(fwdSpeed / 15, 0, 1) * 0.8 * a : 0) - this.w.y);
+    T.add(err.applyMatrix3(this.I));
+    // Arcade: let go of the stick and it stops drifting
+    if (a > 0 && Math.abs(ctl.pitch) < 0.1 && Math.abs(ctl.roll) < 0.1 && !this.onGround) {
+      F.add(_v2.set(-this.v.x, 0, -this.v.z).multiplyScalar(this.mass * 0.8 * a).applyQuaternion(qi));
+    }
+  }
+
   substep(dt, env) {
     const R = this.R, q = this.q, mass = this.mass;
     _qi.copy(q).invert();
@@ -347,8 +406,9 @@ export class Aircraft {
     this.stalled = R.stallSharp > 0 && maxAlpha > 0.29 && V > 8 && !this.onGround;
     // ---- engines ----
     const fwdSpeed = -vAirB.z;
+    if (this.isHeli) this.rotors(dt, rho, ctl, F, T, q, _qi);
     for (const p of this.parts) {
-      const e = p.engine; if (!e || !p.alive) continue;
+      const e = p.engine; if (!e || !p.alive || e.type === 'rotor' || e.type === 'tailrotor') continue;
       let target = ctl.throttle;
       if (e.type === 'rocket') {
         if (!e.burning && ctl.throttle > 0.5 && e.burn > 0) { e.burning = true; this.emit('msg', { text: 'Rocket ignition!' }); this.emit('rocket', {}); }
@@ -380,7 +440,8 @@ export class Aircraft {
     F.add(_v2.set(0, -G * mass, 0).applyQuaternion(_qi));
     // ---- arcade/pilot assistance ----
     T.addScaledVector(Taero, R.aeroTorque);
-    if (R.assist > 0) {
+    if (this.isHeli) this.heliAssist(F, T, ctl, q, _qi, fwdSpeed);
+    else if (R.assist > 0) {
       const sf = clamp((V - 6) / 22, 0, 1);
       const des = new THREE.Vector3(ctl.pitch * 1.3, -ctl.yaw * 0.7, -ctl.roll * 2.4);
       const beta = Math.atan2(vAirB.x, Math.max(1, -vAirB.z));
@@ -649,10 +710,10 @@ export class Aircraft {
       const e = p.engine;
       if (e) {
         if (e.prop) {
-          const rps = e.type === 'prop' ? (e.rpm / 60) : 0;
+          const rps = e.type === 'prop' ? (e.rpm / 60) : e.type === 'rotor' ? e.rpm / 300 * (e.spoolT || 0) : e.type === 'tailrotor' ? e.rpm / 60 * (e.spoolT || 0) : 0;
           e.angle += rps * Math.PI * 2 * dt * e.spinDir * (e.sound === 'electric' ? 0.3 : 1);
           e.prop.userData.spinner.rotation.z = e.angle;
-          const fast = clamp((e.rpm - 500) / 1200, 0, 1);
+          const fast = e.type === 'rotor' || e.type === 'tailrotor' ? clamp((e.spoolT || 0) * 1.2 - 0.2, 0, 1) : clamp((e.rpm - 500) / 1200, 0, 1);
           e.prop.userData.disc.material.opacity = 0;
           e.prop.userData.spinner.visible = true;
           if (!e.discMat) { e.discMat = e.prop.userData.disc.material.clone(); e.prop.userData.disc.material = e.discMat; }

@@ -86,6 +86,7 @@ export function removeParts(design, idxs) {
 const RHO = 1.225, G = 9.81;
 export function analyze(design) {
   const m = new THREE.Matrix4(), com = new THREE.Vector3();
+  let rotorLift = 0, rotors = 0, tailRotors = 0, twist = 0, rotorOff = 0; const rotorAt = new THREE.Vector3();
   let mass = 0, thrust = 0, wingArea = 0, finArea = 0, engines = 0, props = 0, jets = 0, rockets = 0, gear = 0, floats = 0, smoke = 0;
   const lift = new THREE.Vector3(); let liftW = 0; let latLift = 0, latThrust = 0;
   const ctrl = { pitch: 0, roll: 0, yaw: 0 };
@@ -100,7 +101,12 @@ export function analyze(design) {
   if (mass > 0) com.divideScalar(mass);
   const n = new THREE.Vector3(), pos = new THREE.Vector3();
   for (const { p, d, info, m: mm } of items) {
-    if (d.engine) {
+    if (d.engine?.type === 'tailrotor') tailRotors++;
+    else if (d.engine?.type === 'rotor') {
+      engines++; rotors++;
+      const t = d.engine.thrust * thrustScale(p) * partPower(p), at = info.center.clone().applyMatrix4(mm);
+      rotorLift += t; rotorAt.addScaledVector(at, t); twist += (p.mirror ? -1 : 1) * t;
+    } else if (d.engine) {
       engines++; if (d.engine.type === 'jet') jets++; else if (d.engine.type === 'rocket') rockets++; else props++;
       const t = (d.engine.ab || d.engine.thrust) * thrustScale(p) * partPower(p); thrust += t;
       latThrust += (info.center.clone().applyMatrix4(mm).x - com.x) * t;
@@ -119,6 +125,8 @@ export function analyze(design) {
       ctrl.pitch += Math.abs(t.x) * s.area; ctrl.roll += Math.abs(t.z) * s.area; ctrl.yaw += Math.abs(t.y) * s.area;
     }
   }
+  if (rotorLift > 0) { rotorAt.divideScalar(rotorLift); rotorOff = Math.hypot(rotorAt.x - com.x, rotorAt.z - com.z); }
+  const hover = mass > 0 ? rotorLift / (mass * G) : 0, heli = rotors > 0;
   const col = liftW > 0 ? lift.divideScalar(liftW) : com.clone();
   const mac = wingArea > 0 ? Math.sqrt(wingArea / 7) : 1;
   const margin = (col.z - com.z) / mac; // + = stable (lift centre behind CoM)
@@ -127,18 +135,27 @@ export function analyze(design) {
   const warnings = [];
   if (!design.parts.length) warnings.push(['info', 'Start by adding a body from the parts list.']);
   else {
-    if (!engines) warnings.push(['info', 'No engines: it’s a glider. It will start in the air.']);
-    if (wingArea < 0.5) warnings.push(['bad', 'No wings. Only Arcade mode will get this off the ground.']);
-    if (wingArea > 0.5 && margin < -0.02) warnings.push(['bad', 'Tail-heavy: the centre of mass is behind the lift. Expect flips in Sim mode. Move wings back or add weight up front.']);
-    else if (margin > 0.6) warnings.push(['warn', 'Very nose-heavy. It will be hard to lift the nose. Move wings forward.']);
-    if (finArea < 0.4 && wingArea > 0.5) warnings.push(['warn', 'No vertical fin: it will yaw around in Pilot and Sim modes.']);
-    if (tw > 0 && tw < 0.18) warnings.push(['warn', 'Underpowered. Add engines or lose weight.']);
-    if (tw > 1.2) warnings.push(['good', 'Thrust-to-weight over 1: it can climb straight up!']);
-    if (!gear) warnings.push(['info', 'No landing gear: it will belly-slide on take-off. Starting in the air is easier.']);
-    if (Math.abs(latLift) > wingArea * 0.4 || Math.abs(latThrust) > thrust * 0.3) warnings.push(['warn', 'Lopsided! It will roll or yaw in Sim mode (Arcade forgives this).']);
-    if (stall < 40 && tw > 0.2 && margin >= -0.02 && margin <= 0.6 && finArea >= 0.4) warnings.push(['good', 'Looks flyable. Have fun!']);
+    if (heli) {
+      if (hover < 1.05) warnings.push(['bad', 'The rotor can’t lift this much. Use a bigger rotor, more Power, or a lighter build.']);
+      else if (hover < 1.3) warnings.push(['warn', 'Only just enough rotor lift: it will be slow to climb.']);
+      if (Math.abs(twist) > rotorLift * 0.2 && !tailRotors) warnings.push(['bad', 'No tail rotor: it will spin round and round! Put one at the end of the tail.']);
+      if (rotorAt.y < com.y) warnings.push(['warn', 'The rotor is below the middle of the helicopter. Mount it on top.']);
+      if (rotorOff > 0.4) warnings.push(['warn', 'The rotor isn’t over the middle, so it will tip. Move it over the yellow dot.']);
+      if (!gear) warnings.push(['info', 'No skids: it will sit on its belly. Add Helicopter Skids from Gear.']);
+      if (hover >= 1.05 && rotorAt.y >= com.y && rotorOff <= 0.4 && (tailRotors || Math.abs(twist) <= rotorLift * 0.2)) warnings.push(['good', 'Ready to hover! Throttle to the middle to hold height.']);
+    }
+    else if (!engines) warnings.push(['info', 'No engines: it’s a glider. It will start in the air.']);
+    if (!heli && wingArea < 0.5) warnings.push(['bad', 'No wings. Only Arcade mode will get this off the ground.']);
+    if (!heli && wingArea > 0.5 && margin < -0.02) warnings.push(['bad', 'Tail-heavy: the centre of mass is behind the lift. Expect flips in Sim mode. Move wings back or add weight up front.']);
+    else if (!heli && margin > 0.6) warnings.push(['warn', 'Very nose-heavy. It will be hard to lift the nose. Move wings forward.']);
+    if (!heli && finArea < 0.4 && wingArea > 0.5) warnings.push(['warn', 'No vertical fin: it will yaw around in Pilot and Sim modes.']);
+    if (!heli && tw > 0 && tw < 0.18) warnings.push(['warn', 'Underpowered. Add engines or lose weight.']);
+    if (!heli && tw > 1.2) warnings.push(['good', 'Thrust-to-weight over 1: it can climb straight up!']);
+    if (!heli && !gear) warnings.push(['info', 'No landing gear: it will belly-slide on take-off. Starting in the air is easier.']);
+    if (!heli && (Math.abs(latLift) > wingArea * 0.4 || Math.abs(latThrust) > thrust * 0.3)) warnings.push(['warn', 'Lopsided! It will roll or yaw in Sim mode (Arcade forgives this).']);
+    if (!heli && stall < 40 && tw > 0.2 && margin >= -0.02 && margin <= 0.6 && finArea >= 0.4) warnings.push(['good', 'Looks flyable. Have fun!']);
   }
-  return { mass, com, col, margin, stall, thrust, tw, wingArea, finArea, engines, props, jets, rockets, gear, floats, smoke, ctrl, warnings };
+  return { heli, hover, rotors, tailRotors, mass, com, col, margin, stall, thrust, tw, wingArea, finArea, engines, props, jets, rockets, gear, floats, smoke, ctrl, warnings };
 }
 
 // ---------- presets ----------
@@ -289,6 +306,18 @@ export function makePresets() {
     b.add('g_retract_nose', [0, -0.35, -3.9], { parent: f });
     b.pair('g_retract', [1.9, -0.35, 3.0], { parent: f });
     b.pair('x_smoke', [4.9, -0.2, 6.8], { parent: f, color: 0xe8601c });
+    P.push(b.d);
+  }
+  { // Dragonfly — light helicopter
+    const b = new PB('Dragonfly', 'Light helicopter. Throttle to the middle to hover, stick to fly around.');
+    const f = b.add('fus_pod', [0, 0, 0], { color: 0xf2b705 });
+    b.add('x_nosecone', [0, 0, -1.6], { parent: f, color: 0xf2b705 });
+    b.add('ck_bubble', [0, 0.45, -0.6], { parent: f });
+    const boom = b.add('fus_boom', [0, 0.2, 4.6], { parent: f, color: 0xf2b705 });
+    b.add('t_vfin', [0, 0.25, 7.3], { parent: boom, color: 0x111111 });
+    b.add('r_tail', [0.12, 0.75, 7.9], { parent: boom });
+    b.add('r_main', [0, 0.55, 1.44], { parent: f });
+    b.pair('g_skid', [0.6, -0.4, 0.3], { parent: f });
     P.push(b.d);
   }
   return P;
