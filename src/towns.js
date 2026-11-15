@@ -1,150 +1,196 @@
-// Towns, farms, landmarks and animals.
+// Towns, villages, farms, field fences, landmarks and animals.
+// Buildings come from the kit in buildings.js and are merged into one mesh per chunk
+// (a town, or a 2 km cell of countryside): shell (walls + roofs) always drawn, detail
+// (balconies, chimneys, porches, fences) only near the camera.
 import * as THREE from 'three';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
-import { mulberry32, smoothstep } from './noise.js';
-import { glowTexture } from './materials.js';
+import { mulberry32 } from './noise.js';
+import { Builder, buildingMaterial, makeBuilding, C } from './buildings.js';
 
 function vc(g, hex, mult = 1) {
   const geo = g.index ? g.toNonIndexed() : g; const c = new THREE.Color(hex).multiplyScalar(mult), n = geo.attributes.position.count, a = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; }
   geo.setAttribute('color', new THREE.BufferAttribute(a, 3)); if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(n * 2), 2)); return geo;
 }
-// box whose UVs are in metres/3 so the window texture keeps real proportions
-function wallBox(w, h, d) {
-  const g = new THREE.BoxGeometry(w, h, d); const uv = g.attributes.uv, nrm = g.attributes.normal;
-  for (let i = 0; i < uv.count; i++) { const ax = Math.abs(nrm.getX(i)) > 0.5; const along = ax ? d : w; uv.setXY(i, uv.getX(i) * along / 12, uv.getY(i) * h / 12); if (Math.abs(nrm.getY(i)) > 0.5) uv.setXY(i, 0, 0); }
-  return g;
-}
-function gableRoof(w, d, h, over = 0.5) { // ridge along z
-  const s = new THREE.Shape([new THREE.Vector2(-w / 2 - over, 0), new THREE.Vector2(w / 2 + over, 0), new THREE.Vector2(0, h)]);
-  const g = new THREE.ExtrudeGeometry(s, { depth: d + over * 2, bevelEnabled: false }); g.translate(0, 0, -d / 2 - over); return g;
-}
-const KIT = {
-  house: (r, st) => { // style-aware detached house
-    const w = 7 + r() * 4, d = 8 + r() * 5, h = (st === 'chalet' ? 5.5 : 5) + r() * 2.5, walls = [], roofs = [];
-    walls.push(wallBox(w, h, d).translate(0, h / 2, 0));
-    if (st === 'adobe') { roofs.push(vc(new THREE.BoxGeometry(w + 0.4, 0.5, d + 0.4).translate(0, h + 0.25, 0), 0xffffff)); for (let k = 0; k < 4; k++) roofs.push(vc(new THREE.CylinderGeometry(0.12, 0.12, 0.6, 5).rotateZ(Math.PI / 2).translate(w / 2 + 0.2, h - 0.6, -d / 2 + 1 + k * (d - 2) / 3), 0x5a3a22)); }
-    else { roofs.push(vc(gableRoof(w, d, (st === 'chalet' ? 0.38 : 0.55) * w, st === 'chalet' ? 1.1 : 0.45).translate(0, h, 0), 0xffffff)); roofs.push(vc(new THREE.BoxGeometry(0.7, 2.2, 0.7).translate(w * 0.25, h + w * 0.35, d * 0.2), 0x7a5a48)); }
-    if (st === 'chalet') roofs.push(vc(new THREE.BoxGeometry(w + 0.2, 0.15, 1.6).translate(0, h * 0.55, d / 2 + 0.8), 0x6a4a30)); // balcony
-    return { walls, roofs, w, d, h, chimney: st !== 'adobe' ? new THREE.Vector3(w * 0.25, h + w * 0.35 + 1.2, d * 0.2) : null };
-  },
-  apartment: (r) => { const w = 14 + r() * 8, d = 12 + r() * 4, h = 12 + Math.floor(r() * 4) * 3; return { walls: [wallBox(w, h, d).translate(0, h / 2, 0)], roofs: [vc(new THREE.BoxGeometry(w + 0.4, 0.6, d + 0.4).translate(0, h + 0.3, 0), 0x6a6a6a), vc(new THREE.BoxGeometry(3, 2.5, 3).translate(w * 0.2, h + 1.5, 0), 0x8a8a8a)], w, d, h }; },
-  shop: (r) => { const w = 12 + r() * 6, d = 10 + r() * 4, h = 5; return { walls: [wallBox(w, h, d).translate(0, h / 2, 0)], roofs: [vc(new THREE.BoxGeometry(w + 0.3, 0.5, d + 0.3).translate(0, h + 0.25, 0), 0x707070), vc(new THREE.BoxGeometry(w, 0.15, 2.5).translate(0, 3.2, d / 2 + 1.2), 0xc8102e)], w, d, h }; },
-  church: () => {
-    const walls = [wallBox(10, 9, 22).translate(0, 4.5, 0), wallBox(5, 22, 5).translate(0, 11, -12)];
-    const roofs = [vc(gableRoof(10, 22, 6, 0.4).translate(0, 9, 0), 0xffffff), vc(new THREE.ConeGeometry(3.8, 12, 4).rotateY(Math.PI / 4).translate(0, 28, -12), 0xffffff), vc(new THREE.CylinderGeometry(0.15, 0.15, 3).translate(0, 35.5, -12), 0xd4af37)];
-    return { walls, roofs, w: 10, d: 27, h: 22 };
-  },
-  barn: (r) => {
-    const w = 12 + r() * 4, d = 18 + r() * 6, h = 6;
-    const s = new THREE.Shape([[-w / 2 - 0.3, 0], [w / 2 + 0.3, 0], [w / 2 + 0.3, 0.3], [w * 0.35, 3.2], [0, 4.6], [-w * 0.35, 3.2], [-w / 2 - 0.3, 0.3]].map(([x, y]) => new THREE.Vector2(x, y)));
-    const roof = new THREE.ExtrudeGeometry(s, { depth: d + 0.6, bevelEnabled: false }).translate(0, h, -d / 2 - 0.3);
-    return { walls: [wallBox(w, h, d).translate(0, h / 2, 0)], roofs: [vc(roof, 0x555b62)], w, d, h, barn: true };
-  },
-  silo: () => ({ walls: [], roofs: [vc(new THREE.CylinderGeometry(3, 3, 16, 16).translate(0, 8, 0), 0xc0c4c8), vc(new THREE.SphereGeometry(3, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 16, 0), 0xa0a4a8)], w: 6, d: 6, h: 19 }),
-  hotel: (r) => { const w = 30 + r() * 15, d = 14, h = 15 + Math.floor(r() * 3) * 3.2; return { walls: [wallBox(w, h, d).translate(0, h / 2, 0)], roofs: [vc(new THREE.BoxGeometry(w + 0.5, 0.6, d + 0.5).translate(0, h + 0.3, 0), 0xe0dcd0)], w, d, h }; },
-  hut: () => ({ walls: [wallBox(4, 3, 4).translate(0, 1.5, 0)], roofs: [vc(new THREE.ConeGeometry(4, 2.5, 4).rotateY(Math.PI / 4).translate(0, 4.2, 0), 0xc9a86a)], w: 4, d: 4, h: 5 }),
-  station: () => ({ walls: [wallBox(14, 5, 10).translate(0, 2.5, 0)], roofs: [vc(new THREE.BoxGeometry(26, 0.5, 14).translate(6, 6, 0), 0xc8102e), vc(new THREE.CylinderGeometry(0.2, 0.2, 6).translate(17, 3, -5), 0xaaaaaa), vc(new THREE.CylinderGeometry(0.2, 0.2, 6).translate(17, 3, 5), 0xaaaaaa), vc(new THREE.BoxGeometry(1.2, 1.6, 0.9).translate(12, 0.8, 0), 0xdddddd)], w: 26, d: 14, h: 6.5 }),
-};
-const STYLE = {
-  alpine: { st: 'chalet', walls: [0xf4efe6, 0xe8dcc4, 0xd9cbb0, 0xc9a77a], roofs: [0x5a4034, 0x4b4b52, 0x6a3a2a], barnWall: 0x8a2a20 },
-  islands: { st: 'cottage', walls: [0xffffff, 0xf3e7c9, 0x9fd4d9, 0xf0c9a8, 0xf6d6e0, 0xcbe8c4], roofs: [0xc1543b, 0x4a7aa3, 0xd0a060, 0x2f8a8a], barnWall: 0xb8875a },
-  canyon: { st: 'adobe', walls: [0xd8b48a, 0xc9a074, 0xe2c9a6, 0xbf9068], roofs: [0xb98a5e, 0xa0714a, 0xc8a070], barnWall: 0x8a3a24 },
-};
+const DENSITY = { low: 0.5, medium: 0.8, high: 1 };
+const DETAIL_DIST = { low: 900, medium: 1500, high: 2400 };
 
 export class Towns {
   constructor(world) {
     this.w = world; this.group = new THREE.Group(); world.group.add(this.group);
-    const r = (this.r = mulberry32(world.loc.seed * 5 + 3)), W = world, S = STYLE[W.loc.id];
-    this.items = []; // {type, x, z, yaw, wallCol, roofCol}
-    this.grid = new Map(); this.chimneys = [];
-    const place = (type, x, z, yaw, opts = {}) => {
-      const gh = W.sampleGrid(x, z); if (gh < W.waterLevel + 0.5 && !opts.water) return false;
-      if (this.items.some((it) => (it.x - x) ** 2 + (it.z - z) ** 2 < (opts.gap || 14) ** 2)) return false;
-      this.items.push({ type, x, z, y: gh, yaw, wall: opts.wall ?? S.walls[Math.floor(r() * S.walls.length)], roof: opts.roof ?? S.roofs[Math.floor(r() * S.roofs.length)] });
+    const r = (this.r = mulberry32(world.loc.seed * 5 + 3)), W = world, st = W.loc.id;
+    this.dens = DENSITY[W.qName] ?? 0.8; this.detailDist = DETAIL_DIST[W.qName] ?? 1500;
+    this.grid = new Map(); this.chimneys = []; this.chunks = new Map(); this.foot = new Map(); this.count = 0;
+    const t0 = performance.now();
+    // ---- placement with footprint (oriented box) overlap tests ----
+    const fkey = (x, z) => Math.floor(x / 40) + ',' + Math.floor(z / 40);
+    const overlaps = (o) => {
+      const R = Math.ceil((o.rad + 20) / 40), cx = Math.floor(o.x / 40), cz = Math.floor(o.z / 40);
+      for (let i = cx - R; i <= cx + R; i++) for (let j = cz - R; j <= cz + R; j++) {
+        const arr = this.foot.get(i + ',' + j); if (!arr) continue;
+        for (const p of arr) if ((p.x - o.x) ** 2 + (p.z - o.z) ** 2 < (p.rad + o.rad) ** 2 && obbHit(p, o)) return true;
+      }
+      return false;
+    };
+    const addFoot = (o) => { const R = Math.ceil(o.rad / 40), cx = Math.floor(o.x / 40), cz = Math.floor(o.z / 40); for (let i = cx - R; i <= cx + R; i++) for (let j = cz - R; j <= cz + R; j++) { const k = i + ',' + j; if (!this.foot.has(k)) this.foot.set(k, []); this.foot.get(k).push(o); } };
+    const chunkOf = (key) => { if (!this.chunks.has(key)) this.chunks.set(key, { S: new Builder(), D: new Builder(), x: 0, z: 0, n: 0 }); return this.chunks.get(key); };
+    const nearAirport = (x, z) => Math.abs(x - 140) < 380 && Math.abs(z) < 1150;
+    // place a building made by makeBuilding(); (x,z) centre, yaw so local +z faces the street
+    const place = (b, x, z, yaw, opts = {}) => {
+      const cs = Math.cos(yaw), sn = Math.sin(yaw), hw = b.w / 2 + (opts.pad ?? 1), hd = b.d / 2 + (opts.pad ?? 1);
+      const o = { x, z, hw, hd, ax: cs, az: -sn, bx: sn, bz: cs, rad: Math.hypot(hw, hd) };
+      if (nearAirport(x, z) || overlaps(o)) return false;
+      let mn = 1e9, mx = -1e9;
+      for (const [u, v] of [[0, 0], [-1, -1], [1, -1], [1, 1], [-1, 1], [0, 1], [0, -1], [1, 0], [-1, 0]]) {
+        const px = x + u * hw * cs + v * hd * sn, pz = z - u * hw * sn + v * hd * cs, h = W.sampleGrid(px, pz);
+        if (h < W.waterLevel + 0.6) return false;
+        if (W.nearRoad(px, pz, opts.road ?? 2.5)) return false;
+        if (opts.trees !== false && W.flora?.hit({ x: px, y: h + 1, z: pz })) return false;
+        mn = Math.min(mn, h); mx = Math.max(mx, h);
+      }
+      if (mx - mn > (opts.slope ?? 3.5)) return false;
+      addFoot(o);
+      const ch = chunkOf(opts.chunk ?? 'c' + Math.floor(x / 2000) + ',' + Math.floor(z / 2000)), y = mn + 0.05;
+      ch.x += x; ch.z += z; ch.n++;
+      ch.S.seed = ch.D.seed = Math.floor(r() * 255);
+      ch.S.setFrame(x, y, z, yaw); ch.D.setFrame(x, y, z, yaw); b.draw(ch.S, ch.D);
+      const key = Math.floor(x / 50) + ',' + Math.floor(z / 50); if (!this.grid.has(key)) this.grid.set(key, []);
+      this.grid.get(key).push([x, y, z, b.h, Math.min(b.w, b.d) * 0.5 + 0.5]);
+      if (b.chimney && st === 'alpine' && this.chimneys.length < 70 && r() < 0.35) { const [lx, ly, lz] = b.chimney; this.chimneys.push(new THREE.Vector3(x + lx * cs + lz * sn, y + ly, z - lx * sn + lz * cs)); }
+      this.count++;
       return true;
     };
-    // towns: buildings along each street, facing it
-    for (const t of W.net.towns) {
-      const side = new THREE.Vector3(-t.dir.z, 0, t.dir.x), facing = Math.atan2(t.dir.x, t.dir.z);
-      place('church', t.c.x + side.x * 30, t.c.z + side.z * 30, facing, { gap: 25, wall: 0xf2efe8, roof: W.loc.id === 'canyon' ? 0xc9a070 : 0x4b4b52 });
-      place('station', t.c.x - side.x * 34 + t.dir.x * 60, t.c.z - side.z * 34 + t.dir.z * 60, facing + Math.PI / 2, { gap: 25, wall: 0xe8e4dc, roof: 0x707070 });
+    const mk = (type) => makeBuilding(type, st, r);
+    // walk a polyline: point + tangent at arc length s
+    const walker = (pts) => {
+      const L = [0]; for (let i = 1; i < pts.length; i++) L.push(L[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z));
+      return { total: L.at(-1), at(s) { let i = 1; while (i < L.length - 1 && L[i] < s) i++; const a = pts[i - 1], b = pts[i], t = (s - L[i - 1]) / Math.max(1e-6, L[i] - L[i - 1]), dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz) || 1; return { x: a.x + dx * t, z: a.z + dz * t, dx: dx / l, dz: dz / l }; } };
+    };
+    // line a road with buildings on both sides (front row + optional back row)
+    const lineRoad = (pts, width, s0, s1, chunk, pickType, back) => {
+      const wk = walker(pts); s1 = Math.min(s1, wk.total);
+      for (const side of [-1, 1]) {
+        let s = s0 + r() * 6;
+        while (s < s1 - 4) {
+          const type = pickType(wk.at(s)), b = mk(type), center = type === 'center';
+          const p = wk.at(s + b.w / 2), nx = -p.dz * side, nz = p.dx * side;
+          const off = width / 2 + (center ? 3 : 4.5 + r() * 4) + b.d / 2, x = p.x + nx * off, z = p.z + nz * off, yaw = Math.atan2(-nx, -nz);
+          const ok = place(b, x, z, yaw, { chunk, pad: center ? 0.3 : 1.2 });
+          s += ok ? b.w + (center ? 0.8 + r() * 2 : 3 + r() * 7) : 5;
+          if (ok && back && r() < back) { const b2 = mk('house'), off2 = off + b.d / 2 + 7 + r() * 5 + b2.d / 2; place(b2, p.x + nx * off2, p.z + nz * off2, yaw + (r() < 0.25 ? Math.PI : 0), { chunk }); }
+        }
+      }
+    };
+    // ---- towns ----
+    W.net.towns.forEach((t, ti) => {
+      const chunk = 'town' + ti, side = new THREE.Vector3(-t.dir.z, 0, t.dir.x), facing = Math.atan2(t.dir.x, t.dir.z);
+      const typeAt = (p) => (Math.hypot(p.x - t.c.x, p.z - t.c.z) < 150 * t.size + 30 ? 'center' : 'house');
+      // landmarks first so they get good spots
+      for (let k = 0; k < 12; k++) if (place(mk('church'), t.c.x + side.x * (34 + k * 6) + t.dir.x * (k - 4) * 9, t.c.z + side.z * (34 + k * 6) + t.dir.z * (k - 4) * 9, facing - Math.PI / 2, { chunk })) break;
+      if (st === 'canyon') {
+        for (let k = 0; k < 10; k++) if (place(mk('waterTower'), t.c.x - side.x * (50 + k * 10) - t.dir.x * 60, t.c.z - side.z * (50 + k * 10) - t.dir.z * 60, 0, { chunk })) break;
+        const e = t.c.clone().addScaledVector(t.dir, 520 * t.size * 0.4 + 30);
+        for (let k = 0; k < 10; k++) if (place(mk('gasStation'), e.x + side.x * (24 + k * 6) + t.dir.x * k * 10, e.z + side.z * (24 + k * 6) + t.dir.z * k * 10, facing - Math.PI / 2, { chunk })) break;
+      }
       for (const rd of W.net.roads) {
-        if (rd.kind !== 'street' || rd.pts[0].distanceTo(t.c) > 700) continue;
-        rd.pts.forEach((p, i) => {
-          if (i % 3) return;
-          const a = rd.pts[Math.max(0, i - 1)], b = rd.pts[Math.min(rd.pts.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(), n = new THREE.Vector3(-d.z, 0, d.x);
-          for (const s of [-1, 1]) {
-            if (r() < 0.12) continue;
-            const off = 14 + r() * 5, x = p.x + n.x * off * s, z = p.z + n.z * off * s;
-            if (W.nearRoad(x, z, 9)) continue;
-            const center = Math.hypot(x - t.c.x, z - t.c.z) < 140 * t.size;
-            const type = center ? (r() < 0.5 ? (W.loc.id === 'islands' && r() < 0.4 ? 'hotel' : 'apartment') : 'shop') : 'house';
-            place(type, x, z, Math.atan2(n.x * -s, n.z * -s), { gap: type === 'house' ? 13 : 22 });
-          }
-        });
+        const near = Math.hypot(rd.pts[0].x - t.c.x, rd.pts[0].z - t.c.z);
+        if (rd.kind === 'street' && near < 700) lineRoad(rd.pts, rd.width, 0, 1e9, chunk, typeAt, 0.8 * this.dens);
+        else if (rd.kind === 'main' && !rd.closed && near < 5) lineRoad(rd.pts, rd.width, 260 * t.size, 260 * t.size + 260 * this.dens, chunk, () => 'house', 0.3 * this.dens);
       }
-      // extra houses filling in behind
-      for (let k = 0; k < 40 * t.size; k++) { const a = r() * 6.28, d = 60 + r() * 260 * t.size; const x = t.c.x + Math.cos(a) * d, z = t.c.z + Math.sin(a) * d; if (!W.nearRoad(x, z, 10)) place('house', x, z, facing + Math.round(r() * 4) * Math.PI / 2 + (r() - 0.5) * 0.2); }
+      // infill between the streets
+      for (let k = 0; k < 140 * t.size * this.dens; k++) {
+        const a = r() * 6.28, d = 40 + Math.sqrt(r()) * 340 * t.size, x = t.c.x + Math.cos(a) * d, z = t.c.z + Math.sin(a) * d;
+        place(mk(d < 120 * t.size ? 'center' : 'house'), x, z, facing + Math.round(r() * 4) * Math.PI / 2 + (r() - 0.5) * 0.15, { chunk });
+      }
+      // a farm or two on the edge of town
+      for (let k = 0; k < 6 * t.size; k++) { const a = r() * 6.28, d = 380 * t.size + r() * 120, x = t.c.x + Math.cos(a) * d, z = t.c.z + Math.sin(a) * d; if (place(mk('barn'), x, z, a, { chunk })) place(mk('silo'), x + Math.cos(a + 1.3) * 16, z + Math.sin(a + 1.3) * 16, 0, { chunk }); }
+    });
+    // ---- villages strung along main roads and highways ----
+    let villages = 0; const maxV = Math.round((st === 'islands' ? 6 : 12) * this.dens);
+    for (const rd of W.net.roads) {
+      if (rd.kind !== 'highway' && !(rd.kind === 'main')) continue;
+      for (let i = 40 + Math.floor(r() * 40); i < rd.pts.length - 20 && villages < maxV; i += 70 + Math.floor(r() * 60)) {
+        const p = rd.pts[i];
+        if (r() < 0.35 || nearAirport(p.x, p.z) || Math.hypot(p.x - 140, p.z) < 1300) continue;
+        if (W.net.towns.some((t) => Math.hypot(t.c.x - p.x, t.c.z - p.z) < 650 * t.size)) continue;
+        const h = W.sampleGrid(p.x, p.z); if (h < W.waterLevel + 2 || h > W.loc.snowline - 250) continue;
+        const before = this.count;
+        lineRoad(rd.pts.slice(Math.max(0, i - 14), i + 14), rd.width, 0, 1e9, undefined, () => 'house', 0.45 * this.dens);
+        if (this.count - before >= 3) { villages++; if (st !== 'islands' && r() < 0.5) place(mk('church'), p.x + (r() - 0.5) * 60, p.z + (r() - 0.5) * 60, r() * 6.28); }
+      }
     }
-    // farms next to fields
+    // ---- farmsteads beside the fields ----
     for (const f of W.net.fields) {
-      if (r() < 0.55) continue;
-      const a = r() * 6.28, d = Math.max(f.sx, f.sz) + 25, x = f.x + Math.cos(a) * d, z = f.z + Math.sin(a) * d;
-      if (W.nearRoad(x, z, 12) || W.groundAt(x, z).n.y < 0.95) continue;
-      if (place('house', x, z, a)) {
-        place('barn', x + Math.cos(a + 1.2) * 28, z + Math.sin(a + 1.2) * 28, a, { wall: S.barnWall, roof: 0x555b62 });
-        if (r() < 0.6) place('silo', x + Math.cos(a + 1.9) * 26, z + Math.sin(a + 1.9) * 26, 0, { gap: 8, wall: 0xc0c4c8, roof: 0xc0c4c8 });
+      if (r() > 0.25 + 0.65 * this.dens) continue;
+      const ca = Math.cos(f.ang), sa = Math.sin(f.ang), toW = (u, v) => [f.x + u * ca - v * sa, f.z + u * sa + v * ca];
+      for (let tries = 0; tries < 4 && !f.farm; tries++) {
+        const su = r() < 0.5 ? 1 : -1, u = su * (f.sx + 26), v = (r() - 0.5) * f.sz, [x, z] = toW(u, v);
+        const yaw = Math.atan2(-su * ca, -su * sa); // face the field
+        if (!place(mk('house'), x, z, yaw)) continue;
         f.farm = new THREE.Vector3(x, 0, z);
+        const [bx, bz] = toW(u + su * 6, v + (v > 0 ? -1 : 1) * 30); place(mk('barn'), bx, bz, yaw + Math.PI / 2);
+        for (let k = 0; k < 1 + Math.floor(r() * 3); k++) { const [sx, sz] = toW(u + su * (20 + k * 8), v + (v > 0 ? -1 : 1) * 30); place(mk('silo'), sx, sz, 0, { pad: 0.5 }); }
+        const [hx, hz] = toW(u + su * 24, v + (v > 0 ? 1 : -1) * 6); place(mk('shed'), hx, hz, yaw + Math.PI);
       }
     }
-    // beach huts on the islands
-    if (W.loc.id === 'islands') for (let k = 0; k < 220 && this.items.length < 900; k++) {
+    // ---- beach huts on the islands ----
+    if (st === 'islands') for (let k = 0; k < 220 * this.dens; k++) {
       const a = r() * 6.28, x = 140 + Math.cos(a) * 1500 * 0.95, z = Math.sin(a) * 3200;
-      for (let s = 0; s < 40; s++) { const xx = x * (1 - s * 0.01), zz = z * (1 - s * 0.01); const h = W.sampleGrid(xx, zz); if (h > W.waterLevel + 1 && h < W.waterLevel + 4) { place('hut', xx, zz, a + Math.PI, { gap: 30, wall: 0xe8dcc0, roof: 0xc9a86a }); break; } }
+      for (let s = 0; s < 40; s++) { const xx = x * (1 - s * 0.01), zz = z * (1 - s * 0.01); const h = W.sampleGrid(xx, zz); if (h > W.waterLevel + 1 && h < W.waterLevel + 4) { place(mk('hut'), xx, zz, a + Math.PI, { pad: 4 }); break; } }
     }
+    this.buildFences();
     this.buildMeshes();
+    this.buildTime = performance.now() - t0;
     this.buildLandmarks();
     this.buildAnimals();
   }
-  buildMeshes() {
-    const W = this.w, r = this.r, S = STYLE[W.loc.id];
-    // 4x4 windows per tile (12 m), some lit at night and some not
-    const lit = Array.from({ length: 16 }, () => r() < 0.6);
-    const winTex = (() => {
-      const c = document.createElement('canvas'); c.width = 256; c.height = 256; const g = c.getContext('2d');
-      g.fillStyle = '#fff'; g.fillRect(0, 0, 256, 256);
-      for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { const x = i * 64, y = j * 64; g.fillStyle = '#1e2731'; g.fillRect(x + 18, y + 14, 28, 32); g.fillStyle = '#fff'; g.fillRect(x + 31, y + 14, 2, 32); g.fillStyle = 'rgba(0,0,0,0.12)'; g.fillRect(x, y + 60, 64, 4); }
-      const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t;
-    })();
-    const emis = (() => { const c = document.createElement('canvas'); c.width = 256; c.height = 256; const g = c.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, 256, 256);
-      for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) if (lit[i * 4 + j]) { g.fillStyle = ['#ffd890', '#ffe8c0', '#fff4e0', '#ffc070'][(i + j) % 4]; g.fillRect(i * 64 + 19, j * 64 + 15, 26, 30); }
-      const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; })();
-    const wallMat = new THREE.MeshStandardMaterial({ map: winTex, roughness: 0.85, emissive: 0xffc070, emissiveMap: emis, emissiveIntensity: 0 });
-    const roofMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 });
-    this.wallMat = wallMat; W.windowMats.push(wallMat);
-    // a few size variants per type keep window proportions right
-    const variants = {};
-    const getVar = (type) => { if (!variants[type]) variants[type] = Array.from({ length: type === 'church' || type === 'station' || type === 'silo' ? 1 : 4 }, () => ({ m: KIT[type](r, S.st), list: [] })); return variants[type][Math.floor(r() * variants[type].length)]; };
-    for (const it of this.items) { const v = getVar(it.type); v.list.push(it); it.v = v.m; }
-    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), col = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
-    for (const type in variants) for (const v of variants[type]) {
-      if (!v.list.length) continue;
-      const mk = (geos, mat, colorKey) => {
-        if (!geos.length) return;
-        const g = mergeGeometries(geos.map((x) => (x.index ? x.toNonIndexed() : x)).map((x) => { if (!x.attributes.color) vc(x, 0xffffff); return x; }));
-        const im = new THREE.InstancedMesh(g, mat, v.list.length); im.castShadow = W.qName === 'high'; im.receiveShadow = true;
-        v.list.forEach((it, i) => { q.setFromAxisAngle(up, it.yaw); m4.compose(new THREE.Vector3(it.x, it.y - 0.3, it.z), q, one); im.setMatrixAt(i, m4); im.setColorAt(i, col.set(it[colorKey])); });
-        this.group.add(im);
-      };
-      mk(v.m.walls.map((g) => vc(g, 0xffffff)), wallMat, 'wall');
-      mk(v.m.roofs, roofMat, 'roof');
-      for (const it of v.list) {
-        const key = Math.floor(it.x / 50) + ',' + Math.floor(it.z / 50); if (!this.grid.has(key)) this.grid.set(key, []);
-        this.grid.get(key).push([it.x, it.y, it.z, v.m.h, Math.max(v.m.w, v.m.d) * 0.55]);
-        if (v.m.chimney && W.loc.id === 'alpine' && r() < 0.5) this.chimneys.push(v.m.chimney.clone().applyAxisAngle(up, it.yaw).add(new THREE.Vector3(it.x, it.y, it.z)));
+  // fences / hedges / dry-stone walls around fields (detail layer)
+  buildFences() {
+    const W = this.w, r = this.r, st = W.loc.id;
+    for (const f of W.net.fields) {
+      if (f.pivot) continue;
+      const kind = st === 'islands' ? (r() < 0.6 ? 'hedge' : 'wall') : st === 'alpine' ? (r() < 0.6 ? 'rail' : 'hedge') : 'post';
+      if (this.dens < 0.6 && (kind === 'rail' || kind === 'post')) continue; // low quality: hedges and walls only
+      const ca = Math.cos(f.ang), sa = Math.sin(f.ang), toW = (u, v) => [f.x + u * ca - v * sa, f.z + u * sa + v * ca];
+      const ch = this.chunks.get('c' + Math.floor(f.x / 2000) + ',' + Math.floor(f.z / 2000)) || (this.chunks.set('c' + Math.floor(f.x / 2000) + ',' + Math.floor(f.z / 2000), { S: new Builder(), D: new Builder(), x: f.x, z: f.z, n: 1 }), this.chunks.get('c' + Math.floor(f.x / 2000) + ',' + Math.floor(f.z / 2000)));
+      const B = kind === 'hedge' || kind === 'wall' ? ch.S : ch.D; B.setFrame(0, 0, 0, 0); B.seed = 0;
+      const sx = f.sx + 1.5, sz = f.sz + 1.5, corners = [[-sx, -sz], [sx, -sz], [sx, sz], [-sx, sz]], gate = Math.floor(r() * 4);
+      const hedgeCol = [0x6f8f50, 0x5f8048, 0x7a9658][Math.floor(r() * 3)];
+      for (let e = 0; e < 4; e++) {
+        const [u0, v0] = corners[e], [u1, v1] = corners[(e + 1) % 4], L = Math.hypot(u1 - u0, v1 - v0), seg = kind === 'hedge' || kind === 'wall' ? 12 : 10, n = Math.max(1, Math.round(L / seg));
+        for (let k = 0; k < n; k++) {
+          if (e === gate && k === Math.floor(n / 2)) continue;
+          const [ax, az] = toW(u0 + (u1 - u0) * k / n, v0 + (v1 - v0) * k / n), [bx, bz] = toW(u0 + (u1 - u0) * (k + 1) / n, v0 + (v1 - v0) * (k + 1) / n);
+          const ya = W.sampleGrid(ax, az), yb = W.sampleGrid(bx, bz);
+          if (ya < W.waterLevel + 0.5 || yb < W.waterLevel + 0.5 || W.nearRoad((ax + bx) / 2, (az + bz) / 2, 3) || Math.abs(ya - yb) > 4) continue;
+          const dx = bx - ax, dz = bz - az, l = Math.hypot(dx, dz), nx = dz / l, nz = -dx / l; // outward-ish normal
+          const strip = (h0, h1, th, cell, col, top) => { // a thin wall from ground+h0 to ground+h1, two-sided, thickness th
+            for (const s of [1, -1]) { const ox = nx * th / 2 * s, oz = nz * th / 2 * s; const P = s < 0 ? [[ax + ox, ya + h0, az + oz], [bx + ox, yb + h0, bz + oz], [bx + ox, yb + h1, bz + oz], [ax + ox, ya + h1, az + oz]] : [[bx + ox, yb + h0, bz + oz], [ax + ox, ya + h0, az + oz], [ax + ox, ya + h1, az + oz], [bx + ox, yb + h1, bz + oz]]; B.plainQuad(P[0], P[1], P[2], P[3], cell, col); }
+            if (top) B.plainQuad([ax - nx * th / 2, ya + h1, az - nz * th / 2], [bx - nx * th / 2, yb + h1, bz - nz * th / 2], [bx + nx * th / 2, yb + h1, bz + nz * th / 2], [ax + nx * th / 2, ya + h1, az + nz * th / 2], cell, col);
+          };
+          if (kind === 'hedge') strip(-0.3, 1.6 + r() * 0.8, 1.4, C.HEDGE, hedgeCol, true);
+          else if (kind === 'wall') strip(-0.3, 1.0, 0.7, C.STONE, 0xffffff, true);
+          else {
+            if (kind === 'rail') { strip(0.45, 0.62, 0.08, C.DARKWOOD, 0xd8c8b0, false); strip(0.95, 1.12, 0.08, C.DARKWOOD, 0xd8c8b0, false); }
+            else strip(1.0, 1.04, 0.03, C.METAL, 0x555555, false);
+            B.box(ax, ya - 0.3, az, 0.2, 1.6, 0.2, C.DARKWOOD, 0xc0a888, { top: false });
+          }
+        }
       }
     }
+  }
+  buildMeshes() {
+    const W = this.w, mat = (this.mat = buildingMaterial());
+    W.windowMats.push(mat);
+    this.chunkList = [];
+    let tris = 0;
+    for (const [key, ch] of this.chunks) {
+      const c = { key, x: ch.n ? ch.x / ch.n : 0, z: ch.n ? ch.z / ch.n : 0 };
+      if (!ch.S.empty) { const g = ch.S.toGeometry(); tris += g.index.count / 3; c.shell = new THREE.Mesh(g, mat); c.shell.castShadow = W.qName === 'high'; c.shell.receiveShadow = true; this.group.add(c.shell); }
+      if (!ch.D.empty) { const g = ch.D.toGeometry(); tris += g.index.count / 3; c.detail = new THREE.Mesh(g, mat); c.detail.receiveShadow = true; this.group.add(c.detail); const bs = g.boundingSphere; c.dx = bs.center.x; c.dz = bs.center.z; c.dr = bs.radius; }
+      this.chunkList.push(c);
+    }
+    this.tris = tris; this.chunks = null; this.foot = null;
   }
   buildLandmarks() {
     const W = this.w, r = this.r;
@@ -227,6 +273,7 @@ export class Towns {
   }
   update(dt, t, fx, cam) {
     const W = this.w, night = W.night || W.W.dark > 0.55;
+    if (cam) { for (const c of this.chunkList) if (c.detail) c.detail.visible = Math.hypot(c.dx - cam.x, c.dz - cam.z) < this.detailDist + c.dr; }
     for (const s of this.spinners) { if (s.o) s.o.rotation.z += dt * s.sp * (0.6 + W.W.wind * 0.08); if (s.blink) s.blink.visible = Math.floor(t * 1.1) % 2 === 0; }
     if (this.lighthouse) { this.lighthouse.piv.rotation.y += dt * 0.6; this.lighthouse.beam.material.opacity = night ? 0.08 : 0; this.lighthouse.lamp.visible = true; }
     if (fx && cam) for (const c of this.chimneys) if (Math.random() < dt * 1.5 && c.distanceToSquared(cam) < 2500 * 2500) fx.smoke.add(c.x, c.y, c.z, W.windBase.x * 0.3 + (Math.random() - 0.5), 1.2, W.windBase.z * 0.3 + (Math.random() - 0.5), 9, 0.8, 7, 0.75, 0.75, 0.78, 0.35, 0.2, -0.15);
@@ -241,4 +288,15 @@ export class Towns {
       this.herd.instanceMatrix.needsUpdate = true;
     }
   }
+}
+
+// separating-axis test for two oriented rectangles {x,z,hw,hd,ax,az,bx,bz}
+function obbHit(a, b) {
+  const dx = b.x - a.x, dz = b.z - a.z;
+  for (const [ux, uz] of [[a.ax, a.az], [a.bx, a.bz], [b.ax, b.az], [b.bx, b.bz]]) {
+    const ra = a.hw * Math.abs(a.ax * ux + a.az * uz) + a.hd * Math.abs(a.bx * ux + a.bz * uz);
+    const rb = b.hw * Math.abs(b.ax * ux + b.az * uz) + b.hd * Math.abs(b.bx * ux + b.bz * uz);
+    if (Math.abs(dx * ux + dz * uz) > ra + rb) return false;
+  }
+  return true;
 }
