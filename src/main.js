@@ -508,7 +508,8 @@ function buildFlight(cfg) {
   if (st.car && st.wingArea < 0.5 && (start === 'air' || start === 'approach')) start = 'runway'; // cars without wings start on the ground
   const slot = cfg.mpSlot || 0, slotX = slot ? (slot % 2 ? 1 : -1) * Math.ceil(slot / 2) * 70 : 0; // multiplayer: side by side, stepped up
   const vApp = clamp(Number.isFinite(st.stall) ? st.stall * 1.45 : 45, 32, 110);
-  if (start === 'runway') { ac.spawn(env, new THREE.Vector3(0, 0, world.runway.len / 2 - 60), 0); }
+  const rwy = world.runways[cfg.rwy || 0] || world.runway;
+  if (start === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0); }
   else if (start === 'water') {
     const w = findWater(world);
     if (w) ac.spawn(env, w, 0); else { start = 'air'; }
@@ -539,7 +540,7 @@ function buildFlight(cfg) {
   state = 'flight';
   $('#loading').classList.remove('show');
   onResize();
-  const msg = { runway: `Runway 36 · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.' }[start];
+  const msg = { runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.' }[start];
   hud.center(msg, 3500);
   if (!ac.hasEngine) hud.toast('Glider: look for rising air under clouds and over sunny ridges.');
 }

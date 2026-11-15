@@ -14,6 +14,9 @@ import { erode } from './erosion.js';
 import { terrainDetailUniforms } from './terrainTex.js';
 
 const RWY = { len: 1800, width: 45 };
+// Two parallel runways (the airport is centred on the east one, which has the PAPI and the landing mission).
+// Facing north the west one is on the left, so it is 36L / 18R; the east one is 36R / 18L.
+export const RUNWAYS = [{ x: 0, name: '36R', back: '18L' }, { x: -200, name: '36L', back: '18R' }];
 
 export const LOCATIONS = {
   alpine: {
@@ -124,7 +127,7 @@ export class World {
   rawHeight(x, z) {
     let h = this.height(x, z);
     // flatten airport
-    const dx = Math.max(0, Math.abs(x - 140) - 300), dz = Math.max(0, Math.abs(z) - RWY.len / 2 - 250);
+    const dx = Math.max(0, Math.abs(x - 100) - 350), dz = Math.max(0, Math.abs(z) - RWY.len / 2 - 250);
     const d = Math.hypot(dx, dz);
     const t = smoothstep(0, 700, d);
     return lerp(this.loc.rwyH, h, t);
@@ -371,7 +374,7 @@ export class World {
     const hx = this.sampleGrid(x + e, z), hz = this.sampleGrid(x, z + e);
     const n = new THREE.Vector3(h - hx, e, h - hz).normalize();
     let type = 'grass';
-    if (Math.abs(x) < RWY.width / 2 + 2 && Math.abs(z) < RWY.len / 2 + 30) type = 'runway';
+    if (Math.abs(z) < RWY.len / 2 + 30 && RUNWAYS.some((r) => Math.abs(x - r.x) < RWY.width / 2 + 2)) type = 'runway';
     else if (this.isPaved(x, z)) type = 'runway';
     else if (n.y < 0.8) type = 'rock';
     else if (this.loc.desert) type = 'sand';
@@ -382,6 +385,7 @@ export class World {
     if (x > 60 && x < 100 && Math.abs(z) < RWY.len / 2) return true; // taxiway
     if (x > 20 && x < 100 && (Math.abs(z - RWY.len / 2 + 20) < 15 || Math.abs(z + RWY.len / 2 - 20) < 15 || Math.abs(z) < 15)) return true;
     if (x > 100 && x < 330 && Math.abs(z) < 200) return true; // apron
+    if (x > -180 && x < -20 && (Math.abs(z - RWY.len / 2 + 20) < 11 || Math.abs(z + RWY.len / 2 - 20) < 11 || Math.abs(z) < 11)) return true; // links between the runways
     return false;
   }
 
@@ -398,7 +402,7 @@ export class World {
       const i = (y * s + x) * 4; img.data[i] = col.r * 255 * shade; img.data[i + 1] = col.g * 255 * shade; img.data[i + 2] = col.b * 255 * shade; img.data[i + 3] = 255;
     }
     g.putImageData(img, 0, 0);
-    g.fillStyle = '#222'; g.fillRect(s / 2 - 1.5, s / 2 - (RWY.len / this.size) * s / 2, 3, (RWY.len / this.size) * s);
+    g.fillStyle = '#222'; for (const r of RUNWAYS) g.fillRect(s / 2 + (r.x / this.size) * s - 1.5, s / 2 - (RWY.len / this.size) * s / 2, 3, (RWY.len / this.size) * s);
     const toM = (p) => [((p.x + this.half) / this.size) * s, ((p.z + this.half) / this.size) * s];
     for (const rd of this.net.roads) { g.strokeStyle = rd.kind === 'highway' ? 'rgba(250,220,120,0.9)' : 'rgba(240,240,230,0.7)'; g.lineWidth = rd.kind === 'street' ? 0.6 : 1.1; g.beginPath(); rd.pts.forEach((p, i) => { const [x, y] = toM(p); i ? g.lineTo(x, y) : g.moveTo(x, y); }); if (rd.closed) g.closePath(); g.stroke(); }
     if (this.net.rail) { g.strokeStyle = 'rgba(60,40,30,0.9)'; g.setLineDash([2, 2]); g.beginPath(); this.net.rail.pts.forEach((p, i) => { const [x, y] = toM(p); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); g.setLineDash([]); }
@@ -575,7 +579,8 @@ export class World {
   }
 
   // ---------------- runway & airport ----------------
-  buildRunway() {
+  // one runway: painted asphalt texture (numbers at both ends) on a flat strip at x = r.x
+  buildRunwayStrip(r) {
     const w = 512, h = 4096, c = document.createElement('canvas'); c.width = w; c.height = h;
     const g = c.getContext('2d');
     g.fillStyle = '#4a4b4e'; g.fillRect(0, 0, w, h);
@@ -599,24 +604,31 @@ export class World {
       g.fillStyle = '#e9e9e4';
     }
     g.font = `bold ${Math.round(12 * ppm)}px Arial`; g.textAlign = 'center';
-    g.save(); g.translate(w / 2, h - 60 * ppm); g.scale(1, 1.6); g.fillText('36', 0, 0); g.restore();
-    g.save(); g.translate(w / 2, 60 * ppm); g.rotate(Math.PI); g.scale(1, 1.6); g.fillText('18', 0, 0); g.restore();
+    g.save(); g.translate(w / 2, h - 60 * ppm); g.scale(1, 1.6); g.fillText(r.name, 0, 0); g.restore();
+    g.save(); g.translate(w / 2, 60 * ppm); g.rotate(Math.PI); g.scale(1, 1.6); g.fillText(r.back, 0, 0); g.restore();
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 16;
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(RWY.width, RWY.len), new THREE.MeshStandardMaterial({ map: t, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6 }));
-    mesh.rotation.x = -Math.PI / 2; mesh.position.set(0, this.loc.rwyH + 0.05, 0); mesh.receiveShadow = true; this.group.add(mesh);
+    mesh.rotation.x = -Math.PI / 2; mesh.position.set(r.x, this.loc.rwyH + 0.05, 0); mesh.receiveShadow = true; this.group.add(mesh);
+  }
+
+  buildRunway() {
+    for (const r of RUNWAYS) this.buildRunwayStrip(r);
     // shoulders, taxiway, apron
     const asph = new THREE.MeshStandardMaterial({ color: 0x55565a, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4, map: this.detailTexture() });
     asph.map.repeat.set(20, 20);
     const add = (w2, l, x, z) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w2, l), asph); m.rotation.x = -Math.PI / 2; m.position.set(x, this.loc.rwyH + 0.03, z); m.receiveShadow = true; this.group.add(m); };
     add(20, RWY.len, 80, 0); add(230, 400, 215, 0);
-    for (const z of [RWY.len / 2 - 20, -RWY.len / 2 + 20, 0]) add(60, 22, 50, z);
-    this.runway = { x: 0, z: 0, h: this.loc.rwyH, len: RWY.len, width: RWY.width, threshold: new THREE.Vector3(0, this.loc.rwyH, RWY.len / 2 - 60), heading: 0 };
+    for (const z of [RWY.len / 2 - 20, -RWY.len / 2 + 20, 0]) { add(60, 22, 50, z); add(160, 22, -100, z); }
+    this.runways = RUNWAYS.map((r) => ({ x: r.x, z: 0, h: this.loc.rwyH, len: RWY.len, width: RWY.width, name: r.name, threshold: new THREE.Vector3(r.x, this.loc.rwyH, RWY.len / 2 - 60), heading: 0 }));
+    this.runway = this.runways[0];
     // runway & approach lights (points shown at night)
     const lp = [], lc = [];
     const push = (x, z, c, y = 0.4) => { lp.push(x, this.loc.rwyH + y, z); const cc = new THREE.Color(c); lc.push(cc.r, cc.g, cc.b); };
-    for (let z = -RWY.len / 2; z <= RWY.len / 2; z += 60) { push(-RWY.width / 2 - 1, z, 0xfff0c0); push(RWY.width / 2 + 1, z, 0xfff0c0); }
-    for (let x = -RWY.width / 2; x <= RWY.width / 2; x += 4) { push(x, RWY.len / 2 + 2, 0x30ff60); push(x, -RWY.len / 2 - 2, 0xff3030); }
-    for (let k = 1; k <= 12; k++) for (let x = -8; x <= 8; x += 4) push(x, RWY.len / 2 + k * 30, 0xffffff, 1 + k * 0.4);
+    for (const { x: rx } of RUNWAYS) {
+      for (let z = -RWY.len / 2; z <= RWY.len / 2; z += 60) { push(rx - RWY.width / 2 - 1, z, 0xfff0c0); push(rx + RWY.width / 2 + 1, z, 0xfff0c0); }
+      for (let x = -RWY.width / 2; x <= RWY.width / 2; x += 4) { push(rx + x, RWY.len / 2 + 2, 0x30ff60); push(rx + x, -RWY.len / 2 - 2, 0xff3030); }
+      for (let k = 1; k <= 12; k++) for (let x = -8; x <= 8; x += 4) push(rx + x, RWY.len / 2 + k * 30, 0xffffff, 1 + k * 0.4);
+    }
     for (let z = -RWY.len / 2; z <= RWY.len / 2; z += 40) { push(62, z, 0x3070ff); push(98, z, 0x3070ff); }
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3)); lg.setAttribute('color', new THREE.Float32BufferAttribute(lc, 3));
     this.lightsMat = new THREE.PointsMaterial({ size: 3.2, color: new THREE.Color(3, 3, 3), vertexColors: true, map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0, fog: false });
