@@ -4,9 +4,7 @@
 // Each tile bakes its own albedo/AO/normal maps with exactly the core's bake (World.bakeMaps) and draws with the
 // core's terrain material, so crossing the edge of the core map doesn't change the look of the ground.
 import * as THREE from 'three';
-import { mulberry32 } from './noise.js';
 import { terrainMaterial } from './shaders.js';
-import { Flora } from './flora.js';
 
 const RADIUS = 4.3; // tiles (centre distance) kept around the camera
 
@@ -19,7 +17,6 @@ export class TerrainTiles {
     // texels per tile at full detail: the core's bake spacing
     this.texR = Math.round(world.q.bake / 4);
     this.white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1); this.white.needsUpdate = true;
-    this.trees = new Map(); // flora kind -> { near, hi, lo } pooled InstancedMeshes for all outer tiles
     this.lastCam = null; this.treeCam = null;
   }
   key(i, j) { return i + ',' + j; }
@@ -55,7 +52,7 @@ export class TerrainTiles {
         this.job = null;
       }
     }
-    // trees: near / detailed / simple tiers by distance, like the core's flora
+    // vegetation lives in Flora; tell it when the tiles under it change
     if (!this.treeCam || this.treeCam.distanceToSquared(cam) > 40 * 40) { this.treeCam = cam.clone(); this.layoutTrees(cam); }
   }
 
@@ -104,66 +101,11 @@ export class TerrainTiles {
     if (lod === 1) yield* this.scatter(tile);
     return tile;
   }
-  // Trees at the same density and with the same rules as the core's flora (forest clumps, species by height/slope).
-  *scatter(tile) {
-    const W = this.w, F = W.flora; if (!F?.kinds?.length) return;
-    const r = mulberry32((tile.i * 73856093) ^ (tile.j * 19349663)), A = this.size ** 2, tint = new THREE.Color();
-    const tries = Math.round(F.rate.tries * A), max = Math.round(F.rate.max * A);
-    const wet = (x, z) => this.sample(x, z, tile) < W.waterLevel + 1;
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), p = new THREE.Vector3(), sc = new THREE.Vector3();
-    for (let t = 0; t < tries && tile.trees.length < max; t++) {
-      if (t % 400 === 399) yield;
-      const x = tile.x0 + r() * this.size, z = tile.z0 + r() * this.size, h = this.sample(x, z, tile);
-      if (h < W.waterLevel) continue;
-      const e = 1.5, hx = this.sample(x + e, z, tile), hz = this.sample(x, z + e, tile), s = 1 - e / Math.hypot(h - hx, e, h - hz);
-      const n = W.noise.n2(x / 90, z / 90), f = W.noise.fbm(x / 260 + 7, z / 260, 3);
-      if (f < 0.05 && r() < 0.85) continue;
-      const nearWater = wet(x + 60, z) || wet(x - 60, z) || wet(x, z + 60) || wet(x, z - 60);
-      const k = F.pick(r); if (!k.where(h, s, n, f, nearWater)) continue;
-      const s0 = 0.75 + r() * 0.55, yaw = r() * Math.PI * 2;
-      q.setFromAxisAngle(up, yaw); m.compose(p.set(x, h - 0.15, z), q, sc.setScalar(s0));
-      Flora.tint(r, tint);
-      tile.trees.push({ k, x, z, m: m.toArray(new Float32Array(16)), c: [tint.r, tint.g, tint.b] });
-      if (!k.model.rock) { const key = Math.floor(x / 50) + ',' + Math.floor(z / 50); if (!tile.hit.has(key)) tile.hit.set(key, []); tile.hit.get(key).push([x, h, z, k.model.H * s0, Math.max(1.2, k.model.R * s0 * 0.5)]); }
-    }
-  }
-  pool(k, need) {
-    let p = this.trees.get(k);
-    if (p && p.cap >= need) return p;
-    if (p) for (const im of [p.near, p.hi, p.lo]) { this.group.remove(im); im.dispose(); }
-    const F = this.w.flora, cap = Math.ceil(need * 1.5) + 64;
-    const mk = (geo, mat) => { const im = new THREE.InstancedMesh(geo, mat, cap); im.frustumCulled = false; im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3); im.count = 0; this.group.add(im); return im; };
-    p = { cap, near: mk(k.model.geo, k.mat), hi: mk(k.model.geo, k.mat), lo: mk(F.loGeo(k), k.loMat) };
-    p.near.castShadow = this.w.q.shadows; p.near.receiveShadow = true;
-    this.trees.set(k, p); return p;
-  }
-  layoutTrees(cam) {
-    const F = this.w.flora; if (!F) return;
-    const n2 = 170 * 170, d2 = F.loDist ** 2, far = F.farDist, far2 = far * far, T = this.size;
-    const byKind = new Map();
-    for (const t of this.tiles.values()) {
-      if (!t.trees.length) continue;
-      const dx = Math.max(0, t.x0 - cam.x, cam.x - t.x0 - T), dz = Math.max(0, t.z0 - cam.z, cam.z - t.z0 - T);
-      if (dx * dx + dz * dz > far2) continue;
-      for (const tr of t.trees) { let l = byKind.get(tr.k); if (!l) byKind.set(tr.k, (l = [])); l.push(tr); }
-    }
-    for (const [k, list] of byKind) {
-      const p = this.pool(k, list.length), cnt = { near: 0, hi: 0, lo: 0 };
-      for (const tr of list) {
-        const dd = (tr.x - cam.x) ** 2 + (tr.z - cam.z) ** 2; if (dd > far2) continue;
-        const tier = dd < n2 ? 'near' : dd < d2 ? 'hi' : 'lo', im = p[tier], c = cnt[tier]++;
-        im.instanceMatrix.array.set(tr.m, c * 16); im.instanceColor.array.set(tr.c, c * 3);
-      }
-      for (const tier of ['near', 'hi', 'lo']) { const im = p[tier]; im.count = cnt[tier]; im.instanceMatrix.needsUpdate = true; im.instanceColor.needsUpdate = true; }
-    }
-    for (const [k, p] of this.trees) if (!byKind.has(k)) p.near.count = p.hi.count = p.lo.count = 0;
-  }
-  treeHit(pt) {
-    const T = this.size, t = this.tiles.get(this.key(Math.floor(pt.x / T), Math.floor(pt.z / T)));
-    const arr = t?.hit.get(Math.floor(pt.x / 50) + ',' + Math.floor(pt.z / 50)); if (!arr) return null;
-    for (const h of arr) { const dx = pt.x - h[0], dz = pt.z - h[2]; if (dx * dx + dz * dz < h[4] * h[4] && pt.y < h[1] + h[3] && pt.y > h[1]) return h; }
-    return null;
-  }
+  // Vegetation on the outer tiles is streamed by Flora (src/flora.js) in the same cells as the core, sampling
+  // these tiles' heights; it only needs to hear when the set of built tiles changes, to re-seat trees on re-meshed ground.
+  *scatter() {}
+  layoutTrees() { this.w.flora?.tilesChanged?.(this.tiles); }
+  treeHit() { return null; } // Flora.hit covers the outer tiles too
   // Sea-floor heights around the camera for the water shader (shallows and surf beyond the core map)
   *updateWaterDepth(cam) {
     const W = this.w, U = W.waterMat?.userData.U; if (!U) return;
@@ -195,7 +137,6 @@ export class TerrainTiles {
   }
   dispose() {
     for (const t of this.tiles.values()) this.drop(t);
-    for (const p of this.trees.values()) for (const im of [p.near, p.hi, p.lo]) im.dispose();
     this.white.dispose(); this.w.group.remove(this.group);
   }
 }

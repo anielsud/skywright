@@ -143,3 +143,4 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 Ground textures in `tex/` are CC0 from [Poly Haven](https://polyhaven.com) (aerial_grass_rock, aerial_rocks_02, aerial_beach_01, dry_ground_rocks, cliff_side).
 
 The sky's atmosphere model (Rayleigh/Mie/ozone coefficients, single scattering into a sky-view lookup table) follows Eric Bruneton's *Precomputed Atmospheric Scattering* and Sébastien Hillaire's *A Scalable and Production Ready Sky and Atmosphere Rendering Technique* (EGSR 2020); the code is our own.
+Vegetation (`src/flora.js`): needle sprays, leaf clusters, palm fronds, grass and scrub are painted procedurally at start-up (no downloaded art); boulders reuse the CC0 Poly Haven rock textures above (aerial_rocks_02, cliff_side).
