@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.30.1', items: [
+    'Behind the scenes: an automatic check now flies every plane before each update, to catch anything broken before it reaches you.',
+  ] },
   { v: '1.30.0', items: [
     'Super-fast planes now glow like real hot metal: the nose and the front edges of the wings glow brightest, and the back of the plane stays cooler. Flying really high no longer makes stripes on the far-away ground, and messages no longer cover the lights at the top of the screen.',
   ] },
