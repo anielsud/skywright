@@ -14,12 +14,12 @@ const GradeShader = {
   uniforms: { tDiffuse: { value: null }, vignette: { value: 0.32 }, saturation: { value: 1.12 }, contrast: { value: 1.06 }, shock: { value: 0 }, warmth: { value: 0 }, time: { value: 0 }, grain: { value: 0.025 },
     sunUV: { value: new THREE.Vector2(0.5, 0.5) }, sunVis: { value: 0 }, sunTint: { value: new THREE.Color(1, 0.9, 0.7) }, aspect: { value: 1.6 },
     shimSeg: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, shimPar: { value: [0, 1, 2, 3].map(() => new THREE.Vector2()) }, shimOn: { value: 0 },
-    film: { value: 0 } },
+    film: { value: 0 }, sharpen: { value: 0 }, texel: { value: new THREE.Vector2(1 / 1920, 1 / 1080) } },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
   fragmentShader: /* glsl */`
     uniform sampler2D tDiffuse; uniform float vignette; uniform float saturation; uniform float contrast; uniform float shock; uniform float warmth; uniform float time; uniform float grain;
     uniform vec2 sunUV; uniform float sunVis; uniform vec3 sunTint; uniform float aspect;
-    uniform vec4 shimSeg[4]; uniform vec2 shimPar[4]; uniform float shimOn; uniform float film;
+    uniform vec4 shimSeg[4]; uniform vec2 shimPar[4]; uniform float shimOn; uniform float film; uniform float sharpen; uniform vec2 texel;
     varying vec2 vUv;
     float rnd(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main() {
@@ -42,6 +42,14 @@ const GradeShader = {
         vec2 o = d * ca * 0.03;
         c = vec3(texture2D(tDiffuse, uv + o).r, texture2D(tDiffuse, uv).g, texture2D(tDiffuse, uv - o).b);
       } else c = texture2D(tDiffuse, uv).rgb;
+      if (sharpen > 0.0) { // contrast-adaptive sharpening (AMD CAS-style): restores crispness when rendering below native resolution
+        vec3 cn = texture2D(tDiffuse, uv + vec2(0.0, texel.y)).rgb, cs = texture2D(tDiffuse, uv - vec2(0.0, texel.y)).rgb;
+        vec3 ce = texture2D(tDiffuse, uv + vec2(texel.x, 0.0)).rgb, cw = texture2D(tDiffuse, uv - vec2(texel.x, 0.0)).rgb;
+        vec3 mn = min(c, min(min(cn, cs), min(ce, cw))), mx = max(c, max(max(cn, cs), max(ce, cw)));
+        vec3 amp = sqrt(clamp(min(mn, 1.0 - mx) / max(mx, vec3(1e-4)), 0.0, 1.0));
+        vec3 wt = -amp / mix(8.0, 5.0, sharpen);
+        c = clamp((c + (cn + cs + ce + cw) * wt) / (1.0 + 4.0 * wt), 0.0, 1.0);
+      }
       float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
       c = mix(vec3(l), c, saturation);
       c = (c - 0.5) * contrast + 0.5;
@@ -246,10 +254,13 @@ export class Post {
       rt.depthTexture = on ? new THREE.DepthTexture(rt.width, rt.height, THREE.FloatType) : null;
       rt.dispose();
     }
-    this.atmos.enabled = on; this.smaa.enabled = on;
+    this.atmos.enabled = on;
     this.grade.uniforms.film.value = on ? 1 : 0;
   }
-  setSize(w, h, pr) { this.composer.setPixelRatio(pr); this.composer.setSize(w, h); }
+  setSize(w, h, pr) { this.composer.setPixelRatio(pr); this.composer.setSize(w, h); this.grade.uniforms.texel.value.set(1 / Math.max(1, w * pr), 1 / Math.max(1, h * pr)); }
+  // SMAA (cheap, post) instead of MSAA (expensive at high resolution: measured 7-22 ms/frame at 1-2x on an M1 Pro)
+  setSMAA(on) { this.smaa.enabled = on; }
+  setSharpen(v) { this.grade.uniforms.sharpen.value = v; }
   render(scene, camera, dt = 0.016) {
     if (!this.enabled) { this.renderer.render(scene, camera); return; }
     this.renderPass.scene = scene; this.renderPass.camera = camera; this.atmos.camera = camera;
