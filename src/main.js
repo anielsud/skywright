@@ -550,7 +550,7 @@ function buildFlight(cfg) {
     onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40, p.clone()); },
   };
   let start = cfg.start;
-  const gearOK = ac.parts.some((p) => p.gear && !p.gear.float);
+  const gearOK = ac.parts.some((p) => p.gear && (!p.gear.float || p.gear.skid)); // skids can sit on a runway
   if (cfg.mode === 'landing') start = 'approach';
   else if (start === 'water' || (start === 'runway' && st.floats && !gearOK)) start = 'water';
   if (start === 'runway' && (!ac.hasEngine)) start = 'air';

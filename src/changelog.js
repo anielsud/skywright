@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.39.0', items: [
+    'Fixed: helicopters now start on the runway when you pick “On the runway”, instead of landing in a lake.',
+  ] },
   { v: '1.38.0', items: [
     'Fly really high and the world keeps going all the way to the horizon: mountains, islands and desert fade softly into the sky instead of stopping at a square edge.',
   ] },
