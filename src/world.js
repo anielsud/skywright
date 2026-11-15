@@ -168,7 +168,9 @@ export class World {
     this.terrain = mesh; this.group.add(mesh);
     // far skirt so the edge isn't visible
     const skirt = new THREE.Mesh(new THREE.RingGeometry(S * 1.05, S * 6, 64, 1), new THREE.MeshStandardMaterial({ color: this.loc.id === 'islands' ? 0x0d3b4a : new THREE.Color(L.grass[0]).multiplyScalar(this.loc.desert ? 0.9 : 0.6), roughness: 1 }));
-    skirt.rotation.x = -Math.PI / 2; skirt.position.y = this.loc.id === 'islands' ? -50 : this.loc.desert ? 60 : -20; this.group.add(skirt); this.skirt = skirt;
+    // It only shows past the 90 km sea plane (or above it in the desert); kept well clear of the water so they can't z-fight from altitude.
+    skirt.rotation.x = -Math.PI / 2; skirt.position.y = this.loc.desert ? 60 : this.waterLevel - 250;
+    if (this.loc.desert) { skirt.material.polygonOffset = true; skirt.material.polygonOffsetUnits = -4; skirt.material.polygonOffsetFactor = -1; } this.group.add(skirt); this.skirt = skirt;
     this.roadGroup = buildRoadMeshes(this, this.net); this.group.add(this.roadGroup);
     this.buildMinimap();
     this.buildPatch();

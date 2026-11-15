@@ -5,19 +5,10 @@
 import * as THREE from 'three';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { clamp } from './noise.js';
+import { FOG } from './shaders.js';
 
 const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const _white = new THREE.Color(1, 1, 1), _violet = new THREE.Color(2.0, 0.6, 2.4), _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _Y = new THREE.Vector3(0, 1, 0);
-
-// Rough black-body colour for a hot skin temperature (°C), as linear RGB with an HDR intensity.
-export function heatGlow(c, out = new THREE.Color()) {
-  const k = smooth(220, 1300, c);
-  if (k <= 0) return out.setRGB(0, 0, 0);
-  const t = clamp((c - 220) / 1400, 0, 1);
-  const r = 1, g = clamp(t * 1.05, 0, 0.92) ** 1.6, b = clamp((t - 0.55) * 1.6, 0, 0.7) ** 1.5;
-  const I = 0.3 + k * k * 4.2; // dull red barely glows, white-hot blooms
-  return out.setRGB(r * I, g * I, b * I);
-}
 
 // Bell-shaped collar around the aircraft: local +Y runs from the front edge (0) to the back (1).
 let _cone;
@@ -87,20 +78,52 @@ function diamondGeometry(flame) {
 }
 const diamondMat = () => new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 1.5, 2.2), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
 
-// Hot-skin glow: patched copy of a lit material. Faces turned into the airflow (nose, leading edges) glow most.
-function heatMaterial(mat, U, exposure) {
+// Hot-skin glow: patched copy of a lit material. Kinetic heating peaks where the air stagnates, so each fragment gets
+// its own temperature: surfaces facing into the airflow (nose cone, rounded wing/tail leading edges, intake lips) run
+// near the full skin temperature, the nose region is hottest of all, and the heat falls off along the body and on
+// faces turned away from the flow, where the paint stays visible. Colour is a cheap black-body ramp in HDR, so only
+// the hottest spots get bright enough to catch the bloom.
+const HEAT_GLSL = /* glsl */`
+  uniform vec3 uHeatFwd; uniform vec3 uHeatAxis; uniform vec3 uHeatNose; uniform float uHeatLen; uniform float uHeatC; uniform float uHeatAmb;
+  varying vec3 vHeatW;
+  // temperature (°C) -> emitted HDR radiance: invisible below ~450, dull red, orange, yellow, white-hot
+  vec3 heatRadiance(float T) {
+    float k = smoothstep(350.0, 1250.0, T), t = clamp((T - 450.0) / 1000.0, 0.0, 1.0);
+    vec3 c = vec3(1.0, 0.06 + 0.8 * pow(t, 1.35), 0.015 + 0.65 * pow(max(t - 0.45, 0.0) * 1.8, 1.6));
+    return c * (pow(k, 1.5) * 8.5 + k * 0.3);
+  }`;
+function heatMaterial(mat, U) {
   const m = mat.clone();
   m.userData.heat = true;
   m.onBeforeCompile = (sh) => {
-    sh.uniforms.uHeatCol = U.col; sh.uniforms.uHeatFwd = U.fwd; sh.uniforms.uHeatExp = exposure; sh.uniforms.uHeatDark = U.dark;
+    Object.assign(sh.uniforms, FOG); // the global height-fog hook this replaces
+    sh.uniforms.uHeatFwd = U.fwd; sh.uniforms.uHeatAxis = U.axis; sh.uniforms.uHeatNose = U.nose; sh.uniforms.uHeatLen = U.len; sh.uniforms.uHeatC = U.c; sh.uniforms.uHeatAmb = U.amb;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vHeatW;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvHeatW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uHeatCol; uniform vec3 uHeatFwd; uniform float uHeatExp; uniform float uHeatDark;')
-      .replace('#include <color_fragment>', '#include <color_fragment>\n diffuseColor.rgb *= 1.0 - uHeatDark * uHeatExp; // scorched, so the glow reads even on white paint')
+      .replace('#include <common>', '#include <common>\n' + HEAT_GLSL)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        { float hf = max(0.0, dot(normal, normalize((viewMatrix * vec4(uHeatFwd, 0.0)).xyz)));
-          totalEmissiveRadiance += uHeatCol * uHeatExp * (0.45 + 0.55 * hf * hf); }`);
+        float heatHot = 0.0;
+        if (uHeatC > 150.0) {
+          vec3 wn = inverseTransformDirection(normal, viewMatrix);
+          float stag = smoothstep(-0.15, 0.8, dot(wn, uHeatFwd));                 // facing into the airflow
+          float a = clamp(dot(vHeatW - uHeatNose, -uHeatAxis) / uHeatLen, 0.0, 1.0); // 0 at the nose, 1 at the tail
+          float nose = exp(-a * 4.0);
+          float e = max(stag * (1.0 - 0.35 * a), nose) + 0.3 * (1.0 - a) * (1.0 - a);
+          float T = uHeatAmb + (uHeatC - uHeatAmb) * clamp(0.4 + 0.6 * e, 0.0, 1.0);
+          // scorched dark and dull where hot (no glossy sky reflections), so the glow reads even on white paint
+          heatHot = 0.96 * smoothstep(250.0, 700.0, T);
+          diffuseColor.rgb *= 1.0 - heatHot;
+          roughnessFactor = mix(roughnessFactor, 0.85, heatHot); metalnessFactor *= 1.0 - heatHot;
+          totalEmissiveRadiance += heatRadiance(T);
+        }`)
+      .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
+        #ifdef USE_CLEARCOAT
+          material.clearcoat *= 1.0 - heatHot;
+        #endif`);
   };
-  m.customProgramCacheKey = () => 'skyheat1';
+  m.customProgramCacheKey = () => 'skyheat2';
   return m;
 }
 export function keepHeatPatch(from, to) { // aircraft.damage() clones materials when scorching
@@ -117,15 +140,13 @@ export class SonicFX {
     for (const p of ac.parts) for (const h of p.hull) { const r = _v.copy(h).sub(ac.com); minZ = Math.min(minZ, r.z); maxZ = Math.max(maxZ, r.z); span = Math.max(span, Math.abs(r.x)); hgt = Math.max(hgt, Math.abs(r.y)); }
     if (minZ > maxZ) { minZ = -ac.radius; maxZ = ac.radius; }
     this.minZ = minZ; this.maxZ = maxZ; this.len = Math.max(2, maxZ - minZ); this.span = span; this.hgt = hgt;
-    // heat glow uniforms (shared by the whole plane) and per-part exposure
-    this.U = { col: { value: new THREE.Color(0, 0, 0) }, fwd: { value: new THREE.Vector3(0, 0, -1) }, dark: { value: 0 } };
+    // heat glow uniforms (shared by the whole plane)
+    this.U = { fwd: { value: new THREE.Vector3(0, 0, -1) }, axis: { value: new THREE.Vector3(0, 0, -1) }, nose: { value: new THREE.Vector3() }, len: { value: this.len }, c: { value: 15 }, amb: { value: 15 } };
     for (const p of ac.parts) {
-      const front = 1 - clamp((p.center.z - ac.com.z - minZ) / this.len, 0, 1);
-      const exp = { value: 0.45 + 0.55 * front * front };
       const done = new Map();
       p.obj.traverse((o) => {
         if (!o.isMesh || !o.material?.isMeshStandardMaterial || o.material.transparent) return;
-        if (!done.has(o.material)) done.set(o.material, heatMaterial(o.material, this.U, exp));
+        if (!done.has(o.material)) done.set(o.material, heatMaterial(o.material, this.U));
         o.material = done.get(o.material);
       });
     }
@@ -150,8 +171,9 @@ export class SonicFX {
     const M = dead ? 0 : (ac.mach || 0), C = ac.skinC ?? 15, V = ac.v.length();
     // airflow direction (world); never zero so the shaders can't produce NaN
     if (V > 1) this.U.fwd.value.copy(ac.v).divideScalar(V);
-    heatGlow(dead ? -300 : C, this.U.col.value);
-    this.U.dark.value = dead ? 0 : 0.85 * smooth(150, 700, C);
+    this.U.c.value = dead ? -300 : C; this.U.amb.value = Math.min(C, 15);
+    this.U.axis.value.set(0, 0, -1).applyQuaternion(ac.q);
+    this.U.nose.value.copy(ac.x).addScaledVector(this.U.axis.value, -this.minZ);
     // --- sonic boom ---
     if (dead) this.armed = false; // (re)appearing already supersonic (e.g. a remote player) is not a boom
     else if (M < 0.95) this.armed = true;

@@ -46,8 +46,14 @@ export class HUD {
   toast(text, kind = '') {
     const d = document.createElement('div'); d.className = 'toast ' + kind; d.textContent = text;
     this.toasts.prepend(d);
-    while (this.toasts.children.length > 4) this.toasts.lastChild.remove();
+    while (this.toasts.children.length > 3) this.toasts.lastChild.remove();
     setTimeout(() => d.classList.add('fade'), 2600); setTimeout(() => d.remove(), 3400);
+  }
+  // Touch layout: the status lamps sit at the top (the bottom belongs to the touch controls). Put them in the same
+  // top-centre column as the mission line and toasts, so toasts stack below the lamps instead of on top of them.
+  setTouch(on) {
+    const bc = this.root.querySelector('.hud-bc'), tc = this.root.querySelector('.hud-tc');
+    if (on) tc.insertBefore(bc, this.toasts); else this.root.insertBefore(bc, tc.nextSibling);
   }
   center(text, ms = 1800) { const c = this.$('h-center'); c.textContent = text; c.classList.add('show'); clearTimeout(this.ct); this.ct = setTimeout(() => c.classList.remove('show'), ms); }
   show(on) { this.visible = on; this.root.style.display = on ? '' : 'none'; }
