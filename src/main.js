@@ -388,7 +388,7 @@ async function updateNow(status) {
 // ---------- what's new ----------
 // After an update brings in a higher VERSION, list what changed since the version this player last saw.
 function whatsNewModal(entries, title = 'What’s new ✨') {
-  const MAX = 6, shown = entries.slice(0, MAX);
+  const MAX = 10, shown = entries.slice(0, MAX);
   const m = ui.modal(`<h2>${title}</h2>
     <div class="whats-new">${shown.map((e, i) => `<section${i ? '' : ' class="latest"'}>
       <h4>Version ${e.v}</h4><ul>${e.items.map((t) => `<li>${t}</li>`).join('')}</ul></section>`).join('')}
@@ -397,12 +397,13 @@ function whatsNewModal(entries, title = 'What’s new ✨') {
   m.el.querySelector('[data-close]').addEventListener('click', () => audio.play('click'));
 }
 function maybeShowWhatsNew() {
-  let seen = LS.get('seenVersion', null);
-  if (!seen) {
-    // Older builds didn't record this. A player with saved stuff has been here before: show them the newest release.
-    // A brand-new player just starts at the current version with no popup.
-    seen = returningPlayer ? (CHANGELOG[1]?.v || VERSION) : VERSION;
-  }
+  // 1.11.0 is the last release before this popup existed, so a player with saved stuff but no record has seen at least that.
+  // A brand-new player starts at the current version with no popup.
+  const LEGACY_SEEN = '1.11.0';
+  let seen = LS.get('seenVersion', null) || (returningPlayer ? LEGACY_SEEN : VERSION);
+  // One-time repair: 1.13–1.17 showed pre-popup players only the newest release, so they never heard about
+  // helicopters (1.12). Rewind them once so they get the full list.
+  if (!LS.get('seenRepair1', false)) { if (newer(seen, LEGACY_SEEN) && !newer(seen, '1.17.0')) seen = LEGACY_SEEN; LS.set('seenRepair1', true); }
   LS.set('seenVersion', VERSION);
   if (!newer(VERSION, seen)) return;
   const entries = changesSince(seen, VERSION);
