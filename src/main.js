@@ -832,7 +832,14 @@ function stepFlight(dtReal) {
     const k = engSound(e); if (!engines[k]) engines[k] = { sound: k, rpm: 0, spoolT: 0, count: 0, blades: { e_turboprop: 4, e_radial: 3, e_electric: 6, r_main4: 4 }[p.p.id] || 2, ab: false, burning: false, pos: new THREE.Vector3(), fwd: ac.forward };
     if (k === 'rotor') { engines[k].load = ac.collective ?? 0.5; engines[k].tail = ac.parts.some((q) => q.alive && q.engine?.type === 'tailrotor'); }
     const a = engines[k]; a.count++; a.rpm = Math.max(a.rpm, e.rpm || 0); a.spoolT = Math.max(a.spoolT, e.spoolT || 0); a.ab = a.ab || e.abOn; a.burning = a.burning || e.burning;
-    a.pos.add(ac.worldPoint(e.pos));
+    a.pos.add(ac.worldPoint(e.pos)); a.dmg = Math.max(a.dmg || 0, p.dmg / p.hp); // damage: sputter and misfire (audio.engineDamage)
+  }
+  // damage audio: the worst burning engine (same > 70 % rule as the flames above), and damaged parts still attached (rattle)
+  const dmgAudio = { fire: null, rattle: 0 };
+  if (!ac.dead) for (const p of ac.parts) {
+    if (!p.alive) continue; const fr = p.dmg / p.hp;
+    if (p.engine && fr > 0.7 && fr > (dmgAudio.fire?.fr ?? 0)) dmgAudio.fire = { fr, amt: 0.5 + 0.5 * Math.min(1, (fr - 0.7) / 0.3), pos: ac.worldPoint(p.engine.pos) };
+    else if (!p.engine && !p.gear) dmgAudio.rattle = Math.max(dmgAudio.rattle, fr);
   }
   for (const k in engines) engines[k].pos.divideScalar(engines[k].count);
   const cockpit = rig.mode === 'cockpit' && !ac.dead;
@@ -851,6 +858,7 @@ function stepFlight(dtReal) {
     gear: contactGear(ac), scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead, cockpit, doppler, rain: world.rain.visible ? world.W.rain : 0,
     listener: { pos: flightCam.position, fwd: camFwd, up: camUp },
     amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) },
+    fire: dmgAudio.fire, rattle: dmgAudio.rattle, g: ac.dead ? 0 : ac.g, acPos: ac.x,
     music: flightMusic(f, ac, world) });
   f.worldSound?.update(f, flightCam.position, dtReal, net.players?.values(), cockpit);
   f.callouts?.update(world, dtReal);

@@ -20,6 +20,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "horn_fail_wahwah_2.wav" by TaranP (CC0): https://freesound.org/people/TaranP/sounds/362205/
 - "Glockenspiel - C5 (glock_medium_C5.wav)" by sgossner (CC0): https://freesound.org/people/sgossner/sounds/373364/
 - "Bombardier Dash 8-300 Runway Takeoff Cruise.wav" by Pack489 (CC0): https://freesound.org/people/Pack489/sounds/399371/
+- "Metal_Rattling_Small.wav" by GiocoSound (CC0): https://freesound.org/people/GiocoSound/sounds/421154/
 - "Landing Gear" by 77Pacer (CC0): https://freesound.org/people/77Pacer/sounds/425273/
 - "Aluminium pipe dropped on concrete, indoor, 4 impacts.wav" by Bibow (CC0): https://freesound.org/people/Bibow/sounds/426846/
 - "34 Wrench on concrete floor, indoor, 5 impacts.wav" by Bibow (CC0): https://freesound.org/people/Bibow/sounds/426848/
@@ -37,6 +38,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "spray can" by richwise (CC0): https://freesound.org/people/richwise/sounds/476839/
 - "R01-71-Close up Seagull.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/479595/
 - "R03-19-Old Auto Tire Skid.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/481668/
+- "liner gangplank groaning.WAV" by phonoflora (CC0): https://freesound.org/people/phonoflora/sounds/500008/
 - "camioneta avanzando sobre tierra / pickup truck going overland" by jusebago (CC0): https://freesound.org/people/jusebago/sounds/515038/
 - "Strong Wind 03.wav" by Tim_Verberne (CC0): https://freesound.org/people/Tim_Verberne/sounds/518090/
 - "Meadow with many insects chirps atmo field recording" by Garuda1982 (CC0): https://freesound.org/people/Garuda1982/sounds/529573/
@@ -59,11 +61,13 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "forest heavy rain loop.wav" by Victormaa (CC0): https://freesound.org/people/Victormaa/sounds/671409/
 - "S37-14 Two cars crash foley; good metallic bump.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/675466/
 - "Game Success Fanfare Short" by el_boss (CC0): https://freesound.org/people/el_boss/sounds/677858/
+- "Fire close 1.wav" by Poulpy2.0 (CC0): https://freesound.org/people/Poulpy2.0/sounds/679405/
 - "Big falling debris (crash)" by xkeril (CC0): https://freesound.org/people/xkeril/sounds/703247/
 - "Fall debris (crash)" by xkeril (CC0): https://freesound.org/people/xkeril/sounds/703248/
 - "Jet Engine Start Cart.wav" by C-V (CC0): https://freesound.org/people/C-V/sounds/704945/
 - "Rocket Launch Boost and Burning (Version A)" by TheLittleCrow (CC0): https://freesound.org/people/TheLittleCrow/sounds/774245/
 - "truck driving sound" by joni_ompong (CC0): https://freesound.org/people/joni_ompong/sounds/785698/
+- "metal groans and squeaks" by sup_dude (CC0): https://freesound.org/people/sup_dude/sounds/794554/
 - "Locomotive Train Horn" by thet00nedl00n (CC0): https://freesound.org/people/thet00nedl00n/sounds/799291/
 - "Countdown for race, game start" by Pastew (CC0): https://freesound.org/people/Pastew/sounds/813525/
 - "Airport Jet Idle" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/817123/
