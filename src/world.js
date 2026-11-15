@@ -16,6 +16,8 @@ import { terrainDetailUniforms } from './terrainTex.js';
 import { CascadedShadows } from './cascades.js';
 import { REAL_LOCATIONS, realData } from './realworld.js';
 import { RealScenery } from './realBuildings.js';
+import { BAKED, preloadBake, bakeFor, withBake, landAt } from './terrainBake.js';
+import { Landcover } from './landcover.js';
 
 export const RWY = { len: 1800, width: 45 };
 // Two parallel runways (the airport is centred on the east one, which has the PAPI and the landing mission).
@@ -108,17 +110,23 @@ export class World {
     this.loc = LOCATIONS[opts.location] || LOCATIONS.alpine;
     this.q = QUALITY[opts.quality] || QUALITY.medium; this.qName = opts.quality || 'medium'; this.qBase = baseTier(this.qName);
     this.noise = makeNoise(this.loc.seed);
-    // the one height function everything uses (core bake, streamed tiles, physics fallback): location shape + erosion
+    // the one height function everything uses (core bake, streamed tiles, physics fallback): location shape + erosion,
+    // plus the offline landscape-evolution bake around the airport where there is one (src/terrainBake.js)
     const base = (x, z) => this.loc.height(this.noise, x, z);
-    this.height = this.loc.erosion === false ? base : erode(base, { seed: this.loc.seed, ...this.loc.erosion });
+    const analytic = this.loc.erosion === false ? base : erode(base, { seed: this.loc.seed, ...this.loc.erosion });
+    this.bake = bakeFor(this.loc.id);
+    this.height = withBake(analytic, this.bake);
+    if (this.height === analytic) this.bake = null;
+    this.cover = new Landcover(this);
     this.rnd = mulberry32(this.loc.seed * 7);
     this.time = opts.time ?? 10; this.weatherId = opts.weather || 'clear';
     this.waterLevel = this.loc.water;
-    this.detailU = terrainDetailUniforms(this.loc.id, this.waterLevel, this.loc.snowline);
+    this.detailU = terrainDetailUniforms(this.loc.id, this.waterLevel, this.loc.snowline, this.qName);
     // real location: satellite imagery is the ground colour, OSM drives roads, buildings and forests
     this.real = this.loc.real ? realData(this.loc) : null;
     if (this.loc.real && !this.real) throw new Error('location data not loaded');
     if (this.real) Object.assign(this.detailU, this.real.uniforms());
+    this.landUniforms(); // no bake on real places: rivers/lakes off (and compiled out of the terrain shader)
     this.size = 22000;
     this.group = new THREE.Group(); scene.add(this.group);
     this.t = 0; this.night = false;
@@ -139,7 +147,37 @@ export class World {
     this.tiles = new TerrainTiles(this); // endless land beyond the detailed core
   }
 
+  // Resolves once everything a World for this location loads asynchronously is in (the terrain bake). Never rejects.
+  static prepare(locId) { return BAKED.includes(locId) ? preloadBake(locId).catch(() => null) : Promise.resolve(null); }
+
   // ---------------- terrain ----------------
+  // The baked hydrology/land maps on the GPU: the terrain shader draws rivers, lakes and wet banks from them.
+  landUniforms() {
+    const B = this.bake, U = this.detailU;
+    if (B) {
+      const t = new THREE.DataTexture(B.land, B.nw, B.nw, THREE.RGBAFormat);
+      t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; t.anisotropy = 8; t.needsUpdate = true;
+      this.landTex = t;
+    }
+    U.landTex.value = this.landTex || null; U.landOn.value = B ? 1 : 0; U.landDry.value = B?.dry ? 1 : 0;
+    U.landOrig.value.set(B ? B.x0 - B.lcell / 2 : 0, B ? B.x0 - B.lcell / 2 : 0); U.landSpan.value = B ? B.span + B.lcell : 1;
+  }
+  // [water, drain, depo, wet] at (x,z), each 0..1 (zeros where there is no bake): rivers/lakes, drainage (log area),
+  // scree/alluvium, wetness. Vegetation and props can use it to keep out of rivers.
+  landAt(x, z, out = [0, 0, 0, 0]) { return landAt(this.bake, x, z, out); }
+  // Forest density 0..1 at (x,z): what the vegetation plants (Flora's F) and the canopy colour in the baked albedo.
+  // Cached on a 10 m lattice (vegetation asks for it at every candidate tree).
+  forestAt(x, z) {
+    if (this.real) return smoothstep(-0.02, 0.18, this.noise.fbm(x / 260 + 7, z / 260, 3)); // real places: Flora's mapped-forest mask comes first; noise outside the data, as before
+    const ix = Math.round(x / 10), iz = Math.round(z / 10), key = ix * 131072 + iz;
+    let c = this.forestCache || (this.forestCache = new Map()), v = c.get(key);
+    if (v !== undefined) return v;
+    if (c.size > 300000) c.clear();
+    const cx = ix * 10, cz = iz * 10, e = 6, h = this.sampleGrid(cx, cz), hx = this.sampleGrid(cx + e, cz), hz = this.sampleGrid(cx, cz + e);
+    const l = Math.hypot(h - hx, e, h - hz), slope = 1 - e / l;
+    v = this.cover.forest(cx, cz, h, slope, undefined, undefined, (h - hz) / l);
+    c.set(key, v); return v;
+  }
   rawHeight(x, z) {
     let h = this.height(x, z);
     // flatten airport
@@ -187,7 +225,7 @@ export class World {
   }
   // Bake high-resolution albedo (+AO) and normal maps from the analytic height function.
   bakeTerrain() {
-    const R = this.q.bake, S = this.size, half = this.half, st = S / R, W = R + 1;
+    const R = this.bakeRes(), S = this.size, half = this.half, st = S / R, W = R + 1;
     const Hh = new Float32Array(W * W);
     for (let j = 0; j <= R; j++) for (let i = 0; i <= R; i++) Hh[j * W + i] = this.rawHeight(-half + i * st, -half + j * st);
     flattenHi(this, this.net, Hh, R);
@@ -203,7 +241,7 @@ export class World {
     const bake = this.bakeMaps(Hp, R, pad, -half, -half, st, paint, maps); while (!bake.next().done);
     this.albedoTex = this.dataTex(maps.alb, W, true);
     this.normalTex = this.dataTex(maps.nor, W);
-    const SR = Math.floor(R / 2) + 1;
+    const SR = Math.floor(this.q.bake / 2) + 1; // terrain self-shadow map: re-traced when the sun moves, so it keeps the tier's base size
     this.shadowData = new Uint8Array(SR * SR * 4).fill(255);
     this.shadowTex = this.dataTex(this.shadowData, SR); this.shadowTex.generateMipmaps = false; this.shadowTex.minFilter = THREE.LinearFilter;
     this.shadowR = SR;
@@ -215,6 +253,8 @@ export class World {
     this.depthTex = new THREE.DataTexture(hd, W, W, THREE.RedFormat, THREE.HalfFloatType);
     this.depthTex.magFilter = this.depthTex.minFilter = THREE.LinearFilter; this.depthTex.needsUpdate = true;
   }
+  // Core bake resolution: ultra resolves the eroded terrain's gullies (~14 m texels; ~2 s more loading than 1024)
+  bakeRes() { return this.qName === 'ultra' && this.bake ? Math.max(this.q.bake, 1536) : this.q.bake; }
   // Padding (texels) a bake needs around its grid: the wider AO blur radius, plus one for normals.
   bakePad(st) { return Math.max(1, Math.round(10 * (this.size / this.q.bake) / st)) + 1; }
   // Albedo (+AO in alpha) and normal maps for an (R+1)^2 grid of texels at spacing st starting at (x0,z0). Hp holds the
@@ -236,9 +276,10 @@ export class World {
       for (let i = 0; i <= R; i++) {
         const k = j * W + i, p = (j + pad) * PW + i + pad, h = Hp[p], x = x0 + i * st, z = z0 + j * st;
         n.set(Hp[p - 1] - Hp[p + 1], 2 * st, Hp[p - PW] - Hp[p + PW]).normalize();
-        nor[k * 4] = (n.x * 0.5 + 0.5) * 255; nor[k * 4 + 1] = (n.y * 0.5 + 0.5) * 255; nor[k * 4 + 2] = (n.z * 0.5 + 0.5) * 255; nor[k * 4 + 3] = 255;
+        nor[k * 4] = (n.x * 0.5 + 0.5) * 255; nor[k * 4 + 1] = (n.y * 0.5 + 0.5) * 255; nor[k * 4 + 2] = (n.z * 0.5 + 0.5) * 255;
         const slope = 1 - n.y;
-        this.baseColor(x, z, h, slope, c);
+        this.baseColor(x, z, h, slope, c, n);
+        nor[k * 4 + 3] = this.cover.lastFarm * 255; // farmland: the shader draws the field parcels there
         if (paint && h > this.waterLevel + 0.5 && slope < 0.25) paint(x, z, c);
         // ambient occlusion from local concavity
         const ao = clamp(1 - Math.max(0, b1[p] - h) * 0.04 - Math.max(0, b2[p] - h) * 0.006, 0.35, 1);
@@ -297,31 +338,14 @@ export class World {
     return t;
   }
   // Ground colour rules shared by the baked core terrain and the streamed outer tiles.
-  baseColor(x, z, h, slope, c) {
-    if (this.real) return this.real.color(x, z, c);
+  baseColor(x, z, h, slope, c, nrm) {
+    if (this.real) { this.cover.lastFarm = 0; return this.real.color(x, z, c); }
     if (!this.pal) {
       const L = this.loc.colors;
       this.pal = { grass: L.grass.map((v) => new THREE.Color(v)), rock: new THREE.Color(L.rock), snow: new THREE.Color(L.snow), sand: new THREE.Color(L.sand), dirt: new THREE.Color(L.dirt),
         seabed: new THREE.Color(this.loc.id === 'islands' ? 0xd8c79a : 0x4a4636), forest: new THREE.Color(this.loc.trees === 'pine' ? 0x2a4220 : 0x355a26), tmp: new THREE.Color() };
     }
-    const { grass, rock, snow, sand, dirt, seabed, forest, tmp } = this.pal;
-    const nv = this.noise.fbm(x / 700, z / 700, 3) * 0.5 + 0.5, nd = this.noise.n2(x / 90, z / 90) * 0.5 + 0.5, nf = this.noise.fbm(x / 260 + 7, z / 260, 3);
-    c.copy(grass[0]).lerp(grass[1], nv).lerp(grass[2], nd * 0.5);
-    if (this.loc.desert) {
-      const band = Math.sin(h / 14 + this.noise.n2(x / 400, z / 400) * 1.5) * 0.5 + 0.5;
-      const band2 = Math.sin(h / 3.7 + nd * 2) * 0.5 + 0.5;
-      c.lerp(tmp.copy(rock).lerp(sand, band).multiplyScalar(0.85 + band2 * 0.25), smoothstep(0.06, 0.22, slope));
-      c.lerp(sand, smoothstep(0.3, 0, slope) * 0.3);
-    } else {
-      if (h < this.loc.snowline - 150 && h > this.waterLevel + 3) c.lerp(forest, smoothstep(0.0, 0.25, nf) * 0.55 * (1 - smoothstep(0.25, 0.4, slope)));
-      c.lerp(dirt, smoothstep(0.12, 0.25, slope) * 0.6);
-      c.lerp(rock, smoothstep(0.22, 0.42, slope + (h > 700 ? 0.12 : 0) + nd * 0.06));
-      const sl = this.loc.snowline + nd * 150 - smoothstep(0.0, 0.3, nf) * 120;
-      if (h > sl) c.lerp(snow, smoothstep(sl, sl + 120, h) * (1 - smoothstep(0.55, 0.85, slope - (h - sl) * 0.0003)));
-    }
-    if (h < this.waterLevel + 4) c.lerp(sand, 1 - smoothstep(this.waterLevel + 1, this.waterLevel + 4, h));
-    if (h < this.waterLevel - 1) c.lerp(seabed, 0.6);
-    return c;
+    return this.cover.color(x, z, h, slope, c, nrm);
   }
   // Ground height. Once the high-res bake exists (Hh: ~21-57 m, roads/towns flattened) it is the truth: the near-camera
   // detail patch is built from exactly these triangles, so physics and placed objects match what's drawn up close.
@@ -350,7 +374,7 @@ export class World {
   // grid itself (P x P cells). Its outer ring takes the coarse mesh heights so the seam is closed, and the coarse
   // mesh discards its pixels inside the patch rectangle.
   buildPatch() {
-    const P = this.qBase === 'high' ? 160 : this.qName === 'low' ? 80 : 128;
+    const P = this.qName === 'ultra' ? 256 : this.qBase === 'high' ? 192 : this.qName === 'low' ? 80 : 128;
     this.patchP = P;
     const n = P + 1, pos = new Float32Array(n * n * 3), nor = new Float32Array(n * n * 3), idx = [];
     for (let k = 0; k < n * n; k++) nor[k * 3 + 1] = 1;
@@ -387,6 +411,7 @@ export class World {
     const e = 1.5;
     const h = this.sampleGrid(x, z);
     if (h < this.waterLevel) return { h: this.waterLevel, n: new THREE.Vector3(0, 1, 0), type: 'water' };
+    if (this.bake && !this.bake.dry && this.landAt(x, z, this.gL || (this.gL = [0, 0, 0, 0]))[0] > 0.6) return { h, n: new THREE.Vector3(0, 1, 0), type: 'water' }; // rivers, lakes
     const hx = this.sampleGrid(x + e, z), hz = this.sampleGrid(x, z + e);
     const n = new THREE.Vector3(h - hx, e, h - hz).normalize();
     let type = 'grass';
@@ -448,7 +473,7 @@ export class World {
     const nt = new THREE.CanvasTexture(c); nt.wrapS = nt.wrapT = THREE.RepeatWrapping;
     const pal = this.loc.waterColors || (this.loc.id === 'islands' ? { deep: 0x05324a, shallow: 0x19b5b0, sand: 0xe9dcb0 } : this.loc.desert ? { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 } : { deep: 0x0b2a35, shallow: 0x2f6f6a, sand: 0x6b6a55 });
     // depth texels centred on the baked-grid vertices they come from
-    const mat = waterMaterial({ depthTex: this.depthTex, normal: nt, half: this.half + this.hStep / 2, size: this.size + this.hStep, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6 });
+    const mat = waterMaterial({ depthTex: this.depthTex, normal: nt, half: this.half + this.hStep / 2, size: this.size + this.hStep, level: this.waterLevel, ...pal, foam: this.loc.id === 'islands' ? 1 : 0.6, reef: this.loc.id === 'islands' ? 1 : 0 });
     const w = new THREE.Mesh(new THREE.PlaneGeometry(300000, 300000), mat); // under the whole far terrain (tiles.js / farfield.js)
     w.rotation.x = -Math.PI / 2; w.position.y = this.waterLevel;
     this.waterMat = mat;

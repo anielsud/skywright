@@ -710,6 +710,7 @@ export class Flora {
       if (fields.length && inField(x, z, 2)) continue;
       if (roadNear && W.nearRoad(x, z, 11)) continue;
       const h = W.sampleGrid(x, z); if (h < wl + 0.7) continue;
+      if (W.landAt && W.landAt(x, z, e.land || (e.land = [0, 0, 0, 0]))[0] > 0.3) continue; // not in rivers and lakes (world.js terrain bake)
       let t = u2 * tot, k = 0; while (k < G.length - 1 && (t -= dens[k]) > 0) k++;
       const gr = G[k], V = gr.vars[Math.floor(u3 * gr.vars.length)];
       if (gr.rock) {
