@@ -2,6 +2,11 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.46.0', items: [
+    'The Jungfrau Region sounds alive: fly low over the meadows and hear the cowbells of the grazing herds!',
+    'The Staubbach, Trümmelbach and Mürrenbach waterfalls roar as you fly past their cliffs.',
+    'Trains sound their horns down in the valley, with the echo bouncing off the mountains.',
+  ] },
   { v: '1.45.0', items: [
     'The mountains in Alpine Valley, Coral Islands and Red Canyon were shaped by a real erosion simulation: deep valleys, sharp ridges and rocky slopes.',
     'Rivers and lakes wind through the valleys, farmland is a patchwork of crops with hedges and tracks, and there are glaciers up high, scree under cliffs and desert washes in the canyon.',

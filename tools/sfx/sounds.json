@@ -618,5 +618,23 @@
   "start": 3.0,
   "end": 6.5,
   "loop": false
+ },
+ "amb_cowbells": {
+  "id": 184477,
+  "start": 1,
+  "end": 21,
+  "loop": true
+ },
+ "amb_waterfall": {
+  "id": 760050,
+  "start": 4,
+  "end": 14,
+  "loop": true
+ },
+ "amb_river": {
+  "id": 588179,
+  "start": 20,
+  "end": 30,
+  "loop": true
  }
 }
