@@ -1,6 +1,6 @@
 // Sounds of the living world around you: road traffic, the train (with its horn and level-crossing bells),
 // other players' planes, the airfield's circuit plane and helicopter, bird flocks, and the sounds of real places
-// (waterfalls, cowbells on the alpine pastures, train horns along the real railways).
+// (waterfalls, cowbells on the alpine pastures, train horns along the real railways) and rushing rivers.
 // Everything is positional and goes through the same "far = quieter, duller and later" chain as the engines
 // (panner distance roll-off + air-absorption low-pass + propagation delay, which also gives Doppler).
 // Cheap on purpose: a few pooled voices for the nearest sources only, ranked a few times a second; everything
@@ -28,6 +28,9 @@ const FALLS = {
   ],
 };
 const COWS = { lauterbrunnen: 1, alpine: 1 }; // places with alpine pastures
+// rivers and streams from the terrain bake (world.landAt; not the dry desert washes): ≈-31 dB weighted at the bank of a
+// big river, ≈-42 at 150 m; ≈-37 by a small stream
+const LVL_RIVER = 3.8, RIVER_RANGE = 450, RIVER_RINGS = [0, 25, 50, 90, 140, 210, 300, 420];
 const CAR_VOICES = 3, CAR_RANGE = 240, TRAIN_RANGE = 1600, PLANE_VOICES = 3, PLANE_RANGE = 3500, FLOCK_RANGE = 160;
 const HEAVY = { truck: 1, tanker: 1, bus: 1 };
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -85,6 +88,7 @@ export class WorldSound {
     this.hornT = 20 + Math.random() * 20; this.crossings = this.findCrossings(); this.crossHorn = new Map();
     this.flockT = new Map();
     this.fall = new Spot(A, this.bus, 100); this.falls = this.findFalls(); this.rails = this.railPoints(); this.railHornT = 15 + Math.random() * 25;
+    this.river = new Spot(A, this.bus, 50, 0.7); this.riverP = null; this.riverT = 1; this.riverOff = 0; this.lw = [0, 0, 0, 0]; // gentle roll-off on the river: it's a line of sound, not a point
   }
   // level crossings: rail points that sit on a road (bridges excluded), as arc lengths along the train's out-and-back path
   findCrossings() {
@@ -113,6 +117,7 @@ export class WorldSound {
     if (rank) this.updateFlocks(lp);
     this.updateAmbience(lp, dt, agl, cockpit);
     this.updatePlaces(lp, dt, agl);
+    this.updateRiver(lp, dt, agl);
   }
 
   // ---------- road traffic: the nearest few cars get a pooled tyre/engine hum ----------
@@ -349,6 +354,38 @@ export class WorldSound {
     }
   }
 
+  // ---------- rivers and streams: rushing water at the nearest bit of river (from the terrain bake's water map) ----------
+  // Searched in rings twice a second; the sound glides along the bank as the nearest point changes. Bigger rivers
+  // (more drainage) are louder and deeper; small mountain streams are quieter and brighter.
+  updateRiver(lp, dt, agl) {
+    const W = this.world; if (!W.bake || W.bake.dry || !W.landAt) return;
+    this.riverT += dt;
+    if (this.riverT > 0.5) {
+      this.riverT = 0; this.riverHit = null;
+      if (agl < RIVER_RANGE) {
+        const L = this.lw;
+        for (const r of RIVER_RINGS) {
+          const n = r ? Math.max(8, Math.round(r / 12)) : 1;
+          let best = null, bw = 0.4;
+          for (let k = 0; k < n; k++) {
+            const a = (k / n) * Math.PI * 2, x = lp.x + Math.cos(a) * r, z = lp.z + Math.sin(a) * r;
+            W.landAt(x, z, L); if (L[0] > bw) { bw = L[0]; best = [x, z, L[1]]; }
+          }
+          if (best) { this.riverHit = { p: new THREE.Vector3(best[0], W.heightAt(best[0], best[1]) + 1, best[1]), size: best[2] }; break; }
+        }
+      }
+    }
+    const hit = this.riverHit;
+    if (hit) {
+      if (!this.river.on) { this.river.start(['amb_river']); this.river.out.gain.value = 0; this.riverP = hit.p.clone(); this.riverSize = hit.size; }
+      this.riverP.lerp(hit.p, Math.min(1, dt * 2)); this.riverSize += (hit.size - this.riverSize) * Math.min(1, dt);
+      const d = this.river.place(this.riverP, lp), sz = this.riverSize;
+      this.river.rate(1.12 - 0.22 * sz);
+      this.river.level(LVL_RIVER * (0.25 + 0.75 * sz) * (1 - smooth(RIVER_RANGE * 0.6, RIVER_RANGE, d)), 0.5);
+    } else if (this.river.on) { this.river.level(0, 0.5); if (++this.riverOff > 120) { this.river.release(); this.riverOff = 0; } }
+    if (hit) this.riverOff = 0;
+  }
+
   // positional one-shot with distance roll-off, air absorption and travel delay
   shotAt(name, pos, lp, { gain = 1, ref = 20, delay = 0, rate = 1 } = {}) {
     const A = this.A, b = A.buffers[name]; if (!b) return false;
@@ -364,7 +401,7 @@ export class WorldSound {
 
   dispose() {
     if (!this.on) return; this.on = false;
-    for (const s of [...this.cars, ...this.planes, this.train, this.bell, this.fall]) s.dispose();
+    for (const s of [...this.cars, ...this.planes, this.train, this.bell, this.fall, this.river]) s.dispose();
     for (const b of Object.values(this.beds || {})) { this.A.set(b.g.gain, 0, 0.05); setTimeout(() => { try { b.src.stop(); b.g.disconnect(); } catch { /* gone */ } }, 300); }
     this.A.set(this.bus.gain, 0, 0.05); setTimeout(() => { try { this.bus.disconnect(); } catch { /* gone */ } }, 300);
   }
