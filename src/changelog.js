@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.55.0', items: [
+    'NEW PLACE: Bora Bora! Coral Islands is now the real Bora Bora in French Polynesia, from satellite photos: take off from the airport on its little islet, fly over the turquoise lagoon and coral reef, around Mount Otemanu, and past hundreds of overwater bungalows.',
+    "Taha'a, Raiatea and Maupiti are out on the horizon too.",
+  ] },
   { v: '1.54.0', items: [
     'SPACE! Fly a rocket plane up past 100 km: the sky goes black, stars come out, and you can see the round Earth with clouds below and city lights at night.',
     'Try the new Stardust rocket plane: full throttle, pull up steeply and keep going. New RCS Thrusters part lets you steer in space.',
