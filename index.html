@@ -29,11 +29,14 @@
   </header>
   <aside class="palette">
     <nav id="cats"></nav>
-    <div id="part-list"></div>
+    <div class="rail-wrap"><div id="part-list"></div><div class="rail" aria-hidden="true"><div class="thumb"></div></div></div>
   </aside>
   <aside class="inspector">
-    <section id="sel-panel" hidden></section>
-    <section id="stats"></section>
+    <div id="insp-scroll">
+      <section id="sel-panel" hidden></section>
+      <section id="stats"></section>
+    </div>
+    <div class="rail" aria-hidden="true"><div class="thumb"></div></div>
   </aside>
   <div class="bottombar">
     <button id="btn-toggle-left" class="small">☰ Parts</button>

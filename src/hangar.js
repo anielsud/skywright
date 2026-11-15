@@ -115,6 +115,15 @@ export class Hangar {
       p.quat = [q.x, q.y, q.z, q.w];
     }, undo);
   }
+  // Turn a part about the plane's own axes (0 = pitch about X, 1 = yaw about Y, 2 = roll about Z), starting from
+  // a saved quaternion so a held button can apply its running total without drift or gimbal lock.
+  rotateFrom(baseQuat, axis, deg, undo = true) {
+    this.edit((p) => {
+      const ax = new THREE.Vector3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0);
+      const q = new THREE.Quaternion().setFromAxisAngle(ax, THREE.MathUtils.degToRad(deg)).multiply(new THREE.Quaternion(...baseQuat));
+      p.quat = [q.x, q.y, q.z, q.w];
+    }, undo);
+  }
   resetRotation() { this.edit((p) => { p.quat = [0, 0, 0, 1]; }); }
   // Part sizing. axis is a sizeSliders() key (len/dia/span/chord/size). Pass undo=false for follow-up steps of one slider drag.
   resizePart(axis, v, undo = true) {
