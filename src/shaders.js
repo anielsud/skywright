@@ -107,6 +107,7 @@ export function terrainMaterial(maps, patch = false) {
     tOrig: { value: maps.orig }, tSpan: { value: maps.span }, sOrig: { value: maps.sOrig || maps.orig }, sSpan: { value: maps.sSpan || maps.span },
     shadowOn: { value: maps.shadowOn ?? 1 }, patchRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, ...maps.detailU };
   mat.userData.U = U;
+  if (real) mat.defines = { TERRAIN_NO_SAND: '' }; // keeps the terrain within 16 texture units with Ultra's extra shadow maps
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, U);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vTW;')

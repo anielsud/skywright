@@ -35,7 +35,10 @@ export const TEXTURE_FILES = [...new Set(Object.values(SETS).flatMap((s) => [s.g
 // Ground and sand are projected from above (2 scales, to break up tiling); rock is triplanar with
 // whiteout normal blending (Ben Golus), so cliffs aren't smeared.
 export const TERRAIN_DETAIL_GLSL = /* glsl */`
-  uniform sampler2D gD; uniform sampler2D gN; uniform sampler2D rD; uniform sampler2D rN; uniform sampler2D sD; uniform sampler2D sN;
+  uniform sampler2D gD; uniform sampler2D gN; uniform sampler2D rD; uniform sampler2D rN;
+  #ifndef TERRAIN_NO_SAND
+  uniform sampler2D sD; uniform sampler2D sN;
+  #endif
   uniform float tWater; uniform float tDetail; uniform float tSnow;
   // normalize that never returns NaN (degenerate skirt / silhouette pixels would otherwise poison bloom)
   vec3 snrm(vec3 v) { float l = length(v); return l > 1e-5 ? v / l : vec3(0.0, 1.0, 0.0); }
@@ -54,13 +57,15 @@ export const TERRAIN_DETAIL_GLSL = /* glsl */`
     vec2 gn = (texture2D(gN, u1).xy * 2.0 - 1.0) * 0.6 * (1.0 - far) + (texture2D(gN, u2).xy * 2.0 - 1.0) * 0.4;
     vec3 n = udn(wn, gn, 0.9);
     vec3 c = g;
-    // beach
+    // beach (real-world locations skip it: the imagery shows beaches, and the texture slots are needed for Ultra's shadow cascades)
+    #ifndef TERRAIN_NO_SAND
     float sand = 1.0 - smoothstep(tWater + 1.5, tWater + 4.5, p.y);
     if (sand > 0.0) {
       vec3 sa = texture2D(sD, p.xz / 18.0).rgb / avgOf(sD);
       vec2 sn = texture2D(sN, p.xz / 18.0).xy * 2.0 - 1.0;
       c = mix(c, sa, sand); n = snrm(mix(n, udn(wn, sn, 0.7), sand));
     }
+    #endif
     // rock on steep ground, triplanar
     float rock = smoothstep(0.18, 0.4, 1.0 - wn.y);
     if (rock > 0.0) {
