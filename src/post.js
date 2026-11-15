@@ -60,6 +60,7 @@ export class Post {
     this.composer.addPass(this.renderPass); this.composer.addPass(this.bloom); this.composer.addPass(this.output); this.composer.addPass(this.grade);
     this.enabled = true;
   }
+  setSamples(n) { for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) { if (rt.samples !== n) { rt.samples = n; rt.dispose(); } } }
   setSize(w, h, pr) { this.composer.setPixelRatio(pr); this.composer.setSize(w, h); }
   render(scene, camera, dt = 0.016) {
     if (!this.enabled) { this.renderer.render(scene, camera); return; }

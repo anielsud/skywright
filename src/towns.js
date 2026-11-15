@@ -133,7 +133,7 @@ export class Towns {
       const mk = (geos, mat, colorKey) => {
         if (!geos.length) return;
         const g = mergeGeometries(geos.map((x) => (x.index ? x.toNonIndexed() : x)).map((x) => { if (!x.attributes.color) vc(x, 0xffffff); return x; }));
-        const im = new THREE.InstancedMesh(g, mat, v.list.length); im.castShadow = W.q.shadows; im.receiveShadow = true;
+        const im = new THREE.InstancedMesh(g, mat, v.list.length); im.castShadow = W.qName === 'high'; im.receiveShadow = true;
         v.list.forEach((it, i) => { q.setFromAxisAngle(up, it.yaw); m4.compose(new THREE.Vector3(it.x, it.y - 0.3, it.z), q, one); im.setMatrixAt(i, m4); im.setColorAt(i, col.set(it[colorKey])); });
         this.group.add(im);
       };

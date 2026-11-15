@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { mulberry32, smoothstep, lerp, clamp } from './noise.js';
 import { glowTexture as glow } from './materials.js';
+import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 
 const RWY_HALF = 900;
 
@@ -236,7 +237,7 @@ export function buildRoadMeshes(w, net) {
   const verge = new THREE.MeshStandardMaterial({ color: 0x4a4538, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
   const concrete = new THREE.MeshStandardMaterial({ color: 0x9a978f, roughness: 0.8 });
   const steel = new THREE.MeshStandardMaterial({ color: 0x8b9097, metalness: 0.9, roughness: 0.35 });
-  const bridgeGeos = [], railGeos = [];
+  const bridgeGeos = [], railGeos = [], pending = new Map(); // ribbons are merged per material at the end (fewer draw calls)
   const ribbon = (rd, width, yOff, material, vScale, kind) => {
     const P = rd.pts, n = P.length, closed = !!rd.closed, pos = [], uv = [], idx = [];
     let dist = 0;
@@ -260,7 +261,7 @@ export function buildRoadMeshes(w, net) {
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
-    const m = new THREE.Mesh(g, material); m.receiveShadow = true; group.add(m);
+    if (!pending.has(material)) pending.set(material, []); pending.get(material).push(g);
   };
   for (const rd of net.roads) { ribbon(rd, rd.width + 3, 0.12, verge, 10); ribbon(rd, rd.width, 0.25, mat(rd.kind), 14, rd.kind); }
   if (net.rail) {
@@ -285,6 +286,7 @@ export function buildRoadMeshes(w, net) {
   const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3));
   const lampMat = new THREE.PointsMaterial({ size: 3, color: new THREE.Color(3.2, 2.2, 1.1), map: glow(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0 });
   group.add(new THREE.Points(lg, lampMat)); group.userData.lampMat = lampMat;
+  for (const [material, geos] of pending) { const m = new THREE.Mesh(mergeGeometries(geos), material); m.receiveShadow = true; group.add(m); }
   if (bridgeGeos.length) { const m = new THREE.Mesh(mergeAll(bridgeGeos), concrete); m.castShadow = m.receiveShadow = true; group.add(m); }
   if (railGeos.length) group.add(new THREE.Mesh(mergeAll(railGeos), steel));
   return group;
