@@ -15,7 +15,7 @@ import { SAMPLE_ENGINES, SAMPLE_LEVEL, RPM_RANGE } from './audio.js';
 const LVL = { car: 1.5, truck: 2, train: 5, horn: 3.6, bell: 1.1, flock: 1.4, call: 1.1, plane: 1.4 };
 // Ambience beds (weighted dBFS at full amount, measured over 7 s): airport ≈-40 (under an idling engine), town ≈-39 (bells to ≈-31),
 // high wind ≈-38 (gusts to ≈-33), storm wind ≈-34, canopy rain in a storm ≈-35 (on top of the existing rain bed). Nature beds sit at -41..-34.
-const AMB = { airport: 0.7, town: 0.7, high: 1, storm: 1, canopy: 0.55, cows: 1.3 };
+const AMB = { airport: 0.7, town: 0.7, high: 1, storm: 1, canopy: 0.55, cows: 1.3, city: 1.4 };
 // Real-place sounds (weighted dBFS, sliders at 100%): a waterfall ≈-30 at its foot, ≈-40 at 300 m; cowbells ≈-37 over open
 // meadow (bells to ≈-28); a train horn down the valley ≈-38 peak at 500 m, plus a quieter echo off the cliffs.
 const LVL_FALL = 3, LVL_VHORN = 2 * LVL.horn, FALL_RANGE = 1800, RAIL_RANGE = 2200;
@@ -28,6 +28,9 @@ const FALLS = {
   ],
 };
 const COWS = { lauterbrunnen: 1, alpine: 1 }; // places with alpine pastures
+// big cities: a dense-traffic roar over the streets instead of the village hum (≈-34 dB weighted low over Midtown, ≈-38
+// at 1 km up) and a far-off siren every 30–75 s (≈-37 peak, 400–1100 m away)
+const CITY = { nyc: 1 }, LVL_SIREN = 3.5;
 // rivers and streams from the terrain bake (world.landAt; not the dry desert washes): ≈-31 dB weighted at the bank of a
 // big river, ≈-42 at 150 m; ≈-37 by a small stream
 const REAL_RIVER = 0.8; // mapped real rivers carry no size: treat them as big ones
@@ -256,7 +259,8 @@ export class WorldSound {
     const night = W.night ? 0.6 : 1, storm = W.W?.storm ? Math.min(1, (W.W.wind || 15) / 15) : 0;
     const rain = W.rain?.visible ? W.W.rain : 0;
     this.ambBed('amb_airport', this.bus, w.airport * night * AMB.airport);
-    this.ambBed('amb_town', this.bus, w.town * night * AMB.town);
+    this.ambBed('amb_town', this.bus, CITY[W.loc.id] ? 0 : w.town * night * AMB.town);
+    this.ambBed('amb_city', this.bus, w.city * (W.night ? 0.7 : 1) * AMB.city);
     this.ambBed('wind_high', this.bus, w.high * (0.45 + 0.75 * this.gust) * AMB.high * (1 - 0.5 * storm), 0.8 + 0.25 * this.gust);
     this.ambBed('wind_storm', this.bus, storm * AMB.storm * (0.7 + 0.5 * this.gust));
     this.ambBed('amb_cowbells', this.bus, w.cows * (W.night ? 0.25 : 1) * (1 - 0.8 * storm) * AMB.cows);
@@ -295,7 +299,15 @@ export class WorldSound {
       }
       cows = (open / 5) * (1 - smooth(30, 300, agl)) * (1 - town) * (1 - airport);
     }
-    return { airport, town, high, cows };
+    // a city: how much of the ground around (wider the higher you are) is covered in buildings (the 50 m collision grid)
+    let city = 0;
+    const G = CITY[W.loc.id] && (W.towns?.city?.grid || W.towns?.grid);
+    if (G && agl < 1500) {
+      const r = 120 + agl * 0.6; let hit = 0;
+      for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if (G.get(Math.floor((lp.x + a * r) / 50) + ',' + Math.floor((lp.z + b * r) / 50))?.length) hit++;
+      city = smooth(1, 6, hit) * (1 - smooth(200, 1500, agl) * 0.75);
+    }
+    return { airport, town, high, cows, city };
   }
   // a looping bed that only exists while it's audible: created on fade-in, stopped a few seconds after fading out
   ambBed(name, dest, v, rate) {
@@ -339,6 +351,15 @@ export class WorldSound {
       this.fall.place(best.p, lp);
       this.fall.level(LVL_FALL * (1 - smooth(FALL_RANGE * 0.6, FALL_RANGE, bd)), 0.4);
     } else if (this.fall.on) this.fall.release();
+    // a siren somewhere across the city
+    if (this.where?.city > 0.3) {
+      this.sirenT = (this.sirenT ?? 10 + Math.random() * 15) - dt;
+      if (this.sirenT < 0) {
+        this.sirenT = 30 + Math.random() * 45;
+        const a = Math.random() * Math.PI * 2, d = 400 + Math.random() * 700, x = lp.x + Math.cos(a) * d, z = lp.z + Math.sin(a) * d;
+        this.shotAt(`siren_${1 + (Math.random() < 0.5)}`, new THREE.Vector3(x, Math.max(this.world.heightAt(x, z), this.world.waterLevel) + 3, z), lp, { gain: LVL_SIREN, ref: 120, rate: 0.95 + Math.random() * 0.1 });
+      }
+    }
     // a train somewhere down the valley sounds its horn now and then (with the echo off the cliffs)
     const R = this.rails; if (!R.length) return;
     this.railHornT -= dt; if (this.railHornT > 0) return;

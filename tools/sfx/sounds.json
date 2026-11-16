@@ -678,5 +678,23 @@
   "start": 7.5,
   "end": 12.3,
   "loop": false
+ },
+ "amb_city": {
+  "id": 451080,
+  "start": 35,
+  "end": 55,
+  "loop": true
+ },
+ "siren_1": {
+  "id": 572365,
+  "start": 3.5,
+  "end": 16,
+  "loop": false
+ },
+ "siren_2": {
+  "id": 574394,
+  "start": 1,
+  "end": 13,
+  "loop": false
  }
 }
