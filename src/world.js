@@ -17,6 +17,7 @@ import { CascadedShadows, NEAR_SHADOW } from './cascades.js';
 import { REAL_LOCATIONS, realData } from './realworld.js';
 import { SpaceView } from './space.js';
 import { RealScenery } from './realBuildings.js';
+import { Destruction } from './destruction.js';
 import { BAKED, preloadBake, bakeFor, withBake, landAt } from './terrainBake.js';
 import { Landcover } from './landcover.js';
 import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
@@ -109,6 +110,7 @@ export class World {
     this.flora = new Flora(this);
     if (this.real) this.net.towns = this.real.towns(this);
     this.towns = this.real ? new RealScenery(this) : new Towns(this);
+    this.destruct = new Destruction(this); // buildings you can knock down
     this.buildClouds();
     this.buildPrecip();
     this.setWeather(this.weatherId);

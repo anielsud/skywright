@@ -10,7 +10,7 @@
 // brick walk-ups and brownstones, clapboard houses with pitched roofs, warehouses; water towers and plant rooms on
 // the roofs. Collisions: an oriented box per building.
 import * as THREE from 'three';
-import { buildingMaterial, C, BLD_U } from './buildings.js';
+import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, BLD_U } from './buildings.js';
 import { toLocal } from './realworld.js';
 
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
@@ -110,17 +110,19 @@ export class MeshW {
     g.setAttribute('uv', new THREE.Float16BufferAttribute(this.uv.slice(0, n * 2), 2));
     g.setAttribute('color', new THREE.BufferAttribute(this.col.slice(0, n * 3), 3, true));
     g.setAttribute('atl', new THREE.BufferAttribute(this.atl.slice(0, n * 4), 4, false));
+    g.setAttribute('dmg', dmgAttr(n, this.dmgW)); // (destruction.js)
     const I = this.idx.subarray(0, this.ni);
     g.setIndex(new THREE.BufferAttribute(n > 65535 ? I.slice() : Uint16Array.from(I), 1));
     g.computeBoundingSphere();
     this.pos = this.nor = this.uv = this.col = this.atl = null; this.idx = null;
+    this.geo = g; // (destruction.js finds a building's vertices through the writer that wrote them)
     return g;
   }
   mesh(mat) {
     const g = this.geometry();
     // static: once on the GPU the JS copies only cost memory (collisions use their own boxes)
     for (const a of [...Object.values(g.attributes), g.index]) a.onUpload(function () { this.array = new this.array.constructor(0); });
-    const m = new THREE.Mesh(g, mat);
+    const m = new THREE.Mesh(g, mat); m.customDepthMaterial = buildingDepthMaterial();
     m.position.set(this.cx, 0, this.cz); m.scale.setScalar(1 / PQ); m.matrixAutoUpdate = false; m.updateMatrix();
     return m;
   }
@@ -305,7 +307,7 @@ export class CityScenery {
       rise = R.rh > 0 ? R.rh : roof === 'pyramid' ? Math.min(H * 0.6, rad * 1.6) : roof === 'dome' ? Math.min(H * 0.5, rad) : Math.min(box.hw * 0.75, 5);
       rise = Math.min(rise, H - 1);
     }
-    const eave = yTop - rise;
+    const eave = yTop - rise, n0 = M.n; let wt = false;
     M.seed = (hseed * 255) | 0; M.yg = yFloor; M.color(st.col);
     // ---- walls: an optional ground floor band (shops / lobby), then the floors
     const gTop = this.detail && st.ground != null && eave - yFloor > 8 ? yFloor + 4.2 : null;
@@ -336,7 +338,7 @@ export class CityScenery {
             M.color(st.glass ? 0x9aa0a6 : pick(PAL.concrete, h3));
             M.box(b.cx, b.cz, b.ux, b.uz, b.hl * 0.45, b.hw * 0.5, eave, eave + 4 + h3 * 3, st.glass ? C.METAL : C.CONCRETE);
           }
-          if (!st.glass && top > 14 && top < 90 && hash(R.o, 19) < (st.prewar || st.cornice ? 0.45 : 0.15)) this.waterTower(M, b, eave, hash(R.o, 23));
+          if (!st.glass && top > 14 && top < 90 && hash(R.o, 19) < (st.prewar || st.cornice ? 0.45 : 0.15)) { this.waterTower(M, b, eave, hash(R.o, 23)); wt = true; }
         }
       }
     } else if (roof === 'gable' || roof === 'hip') {
@@ -366,7 +368,11 @@ export class CityScenery {
       this.addBox({ cx: m.x, cz: m.z, ux: 1, uz: 0, hl: 2, hw: 2 }, yTop, gm + m.top, null);
     }
     const b = box || obb(P);
-    if (b) this.addBox({ cx: b.cx, cz: b.cz, ux: b.ux, uz: b.uz, hl: b.hl * (A / b.ar > 0.7 ? 1 : 0.85), hw: b.hw * (A / b.ar > 0.7 ? 1 : 0.85) }, part && R.mh > 0.5 ? yBase : R.g0 - 1, yTop, this.curTile);
+    if (!b) return;
+    const t = this.addBox({ cx: b.cx, cz: b.cz, ux: b.ux, uz: b.uz, hl: b.hl * (A / b.ar > 0.7 ? 1 : 0.85), hw: b.hw * (A / b.ar > 0.7 ? 1 : 0.85) }, part && R.mh > 0.5 ? yBase : R.g0 - 1, yTop, this.curTile);
+    // destructible (destruction.js): its vertices, what it's made of; damage done earlier this flight comes back with it
+    t.dk = 'c' + R.o; t.rng = [[M, n0, M.n - n0]]; t.look = { cell: st.cell, col: st.col, rcol: 0x5c5a56, glass: !!st.glass }; if (wt) t.type = 'waterTower';
+    W.destruct?.restore(t);
   }
   pitched(M, b, y, rise, roof, cell, col, gcell, gcol, yaw) {
     const { cx, cz, ux, uz, hl, hw } = b, nx = -uz, nz = ux, o = 0.4, ex = hw + o, el = hl + o, ye = y - o * rise / hw, yr = y + rise;
@@ -402,6 +408,7 @@ export class CityScenery {
     const r = t[4], k0 = Math.floor((b.cx - r) / 50), k1 = Math.floor((b.cx + r) / 50), j0 = Math.floor((b.cz - r) / 50), j1 = Math.floor((b.cz + r) / 50);
     for (let i = k0; i <= k1; i++) for (let j = j0; j <= j1; j++) { const k = i + ',' + j; let a = this.grid.get(k); if (!a) this.grid.set(k, (a = [])); a.push(t); }
     if (tileKey) { const T = this.tiles.get(tileKey); (T.keys || (T.keys = new Set())); for (let i = k0; i <= k1; i++) for (let j = j0; j <= j1; j++) T.keys.add(i + ',' + j); }
+    return t;
   }
   hit(p) {
     const arr = this.grid.get(Math.floor(p.x / 50) + ',' + Math.floor(p.z / 50)); if (!arr) return null;

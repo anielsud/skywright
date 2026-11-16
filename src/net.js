@@ -14,6 +14,7 @@
 //   host -> client  {type:'welcome', you, host, slot, cfg, players:[{id,name,design,realism,slot,broken}]}
 //   host -> all     {type:'join', player} / {type:'left', id} / {type:'full'}
 //   any             ['s', id, t, ...] (state, ~15 Hz, see remote.js), {type:'event', id, kind:'break', i},
+//                   {type:'event', id, kind:'bldg', p, E, d, s} (a building hit: point, energy J, direction, speed),
 //                   {type:'respawn', id}, {type:'ping'}, {type:'bye'}
 import { encodeDesign, decodeDesign } from './design.js';
 import { RemotePlane, SnapBuffer, packState, unpackState, PLAYER_COLORS } from './remote.js';
@@ -246,6 +247,7 @@ export class Net {
     };
   }
 
+  building(m) { if (this.role && this.F) this.send({ type: 'event', id: this.myId, kind: 'bldg', p: m.p, E: m.E, d: m.d, s: m.s }); }
   send(m) { if (this.role === 'client') { if (this.conn?.open) this.conn.send(m); } else if (this.role === 'host') this.broadcast(m); }
   broadcast(m, exceptId) { for (const p of this.players.values()) if (p.id !== exceptId && p.conn?.open) p.conn.send(m); }
 
@@ -263,6 +265,7 @@ export class Net {
     const id = from ? from.id : m.id, pl = this.players.get(id);
     switch (m.type) {
       case 'event':
+        if (m.kind === 'bldg') this.F?.world.destruct?.remote(m); // a building someone flew into (destruction.js)
         if (pl && m.kind === 'break' && Number.isInteger(m.i)) {
           if (!pl.broken.includes(m.i)) pl.broken.push(m.i);
           if (pl.remote) { pl.remote.ac.breakPart(m.i, 'impact'); this.remoteEvents(pl); }
