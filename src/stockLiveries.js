@@ -13,15 +13,24 @@ const bolt = (w, h, fill = '#f2b705', edge = '#111') => ART.custom(w, h, (g) => 
   g.beginPath(); P.forEach(([x, y], i) => (i ? g.lineTo(x * w, y * h) : g.moveTo(x * w, y * h))); g.closePath();
   g.lineJoin = 'round'; g.lineWidth = h * 0.06; g.strokeStyle = edge; g.stroke(); g.fillStyle = fill; g.fill();
 });
-// scattered stars (seeded, so every build looks the same)
+// A star field (seeded, so every build looks the same) that reads as sparkle, not dirt: a few big four-point twinkles
+// with long thin rays, some five-point stars, a sprinkling of pin-prick dots, each with a soft glow round it. n is the
+// number of stars and twinkles; sizes vary over 1:4. Use it with a decal layer's glow so they shine.
 const starField = (w, h, n, cols) => ART.custom(w, h, (g) => {
-  let s = 7; const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
-  for (let i = 0; i < n; i++) {
-    const x = rnd() * w, y = rnd() * h, r = (0.3 + rnd() * 0.7) * h * 0.07, c = cols[i % cols.length];
-    g.fillStyle = c; g.beginPath();
-    for (let k = 0; k < 10; k++) { const a = -Math.PI / 2 + (k * Math.PI) / 5, rr = k % 2 ? r * 0.42 : r; g.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); }
-    g.closePath(); g.fill();
+  let s = 7; const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647), pts = [];
+  const free = (x, y, r) => pts.every(([px, py, pr]) => Math.hypot(px - x, py - y) > (pr + r) * 1.3); // keep them apart: sparse, not clumped
+  const glow = (x, y, r, c) => { const gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, c + '88'); gr.addColorStop(0.25, c + '30'); gr.addColorStop(1, c + '00'); g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); };
+  const star = (x, y, r, pointsN, inner) => { g.beginPath(); for (let k = 0; k < pointsN * 2; k++) { const a = -Math.PI / 2 + (k * Math.PI) / pointsN, rr = k % 2 ? r * inner : r; g.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); } g.closePath(); g.fill(); };
+  for (let i = 0, tries = 0; i < n && tries < n * 40; tries++) {
+    const big = i < Math.max(2, Math.round(n * 0.18)), r = (big ? 0.12 + rnd() * 0.05 : 0.03 + rnd() * 0.035) * h, x = r + rnd() * (w - 2 * r), y = r + rnd() * (h - 2 * r);
+    if (!free(x, y, r)) continue;
+    pts.push([x, y, r]); const c = cols[i % cols.length]; i++;
+    glow(x, y, r * (big ? 0.75 : 1.0), c);
+    g.fillStyle = c;
+    if (big) { star(x, y, r, 4, 0.16); g.fillStyle = '#ffffff'; star(x, y, r * 0.45, 4, 0.3); } // a twinkle: long rays and a white-hot centre
+    else { star(x, y, r * 0.75, 5, 0.45); g.fillStyle = '#ffffff'; g.beginPath(); g.arc(x, y, r * 0.16, 0, 7); g.fill(); }
   }
+  for (let i = 0; i < n * 1.5; i++) { const x = rnd() * w, y = rnd() * h, r = (0.005 + rnd() * 0.006) * h; if (!free(x, y, r * 2)) continue; glow(x, y, r * 3, cols[i % cols.length]); g.fillStyle = '#ffffff'; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); }
 });
 // googly eyes and a big grin (nose to the left)
 const face = ART.custom(640, 420, (g, w, h) => {
@@ -172,7 +181,7 @@ L('firecracker', {
   layers: [
     { type: 'flames', on: ['fus_fighter', 'ck_fighter'], color: 0x7a0a05, z0: -6.5, len: 6.4, yc: -0.08, h: 0.8, n: 5, seed: 11 },
     { type: 'band', on: ['e_rocket'], color: 0xc8102e, dir: [0, 0.8, 0.6], period: 0.7, lo: 0, hi: 0.33 },
-    { type: 'decal', on: ['w_delta'], art: 'stars', proj: 'top', at: [2.9, 5.6], size: [3.2, 3.2], absx: true },
+    { type: 'decal', on: ['w_delta'], art: 'stars', proj: 'top', at: [2.9, 5.6], size: [3.2, 3.2], absx: true, glow: 0.5 },
     { type: 'band', on: ['w_delta'], color: 0xf2b705, dir: [1, 0, 0], absx: true, lo: 4.6 },
     { type: 'decal', on: ['t_jet_vfin'], art: 'title', at: [4.45, 1.75], size: [2.7, 0.42], text: true },
   ],
@@ -221,12 +230,13 @@ L('buggy', {
 // Stardust: X-15-style black rocket plane, satin finish, white titles and a scatter of stars
 L('stardust', {
   name: 'Black Rocket',
-  art: { title: ART.text('STARDUST', 900, 150, { fill: '#f4f4f0' }), x: ART.text('X-8', 300, 150, { fill: '#f4f4f0' }), stars: starField(512, 512, 30, ['#f4f4f0', '#cfd8ff']) },
-  finish: [{ on: 'all', kind: 'satin' }],
+  art: { title: ART.text('STARDUST', 900, 150, { fill: '#f4f4f0' }), x: ART.text('X-8', 300, 150, { fill: '#f4f4f0' }), stars: starField(512, 512, 16, ['#ffffff', '#cfdcff', '#fff1c4']) },
+  finish: [{ on: 'all', kind: 'deep' }],
   layers: [
+    { type: 'band', on: 'all', color: 0x06070c }, // deep space black-blue under everything: the stars show up against it
     { type: 'decal', on: ['fus_fighter'], art: 'title', at: [0.4, -0.15], size: [3.0, 0.42], text: true, box: box([0.6], []) },
     { type: 'decal', on: ['t_jet_vfin'], art: 'x', at: [4.45, 1.8], size: [1.2, 0.6], text: true },
-    { type: 'decal', on: ['w_swept'], art: 'stars', proj: 'top', at: [3.3, 2.6], size: [3.6, 3.6], absx: true },
+    { type: 'decal', on: ['w_swept'], art: 'stars', proj: 'top', at: [3.3, 2.6], size: [3.6, 3.6], absx: true, glow: 0.6 },
     { type: 'band', on: ['fus_fighter', 'ck_fighter'], color: 0x8a9099, dir: [0, 0, 1], lo: -6.6, hi: -6.0 },
   ],
 });

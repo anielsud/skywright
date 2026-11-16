@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.80.0', items: [
+    'The Rocket now stands tall on its own launch pad with a service tower! Glass noses, motors, lights, tail wheels and helicopter noses all got real details, monster tyres have chunky tread, and Stardust sparkles with real stars.',
+  ] },
   { v: '1.79.0', items: [
     'Engines look like real engines now: radial planes have open cowls with finned cylinders, jets have deep intakes with a spinning core, and rockets have proper bell nozzles. Airliners got real cockpit windows, and Chomper is now a tough pickup truck!',
   ] },

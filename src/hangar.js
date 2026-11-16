@@ -5,7 +5,9 @@ import { RoomEnvironment } from '../vendor/addons/RoomEnvironment.js';
 import { PARTS, CATEGORIES, PAINTS, partInfo } from './parts.js';
 import { analyze, partMatrix, partScale, sizeAxes, mirroredOf, newPart, subtree, removeParts, cloneDesign } from './design.js';
 import { assemble, ControlPreview } from './planeDetail.js';
-import { HangarEnv } from './hangarEnv.js';
+import { HangarEnv, HW, HD, EAVE } from './hangarEnv.js';
+import { M } from './materials.js';
+import { Bag, bar } from './partDetail.js';
 
 // the hour the flight settings will fly at: the hangar's daylight follows it
 const flightHour = () => { try { const t = JSON.parse(localStorage.getItem('skywright.flight'))?.time; return Number.isFinite(t) ? t : 10; } catch { return 10; } };
@@ -19,7 +21,9 @@ export class Hangar {
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 2000);
     this.camera.position.set(14, 7, 16);
     this.controls = new OrbitControls(this.camera, renderer.domElement);
-    this.controls.enableDamping = true; this.controls.maxPolarAngle = Math.PI * 0.97; // can swing under the plane: the floor is one-sided, so it vanishes from below this.controls.minDistance = 3; this.controls.maxDistance = 150;
+    this.controls.enableDamping = true; this.controls.maxPolarAngle = Math.PI * 0.97; // can swing under the plane: the floor is one-sided, so it vanishes from below
+    this.controls.minDistance = 3; this.controls.maxDistance = 150; // (fitted to the vehicle on every rebuild: fitOrbit)
+    this.sphere = new THREE.Sphere(new THREE.Vector3(0, 1.5, 0), 4);
     this.controls.enabled = false;
     this.symmetry = true; this.showBalance = true;
     this.design = { name: 'My Vehicle', parts: [] };
@@ -171,7 +175,7 @@ export class Hangar {
     const id = this.placing, d = PARTS[id], info = partInfo(id);
     if (!hit) return newPart(id, [0, 0, 0]);
     const p = this.designGroup.worldToLocal(hit.point.clone());
-    const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
+    const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).transformDirection(this.designGroup.matrixWorld.clone().invert()); // in design space (an upright rocket stands turned)
     const att = d.attach;
     let pos, mirror = false, rot = null;
     if (att === 'wing') {
@@ -224,21 +228,28 @@ export class Hangar {
     this.designGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.designGroup.clear();
     const t0 = performance.now(), objs = buildDesign(this.design, this.designGroup, { quick, near: !quick }).parts; this.rebuildMs = performance.now() - t0; this.rebuildQuick = quick;
-    // rest on the floor: lowest point at y=0 (gear touching)
-    this.designGroup.position.set(0, 0, 0); this.designGroup.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(this.designGroup);
-    this.designGroup.position.y = box.isEmpty() ? 2 : -box.min.y + 0.02;
+    // rest on the floor: lowest point at y=0 (gear touching); a vertical launcher stands on its tail on a launch stand
+    this.stats = analyze(this.design);
+    if (this.stand) { this.scene.remove(this.stand); this.stand.traverse((o) => o.geometry?.dispose()); this.stand = null; }
+    const up = uprightStage(this.design, this.designGroup, this.stats);
+    if (up) { this.designGroup.position.y = up.y; this.stand = up.stand; this.scene.add(this.stand); }
+    else {
+      const box = new THREE.Box3().setFromObject(this.designGroup);
+      this.designGroup.position.y = box.isEmpty() ? 2 : -box.min.y + 0.02;
+    }
     this.designGroup.updateMatrixWorld(true);
     this.shadowsDirty(); // shadows are only redrawn when something changed
-    this.env.setPlaneFootprint(new THREE.Box3().setFromObject(this.designGroup));
-    this.stats = analyze(this.design);
+    const vbox = new THREE.Box3().setFromObject(this.designGroup); if (this.stand) vbox.expandByObject(this.stand);
+    this.env.setPlaneFootprint(vbox);
+    this.fitOrbit(vbox);
     this.preview.attach(this.design, objs, this.stats.com);
     // markers
     const show = this.showBalance && this.design.parts.length > 0;
     this.markers.visible = show;
     if (show) {
-      this.comM.position.copy(this.stats.com).add(this.designGroup.position);
-      this.colM.position.copy(this.stats.col).add(this.designGroup.position); this.colM.visible = this.stats.wingArea > 0.5;
+      this.comM.position.copy(this.stats.com).applyMatrix4(this.designGroup.matrixWorld);
+      this.colM.position.copy(this.stats.col).applyMatrix4(this.designGroup.matrixWorld); this.colM.visible = this.stats.wingArea > 0.5;
+      this.thrustArrow.setDirection(new THREE.Vector3(0, 0, -1).transformDirection(this.designGroup.matrixWorld));
       this.thrustArrow.visible = this.stats.thrust > 0;
       this.thrustArrow.position.copy(this.comM.position);
       this.thrustArrow.setLength(1.5 + Math.min(6, this.stats.tw * 4), 0.6, 0.35);
@@ -251,14 +262,44 @@ export class Hangar {
     const o = this.designGroup.children.find((c) => c.userData.partIndex === this.sel);
     if (o) { this.selBox.setFromObject(o); this.selBox.visible = true; } else this.selBox.visible = false;
   }
+  // The orbit fits the vehicle's bounding sphere: the camera can't be zoomed in through big planes (it stops a little
+  // way inside the sphere, about where the skin is), can't be zoomed out past where the whole vehicle is a small thing
+  // in the middle, and the near plane follows the camera's distance to the sphere (close to it: fine detail without
+  // clipping; far from it: better depth precision).
+  fitOrbit(box) {
+    if (box.isEmpty()) return;
+    box.getBoundingSphere(this.sphere);
+    const R = this.sphere.radius, c = this.controls;
+    c.minDistance = Math.max(1.2, R * 0.55); c.maxDistance = Math.max(30, this.fitDistance() * 2.5);
+    this.updateNear(true);
+  }
+  fitDistance() { // camera distance at which the bounding sphere just fills the narrower field of view
+    const cam = this.camera, v = THREE.MathUtils.degToRad(cam.fov), h = 2 * Math.atan(Math.tan(v / 2) * cam.aspect);
+    return this.sphere.radius / Math.sin(Math.min(v, h) / 2) * 1.04;
+  }
+  updateNear(force = false) {
+    const cam = this.camera, d = cam.position.distanceTo(this.sphere.center), R = this.sphere.radius;
+    const near = THREE.MathUtils.clamp((d - R) * 0.35, 0.05, 1.5);
+    if (force || Math.abs(near - cam.near) > cam.near * 0.08) { cam.near = near; cam.updateProjectionMatrix(); return true; }
+    return false;
+  }
   frame() {
-    const box = new THREE.Box3().setFromObject(this.designGroup);
+    const box = new THREE.Box3().setFromObject(this.designGroup); if (this.stand) box.expandByObject(this.stand);
     if (box.isEmpty()) { this.controls.target.set(0, 1.5, 0); return; }
-    const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()).length();
-    this.controls.target.copy(c);
-    const dir = new THREE.Vector3(0.75, 0.45, 0.85).normalize();
-    this.camera.position.copy(c).addScaledVector(dir, Math.max(8, s * 1.1));
-    this.controls.update();
+    this.fitOrbit(box);
+    this.controls.target.copy(this.sphere.center);
+    // the usual 3/4 view from above; a vehicle too big to fit from there inside the hangar is framed from lower down,
+    // so the camera isn't pushed up into the roof trusses and lamps by the walls
+    // (the box's sphere is generous, so 85 % of its fit distance still shows the whole vehicle)
+    const want = Math.max(8, this.fitDistance() * 0.85), c = this.sphere.center, room = (d) => { // how far the camera can go along d
+      let t = Infinity; const lim = [HW - 3, EAVE - 3, HD - 3];
+      for (let k = 0; k < 3; k++) { const o = c.getComponent(k), v = d.getComponent(k); if (Math.abs(v) < 1e-6) continue; t = Math.min(t, ((v > 0 ? lim[k] : k === 1 ? 0.5 : -lim[k]) - o) / v); }
+      const q = c.clone().addScaledVector(d, Math.min(t, want)); if (q.x > 15 && q.z > 24) t = Math.min(t, 0); // not in the office block
+      return t; };
+    let dir = null, best = -1;
+    search: for (const sx of [0.75, -0.75]) for (const e of [0.45, 0.32, 0.22, 0.14]) { const d = new THREE.Vector3(sx, e, 0.85).normalize(), t = room(d); if (t >= want) { dir = d; break search; } if (t > best) { best = t; dir = d; } }
+    this.camera.position.copy(c).addScaledVector(dir, Math.min(want, Math.max(room(dir), 1)));
+    this.controls.update(); this.updateNear(true);
   }
 
   // ---------- pointer ----------
@@ -302,6 +343,7 @@ export class Hangar {
     if (this.controls.update()) this.needsRender = true;
     if (this.preview.update(dt)) this.needsRender = true;
     if (this.env.clampCamera(this.camera, this.controls.target)) this.needsRender = true; // walls, office block
+    if (this.updateNear()) this.needsRender = true;
     if (this.envDirty && !this.env.loading && this.env.tier) this.bakeEnv();
     if (this.env.animating) { this.env.update(dt); this.needsRender = true; } // Ultra: dust in the sunbeams
     if (this.selBox.visible) this.updateSelection();
@@ -309,7 +351,7 @@ export class Hangar {
     const r = this.needsRender; this.needsRender = false; return r;
   }
   setQuality(tier) { this.env.setTier(tier); this.envDirty = true; this.needsRender = true; }
-  resize(w, h) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); this.needsRender = true; }
+  resize(w, h) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); this.controls.maxDistance = Math.max(30, this.fitDistance() * 2.5); this.needsRender = true; }
   render() { this.renderer.render(this.scene, this.camera); }
 }
 
@@ -325,6 +367,66 @@ export function buildDesign(design, root, { quick = false, near = true } = {}) {
     root.add(o);
   });
   return assemble(design, objs, root, { quick, near });
+}
+
+// A vertical launcher (a rocket with no main wing: analyze().vertical) is shown standing on its tail, the way it
+// launches, on a launch stand sized from the vehicle itself: a deck ring it rests on by its lowest points outside the
+// ring's hole (fins, a skirt), with nozzles and anything narrower hanging down into the hole over a flame deflector;
+// splayed, braced legs; and a lattice service tower with a swing arm beside it. root: the built vehicle (its own
+// group). Returns null for anything else, else { stand, y }: the stand (world space: add it to the scene) and the
+// height to set root.position.y to. Visual only: physics and the flight's own launch don't use it.
+export function uprightStage(design, root, stats = analyze(design)) {
+  root.rotation.set(0, 0, 0); root.position.set(0, 0, 0);
+  if (!stats.vertical || !design.parts.length) { root.updateMatrixWorld(true); return null; }
+  root.rotation.x = Math.PI / 2; root.updateMatrixWorld(true); // nose up
+  const pts = [], v = new THREE.Vector3();
+  root.traverse((o) => {
+    if (!o.isMesh || !o.visible || o.userData.isDisc || o.material?.blending === THREE.AdditiveBlending) return;
+    const a = o.geometry.attributes.position, step = Math.max(1, Math.floor(a.count / 1500));
+    for (let i = 0; i < a.count; i += step) pts.push(v.fromBufferAttribute(a, i).applyMatrix4(o.matrixWorld).clone());
+  });
+  if (!pts.length) return null;
+  const box = new THREE.Box3().setFromPoints(pts), c = box.getCenter(new THREE.Vector3()), Hv = box.max.y - box.min.y;
+  const rad = (p) => Math.hypot(p.x - c.x, p.z - c.z);
+  let Rf = 0.3; for (const p of pts) if (p.y < box.min.y + Hv * 0.3) Rf = Math.max(Rf, rad(p)); // footprint of the lower third
+  const rIn = Rf * 0.55; let yRest = Infinity;
+  for (const p of pts) if (rad(p) > rIn) yRest = Math.min(yRest, p.y);
+  const hang = yRest - box.min.y, t = 0.1 + 0.03 * Rf, H = Math.max(0.7, hang + 0.35) + t, rOut = Rf * 1.12 + 0.15;
+  const stand = new THREE.Group(), b = new Bag(), deck = M.paint(0x5d6168, 'metal'), red = M.paint(0xb8321f, 'gloss'), soot = M.paint(0x2a2622, 'matte'), steel = M.steel();
+  const V3 = (x, y, z) => new THREE.Vector3(c.x + x, y, c.z + z), rl = (rIn + rOut) / 2, lw = 0.08 + Rf * 0.05;
+  const ring = new THREE.LatheGeometry([new THREE.Vector2(rIn, -t), new THREE.Vector2(rOut, -t), new THREE.Vector2(rOut, 0), new THREE.Vector2(rIn, 0), new THREE.Vector2(rIn, -t)], 40);
+  ring.translate(c.x, H, c.z); b.add(ring, deck);
+  const rim = new THREE.TorusGeometry(rIn, 0.03 + Rf * 0.01, 6, 40); rim.rotateX(Math.PI / 2); rim.translate(c.x, H, c.z); b.add(rim, M.paint(0xf2b705, 'gloss'));
+  for (let k = 0; k < 4; k++) {
+    const a = (k / 4) * Math.PI * 2 + Math.PI / 4, ca = Math.cos(a), sa = Math.sin(a), a2 = a + Math.PI / 2;
+    const top = V3(ca * rl, H - t, sa * rl), foot = V3(ca * (rl + H * 0.25), 0, sa * (rl + H * 0.25));
+    b.add(bar(top, foot, lw, lw), red);
+    const pad = new THREE.BoxGeometry(lw * 2.2, 0.04, lw * 2.2); pad.translate(foot.x, 0.02, foot.z); b.add(pad, steel);
+    const nt = V3(Math.cos(a2) * rl, H - t, Math.sin(a2) * rl), nf = V3(Math.cos(a2) * (rl + H * 0.25), 0, Math.sin(a2) * (rl + H * 0.25));
+    b.add(bar(top.clone().lerp(foot, 0.15), nf.clone().lerp(nt, 0.85), lw * 0.5, lw * 0.5, true, 6), red); // X braces between neighbouring legs
+    b.add(bar(foot.clone().lerp(top, 0.15), nt.clone().lerp(nf, 0.85), lw * 0.5, lw * 0.5, true, 6), red);
+    const cl = new THREE.BoxGeometry(0.12 + Rf * 0.04, 0.1 + Rf * 0.04, 0.12 + Rf * 0.04); cl.translate(c.x + ca * (rIn + 0.1), H + 0.05, c.z + sa * (rIn + 0.1)); b.add(cl, steel); // hold-down clamps
+  }
+  const dh = Math.min(H - t, rIn) * 0.8, defl = new THREE.ConeGeometry(rIn * 0.95, dh, 24); defl.translate(c.x, dh / 2, c.z); b.add(defl, soot); // flame deflector
+  // service tower (to one side of both the hangar view and the picture view): four posts, a cross-braced lattice every
+  // ~1.5 m, a swing arm out to the vehicle two thirds of the way up
+  const tw = 0.6 + Rf * 0.25, off = (rOut + tw * 0.5 + 0.6) * Math.SQRT1_2, tx = off, tz = -off, pr = 0.035 + Rf * 0.01, top = H + (box.max.y - yRest) * 0.8;
+  const P = (i, y) => V3(tx + (i & 1 ? tw : -tw) / 2, y, tz + (i & 2 ? tw : -tw) / 2), order = [0, 1, 3, 2];
+  for (let i = 0; i < 4; i++) b.add(bar(P(i, 0), P(i, top), pr * 2, pr * 2), red);
+  const lv = Math.max(2, Math.round(top / 1.5));
+  for (let k = 0; k <= lv; k++) for (let s = 0; s < 4; s++) {
+    const y0 = (k / lv) * top, y1 = ((k + 1) / lv) * top, i = order[s], j = order[(s + 1) % 4];
+    b.add(bar(P(i, y0), P(j, y0), pr * 1.4, pr * 1.4, true, 5), red);
+    if (k < lv) b.add(bar(P(i, y0), P(j, y1), pr, pr, true, 5), red);
+  }
+  // swing arm: from the tower towards the vehicle's axis, stopping at its skin
+  const ya = H + (box.max.y - yRest) * 0.62, yv = ya - H + yRest, from = V3(tx, ya, tz), dirA = new THREE.Vector3(-tx, 0, -tz).normalize();
+  let reach = Math.hypot(tx, tz);
+  for (const p of pts) if (Math.abs(p.y - yv) < 0.3) { const q = new THREE.Vector3(p.x - c.x - tx, 0, p.z - c.z - tz), along = q.dot(dirA); if (along > 0 && q.addScaledVector(dirA, -along).length() < tw * 0.5) reach = Math.min(reach, along - 0.04); }
+  const end = from.clone().addScaledVector(dirA, Math.max(0.2, reach));
+  b.add(bar(from, end, tw * 0.35, tw * 0.25), red); b.add(bar(from.clone().setY(ya + tw * 0.25), end.clone().setY(ya + tw * 0.25), pr, pr, true, 5), steel);
+  b.to(stand); stand.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return { stand, y: H - yRest };
 }
 
 // thumbnails of each part, rendered once

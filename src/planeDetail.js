@@ -14,7 +14,7 @@ import { PARTS, partInfo, airfoil } from './parts.js';
 import { partMatrix, partScale, scaleSurface, linScale } from './design.js';
 import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
-import { V, bar, tube, pipe, norm, ringLoft, Bag, kitMaterial, kitSlot, kitUV, EXHAUST_ROUTES, exhaustPipes } from './partDetail.js';
+import { V, bar, tube, pipe, norm, ringLoft, Bag, kitMaterial, kitSlot, kitUV, EXHAUST_ROUTES, exhaustPipes, navColour, shell } from './partDetail.js';
 import { clamp, lerp } from './noise.js';
 import { applyLivery } from './liveries.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
@@ -474,6 +474,23 @@ function bodyFurniture(p, obj, info, ctx) {
     const d = new THREE.CylinderGeometry(R > 1 ? 0.07 : 0.035, R > 1 ? 0.07 : 0.035, 0.006, 14); put(bag, d, M.aluminum(), h);
     const c = new THREE.CylinderGeometry(R > 1 ? 0.03 : 0.015, R > 1 ? 0.03 : 0.015, 0.008, 10); put(bag, c, M.black(), h);
   }
+  // loading ramp (cargo bodies, PARTS[id].ramp: z range in part units): its seams under the upswept tail (two sides and the
+  // aft edge), the hinge line across the belly with its knuckles, and a crew door with a window on each side
+  const rp = PARTS[p.id].ramp;
+  if (rp) {
+    const k = Math.max(sc[0], sc[1]), fz = (z) => (z - z0) / (z1 - z0), seamM = M.paint(0x0b0c0e, 'matte'), aS = 0.85;
+    const line = (pts, r = 0.012) => { const hs = pts.map(([z, a]) => skin(fz(z), a)).filter(Boolean); if (hs.length >= 2) bag.add(tube(hs.map((h) => h.p.clone().addScaledVector(h.n, 0.006 * k)), r * k, 4, hs.length * 3), seamM); return hs; };
+    const N = 10, run = (za, zb, a) => Array.from({ length: N + 1 }, (_, i) => [za + (zb - za) * (i / N), a]), arc = (z, a0, a1) => Array.from({ length: N + 1 }, (_, i) => [z, a0 + (a1 - a0) * (i / N)]);
+    for (const s of [1, -1]) line(run(rp.z0, rp.z1, Math.PI - s * aS));
+    line(arc(rp.z1, Math.PI - aS, Math.PI + aS));
+    const hinge = line(arc(rp.z0, Math.PI - aS, Math.PI + aS), 0.02);
+    for (let i = 1; i < hinge.length - 1; i += 3) { const h = hinge[i], kn = new THREE.CylinderGeometry(0.045 * k, 0.045 * k, 0.16 * k, 10); kn.rotateZ(Math.PI / 2); kn.applyMatrix4(frameAt(h.p.clone().addScaledVector(h.n, 0.01 * k), h.n, fw)); bag.add(kn, M.darkMetal()); }
+    if (rp.door != null) for (const s of [1, -1]) {
+      const d0 = rp.door - 0.45, d1 = rp.door + 0.45, a0 = s * (Math.PI / 2 - 0.32), a1 = s * (Math.PI / 2 + 0.42);
+      line(run(d0, d1, a0)); line(run(d0, d1, a1)); line(arc(d0, a0, a1)); line(arc(d1, a0, a1));
+      const w = skin(fz(rp.door), s * (Math.PI / 2 - 0.18)); if (w) { const g = new THREE.CylinderGeometry(0.13 * k, 0.13 * k, 0.012, 18); put(bag, g, PM.windscreen(), w); }
+    }
+  }
   // anti-collision beacons on big bodies (top and belly)
   if (R > 1.2) for (const [f, ang] of [[0.42, 0], [0.5, Math.PI]]) {
     const h = skin(f, ang); if (!h || ctx.occupied(h.p.clone().addScaledVector(h.n, 0.1), obj)) continue;
@@ -603,6 +620,7 @@ function carCorner(p, obj, bp, bobj, ctx) {
     const key = Math.round(hl.z * 4) + ':' + Math.round(hl.y * 4); ctx.diffs = ctx.diffs || new Map(); const done = ctx.diffs.get(bobj) || new Set(); ctx.diffs.set(bobj, done);
     if (!done.has(key)) { done.add(key); const d = new THREE.SphereGeometry(r * 0.28, 16, 12); d.scale(1, 1, 0.8); d.applyMatrix4(new THREE.Matrix4().makeTranslation(...V(0, hl.y, hl.z).applyMatrix4(B).toArray())); addTo(bobj, d, M.darkMetal()); }
   }
+  if (!PARTS[bp.id].mudFlaps) fender(u, bp.color);
   // mud flap: rubber, hung from the body behind the tyre, on the rear wheels of bodies that carry them
   if (!PARTS[bp.id].mudFlaps || hl.z < 0.2) return;
   const fw = V(0, 0, -1).transformDirection(B).normalize(), upB = V(0, 1, 0).transformDirection(B).normalize(), side = V(1, 0, 0).transformDirection(B).normalize();
@@ -612,6 +630,40 @@ function carCorner(p, obj, bp, bobj, ctx) {
   flap.translate(...back.clone().addScaledVector(upB, (yTop + y0) / 2).toArray());
   addTo(bobj, flap, M.rubber());
   const brk = bar(back.clone().addScaledVector(upB, yTop).addScaledVector(fw, 0.02), back.clone().addScaledVector(upB, yTop).addScaledVector(fw, r * 0.6), 0.05, 0.05, true, 6); addTo(bobj, brk, M.darkMetal());
+}
+
+// A cycle-wing fender over a car wheel (open-wheel bodies: a truck body has its own wheel arches and mud flaps): a
+// crowned strip in the body's paint following the tyre from behind the axle to ahead of the top, with a rolled edge
+// and two stays down beside the tyre's inner wall. It sits on the wheel's fixed frame (wheelsFixed), so it rises and
+// steers with the wheel and never meets the tyre. Sized from the tyre actually fitted.
+function fender(u, color) {
+  const wh = u.wheels, fx = u.wheelsFixed; wh.updateMatrixWorld(true);
+  const inv = wh.matrixWorld.clone().invert(), box = new THREE.Box3(), m = new THREE.Matrix4();
+  wh.traverse((o) => { if (o.isMesh) { if (!o.geometry.boundingBox) o.geometry.computeBoundingBox(); box.union(o.geometry.boundingBox.clone().applyMatrix4(m.multiplyMatrices(inv, o.matrixWorld))); } });
+  if (box.isEmpty()) return;
+  const w = box.max.x - box.min.x, xc = (box.max.x + box.min.x) / 2, rr = Math.max(box.max.y, -box.min.y, box.max.z, -box.min.z);
+  const R = rr * 1.07 + 0.03, hw = w * 0.58, crown = rr * 0.06, NA = 18, NX = 8, rows = [];
+  const P = (th, x, dr = 0) => V(x, (R + dr) * Math.cos(th), -(R + dr) * Math.sin(th));
+  for (let i = 0; i <= NA; i++) {
+    const th = -1.2 + 1.95 * (i / NA), row = [];
+    for (let j = 0; j <= NX; j++) { const t = (j / NX) * 2 - 1, edge = Math.abs(t) > 0.92 ? -(Math.abs(t) - 0.92) * 0.9 * rr : 0; row.push(P(th, xc + t * hw, crown * (1 - t * t) + edge)); }
+    rows.push(row);
+  }
+  const geo = shell(gridGeo(rows, { uv: (i, j) => [i / NA, j / NX], out: V(0, 1, 0) }), Math.max(0.008, rr * 0.018));
+  const b = new Bag(); b.add(geo, PM.carPaint(color));
+  for (const th of [0.45, -0.75]) { const top = P(th, xc - hw * 0.92), bot = V(xc - w * 0.5 - 0.02, rr * 0.3 * Math.cos(th), -rr * 0.3 * Math.sin(th)); b.add(bar(top, bot, rr * 0.05, rr * 0.05, true, 6), M.darkMetal()); }
+  for (const [mat, g] of b.merged()) { const mesh = new THREE.Mesh(g, mat); mesh.userData.joint = mesh.userData.cosmetic = true; mesh.castShadow = true; mesh.receiveShadow = true; fx.add(mesh); }
+}
+
+// A position light: its lens shows the colour of its side (red left, green right, white on the centreline: the rule
+// aircraft.js colours the bulb by in flight) and its teardrop head turns to face the airflow, flattened onto the skin it
+// sits on, however the part was turned.
+function navLight(obj, ctx) {
+  const u = obj.userData, W = obj.matrixWorld, x = V().setFromMatrixPosition(W).applyMatrix4(ctx.rootInv).x, col = navColour(x);
+  u.navLens.material.color.setHex(col); u.navLens.material.emissive.setHex(col);
+  if (u.bulb) u.bulb.material.color.setHex(col).multiplyScalar(6);
+  const f = ctx.fw.clone().transformDirection(W.clone().invert()); f.y = 0;
+  if (f.lengthSq() > 1e-4) { f.normalize(); u.navHead.rotation.y = Math.atan2(-f.x, -f.z); }
 }
 
 // ---------- LOD ----------
@@ -635,6 +687,16 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
   const parts = design.parts, valid = (i) => i >= 0 && objs[i] && PARTS[parts[i]?.id];
   // bodies swell into one skin with what they carry, canopies are seated into them (skinBlend.js)
   const nearBags = new Map(), nearBag = (obj) => { if (!near) return { add() {} }; if (!nearBags.has(obj)) nearBags.set(obj, new Bag()); return nearBags.get(obj); };
+  // a body with its own nose (userData.noseCap) puts it away when another part covers its front (a Bubble Nose bolted
+  // to a Heli Cabin is then the nose), and its seats go with it
+  objs.forEach((o, i) => {
+    const nc = valid(i) && o.userData.noseCap; if (!nc) return;
+    o.updateMatrixWorld(true); const f = V(...nc.front).applyMatrix4(o.matrixWorld);
+    const covers = (q) => { let hit = false; q.traverse((m) => { if (!hit && m.isMesh && !m.userData.isDisc && new THREE.Box3().setFromBufferAttribute(m.geometry.attributes.position).applyMatrix4(m.matrixWorld).containsPoint(f)) hit = true; }); return hit; };
+    if (objs.some((q, j) => j !== i && valid(j) && !PARTS[parts[j].id].gear && PARTS[parts[j].id].cat !== 'rotor' && covers(q))) {
+      o.remove(nc.obj); nc.obj.traverse((m) => m.geometry?.dispose()); o.userData.seats = null;
+    }
+  });
   const t0 = performance.now(); let seated = new Set();
   try { seated = blendSkins(design, objs, { pods: POD, addTo, quick, rivets: (obj, pts, n) => { const bag = nearBag(obj); pts.forEach((p, k) => rivet(bag, p, n[k], 0.008)); } }); } catch (e) { console.warn('skinBlend', e); }
   const tSkin = performance.now() - t0;
@@ -644,7 +706,7 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
   const structure = [];
   parts.forEach((p, i) => { if (valid(i) && !PARTS[p.id].gear && PARTS[p.id].cat !== 'rotor') structure.push(...solidMeshes(objs[i])); });
   const ctx = {
-    fw, right, up, structure, isGear: (m) => gearSet.has(m),
+    fw, right, up, structure, isGear: (m) => gearSet.has(m), rootInv: root.matrixWorld.clone().invert(),
     near: nearBag,
     flush: (bag, obj, nr) => { for (const [mat, geo] of bag.merged()) addTo(obj, geo, mat, { near: nr }); },
     boxes: objs.map((o, j) => (valid(j) ? new THREE.Box3().setFromObject(o).expandByScalar(0.05) : null)),
@@ -698,6 +760,7 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
       if (d.wing) T('wing', () => wingFurniture(p, objs[i], ctx, joined.get(i)));
       if (POD[p.id]?.ex) T('soot', () => soot(p, objs[i], ctx, valid(p.parent) ? objs[p.parent] : null));
       if (objs[i].userData.exhaust) T('exhaust', () => routeExhaust(objs[i], objs));
+      if (objs[i].userData.navHead) navLight(objs[i], ctx);
       if (d.cat === 'car' && objs[i].userData.wheelsFixed && valid(p.parent) && isBody(parts[p.parent].id)) T('axle', () => carCorner(p, objs[i], parts[p.parent], objs[p.parent], ctx));
       if (d.cat === 'car' && objs[i].userData.exhaust && valid(p.parent)) T('collar', () => engineCollar(objs[i], objs[p.parent]));
     } catch (e) { console.warn('planeDetail furniture', p.id, e); }

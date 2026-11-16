@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import { PARTS, revolve, airfoil } from './parts.js';
 import { PM } from './planeMaterials.js';
-import { V, ringLoft, fighterGlassR, fixNormals, clipGeometry, posKey } from './partDetail.js';
+import { V, ringLoft, fighterGlassR, fixNormals, clipGeometry, posKey, leatherMat } from './partDetail.js';
 export { clipGeometry };
 import { clamp } from './noise.js';
 
@@ -41,7 +41,7 @@ const CK = {
     wall(th, t) { const f = th < Math.PI ? th / Math.PI : (2 * Math.PI - th) / Math.PI, side = th < Math.PI ? 1 : -1, z = -1.52 + 3.45 * f, r = fighterGlassR(z), ph = -1.25 + t * 2.75; return [side * r * Math.cos(ph), 1.15 * r * Math.sin(ph), z]; },
   },
   ck_open: {
-    frame: id3, local: idInv, up: V(0, 1, 0), a: 0.4, b: 0.56, c: 0.1, v0: -0.56, v1: 0.56, flare: 0.3, tub: 0.5, sill: 0.045, rimColour: true,
+    frame: id3, local: idInv, up: V(0, 1, 0), a: 0.4, b: 0.56, c: 0.1, v0: -0.56, v1: 0.56, flare: 0.3, tub: 0.5, sill: 0.06, rimColour: true,
     turtle: { cz: 0.5, ex: 0.16, ey: 0.2, ez: 0.75 },
     foot: (u, v, g) => ell(u, v, 0.4 * g, 0.56 * g),
     vol: (u, h, v) => (h > 0.4 ? h - 0.4 : ell(u, v, 0.37, 0.52)),
@@ -275,7 +275,7 @@ function seatCanopy(ck, U, bodyColor, addTo, rivets) {
   const skinF = (p) => U.at(p), gradAt = (p) => { const g = V(), q = V(); for (let a = 0; a < 3; a++) { q.copy(p); q.setComponent(a, p.getComponent(a) + 0.003); const f1 = U.at(q); q.setComponent(a, p.getComponent(a) - 0.003); g.setComponent(a, f1 - U.at(q)); } return g.normalize(); };
   // trim the glass inside the skin; the skirt below the base becomes visible once trimmed
   cobj.traverse((m) => {
-    if (!m.isMesh || m.userData.near || !m.material?.transparent || m.material.blending === THREE.AdditiveBlending || m.userData.isDisc) return;
+    if (!m.isMesh || m.userData.near || !m.material?.transparent || m.material.blending === THREE.AdditiveBlending || m.userData.isDisc || m.userData.screenGlass) return;
     const g = m.geometry, pos = g.attributes.position, val = new Float32Array(pos.count), v = V(); m.updateMatrixWorld();
     for (let i = 0; i < pos.count; i++) val[i] = skinF(v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld));
     const g2 = clipGeometry(g, val); if (g2) { m.geometry = fixNormals(g2); g.dispose(); }
@@ -301,7 +301,10 @@ function seatCanopy(ck, U, bodyColor, addTo, rivets) {
   const outOf = (p) => { const d = p.clone().sub(ctr); d.addScaledVector(up, -d.dot(up)); return d.normalize(); };
   // sill: a rounded frame along the seam (leather coaming on open cockpits)
   const rad = C.sill * s, sillPts = seam.map((p) => p.clone().addScaledVector(outOf(p), rad * 0.45).addScaledVector(up, rad * 0.15));
-  addTo(cobj, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(sillPts, true), NS * 2, rad, 6, true), PM.skin(C.rimColour ? cp.color : bodyColor));
+  addTo(cobj, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(sillPts, true), NS * 2, rad, C.rimColour ? 10 : 6, true), C.rimColour ? leatherMat(cp.color) : PM.skin(bodyColor));
+  // open cockpits: the windscreen stands on the front of that padded coaming
+  const scr = cobj.userData.screen;
+  if (scr) { let f = null; for (const p of sillPts) { const q = p.clone().applyMatrix4(ck.inv); if (!f || q.z < f.z) f = q; } scr.position.set(0, f.y + C.sill * 0.55, f.z + C.sill * 0.9); }
   // a rivet row on the skin just outside the sill (the frame is screwed down to the deck)
   if (rivets && !C.rimColour) {
     const rp = [], rn = [], curve = new THREE.CatmullRomCurve3(seam, true), L = curve.getLength(), n = Math.max(12, Math.round(L / (0.065 * s)));

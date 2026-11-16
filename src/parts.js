@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { M } from './materials.js';
 import { PM, SKIN_TILE, lightGeometry } from './planeMaterials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
-import { bladeGeometry, rotorBlade, propEngineDetail, jetEngineDetail, rocketDetail, gearLegDetailed, strutLegs, cockpitBuild, openCockpitBuild, airlinerNoseBuild, carEngineDetail, rotorDetail, strutDetail, ringLoft, Bag, V, bar, shell } from './partDetail.js';
+import { bladeGeometry, rotorBlade, propEngineDetail, jetEngineDetail, rocketDetail, gearLegDetailed, strutLegs, cockpitBuild, openCockpitBuild, airlinerNoseBuild, carEngineDetail, rotorDetail, strutDetail, ringLoft, Bag, V, bar, shell, glassNoseBuild, electricMotorDetail, landLightBuild, navLightBuild, pylonBuild } from './partDetail.js';
 
 // ---------- geometry helpers ----------
 // Body of revolution around Z. profile: [[z, r], ...] nose (most negative z) first.
@@ -412,8 +412,8 @@ function wheel(r, w) {
   return g;
 }
 
-function gearLeg({ len, r, w = null, color = 0xdddddd, fairing = false, bogie = false, steer = false, lv = 0 }) {
-  if (lv) return gearLegDetailed({ len, r, w, color, fairing, bogie, steer });
+function gearLeg({ len, r, w = null, color = 0xdddddd, fairing = false, bogie = false, steer = false, tail = false, lv = 0 }) {
+  if (lv) return gearLegDetailed({ len, r, w, color, fairing, bogie, steer, tail });
   const g = new THREE.Group();
   const strut = new THREE.Group();
   const sm = new THREE.Mesh(new THREE.CylinderGeometry(0.05 + r * 0.08, 0.05 + r * 0.08, len, 10), M.steel());
@@ -528,8 +528,11 @@ def({ id: 'fus_fighter', cat: 'fuselage', name: 'Fighter Body', desc: 'Area-rule
   } });
 def({ id: 'fus_airliner', cat: 'fuselage', name: 'Airliner Tube', desc: 'A long pressurised cabin with 120 windows. Bring big wings.', mass: 14000, hp: 9000, color: C.white,
   build: (c) => fuselage([[-11, 1.9], [-6, 1.95], [0, 1.95], [6, 1.9], [9, 1.55], [11.5, 0.75], [12.6, 0.25]], { color: c, windows: 46, segs: 40, yOff: (z) => (z > 6 ? (z - 6) ** 2 * 0.025 : 0), reg: { text: 'N747SW', at: 0.865, lift: 0.12, size: 0.3 } }) });
-def({ id: 'fus_cargo', cat: 'fuselage', name: 'Cargo Hauler', desc: 'Fat, strong freighter body.', mass: 9000, hp: 9000, color: C.green,
-  build: (c) => fuselage([[-7, 2.3], [-3, 2.45], [3, 2.45], [6, 2.0], [9, 0.8], [9.6, 0.4]], { color: c, sy: 1.0, yOff: (z) => (z > 4 ? (z - 4) * 0.32 : 0), segs: 36, reg: { text: 'N130SW', at: 0.42, lift: 0.3, size: 0.25 } }) });
+def({ id: 'fus_cargo', cat: 'fuselage', name: 'Cargo Hauler', desc: 'Fat, strong freighter body.', mass: 9000, hp: 9000, color: C.green, ramp: { z0: 4.4, z1: 8.4, door: -4.6 },
+  build: (c, lv) => lv // detail: a rounded, slightly drooped nose (the plain part ends in a flat disc), a smoothly upswept tail
+    ? fuselage([[-7, 0], [-6.94, 0.8], [-6.72, 1.5], [-6.25, 2.0], [-5.4, 2.32], [-3.6, 2.45], [3, 2.45], [6, 2.0], [8.3, 1.08], [9.3, 0.52], [9.6, 0.0]], { color: c, sy: 1.0, segs: 48, reg: { text: 'N130SW', at: 0.42, lift: 0.3, size: 0.25 },
+      yOff: (z) => (z < -4.6 ? -(((-4.6 - z) / 2.4) ** 2) * 0.42 : z > 3.4 ? (z - 3.4) ** 1.25 * 0.205 : 0) }) // (the ramp seams are drawn by planeDetail)
+    : fuselage([[-7, 2.3], [-3, 2.45], [3, 2.45], [6, 2.0], [9, 0.8], [9.6, 0.4]], { color: c, sy: 1.0, yOff: (z) => (z > 4 ? (z - 4) * 0.32 : 0), segs: 36, reg: { text: 'N130SW', at: 0.42, lift: 0.3, size: 0.25 } }) });
 def({ id: 'fus_pod', cat: 'fuselage', name: 'Mini Pod', desc: 'Short stubby pod. Great for twin-boom or outrigger builds.', mass: 120, hp: 500, color: C.yellow,
   build: (c) => fuselage([[-1.6, 0], [-1.4, 0.35], [-0.6, 0.5], [0.6, 0.48], [1.5, 0.25], [1.8, 0.05]], { color: c, sy: 1.1, reg: { text: 'N10SW', at: 0.5, lift: 0.15, size: 0.4 } }) });
 def({ id: 'fus_boom', cat: 'fuselage', name: 'Tail Boom', desc: 'Thin carbon tube. Push the tail further back.', mass: 45, hp: 300, color: C.darkgray,
@@ -575,7 +578,8 @@ def({ id: 'ck_airliner', cat: 'cockpit', name: 'Airliner Nose', desc: 'Flight de
     return g;
   } });
 def({ id: 'ck_glassnose', cat: 'cockpit', name: 'Greenhouse Nose', desc: 'Framed glass nose, like an old bomber.', mass: 220, hp: 400, color: C.navy, eye: [0, 0.1, -0.6],
-  build: (c) => {
+  build: (c, lv) => {
+    if (lv) return glassNoseBuild(c); // detail: framed panes of real glass, a gun in the nose ring, the bomb aimer's station inside
     const g = new THREE.Group();
     const glass = new THREE.Mesh(new THREE.SphereGeometry(0.7, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2), PM.canopy()); glass.rotation.x = -Math.PI / 2; glass.scale.z = 1.4; g.add(glass);
     for (let i = 0; i < 6; i++) { const r = new THREE.Mesh(new THREE.TorusGeometry(0.7, 0.018, 6, 24, Math.PI), PM.skin(c)); r.rotation.z = (i / 6) * Math.PI; r.rotation.y = Math.PI / 2; r.scale.set(1.4, 1, 1); const h = new THREE.Group(); h.rotation.x = 0; h.add(r); g.add(h); }
@@ -635,7 +639,8 @@ def({ id: 'e_electric', cat: 'engine', name: 'Electric Fan', desc: 'Silent-ish d
     const duct = new THREE.Mesh(revolve([[-0.3, 0.42], [-0.25, 0.47], [0.3, 0.46], [0.5, 0.38]], { segs: 28 }), PM.skin(c)); g.add(duct);
     const di = new THREE.Mesh(revolve([[-0.3, 0.41], [0.5, 0.37]], { segs: 28 }), M.intake()); di.scale.x = -1; g.add(di);
     if (lv) { duct.geometry = shell(duct.geometry, 0.012); di.material = PM.duct(0x4e5258); } // detail: a duct wall with a rim, a lit liner inside
-    const p = propeller(0.4, 6); p.position.z = -0.05; g.add(p); g.userData.prop = p;
+    const p = propeller(0.4, 6, null, lv); p.position.z = -0.05; g.add(p); g.userData.prop = p;
+    if (lv) { electricMotorDetail(g, { r: 0.4, zFan: -0.05 }); return g; } // detail: twisted blades on a finned can motor in stator vanes, a spinner
     const hub = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), M.chrome()); hub.scale.z = 1.8; g.add(hub);
     return g;
   } });
@@ -670,7 +675,7 @@ const gearDef = (id, name, desc, mass, hp, opts, gearInfo) => def({ id, cat: 'ge
   build: (c, lv) => gearLeg({ ...opts, color: c, lv }) });
 gearDef('g_nose', 'Nose Wheel', 'Steerable nose wheel. Rudder steers on the ground.', 25, 260, { len: 0.95, r: 0.22, steer: true, fairing: false }, { len: 0.95, r: 0.22, steer: true, brake: false, limit: 4.5, k: 2.2 });
 gearDef('g_main', 'Main Gear Leg', 'Spring-steel leg with a faired wheel. Use one each side.', 35, 380, { len: 1.05, r: 0.28, fairing: true }, { len: 1.05, r: 0.28, steer: false, brake: true, limit: 5.0, k: 3 });
-gearDef('g_tail', 'Tail Wheel', 'Little steerable tail wheel for taildraggers.', 10, 160, { len: 0.38, r: 0.12, steer: true }, { len: 0.38, r: 0.12, steer: true, brake: false, limit: 4.0, k: 1.2 });
+gearDef('g_tail', 'Tail Wheel', 'Little steerable tail wheel for taildraggers.', 10, 160, { len: 0.38, r: 0.12, steer: true, tail: true }, { len: 0.38, r: 0.12, steer: true, brake: false, limit: 4.0, k: 1.2 });
 gearDef('g_bush', 'Bush Tires', 'Giant soft tires. Land anywhere.', 60, 500, { len: 1.2, r: 0.45, w: 0.4 }, { len: 1.2, r: 0.45, steer: false, brake: true, limit: 7.5, k: 3 });
 gearDef('g_retract', 'Retractable Gear', 'Folds away with G. Less drag, more speed.', 120, 900, { len: 1.5, r: 0.36 }, { len: 1.5, r: 0.36, steer: false, brake: true, retract: true, limit: 4.5, k: 6 });
 gearDef('g_retract_nose', 'Retractable Nose Gear', 'Steerable nose gear that folds away.', 80, 700, { len: 1.6, r: 0.3, steer: true }, { len: 1.6, r: 0.3, steer: true, brake: false, retract: true, limit: 4.5, k: 4 });
@@ -703,10 +708,12 @@ def({ id: 'x_ballast', cat: 'extra', name: 'Ballast Weight', desc: '250 kg lead 
 def({ id: 'x_smoke', cat: 'extra', name: 'Smoke Generator', desc: 'Airshow smoke! Toggle with the smoke button (or Space).', mass: 20, hp: 200, color: C.red, smoke: true,
   build: (c) => { const g = new THREE.Group(); g.add(new THREE.Mesh(revolve(smoothProfile([[-0.5, 0], [-0.4, 0.09], [0.3, 0.1], [0.5, 0.06]], 12).concat([[0.501, 0]]), { segs: 16 }), PM.skin(c))); return g; } });
 def({ id: 'x_navlight', cat: 'extra', name: 'Strobe Light', desc: 'Blinking position light. Red on the left, green on the right, white strobe in the middle.', mass: 2, hp: 80, color: 0xeeeeee, light: 'nav',
-  build: (c) => { const g = new THREE.Group(); const base = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.06, 10), PM.skin(c)); g.add(base);
+  build: (c, lv) => { if (lv) return navLightBuild(c); // detail: a teardrop housing with a coloured lens (planeDetail colours and aims it)
+    const g = new THREE.Group(); const base = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.06, 10), PM.skin(c)); g.add(base);
     const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), M.light(0xffffff).clone()); bulb.position.y = 0.05; g.add(bulb); g.userData.bulb = bulb; return g; } });
 def({ id: 'x_landlight', cat: 'extra', name: 'Landing Light', desc: 'Bright spotlight for night landings.', mass: 4, hp: 80, color: 0xcccccc, light: 'landing',
-  build: (c) => { const g = new THREE.Group(); const h = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.09, 0.15, 14), PM.skin(c)); h.rotation.x = Math.PI / 2; g.add(h);
+  build: (c, lv) => { if (lv) return landLightBuild(c); // detail: bezel, reflector bowl, glowing lamp, cover glass
+    const g = new THREE.Group(); const h = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.09, 0.15, 14), PM.skin(c)); h.rotation.x = Math.PI / 2; g.add(h);
     const lens = new THREE.Mesh(lightGeometry(new THREE.CircleGeometry(0.11, 14), 2), PM.light()); lens.userData.planeLight = true; lens.position.z = -0.08; lens.rotation.y = Math.PI; g.add(lens); return g; } });
 def({ id: 'x_rcs', cat: 'extra', name: 'RCS Thrusters', desc: 'Little gas jets for steering in space, where wings and rudders do nothing. Rockets have some built in.', mass: 40, hp: 300, color: C.white, rcs: true,
   build: (c) => { const g = new THREE.Group(); g.add(new THREE.Mesh(revolve(smoothProfile([[-0.35, 0], [-0.25, 0.12], [0.25, 0.14], [0.35, 0]], 10), { segs: 16 }), PM.skin(c)));
@@ -715,7 +722,8 @@ def({ id: 'x_rcs', cat: 'extra', name: 'RCS Thrusters', desc: 'Little gas jets f
 def({ id: 'x_strut', cat: 'extra', name: 'Strut', desc: 'Structural strut. Connect wings for biplanes.', mass: 12, hp: 400, color: 0x888888,
   build: (c, lv) => { const g = new THREE.Group(); const s = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.6, 8), PM.skin(c)); g.add(s); if (lv) strutDetail(g, c); return g; } });
 def({ id: 'x_pylon', cat: 'extra', name: 'Pylon', desc: 'Vertical mounting pylon. Hang engines lower or higher.', mass: 40, hp: 600, color: C.gray,
-  build: (c) => { const g = new THREE.Group(); const sh = new THREE.Shape(); sh.moveTo(-0.8, 0); sh.lineTo(0.9, 0); sh.lineTo(0.5, -0.8); sh.lineTo(-0.4, -0.8); sh.closePath();
+  build: (c, lv) => { if (lv) return pylonBuild(c); // detail: aerofoil section, root fillet, keel and sway braces
+    const g = new THREE.Group(); const sh = new THREE.Shape(); sh.moveTo(-0.8, 0); sh.lineTo(0.9, 0); sh.lineTo(0.5, -0.8); sh.lineTo(-0.4, -0.8); sh.closePath();
     const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.12, bevelEnabled: false }); geo.rotateY(Math.PI / 2); geo.translate(-0.06, 0, 0); g.add(new THREE.Mesh(geo, PM.skin(c))); return g; } });
 
 export const CATEGORIES = [

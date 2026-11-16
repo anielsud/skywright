@@ -47,6 +47,47 @@ export function randomBuilds(n = 20, seed = 7) {
   return out;
 }
 
+// Fittings and bodies dropped anywhere (part polish): greenhouse noses, position and landing lights, pylons with stores,
+// electric fans, cargo and heli cabins (with and without a Bubble Nose), monster tyres. Random spots, rotations and
+// sizes; every third build mirrored.
+const FITTINGS = ['x_navlight', 'x_landlight', 'x_pylon', 'e_electric', 'ck_glassnose', 'x_navlight'];
+export function fittingBuilds(n = 12, seed = 31) {
+  const R = rng(seed), pick = (a) => a[Math.floor(R() * a.length)], out = [], rot = () => [Math.round((R() - 0.5) * 120), Math.round((R() - 0.5) * 180), Math.round((R() - 0.5) * 120)];
+  const bodies = ['fus_cargo', 'fus_heli', 'fus_light', 'fus_pod', 'fus_buggy'];
+  for (let k = 0; k < n; k++) {
+    const body = bodies[k % bodies.length], parts = [], add = (id, pos, o = {}) => { parts.push(newPart(id, pos, o)); return parts.length - 1; };
+    const f = add(body, [0, 0, 0]);
+    if (body === 'fus_heli' && R() < 0.5) add('ck_heli', [0, 0, -1.05], { parent: f });
+    if (body === 'fus_heli') add('fus_boom', [0, 0.38, 4.6], { parent: f });
+    if (body === 'fus_buggy') { for (const z of [-1.35, 1.35]) { const i = add(pick(['c_bigfoot', 'c_offroad', 'c_monster', 'c_wheel']), [1.1, 0, z], { parent: f }); parts.push(mirroredOf(parts[i])); } add('ck_open', [0, 0.36, -0.1], { parent: f }); }
+    if (body !== 'fus_buggy' && body !== 'fus_heli') { const w = add('w_taper', [0.4, 0, -0.3], { parent: f }); parts.push(mirroredOf(parts[w])); const pl = add('x_pylon', [2.2, -0.12, -0.3], { parent: w }); add(pick(['x_tank', 'e_jet_small']), [2.2, -1.2, -0.3], { parent: pl }); }
+    for (let j = 0; j < 4; j++) {
+      const id = pick(FITTINGS), x = R() < 0.3 ? 0 : (R() - 0.5) * 3, i = add(id, [x, (R() - 0.3) * 2, -3 + R() * 6], { parent: f, rot: R() < 0.6 ? rot() : undefined });
+      if (R() < 0.4) { const s = 0.6 + R() * 0.9; parts[i].scale = [s, s, s]; }
+      if (Math.abs(x) > 0.05 && R() < 0.6) parts.push(mirroredOf(parts[i]));
+    }
+    if (k % 3 === 2) parts.forEach((p) => { p.pos[0] = -p.pos[0]; p.mirror = !p.mirror; p.quat = [p.quat[0], -p.quat[1], -p.quat[2], p.quat[3]]; });
+    out.push({ name: `fittings ${k} (${body})`, parts });
+  }
+  return out;
+}
+
+// ---------- position lights ----------
+// Every detailed position light shows its side's colour (red left, green right, white on the centreline: aircraft.js's
+// rule) and its teardrop head points along the flight direction, flattened onto its mount.
+function navLightIssues(design, det, root) {
+  const out = [], inv = root.matrixWorld.clone().invert(), fw = new THREE.Vector3(0, 0, -1).transformDirection(root.matrixWorld);
+  det.parts.forEach((o, i) => {
+    const u = o?.userData; if (!u?.navLens) return;
+    const x = new THREE.Vector3().setFromMatrixPosition(o.matrixWorld).applyMatrix4(inv).x, want = x < -0.5 ? 0xff2020 : x > 0.5 ? 0x20ff40 : 0xffffff;
+    if (u.navLens.material.color.getHex() !== new THREE.Color(want).getHex()) out.push({ part: i, issue: 'lens colour' });
+    const up = new THREE.Vector3(0, 1, 0).transformDirection(o.matrixWorld), f = fw.clone().addScaledVector(up, -fw.dot(up));
+    const head = new THREE.Vector3(0, 0, -1).transformDirection(u.navHead.matrixWorld);
+    if (f.lengthSq() > 0.01 && head.dot(f.normalize()) < 0.97) out.push({ part: i, issue: 'head not facing the airflow', dot: +head.dot(f).toFixed(3) });
+  });
+  return out;
+}
+
 // ---------- open shells ----------
 const skipMesh = (m) => {
   const mt = m.material;
@@ -104,15 +145,15 @@ function exhaustHits(root) {
   return { paths: paths.length, hits };
 }
 
-export async function run({ presets = [], random = 20 } = {}) {
-  const designs = [...presets, ...randomBuilds(random)], report = [];
+export async function run({ presets = [], random = 20, fittings = 12 } = {}) {
+  const designs = [...presets, ...randomBuilds(random), ...fittingBuilds(fittings)], report = [];
   for (const d of designs) {
     const root = new THREE.Group(); let res;
     try {
       const det = buildDesign(d, root, { quick: false, near: true }); root.updateMatrixWorld(true);
       const open = [];
       det.parts.forEach((o, i) => { if (!o || SKIP_CATS.has(PARTS[d.parts[i].id]?.cat)) return; o.traverse((m) => { if (skipMesh(m)) return; for (const s of openShells(m)) open.push({ part: d.parts[i].id, mat: m.material.name || m.material.type, ...s }); }); });
-      res = { name: d.name, open, exhaust: exhaustHits(root) };
+      res = { name: d.name, open, exhaust: exhaustHits(root), nav: navLightIssues(d, det, root) };
     } catch (e) { res = { name: d.name, error: String(e && e.stack || e) }; }
     root.traverse((m) => m.geometry?.dispose?.());
     report.push(res);
