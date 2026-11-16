@@ -286,6 +286,9 @@ export const PM = {
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
     return new THREE.MeshStandardMaterial({ map: t, metalness: 0.35, roughness: 0.5 });
   }),
+  // inside walls of ducts and liners, seen from either side (intake liners, nozzle sleeves, afterburner petals): metal, lit
+  // correctly from the inside (three flips the normal on back faces)
+  duct: (c = 0x8e9399, kind = 'matte') => cached('duct' + c + kind, () => new THREE.MeshStandardMaterial({ color: c, metalness: kind === 'hot' ? 0.85 : 0.55, roughness: kind === 'hot' ? 0.42 : 0.6, side: THREE.DoubleSide, ...(kind === 'hot' ? { roughnessMap: brushedTexture() } : {}) })),
   // inside of exhaust pipes and stacks: sooty, dull
   exhaust: () => cached('exhaust', () => new THREE.MeshStandardMaterial({ color: 0x0d0c0b, metalness: 0, roughness: 1 })),
   // instrument faces (planar UVs 0..1)
