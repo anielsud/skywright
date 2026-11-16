@@ -338,7 +338,11 @@ export class Aircraft {
   steerCmd() { return this.isCar ? clamp(this.ctl.yaw + this.ctl.roll, -1, 1) : this.ctl.yaw; }
   // Steering angle (rad, + = left) of the reference front wheel; steerAngle(w) gives one wheel its own angle.
   steerAngle(w = null) {
-    if (!this.isCar) return -this.ctl.yaw * 0.55 * clamp(1 - this.airspeed / 45, 0.15, 1);
+    if (!this.isCar) {
+      // a steered tail wheel (behind the CoM) turns the opposite way to a nose wheel so the nose still goes where you push (#98)
+      const tail = w && this.com && w.top.z > this.com.z ? -1 : 1;
+      return -tail * this.ctl.yaw * 0.55 * clamp(1 - this.airspeed / 45, 0.15, 1);
+    }
     // cars: full lock (~34°) at walking pace, less as you speed up so corners stay under cornerG (it slides before it tips)
     const v = Math.hypot(this.v.x, this.v.z), L = this.wheelbase || 2.5;
     const th = -this.steerCmd() * Math.min(0.6, Math.atan(L * (this.cornerG || 6) / Math.max(1, v * v)));
