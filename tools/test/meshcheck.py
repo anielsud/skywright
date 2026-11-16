@@ -39,11 +39,13 @@ async def main(a):
     bad = 0
     for r in report:
         ex = r.get('exhaust', {})
-        issues = len(r.get('open', [])) + len(ex.get('hits', [])) + (1 if r.get('error') else 0)
+        issues = len(r.get('open', [])) + len(ex.get('hits', [])) + len(r.get('nav', [])) + (1 if r.get('error') else 0)
         bad += issues
         print(f'{"FAIL" if issues else "PASS"}  {r["name"]:<34} open shells {len(r.get("open", []))}  exhaust paths {ex.get("paths", 0)}, through glass {len(ex.get("hits", []))}')
         if r.get('error'):
             print('      error:', r['error'][:400])
+        for o in r.get('nav', [])[:8]:
+            print(f'      position light: part {o["part"]}: {o["issue"]}')
         for o in r.get('open', [])[:8]:
             print(f'      open: {o["part"]:<16} {o["mat"]:<22} hole {o["loop"]} m round, piece {o["size"]} m at {o["at"]}')
         for h in ex.get('hits', [])[:4]:

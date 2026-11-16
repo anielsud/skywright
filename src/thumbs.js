@@ -9,9 +9,9 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from '../vendor/addons/RoomEnvironment.js';
 import { OutputPass } from '../vendor/addons/postprocessing/OutputPass.js';
-import { buildDesign } from './hangar.js';
+import { buildDesign, uprightStage } from './hangar.js';
 
-const STYLE = 1; // bump when the look of the pictures changes: every picture is redrawn
+const STYLE = 2; // bump when the look of the pictures changes: every picture is redrawn
 export const SAVED_SIZE = [320, 240], STOCK_SIZE = [400, 300];
 const SS = 2; // drawn at twice the size and scaled down: smooth edges on thin wings and struts
 
@@ -85,13 +85,15 @@ class Studio {
   async draw(design, [w, h], quality) {
     const W = w * SS, H = h * SS, r = this.r, scene = this.scene;
     this.targets(W, H); this.cam.aspect = w / h;
-    const root = new THREE.Group(); scene.add(root);
+    const root = new THREE.Group(); scene.add(root); let stand = null;
     try {
       buildDesign(design, root, { near: false });
+      const up = uprightStage(design, root); // vertical launchers stand on a launch stand, as in the hangar
+      if (up) { stand = up.stand; scene.add(stand); root.position.y = up.y; }
       root.updateMatrixWorld(true);
       let box = new THREE.Box3().setFromObject(root);
       if (box.isEmpty()) box = new THREE.Box3(V().set(-1, 0, -1), V().set(1, 1, 1));
-      root.position.y = -box.min.y; root.updateMatrixWorld(true); box.translate(V().set(0, -box.min.y, 0));
+      if (!up) { root.position.y = -box.min.y; root.updateMatrixWorld(true); box.translate(V().set(0, -box.min.y, 0)); }
       const rad = Math.max(1, box.getSize(V()).length() / 2), c = box.getCenter(V());
       this.ground.scale.setScalar(rad * 8); this.ground.position.set(c.x, 0, c.z);
       const key = this.key, sc = key.shadow.camera;
@@ -108,6 +110,7 @@ class Studio {
       } finally { r.setRenderTarget(prevRT); r.shadowMap.autoUpdate = prevAuto; r.xr.enabled = prevXr; }
     } finally {
       scene.remove(root); root.traverse((o) => o.geometry?.dispose()); // materials are the shared part/livery ones
+      if (stand) { scene.remove(stand); stand.traverse((o) => o.geometry?.dispose()); }
     }
     // GL rows run bottom-up: flip into a canvas, then scale down into the picture
     const big = document.createElement('canvas'); big.width = W; big.height = H;

@@ -6,8 +6,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { M } from './materials.js';
-import { PM } from './planeMaterials.js';
-import { revolve } from './parts.js'; // (circular, used at build time only)
+import { PM, lightGeometry } from './planeMaterials.js';
+import { revolve, airfoil } from './parts.js'; // (circular, used at build time only)
 
 export const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const KEEP = ['position', 'normal', 'uv', 'uv1'];
@@ -549,16 +549,18 @@ export function strutFlare(top, dir, n, w, c, fwd) {
 // to the skin they really meet (route.legs), plus braces to structure (route.braces). Without a route (part pictures)
 // the legs run to the part origin as before.
 const oleoK = 1.7; // chord / thickness of a faired oleo cylinder
-function gearDims({ len, r, w, bogie }) {
+function gearDims({ len, r, w, bogie, tail }) {
   const ww = w || r * 0.6, ro = 0.04 + r * 0.085, cl = len - r * 1.25 - 0.08;
-  const kind = bogie ? 'bogie' : r * 1.1 + 0.04 > len * 0.8 ? 'car' : 'oleo';
-  return { ww, ro, cl, kind, gland: kind === 'bogie' ? len * 0.4 : kind === 'car' ? len * 0.5 : len - cl * 0.62 };
+  const kind = bogie ? 'bogie' : tail ? 'tail' : r * 1.1 + 0.04 > len * 0.8 ? 'car' : 'oleo';
+  return { ww, ro, cl, kind, gland: kind === 'bogie' ? len * 0.4 : kind === 'car' ? len * 0.5 : kind === 'tail' ? r * 1.25 + 0.06 : len - cl * 0.62 };
 }
+// tail wheel: the swivel axis runs down ahead of the axle (the wheel castors behind it)
+const tailCaster = (r) => -r * 0.5;
 // Where the legs start, in the wheel frame. side: the side of the wheel a spring leg runs down (+1 / -1), or 0 for a
 // yoke either side of the wheel (a gear on the centreline). Oleo legs start at the gland nut on the wheel's axis.
 export function gearAnchors(o, side = -1) {
   if (o.fairing) { const x = gearDims(o).ww * 0.5 + 0.05, y = o.r * 0.05; return side ? [V(side * x, y, 0)] : [V(-x, y, 0), V(x, y, 0)]; }
-  return [V(0, gearDims(o).gland, 0)];
+  return [V(0, gearDims(o).gland, o.tail ? tailCaster(o.r) : 0)];
 }
 function defaultRoute(o) {
   const { ro, cl, kind } = gearDims(o), T = V(0, -o.len, 0);
@@ -596,7 +598,8 @@ function buildGearLeg(o, route, leg, fixed, wheels) {
   const fU = new Bag(), fUN = new Bag(); // piston and lower torque link: also raked with the leg about the fork crown
   const legs = R.legs.map((l) => ({ ...l, aL: toL(l.a), topL: toL(l.top), kneeL: l.knee ? toL(l.knee) : null }));
   // the legs: from the anchor (via a knee where the straight path was blocked) to the top, streamlined, plus boots
-  const legW = o.fairing ? 0.036 : kind === 'bogie' ? ro * 3 : ro * 2, legC = o.fairing ? 0.12 : legW * oleoK;
+  // (a tail wheel's leg is a leaf spring: a flat strap, wide across and thin fore and aft)
+  const legW = o.fairing ? 0.036 : kind === 'bogie' ? ro * 3 : kind === 'tail' ? r * 0.45 : ro * 2, legC = o.fairing ? 0.12 : kind === 'tail' ? r * 0.13 : legW * oleoK;
   for (const l of legs) {
     const pts = [l.a, ...(l.knee ? [l.knee] : []), l.top];
     for (let i = 0; i < pts.length - 1; i++) sB.add(fairedBar(pts[i], pts[i + 1].clone().addScaledVector(pts[i + 1].clone().sub(pts[i]).normalize(), i < pts.length - 2 ? legW * 0.3 : 0), legW, legC, fwd), paint);
@@ -635,6 +638,17 @@ function buildGearLeg(o, route, leg, fixed, wheels) {
     lN.add(tube(coil, 0.012, 4, 80), M.propTip());
     const piston = new THREE.CylinderGeometry(ro * 0.7, ro * 0.7, len * 0.6, 10); piston.translate(0, len * 0.3, 0); fB.add(piston, chrome);
     fB.add(bar(V(0, 0, 0), V(-(ww * 0.5 + 0.02), 0, 0), 0.07, 0.07, true, 8), steel);
+  } else if (kind === 'tail') {
+    // tail wheel: the leaf-spring leg ends in a swivel head; below it a castering fork (crown ahead of the axle, slim legs
+    // either side of the tyre) carries a small solid tyre on its hub, with a steering horn across the crown. Fork, horn and
+    // wheel turn with the steering (wheelsFixed follows the wheel).
+    const hp = lg0.aL, hr = r * 0.2, crown = hp.y - 0.05, zc = hp.z, fx = ww * 0.5 + r * 0.1;
+    const head = new THREE.CylinderGeometry(hr, hr * 1.15, 0.07, 14); head.translate(hp.x, hp.y - 0.02, hp.z); lB.add(head, steel);
+    const cap = new THREE.CylinderGeometry(hr * 0.6, hr * 0.6, 0.02, 10); cap.translate(hp.x, hp.y + 0.025, hp.z); lN.add(cap, chrome);
+    const cr = new THREE.BoxGeometry(2 * fx + r * 0.16, r * 0.14, r * 0.36); cr.translate(0, crown, zc); fB.add(cr, steel);
+    for (const sx of [-1, 1]) fB.add(bar(V(sx * fx, crown, zc), V(sx * fx, 0, 0), r * 0.1, r * 0.22), steel);
+    const axle = new THREE.CylinderGeometry(r * 0.12, r * 0.12, 2 * fx + r * 0.2, 8); axle.rotateZ(Math.PI / 2); fB.add(axle, steel);
+    const horn = bar(V(-r * 0.75, crown + r * 0.1, zc), V(r * 0.75, crown + r * 0.1, zc), r * 0.1, r * 0.08); fN.add(horn, steel);
   } else {
     // oleo: faired cylinder (the routed leg) + gland nut; chrome piston, fork crown, fork legs and axle ride with the wheel
     lB.add(fairedBar(V(0, gland - 0.018, 0), V(0, gland + 0.018, 0), legW * 1.12, legC * 1.12), steel); // gland nut
@@ -761,10 +775,20 @@ export function cockpitBuild(id, color) {
   return g;
 }
 // Detail build of the open cockpit: windscreen, coaming rim, a padded seat; the pilot (or driver) comes from crew.js.
+// The windscreen is a little curved, raked screen in a metal frame standing on the front of the coaming (its base at the
+// group origin): skinBlend moves it onto the seam when the cockpit is seated in a body, and leaves it untrimmed.
 export function openCockpitBuild(color) {
   const g = new THREE.Group(), b = new Bag();
-  const ws = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.25, 16, 1, true, -0.9, 1.8), PM.canopy()); ws.position.set(0, 0.12, -0.2); ws.rotation.y = Math.PI; g.add(ws);
-  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.05, 8, 24), PM.skin(color)); rim.rotation.x = Math.PI / 2; rim.scale.set(1, 1.4, 1); g.add(rim); g.userData.rim = rim;
+  const screen = new THREE.Group(), sb = new Bag(), Rw = 0.34, A = 0.75, H = 0.24, rake = 0.55;
+  const wsG = new THREE.CylinderGeometry(Rw, Rw, H, 20, 1, true, Math.PI - A, 2 * A); wsG.translate(0, H / 2, Rw); // front of the arc at z = 0
+  const tilt = new THREE.Matrix4().makeRotationX(rake); wsG.applyMatrix4(tilt); // top leaning back
+  const glass = new THREE.Mesh(wsG, PM.canopy(0x3c5262)); glass.userData.screenGlass = true; glass.castShadow = false; screen.add(glass);
+  const arc = (y) => { const o = []; for (let i = 0; i <= 12; i++) { const a = Math.PI - A + 2 * A * (i / 12); o.push(V(Math.sin(a) * Rw * 1.01, y, Rw + Math.cos(a) * Rw * 1.01).applyMatrix4(tilt)); } return o; };
+  sb.add(pipe(arc(H), 0.011, 6, 40), M.chrome()); // top rail
+  for (const i of [0, 12]) { const p = arc(0)[i], q = arc(H)[i]; sb.add(bar(p, q, 0.022, 0.022, true, 6), M.chrome()); } // side posts
+  const foot = arc(0); sb.add(pipe(foot, 0.014, 6, 40), M.darkMetal()); // base strip on the coaming
+  sb.to(screen); screen.position.set(0, 0.03, -0.52); g.add(screen); g.userData.screen = screen;
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.06, 10, 32), leatherMat(color)); rim.rotation.x = Math.PI / 2; rim.scale.set(1, 1.4, 1); g.add(rim); g.userData.rim = rim; // padded coaming (skinBlend swaps it for one along the seam)
   const st = seatGeo(0.4, 0.5, 0.36, 0.3); st.translate(0, -0.36, 0.32); b.add(st, PM.seat());
   const hrest = new THREE.CapsuleGeometry(0.06, 0.12, 4, 10); hrest.rotateZ(Math.PI / 2); hrest.scale(1, 1, 0.6); hrest.translate(0, 0.17, 0.48); b.add(hrest, PM.seat());
   b.to(g);
@@ -951,4 +975,137 @@ export function strutDetail(g, color) {
     const bolt = new THREE.CylinderGeometry(0.012, 0.012, 0.06, 6); bolt.rotateZ(Math.PI / 2); bolt.translate(0, sy * 0.8, 0); nb.add(bolt, M.steel());
   }
   b.to(g); nb.to(g, true);
+}
+
+// ---------- small fittings: greenhouse nose, electric fan motor, landing and position lights, pylon ----------
+const _pdm = new Map();
+const pdMat = (k, make) => { if (!_pdm.has(k)) _pdm.set(k, make()); return _pdm.get(k); };
+// polished reflector (seen from inside a lamp bowl): mirror metal on both faces
+const mirrorMat = () => pdMat('mirror', () => new THREE.MeshStandardMaterial({ color: 0xf4f6f8, metalness: 1, roughness: 0.06, side: THREE.DoubleSide }));
+// padded leather (cockpit coamings, cushions)
+export const leatherMat = (c = 0x4a2e1c) => pdMat('leather' + c, () => new THREE.MeshStandardMaterial({ color: c, metalness: 0, roughness: 0.62 }));
+
+// Greenhouse nose (ck_glassnose detail): the same dome as the plain part (radius 0.7 at the base ring, 0.98 long, looking
+// forward along -z), glazed with real canopy glass and framed like a bomber's nose: meridian frames from the base ring to a
+// nose ring and two hoops across them, so the glass reads as panes (the plain part's rings floated in the air), and a
+// ball-mounted gun in the nose ring. Inside, behind the glass: a floor, the bomb aimer's cushion, a bombsight, an ammunition
+// box and the gun's breech; a bulkhead closes the back. A hidden skirt behind the base is shown and trimmed by skinBlend
+// when the nose is seated on a body.
+export function glassNoseBuild(color) {
+  const g = new THREE.Group(), b = new Bag(), nb = new Bag(), paint = PM.skin(color), R = 0.7, L = 0.98, dark = M.darkMetal(), tint = 0x2f4656;
+  const P = (psi, phi, t = 0) => V((R + t) * Math.sin(psi) * Math.cos(phi), (R + t) * Math.sin(psi) * Math.sin(phi), -(L + t) * Math.cos(psi));
+  const dome = new THREE.SphereGeometry(1, 48, 24, 0, Math.PI * 2, 0, Math.PI / 2); dome.rotateX(-Math.PI / 2); dome.scale(R, R, L);
+  g.add(new THREE.Mesh(dome, PM.canopy(tint)));
+  const skirt = new THREE.CylinderGeometry(1, 1, 0.5, 48, 1, true); skirt.rotateX(Math.PI / 2); skirt.scale(R, R, 1); skirt.translate(0, 0, 0.25);
+  const sk = new THREE.Mesh(skirt, PM.canopy(tint)); sk.visible = false; sk.userData.glassSkirt = true; g.add(sk);
+  const psiTip = 0.3, NR = 10, fr = 0.017;
+  for (let k = 0; k < NR; k++) { // meridian frames, base ring to nose ring
+    const phi = (k / NR) * Math.PI * 2 + Math.PI / 2, pts = [];
+    for (let i = 0; i <= 10; i++) pts.push(P(psiTip + (Math.PI / 2 - psiTip) * (i / 10), phi, fr * 0.6));
+    b.add(pipe(pts, fr, 6, 30), paint);
+  }
+  for (const [psi, r] of [[0.95, 0.014], [1.3, 0.014], [Math.PI / 2, 0.03], [psiTip, 0.024]]) { // hoops, base ring, nose ring
+    const pts = []; for (let i = 0; i < 40; i++) pts.push(P(psi, (i / 40) * Math.PI * 2, r * 0.6));
+    b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 80, r, 6, true), paint);
+  }
+  // ball mount and gun in the nose ring
+  const zt = -L * Math.cos(psiTip), ball = new THREE.SphereGeometry(0.13, 20, 14); ball.scale(1, 1, 0.8); ball.translate(0, 0, zt - 0.02); b.add(ball, dark);
+  const gd = V(0, -0.12, -1).normalize(), g0 = V(0, -0.01, zt - 0.1);
+  b.add(bar(g0, g0.clone().addScaledVector(gd, 0.62), 0.032, 0.032, true, 10), M.black()); // barrel
+  nb.add(bar(g0.clone().addScaledVector(gd, 0.04), g0.clone().addScaledVector(gd, 0.3), 0.06, 0.06, true, 12), dark); // cooling jacket
+  nb.add(bar(g0.clone().addScaledVector(gd, 0.58), g0.clone().addScaledVector(gd, 0.66), 0.05, 0.05, true, 10), dark); // flash hider
+  const breech = new THREE.BoxGeometry(0.09, 0.1, 0.26); breech.translate(0, 0.0, zt + 0.2); b.add(breech, M.black());
+  nb.add(bar(V(-0.07, -0.02, zt + 0.34), V(0.07, -0.02, zt + 0.34), 0.03, 0.03, true, 8), M.black()); // spade grips
+  // the bomb aimer's station: floor, cushion, bombsight with its eyepiece, an ammunition box; bulkhead at the back
+  const floor = new THREE.BoxGeometry(0.8, 0.03, 0.62); floor.translate(0, -0.41, -0.25); b.add(floor, M.paint(0x3a3d42, 'matte'));
+  const cush = new THREE.CapsuleGeometry(0.1, 0.32, 4, 10); cush.rotateX(Math.PI / 2); cush.scale(1.3, 0.45, 1); cush.translate(0.12, -0.37, -0.12); b.add(cush, leatherMat());
+  const sight = new THREE.BoxGeometry(0.13, 0.16, 0.14); sight.translate(-0.16, -0.31, -0.5); b.add(sight, M.paint(0x2b3a2a, 'matte'));
+  const eye = new THREE.CylinderGeometry(0.022, 0.03, 0.12, 10); eye.rotateX(-0.6); eye.translate(-0.16, -0.19, -0.44); nb.add(eye, M.black());
+  const ammo = new THREE.BoxGeometry(0.16, 0.13, 0.2); ammo.translate(0.22, -0.33, -0.48); b.add(ammo, M.paint(0x4b5320, 'matte'));
+  const bulk = new THREE.CircleGeometry(R * 0.985, 40); bulk.rotateY(Math.PI); bulk.translate(0, 0, 0.004); b.add(bulk, M.paint(0x2e3136, 'matte'));
+  b.to(g); nb.to(g, true);
+  return g;
+}
+
+// Electric fan detail: the fan sits on a can motor (finned can, cooling slots, end bell, three phase leads) held in the
+// duct by four stator vanes, with a short shaft and a proper spinner ahead of the blades (the plain part's flat black
+// blades and chrome ball read as a black disc).
+export function electricMotorDetail(g, { r = 0.4, zFan = -0.05, ductR = 0.385 } = {}) {
+  const b = new Bag(), nb = new Bag(), can = PM.metal('anodised'), alu = PM.metal('brushed');
+  const rc = r * 0.34, z0 = zFan + 0.08, z1 = zFan + 0.36;
+  b.add(revolve(smoothPts([[zFan - 0.29, 0], [zFan - 0.26, rc * 0.42], [zFan - 0.18, rc * 0.78], [zFan - 0.08, rc * 0.95], [zFan - 0.02, rc]], 14).concat([[zFan - 0.019, 0]]), { segs: 24 }), PM.metal('polished'));
+  const shaft = new THREE.CylinderGeometry(rc * 0.22, rc * 0.22, 0.14, 12); shaft.rotateX(Math.PI / 2); shaft.translate(0, 0, zFan + 0.03); b.add(shaft, M.steel());
+  const body = new THREE.CylinderGeometry(rc, rc, z1 - z0, 28); body.rotateX(Math.PI / 2); body.translate(0, 0, (z0 + z1) / 2); b.add(body, can);
+  for (let k = 0; k < 7; k++) { const f = new THREE.CylinderGeometry(rc * 1.16, rc * 1.16, 0.012, 28); f.rotateX(Math.PI / 2); f.translate(0, 0, z0 + 0.05 + k * 0.032); b.add(f, can); }
+  for (let k = 0; k < 10; k++) { // cooling slots in the front face
+    const a = (k / 10) * Math.PI * 2, s = new THREE.PlaneGeometry(rc * 0.36, rc * 0.12); s.rotateZ(a); s.rotateY(Math.PI); s.translate(Math.cos(a) * rc * 0.62, Math.sin(a) * rc * 0.62, z0 - 0.002); nb.add(s, M.black());
+  }
+  b.add(revolve([[z1 - 0.002, 0], [z1, rc], [z1 + 0.03, rc * 0.82], [z1 + 0.05, rc * 0.4], [z1 + 0.052, 0.01], [z1 + 0.053, 0]], { segs: 24 }), alu); // end bell
+  for (let k = 0; k < 4; k++) { // stator vanes: the motor mount, from the can out to the duct wall
+    const a = (k / 4) * Math.PI * 2 + Math.PI / 4, c = Math.cos(a), s = Math.sin(a);
+    b.add(bar(V(c * rc * 0.95, s * rc * 0.95, z1 - 0.1), V(c * ductR, s * ductR, z1 - 0.06), 0.016, 0.09), alu);
+  }
+  [0xc0392b, 0x111111, 0xd4a017].forEach((col, k) => { const a = -Math.PI / 2 + (k - 1) * 0.18; nb.add(tube([V(Math.cos(a) * rc * 0.9, Math.sin(a) * rc * 0.9, z1 + 0.01), V(Math.cos(a) * rc * 1.6, Math.sin(a) * rc * 1.6, z1 + 0.03), V(Math.cos(a) * ductR * 0.98, Math.sin(a) * ductR * 0.98, z1 + 0.06)], 0.008, 5, 10), M.paint(col, 'gloss')); });
+  b.to(g); nb.to(g, true);
+}
+
+// Landing light (x_landlight detail): a tapered, painted can with a chrome bezel, a polished parabolic reflector bowl, a
+// glowing lamp in its focus behind a little shield, and a clear domed cover glass; two mounting lugs. Lens faces -z.
+export function landLightBuild(color) {
+  const g = new THREE.Group(), b = new Bag(), nb = new Bag(), R = 0.112;
+  const can = new THREE.Mesh(revolve([[-0.072, R + 0.004], [-0.066, 0.124], [0.03, 0.118], [0.07, 0.095], [0.08, 0.05], [0.082, 0]], { segs: 32 }), PM.skin(color));
+  can.userData.openOk = 'front: the reflector bowl and bezel fill it'; g.add(can);
+  b.add(revolve(smoothPts([[-0.07, R], [-0.05, R * 0.82], [-0.03, R * 0.56], [-0.012, R * 0.28], [-0.004, 0.012]], 12), { segs: 32 }), mirrorMat());
+  const bez = new THREE.TorusGeometry(R + 0.006, 0.011, 8, 36); bez.translate(0, 0, -0.072); b.add(bez, M.chrome());
+  const lampG = new THREE.SphereGeometry(0.026, 14, 10); lampG.scale(1, 1, 1.3); lampG.translate(0, 0, -0.03);
+  const lamp = new THREE.Mesh(lightGeometry(lampG, 2), PM.light()); lamp.userData.planeLight = true; lamp.userData.cosmetic = true; lamp.castShadow = false; g.add(lamp);
+  const sh = new THREE.CylinderGeometry(0.03, 0.03, 0.012, 14); sh.rotateX(Math.PI / 2); sh.translate(0, 0, -0.06); nb.add(sh, M.chrome()); // bulb shield
+  const rs = 0.3, th = Math.asin((R + 0.004) / rs), cap = new THREE.SphereGeometry(rs, 32, 4, 0, Math.PI * 2, 0, th); cap.rotateX(-Math.PI / 2); cap.translate(0, 0, -0.072 + rs * Math.cos(th));
+  const glass = new THREE.Mesh(cap, PM.canopy(0x8fa4b4)); glass.userData.cosmetic = true; glass.castShadow = false; g.add(glass);
+  for (const sx of [-1, 1]) { const lug = new THREE.BoxGeometry(0.02, 0.05, 0.06); lug.translate(sx * 0.06, 0.11, 0.03); nb.add(lug, M.darkMetal()); }
+  b.to(g); nb.to(g, true);
+  return g;
+}
+
+// Position light (x_navlight detail): a streamlined teardrop housing (half sunk into the skin it sits on) with a domed
+// lens over its front half. The lens is the part's bulb: aircraft.js colours it by side in flight (red left, green right,
+// white on the centreline) and blinks the white strobe; the assembly pass gives it the same colour in the hangar and
+// turns the head to face the airflow whatever the part's rotation (planeDetail.navLight). userData.navHead is the head.
+export function navLightBuild(color) {
+  const g = new THREE.Group(), head = new THREE.Group(), b = new Bag(), yc = 0.03;
+  const house = revolve(smoothPts([[-0.13, 0], [-0.115, 0.032], [-0.07, 0.056], [0.0, 0.06], [0.08, 0.042], [0.15, 0.012], [0.165, 0]], 18), { segs: 24, sy: 0.85 });
+  house.translate(0, yc, 0); b.add(house, PM.skin(color));
+  const base = new THREE.CylinderGeometry(0.07, 0.085, 0.03, 18); base.scale(1, 1, 1.9); base.translate(0, -0.005, 0.02); b.add(base, PM.skin(color));
+  const lensG = revolve(smoothPts([[-0.142, 0], [-0.125, 0.036], [-0.08, 0.062], [-0.03, 0.068], [-0.004, 0.066]], 14).concat([[-0.003, 0]]), { segs: 24, sy: 0.85 }); lensG.translate(0, yc, 0);
+  const lens = new THREE.Mesh(lensG, navLensMat().clone()); lens.castShadow = false; lens.userData.cosmetic = true; lens.userData.navLens = true; head.add(lens);
+  const bulbG = new THREE.SphereGeometry(0.03, 12, 8); bulbG.scale(1, 0.85, 1.4); bulbG.translate(0, yc, -0.06);
+  const bulb = new THREE.Mesh(bulbG, M.light(0xffffff).clone()); bulb.castShadow = false; head.add(bulb);
+  const bez = new THREE.TorusGeometry(0.064, 0.007, 6, 28); bez.scale(1, 0.85, 1); bez.translate(0, yc, -0.004); b.add(bez, M.chrome());
+  b.to(head); g.add(head);
+  g.userData.bulb = bulb; g.userData.navHead = head; g.userData.navLens = lens;
+  return g;
+}
+// coloured glass over the lamp: tinted, glossy, a little self-lit so it reads as a lit lens by day (cloned per light: the
+// assembly pass sets each one's colour)
+const navLensMat = () => pdMat('navLens', () => new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.9, metalness: 0, roughness: 0.1, transparent: true, opacity: 0.86, depthWrite: false }));
+// the colour a position light shows at this lateral position (vehicle frame): the rule aircraft.js uses for the bulb
+export const navColour = (x) => (x < -0.5 ? 0xff2020 : x > 0.5 ? 0x20ff40 : 0xffffff);
+
+// Pylon (x_pylon detail): an aerofoil-section pylon on the plain part's planform (top chord 1.7 m, bottom 0.9 m, 0.8 m
+// deep, 12 cm thick) instead of a flat slab: a rounded leading edge, a root that flares out and runs forward and aft into a
+// fillet where it meets the wing above, and a keel fairing with sway braces for whatever hangs below. Front -z, top y = 0.
+export function pylonBuild(color) {
+  const g = new THREE.Group(), b = new Bag(), nb = new Bag(), paint = PM.skin(color);
+  const { up, lo } = airfoil(18, 1, 0), sec = [...up.slice().reverse(), ...lo.slice(1, -1)]; // unit-thickness section: TE, upper, LE, lower
+  const rings = [], N = 14;
+  for (let k = 0; k <= N; k++) {
+    const t = k / N, y = -0.8 * t, fl = t < 0.25 ? (1 - t / 0.25) ** 2 : 0; // root flare
+    const le = -0.9 + 0.4 * t - 0.25 * fl, te = 0.8 - 0.4 * t + 0.14 * fl, ch = te - le, half = 0.06 * (1 + 1.8 * fl);
+    rings.push(sec.map(([x, yy]) => V(yy * half * 2, y, le + x * ch))); // (unit thickness: |yy| peaks at 0.5)
+  }
+  b.add(ringLoft(rings, true, true), paint);
+  const keel = new THREE.CapsuleGeometry(0.05, 0.62, 4, 10); keel.rotateX(Math.PI / 2); keel.scale(1, 0.6, 1); keel.translate(0, -0.8, -0.05); b.add(keel, paint);
+  for (const z of [-0.3, 0.2]) for (const sx of [-1, 1]) nb.add(bar(V(sx * 0.04, -0.8, z), V(sx * 0.16, -0.92, z), 0.025, 0.025, true, 6), M.darkMetal());
+  b.to(g); nb.to(g, true);
+  return g;
 }

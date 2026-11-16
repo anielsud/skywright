@@ -79,8 +79,12 @@ function chaikin(secs, passes = 2) {
 
 // ---------- wheels ----------
 // Knobby tyre around X: a lathe of the tyre section with staggered tread blocks (and shoulder lugs) pushed out.
-function knobbyTyre(r, w, { blocks = 18, rim = 0.6, knob = 0.045, closed = false } = {}) {
-  const NA = blocks * 8, prof = [];
+// lugs (monster tyres): deep chevron paddle lugs, as deep as a tenth of the radius, cut down into the carcass so their
+// tops stay at the rolling radius. Still one lathe: the tread costs no extra meshes or draw calls.
+function knobbyTyre(r, w, { blocks = 18, rim = 0.6, knob = 0.045, closed = false, lugs = false } = {}) {
+  if (lugs) knob = Math.max(knob, r * 0.1);
+  const sink = lugs ? knob * 0.65 : 0, skew = lugs ? 0.55 : 0;
+  const NA = blocks * (lugs ? 12 : 8), prof = [];
   const ri = r * rim, sh = Math.min(r * 0.18, w * 0.3); // inner (bead) radius, shoulder rounding
   // section from the left bead round the tread to the right bead: [x, rho, tread?]
   for (let i = 0; i <= 4; i++) { const t = i / 4; prof.push([-w / 2 + 0.01 * Math.sin(t * Math.PI), ri + (r - sh - ri) * t, 0]); }
@@ -90,9 +94,10 @@ function knobbyTyre(r, w, { blocks = 18, rim = 0.6, knob = 0.045, closed = false
   for (let i = 1; i <= 4; i++) { const t = i / 4; prof.push([w / 2 - 0.01 * Math.sin(t * Math.PI), r - sh - (r - sh - ri) * t, 0]); }
   const pos = [], uv = [], idx = [], NP = prof.length;
   for (let a = 0; a <= NA; a++) {
-    const ph = (a / NA) * Math.PI * 2, cell = Math.floor((a / NA) * blocks * 2 + 0.5) % (blocks * 2), sub = ((a / NA) * blocks * 2 + 0.5) % 1;
+    const ph = (a / NA) * Math.PI * 2;
     for (let j = 0; j < NP; j++) {
-      const [x, rho, tr] = prof[j], side = x > 0 ? 1 : 0;
+      const [x, rho0, tr] = prof[j], side = x > 0 ? 1 : 0, rho = tr ? rho0 - sink * (tr === 1 ? 1 : 0.6) : rho0;
+      const u = (a / NA) * blocks * 2 + 0.5 + skew * Math.abs(x) / w, cell = Math.floor(u) % (blocks * 2), sub = u % 1; // (skewed: chevrons)
       // block pattern: alternating left / right blocks, wide shoulder lugs every other block
       const onBlock = sub > 0.12 && sub < 0.88 && ((cell + side) % 2 === 0 ? Math.abs(x) > w * 0.04 : Math.abs(x) > w * 0.3);
       const lug = tr === 0.5 && (cell + side) % 2 === 0 && sub > 0.15 && sub < 0.85;
@@ -132,7 +137,7 @@ function beadlockRim(r, w, color, lv) {
 // Off-road corner: knobby tyre on a beadlock rim, coil-over shock (body on the strut, shaft and spring ride with the
 // wheel) and A-arms out to an inboard pivot. Same contract as parts.js gearLeg: origin = strut top, userData.strut /
 // .wheels (children spin about X) / .steer / .wheelsFixed (follows the wheel without spinning).
-function offroadCorner({ r, w, len, color, steer, lv, arm = 0.55, blocks = 18 }) {
+function offroadCorner({ r, w, len, color, steer, lv, arm = 0.55, blocks = 18, lugs = false }) {
   const g = new THREE.Group(), strut = new THREE.Group(), wheels = new THREE.Group(), fixed = new THREE.Group();
   wheels.position.y = -len; fixed.position.y = -len;
   const sB = new Bag(), fB = new Bag(), steel = M.steel(), chrome = M.chrome(), dark = M.darkMetal(), arms = tubePaint(0x26272b);
@@ -152,7 +157,7 @@ function offroadCorner({ r, w, len, color, steer, lv, arm = 0.55, blocks = 18 })
   if (lv) for (const sz of [-1, 1]) { const xp = -w / 2 - arm, zp = sz * r * 0.56; sB.add(bar(V(xp, -len - r * 0.2, zp), V(xp, 0.02, zp * 0.85), r * 0.13, r * 0.06), dark); sB.add(bar(V(xp, -len + r * 0.3, zp), V(xi, -0.02, 0), r * 0.06, r * 0.06, true, 6), dark); }
   const axle = new THREE.CylinderGeometry(r * 0.05, r * 0.05, w * 0.6, 8); axle.rotateZ(Math.PI / 2); axle.translate(-w * 0.2, 0, 0); fB.add(axle, steel);
   // the spinning wheel: tyre + rim
-  const wh = new THREE.Group(); const tb = new Bag(); tb.add(knobbyTyre(r, w, { blocks, closed: !!lv }), knobby()); tb.to(wh); beadlockRim(r, w, color, lv).to(wh);
+  const wh = new THREE.Group(); const tb = new Bag(); tb.add(knobbyTyre(r, w, { blocks, closed: !!lv, lugs: lugs && !!lv }), knobby()); tb.to(wh); beadlockRim(r, w, color, lv).to(wh);
   wheels.add(wh);
   sB.to(strut); fB.to(fixed); strut.add(fixed); strut.add(wheels); g.add(strut);
   g.userData.strut = strut; g.userData.wheels = wheels; g.userData.steer = steer; g.userData.wheelsFixed = fixed;
@@ -313,14 +318,47 @@ function truckCab(g, S0, c) {
 // Helicopter cabin: a body of revolution (so planeDetail can dress it like any fuselage) with a raised tail joint.
 const HELI_PROF = [[-1.05, 0.0], [-1.05, 0.62], [-0.85, 0.82], [-0.2, 0.9], [0.6, 0.86], [1.3, 0.62], [1.9, 0.36], [2.3, 0.22]];
 const heliYOff = (z) => (z > 0.5 ? (z - 0.5) * 0.2 : 0);
-function heliCabin(c) {
+function heliCabin(c, lv) {
   const g = new THREE.Group(), prof = smoothProfile(HELI_PROF, 40);
-  g.add(new THREE.Mesh(revolve(prof, { sy: 1.12, sx: 0.92, yOff: heliYOff, segs: 40, cap: true }), PM.skin(c)));
+  if (lv) heliCabinDetail(g, prof, c); else g.add(new THREE.Mesh(revolve(prof, { sy: 1.12, sx: 0.92, yOff: heliYOff, segs: 40, cap: true }), PM.skin(c)));
   g.userData.body = { prof, sx: 0.92, sy: 1.12, yOff: heliYOff };
   // engine cowling hump on top, exhausts
   const hump = revolve(smoothProfile([[-0.2, 0], [0.0, 0.3], [0.8, 0.36], [1.5, 0.22], [1.75, 0]], 20), { segs: 24, sy: 0.7, sx: 1.1, cap: true }); hump.translate(0, 0.86, 0); g.add(new THREE.Mesh(hump, PM.skin(c)));
   const b = new Bag(); for (const sx of [-1, 1]) { const ex = new THREE.CylinderGeometry(0.08, 0.1, 0.32, 12); ex.rotateX(Math.PI / 2.6); ex.translate(sx * 0.3, 1.08, 1.45); b.add(ex, M.darkMetal()); } b.to(g);
   return g;
+}
+// Detail cabin: no flat disc on the front. A glazed, rounded nose (glass over the top and front with a centre post and a
+// framed edge, a painted chin below), a dark cabin seen through it with two seats and a console (crew.js seats the crew),
+// and at the back a tapered fairing with a bolted collar where a tail boom plugs in. The whole nose (userData.noseCap)
+// is put away by the assembly pass when another part covers the front (a Bubble Nose): then that is the cabin's nose.
+function heliCabinDetail(g, prof, c) {
+  const sx = 0.92, sy = 1.12, front = prof.findIndex(([, r]) => r > 0.5), z0 = prof[front][0], r0 = prof[front][1];
+  const geo = revolve(prof.slice(front), { sy, sx, yOff: heliYOff, segs: 48, cap: false });
+  const sk = new THREE.Mesh(geo, PM.skin(c)); sk.userData.openOk = 'glazed nose in front, boom fairing behind'; g.add(sk);
+  const inner = new THREE.Mesh(geo, mat('heliIn', () => new THREE.MeshStandardMaterial({ color: 0x4a4e55, roughness: 0.9, side: THREE.BackSide }))); inner.castShadow = false; g.add(inner);
+  // nose: half an ellipsoid on the front ring, glass above a chin line, paint below (with a wall)
+  const nose = new THREE.Group(), b = new Bag(), nb = new Bag(), rx = r0 * sx, ry = r0 * sy, L = 0.62;
+  const dome = new THREE.SphereGeometry(1, 40, 20, 0, Math.PI * 2, 0, Math.PI / 2); dome.rotateX(-Math.PI / 2); dome.scale(rx, ry, L); dome.translate(0, 0, z0);
+  const P = dome.attributes.position, up = new Float32Array(P.count), dn = new Float32Array(P.count);
+  for (let i = 0; i < P.count; i++) { const y = P.getY(i), z = P.getZ(i), chin = -0.28 * ry - 0.35 * (z0 - z); up[i] = y - chin; dn[i] = chin - y; }
+  const glass = clipGeometry(dome, up), chin = clipGeometry(dome, dn);
+  if (glass) nose.add(new THREE.Mesh(glass, PM.canopy(0x1d2a33)));
+  if (chin) b.add(shell(chin, 0.02), PM.skin(c));
+  const ring = new THREE.TorusGeometry(1, 0.03, 8, 48); ring.scale(rx, ry, 1); ring.translate(0, 0, z0); b.add(ring, PM.skin(c));
+  const post = []; for (let i = 0; i <= 12; i++) { const a = (i / 12) * Math.PI * 0.62; post.push(V(0, Math.cos(a) * ry * 1.01, z0 - Math.sin(a) * L * 1.01)); } b.add(pipe(post, 0.022, 6, 30), PM.skin(c));
+  const con = new THREE.BoxGeometry(rx * 0.9, 0.1, 0.24); con.rotateX(-0.55); con.translate(0, -0.3 * ry, z0 + 0.12); b.add(con, M.black());
+  const floor = new THREE.BoxGeometry(rx * 1.5, 0.03, 1.1); floor.translate(0, -0.52, z0 + 0.6); b.add(floor, M.paint(0x2b2d31, 'matte'));
+  for (const s of [-0.3, 0.3]) { const st = seatGeo(0.42, 0.6, 0.38, 0.22); st.translate(s, -0.47, z0 + 0.92); b.add(st, PM.seat()); }
+  { const zb = z0 + 1.25, rb = prof.find(([z]) => z >= zb)?.[1] ?? r0, bh = new THREE.CircleGeometry(rb * 0.99, 40); bh.scale(sx, sy, 1); bh.rotateY(Math.PI); bh.translate(0, heliYOff(zb), zb); b.add(bh, M.paint(0x4a4e55, 'matte')); } // bulkhead behind the seats
+  b.to(nose); nb.to(nose, true); g.add(nose);
+  g.userData.noseCap = { obj: nose, front: [0, 0, z0 - L * 0.6] };
+  g.userData.seats = [{ p: [0.3, -0.45, z0 + 0.77], s: 0.8 }, { p: [-0.3, -0.45, z0 + 0.77], s: 0.8, role: 'crew' }]; // pilot right
+  // tail-boom joint: the cabin's tail tapers on into a short fairing with a bolted collar (closed if nothing plugs in)
+  const [zt, rt] = prof.at(-1), yt = heliYOff(zt), tb = new Bag();
+  const cone = revolve([[zt - 0.011, 0], [zt - 0.01, rt * 1.02], [zt + 0.12, rt * 0.94], [zt + 0.3, rt * 0.8], [zt + 0.31, 0]], { segs: 32, sx, sy }); cone.translate(0, yt, 0); tb.add(cone, PM.skin(c));
+  const col = new THREE.TorusGeometry(rt * 0.84, 0.022, 6, 32); col.scale(sx, sy, 1); col.translate(0, yt, zt + 0.24); tb.add(col, M.darkMetal());
+  for (let k = 0; k < 10; k++) { const a = (k / 10) * Math.PI * 2, bolt = new THREE.SphereGeometry(0.012, 6, 4); bolt.translate(Math.cos(a) * rt * 0.86 * sx, yt + Math.sin(a) * rt * 0.86 * sy, zt + 0.24); tb.add(bolt, M.steel()); }
+  tb.to(g);
 }
 // Bubble nose: glass dome forward of the cabin bulkhead, painted chin, two seats, pilots, instrument console.
 function heliNose(c, lv) {
@@ -357,7 +395,7 @@ def({ id: 'fus_buggy', cat: 'fuselage', name: 'Buggy Tub', desc: 'Low, tough off
 def({ id: 'fus_truck', cat: 'fuselage', name: 'Monster Truck Body', desc: 'Pickup body on a ladder frame. Made for giant wheels.', mass: 620, hp: 2200, color: 0x1d4e89, eye: [-0.3, 1.0, -0.2], mudFlaps: true,
   build: (c, lv) => truckBody(c, lv) });
 def({ id: 'fus_heli', cat: 'fuselage', name: 'Heli Cabin', desc: 'Helicopter cabin with an engine hump. Bubble Nose in front, Tail Boom behind, rotor on top.', mass: 260, hp: 1100, color: 0xc8102e,
-  build: (c) => heliCabin(c) });
+  build: (c, lv) => heliCabin(c, lv) });
 def({ id: 'ck_heli', cat: 'cockpit', name: 'Bubble Nose', desc: 'Wrap-around glass helicopter nose with two seats. Bolts to the front of a Heli Cabin.', mass: 70, hp: 300, color: 0xc8102e, eye: [0.3, 0.4, -0.1],
   build: (c, lv) => heliNose(c, lv) });
 
@@ -366,7 +404,7 @@ const cornerDef = (id, name, desc, mass, o, steer) => def({ id, cat: 'car', name
   build: (c, lv) => offroadCorner({ ...o, color: c, steer, lv }) });
 cornerDef('c_offroad', 'Off-Road Wheel', 'Knobby tyre on long-travel suspension. Drives. Put them at the back.', 55, { r: 0.5, w: 0.42, len: 0.55, limit: 10, hp: 900, color: 0xd9a400 }, false);
 cornerDef('c_offroad_steer', 'Off-Road Steering Wheel', 'Knobby tyre on long-travel suspension. Drives and steers. Put them at the front.', 57, { r: 0.5, w: 0.42, len: 0.55, limit: 10, hp: 900, color: 0xd9a400 }, true);
-cornerDef('c_bigfoot', 'Monster Tyre', 'Gigantic knobby tyre that drives and steers. Climb over anything.', 140, { r: 0.85, w: 0.72, len: 0.7, limit: 12, hp: 1600, color: 0xc8102e, arm: 0.35, blocks: 16 }, true);
+cornerDef('c_bigfoot', 'Monster Tyre', 'Gigantic knobby tyre that drives and steers. Climb over anything.', 140, { r: 0.85, w: 0.72, len: 0.7, limit: 12, hp: 1600, color: 0xc8102e, arm: 0.35, blocks: 16, lugs: true }, true);
 
 def({ id: 'c_rollcage', cat: 'car', name: 'Roll Cage', desc: 'Steel tube cage. Looks tough and keeps the driver safe when you flip.', mass: 45, hp: 1400, color: 0xe8601c,
   build: (c, lv) => {

@@ -17,8 +17,8 @@
 //   flames  : hot-rod flames licking back from z0 for len metres, centred on height yc, half-height h, n tongues.
 //   decal   : a drawing from the livery's `art` (canvas) projected 'side', 'top' or 'front'; at = plane centre
 //             (side: [z, y], top: [x, z], front: [x, y]), size = [w, h] in metres; text: true reads correctly
-//             from both sides.
-// `finish` rules change the paint itself: { on, kind: 'matte' | 'satin' | 'metal' | 'chrome' }.
+//             from both sides; glow: k makes the drawing self-lit (k × its colour, by its alpha): stars that shine.
+// `finish` rules change the paint itself: { on, kind: 'matte' | 'satin' | 'deep' | 'metal' | 'chrome' }.
 import * as THREE from 'three';
 import { PARTS } from './parts.js';
 import { PM } from './planeMaterials.js';
@@ -34,6 +34,7 @@ const PROJ = { side: 0, top: 1, front: 2, around: 3 };
 const LIV_GLSL = /* glsl */`
   uniform highp sampler2D livData; uniform sampler2D livArt; uniform int livMask; uniform int livN;
   varying vec3 vLivPos;
+  vec3 livGlow = vec3(0.0); // self-lit paint (glowing decals), added to the emissive light
   float livHash(float n) { return fract(sin(n * 91.345 + 7.13) * 43758.5453); }
   vec3 livery(vec3 base) {
     vec3 P = vLivPos, dpx = dFdx(P), dpy = dFdy(P);
@@ -85,6 +86,7 @@ const LIV_GLSL = /* glsl */`
           if (flip) { gx.x = -gx.x; gy.x = -gy.x; }
           vec4 tx = textureGrad(livArt, tuv, gx, gy);
           c = tx.rgb; a = tx.a * smoothstep(0.15, 0.35, face);
+          livGlow += c * a * t0.w;
         }
       }
       col = mix(col, c, clamp(a * t1.a, 0.0, 1.0));
@@ -99,7 +101,8 @@ function liveryCompile(base, L, mask) {
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 livPos; varying vec3 vLivPos;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLivPos = livPos;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + LIV_GLSL)
-      .replace('#include <map_fragment>', 'diffuseColor.rgb = livery(diffuseColor.rgb);\n#include <map_fragment>');
+      .replace('#include <map_fragment>', 'diffuseColor.rgb = livery(diffuseColor.rgb);\n#include <map_fragment>')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += livGlow;');
   };
 }
 
@@ -114,7 +117,7 @@ function compile(id) {
   layers.forEach((l, i) => {
     const o = i * 24, set = (k, a) => buf.set(a, o + k * 4), c = lin(l.color ?? 0xffffff);
     const proj = PROJ[l.proj || 'side'];
-    set(0, [TYPE[l.type], (l.absx ? 1 : 0) | (l.text ? 2 : 0), l.type === 'band' ? (2 * Math.PI) / (l.waveLen || 1) : proj, l.type === 'band' ? l.wave || 0 : 0]);
+    set(0, [TYPE[l.type], (l.absx ? 1 : 0) | (l.text ? 2 : 0), l.type === 'band' ? (2 * Math.PI) / (l.waveLen || 1) : proj, l.type === 'band' ? l.wave || 0 : l.type === 'decal' ? l.glow || 0 : 0]);
     set(1, [c.r, c.g, c.b, l.alpha ?? 1]);
     if (l.type === 'band') { set(2, [...(l.dir || [0, 1, 0]), l.off || 0]); set(3, [l.lo ?? -1e6, l.hi ?? 1e6, l.period || 0, l.soft || 0]); }
     if (l.type === 'checker') { const c2 = lin(l.color2 ?? 0x111111); set(2, [l.cell || 0.3, ...(l.origin || [0, 0]), l.radius || 1]); set(3, [c2.r, c2.g, c2.b, l.axisY || 0]); }
@@ -162,6 +165,7 @@ const isSkin = (m) => m && m.isMeshPhysicalMaterial && m.onBeforeCompile === SKI
 const FINISH = {
   gloss: {}, satin: { roughness: 0.5, clearcoat: 0.45 }, matte: { roughness: 0.7, clearcoat: 0.08, clearcoatRoughness: 0.5 },
   metal: { metalness: 0.95, roughness: 0.3, clearcoat: 0.3 }, chrome: { metalness: 1, roughness: 0.12, clearcoat: 0.6 },
+  deep: { roughness: 0.55, clearcoat: 0.3, clearcoatRoughness: 0.25, envMapIntensity: 0.5 }, // soft, dark: reflections don't grey out a black paint job
 };
 function liveryMaterial(L, base, mask, finish) {
   const key = base.uuid + '|' + mask + '|' + finish;
@@ -169,7 +173,7 @@ function liveryMaterial(L, base, mask, finish) {
   const m = base.clone();
   Object.assign(m, FINISH[finish] || {});
   m.onBeforeCompile = liveryCompile(base, L, mask);
-  m.customProgramCacheKey = () => 'skinLivery1';
+  m.customProgramCacheKey = () => 'skinLivery2';
   L.mats.set(key, m);
   return m;
 }
