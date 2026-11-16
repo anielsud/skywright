@@ -223,15 +223,7 @@ export class Hangar {
     clearTimeout(this.fullT); if (quick) this.fullT = setTimeout(() => { this.lastRebuild = -1e9; this.rebuild({ full: true }); }, 200);
     this.designGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.designGroup.clear();
-    const m = new THREE.Matrix4(), objs = [];
-    this.design.parts.forEach((p, i) => {
-      const d = PARTS[p.id]; if (!d) return;
-      const o = d.build(p.color, { detail: 2 }); partMatrix(p, m); m.decompose(o.position, o.quaternion, o.scale); objs[i] = o;
-      o.userData.partIndex = i;
-      o.traverse((c) => { if (c.isMesh) { c.castShadow = !c.material.transparent; c.receiveShadow = true; } if (c.userData.isDisc) c.visible = false; });
-      this.designGroup.add(o);
-    });
-    const t0 = performance.now(); assemble(this.design, objs, this.designGroup, { quick, near: !quick }); this.rebuildMs = performance.now() - t0; this.rebuildQuick = quick;
+    const t0 = performance.now(), objs = buildDesign(this.design, this.designGroup, { quick, near: !quick }).parts; this.rebuildMs = performance.now() - t0; this.rebuildQuick = quick;
     // rest on the floor: lowest point at y=0 (gear touching)
     this.designGroup.position.set(0, 0, 0); this.designGroup.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(this.designGroup);
@@ -319,6 +311,20 @@ export class Hangar {
   setQuality(tier) { this.env.setTier(tier); this.envDirty = true; this.needsRender = true; }
   resize(w, h) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); this.needsRender = true; }
   render() { this.renderer.render(this.scene, this.camera); }
+}
+
+// Build a design's parts under `root` and join them up (planeDetail.js): what the hangar shows, also used for the
+// vehicle pictures in the Vehicles menu (thumbs.js). The caller disposes the geometries when done.
+export function buildDesign(design, root, { quick = false, near = true } = {}) {
+  const m = new THREE.Matrix4(), objs = [];
+  design.parts.forEach((p, i) => {
+    const d = PARTS[p.id]; if (!d) return;
+    const o = d.build(p.color, { detail: 2 }); partMatrix(p, m); m.decompose(o.position, o.quaternion, o.scale); objs[i] = o;
+    o.userData.partIndex = i;
+    o.traverse((c) => { if (c.isMesh) { c.castShadow = !c.material.transparent; c.receiveShadow = true; } if (c.userData.isDisc) c.visible = false; });
+    root.add(o);
+  });
+  return assemble(design, objs, root, { quick, near });
 }
 
 // thumbnails of each part, rendered once

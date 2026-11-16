@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.70.0', items: [
+    'The Vehicles menu has pictures! See every vehicle before you load it, including the ones you saved, and get a preview when you paste a share code.',
+  ] },
   { v: '1.69.0', items: [
     "Pick the moon! Choose tonight's real moon, a full moon, a half moon, a crescent or no moon at all.",
     'The flight menu is tidier: four amazing real places in one row, and the FLY button is right next to the start options.',
