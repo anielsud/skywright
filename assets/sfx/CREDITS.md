@@ -35,6 +35,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Thunder sound effect 2" by humanoide9000 (CC BY 4.0): https://freesound.org/people/humanoide9000/sounds/441836/
 - "Auto Shop Soundscape.mp3" by I5AAC (CC0): https://freesound.org/people/I5AAC/sounds/449591/
 - "City Ambience with distant church bells" by florianreichelt (CC0): https://freesound.org/people/florianreichelt/sounds/451731/
+- "window break with axe glass shatter in trailer.wav" by kyles (CC0): https://freesound.org/people/kyles/sounds/452667/
 - "Brean Sands Beach" by richwise (CC0): https://freesound.org/people/richwise/sounds/475350/
 - "spray can" by richwise (CC0): https://freesound.org/people/richwise/sounds/476839/
 - "R01-71-Close up Seagull.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/479595/
@@ -52,6 +53,8 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Car rolling on asphalt .wav" by orlandorizo (CC0): https://freesound.org/people/orlandorizo/sounds/591079/
 - "Ratchet Wrench Avg Speed Multiple" by Rudmer_Rotteveel (CC0): https://freesound.org/people/Rudmer_Rotteveel/sounds/591524/
 - "Canoe moving through water" by TheFlyFishingFilmmaker (CC BY 4.0): https://freesound.org/people/TheFlyFishingFilmmaker/sounds/592836/
+- "Rockslide_1.wav" by NinjaSharkStudios (CC0): https://freesound.org/people/NinjaSharkStudios/sounds/608957/
+- "Windowcrash.wav" by eZZin (CC0): https://freesound.org/people/eZZin/sounds/613311/
 - "120612 Rain, heavy car windshield, window, Ontario.wav" by TRP (CC0): https://freesound.org/people/TRP/sounds/616585/
 - "121003 Pigeon flock fly away, wing flaps, Toronto.wav" by TRP (CC0): https://freesound.org/people/TRP/sounds/616623/
 - "switching_a_rattling_lever_with_room_ambience.wav" by mediatheksuche (CC0): https://freesound.org/people/mediatheksuche/sounds/623712/
@@ -62,11 +65,14 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Sonic boom from Falcon 9 rocket landing" by g0ggs (CC0): https://freesound.org/people/g0ggs/sounds/668561/
 - "forest heavy rain loop.wav" by Victormaa (CC0): https://freesound.org/people/Victormaa/sounds/671409/
 - "S37-14 Two cars crash foley; good metallic bump.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/675466/
+- "S37-15 Wooden building collapses quickly.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/675900/
 - "Game Success Fanfare Short" by el_boss (CC0): https://freesound.org/people/el_boss/sounds/677858/
 - "Fire close 1.wav" by Poulpy2.0 (CC0): https://freesound.org/people/Poulpy2.0/sounds/679405/
 - "Big falling debris (crash)" by xkeril (CC0): https://freesound.org/people/xkeril/sounds/703247/
 - "Fall debris (crash)" by xkeril (CC0): https://freesound.org/people/xkeril/sounds/703248/
 - "Jet Engine Start Cart.wav" by C-V (CC0): https://freesound.org/people/C-V/sounds/704945/
+- "building collapse / demolition" by greyfeather (CC0): https://freesound.org/people/greyfeather/sounds/712918/
+- "Bakers house collapse" by DasWaff (CC0): https://freesound.org/people/DasWaff/sounds/721600/
 - "Rushing Waterfall" by Colonnades (CC0): https://freesound.org/people/Colonnades/sounds/760050/
 - "Rocket Launch Boost and Burning (Version A)" by TheLittleCrow (CC0): https://freesound.org/people/TheLittleCrow/sounds/774245/
 - "truck driving sound" by joni_ompong (CC0): https://freesound.org/people/joni_ompong/sounds/785698/
@@ -80,6 +86,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Cargo Train 2" by Julian_Eftei (CC0): https://freesound.org/people/Julian_Eftei/sounds/831430/
 - "Illegal Explosion" by qubodup (CC0): https://freesound.org/people/qubodup/sounds/840508/
 - "Canadian Pacific local freight train arriving" by chungus43A (CC0): https://freesound.org/people/chungus43A/sounds/843361/
+- "Building Collapse" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/845932/
 - "Glass Smash" by dwswords (CC0): https://freesound.org/people/dwswords/sounds/848312/
 - "UH‑60 Black Hawk Helicopter Hover Loop 1" by qubodup (CC0): https://freesound.org/people/qubodup/sounds/854493/
 

@@ -636,5 +636,47 @@
   "start": 20,
   "end": 30,
   "loop": true
+ },
+ "bld_collapse": {
+  "id": 721600,
+  "start": 0,
+  "end": 5.7,
+  "loop": false
+ },
+ "bld_collapse_big": {
+  "id": 845932,
+  "start": 0,
+  "end": 7.2,
+  "loop": false
+ },
+ "bld_wood": {
+  "id": 675900,
+  "start": 0,
+  "end": 5.1,
+  "loop": false
+ },
+ "bld_crumble": {
+  "id": 712918,
+  "start": 0,
+  "end": 3.0,
+  "loop": false
+ },
+ "bld_glass_1": {
+  "id": 452667,
+  "start": 0.15,
+  "end": 2.1,
+  "loop": false
+ },
+ "bld_glass_2": {
+  "id": 613311,
+  "start": 0,
+  "end": 2.1,
+  "loop": false
+ },
+ "bld_settle": {
+  "id": 608957,
+  "start": 7.5,
+  "end": 12.3,
+  "loop": false
  }
 }
