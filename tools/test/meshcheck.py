@@ -3,7 +3,9 @@
 in varied places, resized and mirrored) in headless Chrome, the way the hangar shows them, and fails on
   - open shells: a non-flat piece of an opaque one-sided mesh with a hole big enough to look into (a duct, nozzle,
     tyre or cowl with no inside surface, a missing end cap), and
-  - car exhausts whose path runs through glass.
+  - car exhausts whose path runs through glass, and
+  - floating parts on cars (stock and 16 seeded random car builds): every piece must touch (within 1 cm) the rest of the
+    vehicle, at rest and with the wheels pushed up their travel and steered.
 
 Run from anywhere:  python3 tools/test/meshcheck.py [--random 20] [--json out.json]
 Same requirements as smoke.py (Chrome + the websockets package). See tools/test/README.md.
@@ -29,7 +31,7 @@ async def main(a):
             await cdp.send('Runtime.enable')
             await cdp.send('Page.navigate', url=origin + '/')
             await cdp.wait_for('window.__sky && window.__sky.hangar', 60, 'the app to boot')
-            report = await cdp.js(f"import('/tools/test/meshcheck.js').then((m) => m.run({{ presets: __sky.presets, random: {a.random} }}))", timeout=600)
+            report = await cdp.js(f"import('/tools/test/meshcheck.js').then((m) => m.run({{ presets: __sky.presets, random: {a.random}, cars: {a.cars} }}))", timeout=600)
     finally:
         proc.kill(); proc.wait(); shutil.rmtree(profile, ignore_errors=True)
         if srv:
@@ -39,9 +41,15 @@ async def main(a):
     bad = 0
     for r in report:
         ex = r.get('exhaust', {})
-        issues = len(r.get('open', [])) + len(ex.get('hits', [])) + len(r.get('nav', [])) + (1 if r.get('error') else 0)
+        fl, fm = r.get('floating', []), r.get('floatingMoved', [])
+        issues = len(r.get('open', [])) + len(ex.get('hits', [])) + len(r.get('nav', [])) + len(fl) + len(fm) + (1 if r.get('error') else 0)
         bad += issues
-        print(f'{"FAIL" if issues else "PASS"}  {r["name"]:<34} open shells {len(r.get("open", []))}  exhaust paths {ex.get("paths", 0)}, through glass {len(ex.get("hits", []))}')
+        car = f'  floating {len(fl)} at rest, {len(fm)} moved ({r["pieces"]} pieces)' if 'floating' in r else ''
+        print(f'{"FAIL" if issues else "PASS"}  {r["name"]:<44} open shells {len(r.get("open", []))}  exhaust paths {ex.get("paths", 0)}, through glass {len(ex.get("hits", []))}{car}')
+        for o in fl[:8]:
+            print(f'      floating: {o["what"]:<60} {o["n"]} piece(s), biggest {o["size"]} m at {o["at"]}')
+        for o in fm[:8]:
+            print(f'      floating (wheels up and steered): {o["what"]:<40} {o["n"]} piece(s), biggest {o["size"]} m at {o["at"]}')
         if r.get('error'):
             print('      error:', r['error'][:400])
         for o in r.get('nav', [])[:8]:
@@ -59,6 +67,7 @@ async def main(a):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--random', type=int, default=20, help='number of random player builds (default 20)')
+    ap.add_argument('--cars', type=int, default=16, help='number of random car builds checked for floating parts (default 16)')
     ap.add_argument('--json', help='write the full report here')
     ap.add_argument('--url', help='check an already running server (e.g. http://127.0.0.1:8000) instead of serving the repo')
     ap.add_argument('--port', type=int), ap.add_argument('--cdp-port', type=int)

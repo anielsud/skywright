@@ -8,6 +8,7 @@ import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
 import { V, bar, tube, pipe, Bag, seatGeo, flightDeckGlass, shell, capHoles } from './partDetail.js';
 import { clipGeometry } from './skinBlend.js';
+import { Rig, cornerLinks, cornerGeometry } from './carRig.js';
 
 const cached = new Map();
 const mat = (k, make) => { if (!cached.has(k)) cached.set(k, make()); return cached.get(k); };
@@ -114,9 +115,9 @@ function knobbyTyre(r, w, { blocks = 18, rim = 0.6, knob = 0.045, closed = false
   return g;
 }
 // Beadlock rim: barrel, a bolted ring on the outer face, six spokes and a hub cap (outer face towards +X).
-function beadlockRim(r, w, color, lv) {
-  const b = new Bag(), paint = rimPaint(color), steel = M.steel(), dark = M.darkMetal(), rr = r * 0.62;
-  const barrel = new THREE.CylinderGeometry(rr, rr, w * 0.86, 28, 1, true); barrel.rotateZ(Math.PI / 2); b.add(lv ? shell(barrel, r * 0.03) : barrel, dark);
+function beadlockRim(r, w, color, lv, seat = 0.62) {
+  const b = new Bag(), paint = rimPaint(color), steel = M.steel(), dark = M.darkMetal(), rr = r * seat;
+  const barrel = new THREE.CylinderGeometry(rr, rr, w * (lv ? 0.99 : 0.86), 28, 1, true); barrel.rotateZ(Math.PI / 2); b.add(lv ? shell(barrel, r * 0.03) : barrel, dark); // (detail: out to the tyre's beads)
   if (lv) { // the inner side: the rim's back face dished in, a hub with studs where the axle comes in, and a brake rotor and caliper
     const back = new THREE.CylinderGeometry(rr * 0.97, rr * 0.97, 0.02, 28); back.rotateZ(Math.PI / 2); back.translate(-w * 0.2, 0, 0); b.add(back, dark);
     const hubIn = new THREE.CylinderGeometry(rr * 0.24, rr * 0.3, w * 0.18, 16); hubIn.rotateZ(Math.PI / 2); hubIn.translate(-w * 0.3, 0, 0); b.add(hubIn, paint);
@@ -124,7 +125,7 @@ function beadlockRim(r, w, color, lv) {
     for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2, s = new THREE.CylinderGeometry(r * 0.02, r * 0.02, w * 0.1, 6); s.rotateZ(Math.PI / 2); s.translate(-w * 0.36, Math.cos(a) * rr * 0.18, Math.sin(a) * rr * 0.18); b.add(s, M.chrome()); }
   }
   const ring = new THREE.TorusGeometry(rr * 0.97, r * 0.05, 8, 32); ring.rotateY(Math.PI / 2); ring.translate(w * 0.4, 0, 0); b.add(ring, paint);
-  const face = new THREE.CylinderGeometry(rr * 0.92, rr * 0.92, 0.02, 28); face.rotateZ(Math.PI / 2); face.translate(w * 0.18, 0, 0); b.add(face, dark);
+  const face = new THREE.CylinderGeometry(rr * (lv ? 0.99 : 0.92), rr * (lv ? 0.99 : 0.92), 0.02, 28); face.rotateZ(Math.PI / 2); face.translate(w * 0.18, 0, 0); b.add(face, dark); // (detail: out to the barrel)
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2, c = Math.cos(a), s = Math.sin(a);
     b.add(bar(V(w * 0.32, c * rr * 0.22, s * rr * 0.22), V(w * 0.36, c * rr * 0.9, s * rr * 0.9), r * 0.11, r * 0.06), paint);
@@ -137,7 +138,8 @@ function beadlockRim(r, w, color, lv) {
 // Off-road corner: knobby tyre on a beadlock rim, coil-over shock (body on the strut, shaft and spring ride with the
 // wheel) and A-arms out to an inboard pivot. Same contract as parts.js gearLeg: origin = strut top, userData.strut /
 // .wheels (children spin about X) / .steer / .wheelsFixed (follows the wheel without spinning).
-function offroadCorner({ r, w, len, color, steer, lv, arm = 0.55, blocks = 18, lugs = false }) {
+function offroadCorner({ r, w, len, color, steer, lv, arm = 0.55, blocks = 18, lugs = false, tread = 'knobby' }) {
+  if (lv) return cornerDetail({ r, w, len, color, steer, arm, blocks, lugs, tread });
   const g = new THREE.Group(), strut = new THREE.Group(), wheels = new THREE.Group(), fixed = new THREE.Group();
   wheels.position.y = -len; fixed.position.y = -len;
   const sB = new Bag(), fB = new Bag(), steel = M.steel(), chrome = M.chrome(), dark = M.darkMetal(), arms = tubePaint(0x26272b);
@@ -164,6 +166,53 @@ function offroadCorner({ r, w, len, color, steer, lv, arm = 0.55, blocks = 18, l
   return g;
 }
 
+// Detail corner (every car wheel: off-road, monster and road): the tyre seated on its rim, and a knuckle that steers
+// with the wheel, carrying the hub, brake caliper, ball joints and steering arm. The suspension that joins it to the
+// chassis moves (carRig.js): wishbones pivot, the coil-over squeezes, so nothing parts company when the wheel rises.
+// The assembly pass (carDetail.js) swaps the wishbones for a solid axle where the vehicle has one and carries the
+// chassis mounts up to the real body. On its own (part pictures) the corner shows its links at rest.
+function cornerDetail({ r, w, len, color, steer, arm = 0.55, blocks = 18, lugs = false, tread = 'knobby' }) {
+  const g = new THREE.Group(), strut = new THREE.Group(), wheels = new THREE.Group(), fixed = new THREE.Group();
+  wheels.position.y = -len; fixed.position.y = -len;
+  const sB = new Bag(), fB = new Bag(), nB = new Bag(), steel = M.steel(), dark = M.darkMetal(), paint = M.paint(color, 'metal');
+  const c = { r, w, len, arm, strut, fixed, part: g, steer, mats: { arm: tubePaint(0x26272b), dark, shock: paint, chrome: M.chrome(), spring: M.paint(0xf2b705, 'gloss') } };
+  const G = cornerGeometry(c);
+  // knuckle (steers with the wheel): upright, ball joints, stub axle into the hub, caliper over the rotor, steering arm
+  const kn = new THREE.BoxGeometry(r * 0.15, r * 0.56, r * 0.22); kn.translate(G.kx, r * 0.03, 0); fB.add(kn, dark);
+  for (const p of [G.U, G.L]) { const bj = new THREE.SphereGeometry(r * 0.06, 10, 8); bj.translate(p.x, p.y, p.z); fB.add(bj, steel); }
+  const stub = new THREE.CylinderGeometry(r * 0.07, r * 0.08, Math.abs(G.kx) - w * 0.2, 12); stub.rotateZ(Math.PI / 2); stub.translate((G.kx - w * 0.2) / 2, 0, 0); fB.add(stub, steel);
+  const cal = new THREE.BoxGeometry(r * 0.09, r * 0.2, r * 0.16); cal.translate(-w * 0.31, r * 0.3, r * 0.12); fB.add(cal, M.paint(0xc8102e, 'gloss'));
+  fB.add(bar(V(G.kx, r * 0.03, r * 0.1), V(G.kx, r * 0.24, r * 0.14), r * 0.05, r * 0.05), dark); // caliper bracket
+  if (steer) fB.add(bar(V(G.kx, -r * 0.08, 0), V(G.kx - r * 0.06, -r * 0.1, r * 0.36), r * 0.06, r * 0.045), dark);
+  // the spinning wheel: tyre (seated on the rim's bead seats) and rim
+  const wh = new THREE.Group(), tb = new Bag();
+  const road = tread === 'road', ty = knobbyTyre(r, w, road ? { blocks: 6, knob: 0, rim: 0.66, closed: true } /* (a smooth road tread: no lugs to draw) */ : { blocks, closed: true, lugs, rim: 0.62 });
+  tb.add(ty, knobby()); tb.to(wh); beadlockRim(r, w, color, 2, road ? 0.66 : 0.62).to(wh); wheels.add(wh);
+  // static on the strut: the shock's remote reservoir on its top mount
+  const res = new THREE.CylinderGeometry(r * 0.06, r * 0.06, len * 0.32, 10); res.translate(G.xi - r * 0.17, -len * 0.2, r * 0.05); sB.add(res, paint);
+  sB.add(bar(V(G.xi, -0.05, 0), V(G.xi - r * 0.17, -0.05, r * 0.05), r * 0.05, r * 0.05, true, 6), dark);
+  sB.add(bar(V(G.xi, -len * 0.04, 0), V(G.xi - r * 0.17, -len * 0.04 - 0.02, r * 0.05), r * 0.03, r * 0.03, true, 6), M.black()); // hose
+  sB.to(strut); fB.to(fixed); nB.to(fixed, true); strut.add(fixed); strut.add(wheels); g.add(strut);
+  // at rest on its own: the links baked (the assembly pass removes this and rigs them to move)
+  const rig = new Rig(g), { links } = cornerLinks(c), fb = new Bag(); g.updateMatrixWorld(true);
+  for (const l of links) rig.link(l); rig.bake(fb); const fall = new THREE.Group(); fall.userData.rigFallback = true; fb.to(fall); g.add(fall);
+  Object.assign(g.userData, { strut, wheels, steer, wheelsFixed: fixed, corner: c });
+  return g;
+}
+
+// Lamps: a housing standing proud of the face it is on, a chrome bezel and a glowing lens (domed when round). dir: the
+// way the lamp faces along z (-1 forward, +1 back); x, y, z: the centre of its base on the face.
+function lampRound(b, x, y, z, r, dir, color) {
+  const bucket = new THREE.CylinderGeometry(r * 1.18, r * 1.3, r * 0.8, 20); bucket.rotateX(Math.PI / 2); bucket.translate(x, y, z + dir * r * 0.3); b.add(bucket, M.darkMetal());
+  const bezel = new THREE.TorusGeometry(r * 1.1, r * 0.16, 8, 24); bezel.translate(x, y, z + dir * r * 0.7); b.add(bezel, M.chrome());
+  const lens = new THREE.SphereGeometry(r * 1.05, 20, 8, 0, Math.PI * 2, 0, Math.PI * 0.32); lens.rotateX(dir * Math.PI / 2); lens.translate(x, y, z + dir * (r * 0.7 - r * 1.05 * Math.cos(Math.PI * 0.32))); b.add(capHoles(lens), M.light(color));
+}
+function lampRect(b, x, y, z, w, h, dir, color) {
+  const box = new THREE.BoxGeometry(w * 1.2, h * 1.2, 0.05); box.translate(x, y, z + dir * 0.015); b.add(box, M.darkMetal());
+  const lens = new THREE.BoxGeometry(w, h, 0.03); lens.translate(x, y, z + dir * 0.045); b.add(lens, M.light(color));
+  for (const k of [-1, 1]) { const rim = new THREE.BoxGeometry(w * 1.22, 0.008, 0.012); rim.translate(x, y + k * h * 0.6, z + dir * 0.042); b.add(rim, M.chrome()); }
+}
+
 // ---------- body builders ----------
 function buggyTub(c, lv) {
   const g = new THREE.Group();
@@ -180,9 +229,9 @@ function buggyTub(c, lv) {
   ], 2);
   // detail: caps facing out (the plain part's nose and tail were see-through) and car paint instead of riveted panels
   const skin = lv ? PM.carPaint(c) : PM.skin(c);
-  g.add(new THREE.Mesh(superLoft(S, 44, !!lv), skin));
+  g.add(new THREE.Mesh(superLoft(S, 44, !!lv), skin)); g.children[0].userData.footTarget = true;
   const scoop = superLoft(chaikin([{ z: -1.35, hw: 0.2, top: 0.24, bot: 0.06, n: 4 }, { z: -1.1, hw: 0.23, top: 0.31, bot: 0.1, n: 4 }, { z: -0.55, hw: 0.23, top: 0.38, bot: 0.2, n: 4 }, { z: -0.45, hw: 0.2, top: 0.36, bot: 0.24, n: 4 }], 1), 24, !!lv);
-  g.add(new THREE.Mesh(scoop, skin));
+  g.add(new THREE.Mesh(scoop, skin)); g.children[1].userData.footTarget = true;
   const b = new Bag(), dark = M.darkMetal(), tp = tubePaint(0x1a1b1e);
   const mouth = new THREE.BoxGeometry(0.3, 0.1, 0.02); mouth.translate(0, 0.17, -1.355); b.add(mouth, M.intake());
   // front bumper / nerf bars / skid plate
@@ -191,11 +240,23 @@ function buggyTub(c, lv) {
   b.add(tb([V(-0.5, 0.0, -2.05), V(-0.35, 0.05, -2.3), V(0.35, 0.05, -2.3), V(0.5, 0.0, -2.05)], 0.035, 8, 30), tp);
   const skid = new THREE.BoxGeometry(0.9, 0.04, 1.2); skid.translate(0, -0.37, -1.4); b.add(skid, M.aluminum());
   for (const sx of [-1, 1]) b.add(tb([V(sx * 0.7, -0.3, -0.9), V(sx * 0.86, -0.28, -0.6), V(sx * 0.86, -0.28, 0.6), V(sx * 0.7, -0.3, 0.9)], 0.04, 8, 30), tp);
+  if (lv) { // detail: the guard is one welded structure bolted to the tub: uprights from the top hoop to the bumper, and every
+    // tube end, plus two bumper brackets, carried to the nose or the side it mounts on (carDetail.js, against the built skin)
+    for (const sx of [-1, 1]) b.add(pipe([V(sx * 0.35, 0.05, -2.3), V(sx * 0.42, -0.06, -2.32), V(sx * 0.45, -0.18, -2.32)], 0.03, 8, 16), tp);
+    // the tube frame the tub sits on, seen from below: two rails following the floor, cross tubes, a front hoop
+    const under = (x, z) => { const sc = secAt(S, z); return 2 * ((sc.top + sc.bot) / 2) - topY(sc, x) - 0.03; };
+    for (const sx of [-1, 1]) { const pts = []; for (let z = -1.85; z <= 1.76; z += 0.3) pts.push(V(sx * 0.48, under(0.48, z), z)); b.add(pipe(pts, 0.035, 8, pts.length * 6), tp); }
+    for (const z of [-1.55, -0.65, 0.35, 1.35]) b.add(pipe([V(-0.48, under(0.48, z), z), V(0, under(0, z) - 0.005, z), V(0.48, under(0.48, z), z)], 0.03, 8, 12), tp);
+    const self = (a, q, r) => footOf(a, q, r, tp, { on: 'self', reach: 0.6 });
+    g.userData.feet = [-1, 1].flatMap((sx) => [self(V(sx * 0.5, 0, -2.05), V(sx * 0.35, 0.05, -2.3), 0.035), self(V(sx * 0.55, -0.22, -2.0), V(sx * 0.45, -0.18, -2.32), 0.045),
+      { ...self(V(sx * 0.25, -0.17, -2.38), V(sx * 0.25, -0.17, -2.5), 0.03), kind: 'sq' },
+      self(V(sx * 0.7, -0.3, -0.9), V(sx * 0.86, -0.28, -0.6), 0.04), self(V(sx * 0.7, -0.3, 0.9), V(sx * 0.86, -0.28, 0.6), 0.04)]);
+  }
   // rear: spare-wheel-style diffuser fins and tail lights
   for (const sx of [-0.3, 0, 0.3]) b.add(bar(V(sx, -0.25, 1.7), V(sx, -0.12, 2.05), 0.03, 0.12), dark);
   b.to(g);
   if (lv) {
-    const tl = new Bag(); for (const sx of [-1, 1]) { const l = new THREE.BoxGeometry(0.16, 0.08, 0.02); l.translate(sx * 0.32, 0.08, 2.0); tl.add(l, M.light(0xff2010)); } tl.to(g, true);
+    const tl = new Bag(); for (const sx of [-1, 1]) lampRect(tl, sx * 0.32, 0.06, 1.99, 0.16, 0.08, 1, 0xff2010); tl.to(g, true);
   }
   return g;
 }
@@ -225,7 +286,7 @@ function truckBody(c, lv) {
   b.add(tb([V(-0.6, 0.0, -2.62), V(-0.5, 0.45, -2.6), V(0.5, 0.45, -2.6), V(0.6, 0.0, -2.62)], 0.045, 8, 30), tp);
   if (lv) b.add(pipe([V(-0.8, 0.05, 2.42), V(-0.6, 0.0, 2.62), V(0.6, 0.0, 2.62), V(0.8, 0.05, 2.42)], 0.06, 8, 30), tp); // rear bumper
   b.to(g);
-  if (lv) { const tl = new Bag(); for (const sx of [-1, 1]) { const l = new THREE.BoxGeometry(0.12, 0.22, 0.02); l.translate(sx * 0.74, 0.5, 2.39); tl.add(l, M.light(0xff2010)); } tl.to(g, true); }
+  if (lv) { const tl = new Bag(); for (const sx of [-1, 1]) lampRect(tl, sx * 0.72, 0.5, 2.37, 0.12, 0.22, 1, 0xff2010); tl.to(g, true); }
   return g;
 }
 
@@ -254,13 +315,13 @@ function truckBed(g, S) {
 function truckCage(g) {
   const b = new Bag(), p = tubePaint(0xd3d6db), r = 0.035, P = (pts) => b.add(pipe(pts.map((q) => V(...q)), r, 8, pts.length * 8), p), B = (a, c, k = 1) => b.add(bar(V(...a), V(...c), r * 2 * k, r * 2 * k, true, 8), p);
   for (const sx of [-1, 1]) {
-    P([[sx * 0.7, -0.15, -0.74], [sx * 0.7, 0.8, -0.71], [sx * 0.64, 1.32, -0.18], [sx * 0.64, 1.34, 0.12]]); // A-pillar bar
+    P([[sx * 0.7, 0.02, -0.74], [sx * 0.7, 0.8, -0.71], [sx * 0.64, 1.32, -0.18], [sx * 0.64, 1.34, 0.12]]); // A-pillar bar
     B([sx * 0.64, 1.34, 0.1], [sx * 0.64, 1.34, 0.6]); // roof rail
     B([sx * 0.72, 0.5, -0.7], [sx * 0.74, 0.6, 0.6], 0.9); B([sx * 0.72, 0.75, -0.7], [sx * 0.74, 0.35, 0.6], 0.9); // door bars (X)
     B([sx * 0.62, 1.32, 0.64], [sx * 0.56, yBed, 1.7]); // rear brace through the bed
     B([sx * 0.56, yBed, 1.7], [sx * 0.56, -0.15, 1.75]); // down to the chassis
   }
-  P([[-0.72, -0.15, 0.64], [-0.72, 1.0, 0.64], [-0.62, 1.34, 0.64], [0.62, 1.34, 0.64], [0.72, 1.0, 0.64], [0.72, -0.15, 0.64]]); // main hoop
+  P([[-0.72, 0.02, 0.64], [-0.72, 1.0, 0.64], [-0.62, 1.34, 0.64], [0.62, 1.34, 0.64], [0.72, 1.0, 0.64], [0.72, 0.02, 0.64]]); // main hoop (on the floor)
   B([-0.72, 0.1, 0.64], [0.62, 1.34, 0.64]); B([-0.72, 0.85, 0.64], [0.72, 0.85, 0.64]); // diagonal, harness bar
   B([-0.64, 1.34, -0.16], [0.64, 1.34, -0.16]); B([-0.64, 1.34, -0.16], [0.64, 1.34, 0.6], 0.9); // roof front bar, roof diagonal
   b.to(g);
@@ -271,6 +332,12 @@ function truckChassis(g) {
   const b = new Bag(), p = tubePaint(0x26272b), r = 0.05;
   for (const sx of [-1, 1]) b.add(pipe([V(sx * 0.5, -0.05, -2.55), V(sx * 0.55, -0.2, -2.0), V(sx * 0.58, -0.2, 0), V(sx * 0.55, -0.2, 2.0), V(sx * 0.5, -0.05, 2.55)], r, 8, 40), p);
   for (const z of [-2.0, -0.8, 0.64, 1.75]) b.add(bar(V(-0.58, -0.2, z), V(0.58, -0.2, z), r * 1.6, r * 1.6, true, 8), p);
+  // body mounts: rubber pucks from the rails up to the floor, with a bolt and washer underneath
+  const rub = M.rubber();
+  for (const sx of [-1, 1]) for (const z of [-1.6, -0.4, 1.0, 2.05]) {
+    const pk = new THREE.CylinderGeometry(0.055, 0.055, 0.17, 12); pk.translate(sx * 0.57, -0.075, z); b.add(pk, rub);
+    const w = new THREE.CylinderGeometry(0.04, 0.04, 0.03, 8); w.translate(sx * 0.57, -0.255, z); b.add(w, M.steel());
+  }
   b.to(g);
 }
 const lerpSec = (a, b, t) => Object.fromEntries(Object.keys(a).map((k) => [k, a[k] + (b[k] - a[k]) * t]));
@@ -295,7 +362,7 @@ function truckCab(g, S0, c) {
   const inner = new THREE.Mesh(geo, mat('cabIn', () => new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.9, side: THREE.BackSide }))); inner.castShadow = false; g.add(inner);
   const b = new Bag(), nb = new Bag(), black = M.black(), chrome = M.chrome(), seam = M.paint(0x0b0c0e, 'matte');
   const dash = new THREE.BoxGeometry(1.6, 0.14, 0.34); dash.translate(0, 0.74, -0.58); b.add(dash, black);
-  for (const sx of [-0.4, 0.4]) { const st = seatGeo(0.46, 0.62, 0.42, 0.22); st.translate(sx, 0.4, 0.42); b.add(st, PM.seat()); }
+  for (const sx of [-0.4, 0.4]) { const st = seatGeo(0.46, 0.62, 0.42, 0.22); st.translate(sx, 0.4, 0.42); b.add(st, PM.seat()); const rs = new THREE.BoxGeometry(0.34, 0.37, 0.3); rs.translate(sx, 0.18, 0.25); b.add(rs, black); } // on risers from the floor
   g.userData.seats = [{ p: [-0.4, 0.44, 0.3], s: 1 }]; // driver on the left
   // shut lines (thin dark grooves just proud of the paint), door handles, mirrors
   const line = (pts) => nb.add(tube(pts, 0.007, 4, pts.length * 4), seam);
@@ -308,8 +375,7 @@ function truckCab(g, S0, c) {
     // hood seams
     const hood = []; for (let k = 0; k <= 10; k++) { const z = -2.25 + 1.42 * (k / 10), sec = secAt(S, z); hood.push(V(sx * 0.7, topY(sec, 0.7) + 0.004, z)); } line(hood);
     // headlights on the grille face, tail lights are on the plain part
-    const hl = new THREE.CircleGeometry(0.075, 18); hl.rotateY(Math.PI); hl.translate(sx * 0.58, 0.24, -2.404); nb.add(hl, M.light(0xfff4d8));
-    const ring = new THREE.TorusGeometry(0.08, 0.012, 6, 18); ring.translate(sx * 0.58, 0.24, -2.405); nb.add(ring, chrome);
+    lampRound(b, sx * 0.6, 0.3, -2.4, 0.085, -1, 0xfff4d8); // headlights stand proud of the grille (the grin livery covers its face)
   }
   { const o = []; for (let k = 0; k <= 12; k++) { const x = -0.7 + 1.4 * (k / 12); o.push(V(x, topY(secAt(S, -0.83), x) + 0.004, -0.83)); } line(o); } // cowl line at the back of the hood
   b.to(g); nb.to(g, true);
@@ -392,7 +458,7 @@ function heliNose(c, lv) {
 // ---------- parts ----------
 def({ id: 'fus_buggy', cat: 'fuselage', name: 'Buggy Tub', desc: 'Low, tough off-road racer body with a bumper and nerf bars. Add a cage, a motor and big wheels.', mass: 260, hp: 1100, color: 0x15161a,
   build: (c, lv) => buggyTub(c, lv) });
-def({ id: 'fus_truck', cat: 'fuselage', name: 'Monster Truck Body', desc: 'Pickup body on a ladder frame. Made for giant wheels.', mass: 620, hp: 2200, color: 0x1d4e89, eye: [-0.3, 1.0, -0.2], mudFlaps: true,
+def({ id: 'fus_truck', cat: 'fuselage', name: 'Monster Truck Body', desc: 'Pickup body on a ladder frame. Made for giant wheels.', mass: 620, hp: 2200, color: 0x1d4e89, eye: [-0.3, 1.0, -0.2], mudFlaps: true, axles: 'solid',
   build: (c, lv) => truckBody(c, lv) });
 def({ id: 'fus_heli', cat: 'fuselage', name: 'Heli Cabin', desc: 'Helicopter cabin with an engine hump. Bubble Nose in front, Tail Boom behind, rotor on top.', mass: 260, hp: 1100, color: 0xc8102e,
   build: (c, lv) => heliCabin(c, lv) });
@@ -405,7 +471,19 @@ const cornerDef = (id, name, desc, mass, o, steer) => def({ id, cat: 'car', name
 cornerDef('c_offroad', 'Off-Road Wheel', 'Knobby tyre on long-travel suspension. Drives. Put them at the back.', 55, { r: 0.5, w: 0.42, len: 0.55, limit: 10, hp: 900, color: 0xd9a400 }, false);
 cornerDef('c_offroad_steer', 'Off-Road Steering Wheel', 'Knobby tyre on long-travel suspension. Drives and steers. Put them at the front.', 57, { r: 0.5, w: 0.42, len: 0.55, limit: 10, hp: 900, color: 0xd9a400 }, true);
 cornerDef('c_bigfoot', 'Monster Tyre', 'Gigantic knobby tyre that drives and steers. Climb over anything.', 140, { r: 0.85, w: 0.72, len: 0.7, limit: 12, hp: 1600, color: 0xc8102e, arm: 0.35, blocks: 16, lugs: true }, true);
+// Solid axles: monster tyres ride on one beam per pair (carDetail.js), like a real monster truck; so does anything on a
+// truck body (PARTS.fus_truck.axles). Everything else gets independent wishbones and half shafts.
+PARTS.c_bigfoot.axle = 'solid';
+// The plain car wheels (parts.js) get the same detail corner: a road tyre on its rim, or a monster tread, on moving
+// suspension (their detail build was an aircraft oleo leg with a fork and a boot fairing).
+for (const [id, w, o] of [['c_wheel', 0.3, { tread: 'road', arm: 0.3 }], ['c_wheel_steer', 0.3, { tread: 'road', arm: 0.3 }], ['c_monster', 0.6, { lugs: true, blocks: 16, arm: 0.35 }]]) {
+  const d = PARTS[id], plain = d.build, gi = d.gear;
+  d.build = (c, opt) => (opt?.detail ? ensureUv1(cornerDetail({ r: gi.r, w, len: gi.len, color: c, steer: gi.steer, ...o })) : plain(c, opt));
+}
+PARTS.c_monster.axle = 'solid';
 
+// a foot spec for carDetail: the tube end `a` (coming from `q`), radius, material
+const footOf = (a, q, r, mat, o = {}) => ({ p: a.toArray(), d: a.clone().sub(q).normalize().toArray(), r, kind: 'rod', mat, on: 'body', ...o });
 def({ id: 'c_rollcage', cat: 'car', name: 'Roll Cage', desc: 'Steel tube cage. Looks tough and keeps the driver safe when you flip.', mass: 45, hp: 1400, color: 0xe8601c,
   build: (c, lv) => {
     const g = new THREE.Group(), b = new Bag(), p = tubePaint(c), r = 0.042, tb = lv ? pipe : tube;
@@ -420,11 +498,16 @@ def({ id: 'c_rollcage', cat: 'car', name: 'Roll Cage', desc: 'Steel tube cage. L
     }
     b.add(bar(V(-0.62, 0.05, 0.5), V(0.48, 1.0, 0.45), r * 1.8, r * 1.8, true, 8), p); // X behind the seat
     b.add(bar(V(-0.5, 0.95, -0.32), V(0.48, 1.0, 0.45), r * 1.6, r * 1.6, true, 8), p); // roof diagonal
-    b.to(g); return g;
+    b.to(g);
+    // detail: every tube that ends low is carried down to the body it stands on and welded to a foot plate (carDetail.js)
+    if (lv) g.userData.feet = [[hoopF, 0], [hoopF, 1], [hoopM, 0], [hoopM, 1]].map(([h, e]) => { const a = e ? h.at(-1) : h[0], q = e ? h.at(-2) : h[1]; return footOf(a, q, r, p); })
+      .concat([-1, 1].map((sx) => footOf(V(sx * 0.56, 0.0, 1.75), V(sx * 0.48, 1.0, 0.45), r, p)));
+    return g;
   } });
 def({ id: 'c_lightbar', cat: 'car', name: 'Light Bar', desc: 'Four big spotlights for racing through the night.', mass: 8, hp: 200, color: 0x1a1b1e,
-  build: (c) => {
+  build: (c, lv) => {
     const g = new THREE.Group(), b = new Bag();
+    if (lv) g.userData.feet = [-1, 1].map((sx) => footOf(V(sx * 0.5, -0.12, 0.02), V(sx * 0.5, 0, 0.02), 0.02, M.darkMetal(), { on: 'any', reach: 0.8 })); // legs down to the roof or cage
     const beam = new THREE.BoxGeometry(1.1, 0.08, 0.08); b.add(beam, M.paint(c, 'matte'));
     for (const sx of [-1, 1]) b.add(bar(V(sx * 0.5, -0.12, 0.02), V(sx * 0.5, 0, 0.02), 0.04, 0.04, true, 6), M.darkMetal());
     for (let i = 0; i < 4; i++) {
@@ -442,10 +525,12 @@ def({ id: 'c_rearwing', cat: 'car', name: 'Rear Wing', desc: 'Big racing wing on
     const blade = new THREE.ExtrudeGeometry(sh, { depth: 1.5, bevelEnabled: false }); blade.translate(0, 0, -0.75); blade.rotateY(Math.PI / 2); blade.rotateX(-0.12); blade.translate(0, 0.62, -0.2); b.add(blade, skin);
     for (const sx of [-1, 1]) {
       const ep = new THREE.BoxGeometry(0.025, 0.36, 0.62); ep.translate(sx * 0.76, 0.6, 0.02); b.add(ep, skin);
-      b.add(bar(V(sx * 0.32, lv ? -0.14 : 0, 0.05), V(sx * 0.32, 0.6, 0.0), 0.05, 0.16), tubePaint(0x1a1b1e)); // detail: down onto the body (it floated above the tub)
-      if (lv) { const foot = new THREE.BoxGeometry(0.1, 0.03, 0.22); foot.translate(sx * 0.32, -0.13, 0.05); b.add(foot, M.darkMetal()); }
+      // (detail: the struts rise into the blade's underside at mid-chord; they stopped short of it, in front)
+      b.add(lv ? bar(V(sx * 0.32, 0, -0.36), V(sx * 0.32, 0.6, -0.43), 0.05, 0.16) : bar(V(sx * 0.32, 0, 0.05), V(sx * 0.32, 0.6, 0.0), 0.05, 0.16), tubePaint(0x1a1b1e));
     }
-    b.to(g); return g;
+    b.to(g);
+    if (lv) g.userData.feet = [-1, 1].map((sx) => footOf(V(sx * 0.32, 0.0, -0.36), V(sx * 0.32, 0.6, -0.43), 0.04, tubePaint(0x1a1b1e), { on: 'any' })); // struts down onto the deck
+    return g;
   } });
 
 // Rocket stage: a tall cylinder with an ogive nose (a body of revolution, so planeDetail dresses it like a fuselage).

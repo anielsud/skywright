@@ -259,7 +259,7 @@ function fuselage(profile, { color, sy = 1, sx = 1, windows = 0, yOff, segs = 36
   const prof = smoothProfile(profile, 40);
   const skin = new THREE.Mesh(revolve(prof, { sy, sx, yOff, segs, cap: true }), PM.skin(color, windows)); g.add(skin);
   g.userData.body = { prof, sx, sy, yOff, segs, skin }; // for planeDetail: antennas, ports and lights placed on the skin; skinBlend reshapes the skin
-  if (reg) for (const side of [1, -1]) g.add(cosmetic(new THREE.Mesh(bodyDecal(prof, { sx, sy, yOff, side, ...reg }), PM.reg(reg.text, color))));
+  if (reg) for (const side of [1, -1]) { const m = cosmetic(new THREE.Mesh(bodyDecal(prof, { sx, sy, yOff, side, ...reg }), PM.reg(reg.text, color))); m.userData.decal = true; g.add(m); }
   return g;
 }
 
