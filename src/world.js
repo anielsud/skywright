@@ -27,7 +27,7 @@ export const RWY = { len: 1800, width: 45 };
 export const RUNWAYS = [{ x: 0, name: '36R', back: '18L' }, { x: -200, name: '36L', back: '18R' }];
 
 export const LOCATIONS = {
-  alpine: {
+  alpine: { hidden: true, // kept for old saves / sessions, not offered in the picker
     id: 'alpine', name: 'Alpine Valley', desc: 'Snowy peaks, a glacier lake, pine forests and a mountain village.', seed: 11, rwyH: 30, water: 0, cloudBase: 2300, trees: 'pine',
     colors: { grass: [0x4a6b2a, 0x5f7f35, 0x3f5d27], rock: 0x6b6660, snow: 0xf4f6f8, sand: 0x9a8d6a, dirt: 0x6f5a3c }, snowline: 1250, balloons: true, erosion: { cell: 800, depth: 0.16, octaves: 4 },
     height(n, x, z) {

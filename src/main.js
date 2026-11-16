@@ -43,7 +43,7 @@ let autoTier = isTouch ? 'medium' : 'high';
 const qualityTier = () => (settings.quality === 'auto' ? autoTier : settings.quality);
 const isHigh = (t) => t === 'high' || t === 'ultra'; // Ultra keeps everything High has
 const perf = { scale: 1, level: 0, ema: 16.7, slowT: 0, fastT: 0, lastChange: 0, fps: 60 };
-const flightCfg = Object.assign({ location: 'alpine', time: 10, weather: 'clear', realism: 'pilot', mode: 'free', start: 'runway', online: true }, LS.get('flight', {}));
+const flightCfg = Object.assign({ location: 'islands', moon: 'real', time: 10, weather: 'clear', realism: 'pilot', mode: 'free', start: 'runway', online: true }, LS.get('flight', {}));
 const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 // ---------- renderer ----------
@@ -336,12 +336,15 @@ function planesModal() {
 }
 
 function timeLabel(t) { const h = Math.floor(t), mm = Math.round((t - h) * 60); const lab = t < 5 || t > 20.5 ? 'Night' : t < 7.5 ? 'Dawn' : t < 11 ? 'Morning' : t < 15 ? 'Midday' : t < 18 ? 'Afternoon' : 'Sunset'; return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${lab}`; }
+// Moon phase choices for the flight: [id, label, moon age in days (null = today's real phase)]
+const MOONS = [['real', 'Tonight’s real moon', null], ['full', 'Full', 14.77], ['half', 'Half', 7.38], ['crescent', 'Crescent', 3.5], ['new', 'No moon', 0]];
+if (LOCATIONS[flightCfg.location]?.hidden || !LOCATIONS[flightCfg.location]) flightCfg.location = 'islands'; // hidden/removed places move to Bora Bora
 function flightModal() {
   const s = analyze(hangar.design);
   const m = ui.modal(`
     <h2>Ready for take-off: ${hangar.design.name}</h2>
     <label class="lbl">Location</label>
-    <div class="choice-row">${Object.values(LOCATIONS).map((l) => `<button class="loc-card ${l.id}${flightCfg.location === l.id ? ' on' : ''}" data-loc="${l.id}"><span class="loc-online" data-online="${l.id}"></span><b>${l.name}</b><small>${l.desc}</small></button>`).join('')}</div>
+    <div class="choice-row">${Object.values(LOCATIONS).filter((l) => !l.hidden).map((l) => `<button class="loc-card ${l.id}${flightCfg.location === l.id ? ' on' : ''}" data-loc="${l.id}"><span class="loc-online" data-online="${l.id}"></span><b>${l.name}</b><small>${l.desc}</small></button>`).join('')}</div>
     <div class="mp-online">
       <div class="mp-head"><b>Fly together</b><div class="chips"><button data-on="1" class="${flightCfg.online !== false ? 'on' : ''}">With others</button><button data-on="0" class="${flightCfg.online === false ? 'on' : ''}">Alone</button></div>
         <label class="mp-name">Your name <input id="mp-name" maxlength="16" autocomplete="off" spellcheck="false" value="${esc(net.name)}"></label></div>
@@ -349,6 +352,8 @@ function flightModal() {
     </div>
     <label class="lbl">Time of day <span id="tlab">${timeLabel(flightCfg.time)}</span></label>
     <input type="range" min="0" max="24" step="0.25" value="${flightCfg.time}" id="time" class="time-slider">
+    <label class="lbl">Moon</label>
+    <div class="chips">${MOONS.map(([k, n]) => `<button data-moon="${k}" class="${(flightCfg.moon || 'real') === k ? 'on' : ''}">${n}</button>`).join('')}</div>
     <label class="lbl">Weather</label>
     <div class="chips">${Object.entries(WEATHER).map(([k, w]) => `<button data-w="${k}" class="${flightCfg.weather === k ? 'on' : ''}">${w.name}</button>`).join('')}</div>
     <label class="lbl">Realism</label>
@@ -356,11 +361,11 @@ function flightModal() {
     <label class="lbl">Mode</label>
     <div class="choice-row">${Object.entries(MODES).map(([k, mo]) => `<button class="opt-card${flightCfg.mode === k ? ' on' : ''}" data-m="${k}"><b>${mo.name}</b><small>${mo.desc}</small></button>`).join('')}</div>
     <label class="lbl">Start</label>
-    <div class="chips"><button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">On the runway</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}</div>
-    <div class="modal-foot"><button data-close>Back</button><button class="primary big" id="go">FLY ▶</button></div>`, 'wide');
+    <div class="start-row"><div class="chips"><button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">On the runway</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}</div>
+    <div class="start-go"><button data-close>Back</button><button class="primary big" id="go">FLY ▶</button></div></div>`, 'wide');
   const el = m.el;
   const pick = (attr, key) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { flightCfg[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); audio.play('click'); }));
-  pick('loc', 'location'); pick('w', 'weather'); pick('r', 'realism'); pick('m', 'mode'); pick('s', 'start');
+  pick('loc', 'location'); pick('w', 'weather'); pick('r', 'realism'); pick('m', 'mode'); pick('s', 'start'); pick('moon', 'moon');
   el.querySelector('#time').addEventListener('input', (e) => { flightCfg.time = +e.target.value; el.querySelector('#tlab').textContent = timeLabel(flightCfg.time); });
   // ----- online sessions: everyone at a location flies together unless they pick "Alone" -----
   const list = el.querySelector('#mp-list');
@@ -573,6 +578,7 @@ function startFlight(cfgOverride) {
 function buildFlight(cfg) {
   const scene = new THREE.Scene();
   const world = new World(renderer, scene, { location: cfg.location, quality: qualityTier(), time: cfg.time, weather: cfg.weather });
+  const moonSet = MOONS.find(([k]) => k === cfg.moon)?.[2]; if (moonSet != null) world.setMoonAge(moonSet); // 'real' keeps today's phase
   world.addParked([2, 0, 4, 7].map((i) => mergeByMaterial(buildStatic(presets[i]))));
   const realism = REALISM[cfg.realism];
   const design = cloneDesign(hangar.design);
