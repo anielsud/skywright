@@ -95,7 +95,9 @@ const HEAT_GLSL = /* glsl */`
 function heatMaterial(mat, U) {
   const m = mat.clone();
   m.userData.heat = true;
-  m.onBeforeCompile = (sh) => {
+  const prev = mat.onBeforeCompile, prevKey = mat.customProgramCacheKey(); // keep the skin's own hook (panel skin, livery)
+  m.onBeforeCompile = (sh, r) => {
+    prev.call(m, sh, r);
     Object.assign(sh.uniforms, FOG); // the global height-fog hook this replaces
     sh.uniforms.uHeatFwd = U.fwd; sh.uniforms.uHeatAxis = U.axis; sh.uniforms.uHeatNose = U.nose; sh.uniforms.uHeatLen = U.len; sh.uniforms.uHeatC = U.c; sh.uniforms.uHeatAmb = U.amb;
     sh.vertexShader = sh.vertexShader
@@ -123,7 +125,7 @@ function heatMaterial(mat, U) {
           material.clearcoat *= 1.0 - heatHot;
         #endif`);
   };
-  m.customProgramCacheKey = () => 'skyheat2';
+  m.customProgramCacheKey = () => 'skyheat2|' + prevKey;
   return m;
 }
 export function keepHeatPatch(from, to) { // aircraft.damage() clones materials when scorching
