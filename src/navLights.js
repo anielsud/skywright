@@ -38,7 +38,7 @@ const VS = /* glsl */`
     } else if (mode < 1.5) { // strobe: two short white flashes every 1.3 s (the first one with the lens flash)
       float t = fract((time + ph) / 1.3);
       float f = step(t, 0.045) + step(0.11, t) * step(t, 0.15);
-      I *= f; grow = 1.0 + f;
+      I *= f; grow = 1.0 + 0.4 * f;
     } else if (mode < 2.5) { // rotating red beacon
       I *= 0.06 + pow(max(0.0, sin((time + ph) * 5.6)), 10.0);
     } else { // landing light: a beam; head-on it dazzles
@@ -190,7 +190,7 @@ export function lightLayout(root, parts, kind) {
     const chord = tip.max[2] - tip.min[2];
     const y = tip.mean[1], z = wing.length ? tip.min[2] + chord * 0.3 : tip.mean[2];
     add(L.NAV, [xe + s * 0.06 * S, y, z], [s, 0, -1.2], s > 0 ? GREEN : RED, 0.9 * S, 4.5, part);
-    if (kind === 'plane') add(L.STROBE, [xe + s * 0.04 * S, y, Math.min(tip.max[2], z + chord * 0.35 + 0.1)], [0, 0, -1], WHITE, 2.2 * S, 12, part);
+    if (kind === 'plane') add(L.STROBE, [xe + s * 0.04 * S, y, Math.min(tip.max[2], z + chord * 0.35 + 0.1)], [0, 0, -1], WHITE, 1.4 * S, 10, part);
   }
   // tail light: the rearmost point near the centreline
   const cw = Math.max(0.35, (B.max[0] - B.min[0]) * 0.3);
