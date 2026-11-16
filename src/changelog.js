@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.61.0', items: [
+    'Fly down into the Grand Canyon and hear the Colorado River rushing below you!',
+  ] },
   { v: '1.60.0', items: [
     "Pull too hard and you'll hear the wings groan and creak before they snap: that's your cue to ease off!",
   ] },
