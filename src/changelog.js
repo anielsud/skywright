@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.73.0', items: [
+    'Smashing buildings sounds HUGE now: bricks crumble, wood splinters, windows shatter, and when a tower comes down you hear the rumble and the rubble settling. From far away you see it fall first, then hear it a moment later, just like real life!',
+  ] },
   { v: '1.72.0', items: [
     'CRASH! Buildings can be smashed now: clip a roof and knock a hole in it, or plough right through and watch it crumble into a pile of rubble with dust and smoke. Then fly through the gap!',
     'Water towers burst, gas stations go boom and silos puff out clouds of grain.',
