@@ -346,7 +346,7 @@ export function blendSkins(design, objs, { pods, addTo, quick = false, rivets = 
           const Cb = bf.get(j), k = clamp(0.45 * Math.min(B.rW, Cb.rW), 0.05, 1.0);
           if (boxNear(B.box, Cb.box, k)) fields.push({ ...Cb, box: Cb.box.clone().expandByScalar(k), k, reach: k * 0.9, stop: 'bis' });
         } else if (pods[q.id] && !d.wing) {
-          const F = podField(o, pods[q.id]); F.k = clamp(0.6 * F.rW, 0.05, 0.6); F.reach = F.k; F.stop = 'in';
+          const F = podField(o, pods[q.id]); F.k = clamp(0.4 * F.rW, 0.05, 0.4); F.reach = F.k; // thicker than the reach: skin that runs into it just ends up hidden inside
           if (boxNear(B.box, F.box, F.k)) { F.box.expandByScalar(F.k); fields.push(F); }
         } else if (CK[q.id] && q.parent === i) {
           const ck = cockpitSetup(q, o, B); if (ck) { fields.push(ck.ped); cks.push(ck); }
