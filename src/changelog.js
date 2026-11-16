@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.62.0', items: [
+    'The Planes button is now Vehicles, because you can build planes, helicopters, seaplanes, rockets and cars!',
+  ] },
   { v: '1.61.0', items: [
     'Fly down into the Grand Canyon and hear the Colorado River rushing below you!',
   ] },

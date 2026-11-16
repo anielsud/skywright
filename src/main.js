@@ -96,7 +96,7 @@ function buildPalette() {
   $('#part-list').innerHTML = list.map((p) => `<button class="part-card ${hangar.placing === p.id ? 'on' : ''}" data-id="${p.id}"><img src="${thumbs[p.id] || ''}" alt=""><div><b>${p.name}</b><small>${p.desc}</small><em>${p.mass.toLocaleString()} kg${p.engine ? ` · ${Math.round((p.engine.ab || p.engine.thrust) / 1000)} kN` : ''}</em></div></button>`).join('');
   $('#part-list').querySelectorAll('.part-card').forEach((b) => b.addEventListener('click', () => {
     audio.init();
-    if (hangar.placing === b.dataset.id) hangar.cancelPlacing(); else { hangar.startPlacing(b.dataset.id); if (hangar.design.parts.length > 1 || hangar.placing) ui.hint(isTouch ? 'Tap on your plane to attach' : 'Click on your plane to attach (Esc to cancel)'); }
+    if (hangar.placing === b.dataset.id) hangar.cancelPlacing(); else { hangar.startPlacing(b.dataset.id); if (hangar.design.parts.length > 1 || hangar.placing) ui.hint(isTouch ? 'Tap on your vehicle to attach' : 'Click on your vehicle to attach (Esc to cancel)'); }
     buildPalette();
   }));
 }
@@ -294,30 +294,30 @@ window.addEventListener('keydown', (e) => {
 // For analytics: preset planes by name; anything built or changed by the player is just 'custom' (their names stay on the device)
 const planeLabel = (d) => presets.find((p) => p.name === d.name && p.parts.length === d.parts.length)?.name || 'custom';
 const planeKind = (st) => (st.heli ? 'helicopter' : st.car && st.wingArea < 0.5 ? 'car' : st.floats ? 'seaplane' : 'plane');
-// Save the plane on the hangar floor into "My planes" under its name (same name = overwrite that save).
+// Save the vehicle on the hangar floor into "My vehicles" under its name (same name = overwrite that save).
 function saveCurrent() {
   if (!hangar.design.parts.length) { ui.hint('Build something first!'); return; }
-  const mine = LS.get('designs', []), name = (hangar.design.name || '').trim() || 'My Plane';
+  const mine = LS.get('designs', []), name = (hangar.design.name || '').trim() || 'My Vehicle';
   hangar.design.name = name; $('#plane-name').value = name;
   const i = mine.findIndex((d) => d.name === name), c = cloneDesign(hangar.design);
   if (i >= 0) mine[i] = c; else mine.push(c);
   LS.set('designs', mine); audio.play('save');
   analytics.capture('plane_saved', { parts: c.parts.length, overwrite: i >= 0, saved_planes: mine.length });
-  ui.hint(`Saved “${name}” — find it in Planes`);
+  ui.hint(`Saved “${name}” — find it in Vehicles`);
 }
 function planesModal() {
   const mine = LS.get('designs', []);
   const card = (d, i, kind) => { const s = analyze(d); return `<div class="plane-card"><b>${d.name}</b><small>${d.desc || `${d.parts.length} parts · ${fmt(s.mass)} kg`}</small><div class="row2"><button data-load="${kind}:${i}" class="primary">Load</button>${kind === 'mine' ? `<button data-delp="${i}" class="danger">Delete</button>` : ''}</div></div>`; };
   const m = ui.modal(`
-    <h2>Planes</h2>
-    <div class="tabs"><button class="on" data-tab="presets">Hangar classics</button><button data-tab="mine">My planes (${mine.length})</button><button data-tab="share">Share / import</button></div>
+    <h2>Vehicles</h2>
+    <div class="tabs"><button class="on" data-tab="presets">Hangar classics</button><button data-tab="mine">My vehicles (${mine.length})</button><button data-tab="share">Share / import</button></div>
     <div data-pane="presets" class="plane-grid">${presets.map((d, i) => card(d, i, 'preset')).join('')}<div class="plane-card"><b>Blank sheet</b><small>Start from nothing.</small><div class="row2"><button data-new class="primary">New</button></div></div></div>
-    <div data-pane="mine" class="plane-grid" hidden>${mine.map((d, i) => card(d, i, 'mine')).join('') || '<p>No saved planes yet.</p>'}<div class="plane-card"><b>Save current</b><small>“${hangar.design.name}”</small><div class="row2"><button data-save class="primary">Save</button></div></div></div>
+    <div data-pane="mine" class="plane-grid" hidden>${mine.map((d, i) => card(d, i, 'mine')).join('') || '<p>No saved vehicles yet.</p>'}<div class="plane-card"><b>Save current</b><small>“${hangar.design.name}”</small><div class="row2"><button data-save class="primary">Save</button></div></div></div>
     <div data-pane="share" hidden>
       <p>Copy this code to share <b>${hangar.design.name}</b>:</p>
       <textarea readonly rows="3" id="share-code">${encodeDesign(hangar.design)}</textarea>
       <div class="row2"><button id="copy-code">Copy code</button></div>
-      <p>Paste a code to import a plane:</p>
+      <p>Paste a code to import a vehicle:</p>
       <textarea rows="3" id="import-code" placeholder="paste code here"></textarea>
       <div class="row2"><button id="import-btn" class="primary">Import</button></div>
     </div>
@@ -326,7 +326,7 @@ function planesModal() {
   el.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => { el.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === b)); el.querySelectorAll('[data-pane]').forEach((p) => (p.hidden = p.dataset.pane !== b.dataset.tab)); }));
   el.querySelectorAll('[data-load]').forEach((b) => b.addEventListener('click', () => { const [k, i] = b.dataset.load.split(':'); hangar.load(k === 'preset' ? presets[+i] : mine[+i]); audio.play('load'); m.close(); analytics.capture('plane_loaded', { source: k, plane: k === 'preset' ? presets[+i].name : 'custom' }); }));
   el.querySelectorAll('[data-delp]').forEach((b) => b.addEventListener('click', () => { mine.splice(+b.dataset.delp, 1); LS.set('designs', mine); m.close(); planesModal(); }));
-  el.querySelector('[data-new]').addEventListener('click', () => { hangar.load({ name: 'My Plane', parts: [] }); analytics.capture('plane_loaded', { source: 'blank' }); activeCat = 'fuselage'; buildPalette(); m.close(); ui.hint('Pick a body to start'); });
+  el.querySelector('[data-new]').addEventListener('click', () => { hangar.load({ name: 'My Vehicle', parts: [] }); analytics.capture('plane_loaded', { source: 'blank' }); activeCat = 'fuselage'; buildPalette(); m.close(); ui.hint('Pick a body to start'); });
   el.querySelector('[data-save]').addEventListener('click', () => { saveCurrent(); m.close(); });
   el.querySelector('#copy-code').addEventListener('click', () => { const t = el.querySelector('#share-code'); t.select(); navigator.clipboard?.writeText(t.value).then(() => ui.hint('Copied!'), () => document.execCommand('copy')); });
   el.querySelector('#import-btn').addEventListener('click', () => { try { hangar.load(decodeDesign(el.querySelector('#import-code').value)); audio.play('load'); m.close(); ui.hint('Imported!'); analytics.capture('plane_loaded', { source: 'import' }); } catch (e) { ui.hint('That code didn’t work'); } });
@@ -369,7 +369,7 @@ function flightModal() {
       const n = net.sessionsAt(b.dataset.online).reduce((a, r) => a + Math.max(0, r.count), 0);
       b.textContent = on && n ? `👥 ${n} flying` : ''; b.hidden = !(on && n);
     }
-    if (!on) { list.innerHTML = '<p class="mp-note">You’ll fly on your own. Nobody else will see your plane.</p>'; return; }
+    if (!on) { list.innerHTML = '<p class="mp-note">You’ll fly on your own. Nobody else will see your vehicle.</p>'; return; }
     const rows = net.sessionsAt(loc).filter((r) => r.count > 0);
     const target = rows.find((r) => r.count < r.max);
     const sess = rows.map((r) => `<div class="mp-row${r === target ? ' target' : ''}"><div><b>Session ${r.n}</b> · ${r.count} pilot${r.count === 1 ? '' : 's'}: ${r.names.slice(0, 4).map(esc).join(', ')}${r.names.length > 4 ? '…' : ''}
@@ -492,7 +492,7 @@ function settingsModal() {
     <div class="mixer">${[['master', 'Volume'], ['engines', 'Engines'], ['world', 'Wind & world'], ['fx', 'Effects'], ['music', 'Music']].map(([k, n]) =>
       `<label>${n}</label><input type="range" min="0" max="1" step="0.02" value="${settings.mix[k]}" data-mix="${k}"><b data-mixv="${k}">${Math.round(settings.mix[k] * 100)}</b>`).join('')}</div>
     <label class="lbl">Privacy</label>
-    <label class="check"><input type="checkbox" id="stats" ${settings.analytics !== false ? 'checked' : ''}> Share anonymous usage stats (which planes and places get flown, frame rate, errors). No names or locations.</label>
+    <label class="check"><input type="checkbox" id="stats" ${settings.analytics !== false ? 'checked' : ''}> Share anonymous usage stats (which vehicles and places get used, frame rate, errors). No names or locations.</label>
     <p class="version">${buildInfo()} · device ${analytics.id}</p>
     <div class="update-row"><button id="upd">Check for updates</button><button id="wn">What’s new</button><span id="upd-status"></span></div>
     <div class="modal-foot"><button data-close class="primary">Done</button></div>`);
@@ -514,7 +514,7 @@ function settingsModal() {
 function helpModal() {
   ui.modal(`<h2>How to play</h2>
   <div class="help">
-  <h4>Build</h4><p>Pick a part on the left, then tap your plane where it should attach. With <b>Mirror</b> on, side parts are added in pairs. Tap a part to move, rotate, paint or remove it. The yellow dot is the centre of mass, the blue dot is the centre of lift: for a stable plane keep the yellow dot slightly <b>in front of</b> the blue one.</p>
+  <h4>Build</h4><p>Pick a part on the left, then tap your vehicle where it should attach. With <b>Mirror</b> on, side parts are added in pairs. Tap a part to move, rotate, paint or remove it. The yellow dot is the centre of mass, the blue dot is the centre of lift: for a stable plane keep the yellow dot slightly <b>in front of</b> the blue one.</p>
   <h4>Fly — keyboard</h4>
   <table><tr><td>↑ ↓ / W S</td><td>Pitch (↓ pulls the nose up)</td></tr><tr><td>← → / A D</td><td>Roll</td></tr><tr><td>Q E</td><td>Rudder / steer on the ground</td></tr>
   <tr><td>Shift / Ctrl, R / F, 1–0</td><td>Throttle</td></tr><tr><td>B</td><td>Brakes</td></tr><tr><td>G</td><td>Gear up/down</td></tr><tr><td>V</td><td>Flaps</td></tr><tr><td>Space</td><td>Airshow smoke</td></tr><tr><td>C</td><td>Change camera</td></tr><tr><td>H</td><td>Hide HUD (photo mode)</td></tr><tr><td>Esc / P</td><td>Pause</td></tr></table>
@@ -909,7 +909,7 @@ function stepFlight(dtReal) {
   // end of flight detection
   const stopped = ac.v.length() < 0.6;
   if (!f.shownEnd && f.mission?.done !== true) {
-    if (ac.dead || (ac.wrecked && stopped)) { f.endT = (f.endT ?? 0) + dtReal; if (f.endT > 4) showEnd(ac.dead ? 'Kaboom! The plane is in pieces.' : 'Crashed!'); }
+    if (ac.dead || (ac.wrecked && stopped)) { f.endT = (f.endT ?? 0) + dtReal; if (f.endT > 4) showEnd(ac.dead ? 'Kaboom! It’s in pieces.' : 'Crashed!'); }
     else if (ac.onGround && stopped && ac.stats.partsLost > 0 && ac.stats.airTime > 3) { f.endT = (f.endT ?? 0) + dtReal; if (f.endT > 4) showEnd('Crash landing!'); }
     else if (ac.x.y < world.waterLevel - 2) { f.endT = (f.endT ?? 0) + dtReal; if (f.endT > 3) showEnd('Splashdown! Glub glub.'); }
     else f.endT = null;

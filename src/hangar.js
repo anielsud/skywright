@@ -22,7 +22,7 @@ export class Hangar {
     this.controls.enableDamping = true; this.controls.maxPolarAngle = Math.PI * 0.97; // can swing under the plane: the floor is one-sided, so it vanishes from below this.controls.minDistance = 3; this.controls.maxDistance = 150;
     this.controls.enabled = false;
     this.symmetry = true; this.showBalance = true;
-    this.design = { name: 'My Plane', parts: [] };
+    this.design = { name: 'My Vehicle', parts: [] };
     this.undoStack = []; this.redoStack = [];
     this.sel = -1; this.placing = null; this.ghost = null;
     this.buildEnv();
@@ -285,7 +285,7 @@ export class Hangar {
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y), dt = performance.now() - down.t; down = null;
       if (moved > 8 || dt > 600) return;
       const hit = this.pick(ndc(e));
-      if (this.placing) { if (hit) this.place(hit); else this.ui.hint('Tap on your plane to attach the part'); return; }
+      if (this.placing) { if (hit) this.place(hit); else this.ui.hint('Tap on your vehicle to attach the part'); return; }
       this.sel = hit ? this.partIndexOf(hit.object) : -1;
       this.updateSelection(); this.onChange();
       if (this.sel >= 0) this.audio.play('select');
