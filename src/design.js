@@ -87,6 +87,12 @@ export function removeParts(design, idxs) {
 
 // ---------- analysis ----------
 const RHO = 1.225, G = 9.81;
+// Rocket bodies make the whole build a rocket: it steers like one (stick = nose left/right/up/down on screen, the rudder
+// rolls) and, without main wings, launches standing up.
+const ROCKET_BODIES = new Set(['fus_rocket']);
+export const isRocketDesign = (design) => design.parts.some((p) => ROCKET_BODIES.has(p.id));
+export const launchesVertical = (design) => !!design.vertical || (isRocketDesign(design) && !design.parts.some((p) => PARTS[p.id]?.cat === 'wing'));
+
 export function analyze(design) {
   const m = new THREE.Matrix4(), com = new THREE.Vector3();
   let drivePower = 0, motors = 0, driveWheels = 0, wheels = 0;
@@ -139,6 +145,7 @@ export function analyze(design) {
   const margin = (col.z - com.z) / mac; // + = stable (lift centre behind CoM)
   const stall = wingArea > 0 ? Math.sqrt((2 * mass * G) / (RHO * wingArea * 1.4)) : Infinity;
   const tw = mass > 0 ? thrust / (mass * G) : 0;
+  const rocket = isRocketDesign(design) && !heli && !car, vertical = !!design.vertical || (rocket && launchesVertical(design));
   const warnings = [];
   if (!design.parts.length) warnings.push(['info', 'Start by adding a body from the parts list.']);
   else {
@@ -156,11 +163,12 @@ export function analyze(design) {
       else if (wheels < 3) warnings.push(['warn', 'Fewer than 3 wheels: it will tip over. Use 4.']);
       if (driveWheels && !design.parts.some((q) => PARTS[q.id]?.gear?.steer)) warnings.push(['warn', 'Nothing steers. Use Steering Wheels at the front.']);
       if (grip < 0.25 && driveWheels) warnings.push(['warn', 'Heavy for its engine: it will be slow. Add Power or another engine.']);
-      if (driveWheels && wheels >= 3) warnings.push(['good', 'Ready to drive! Throttle to go, stick to steer, pull the stick back to reverse.']);
+      if (driveWheels && wheels >= 3) warnings.push(['good', 'Ready to drive! Gas to go, brake to stop (keep holding it to reverse), stick to steer.']);
     }
     else if (!engines) warnings.push(['info', 'No engines: it’s a glider. It will start in the air.']);
-    const plane = !heli && !(car && wingArea < 0.5) && !design.vertical; // rockets (design.vertical) launch standing up
-    if (design.vertical && engines) warnings.push(tw > 1.1 ? ['good', 'Rocket ready! It launches standing up: full throttle, keep the nose pointing at the sky.'] : ['bad', 'Not enough thrust to lift off. Add rockets or more Power.']);
+    if (rocket && !vertical) warnings.push(['info', 'Rocket plane: it steers like a rocket when the nose is up or the rockets are burning, and like a plane when the wings carry it.']);
+    const plane = !heli && !(car && wingArea < 0.5) && !vertical; // rockets launch standing up
+    if (vertical && engines) warnings.push(tw > 1.1 ? ['good', 'Rocket ready! It launches standing up: full throttle, keep the nose pointing at the sky.'] : ['bad', 'Not enough thrust to lift off. Add rockets or more Power.']);
     if (plane && wingArea < 0.5) warnings.push(['bad', 'No wings. Only Arcade mode will get this off the ground.']);
     if (plane && wingArea > 0.5 && margin < -0.02) warnings.push(['bad', 'Tail-heavy: the centre of mass is behind the lift. Expect flips in Sim mode. Move wings back or add weight up front.']);
     else if (plane && margin > 0.6) warnings.push(['warn', 'Very nose-heavy. It will be hard to lift the nose. Move wings forward.']);
@@ -171,7 +179,7 @@ export function analyze(design) {
     if (plane && (Math.abs(latLift) > wingArea * 0.4 || Math.abs(latThrust) > thrust * 0.3)) warnings.push(['warn', 'Lopsided! It will roll or yaw in Sim mode (Arcade forgives this).']);
     if (plane && stall < 40 && tw > 0.2 && margin >= -0.02 && margin <= 0.6 && finArea >= 0.4) warnings.push(['good', 'Looks flyable. Have fun!']);
   }
-  return { car, grip, motors, driveWheels, wheels, heli, hover, rotors, tailRotors, mass, com, col, margin, stall, thrust, tw, wingArea, finArea, engines, props, jets, rockets, gear, floats, smoke, ctrl, warnings };
+  return { car, rocket, vertical, grip, motors, driveWheels, wheels, heli, hover, rotors, tailRotors, mass, com, col, margin, stall, thrust, tw, wingArea, finArea, engines, props, jets, rockets, gear, floats, smoke, ctrl, warnings };
 }
 
 // ---------- presets ----------

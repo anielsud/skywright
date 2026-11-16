@@ -86,7 +86,7 @@ export class HUD {
     L('l-gear', ac.hasRetract ? ac.gearDown : false, ac.hasRetract ? (ac.gearT > 0.95 ? 'GEAR DOWN' : ac.gearT < 0.05 ? 'GEAR UP' : 'GEAR ···') : 'FIXED GEAR');
     this.$('l-gear').style.display = ac.parts.some((p) => p.gear && p.alive) ? '' : 'none';
     L('l-flaps', ac.flaps > 0, `FLAPS ${[0, 10, 20, 35][ac.flaps]}°`);
-    L('l-brake', ac.brake > 0.5);
+    L('l-brake', ac.brake > 0.5 || ac.svcBrake > 0.5 || ac.ctl.hand > 0.5);
     this.$('l-smoke').style.display = ac.hasSmoke ? '' : 'none'; L('l-smoke', ac.smokeOn);
     this.$('l-stall').style.display = ac.stalled ? '' : 'none';
     const ab = ac.parts.some((p) => p.alive && p.engine && (p.engine.abOn || p.engine.burning));
@@ -111,10 +111,14 @@ export class HUD {
   // Hidden by CSS while the touch controls are showing, since those already show it.
   updateControls(ac) {
     const c = ac.ctl, t = clamp(c.throttle, 0, 1), P = 26; // stick travel in px
-    const v = t > 0.995 ? 'MAX' : `${Math.round(t * 100)}%`;
+    const v = ac.isCar && ac.reversing && c.rev > 0.02 ? 'REV' : t > 0.995 ? 'MAX' : `${Math.round(t * 100)}%`;
     if (v !== this.ctlV) { this.ctlV = v; this.$('c-thr-v').textContent = v; this.$('c-thr').style.height = `${t * 100}%`; }
     const lbl = ac.isHeli ? 'LIFT' : ac.isCar ? 'GAS' : 'THR';
-    if (lbl !== this.ctlL) { this.ctlL = lbl; this.$('c-thr-l').textContent = lbl; }
+    if (lbl !== this.ctlL) {
+      this.ctlL = lbl; this.$('c-thr-l').textContent = lbl;
+      const [kt, ks] = this.root.querySelectorAll('#h-ctl kbd'); // cars: W gas, S brake/reverse, A D steer, Space handbrake
+      kt.textContent = ac.isCar ? 'W / S' : '⇧ / Ctrl'; ks.textContent = ac.isCar ? 'A D · Space' : 'W A S D · Q E';
+    }
     this.$('c-stick').style.transform = `translate(${clamp(c.roll, -1, 1) * P}px, ${clamp(c.pitch, -1, 1) * P}px)`;
     this.$('c-rud').style.transform = `translateX(${clamp(c.yaw, -1, 1) * 34}px)`;
   }

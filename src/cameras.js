@@ -47,7 +47,18 @@ export class CameraRig {
     if (mode === 'chase') {
       const fwd = ac.forward; const vdir = ac.v.lengthSq() > 25 ? ac.v.clone().normalize() : fwd;
       const dir = fwd.clone().lerp(vdir, 0.35).normalize();
-      const flat = new THREE.Vector3(dir.x, 0, dir.z); if (flat.lengthSq() < 1e-4) flat.set(0, 0, -1); flat.normalize();
+      const flat = new THREE.Vector3(dir.x, 0, dir.z);
+      const rk = ac.isRocket ? ac.rocketK : 0;
+      if (rk > 0.01) {
+        // A rocket points (nearly) straight up, so "behind it" has no direction: hold the camera's heading and only swing
+        // round as the nose tips over. (Chasing the tiny sideways lean flipped the camera about, and with it which way
+        // the stick seemed to steer.)
+        const h = flat.length();
+        if (!this.rocketFlat || !this.init) this.rocketFlat = h > 0.3 ? flat.clone().normalize() : new THREE.Vector3(-ac.up.x, 0, -ac.up.z).normalize();
+        if (h > 1e-3) this.rocketFlat.lerp(flat.clone().divideScalar(h), Math.min(1, dt * 2.5 * h ** 4)).normalize();
+        flat.lerp(this.rocketFlat, rk);
+      } else this.rocketFlat = null;
+      if (flat.lengthSq() < 1e-4) flat.set(0, 0, -1); flat.normalize();
       const d = (R * 2.2 + 8) * this.look.dist;
       const off = flat.clone().multiplyScalar(-d).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.look.yaw);
       off.y = d * 0.28 + this.look.pitch * d * 0.6 - dir.y * d * 0.5;
@@ -63,7 +74,7 @@ export class CameraRig {
       // stay a fixed distance (avoid lag stretching at high speed)
       const rel = this.pos.clone().sub(target); rel.setLength(clamp(rel.length(), d * 0.8, d * 1.25)); this.pos.copy(target).add(rel);
       this.lookAt.copy(target).addScaledVector(dir, R * 0.6);
-      cam.up.set(0, 1, 0).lerp(ac.up, 0.15).normalize();
+      cam.up.set(0, 1, 0).lerp(ac.up, 0.15 * (1 - rk)).normalize();
       fov = 60 + clamp((ac.v.length() - 60) / 6, 0, 18);
     } else if (mode === 'cockpit') {
       const eye = ac.worldPoint(ac.eyePoint());

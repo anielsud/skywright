@@ -4,7 +4,8 @@ import { clamp } from './noise.js';
 export class Controls {
   constructor(root, onAction) {
     this.root = root; this.onAction = onAction;
-    this.out = { pitch: 0, roll: 0, yaw: 0, throttle: 0, brake: 0 };
+    this.out = { pitch: 0, roll: 0, yaw: 0, throttle: 0, brake: 0, gas: 0, rev: 0, hand: 0 };
+    this.vehicle = 'plane'; this.pedal = { gas: 0, brake: 0 }; // vehicle: plane | car | rocket (see setVehicle)
     this.keys = new Set();
     this.touch = { pitch: 0, roll: 0, yaw: 0, active: false };
     this.invert = false; this.mode = 'stick'; // stick | tilt
@@ -24,8 +25,9 @@ export class Controls {
     if (down) {
       if (!this.keys.has(k)) {
         const map = { g: 'gear', v: 'flaps', c: 'camera', ' ': 'smoke', p: 'pause', Escape: 'pause', h: 'hud', m: 'map', l: 'lights', '`': 'debug' };
+        if (this.vehicle === 'car') delete map[' ']; // space is the handbrake
         if (map[k]) { this.onAction(map[k]); e.preventDefault(); }
-        if (k >= '0' && k <= '9') this.setThrottle(k === '0' ? 1 : (+k) / 10);
+        if (k >= '0' && k <= '9' && this.vehicle !== 'car') this.setThrottle(k === '0' ? 1 : (+k) / 10);
       }
       this.keys.add(k);
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(k)) e.preventDefault();
@@ -36,6 +38,7 @@ export class Controls {
   buildTouch() {
     const el = document.createElement('div'); el.className = 'touch'; el.innerHTML = `
       <div class="t-left">
+        <div class="t-pedals"><div class="t-pedal brake" data-p="brake"><b>BRAKE</b><small>hold to reverse</small></div><div class="t-pedal gas" data-p="gas"><b>GAS</b></div></div>
         <div class="t-throttle"><div class="t-thr-fill"></div><div class="t-thr-knob"><span>THR</span></div><div class="t-thr-label">0%</div></div>
         <div class="t-rudder"><div class="t-rud-knob"></div><span class="t-rud-label">RUDDER</span></div>
       </div>
@@ -69,6 +72,13 @@ export class Controls {
       st.style.left = `${e.clientX - z.left - R}px`; st.style.top = `${e.clientY - z.top - R}px`; st.style.right = st.style.bottom = 'auto';
       st.classList.add('live'); stMove(e);
     }, stMove, () => { this.touch.roll = this.touch.pitch = 0; this.touch.active = false; knob.style.transform = ''; origin = null; st.style.left = st.style.top = st.style.right = st.style.bottom = ''; st.classList.remove('live'); });
+    // car pedals: hold to press (each its own finger, so gas + steer + brake all work together)
+    el.querySelectorAll('.t-pedal').forEach((b) => {
+      const k = b.dataset.p;
+      const set = (v) => (e) => { e.preventDefault(); this.pedal[k] = v; b.classList.toggle('on', !!v); };
+      b.addEventListener('pointerdown', set(1));
+      for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, set(0));
+    });
     el.querySelectorAll('.t-btn').forEach((b) => {
       const act = b.dataset.act;
       if (act === 'brake') {
@@ -93,6 +103,14 @@ export class Controls {
     this.el.querySelector('.t-thr-label').textContent = t > 0.95 ? 'MAX' : `${Math.round(t * 100)}%`;
   }
   showTouch(on) { this.el.style.display = on ? '' : 'none'; }
+  // Cars get pedals (GAS / BRAKE-then-reverse) instead of the throttle and rudder sliders, and a handbrake button;
+  // rockets keep the plane layout but the rudder slider rolls.
+  setVehicle(kind) {
+    this.vehicle = kind; this.pedal.gas = this.pedal.brake = 0;
+    this.el.classList.toggle('car', kind === 'car'); this.el.classList.toggle('rocket', kind === 'rocket');
+    this.el.querySelector('.t-rud-label').textContent = kind === 'rocket' ? 'ROLL' : 'RUDDER';
+    this.el.querySelector('[data-act="brake"]').textContent = kind === 'car' ? 'HANDBRAKE' : 'BRAKE';
+  }
   setMode(mode) {
     this.mode = mode;
     this.el.classList.toggle('tilt', mode === 'tilt');
@@ -125,7 +143,8 @@ export class Controls {
     if (K.has('Shift') || K.has('r') || K.has('=') || K.has('+')) this.setThrottle(this.throttle + dt * 0.6);
     if (K.has('Control') || K.has('f') || K.has('-')) this.setThrottle(this.throttle - dt * 0.6);
     let pitch = this.k.pitch, roll = this.k.roll, yaw = this.k.yaw;
-    let brake = K.has('b') ? 1 : 0;
+    let brake = K.has('b') || (this.vehicle === 'car' && K.has(' ')) ? 1 : 0;
+    const car = this.vehicle === 'car';
     // touch
     if (this.touch.active) { pitch += this.touch.pitch; roll += this.touch.roll; }
     yaw += this.touch.yaw;
@@ -134,7 +153,7 @@ export class Controls {
     if (this.mode === 'tilt' && this.tilt.ok && this.tilt.cal) {
       const dz = (v, d) => (Math.abs(v) < d ? 0 : (v - Math.sign(v) * d));
       roll += clamp(dz((this.tilt.x - this.tilt.cal.x) / 4.5, 0.05), -1, 1) * (navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad') ? -1 : 1);
-      pitch += clamp(dz(-(this.tilt.y - this.tilt.cal.y) / 4, 0.06), -1, 1);
+      if (!car) pitch += clamp(dz(-(this.tilt.y - this.tilt.cal.y) / 4, 0.06), -1, 1); // (a car's pedals do go/stop)
     }
     // gamepad
     const gps = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -143,7 +162,7 @@ export class Controls {
       const ax = (i) => (Math.abs(gp.axes[i] || 0) > 0.12 ? gp.axes[i] : 0);
       roll += ax(0); pitch += ax(1); yaw += ax(2);
       const bt = (i) => gp.buttons[i]?.value || 0;
-      this.setThrottle(this.throttle + (bt(7) - bt(6)) * dt * 0.8);
+      if (car) { this.gpGas = bt(7); this.gpRev = bt(6); } else this.setThrottle(this.throttle + (bt(7) - bt(6)) * dt * 0.8);
       if (bt(0) > 0.5) brake = 1;
       const pressed = (i) => gp.buttons[i]?.pressed && !this.gpPrev[i];
       if (pressed(1)) this.onAction('gear'); if (pressed(2)) this.onAction('flaps'); if (pressed(3)) this.onAction('camera');
@@ -151,6 +170,15 @@ export class Controls {
       this.gpPrev = gp.buttons.map((b) => b.pressed);
       break;
     }
+    if (car) { // W / up / stick forward / GAS = go; S / down / stick back / BRAKE = brake, then reverse once stopped
+      const p = clamp(pitch, -1, 1);
+      o.gas = clamp(Math.max(-p, this.pedal.gas, this.gpGas || 0, K.has('Shift') ? 1 : 0), 0, 1);
+      o.rev = clamp(Math.max(p, this.pedal.brake, this.gpRev || 0), 0, 1);
+      o.hand = brake; o.brake = 0; o.throttle = o.gas;
+      o.pitch = 0; o.roll = clamp(roll + yaw, -1, 1); o.yaw = 0;
+      return o;
+    }
+    o.gas = o.rev = o.hand = 0;
     if (this.invert) pitch = -pitch;
     o.pitch = clamp(pitch, -1, 1); o.roll = clamp(roll, -1, 1); o.yaw = clamp(yaw, -1, 1);
     o.throttle = this.throttle; o.brake = brake;
