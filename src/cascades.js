@@ -75,13 +75,15 @@ export class CascadedShadows {
     });
     this._corners = Array.from({ length: 8 }, () => new THREE.Vector3());
   }
-  set enabled(on) { for (const l of this.lights) l.castShadow = on; }
-  get enabled() { return this.sun.castShadow; }
+  // Shedding shadows must not change castShadow (the shadow count is part of every lit shader: a full recompile right
+  // when the frame rate is already struggling). Fade them out and stop rendering the maps instead.
+  set enabled(on) { this.on = on; this.lights.forEach((l, i) => { l.shadow.intensity = on ? 1 : 0; if (!on) l.shadow.autoUpdate = false; else if (i < 2) l.shadow.autoUpdate = true; }); } // far cascades (i >= 2) are scheduled in update()
+  get enabled() { return this.on !== false; }
   // Fit each cascade's orthographic box to a bounding sphere of its slice of the camera frustum (stable under
   // rotation), and snap it to whole shadow texels in light space (stable under translation: no shimmering edges).
   update(camera, lightDir) {
     camera.layers.enable(NEAR_SHADOW);
-    if (!this.sun.castShadow) return;
+    if (this.on === false) return;
     this.frame++;
     const tanY = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2), tanX = tanY * camera.aspect;
     // light-space basis exactly as the shadow camera builds it (z toward the light, y up): snapping in it is exact

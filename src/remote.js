@@ -71,6 +71,9 @@ export class RemotePlane {
   constructor(player, scene, labelRoot) {
     this.player = player; this.scene = scene;
     this.ac = new Aircraft(player.design, REALISM[player.realism] || REALISM.pilot);
+    // no real lights on other players' planes (their running lights are sprites): a light arriving mid-flight changes
+    // the scene's light count and recompiles every lit shader for everyone
+    const lights = []; this.ac.root.traverse((o) => { if (o.isLight) lights.push(o); }); for (const l of lights) l.parent.remove(l); this.ac.landingLight = null;
     this.ac.ctl.throttle = 0;
     scene.add(this.ac.root);
     this.ac.root.visible = false; // until the first snapshot

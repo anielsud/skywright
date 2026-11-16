@@ -53,7 +53,9 @@ export class Effects {
     // One flash light for explosions, reused: the number of lights in the scene is part of every lit shader, so a new
     // light would recompile them all on impact. It's in the scene only while it glows (main.js compiles the shaders
     // with it present too, before the flight starts).
-    this.boom = new THREE.PointLight(0xffa040, 0, 300, 1.5); this.boom.userData = { t: 0, d: 1.2, i: 0 };
+    // Always in the scene (at intensity 0 when idle): adding/removing a light changes the light count, and three.js
+    // then recompiles every lit shader mid-crash (#99). Only its intensity ever changes.
+    this.boom = new THREE.PointLight(0xffa040, 0, 300, 1.5); this.boom.userData = { t: 0, d: 1.2, i: 0, on: false }; scene.add(this.boom);
   }
   setLighting(world, camera) {
     for (const pool of [this.smoke, this.fire]) pool.bb.updateCamera(camera, world.scene.fog);
@@ -63,7 +65,7 @@ export class Effects {
   update(dt, wind) {
     this.smoke.update(dt, wind); this.fire.update(dt, wind);
     const l = this.boom, u = l.userData;
-    if (l.parent) { u.t += dt; l.intensity = u.i * Math.max(0, 1 - u.t / u.d); if (u.t > u.d) this.scene.remove(l); }
+    if (u.on) { u.t += dt; l.intensity = u.i * Math.max(0, 1 - u.t / u.d); if (u.t > u.d) { u.on = false; l.intensity = 0; } }
   }
   rnd(s) { return (Math.random() - 0.5) * s; }
   puff(p, v, opt = {}) {
@@ -113,8 +115,8 @@ export class Effects {
     }
     for (let i = 0; i < 40 * power; i++) this.smoke.add(p.x + this.rnd(6), p.y + 2 + Math.random() * 4, p.z + this.rnd(6), this.rnd(8), 3 + Math.random() * 8, this.rnd(8), 6 + Math.random() * 6, 4, 22 * power, 0.12, 0.11, 0.1, 0.75, 0.8, -0.6);
     this.sparks(p, { x: 0, z: 0 }, 40);
-    const l = this.boom, u = l.userData, live = l.parent ? Math.max(0, 1 - u.t / u.d) : 0; // (a second blast re-fires it)
-    l.position.copy(p).y += 3; u.i = Math.max(2000 * power, u.i * live); u.t = 0; l.intensity = 0; this.scene.add(l);
+    const l = this.boom, u = l.userData, live = u.on ? Math.max(0, 1 - u.t / u.d) : 0; // (a second blast re-fires it)
+    l.position.copy(p).y += 3; u.i = Math.max(2000 * power, u.i * live); u.t = 0; l.intensity = 0; u.on = true;
   }
   dispose() { this.scene.remove(this.smoke.bb.mesh, this.fire.bb.mesh); this.scene.remove(this.boom); }
 }
