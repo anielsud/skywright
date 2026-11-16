@@ -21,6 +21,7 @@ import { VERSION, COMMIT, BUILT } from './version.js';
 import { CHANGELOG, changesSince, newer } from './changelog.js';
 import { Net } from './net.js';
 import { Analytics } from './analytics.js';
+import { designSummary, trackHangar } from './buildStats.js';
 import { loadReal } from './realworld.js';
 installFog();
 
@@ -293,6 +294,7 @@ window.addEventListener('keydown', (e) => {
 
 // For analytics: preset planes by name; anything built or changed by the player is just 'custom' (their names stay on the device)
 const planeLabel = (d) => presets.find((p) => p.name === d.name && p.parts.length === d.parts.length)?.name || 'custom';
+const buildStats = trackHangar(hangar, planeLabel); // what gets built and how (anonymous; see buildStats.js)
 const planeKind = (st) => (st.heli ? 'helicopter' : st.car && st.wingArea < 0.5 ? 'car' : st.floats ? 'seaplane' : 'plane');
 // Save the vehicle on the hangar floor into "My vehicles" under its name (same name = overwrite that save).
 function saveCurrent() {
@@ -302,7 +304,7 @@ function saveCurrent() {
   const i = mine.findIndex((d) => d.name === name), c = cloneDesign(hangar.design);
   if (i >= 0) mine[i] = c; else mine.push(c);
   LS.set('designs', mine); audio.play('save');
-  analytics.capture('plane_saved', { parts: c.parts.length, overwrite: i >= 0, saved_planes: mine.length });
+  analytics.capture('plane_saved', { parts: c.parts.length, overwrite: i >= 0, saved_planes: mine.length, design: designSummary(hangar.design, analyze(hangar.design), buildStats.base) });
   ui.hint(`Saved “${name}” — find it in Vehicles`);
 }
 function planesModal() {
@@ -324,12 +326,12 @@ function planesModal() {
     <div class="modal-foot"><button data-close>Close</button></div>`, 'wide');
   const el = m.el;
   el.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => { el.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === b)); el.querySelectorAll('[data-pane]').forEach((p) => (p.hidden = p.dataset.pane !== b.dataset.tab)); }));
-  el.querySelectorAll('[data-load]').forEach((b) => b.addEventListener('click', () => { const [k, i] = b.dataset.load.split(':'); hangar.load(k === 'preset' ? presets[+i] : mine[+i]); audio.play('load'); m.close(); analytics.capture('plane_loaded', { source: k, plane: k === 'preset' ? presets[+i].name : 'custom' }); }));
+  el.querySelectorAll('[data-load]').forEach((b) => b.addEventListener('click', () => { const [k, i] = b.dataset.load.split(':'); hangar.load(k === 'preset' ? presets[+i] : mine[+i]); buildStats.setBase(k === 'preset' ? presets[+i].name : 'saved'); audio.play('load'); m.close(); analytics.capture('plane_loaded', { source: k, plane: k === 'preset' ? presets[+i].name : 'custom' }); }));
   el.querySelectorAll('[data-delp]').forEach((b) => b.addEventListener('click', () => { mine.splice(+b.dataset.delp, 1); LS.set('designs', mine); m.close(); planesModal(); }));
   el.querySelector('[data-new]').addEventListener('click', () => { hangar.load({ name: 'My Vehicle', parts: [] }); analytics.capture('plane_loaded', { source: 'blank' }); activeCat = 'fuselage'; buildPalette(); m.close(); ui.hint('Pick a body to start'); });
   el.querySelector('[data-save]').addEventListener('click', () => { saveCurrent(); m.close(); });
   el.querySelector('#copy-code').addEventListener('click', () => { const t = el.querySelector('#share-code'); t.select(); navigator.clipboard?.writeText(t.value).then(() => ui.hint('Copied!'), () => document.execCommand('copy')); });
-  el.querySelector('#import-btn').addEventListener('click', () => { try { hangar.load(decodeDesign(el.querySelector('#import-code').value)); audio.play('load'); m.close(); ui.hint('Imported!'); analytics.capture('plane_loaded', { source: 'import' }); } catch (e) { ui.hint('That code didn’t work'); } });
+  el.querySelector('#import-btn').addEventListener('click', () => { try { hangar.load(decodeDesign(el.querySelector('#import-code').value)); audio.play('load'); m.close(); ui.hint('Imported!'); buildStats.setBase('import'); analytics.capture('plane_loaded', { source: 'import' }); } catch (e) { ui.hint('That code didn’t work'); } });
 }
 
 function timeLabel(t) { const h = Math.floor(t), mm = Math.round((t - h) * 60); const lab = t < 5 || t > 20.5 ? 'Night' : t < 7.5 ? 'Dawn' : t < 11 ? 'Morning' : t < 15 ? 'Midday' : t < 18 ? 'Afternoon' : 'Sunset'; return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${lab}`; }
@@ -638,7 +640,8 @@ function buildFlight(cfg) {
   state = 'flight';
   F.track = { location: cfg.location, realism: cfg.realism, mode: cfg.mode, start, time_of_day: cfg.time, weather: cfg.weather, online: !!net.active, plane: planeLabel(design), kind: planeKind(st), engine: ac.hasEngine };
   Object.assign(F, { t0: performance.now(), frames: 0, activeT: 0, fpsLow: Infinity, maxLevel: perf.level, playersMax: net.count });
-  analytics.capture('flight_start', { ...F.track, parts: design.parts.length, part_types: [...new Set(design.parts.map((p) => p.id))], quality: settings.quality, touch: showTouch, control_mode: settings.controlMode });
+  const dsum = designSummary(design, st, buildStats.base); F.track.design_hash = dsum.design_hash; F.track.base = dsum.base; // flight_end carries these too
+  analytics.capture('flight_start', { ...F.track, design: dsum, build: buildStats.take(), parts: design.parts.length, part_types: [...new Set(design.parts.map((p) => p.id))], quality: settings.quality, touch: showTouch, control_mode: settings.controlMode });
   // The loading screen stays up while every shader compiles (the hidden things' too: tree LODs, night lights, far town
   // detail), and over the first frame, which draws the hidden shadow casters for their shadow shaders (see warmShaders)
   const warm = (F.warm = { t: performance.now(), n: 0, pending: true }), compiled = () => { warm.pending = false; warm.t = performance.now(); };

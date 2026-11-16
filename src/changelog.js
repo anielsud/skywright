@@ -2,6 +2,8 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.64.0', items: [
+  ] },
   { v: '1.63.0', items: [
     'On a tablet you can now drag anywhere on the screen to look around your plane (and pinch to zoom). The flying stick lives in the bottom-right corner.',
   ] },
