@@ -943,10 +943,11 @@ function stepFlight(dtReal) {
     if (e.type === 'raceDone') { audio.mission('win'); analytics.capture('mission_done', { ...f.track, mission: 'rings', seconds: +e.time.toFixed(1) }); const best = LS.get('best', {}); const key = `${f.cfg.location}:${hangar.design.name}`; const pb = !best[key] || e.time < best[key]; if (pb) { best[key] = e.time; LS.set('best', best); setTimeout(() => audio.mission('record'), 2600); } setTimeout(() => showEnd(`Course complete: ${e.time.toFixed(1)} s`, pb ? '<p class="good">New personal best!</p>' : `<p>Best: ${best[key].toFixed(1)} s</p>`), 1500); }
     if (e.type === 'landingDone') { analytics.capture('mission_done', { ...f.track, mission: 'landing', crashed: !!e.crashed, score: e.score, sink_ms: +e.vs.toFixed(2), on_runway: !!e.onRwy }); audio.mission(e.crashed || e.score < 300 ? 'fail' : e.score > 500 ? 'win' : 'ok'); const stars = '★'.repeat(Math.round(e.score / 200)) + '☆'.repeat(5 - Math.round(e.score / 200)); setTimeout(() => showEnd(e.crashed ? 'Crashed on landing' : `Landing score: ${e.score}`, e.crashed ? '' : `<p class="stars">${stars}</p><p>Sink rate ${e.vs.toFixed(1)} m/s · ${Math.abs(e.cl).toFixed(1)} m off centreline · ${Math.round(Math.abs(e.aim))} m ${e.aim > 0 ? 'short of' : 'past'} the aim point${e.onRwy ? '' : ' · missed the runway!'}</p>`), 800); }
     if (e.type === 'thunder') setTimeout(() => audio.play('thunder', e.power), e.delay * 1000);
-    // buildings (destruction.js): stand-in sounds from the crash set
+    // buildings (destruction.js): crumble / splinter / glass on each blow, the collapse and the rubble settling (Audio.buildingHit / collapse)
     const near = e.type === 'building_hit' || e.type === 'collapse' ? Math.max(0, 1 - e.pos.distanceTo(flightCam.position) / 900) : 0; // (shake the camera only close by)
-    if (e.type === 'building_hit' && f.t - (f.bldT ?? -1) > 0.2) { f.bldT = f.t; audio.play(e.power > 0.5 ? 'explosion' : 'crack', 0.4 + e.power * 0.6, e.pos); if (e.glass) audio.play('glass', 1, e.pos); rig.shake((0.4 + e.power) * near); }
-    if (e.type === 'collapse' && e.phase === 'start') { audio.play('impact', Math.min(2, 0.6 + e.size / 40), e.pos); rig.shake(Math.min(2, 0.5 + e.size / 50) * near); if (e.size > 20 && f.t - f.lastSlowmo > 6 && near > 0.2) { f.slowmo = 1.6; f.lastSlowmo = f.t; } }
+    if (e.type === 'building_hit' && f.t - (f.bldT ?? -1) > 0.2) { f.bldT = f.t; audio.buildingHit(e); rig.shake((0.4 + e.power) * near); }
+    if (e.type === 'collapse') audio.collapse(e);
+    if (e.type === 'collapse' && e.phase === 'start') { rig.shake(Math.min(2, 0.5 + e.size / 50) * near); if (e.size > 20 && f.t - f.lastSlowmo > 6 && near > 0.2) { f.slowmo = 1.6; f.lastSlowmo = f.t; } }
   }
   // debris
   const burnPts = [];

@@ -22,6 +22,8 @@ export const SAMPLE_ENGINES = {
 export const SAMPLE_LEVEL = { piston: 3.6, radial: 2.7, turboprop: 3.1, jet: 2.1, fan: 2.2, rocket: 3.0, rotor: 4.5 }; // full power ≈ -24 dB props, -28 jets (weighted, tools/sfx measurements)
 // Recorded world/foley levels (linear), balanced with tools/sfx-style weighted measurements.
 const MUSIC = { hangar: 0.6, cruise: 0.7, mission: 1.3 }; // weighted avg at music 100%: hangar ≈-35, cruise ≈-38 (under the engine), mission ≈-33 dB
+// building destruction (destruction.js events): peaks close up ≈ hit -26, glass -28, collapse -23, tower collapse -21, settle -36 dB weighted
+const BLD = { crumble: 0.9, wood: 0.8, metal: 0.7, glass: 0.55, collapse: 0.95, big: 1.1, settle: 0.2 };
 const SHOT = { lever: 0.24, voice: 1.8, crash: 0.4, debris: 0.2, glass: 0.35, explosion: 0.4, boom: 0.4, chirp: 0.38, splash: 0.32, gear: 0.32, thunder: 0.3, strike: 0.6 }; // peaks: crash ≈-22, explosion ≈-18, chirp ≈-28 dB weighted
 const REC = { windExt: 2.66, windCk: 4.6, roll: 2, rain: 2, day: 0.73, night: 0.52, sea: 1.38, lake: 1.46 }; // wind@120 m/s ≈-32, roll ≈-30, rain ≈-30, day bed ≈-40 dB weighted
 // workshop foley (hangar building) levels, and the synth each falls back to while clips load
@@ -514,6 +516,47 @@ export class Audio {
     if (!this.shot('groan', { gain: DMG.strain * k, rate: 0.8 + Math.random() * 0.1, dest: d })) this.tone('sawtooth', 110, 70, 0.03, 1.2, 0, d);
     this.shot(`creak_${1 + Math.floor(Math.random() * 3)}`, { gain: DMG.creak * 0.8 * k, rate: 0.9 + Math.random() * 0.2, dest: d, delay: 0.25 + Math.random() * 0.2 });
     this.creakT = now + 2.5; // the ordinary G creaks hold off for a moment
+  }
+  // ---------- building destruction: crumbling masonry, splintering wood, shattering windows, collapses and settling rubble ----------
+  // Far-away destruction is heard late (sound travels 343 m/s: you see the tower fall, then hear it), dull (air absorption)
+  // and quieter; a few at most at once so a street of houses going down doesn't pile up into a wall of noise.
+  bldDest(pos, life = 12) {
+    const L = this.ctx.listener, lx = L.positionX ? L.positionX.value : 0, ly = L.positionY ? L.positionY.value : 0, lz = L.positionZ ? L.positionZ.value : 0;
+    const d = Math.hypot(pos.x - lx, pos.y - ly, pos.z - lz);
+    const pan = this.panner(); pan.refDistance = 40; pan.rolloffFactor = 1;
+    if (pan.positionX) { pan.positionX.value = pos.x; pan.positionY.value = pos.y; pan.positionZ.value = pos.z; } else pan.setPosition(pos.x, pos.y, pos.z);
+    const dl = this.ctx.createDelay(8); dl.delayTime.value = Math.min(7, d / 343);
+    const air = this.filt('lowpass', Math.max(600, 22000 * Math.exp(-d / 600)), 0.5);
+    air.connect(dl); dl.connect(pan); pan.connect(this.fx);
+    setTimeout(() => { try { pan.disconnect(); dl.disconnect(); air.disconnect(); } catch { /* gone */ } }, (life + d / 343) * 1000);
+    return { node: air, d };
+  }
+  // e: {pos, power 0..1, glass, material, size}
+  buildingHit(e) {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime; if (now < (this.bldHitT ?? 0)) return; this.bldHitT = now + 0.12;
+    if (e.material === 'fuel') { this.play('explosion', 1, e.pos); return; }
+    const P = Math.min(1, Math.max(0, e.power ?? 0.5)), { node: d } = this.bldDest(e.pos), k = 0.45 + 0.55 * P, r = () => 0.9 + Math.random() * 0.2;
+    let ok = true;
+    if (e.material === 'wood') ok = this.shot('bld_wood', { gain: BLD.wood * k, rate: r() * (1.15 - 0.2 * P), dest: d });
+    else if (e.material === 'metal') ok = this.shot('crash_metal', { gain: BLD.metal * k, rate: r() * 0.85, dest: d });
+    else ok = this.shot('bld_crumble', { gain: BLD.crumble * k, rate: r() * (1.1 - 0.2 * P), dest: d });
+    if (ok && P > 0.6 && e.material !== 'wood') this.shot('debris_big', { gain: SHOT.debris * P, rate: r(), dest: d, delay: 0.15 });
+    if (e.glass || e.material === 'glass') this.shot(`bld_glass_${1 + (Math.random() < 0.5)}`, { gain: BLD.glass * (e.material === 'glass' ? 1.3 : 1) * (0.6 + 0.4 * P), rate: r(), dest: d, delay: 0.03 });
+    if (!ok) this.play(P > 0.5 ? 'explosion' : 'crack', 0.4 + P * 0.6, e.pos); // clips not loaded: the old stand-ins
+  }
+  // e: {pos, size, phase 'start'|'end'}: a building (or a toppling top) comes down, then settles
+  collapse(e) {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    this.bldFalls = (this.bldFalls || []).filter((t) => t > now);
+    const size = e.size || 10, big = size > 45, { node: d } = this.bldDest(e.pos, 14);
+    if (e.phase === 'end') { if (this.bldFalls.length < 3) this.shot('bld_settle', { gain: BLD.settle * Math.min(1.4, 0.5 + size / 50), rate: 0.9 + Math.random() * 0.2, dest: d }); return; }
+    if (this.bldFalls.length >= 3) return;
+    const k = Math.min(1.5, 0.55 + size / 45), rate = big ? Math.max(0.7, 0.95 - size / 600) : 0.95 + Math.random() * 0.15;
+    if (!this.shot(big ? 'bld_collapse_big' : 'bld_collapse', { gain: (big ? BLD.big : BLD.collapse) * k, rate, dest: d })) { this.play('impact', Math.min(2, 0.6 + size / 40), e.pos); return; }
+    this.shot('bld_crumble', { gain: BLD.crumble * 0.6 * k, rate: 0.8 + Math.random() * 0.15, dest: d, delay: 0.6 + Math.random() * 0.6 });
+    this.bldFalls.push(now + (big ? 6 : 4.5));
   }
   // s.fire {amt, pos}: a burning engine; s.g: load factor; s.rattle: worst damage fraction of a part still attached; s.acPos
   airframe(s) {
