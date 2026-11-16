@@ -2,6 +2,7 @@
 // State snapshots arrive ~15 times a second; we render ~120 ms in the past and interpolate between them.
 import * as THREE from 'three';
 import { Aircraft, REALISM } from './aircraft.js';
+import { aircraftLights, updateAircraftLights } from './navLights.js';
 import { clamp } from './noise.js';
 import { SonicFX } from './sonic.js';
 
@@ -74,6 +75,7 @@ export class RemotePlane {
     scene.add(this.ac.root);
     this.ac.root.visible = false; // until the first snapshot
     this.sonic = new SonicFX(this.ac, scene); // vapour cone, glow and sonic booms for other players too
+    this.nav = aircraftLights(this.ac, { phase: Math.random() * 1.3 }); // running lights (out of step with ours)
     this.st = { x: new THREE.Vector3(), q: new THREE.Quaternion(), v: new THREE.Vector3() };
     this.first = true;
     this.label = document.createElement('div'); this.label.className = 'mp-label';
@@ -113,6 +115,7 @@ export class RemotePlane {
     }
     ac.syncVisual();
     ac.updateVisuals(dt, env);
+    updateAircraftLights(this.nav, dt, env);
   }
 
   // airshow smoke, like the local plane

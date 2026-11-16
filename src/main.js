@@ -23,6 +23,7 @@ import { Net } from './net.js';
 import { Analytics } from './analytics.js';
 import { designSummary, trackHangar } from './buildStats.js';
 import { loadReal } from './realworld.js';
+import { aircraftLights, updateAircraftLights } from './navLights.js';
 installFog();
 
 // ---------- persistence ----------
@@ -577,6 +578,7 @@ function buildFlight(cfg) {
   const design = cloneDesign(hangar.design);
   const ac = new Aircraft(design, realism);
   scene.add(ac.root);
+  const nav = aircraftLights(ac, { spot: world.sunElev < 0.2 || world.W.dark > 0.6 }); // running lights (a real landing light after dark)
   const effects = new Effects(scene);
   const sonic = new SonicFX(ac, scene);
   const traffic = new Traffic(scene, world, presets);
@@ -623,7 +625,7 @@ function buildFlight(cfg) {
     ac.boomed = true; rig.shake(1.4); post.shock(0.45);
   };
   sonic.onMilestone = (n) => { hud.center(`MACH ${n}!`, 1800); audio.play('ring'); };
-  F = { scene, world, ac, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
+  F = { scene, world, ac, nav, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
   applyQuality(); // the tier may have changed since the last flight (post effects, shadow cascades)
   F.callouts = new Callouts(audio, ac);
   F.worldSound = new WorldSound(audio, world, traffic);
@@ -910,6 +912,7 @@ function stepFlight(dtReal) {
   rig.update(dtReal, ac, world, focus);
   ac.setCockpitView(rig.mode === 'cockpit' && !focus);
   world.update(dtReal, flightCam, rig.vel, f.events);
+  updateAircraftLights(f.nav, dtReal, f.env);
   effects.setLighting(world, flightCam);
   post.shimmer(f.sonic.shimmer(flightCam, f.shim), perf.level < 1 && qualityTier() !== 'low'); // heat haze is the first thing Auto quality sheds
   // end of flight detection

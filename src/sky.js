@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { FullScreenQuad } from '../vendor/addons/postprocessing/Pass.js';
 import { mulberry32 } from './noise.js';
+import { MOON_U, MOON_GLSL } from './moon.js';
 
 // Planet / atmosphere in km. Coefficients from Bruneton & Hillaire's Earth presets.
 const R0 = 6360, RT = 6460;
@@ -229,7 +230,7 @@ export function skyMaterial(lut, { env = false, fog = null } = {}) {
   const U = {
     skyLUT: { value: lut }, noiseTex: { value: cloudNoiseTexture() }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunDisc: { value: new THREE.Color(0, 0, 0) },
     stars: { value: 0 }, cirrus: { value: 0 }, cirrusOff: { value: new THREE.Vector2() }, cirrusLit: { value: new THREE.Color(1, 1, 1) }, cirrusAmb: { value: new THREE.Color(0.5, 0.6, 0.7) },
-    grey: { value: 0 }, greyCol: { value: new THREE.Color(0.5, 0.5, 0.5) }, uTime: { value: 0 }, ...PLANET,
+    grey: { value: 0 }, greyCol: { value: new THREE.Color(0.5, 0.5, 0.5) }, uTime: { value: 0 }, ...PLANET, ...MOON_U,
   };
   if (fog) { for (const k in fog.uniforms) if (k.startsWith('fog')) U[k] = fog.uniforms[k]; U.fogColor = { value: fog.color }; }
   return new THREE.ShaderMaterial({
@@ -244,6 +245,7 @@ export function skyMaterial(lut, { env = false, fog = null } = {}) {
       uniform float space; uniform sampler2D earthDay; uniform sampler2D earthLights; uniform vec3 planetCam; uniform float planetC; uniform mat3 toEcef;
       uniform float cloudCov; uniform vec2 cloudOff; uniform vec3 sunLight; uniform vec3 planetAmb;
       varying vec3 vDir;
+      ${MOON_GLSL}
       ${CLOUD_SEA_GLSL}
       ${PLANET_LIGHT_GLSL}
       ${fog ? 'uniform vec3 fogColor;\n' + fog.glsl : SKY_LOOKUP_GLSL}
@@ -254,6 +256,8 @@ export function skyMaterial(lut, { env = false, fog = null } = {}) {
         float below = clamp(-d.y * 6.0, 0.0, 1.0);
         float cs = dot(d, sunDir);
         col *= 1.0 - below * 0.45; // below the horizon: the haze over the ground is a little darker
+        // a moonlit night sky is a deep blue, brightest low down (none of it from high up, above the air)
+        col += moonSky * (0.6 + 0.8 * (1.0 - abs(d.y))) * (1.0 - space);
         ${fog ? 'vec3 fext; col = mix(col, fogTarget(d, fogColor, fext), smoothstep(0.0, -0.012, d.y));' : ''}
         #ifndef ENV
         // from high up: the round Earth below the horizon, seen through its own atmosphere (sky-view table: in-scattered
@@ -276,8 +280,10 @@ export function skyMaterial(lut, { env = false, fog = null } = {}) {
           vec3 Tv = pow(vec3(max(L.a, 1e-4)), vec3(${(BR[0] / BR[1]).toFixed(4)}, 1.0, ${(BR[2] / BR[1]).toFixed(4)}));
           if (d.y < 0.0) col = mix(col, L.rgb + Tv * surf * hitP, space);
         }
+        // the moon (src/moon.js): behind the haze below the horizon, and behind the planet from up high
+        vec3 mc = moonDisc(d) * (1.0 - mix(below, hitP, space));
         // stars (procedural, so haze and clouds hide them) with a little twinkle
-        if (stars > 0.002 && (d.y > -0.02 || space > 0.0)) {
+        if (stars > 0.002 && moonMask < 0.99 && (d.y > -0.02 || space > 0.0)) {
           vec3 p = d * 220.0, c = floor(p), f = fract(p);
           float h = hash3(c);
           if (h > 0.95) {
@@ -287,9 +293,11 @@ export function skyMaterial(lut, { env = false, fog = null } = {}) {
             float b = pow((h - 0.95) / 0.05, 5.0) * 3.0 + 0.2;
             float tw = 0.75 + 0.25 * sin(uTime * (2.0 + h * 9.0) + h * 40.0);
             col += vec3(0.85 + 0.3 * hash3(c + 7.0), 0.9, 1.0 + 0.3 * hash3(c + 9.0) - 0.15) * b * tw * smoothstep(px * 1.2, px * 0.3, r) * stars * mix(smoothstep(-0.02, 0.15, d.y), 1.0 - hitP, space)
-              * mix(1.0, 1.0 / (1.0 + 60.0 * dot(col, vec3(0.3, 0.6, 0.1))), space); // up high, daylit air still drowns the faint ones
+              * mix(1.0, 1.0 / (1.0 + 60.0 * dot(col, vec3(0.3, 0.6, 0.1))), space) // up high, daylit air still drowns the faint ones
+              * (1.0 - moonMask);
           }
         }
+        col += mc;
         // sun disc with limb darkening (HDR: blooms through the post chain)
         float disc = smoothstep(0.99990, 0.99993, cs);
         if (disc > 0.0) { float lr = clamp((1.0 - cs) / 0.0001, 0.0, 1.0); col += sunDisc * disc * (1.0 - 0.45 * lr) * (1.0 - mix(below, hitP, space)); }

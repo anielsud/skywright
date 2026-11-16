@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { PLANET, PLANET_R, CLOUD_SEA_GLSL, PLANET_LIGHT_GLSL, Atmosphere, cloudNoiseTexture } from './sky.js';
 import { FOG, FOG_GLSL } from './shaders.js';
 import { smoothstep } from './noise.js';
+import { MOON_U } from './moon.js';
 
 // Where each place is on the globe (latitude, longitude). Real places read theirs from their geodata (meta.json);
 // the made-up ones get a plausible spot: the Alps, French Polynesia, northern Arizona.
@@ -74,7 +75,7 @@ export class SpaceView {
   // world.applyLighting() just ran: remember what it set (restored when we come back down), then re-apply ours
   onLighting() {
     const w = this.w, u = w.sky.material.uniforms;
-    this.base = { stars: u.stars.value, cirrus: u.cirrus.value, disc: u.sunDisc.value.clone(), deck: [w.deck.material.uniforms.opacity.value, w.deck2.material.uniforms.opacity.value] };
+    this.base = { stars: u.stars.value, cirrus: u.cirrus.value, disc: u.sunDisc.value.clone(), deck: [w.deck.material.uniforms.opacity.value, w.deck2.material.uniforms.opacity.value], moon: MOON_U.moonCol.value.clone() };
     this.lightKey = null;
   }
 
@@ -123,6 +124,8 @@ export class SpaceView {
       this.disc = _c.clone();
     }
     u.sunDisc.value.copy(B.disc).lerp(this.disc, k);
+    // the moon above the air: white and bright by day too (still behind the planet when it is below our horizon)
+    MOON_U.moonCol.value.copy(B.moon).lerp(_c.setRGB(2.2, 2.2, 2.15).multiplyScalar(smoothstep(-0.3, -0.05, w.moonElev ?? 0)), k);
     // clouds: the 3D cumulus and the overcast deck give way to a flat sea of cloud seen from above (8-14 km)
     const fade = 1 - smoothstep(8000, 14000, h);
     w.clouds.uniforms.opacity.value = fade; w.clouds.mesh.visible = fade > 0.001;
@@ -145,7 +148,7 @@ export class SpaceView {
     PLANET.space.value = 0; FOG.fogSpace.value = 0;
     w.atmo.setAlt(0.6); this.sinceBake = 0;
     if (B) {
-      const u = w.sky.material.uniforms; u.stars.value = B.stars; u.cirrus.value = B.cirrus; u.sunDisc.value.copy(B.disc);
+      const u = w.sky.material.uniforms; u.stars.value = B.stars; u.cirrus.value = B.cirrus; u.sunDisc.value.copy(B.disc); MOON_U.moonCol.value.copy(B.moon);
       [w.deck, w.deck2].forEach((d, i) => { d.material.uniforms.opacity.value = B.deck[i]; d.visible = B.deck[i] > 0.01; });
     }
     w.clouds.uniforms.opacity.value = 1; w.clouds.mesh.visible = true;
