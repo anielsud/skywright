@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.77.0', items: [
+    'Fixed: after an update the game could look jumbled until you reloaded. Updates now always arrive all at once.',
+  ] },
   { v: '1.76.0', items: [
     'Real pilots! Every vehicle has a proper pilot or driver dressed for the job: fighter pilots, airline crew, rescue crew, racing drivers and an astronaut. Their hands move the stick, throttle and steering wheel as you fly.',
     'Lots of fixes: the Dune Buggy and Chomper got real V8 engines, the Jumbo and Centipede have proper cockpit windows, and loose or floating pieces are fixed everywhere.',
