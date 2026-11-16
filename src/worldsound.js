@@ -30,6 +30,7 @@ const FALLS = {
 const COWS = { lauterbrunnen: 1, alpine: 1 }; // places with alpine pastures
 // rivers and streams from the terrain bake (world.landAt; not the dry desert washes): ≈-31 dB weighted at the bank of a
 // big river, ≈-42 at 150 m; ≈-37 by a small stream
+const REAL_RIVER = 0.8; // mapped real rivers carry no size: treat them as big ones
 const LVL_RIVER = 3.8, RIVER_RANGE = 450, RIVER_RINGS = [0, 25, 50, 90, 140, 210, 300, 420];
 const CAR_VOICES = 3, CAR_RANGE = 240, TRAIN_RANGE = 1600, PLANE_VOICES = 3, PLANE_RANGE = 3500, FLOCK_RANGE = 160;
 const HEAVY = { truck: 1, tanker: 1, bus: 1 };
@@ -358,7 +359,8 @@ export class WorldSound {
   // Searched in rings twice a second; the sound glides along the bank as the nearest point changes. Bigger rivers
   // (more drainage) are louder and deeper; small mountain streams are quieter and brighter.
   updateRiver(lp, dt, agl) {
-    const W = this.world; if (!W.bake || W.bake.dry || !W.landAt) return;
+    const W = this.world, real = W.real?.waterAt ? W.real : null; // real places: mapped rivers (the Colorado, the Lütschine…)
+    if (!real && (!W.bake || W.bake.dry || !W.landAt)) return;
     this.riverT += dt;
     if (this.riverT > 0.5) {
       this.riverT = 0; this.riverHit = null;
@@ -369,9 +371,10 @@ export class WorldSound {
           let best = null, bw = 0.4;
           for (let k = 0; k < n; k++) {
             const a = (k / n) * Math.PI * 2, x = lp.x + Math.cos(a) * r, z = lp.z + Math.sin(a) * r;
-            W.landAt(x, z, L); if (L[0] > bw) { bw = L[0]; best = [x, z, L[1]]; }
+            if (real) { const h = real.waterAt(x, z); if (h != null) { best = [x, z, REAL_RIVER, h]; break; } continue; }
+            W.landAt(x, z, L); if (L[0] > bw) { bw = L[0]; best = [x, z, L[1], W.heightAt(x, z)]; }
           }
-          if (best) { this.riverHit = { p: new THREE.Vector3(best[0], W.heightAt(best[0], best[1]) + 1, best[1]), size: best[2] }; break; }
+          if (best) { this.riverHit = { p: new THREE.Vector3(best[0], best[3] + 1, best[1]), size: best[2] }; break; }
         }
       }
     }
