@@ -17,6 +17,7 @@ import { PM, lightGeometry } from './planeMaterials.js';
 import { V, bar, tube, norm, ringLoft, Bag, kitMaterial, kitSlot, kitUV } from './partDetail.js';
 import { clamp, lerp } from './noise.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
+import { blendSkins } from './skinBlend.js';
 
 const BODY = new Set(['fuselage', 'cockpit']), BODY_X = new Set(['x_nosecone', 'x_tailcone']);
 const isBody = (id) => BODY.has(PARTS[id].cat) || BODY_X.has(id);
@@ -45,6 +46,7 @@ function solidMeshes(obj) {
 // Ray cast against meshes (nearest hit within far; front faces only unless double-sided). The assembly pass fires a
 // few thousand rays per plane, so each geometry gets a one-level box hierarchy (chunks of 48 consecutive triangles,
 // which revolve()/loft() lay out in compact strips) instead of three's test-every-triangle Mesh.raycast.
+const _u0 = new THREE.Vector2(), _u1 = new THREE.Vector2(), _u2 = new THREE.Vector2();
 const accel = new WeakMap(), _ray = new THREE.Ray(), _inv = new THREE.Matrix4(), _a = V(), _b = V(), _c = V(), _hit = V(), _sph = new THREE.Sphere();
 function chunks(g) {
   let ch = accel.get(g); if (ch) return ch;
@@ -72,7 +74,11 @@ function cast(meshes, from, dir, far = Infinity) {
         _a.fromBufferAttribute(pos, idx ? idx.getX(i) : i); _b.fromBufferAttribute(pos, idx ? idx.getX(i + 1) : i + 1); _c.fromBufferAttribute(pos, idx ? idx.getX(i + 2) : i + 2);
         if (!_ray.intersectTriangle(_a, _b, _c, cull, _hit)) continue;
         const wp = _hit.clone().applyMatrix4(m.matrixWorld), d = wp.distanceTo(from);
-        if (d < bestD) { bestD = d; const n = _b.clone().sub(_a).cross(_c.clone().sub(_a)).applyMatrix3(_m3.getNormalMatrix(m.matrixWorld)).normalize(); best = { p: wp, n, d }; }
+        if (d < bestD) {
+          bestD = d; const n = _b.clone().sub(_a).cross(_c.clone().sub(_a)).applyMatrix3(_m3.getNormalMatrix(m.matrixWorld)).normalize(); best = { p: wp, n, d };
+          const u1 = g.attributes.uv1; // panel-skin uv of the hit, so joints can carry the panel lines on
+          if (u1) { const i0 = idx ? idx.getX(i) : i, i1 = idx ? idx.getX(i + 1) : i + 1, i2 = idx ? idx.getX(i + 2) : i + 2; best.uv1 = THREE.Triangle.getInterpolation(_hit, _a, _b, _c, _u0.fromBufferAttribute(u1, i0), _u1.fromBufferAttribute(u1, i1), _u2.fromBufferAttribute(u1, i2), new THREE.Vector2()); }
+        }
       }
     }
   }
@@ -96,9 +102,9 @@ function addTo(obj, geo, mat, { near = false, shadow = true } = {}) {
   obj.add(m); return m;
 }
 // Grid surface (rows x cols of world points) with optional uv; normals oriented towards `out` (a world direction or fn)
-function gridGeo(P, { uv = null, out = null, closedCols = false } = {}) {
-  const R = P.length, C = P[0].length, pos = [], uvs = [], idx = [];
-  for (let i = 0; i < R; i++) for (let j = 0; j < C; j++) { pos.push(P[i][j].x, P[i][j].y, P[i][j].z); uvs.push(...(uv ? uv(i, j) : [0, 0])); }
+function gridGeo(P, { uv = null, uv1 = null, out = null, closedCols = false } = {}) {
+  const R = P.length, C = P[0].length, pos = [], uvs = [], uv1s = [], idx = [];
+  for (let i = 0; i < R; i++) for (let j = 0; j < C; j++) { pos.push(P[i][j].x, P[i][j].y, P[i][j].z); uvs.push(...(uv ? uv(i, j) : [0, 0])); if (uv1) uv1s.push(...uv1(i, j)); }
   const CC = closedCols ? C : C - 1;
   for (let i = 0; i < R - 1; i++) for (let j = 0; j < CC; j++) { const a = i * C + j, b = i * C + ((j + 1) % C), c = (i + 1) * C + ((j + 1) % C), d = (i + 1) * C + j; idx.push(a, b, c, a, c, d); }
   if (out) { // orient: compare a middle triangle's normal with the outward hint
@@ -108,6 +114,7 @@ function gridGeo(P, { uv = null, out = null, closedCols = false } = {}) {
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  if (uv1) g.setAttribute('uv1', new THREE.Float32BufferAttribute(uv1s, 2));
   g.setIndex(idx); g.computeVertexNormals();
   return g;
 }
@@ -159,7 +166,7 @@ function fillet(wp, wobj, bp, bobj, paintOf) {
       if (!side) nw = F.pt(sE, 0, 0).sub(F.pt(sE, 0.05, 0)).normalize(); // leading edge: straight ahead
       const t = nw.clone().addScaledVector(h.n, -nw.dot(h.n));
       if (t.lengthSq() < 1e-4) return null;
-      return { I: h.p.clone(), N: h.n, out, t: t.normalize(), nw, x, room: h.d };
+      return { I: h.p.clone(), N: h.n, out, t: t.normalize(), nw, x, room: h.d, uv1: h.uv1 };
     });
     // contiguous runs of hits
     const runs = []; let cur = [];
@@ -167,20 +174,21 @@ function fillet(wp, wobj, bp, bobj, paintOf) {
     if (cur.length) runs.push(cur);
     for (const run of runs) {
       if (run.length < 4) continue;
-      const J = 7, rows = [];
+      const J = 7, rows = [], uvRows = [];
       run.forEach((k, ri) => {
         const h = hits[k], fade = smooth(clamp(Math.min(ri, run.length - 1 - ri) / 2.5, 0, 1));
         const R = Math.min(h.room * 0.8, R0 * (0.75 + 0.9 * h.x / F.hinge)) * (0.15 + 0.85 * fade);
         const A = h.I.clone().addScaledVector(h.out, R);
         const g = h.I.clone().addScaledVector(h.t, R), hb = cast(body, g.clone().addScaledVector(h.N, R * 1.5 + 0.05), h.N.clone().negate(), R * 3 + 0.1);
-        const B = hb ? hb.p : g;
+        const B = hb ? hb.p : g; uvRows.push(hb?.uv1 || h.uv1 || null);
         const row = [];
         for (let j = 0; j <= J; j++) { const u = j / J; row.push(A.clone().multiplyScalar((1 - u) ** 2).addScaledVector(h.I, 2 * u * (1 - u)).addScaledVector(B, u * u)); }
         rows.push(row);
       });
       const mid = hits[run[Math.floor(run.length / 2)]];
-      const geo = gridGeo(rows, { out: mid.nw.clone().add(mid.N) });
+      const haveUv = uvRows.every(Boolean), geo = gridGeo(rows, { out: mid.nw.clone().add(mid.N), uv1: haveUv ? (i) => [uvRows[i].x, uvRows[i].y] : null });
       const m = addTo(bobj, geo, PM.skin(paintOf(bp))); made.push(m);
+      m.userData.edge = { pts: rows.map((r) => r[J]), n: mid.N.clone() }; // the body-side seam (rivets)
     }
   }
   return made;
@@ -238,7 +246,76 @@ function pylon(pp, pobj, qp, qobj) {
   const P2 = [0, 1, 2, 3].map((k) => Array.from({ length: C + 1 }, (_, j) => ring(j)[k]));
   P2.push(P2[0].map((p) => p.clone()));
   const geo = gridGeo(P2, { out: (i) => (i < 2 ? w : w.clone().negate()) });
-  return addTo(qobj, geo, PM.skin(qp.color));
+  const mesh = addTo(qobj, geo, PM.skin(qp.color)), top = st.reduce((a, t) => a.add(t.top), V()).multiplyScalar(1 / st.length);
+  return { mesh, pp, pobj, qp, qobj, r, u, w, axis, a0, a1, len, top, thick };
+}
+
+// ---------- nacelles and engine beams ----------
+// Prop engines hung under (or on) a wing get an aft nacelle: it carries on behind the cowl, shrinking and rising until it
+// runs into the wing's lower skin, so the engine looks installed rather than clipped on.
+const PROP_NACELLE = { e_piston: 0.92, e_radial: 0.7, e_turboprop: 0.92 };
+function nacelle(pl) {
+  const k = PROP_NACELLE[pl.pp.id]; if (!k) return;
+  const target = solidMeshes(pl.qobj), { r, u, axis, a1 } = pl, rs = r * k, H = [], NS = 14;
+  // how far behind the cowl the wing goes, and its height above the axis there
+  let L = 0;
+  for (let i = 1; i <= 24; i++) { const t = (i / 24) * r * 6, h = cast(target, a1.clone().addScaledVector(axis, t), u, r * 4); if (!h) break; L = t; H.push([t, h.d]); }
+  if (L < r * 0.8) return;
+  L += r * 0.4;
+  const hAt = (t) => { let b = H[0]; for (const q of H) if (q[0] <= t) b = q; return b[1]; };
+  const w = u.clone().cross(axis).normalize(), rings = [];
+  for (let i = 0; i <= NS; i++) {
+    const f = i / NS, t = f * L, rho = rs * (1 - 0.9 * smooth(f) ** 1.3) + 0.01, rise = Math.max(0, hAt(Math.min(t, L - r * 0.4)) + 0.04 - rho) * smooth(Math.min(1, f * 1.6));
+    const c = a1.clone().addScaledVector(axis, t - 0.02).addScaledVector(u, rise), ring = [];
+    for (let j = 0; j < 20; j++) { const a = (j / 20) * Math.PI * 2; ring.push(c.clone().addScaledVector(u, Math.cos(a) * rho).addScaledVector(w, Math.sin(a) * rho * 1.04)); }
+    rings.push(ring);
+  }
+  addTo(pl.pobj, ringLoft(rings, false, true), PM.skin(pl.pp.color));
+}
+// Three or more pods in a row under one wing: a continuous streamlined beam under the skin carries all their pylons.
+function engineBeams(list, ctx) {
+  if (list.length < 3) return;
+  const span = list.at(-1).top.clone().sub(list[0].top); if (span.lengthSq() < 1e-6) return; span.normalize();
+  list.sort((a, b) => a.top.dot(span) - b.top.dot(span));
+  const runs = []; let cur = [list[0]];
+  for (let i = 1; i < list.length; i++) { const gap = list[i].top.distanceTo(list[i - 1].top); if (gap < 5.5 * Math.max(list[i].r, list[i - 1].r)) cur.push(list[i]); else { runs.push(cur); cur = [list[i]]; } }
+  runs.push(cur);
+  for (const run of runs) {
+    if (run.length < 3) continue;
+    const rA = run.reduce((s, p) => s + p.r, 0) / run.length, lenA = run.reduce((s, p) => s + p.len, 0) / run.length;
+    const d = run.reduce((s, p) => s.add(p.axis), V()).normalize(), u = run.reduce((s, p) => s.add(p.u), V()).normalize();
+    const Lh = clamp(lenA * 0.4, 0.3, 3), T = clamp(rA * 0.5, 0.06, 0.6), sp = run.at(-1).top.clone().sub(run[0].top).normalize();
+    const ctrs = run.map((p) => p.top.clone().addScaledVector(u, -T * 0.55).addScaledVector(d, Lh * 0.1));
+    const st = [[ctrs[0].clone().addScaledVector(sp, -rA * 1.1), 0.25], [ctrs[0].clone().addScaledVector(sp, -rA * 0.55), 0.8], ...ctrs.map((c) => [c, 1]), [ctrs.at(-1).clone().addScaledVector(sp, rA * 0.55), 0.8], [ctrs.at(-1).clone().addScaledVector(sp, rA * 1.1), 0.25]];
+    const rings = st.map(([c, sc]) => { const ring = []; for (let j = 0; j < 18; j++) { const a = (j / 18) * Math.PI * 2, x = Math.cos(a), y = Math.sin(a); ring.push(c.clone().addScaledVector(d, -x * Lh * sc * (x > 0 ? 1 : 1.35)).addScaledVector(u, y * T * sc * (1 - 0.35 * Math.max(0, -x)))); } return ring; });
+    const host = run[0].qobj;
+    addTo(host, ringLoft(rings, true, true), PM.skin(run[0].pp.color)); // in the pods' colour: reads as the engines' common mount
+    // rivet line along the bottom of the beam and a builder's plate on its inboard end
+    const bag = ctx.near(host);
+    for (let i = 1; i < st.length - 2; i++) for (let k = 0; k < 12; k++) { const p = st[i][0].clone().lerp(st[i + 1][0], k / 12).addScaledVector(u, -T * 1.0); rivet(bag, p, u.clone().negate(), 0.012); }
+    plate(bag, st[1][0].clone().addScaledVector(u, -T * 0.92), u.clone().negate(), sp, 0.16);
+  }
+}
+// a rivet line just off the body-side seam of each fillet, and a builder's plate ahead of a main wing's root
+function filletRivets(made, bobj, ctx, mainWing) {
+  const bag = ctx.near(bobj);
+  for (const m of made) {
+    const e = m.userData.edge; if (!e || e.pts.length < 2) continue;
+    let acc = 0;
+    for (let i = 1; i < e.pts.length; i++) {
+      const a = e.pts[i - 1], b = e.pts[i], L = a.distanceTo(b);
+      for (let t = (0.07 - acc) / (L || 1); t < 1; t += 0.07 / (L || 1)) rivet(bag, a.clone().lerp(b, Math.max(0, t)).addScaledVector(e.n, 0.002), e.n, 0.009);
+      acc = (acc + L) % 0.07;
+    }
+    if (mainWing && e.pts.length > 6) { const lead = e.pts[Math.floor(e.pts.length / 2)], p = lead.clone().addScaledVector(ctx.fw, 0.35).addScaledVector(e.n, 0.003); plate(bag, p, e.n, ctx.fw, 0.12); }
+  }
+}
+// small fittings: a domed rivet head; a riveted builder's plate (aluminium with a dark border)
+function rivet(bag, p, n, s) { const g = new THREE.SphereGeometry(s, 5, 2, 0, Math.PI * 2, 0, Math.PI / 2); g.scale(1, 0.4, 1); g.applyMatrix4(frameAt(p, n, V(0, 0, -1))); bag.add(g, M.aluminum()); }
+function plate(bag, p, n, along, w) {
+  const f = frameAt(p, n, along), pl = new THREE.BoxGeometry(w, 0.004, w * 0.55); pl.applyMatrix4(f); bag.add(pl, PM.metal('brushed'));
+  const bd = new THREE.BoxGeometry(w * 0.82, 0.005, w * 0.3); bd.applyMatrix4(f); bag.add(bd, M.black());
+  for (const [x, z] of [[-0.42, -0.21], [0.42, -0.21], [-0.42, 0.21], [0.42, 0.21]]) rivet(bag, p.clone().add(V(x * w, 0.004, z * w).applyMatrix4(new THREE.Matrix4().extractRotation(f))), n, 0.008);
 }
 
 // ---------- canopy seat ----------
@@ -483,39 +560,48 @@ class DetailLOD extends THREE.Object3D {
 // ---------- entry point ----------
 // design: { parts }, objs[i]: the built object of design part i (already placed, all under `root`).
 // opts.near: build the small near-only furniture and the LOD switch (flight/hangar), false for merged static planes.
-export function assemble(design, objs, root, { near = true } = {}) {
+export function assemble(design, objs, root, { near = true, quick = false } = {}) {
   root.updateMatrixWorld(true);
   const out = { doors: [], parts: objs, rootW: root.matrixWorld.clone() };
   const parts = design.parts, valid = (i) => i >= 0 && objs[i] && PARTS[parts[i]?.id];
+  // bodies swell into one skin with what they carry, canopies are seated into them (skinBlend.js)
+  const nearBags = new Map(), nearBag = (obj) => { if (!near) return { add() {} }; if (!nearBags.has(obj)) nearBags.set(obj, new Bag()); return nearBags.get(obj); };
+  const t0 = performance.now(); let seated = new Set();
+  try { seated = blendSkins(design, objs, { pods: POD, addTo, quick, rivets: (obj, pts, n) => { const bag = nearBag(obj); pts.forEach((p, k) => rivet(bag, p, n[k], 0.008)); } }); } catch (e) { console.warn('skinBlend', e); }
+  const tSkin = performance.now() - t0;
   const fw = V(0, 0, -1).transformDirection(root.matrixWorld).normalize(), right = V(1, 0, 0).transformDirection(root.matrixWorld).normalize(), up = V(0, 1, 0).transformDirection(root.matrixWorld).normalize();
   const gearSet = new Set();
   parts.forEach((p, i) => { if (valid(i) && PARTS[p.id].gear) objs[i].traverse((o) => gearSet.add(o)); });
   const structure = [];
   parts.forEach((p, i) => { if (valid(i) && !PARTS[p.id].gear && PARTS[p.id].cat !== 'rotor') structure.push(...solidMeshes(objs[i])); });
-  const nearBags = new Map();
   const ctx = {
     fw, right, up, structure, isGear: (m) => gearSet.has(m),
-    near: (obj) => { if (!near) return { add() {} }; if (!nearBags.has(obj)) nearBags.set(obj, new Bag()); return nearBags.get(obj); },
+    near: nearBag,
     flush: (bag, obj, nr) => { for (const [mat, geo] of bag.merged()) addTo(obj, geo, mat, { near: nr }); },
     boxes: objs.map((o, j) => (valid(j) ? new THREE.Box3().setFromObject(o).expandByScalar(0.05) : null)),
     occupied: (pt, self) => ctx.boxes.some((b, j) => b && objs[j] !== self && b.containsPoint(pt)),
   };
-  const done = new Set(), joined = new Map(), tm = {}, T = (k, f) => { const t0 = performance.now(); const r = f(); tm[k] = (tm[k] || 0) + performance.now() - t0; return r; }; out.timing = tm;
-  const pairKey = (a, b) => (a < b ? a + ':' + b : b + ':' + a);
+  const done = new Set(), joined = new Map(), tm = { skin: tSkin }, T = (k, f) => { const t0 = performance.now(); const r = f(); tm[k] = (tm[k] || 0) + performance.now() - t0; return r; }; out.timing = tm;
+  const pairKey = (a, b) => (a < b ? a + ':' + b : b + ':' + a), pylons = new Map();
   const paintOf = (bp) => bp.color;
   parts.forEach((p, i) => {
     if (!valid(i) || !valid(p.parent)) return;
     const q = parts[p.parent], j = p.parent, k = pairKey(i, j); if (done.has(k)) return; done.add(k);
     const di = PARTS[p.id], dj = PARTS[q.id];
     try {
-      if (di.wing && isBody(q.id)) { if (T('fillet', () => fillet(p, objs[i], q, objs[j], paintOf)).length) joined.set(i, objs[j]); }
-      else if (dj.wing && isBody(p.id)) { if (T('fillet', () => fillet(q, objs[j], p, objs[i], paintOf)).length) joined.set(j, objs[i]); }
-      if (POD[p.id] && (dj.wing || isBody(q.id))) T('pylon', () => pylon(p, objs[i], q, objs[j]));
-      else if (POD[q.id] && (di.wing || isBody(p.id))) T('pylon', () => pylon(q, objs[j], p, objs[i]));
+      let fm = null;
+      if (di.wing && isBody(q.id)) { fm = T('fillet', () => fillet(p, objs[i], q, objs[j], paintOf)); if (fm.length) joined.set(i, objs[j]); }
+      else if (dj.wing && isBody(p.id)) { fm = T('fillet', () => fillet(q, objs[j], p, objs[i], paintOf)); if (fm.length) joined.set(j, objs[i]); }
+      if (fm?.length && near) T('rivets', () => filletRivets(fm, di.wing ? objs[j] : objs[i], ctx, PARTS[(di.wing ? p : q).id].cat === 'wing'));
+      let pl = null;
+      if (POD[p.id] && (dj.wing || isBody(q.id))) pl = T('pylon', () => pylon(p, objs[i], q, objs[j]));
+      else if (POD[q.id] && (di.wing || isBody(p.id))) pl = T('pylon', () => pylon(q, objs[j], p, objs[i]));
+      if (pl && PARTS[pl.qp.id].wing) { T('nacelle', () => nacelle(pl)); if (!pylons.has(pl.qobj)) pylons.set(pl.qobj, []); pylons.get(pl.qobj).push(pl); }
       if (di.gear) T('gear', () => gearJoint(p, objs[i], q, structure, out));
-      if (CANOPY[p.id] && isBody(q.id)) T('seat', () => seat(p, objs[i], q, structure.filter((m) => !isInside(m, objs[i]))));
+      if (CANOPY[p.id] && isBody(q.id) && !seated.has(i)) T('seat', () => seat(p, objs[i], q, structure.filter((m) => !isInside(m, objs[i]))));
     } catch (e) { console.warn('planeDetail joint', p.id, q.id, e); }
   });
+  for (const list of pylons.values()) try { T('beam', () => engineBeams(list, ctx)); } catch (e) { console.warn('planeDetail beam', e); }
   parts.forEach((p, i) => {
     if (!valid(i)) return;
     try {

@@ -216,7 +216,11 @@ export class Hangar {
   partIndexOf(obj) { let o = obj; while (o && o.userData.partIndex === undefined) o = o.parent; return o ? o.userData.partIndex : -1; }
 
   // ---------- rendering the design ----------
-  rebuild() {
+  // Back-to-back rebuilds (a size/position slider being dragged) get a coarse skin blend and no small fittings; the full
+  // build follows a moment after the last one.
+  rebuild({ full = false } = {}) {
+    const now = performance.now(), quick = !full && now - (this.lastRebuild || -1e9) < 140; this.lastRebuild = now;
+    clearTimeout(this.fullT); if (quick) this.fullT = setTimeout(() => { this.lastRebuild = -1e9; this.rebuild({ full: true }); }, 200);
     this.designGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.designGroup.clear();
     const m = new THREE.Matrix4(), objs = [];
@@ -227,7 +231,7 @@ export class Hangar {
       o.traverse((c) => { if (c.isMesh) { c.castShadow = !c.material.transparent; c.receiveShadow = true; } if (c.userData.isDisc) c.visible = false; });
       this.designGroup.add(o);
     });
-    assemble(this.design, objs, this.designGroup);
+    const t0 = performance.now(); assemble(this.design, objs, this.designGroup, { quick, near: !quick }); this.rebuildMs = performance.now() - t0; this.rebuildQuick = quick;
     // rest on the floor: lowest point at y=0 (gear touching)
     this.designGroup.position.set(0, 0, 0); this.designGroup.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(this.designGroup);

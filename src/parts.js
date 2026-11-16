@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { M } from './materials.js';
 import { PM, SKIN_TILE, lightGeometry } from './planeMaterials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
-import { bladeGeometry, rotorBlade, propEngineDetail, jetEngineDetail, rocketDetail, gearLegDetailed, cockpitDetail, rotorDetail, strutDetail, ringLoft, Bag, V, bar } from './partDetail.js';
+import { bladeGeometry, rotorBlade, propEngineDetail, jetEngineDetail, rocketDetail, gearLegDetailed, cockpitDetail, cockpitBuild, rotorDetail, strutDetail, ringLoft, Bag, V, bar } from './partDetail.js';
 
 // ---------- geometry helpers ----------
 // Body of revolution around Z. profile: [[z, r], ...] nose (most negative z) first.
@@ -257,8 +257,8 @@ function fin(o, color, lv = 0) {
 function fuselage(profile, { color, sy = 1, sx = 1, windows = 0, yOff, segs = 36, reg = null }) {
   const g = new THREE.Group();
   const prof = smoothProfile(profile, 40);
-  g.add(new THREE.Mesh(revolve(prof, { sy, sx, yOff, segs, cap: true }), PM.skin(color, windows)));
-  g.userData.body = { prof, sx, sy, yOff }; // for planeDetail: antennas, ports and lights placed on the skin
+  const skin = new THREE.Mesh(revolve(prof, { sy, sx, yOff, segs, cap: true }), PM.skin(color, windows)); g.add(skin);
+  g.userData.body = { prof, sx, sy, yOff, segs, skin }; // for planeDetail: antennas, ports and lights placed on the skin; skinBlend reshapes the skin
   if (reg) for (const side of [1, -1]) g.add(cosmetic(new THREE.Mesh(bodyDecal(prof, { sx, sy, yOff, side, ...reg }), PM.reg(reg.text, color))));
   return g;
 }
@@ -534,6 +534,7 @@ def({ id: 'fus_glider', cat: 'fuselage', name: 'Glider Body', desc: 'Long slende
 // --- Cockpits / noses ---
 def({ id: 'ck_bubble', cat: 'cockpit', name: 'Bubble Canopy', desc: 'All-round view glass bubble. Sits on top of a body.', mass: 60, hp: 250, color: C.darkgray, eye: [0, 0.25, 0.1],
   build: (c, lv) => {
+    if (lv) return cockpitBuild('ck_bubble', c); // detail: shaped seat, pilot and panel inside the glass (skinBlend seats it)
     const g = new THREE.Group();
     const glass = new THREE.Mesh(new THREE.SphereGeometry(0.5, 28, 16, 0, Math.PI * 2, 0, Math.PI / 2), PM.canopy()); glass.scale.set(0.9, 0.85, 2.0); g.add(glass);
     const frame = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.025, 6, 40), PM.skin(c)); frame.rotation.x = Math.PI / 2; frame.scale.set(0.9, 2.0, 1); g.add(frame);
@@ -542,11 +543,11 @@ def({ id: 'ck_bubble', cat: 'cockpit', name: 'Bubble Canopy', desc: 'All-round v
     const panel = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.14, 0.22), M.black()); panel.position.set(0, 0.07, -0.55); g.add(panel);
     const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.13, 16, 12), M.pilot()); helmet.position.set(0, 0.28, 0.2); g.add(helmet);
     const visor = new THREE.Mesh(new THREE.SphereGeometry(0.135, 16, 8, -0.9, 1.8, 1.0, 0.7), M.visor()); visor.position.copy(helmet.position); visor.rotation.y = Math.PI; g.add(visor);
-    if (lv) cockpitDetail('ck_bubble', g, c);
     return g;
   } });
 def({ id: 'ck_fighter', cat: 'cockpit', name: 'Fighter Canopy', desc: 'Gold-tinted teardrop canopy with an ejection seat.', mass: 150, hp: 300, color: C.gray, eye: [0, 0.35, 0.2],
   build: (c, lv) => {
+    if (lv) return cockpitBuild('ck_fighter', c);
     const g = new THREE.Group();
     const glass = new THREE.Mesh(revolve(smoothProfile([[-1.6, 0.02], [-0.8, 0.42], [0.3, 0.5], [1.4, 0.3], [2.0, 0.04]], 24), { segs: 24, sy: 1.15 }), PM.canopy(0x6b5524));
     g.add(glass);
@@ -555,7 +556,6 @@ def({ id: 'ck_fighter', cat: 'cockpit', name: 'Fighter Canopy', desc: 'Gold-tint
     const coaming = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.4), M.black()); coaming.position.set(0, 0.14, -0.55); g.add(coaming);
     const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.14, 16, 12), M.pilot()); helmet.position.set(0, 0.3, 0.2); g.add(helmet);
     const visor = new THREE.Mesh(new THREE.SphereGeometry(0.145, 16, 8, -0.9, 1.8, 1.0, 0.7), M.visor()); visor.position.copy(helmet.position); visor.rotation.y = Math.PI; g.add(visor);
-    if (lv) cockpitDetail('ck_fighter', g, c);
     return g;
   } });
 def({ id: 'ck_airliner', cat: 'cockpit', name: 'Airliner Nose', desc: 'Flight deck with wrap-around windscreen. Bolts to the front of a tube.', mass: 1600, hp: 2500, color: C.white, eye: [0, 0.9, -2.8],
@@ -580,7 +580,7 @@ def({ id: 'ck_open', cat: 'cockpit', name: 'Open Cockpit', desc: 'Windscreen, le
   build: (c) => {
     const g = new THREE.Group();
     const ws = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.25, 16, 1, true, -0.9, 1.8), PM.canopy()); ws.position.set(0, 0.12, -0.2); ws.rotation.y = Math.PI; g.add(ws);
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.05, 8, 24), PM.skin(c)); rim.rotation.x = Math.PI / 2; rim.scale.set(1, 1.4, 1); g.add(rim);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.05, 8, 24), PM.skin(c)); rim.rotation.x = Math.PI / 2; rim.scale.set(1, 1.4, 1); g.add(rim); g.userData.rim = rim; // skinBlend swaps it for a coaming along the seam
     const body = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.2, 0.4, 12), PM.skin(0x5a4632)); body.position.set(0, 0.05, 0.15); g.add(body);
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 12), M.paint(0x6b4226, 'matte')); head.position.set(0, 0.36, 0.12); g.add(head);
     const goggles = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.025, 6, 16), M.chrome()); goggles.position.set(0, 0.38, 0.03); g.add(goggles);
