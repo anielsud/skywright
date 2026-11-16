@@ -34,7 +34,7 @@ const face = ART.custom(640, 420, (g, w, h) => {
   g.fillStyle = '#7a0d2a'; g.fill(); g.lineWidth = h * 0.025; g.strokeStyle = '#111'; g.stroke();
   g.fillStyle = '#fff'; for (let i = 0; i < 4; i++) { const x = (0.2 + i * 0.1) * w; g.fillRect(x, 0.69 * h + i * 0.012 * h, 0.06 * w, 0.06 * h); }
 });
-// monster-truck grille: a shark grin across the front, headlights above (front projection: drawing as seen from ahead)
+// monster-truck grille: a shark grin across the front (the headlights are modelled on the body) (front projection: drawing as seen from ahead)
 const grin = ART.custom(900, 360, (g, w, h) => {
   g.fillStyle = '#111'; g.beginPath(); g.roundRect(0.02 * w, 0.04 * h, 0.96 * w, 0.92 * h, h * 0.18); g.fill();
   g.fillStyle = '#9b0f1c'; g.beginPath(); g.roundRect(0.17 * w, 0.14 * h, 0.66 * w, 0.72 * h, h * 0.16); g.fill();
@@ -42,13 +42,7 @@ const grin = ART.custom(900, 360, (g, w, h) => {
   for (let i = 0; i < N; i++) { const a = x0 + (i / N) * W, b = a + W / N, m = (a + b) / 2;
     g.beginPath(); g.moveTo(a, 0.14 * h); g.lineTo(b, 0.14 * h); g.lineTo(m, 0.48 * h); g.closePath(); g.fill(); g.stroke();
     g.beginPath(); g.moveTo(a, 0.86 * h); g.lineTo(b, 0.86 * h); g.lineTo(m, 0.54 * h); g.closePath(); g.fill(); g.stroke(); }
-  for (const x of [0.09, 0.91]) { g.fillStyle = '#333'; g.beginPath(); g.arc(x * w, 0.5 * h, 0.2 * h, 0, 7); g.fill(); g.fillStyle = '#fffbe6'; g.beginPath(); g.arc(x * w, 0.5 * h, 0.15 * h, 0, 7); g.fill(); }
 });
-const glassSide = ART.custom(400, 180, (g, w, h) => { // cab side window, windscreen edge leaning back towards the left
-  g.fillStyle = '#0d1116'; g.beginPath(); g.moveTo(0.3 * w, 0.06 * h); g.lineTo(0.97 * w, 0.06 * h); g.lineTo(0.97 * w, 0.94 * h); g.lineTo(0.03 * w, 0.94 * h); g.closePath(); g.fill();
-  const gr = g.createLinearGradient(0, 0, w, h); gr.addColorStop(0.3, 'rgba(255,255,255,0)'); gr.addColorStop(0.45, 'rgba(255,255,255,0.18)'); gr.addColorStop(0.6, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fill();
-});
-const glassFront = ART.custom(500, 160, (g, w, h) => { g.fillStyle = '#0d1116'; g.beginPath(); g.roundRect(0.02 * w, 0.06 * h, 0.96 * w, 0.88 * h, h * 0.15); g.fill(); });
 // airline tail logo: an orange-ringed disc with a white paper plane
 const planeLogo = ART.custom(512, 512, (g, s) => {
   g.fillStyle = '#ff8a1f'; g.beginPath(); g.arc(s / 2, s / 2, s * 0.47, 0, 7); g.fill();
@@ -237,16 +231,14 @@ L('stardust', {
   ],
 });
 
-// Chomper: blue monster truck with a shark grin, yellow flames and glass painted on the cab
+// Chomper: blue monster truck with a shark grin and yellow flames (real glass in the cab now)
 L('chomper', {
   name: 'Chomper',
-  art: { grin, side: glassSide, front: glassFront, title: ART.text('CHOMPER', 700, 160, { fill: '#f2b705', stroke: '#111', strokeW: 14, italic: true }) },
+  art: { grin, title: ART.text('CHOMPER', 700, 160, { fill: '#f2b705', stroke: '#111', strokeW: 14, italic: true }) },
   layers: [
     { type: 'band', on: ['fus_truck'], color: 0x0b2a5c, dir: [0, 1, 0], hi: 0.12 },
     { type: 'flames', on: ['fus_truck'], color: 0x7a0a05, z0: -2.42, len: 2.6, yc: 0.4, h: 0.28, n: 4, seed: 5 },
     { type: 'decal', on: ['fus_truck'], art: 'grin', proj: 'front', at: [0, 0.36], size: [1.8, 0.72], box: box([], [null, 0.74, -1.9]) },
-    { type: 'decal', on: ['fus_truck'], art: 'side', at: [0.32, 1.06], size: [0.98, 0.44], box: box([null, 0.8, -0.2], [null, null, 0.8]) },
-    { type: 'decal', on: ['fus_truck'], art: 'front', proj: 'front', at: [0, 1.06], size: [1.62, 0.52], box: box([null, 0.78, null], [null, null, 0]) },
     { type: 'decal', on: ['fus_truck'], art: 'title', at: [1.55, 0.42], size: [1.35, 0.32], text: true },
   ],
 });

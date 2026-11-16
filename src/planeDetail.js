@@ -19,6 +19,7 @@ import { clamp, lerp } from './noise.js';
 import { applyLivery } from './liveries.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { blendSkins } from './skinBlend.js';
+import { addCrew } from './crew.js';
 
 const BODY = new Set(['fuselage', 'cockpit']), BODY_X = new Set(['x_nosecone', 'x_tailcone']);
 const isBody = (id) => BODY.has(PARTS[id].cat) || BODY_X.has(id);
@@ -502,7 +503,10 @@ function wingFurniture(p, obj, ctx, rootJoined) {
   }
   if (!main) return;
   // walkway on the upper surface next to the root fillet
-  const lowWing = rootJoined && F.pt(0.05, 0.3, 0).sub(new THREE.Box3().setFromObject(rootJoined).getCenter(V())).dot(ctx.up) < 0;
+  // (only where the root really meets that body: a stub wing joined at its tip, like the Twin Pod's centre section, got
+  // walkways out in the middle of the wing)
+  const rb = rootJoined && new THREE.Box3().setFromObject(rootJoined);
+  const lowWing = rb && rb.clone().expandByScalar(0.3).containsPoint(F.pt(0, 0.3, 0)) && F.pt(0.05, 0.3, 0).sub(rb.getCenter(V())).dot(ctx.up) < 0;
   if (lowWing) {
     const s0 = Math.min(0.2, 0.18 / spanW + 0.01), s1 = s0 + Math.min(0.2, 0.42 / spanW), rows = [];
     for (let i = 0; i <= 4; i++) { const s = s0 + (s1 - s0) * (i / 4), row = []; for (let j = 0; j <= 6; j++) row.push(F.pt(s, 0.12 + 0.4 * (j / 6), 1, 0.003)); rows.push(row); }
@@ -599,7 +603,7 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
       else if (POD[q.id] && (di.wing || isBody(p.id))) pl = T('pylon', () => pylon(q, objs[j], p, objs[i]));
       if (pl && PARTS[pl.qp.id].wing) { T('nacelle', () => nacelle(pl)); if (!pylons.has(pl.qobj)) pylons.set(pl.qobj, []); pylons.get(pl.qobj).push(pl); }
       if (di.gear) T('gear', () => gearJoint(p, objs[i], q, structure, out));
-      if (CANOPY[p.id] && isBody(q.id) && !seated.has(i)) T('seat', () => seat(p, objs[i], q, structure.filter((m) => !isInside(m, objs[i]))));
+      if (CANOPY[p.id] && isBody(q.id) && !seated.has(i)) T('seat', () => seat(p, objs[i], q, solidMeshes(objs[j]))); // only the body it sits on (a roll cage above is not a skin)
     } catch (e) { console.warn('planeDetail joint', p.id, q.id, e); }
   });
   for (const list of pylons.values()) try { T('beam', () => engineBeams(list, ctx)); } catch (e) { console.warn('planeDetail beam', e); }
@@ -613,6 +617,7 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
     } catch (e) { console.warn('planeDetail furniture', p.id, e); }
   });
   for (const [obj, bag] of nearBags) ctx.flush(bag, obj, true);
+  if (near) try { T('crew', () => addCrew(design, objs)); } catch (e) { console.warn('crew', e); } // pilots and drivers on the declared seats (crew.js)
   // near-only items: everything tagged near anywhere in the plane
   const items = [];
   for (const o of objs) if (o) o.traverse((m) => { if (m.isMesh && m.userData.near) { m.castShadow = false; if (near) items.push(m); else m.visible = false; } });
@@ -621,7 +626,6 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
   root.userData.detail = out;
   return out;
 }
-const isInside = (m, obj) => { let o = m; while (o) { if (o === obj) return true; o = o.parent; } return false; };
 
 // ---------- draw-call merge (flight / remote planes) ----------
 // Every rigid piece of a part (the part itself, each hinged surface, slat, spoiler, door, fan, gear strut, fork, wheel)
@@ -643,7 +647,7 @@ export function mergeStatic(objs, root) {
     for (const r of rigid) {
       const inv = r.matrixWorld.clone().invert(), m = new THREE.Matrix4(), buckets = new Map(), victims = [];
       const walk = (o) => {
-        if (skip.has(o) || (o !== r && rigid.has(o)) || o.userData.isDisc) return;
+        if (skip.has(o) || (o !== r && rigid.has(o)) || o.userData.isDisc || o.isSkinnedMesh) return; // crew: skinned, posed every frame
         if (o.isMesh && o.visible && !o.isInstancedMesh) {
           const slot = kitSlot(o.material), mat = slot >= 0 ? kitMaterial() : o.material;
           const key = mat.uuid + (o.castShadow ? 's' : '') + (o.userData.near ? 'n' : '') + (o.userData.planeLight ? 'l' : '');
@@ -684,10 +688,15 @@ export function updateDetail(ac, dt) {
   const D = ac.root.userData.detail; if (!D) return;
   for (const dd of D.doors) setDoors(dd, ac.gearT);
   const k = Math.min(1, dt * 4), spd = ac.v?.length?.() || 0;
+  let crewMoving = false;
   const ground = ac.onGround && (ac.ctl.throttle || 0) < 0.1 && spd > 6 ? 1 : 0;
   for (const p of ac.parts) {
     if (!p.alive) continue;
     const u = p.obj.userData;
+    if (u.crew) {
+      const c = ac.ctl, steer = ac.isCar && ac.steerAngle ? ac.steerAngle() * 2.6 : ac.crewSteer ?? 0;
+      for (const r of u.crew) if (r.update({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: c.throttle, steer }, dt)) crewMoving = true;
+    }
     if (u.wheelsFixed && u.wheels) { u.wheelsFixed.position.copy(u.wheels.position); u.wheelsFixed.rotation.y = u.wheels.rotation.y; }
     if (u.slats) { const t = ac.flaps > 0 ? 1 : 0; for (const s of u.slats) { s.t = lerp(s.t || 0, t, k * 0.6); s.obj.position.set(0, -0.022 * s.chord * s.t, -0.05 * s.chord * s.t); } }
     if (u.spoilers) {
@@ -695,6 +704,7 @@ export function updateDetail(ac, dt) {
       for (const s of u.spoilers) s.obj.rotation.x = lerp(s.obj.rotation.x, -tgt, k * 2);
     }
   }
+  return crewMoving;
 }
 
 // ---------- hangar: control-surface preview ----------
@@ -756,8 +766,8 @@ export class ControlPreview {
     }
     // slats and spoilers through the same hook as in flight
     if (this.root) {
-      const fake = { root: this.root, gearT: 1, ctl: { throttle: 1 }, onGround: false, v: null, flaps, parts: this.parts };
-      updateDetail(fake, dt);
+      const fake = { root: this.root, gearT: 1, ctl: { throttle: 1, pitch: c.pitch, roll: c.roll, yaw: c.yaw }, onGround: false, v: null, flaps, parts: this.parts, crewSteer: -(c.roll + c.yaw) * 1.2 };
+      if (updateDetail(fake, dt)) moving = true; // the crew follows the stick / wheel
     }
     const was = this.moving; this.moving = moving;
     return moving || was;

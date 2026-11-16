@@ -6,7 +6,8 @@ import * as THREE from 'three';
 import { PARTS, revolve, smoothProfile } from './parts.js';
 import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
-import { V, bar, tube, Bag } from './partDetail.js';
+import { V, bar, tube, Bag, seatGeo, flightDeckGlass } from './partDetail.js';
+import { clipGeometry } from './skinBlend.js';
 
 const cached = new Map();
 const mat = (k, make) => { if (!cached.has(k)) cached.set(k, make()); return cached.get(k); };
@@ -23,7 +24,7 @@ function def(p) { const b = p.build; p.build = (c, o) => ensureUv1(b(c, o?.detai
 // ---------- a boxy body: rounded-rectangle (superellipse) sections lofted along Z ----------
 // secs: [{ z, hw, top, bot, n }] nose first; n = squareness (2 = ellipse, 4+ = boxy). Linear between sections (add
 // sections for soft transitions). uv: u along the length, v around; uv1 in metres for the panel skin.
-function superLoft(secs, segs = 40) {
+function superLoft(secs, segs = 40, capsOut = false) {
   const pos = [], uv = [], uv1 = [], idx = [], row = segs + 1, z0 = secs[0].z, z1 = secs.at(-1).z;
   const se = (t, n) => Math.sign(t) * Math.abs(t) ** (2 / n);
   for (const s of secs) {
@@ -39,6 +40,7 @@ function superLoft(secs, segs = 40) {
     const a = j * row + i, b = (j + 1) * row + i, c = (j + 1) * row + i + 1, d = j * row + i + 1;
     idx.push(a, b, c, a, c, d);
   }
+  const nSide = idx.length;
   for (const [j, front] of [[0, true], [secs.length - 1, false]]) { // caps
     const s = secs[j], ci = pos.length / 3; pos.push(0, (s.top + s.bot) / 2, s.z); uv.push(front ? 0 : 1, 0.5); uv1.push(s.z, 0);
     for (let i = 0; i < segs; i++) { const a = j * row + i, b = j * row + i + 1; front ? idx.push(ci, b, a) : idx.push(ci, a, b); }
@@ -49,6 +51,16 @@ function superLoft(secs, segs = 40) {
   // winding: make sure the first quad faces away from the axis
   const p = g.attributes.position, n = g.attributes.normal, k = Math.floor(segs / 4) + row; // a vertex on the right side
   if (n.getX(k) * p.getX(k) < 0) { for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; } g.setIndex(idx); g.computeVertexNormals(); }
+  // The caps above face into the body (culled: you looked through the nose and tail into the hollow tub). The plain part
+  // keeps them (its volume centroid is a physics input); detail builds pass capsOut and get them facing out.
+  if (capsOut) {
+    const P = g.attributes.position, v = (i) => new THREE.Vector3().fromBufferAttribute(P, i), half = (idx.length - nSide) / 2;
+    for (let i = nSide; i < idx.length; i += 3) {
+      const nz = v(idx[i + 1]).sub(v(idx[i])).cross(v(idx[i + 2]).sub(v(idx[i]))).z, front = i < nSide + half;
+      if (front ? nz > 0 : nz < 0) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; }
+    }
+    g.setIndex(idx); g.computeVertexNormals();
+  }
   return g;
 }
 // soften a list of sections: insert midpoints blended with neighbours (cheap Chaikin pass on every parameter)
@@ -128,6 +140,8 @@ function offroadCorner({ r, w, len, color, steer, lv, arm = 0.55, blocks = 18 })
   // knuckle and A-arms (upper and lower wishbones to an inboard pivot)
   const kn = new THREE.BoxGeometry(r * 0.16, r * 0.55, r * 0.22); kn.translate(-w * 0.32, 0, 0); fB.add(kn, dark);
   for (const [y, zz] of [[r * 0.24, r * 0.5], [-r * 0.18, r * 0.62]]) for (const sz of [-1, 1]) fB.add(bar(V(-w * 0.32, y, 0), V(-w / 2 - arm, y + r * 0.05, sz * zz), r * 0.07, r * 0.07, true, 8), arms);
+  // chassis brackets carrying the arms' inboard pivots up to the mount (the pivots hung in the air under the body)
+  if (lv) for (const sz of [-1, 1]) { const xp = -w / 2 - arm, zp = sz * r * 0.56; sB.add(bar(V(xp, -len - r * 0.2, zp), V(xp, 0.02, zp * 0.85), r * 0.13, r * 0.06), dark); sB.add(bar(V(xp, -len + r * 0.3, zp), V(xi, -0.02, 0), r * 0.06, r * 0.06, true, 6), dark); }
   const axle = new THREE.CylinderGeometry(r * 0.05, r * 0.05, w * 0.6, 8); axle.rotateZ(Math.PI / 2); axle.translate(-w * 0.2, 0, 0); fB.add(axle, steel);
   // the spinning wheel: tyre + rim
   const wh = new THREE.Group(); const tb = new Bag(); tb.add(knobbyTyre(r, w, { blocks }), knobby()); tb.to(wh); beadlockRim(r, w, color, lv).to(wh);
@@ -151,9 +165,11 @@ function buggyTub(c, lv) {
     { z: 1.85, hw: 0.66, top: 0.16, bot: -0.24, n: 4 },
     { z: 2.0, hw: 0.56, top: 0.1, bot: -0.14, n: 3.5 },
   ], 2);
-  g.add(new THREE.Mesh(superLoft(S, 44), PM.skin(c)));
-  const scoop = superLoft(chaikin([{ z: -1.35, hw: 0.2, top: 0.24, bot: 0.06, n: 4 }, { z: -1.1, hw: 0.23, top: 0.31, bot: 0.1, n: 4 }, { z: -0.55, hw: 0.23, top: 0.38, bot: 0.2, n: 4 }, { z: -0.45, hw: 0.2, top: 0.36, bot: 0.24, n: 4 }], 1), 24);
-  g.add(new THREE.Mesh(scoop, PM.skin(c)));
+  // detail: caps facing out (the plain part's nose and tail were see-through) and car paint instead of riveted panels
+  const skin = lv ? PM.carPaint(c) : PM.skin(c);
+  g.add(new THREE.Mesh(superLoft(S, 44, !!lv), skin));
+  const scoop = superLoft(chaikin([{ z: -1.35, hw: 0.2, top: 0.24, bot: 0.06, n: 4 }, { z: -1.1, hw: 0.23, top: 0.31, bot: 0.1, n: 4 }, { z: -0.55, hw: 0.23, top: 0.38, bot: 0.2, n: 4 }, { z: -0.45, hw: 0.2, top: 0.36, bot: 0.24, n: 4 }], 1), 24, !!lv);
+  g.add(new THREE.Mesh(scoop, skin));
   const b = new Bag(), dark = M.darkMetal(), tp = tubePaint(0x1a1b1e);
   const mouth = new THREE.BoxGeometry(0.3, 0.1, 0.02); mouth.translate(0, 0.17, -1.355); b.add(mouth, M.intake());
   // front bumper / nerf bars / skid plate
@@ -183,7 +199,7 @@ function truckBody(c, lv) {
     { z: 2.25, hw: 0.92, top: 0.78, bot: -0.02, n: 6 },
     { z: 2.38, hw: 0.86, top: 0.72, bot: 0.02, n: 5 },
   ], 1);
-  g.add(new THREE.Mesh(superLoft(S, 48), PM.skin(c)));
+  if (lv) truckCab(g, S, c); else g.add(new THREE.Mesh(superLoft(S, 48), PM.skin(c)));
   const b = new Bag(), tp = tubePaint(0x1a1b1e), dark = M.darkMetal();
   // ladder frame, axles, push bar, roof light mounts
   for (const sx of [-0.55, 0.55]) { const r = new THREE.BoxGeometry(0.12, 0.18, 4.6); r.translate(sx, -0.12, 0); b.add(r, dark); }
@@ -194,6 +210,48 @@ function truckBody(c, lv) {
   b.to(g);
   if (lv) { const tl = new Bag(); for (const sx of [-1, 1]) { const l = new THREE.BoxGeometry(0.12, 0.22, 0.02); l.translate(sx * 0.74, 0.5, 2.39); tl.add(l, M.light(0xff2010)); } tl.to(g, true); }
   return g;
+}
+
+// Detail build of the pickup body: car paint, real glass in the cab (windscreen, door windows, rear window) with a dark
+// cab behind it, seats, a dash and a driver (crew.js); door and hood shut lines, door handles, mirrors and headlights.
+const lerpSec = (a, b, t) => Object.fromEntries(Object.keys(a).map((k) => [k, a[k] + (b[k] - a[k]) * t]));
+function densify(S, n) { const o = []; for (let i = 0; i < S.length - 1; i++) for (let k = 0; k < n; k++) o.push(lerpSec(S[i], S[i + 1], k / n)); o.push(S.at(-1)); return o; }
+function secAt(S, z) { for (let i = 1; i < S.length; i++) if (S[i].z >= z) return lerpSec(S[i - 1], S[i], (z - S[i - 1].z) / (S[i].z - S[i - 1].z || 1)); return S.at(-1); }
+const sideX = (s, y) => { const mid = (s.top + s.bot) / 2, hh = (s.top - s.bot) / 2, c = Math.max(-1, Math.min(1, (y - mid) / hh)), n = s.n || 3, t = Math.sign(c) * Math.abs(c) ** (n / 2); return s.hw * Math.sqrt(Math.max(0, 1 - t * t)) ** (2 / n); };
+const topY = (s, x) => { const mid = (s.top + s.bot) / 2, hh = (s.top - s.bot) / 2, c = Math.max(-1, Math.min(1, x / s.hw)), n = s.n || 3, t = Math.abs(c) ** (n / 2); return mid + hh * Math.sqrt(Math.max(0, 1 - t * t)) ** (2 / n); };
+function truckCab(g, S0, c) {
+  const S = densify(S0, 3), geo = superLoft(S, 56, true), P = geo.attributes.position;
+  // window openings as slab boxes (negative inside): the skin is clipped exactly along them, the glass is the rest
+  const win = (x, y, z) => {
+    const ax = Math.abs(x), band = Math.max(0.86 - y, y - 1.3);
+    return Math.min(Math.max(band, -0.74 - z, z + 0.2, ax - 0.66), Math.max(band, -0.02 - z, z - 0.62, 0.55 - ax), Math.max(0.92 - y, y - 1.3, 0.7 - z, ax - 0.56));
+  };
+  const d = new Float32Array(P.count), nd = new Float32Array(P.count), v = new THREE.Vector3();
+  for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i); d[i] = win(v.x, v.y, v.z); nd[i] = -d[i]; }
+  g.add(new THREE.Mesh(clipGeometry(geo, d) || geo, PM.carPaint(c)));
+  const glass = clipGeometry(geo, nd); if (glass) g.add(new THREE.Mesh(glass, flightDeckGlass())); // tinted: the bubble-canopy glass went milky white in daylight
+  // the cab seen through the glass: the skin's inside faces in a dark trim colour
+  const inner = new THREE.Mesh(geo, mat('cabIn', () => new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.9, side: THREE.BackSide }))); inner.castShadow = false; g.add(inner);
+  const b = new Bag(), nb = new Bag(), black = M.black(), chrome = M.chrome(), seam = M.paint(0x0b0c0e, 'matte');
+  const dash = new THREE.BoxGeometry(1.6, 0.14, 0.34); dash.translate(0, 0.74, -0.58); b.add(dash, black);
+  for (const sx of [-0.4, 0.4]) { const st = seatGeo(0.46, 0.62, 0.42, 0.22); st.translate(sx, 0.4, 0.42); b.add(st, PM.seat()); }
+  g.userData.seats = [{ p: [-0.4, 0.44, 0.3], s: 1 }]; // driver on the left
+  // shut lines (thin dark grooves just proud of the paint), door handles, mirrors
+  const line = (pts) => nb.add(tube(pts, 0.007, 4, pts.length * 4), seam);
+  for (const sx of [-1, 1]) {
+    const at = (y, z) => V(sx * (sideX(secAt(S, z), y) + 0.004), y, z), col = (z) => { const o = []; for (let k = 0; k <= 8; k++) o.push(at(0.1 + 0.76 * (k / 8), z)); return o; };
+    line(col(-0.12)); line(col(0.7)); { const o = []; for (let k = 0; k <= 10; k++) o.push(at(0.1, -0.12 + 0.82 * (k / 10))); line(o); }
+    const h = new THREE.BoxGeometry(0.03, 0.04, 0.16); h.translate(sx * (sideX(secAt(S, 0.52), 0.72) + 0.015), 0.72, 0.52); nb.add(h, chrome);
+    const arm = bar(V(sx * 0.86, 0.9, -0.12), V(sx * 1.02, 0.95, -0.14), 0.03, 0.03); b.add(arm, black);
+    const mir = new THREE.BoxGeometry(0.05, 0.16, 0.11); mir.translate(sx * 1.05, 0.98, -0.14); b.add(mir, black);
+    // hood seams
+    const hood = []; for (let k = 0; k <= 10; k++) { const z = -2.25 + 1.42 * (k / 10), sec = secAt(S, z); hood.push(V(sx * 0.7, topY(sec, 0.7) + 0.004, z)); } line(hood);
+    // headlights on the grille face, tail lights are on the plain part
+    const hl = new THREE.CircleGeometry(0.075, 18); hl.rotateY(Math.PI); hl.translate(sx * 0.58, 0.24, -2.404); nb.add(hl, M.light(0xfff4d8));
+    const ring = new THREE.TorusGeometry(0.08, 0.012, 6, 18); ring.translate(sx * 0.58, 0.24, -2.405); nb.add(ring, chrome);
+  }
+  { const o = []; for (let k = 0; k <= 12; k++) { const x = -0.7 + 1.4 * (k / 12); o.push(V(x, topY(secAt(S, -0.83), x) + 0.004, -0.83)); } line(o); } // cowl line at the back of the hood
+  b.to(g); nb.to(g, true);
 }
 
 // Helicopter cabin: a body of revolution (so planeDetail can dress it like any fuselage) with a raised tail joint.
@@ -218,6 +276,13 @@ function heliNose(c, lv) {
   chin.scale(0.95, 1.08, 1.45); g.add(new THREE.Mesh(chin, PM.skin(c)));
   const frame = new THREE.TorusGeometry(R * 0.97, 0.035, 8, 40); frame.scale(0.95, 1.08, 1); g.add(new THREE.Mesh(frame, PM.skin(c)));
   const b = new Bag();
+  if (lv) { // detail: the crew sit forward in the bubble (the cabin's front bulkhead is at z = 0), a low console ahead of them
+    const con = new THREE.BoxGeometry(0.86, 0.12, 0.3); con.rotateX(-0.55); con.translate(0, -0.2, -0.92); b.add(con, M.black());
+    for (const sx of [-0.3, 0.3]) { const st = seatGeo(0.42, 0.6, 0.38, 0.22); st.translate(sx, -0.34, 0.0); b.add(st, PM.seat()); }
+    b.to(g);
+    g.userData.seats = [{ p: [0.3, -0.32, -0.18], s: 0.8 }, { p: [-0.3, -0.32, -0.18], s: 0.8, role: 'crew' }]; // pilot right, rescue medic left
+    return g;
+  }
   const console_ = new THREE.BoxGeometry(0.9, 0.22, 0.35); console_.rotateX(-0.5); console_.translate(0, -0.12, -0.55); b.add(console_, M.black());
   for (const sx of [-0.3, 0.3]) {
     const seat = new THREE.BoxGeometry(0.42, 0.62, 0.12); seat.rotateX(-0.2); seat.translate(sx, -0.05, 0.15); b.add(seat, PM.seat());
@@ -277,13 +342,14 @@ def({ id: 'c_lightbar', cat: 'car', name: 'Light Bar', desc: 'Four big spotlight
     b.to(g); return g;
   } });
 def({ id: 'c_rearwing', cat: 'car', name: 'Rear Wing', desc: 'Big racing wing on two struts. Just for looks (and bragging).', mass: 16, hp: 400, color: 0x15161a,
-  build: (c) => {
-    const g = new THREE.Group(), b = new Bag(), skin = PM.skin(c);
+  build: (c, lv) => {
+    const g = new THREE.Group(), b = new Bag(), skin = lv ? PM.carPaint(c) : PM.skin(c);
     const sh = new THREE.Shape(); sh.moveTo(0, 0); sh.quadraticCurveTo(0.12, 0.07, 0.48, 0.025); sh.lineTo(0.5, 0.0); sh.quadraticCurveTo(0.2, -0.015, 0, 0);
     const blade = new THREE.ExtrudeGeometry(sh, { depth: 1.5, bevelEnabled: false }); blade.translate(0, 0, -0.75); blade.rotateY(Math.PI / 2); blade.rotateX(-0.12); blade.translate(0, 0.62, -0.2); b.add(blade, skin);
     for (const sx of [-1, 1]) {
       const ep = new THREE.BoxGeometry(0.025, 0.36, 0.62); ep.translate(sx * 0.76, 0.6, 0.02); b.add(ep, skin);
-      b.add(bar(V(sx * 0.32, 0, 0.05), V(sx * 0.32, 0.6, 0.0), 0.05, 0.16), tubePaint(0x1a1b1e));
+      b.add(bar(V(sx * 0.32, lv ? -0.14 : 0, 0.05), V(sx * 0.32, 0.6, 0.0), 0.05, 0.16), tubePaint(0x1a1b1e)); // detail: down onto the body (it floated above the tub)
+      if (lv) { const foot = new THREE.BoxGeometry(0.1, 0.03, 0.22); foot.translate(sx * 0.32, -0.13, 0.05); b.add(foot, M.darkMetal()); }
     }
     b.to(g); return g;
   } });
@@ -291,11 +357,25 @@ def({ id: 'c_rearwing', cat: 'car', name: 'Rear Wing', desc: 'Big racing wing on
 // Rocket stage: a tall cylinder with an ogive nose (a body of revolution, so planeDetail dresses it like a fuselage).
 const ROCKET_PROF = [...smoothProfile([[-7.2, 0], [-6.8, 0.32], [-6.0, 0.66], [-5.0, 0.86], [-4.4, 0.9]], 20), [3.0, 0.9], [3.9, 0.9], [4.0, 0.84]];
 def({ id: 'fus_rocket', cat: 'fuselage', name: 'Rocket Stage', desc: 'Tall fuel tank with a pointy nose. Rocket engines at the bottom, fins at the back: it launches standing up!', mass: 1600, hp: 3000, color: 0xf2f2ee,
-  build: (c) => {
+  build: (c, lv) => {
     const g = new THREE.Group();
-    g.add(new THREE.Mesh(revolve(ROCKET_PROF, { segs: 40, cap: true }), PM.skin(c)));
     g.userData.body = { prof: ROCKET_PROF, sx: 1, sy: 1, yOff: null };
     const b = new Bag(); // stage rings
     for (const z of [-4.4, -1.2, 2.2]) { const r = new THREE.TorusGeometry(0.905, 0.025, 6, 40); r.translate(0, 0, z); b.add(r, M.darkMetal()); }
-    b.to(g); return g;
+    if (!lv) { g.add(new THREE.Mesh(revolve(ROCKET_PROF, { segs: 40, cap: true }), PM.skin(c))); b.to(g); return g; }
+    // detail: a crew porthole in the capsule section with an astronaut looking out (the Rocket had no crew at all)
+    const W = { z: -3.75, r: 0.3 }, skin = revolve([...ROCKET_PROF.filter((q) => q[0] <= -4.4), ...Array.from({ length: 16 }, (_, k) => [-4.3 + k * 0.1, 0.9]), ...ROCKET_PROF.filter((q) => q[0] > -2.8)], { segs: 64, cap: true }); // denser rings round the porthole
+    const P = skin.attributes.position, d = new Float32Array(P.count), v = new THREE.Vector3();
+    for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i); d[i] = v.x > 0 ? Math.hypot(Math.atan2(v.y, v.x) * 0.9, v.z - W.z) - W.r : 1; }
+    const cut = clipGeometry(skin, d) || skin; g.add(new THREE.Mesh(cut, PM.skin(c)));
+    const inner = new THREE.Mesh(revolve([[-5.0, 0.86], [-2.6, 0.88]], { segs: 32, cap: true }), mat('capsuleIn', () => new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.9, side: THREE.BackSide }))); g.add(inner);
+    const xw = 0.865;
+    const glass = new THREE.CircleGeometry(W.r + 0.03, 28); glass.rotateY(Math.PI / 2); glass.translate(xw, 0, W.z); g.add(new THREE.Mesh(glass, PM.canopy(0x1d2a33)));
+    const ring = new THREE.TorusGeometry(W.r + 0.02, 0.035, 8, 32); ring.rotateY(Math.PI / 2); ring.translate(0.875, 0, W.z); b.add(ring, M.darkMetal());
+    for (let k = 0; k < 10; k++) { const a = (k / 10) * Math.PI * 2, bolt = new THREE.SphereGeometry(0.014, 6, 4); bolt.translate(0.905, Math.sin(a) * (W.r + 0.075), W.z + Math.cos(a) * (W.r + 0.075)); b.add(bolt, M.steel()); }
+    b.to(g);
+    // the astronaut lies with the head towards the nose, facing the porthole (+x): rig up = -z, rig forward = +x
+    const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(V(0, 1, 0), V(0, 0, -1), V(-1, 0, 0)));
+    g.userData.seats = [{ p: [-0.14, 0, -3.1], s: 0.85, quat: q.toArray(), ctl: 'none' }]; // (no stick in front of the face)
+    return g;
   } });

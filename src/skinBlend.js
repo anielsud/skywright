@@ -122,6 +122,14 @@ function wingField(obj, id) {
   };
   return { kind: 'wing', obj, f, box: new THREE.Box3().setFromObject(obj), L, inv, fin };
 }
+// Gear sponson: an elongated blister along the body axis around a retracting leg's strut top (C-130 style), for legs
+// hung off the side of a body under a high wing, whose strut tops otherwise end in mid air beside the fuselage.
+function sponsonField(O, axis, r, hl) {
+  const _d = V();
+  const f = (p) => { _d.copy(p).sub(O); const a = _d.dot(axis); _d.addScaledVector(axis, -a); return (Math.hypot(_d.length() / r, a / hl) - 1) * r; };
+  const box = new THREE.Box3().setFromCenterAndSize(O, V(1, 1, 1).multiplyScalar(2 * r)).union(new THREE.Box3().setFromCenterAndSize(O.clone().addScaledVector(axis, hl), V(1, 1, 1).multiplyScalar(2 * r))).union(new THREE.Box3().setFromCenterAndSize(O.clone().addScaledVector(axis, -hl), V(1, 1, 1).multiplyScalar(2 * r)));
+  return { kind: 'sponson', f, box, rW: r };
+}
 // the body axis point closest to a world point, and a skin-function helper
 function axisPoint(B, wp) {
   const l = wp.clone().applyMatrix4(B.inv), z = clamp(l.z, B.T.z0, B.T.z1);
@@ -200,7 +208,7 @@ function project(U, B, P, N, { steps = 12 } = {}) {
 }
 
 // ---------- clipping an indexed geometry by a per-vertex value (< 0 is cut away) ----------
-function clipGeometry(geo, val) {
+export function clipGeometry(geo, val) {
   const idx = geo.index ? geo.index.array : [...Array(geo.attributes.position.count).keys()];
   const names = Object.keys(geo.attributes), src = names.map((k) => geo.attributes[k]), arr = src.map((a) => Array.from(a.array));
   let count = geo.attributes.position.count; const cache = new Map(), out = [];
@@ -356,6 +364,15 @@ export function blendSkins(design, objs, { pods, addTo, quick = false, rivets = 
           // a body passing through a wing away from its root (twin booms, pods on a wing): the skin swells into it
           const F = wingField(o, q.id), c = V().setFromMatrixPosition(B.W).applyMatrix4(F.inv), t = (F.fin ? c.y : c.x) / F.L;
           if (t > 0.08 && t < 0.92) { F.k = clamp(0.5 * B.rW, 0.05, 0.5); F.reach = F.k * 1.2; F.stop = 'in'; F.box.expandByScalar(F.k); if (boxNear(B.box, F.box, 0)) fields.push(F); }
+        } else if (d.gear?.retract && q.parent === i) {
+          // a retracting leg whose strut top sits at or outside this body's skin, with no wing over it: grow a sponson
+          const O = V().setFromMatrixPosition(o.matrixWorld), out = B.f(O);
+          const underWing = parts.some((w, k) => PARTS[w.id]?.wing && objs[k] && wingField(objs[k], w.id).f(O) < 0.6);
+          if (out > -0.08 && !underWing) {
+            const sl = Math.cbrt(Math.abs(o.matrixWorld.determinant())), r = clamp(d.gear.r * 0.85 * sl, 0.15, 0.7) + Math.max(0, out) * 0.5, hl = (d.gear.r * 2.4 + 0.4) * sl;
+            const axis = V(0, 0, 1).transformDirection(B.W).normalize(), C = O.clone().add(V(0, 0.06 * sl, 0).transformDirection(o.matrixWorld).multiplyScalar(0.06 * sl));
+            const F = sponsonField(C, axis, r, hl); F.obj = o; F.k = clamp(0.5 * r, 0.08, 0.4); F.reach = r * 2 + Math.max(0, out) + F.k; F.box.expandByScalar(F.k); fields.push(F);
+          }
         } else if (MAST[q.id] && q.parent === i) {
           const inv = o.matrixWorld.clone().invert(), A = axisPoint(B, V().setFromMatrixPosition(o.matrixWorld)).applyMatrix4(inv);
           if (A.y < 0) { const F = coneField(o, A.y, 0.26, MAST[q.id] * 0.12, 0.15); F.k = 0.2; F.reach = MAST[q.id] * 0.12 - A.y + 0.2; F.box.expandByScalar(F.k); fields.push(F); } // the skin itself becomes the mast fairing
