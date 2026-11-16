@@ -34,6 +34,7 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "G56-21-Winter Wind.wav" by craigsmith (CC0): https://freesound.org/people/craigsmith/sounds/438876/
 - "Thunder sound effect 2" by humanoide9000 (CC BY 4.0): https://freesound.org/people/humanoide9000/sounds/441836/
 - "Auto Shop Soundscape.mp3" by I5AAC (CC0): https://freesound.org/people/I5AAC/sounds/449591/
+- "traffic heavy dense nice short police siren woop NY MS.wav" by kyles (CC0): https://freesound.org/people/kyles/sounds/451080/
 - "City Ambience with distant church bells" by florianreichelt (CC0): https://freesound.org/people/florianreichelt/sounds/451731/
 - "window break with axe glass shatter in trailer.wav" by kyles (CC0): https://freesound.org/people/kyles/sounds/452667/
 - "Brean Sands Beach" by richwise (CC0): https://freesound.org/people/richwise/sounds/475350/
@@ -48,6 +49,8 @@ Recordings from [Freesound](https://freesound.org), trimmed, looped and level-ma
 - "Foley_Object_Toolbox_Drops_&_Movements_&_Searching_Stereo_H5.wav" by Nox_Sound (CC0): https://freesound.org/people/Nox_Sound/sounds/550341/
 - "BGSaSc Beach Light Waves Close Water Greece 14" by Profispiesser (CC0): https://freesound.org/people/Profispiesser/sounds/550926/
 - "Foley_Mechanism_Camera_Button_Mono_H5.wav" by Nox_Sound (CC0): https://freesound.org/people/Nox_Sound/sounds/553077/
+- "180521 Police siren distant good reflections roof fireworks ms.flac" by TRP (CC0): https://freesound.org/people/TRP/sounds/572365/
+- "Siren distant comes to a stop city Saint John 191003.flac" by TRP (CC0): https://freesound.org/people/TRP/sounds/574394/
 - "Quiet summer night tone with steady close crickets and other animal calls 1" by leonelmail (CC0): https://freesound.org/people/leonelmail/sounds/579572/
 - "Mountain River 001.wav" by Auxide_Audio (CC0): https://freesound.org/people/Auxide_Audio/sounds/588179/
 - "Car rolling on asphalt .wav" by orlandorizo (CC0): https://freesound.org/people/orlandorizo/sounds/591079/
