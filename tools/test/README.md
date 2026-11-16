@@ -42,3 +42,11 @@ files, clips that don't decode, and presets that throw when a flight starts, but
 run is not a substitute for running it locally.
 
 When you add a preset, a sound clip or a modal, the test picks presets and clips up automatically.
+
+## Landing gear check
+
+`gearcheck.py` builds every preset (as is, resized, mirrored) and seeded random player builds (gear, floats and skids
+dropped on bodies, wings, wingtips, pods and flaps, some resized or rotated, all mirrored) and checks with double-sided
+rays that no strut passes through a part (control surfaces included), every leg and brace ends on a solid skin, every
+wheel stands upright, and mirrored gear mirrors. `--seed N --random K` for other builds, `--dump` prints failing
+designs, `--url` checks another server (e.g. a build of main, for a before/after count). About 4 minutes.

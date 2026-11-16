@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { M } from './materials.js';
 import { PM, SKIN_TILE, lightGeometry } from './planeMaterials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
-import { bladeGeometry, rotorBlade, propEngineDetail, jetEngineDetail, rocketDetail, gearLegDetailed, cockpitBuild, openCockpitBuild, airlinerNoseBuild, carEngineDetail, rotorDetail, strutDetail, ringLoft, Bag, V, bar } from './partDetail.js';
+import { bladeGeometry, rotorBlade, propEngineDetail, jetEngineDetail, rocketDetail, gearLegDetailed, strutLegs, cockpitBuild, openCockpitBuild, airlinerNoseBuild, carEngineDetail, rotorDetail, strutDetail, ringLoft, Bag, V, bar } from './partDetail.js';
 
 // ---------- geometry helpers ----------
 // Body of revolution around Z. profile: [[z, r], ...] nose (most negative z) first.
@@ -439,10 +439,11 @@ function gearLeg({ len, r, w = null, color = 0xdddddd, fairing = false, bogie = 
   return g;
 }
 
-function float_({ len, r, color }) {
+function float_({ len, r, color, lv = 0 }) {
   const g = new THREE.Group();
   const body = new THREE.Mesh(revolve(smoothProfile([[-len / 2, 0.02], [-len / 2 + 0.6, r * 0.8], [0, r], [len / 2 - 0.5, r * 0.7], [len / 2, 0.05]], 30), { segs: 20, sy: 0.8, cap: true, yOff: (z) => (z < -len / 2 + 0.8 ? (z + len / 2 - 0.8) * -0.2 : 0) }), PM.skin(color));
   body.position.y = -1.0; g.add(body);
+  if (lv) return strutLegs(g, { stations: [-len * 0.18, len * 0.18], y: -1.0 + r * 0.78, w: 0.05, c: 0.13, paint: PM.skin(color), kind: 'float' }); // N-struts, routed by gearRoute.js
   for (const dz of [-len * 0.18, len * 0.18]) {
     const st = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.0, 8), M.steel()); st.position.set(0, -0.5, dz); g.add(st);
   }
@@ -477,8 +478,7 @@ function skid({ len, h, color, lv = 0 }) {
   if (lv) { // detail: the toe curls up from the end of the skid tube (the plain part's quarter-torus floated beside it)
     const toe = new THREE.TorusGeometry(0.22, 0.06, 8, 12, Math.PI / 2); toe.rotateZ(-Math.PI / 2); toe.rotateY(Math.PI / 2); toe.translate(0, -h + 0.22, -len / 2);
     g.add(new THREE.Mesh(toe, M.paint(color)));
-    for (const dz of [-len * 0.25, len * 0.25]) { const st = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, h, 8), M.steel()); st.position.set(0, -h / 2, dz); g.add(st); }
-    return g;
+    return strutLegs(g, { stations: [-len * 0.25, len * 0.25], y: -h + 0.03, w: 0.07, c: 0.12, paint: M.paint(color), kind: 'skid' }); // cross tubes, routed by gearRoute.js
   }
   const tipF = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.06, 8, 12, Math.PI / 2), M.paint(color)); tipF.rotation.y = Math.PI / 2; tipF.position.set(0, -h + 0.22, -len / 2); g.add(tipF);
   for (const dz of [-len * 0.25, len * 0.25]) { const st = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, h, 8), M.steel()); st.position.set(0, -h / 2, dz); g.add(st); }
@@ -675,7 +675,7 @@ gearDef('g_retract', 'Retractable Gear', 'Folds away with G. Less drag, more spe
 gearDef('g_retract_nose', 'Retractable Nose Gear', 'Steerable nose gear that folds away.', 80, 700, { len: 1.6, r: 0.3, steer: true }, { len: 1.6, r: 0.3, steer: true, brake: false, retract: true, limit: 4.5, k: 4 });
 gearDef('g_bogie', 'Heavy Bogie', 'Four-wheel airliner bogie. Handles huge weights.', 900, 9000, { len: 2.8, r: 0.6, bogie: true }, { len: 2.8, r: 0.6, steer: false, brake: true, retract: true, limit: 4.0, k: 40, wheels: 4 });
 def({ id: 'g_float', cat: 'gear', name: 'Float', desc: 'Pontoon float. Land on water! (Skids on ground.)', mass: 90, hp: 700, color: C.white, attach: 'gear',
-  gear: { float: true, len: 1.0, r: 0.35, flen: 5.2, limit: 6, k: 3 }, build: (c) => float_({ len: 5.2, r: 0.4, color: c }) });
+  gear: { float: true, len: 1.0, r: 0.35, flen: 5.2, limit: 6, k: 3 }, build: (c, lv) => float_({ len: 5.2, r: 0.4, color: c, lv }) });
 def({ id: 'g_skid', cat: 'gear', name: 'Helicopter Skid', desc: 'Landing skid for helicopters. Use one each side.', mass: 30, hp: 600, color: 0x4a4f57, attach: 'gear',
   gear: { float: true, skid: true, flen: 3.0, clen: 0.95, cr: 0.11, limit: 6, k: 3 }, build: (c, lv) => skid({ len: 3.0, h: 1.0, color: c, lv }) });
 
