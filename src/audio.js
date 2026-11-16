@@ -45,7 +45,7 @@ const ENG_SEQ = {
   rotor: { clip: 'eng_spool', rate: 1, gain: 0.6, catch: 2.8, blend: [2.6, 4.2], stop: 'eng_stop_jet', stopGain: 0.5, stopFade: 2.5, stopDur: 8 },
   fan: { clip: 'eng_start_jet', rate: 0.9, gain: 0.4, catch: 3.3, blend: [3.6, 5.8], stop: 'eng_stop_jet', stopGain: 0.45, stopFade: 3.5, stopDur: 10 },
 };
-const DMG = { pop: 0.35, fire: 1, creak: 0.6, rattle: 0.28, flutter: 0.34 }; // damage audio (engineDamage, airframe)
+const DMG = { pop: 0.35, fire: 1, creak: 0.6, strain: 0.45, rattle: 0.28, flutter: 0.34 }; // damage audio (engineDamage, airframe)
 const BOOM = { crack: 0.2, rumble: 0.22, cockpit: 1 }; // sonic boom (sonicBoom) peaks (weighted, 100%): ≈-23 close outside, ≈-36 at 1.5 km, cockpit thump ≈-30; limiter ≥ -2 dB
 const ROTOR = { whop: 0.6, whine: 0.012, tail: 0.05 }; // helicopter extras (rotorTick)
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }; // -12 dB overall: a game shouldn't hit the speaker at full scale
@@ -505,6 +505,15 @@ export class Audio {
       if (prop) for (let k = 0, n = 1 + Math.floor(Math.random() * 3); k < n; k++) this.burst('white', 'bandpass', 500 + Math.random() * 600, 0.8, DMG.pop, 0.05, v.air, 0.03 + k * (0.05 + Math.random() * 0.07));
       else this.burst('brown', 'lowpass', 400, 0.7, DMG.pop * 2.5, 0.25, v.air, 0.02);
     }
+  }
+  // a wing has been overloaded for a moment (aircraft 'strain' event, the "Ease off!" warning): a deep structural groan
+  // with a creak on top, louder than the ordinary high-G creaks so it reads as "something is about to give"
+  strain(pos, cockpit) {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime, d = cockpit ? this.fx : this.dest(pos), k = cockpit ? 1 : 0.7;
+    if (!this.shot('groan', { gain: DMG.strain * k, rate: 0.8 + Math.random() * 0.1, dest: d })) this.tone('sawtooth', 110, 70, 0.03, 1.2, 0, d);
+    this.shot(`creak_${1 + Math.floor(Math.random() * 3)}`, { gain: DMG.creak * 0.8 * k, rate: 0.9 + Math.random() * 0.2, dest: d, delay: 0.25 + Math.random() * 0.2 });
+    this.creakT = now + 2.5; // the ordinary G creaks hold off for a moment
   }
   // s.fire {amt, pos}: a burning engine; s.g: load factor; s.rattle: worst damage fraction of a part still attached; s.acPos
   airframe(s) {
