@@ -602,7 +602,15 @@ export class Aircraft {
         if (!p.alive || !p.surfaces.length || p.d.cat !== 'wing') continue;
         const share = p.surfaces.reduce((a, s) => a + s.area * Math.abs(s.n.y), 0) / Math.max(0.5, this.hArea);
         const strength = this.initialMass * G * share * R.gLimit * 1.1 + p.hp * 2;
-        if (Math.abs(p.lift) > strength) { this.emit('msg', { text: `Over-G! ${p.name} snapped!`, bad: true }); this.breakPart(p.i, 'overload'); }
+        // Structures fail from SUSTAINED overload, not one twitchy frame: time over the limit accumulates (and drains twice
+        // as fast below it); ~0.75 s over breaks the part, a gross overload (1.8x) still breaks it at once.
+        // per-substep lift is noisy (the old check snapped wings on numeric spikes at ~7 g): judge a smoothed load
+        p.liftS = (p.liftS ?? p.lift) + (p.lift - (p.liftS ?? p.lift)) * Math.min(1, dt / 0.12);
+        const ratio = Math.abs(p.liftS) / strength;
+        p.overT = ratio > 1 ? (p.overT || 0) + dt : Math.max(0, (p.overT || 0) - dt * 2);
+        if (p.overT > 0.25 && !p.strainWarned) { p.strainWarned = true; this.emit('msg', { text: `${p.name} is straining! Ease off!`, bad: true }); this.emit('strain', { part: p.i }); }
+        if (p.overT === 0) p.strainWarned = false;
+        if (p.overT > 0.75 || ratio > 1.8) { this.emit('msg', { text: `Over-G! ${p.name} snapped!`, bad: true }); this.breakPart(p.i, 'overload'); }
       }
     }
   }
