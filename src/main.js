@@ -679,6 +679,7 @@ function buildFlight(cfg) {
   applyQuality(); // the tier may have changed since the last flight (post effects, shadow cascades)
   F.callouts = new Callouts(audio, ac);
   F.worldSound = new WorldSound(audio, world, traffic);
+  world.destruct.onImpact = (m) => net.building(m); // online: the others see the same building come down
   // engines: already running for air starts; on the ground they start with the first throttle-up (see engineSwitch)
   F.eng = { on: start === 'air' || start === 'approach', hold: 0, idleT: 0 }; ac.engineRunning = F.eng.on; audio.engineReset(F.eng.on);
   net.attach(F);
@@ -911,12 +912,14 @@ function stepFlight(dtReal) {
     for (const p of ac.parts) {
       if (!p.alive) continue;
       const wp = ac.worldPoint(p.center, _v);
-      const t = world.treeHit(wp);
+      let t = world.treeHit(wp);
+      if (t?.dk && world.destruct.passes(t, wp)) t = null; // through a hole knocked in a building
       if (t && ac.v.length() > 5) {
+        const give = t.dk ? world.destruct.impact(t, wp, ac, p) : 1; // a building that gives way takes some of the blow (never more than a wall would)
         if (t.solid) effects.dust(wp, { x: 0, z: 0 }, 'rock', 6); else effects.leaves(wp);
         audio.play('impact', 0.5, wp.clone()); rig.shake(0.5);
-        ac.damage(p, ac.v.length() * 8 / ac.R.crashMult, wp);
-        ac.v.multiplyScalar(0.92);
+        ac.damage(p, ac.v.length() * 8 / ac.R.crashMult * give, wp);
+        ac.v.multiplyScalar(give < 1 ? 0.95 : 0.92);
         if (!t.solid) t[3] = 0; // flatten the tree so we don't hit it forever (walls stay)
       }
     }
@@ -940,6 +943,10 @@ function stepFlight(dtReal) {
     if (e.type === 'raceDone') { audio.mission('win'); analytics.capture('mission_done', { ...f.track, mission: 'rings', seconds: +e.time.toFixed(1) }); const best = LS.get('best', {}); const key = `${f.cfg.location}:${hangar.design.name}`; const pb = !best[key] || e.time < best[key]; if (pb) { best[key] = e.time; LS.set('best', best); setTimeout(() => audio.mission('record'), 2600); } setTimeout(() => showEnd(`Course complete: ${e.time.toFixed(1)} s`, pb ? '<p class="good">New personal best!</p>' : `<p>Best: ${best[key].toFixed(1)} s</p>`), 1500); }
     if (e.type === 'landingDone') { analytics.capture('mission_done', { ...f.track, mission: 'landing', crashed: !!e.crashed, score: e.score, sink_ms: +e.vs.toFixed(2), on_runway: !!e.onRwy }); audio.mission(e.crashed || e.score < 300 ? 'fail' : e.score > 500 ? 'win' : 'ok'); const stars = '★'.repeat(Math.round(e.score / 200)) + '☆'.repeat(5 - Math.round(e.score / 200)); setTimeout(() => showEnd(e.crashed ? 'Crashed on landing' : `Landing score: ${e.score}`, e.crashed ? '' : `<p class="stars">${stars}</p><p>Sink rate ${e.vs.toFixed(1)} m/s · ${Math.abs(e.cl).toFixed(1)} m off centreline · ${Math.round(Math.abs(e.aim))} m ${e.aim > 0 ? 'short of' : 'past'} the aim point${e.onRwy ? '' : ' · missed the runway!'}</p>`), 800); }
     if (e.type === 'thunder') setTimeout(() => audio.play('thunder', e.power), e.delay * 1000);
+    // buildings (destruction.js): stand-in sounds from the crash set
+    const near = e.type === 'building_hit' || e.type === 'collapse' ? Math.max(0, 1 - e.pos.distanceTo(flightCam.position) / 900) : 0; // (shake the camera only close by)
+    if (e.type === 'building_hit' && f.t - (f.bldT ?? -1) > 0.2) { f.bldT = f.t; audio.play(e.power > 0.5 ? 'explosion' : 'crack', 0.4 + e.power * 0.6, e.pos); if (e.glass) audio.play('glass', 1, e.pos); rig.shake((0.4 + e.power) * near); }
+    if (e.type === 'collapse' && e.phase === 'start') { audio.play('impact', Math.min(2, 0.6 + e.size / 40), e.pos); rig.shake(Math.min(2, 0.5 + e.size / 50) * near); if (e.size > 20 && f.t - f.lastSlowmo > 6 && near > 0.2) { f.slowmo = 1.6; f.lastSlowmo = f.t; } }
   }
   // debris
   const burnPts = [];
@@ -963,6 +970,7 @@ function stepFlight(dtReal) {
   traffic.update(dt, effects, flightCam.position);
   const wind = world.windBase.clone().add(world.gust);
   effects.update(dt, wind);
+  world.destruct.update(dt, effects, flightCam.position, f.events); // falling buildings, debris, dust, fires
   // camera
   let focus = null;
   if (ac.dead || ac.wrecked) { const biggest = ac.dead ? f.debris.reduce((a, d) => (!a || d.mass > a.mass ? d : a), null) : null; focus = biggest ? biggest.x : null; if (rig.mode === 'cockpit') rig.set('orbit'); }

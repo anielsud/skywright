@@ -263,6 +263,56 @@ function paintAtlas(CELL, photo) {
 
 // Shared uniforms (updated by Towns.update): daylight 0..1 for the brightness of rooms behind the glass by day.
 export const BLD_U = { uDay: { value: 1 } };
+
+// ---------------- destruction (destruction.js) ----------------
+// Every building vertex has a `dmg` byte saying what's left of its building: 0 intact, 255 gone (the vertex shader
+// drops it), 1..254 a damage slot: a row of DMG.tex with the height above which the building has fallen (jagged
+// edge: cutY, jag amplitude, power cut, -) and up to DMG_HOLES holes (x, y, z, r) punched through it. Only the
+// damaged buildings' fragments do any of this work (a flat varying). A building's vertices are one contiguous run,
+// so knocking it down is a few bytes uploaded (destruction.js).
+// Geometries are given the attribute by the writers (Builder here, MeshW in realCity.js): dmgW, runs [start, count,
+// value] written before the geometry exists.
+export const DMG_SLOTS = 256, DMG_HOLES = 3;
+const dmgData = new Float32Array(DMG_SLOTS * (1 + DMG_HOLES) * 4);
+for (let s = 0; s < DMG_SLOTS; s++) dmgData[s * (1 + DMG_HOLES) * 4] = 1e9; // (no cut)
+const dmgTex = new THREE.DataTexture(dmgData, 1 + DMG_HOLES, DMG_SLOTS, THREE.RGBAFormat, THREE.FloatType);
+dmgTex.needsUpdate = true;
+export const DMG = { tex: dmgTex, data: dmgData, U: { tDmg: { value: dmgTex } } };
+// (the building material already has its world position varying, vWP: the shadow material brings its own)
+const DMG_VERT_HEAD = 'attribute float dmg; flat varying float vDmgS;', DMG_VERT = 'vDmgS = dmg;';
+const DMG_DEPTH_VERT_HEAD = DMG_VERT_HEAD + ' varying vec3 vDmgP;', DMG_DEPTH_VERT = DMG_VERT + ' vDmgP = (modelMatrix * vec4(position, 1.0)).xyz;';
+const DMG_VERT_KILL = 'if (dmg > 254.5) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);'; // a removed building: off screen (whole triangles)
+const DMG_FRAG_HEAD = `uniform highp sampler2D tDmg; flat varying float vDmgS; float dmgChar = 0.0, dmgDark = 0.0;
+  float dmgH(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
+  float dmgN(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(dmgH(i), dmgH(i + vec3(1, 0, 0)), f.x), mix(dmgH(i + vec3(0, 1, 0)), dmgH(i + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(dmgH(i + vec3(0, 0, 1)), dmgH(i + vec3(1, 0, 1)), f.x), mix(dmgH(i + vec3(0, 1, 1)), dmgH(i + vec3(1, 1, 1)), f.x), f.y), f.z); }`;
+const DMG_FRAG = `if (vDmgS > 0.5) {
+    int dS = int(vDmgS + 0.5); vec4 d0 = texelFetch(tDmg, ivec2(0, dS), 0);
+    float above = vDmgP.y - d0.x - (dmgN(vec3(vDmgP.xz * 0.35, 0.5)) * 0.7 + dmgN(vec3(vDmgP.xz * 1.3, 2.5)) * 0.3 - 0.5) * d0.y;
+    if (above > 0.0) discard;
+    dmgChar = 1.0 - smoothstep(0.0, 2.5 + d0.y, -above); dmgDark = d0.z;
+    for (int k = 1; k <= ${DMG_HOLES}; k++) {
+      vec4 h = texelFetch(tDmg, ivec2(k, dS), 0);
+      if (h.w > 0.0) { float dd = length(vDmgP - h.xyz) + (dmgN(vDmgP * (2.2 / h.w)) - 0.5) * h.w * 0.6; if (dd < h.w) discard; dmgChar = max(dmgChar, 1.0 - smoothstep(h.w, h.w * 1.7, dd)); }
+    }
+  }`;
+export function dmgAttr(n, runs) { const d = new Uint8Array(n); for (const [s, c, v] of runs || []) d.fill(v, s, s + c); return new THREE.BufferAttribute(d, 1); }
+// shadow casting for the merged building meshes: the same holes and missing buildings in the shadow maps
+let _bldDepth = null;
+export function buildingDepthMaterial() {
+  if (_bldDepth) return _bldDepth;
+  const m = (_bldDepth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }));
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, DMG.U);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\n' + DMG_DEPTH_VERT_HEAD)
+      .replace('#include <clipping_planes_vertex>', '#include <clipping_planes_vertex>\n' + DMG_DEPTH_VERT + DMG_VERT_KILL);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vDmgP;\n' + DMG_FRAG_HEAD)
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n' + DMG_FRAG);
+  };
+  m.customProgramCacheKey = () => 'bldgDepth1';
+  return m;
+}
 const rectArr = () => { const a = []; for (let i = 0; i < NCELL; i++) { const w = WIN[i]; a.push(w ? new THREE.Vector4(...w.r) : new THREE.Vector4(2, 2, -1, -1)); } return a; };
 const parArr = () => { const a = []; for (let i = 0; i < NCELL; i++) { const w = WIN[i]; a.push(new THREE.Vector4(w ? w.rec : 0, w ? w.room : 0, w ? w.kind : -1, i === C.METAL || i === C.SEAM || i === C.HANGAR_DOOR ? 0.6 : 0)); } return a; };
 
@@ -276,12 +326,14 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
   mat.normalScale.set(1, 1);
   const U = { tData: { value: A.data }, uRect: { value: rectArr() }, uCP: { value: parArr() } };
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, FOG, U, BLD_U);
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 atl; varying vec4 vAtl; varying vec3 vWP;')
-      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvAtl = atl; vWP = (modelMatrix * vec4(position, 1.0)).xyz;');
+    Object.assign(sh.uniforms, FOG, U, BLD_U, DMG.U);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 atl; varying vec4 vAtl; varying vec3 vWP; ' + DMG_VERT_HEAD)
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvAtl = atl; vWP = (modelMatrix * vec4(position, 1.0)).xyz; ' + DMG_VERT)
+      .replace('#include <fog_vertex>', '#include <fog_vertex>\n' + DMG_VERT_KILL);
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
       uniform sampler2D tData; uniform vec4 uRect[${NCELL}]; uniform vec4 uCP[${NCELL}]; uniform float uDay;
-      varying vec4 vAtl; varying vec3 vWP;
+      varying vec4 vAtl; varying vec3 vWP; ${DMG_FRAG_HEAD}
+      #define vDmgP vWP
       float bh1(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
       float vn3(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); vec2 o = vec2(1.0, 0.0);
         float a = mix(mix(bh1(i.xy + i.z * 7.1), bh1(i.xy + o.xy + i.z * 7.1), f.x), mix(bh1(i.xy + o.yx + i.z * 7.1), bh1(i.xy + o.xx + i.z * 7.1), f.x), f.y);
@@ -292,6 +344,7 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
       vec3 bWinRad = vec3(0.0); float bGlass = 0.0; vec3 bJambN = vec3(0.0); float bJamb = 0.0;
       `)
       .replace('#include <map_fragment>', `
+        ${DMG_FRAG}
         float ci = floor(vAtl.x + 0.5); int ii = int(ci);
         vec2 cxy = vec2(mod(ci, ${COLS}.0), floor(ci / ${COLS}.0 + 0.01));
         vec2 fu = fract(vMapUv), bay = floor(vMapUv);
@@ -340,6 +393,7 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
         float roof = smoothstep(0.3, 0.6, wN.y) * (1.0 - ground) * step(0.6, ly);
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.72, 0.78, 0.6), roof * smoothstep(0.45, 0.8, vn3(vWP * 0.6 + seed)) * 0.7);
         if (bJamb > 0.0) diffuseColor.rgb *= bJamb;
+        diffuseColor.rgb *= 1.0 - 0.82 * dmgChar; // soot round holes and broken edges
       `)
       .replace('#include <roughnessmap_fragment>', `float roughnessFactor = mix(bDat.b, 0.04, winM);
         roughnessFactor = mix(roughnessFactor, min(1.0, roughnessFactor + 0.15), roof * wn);`)
@@ -352,7 +406,7 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
         if (winM > 0.5) normal = Ng;`)
       .replace('#include <emissivemap_fragment>', `
         // ---- behind the glass ----
-        float nightK = emissive.r;
+        float nightK = emissive.r * (1.0 - dmgDark); // a damaged building's power is out
         vec2 wid = bay + vec2(seed * 0.618, ci * 0.37);
         float wh = bh1(wid), wh2 = bh1(wid + 17.3), wh3 = bh1(wid + 41.9);
         vec3 rad = vec3(0.0);
@@ -417,7 +471,7 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
         totalEmissiveRadiance = rad * winM;`);
   };
   mat.defines = { ...(mat.defines || {}), ...(interiors ? { BLD_INTERIOR: '' } : {}), ...(glass ? { BLD_GLASS: '' } : {}) };
-  mat.customProgramCacheKey = () => 'bldg3' + (interiors ? 'i' : '') + (ground ? 'g' : '') + (glass ? 'q' : '');
+  mat.customProgramCacheKey = () => 'bldg4' + (interiors ? 'i' : '') + (ground ? 'g' : '') + (glass ? 'q' : '');
   return mat;
 }
 
@@ -628,10 +682,12 @@ export class Builder {
     g.setAttribute('uv', new THREE.BufferAttribute(this.uv.slice(0, n * 2), 2));
     g.setAttribute('color', new THREE.BufferAttribute(this.col.slice(0, n * 3), 3, true));
     g.setAttribute('atl', new THREE.BufferAttribute(this.atl.slice(0, n * 4), 4, false));
+    g.setAttribute('dmg', dmgAttr(n, this.dmgW));
     const I = this.idx.subarray(0, this.ni);
     g.setIndex(new THREE.BufferAttribute(n > 65535 ? I.slice() : Uint16Array.from(I), 1));
     this.pos = this.nor = this.uv = this.col = this.atl = null; this.idx = new Uint32Array(0); this.cap = 0; // free the staging buffers
     g.computeBoundingSphere(); g.computeBoundingBox();
+    this.geo = g; // (destruction.js finds a building's vertices through the builder that wrote them)
     return g;
   }
   get empty() { return this.n === 0; }

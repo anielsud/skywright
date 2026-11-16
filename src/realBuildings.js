@@ -3,7 +3,7 @@
 // buildings.js, gabled / hipped / flat roofs, Swiss chalet style up in the villages), railways, cable car lines,
 // mountain lakes and rivers above the World's water level. Takes the place of Towns (towns.js) for these locations and offers the same interface.
 import * as THREE from 'three';
-import { Builder, buildingMaterial, C } from './buildings.js';
+import { Builder, buildingMaterial, buildingDepthMaterial, C } from './buildings.js';
 import { mulberry32, smoothstep } from './noise.js';
 import { CityScenery } from './realCity.js';
 import { Landmarks } from './realLandmarks.js';
@@ -120,7 +120,7 @@ export class RealScenery {
         roofCell = thatch ? C.THATCH : C.SEAM; roofC = thatch ? TROPIC.thatch[(r() * 4) | 0] : TROPIC.metal[(r() * TROPIC.metal.length) | 0];
       }
       // ---- geometry
-      const ch = this.chunk(cx, cz), B = ch.B;
+      const ch = this.chunk(cx, cz), B = ch.B, n0 = B.n;
       B.seed = (r() * 255) | 0;
       B.setFrame(0, base, 0, 0);
       const ccw = area > 0; // walls need the outside on their front: walk the ring so the face normal points out
@@ -147,7 +147,9 @@ export class RealScenery {
       // collisions: a disc per building (the aircraft's parts are tested against these)
       const key = Math.floor(cx / 50) + ',' + Math.floor(cz / 50);
       if (!this.grid.has(key)) this.grid.set(key, []);
-      this.grid.get(key).push([cx, base, cz, eave + rise, Math.sqrt(A / Math.PI)]);
+      const e = [cx, base, cz, eave + rise, Math.sqrt(A / Math.PI)];
+      e.solid = true; e.dk = 'r' + this.count; e.rng = [[B, n0, B.n - n0]]; e.ob = { x: ox, z: oz, ux, uz, hl, hw }; // destructible (destruction.js)
+      this.grid.get(key).push(e);
       this.count++;
     }
     this.buildPiers(W.real.osm.piers || []);
@@ -156,7 +158,7 @@ export class RealScenery {
     this.chunkList = [];
     for (const ch of this.chunks.values()) {
       if (ch.B.empty) continue;
-      const g = ch.B.toGeometry(), m = new THREE.Mesh(g, mat);
+      const g = ch.B.toGeometry(), m = new THREE.Mesh(g, mat); m.customDepthMaterial = buildingDepthMaterial();
       m.castShadow = W.qBase === 'high'; m.receiveShadow = true;
       this.group.add(m);
       this.chunkList.push({ m, x: ch.x / ch.n, z: ch.z / ch.n, r: g.boundingSphere.radius });

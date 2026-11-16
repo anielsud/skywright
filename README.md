@@ -71,7 +71,7 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 - **Farmland:** fields of crops (pivot-irrigation circles in the desert), plus farms with barns and silos, and grazing sheep or cows.
 - **Plants:** procedural trees in many variants (pines, broadleaf, birch, palms, saguaro cacti, shrubs, rocks), with near/far detail levels and grass near the ground.
 - **More life:** a railway with a train in the mountains and the desert, wind turbines, a helicopter shuttle, a radio mast, and boats in the Bora Bora lagoon.
-- **Obstacles:** you can crash into buildings and trees.
+- **Obstacles:** you can crash into buildings and trees. Buildings break the way you hit them (`src/destruction.js`): a small hit punches a hole or knocks off a corner or the roof, a big one brings the whole building down in a cloud of dust, and a skyscraper hit high up loses its top (the floors pancake down, or the top section topples off). Debris wears the building's own walls, glass towers shower glass, and the rubble smoulders. You can fly through the gap afterwards. Damage lasts the whole flight.
 
 **Graphics**
 - High-resolution baked terrain textures with ambient occlusion and soft sun shadows from the mountains.

@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { mulberry32 } from './noise.js';
 import { glowTexture } from './materials.js';
-import { Builder, buildingMaterial, C, BLD_U } from './buildings.js';
+import { Builder, buildingMaterial, buildingDepthMaterial, C, BLD_U } from './buildings.js';
 import { makeBuilding } from './buildkit.js';
 
 function vc(g, hex, mult = 1) {
@@ -68,16 +68,21 @@ export class Towns {
       const ch = chunkOf(opts.chunk ?? 'c' + Math.floor(x / 2000) + ',' + Math.floor(z / 2000)), y = mn + 0.05;
       ch.x += x; ch.z += z; ch.n++;
       ch.S.seed = ch.D.seed = Math.floor(r() * 255);
+      const s0 = ch.S.n, d0 = ch.D.n;
       ch.S.setFrame(x, y, z, yaw); ch.D.setFrame(x, y, z, yaw); b.draw(ch.S, ch.D);
       const key = Math.floor(x / 50) + ',' + Math.floor(z / 50); if (!this.grid.has(key)) this.grid.set(key, []);
-      this.grid.get(key).push([x, y, z, b.h, Math.min(b.w, b.d) * 0.5 + 0.5]);
+      const e = [x, y, z, b.h, Math.min(b.w, b.d) * 0.5 + 0.5];
+      // destructible (destruction.js): its vertices in the chunk's shell and detail, its box, what it is
+      e.solid = true; e.dk = 't' + this.count; e.rng = [[ch.S, s0, ch.S.n - s0], [ch.D, d0, ch.D.n - d0]];
+      e.ob = { x, z, ux: cs, uz: -sn, hl: b.w / 2, hw: b.d / 2 }; e.type = b.type;
+      this.grid.get(key).push(e);
       if (b.chimney && st === 'alpine' && this.chimneys.length < 70 && r() < 0.35) { const [lx, ly, lz] = b.chimney; this.chimneys.push(new THREE.Vector3(x + lx * cs + lz * sn, y + ly, z - lx * sn + lz * cs)); }
       if (T.plots && b.yard && opts.plot !== false) this.plot(ch, b, x, y, z, yaw, opts.front ?? 4 + r() * 3);
       if (opts.after) opts.after(ch, x, y, z, yaw);
       this.count++;
       return true;
     };
-    const mk = (type) => makeBuilding(type, st, r);
+    const mk = (type) => { const b = makeBuilding(type, st, r); b.type ??= type; return b; };
     // walk a polyline: point + tangent at arc length s
     const walker = (pts) => {
       const L = [0]; for (let i = 1; i < pts.length; i++) L.push(L[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z));
@@ -381,8 +386,8 @@ export class Towns {
     const castDetail = W.qName === 'high' || W.qName === 'ultra';
     for (const [key, ch] of this.chunks) {
       const c = { key, x: ch.n ? ch.x / ch.n : 0, z: ch.n ? ch.z / ch.n : 0 };
-      if (!ch.S.empty) { const g = ch.S.toGeometry(); tris += g.index.count / 3; lt.S += g.index.count / 3; c.shell = new THREE.Mesh(g, mat); c.shell.castShadow = W.q.shadows && W.qName !== 'medium'; c.shell.receiveShadow = true; this.group.add(c.shell); }
-      if (!ch.D.empty) { const g = ch.D.toGeometry(); tris += g.index.count / 3; lt.D += g.index.count / 3; c.detail = new THREE.Mesh(g, mat); c.detail.receiveShadow = true; c.detail.castShadow = castDetail; W.nearShadow?.(c.detail); this.group.add(c.detail); const bs = g.boundingSphere; c.dx = bs.center.x; c.dz = bs.center.z; c.dr = bs.radius; }
+      if (!ch.S.empty) { const g = ch.S.toGeometry(); tris += g.index.count / 3; lt.S += g.index.count / 3; c.shell = new THREE.Mesh(g, mat); c.shell.customDepthMaterial = buildingDepthMaterial(); c.shell.castShadow = W.q.shadows && W.qName !== 'medium'; c.shell.receiveShadow = true; this.group.add(c.shell); }
+      if (!ch.D.empty) { const g = ch.D.toGeometry(); tris += g.index.count / 3; lt.D += g.index.count / 3; c.detail = new THREE.Mesh(g, mat); c.detail.customDepthMaterial = buildingDepthMaterial(); c.detail.receiveShadow = true; c.detail.castShadow = castDetail; W.nearShadow?.(c.detail); this.group.add(c.detail); const bs = g.boundingSphere; c.dx = bs.center.x; c.dz = bs.center.z; c.dr = bs.radius; }
       if (!ch.G.empty) { const g = ch.G.toGeometry(); tris += g.index.count / 3; lt.G += g.index.count / 3; c.ground = new THREE.Mesh(g, gmat); c.ground.receiveShadow = true; c.ground.renderOrder = -1; this.group.add(c.ground); const bs = g.boundingSphere; c.gx = bs.center.x; c.gz = bs.center.z; c.gr = bs.radius; }
       for (const l of ch.L) { lampHeads.push(l); glowPos.push(l[0] + Math.sin(l[3]) * l[4], l[1], l[2] + Math.cos(l[3]) * l[4]); }
       this.chunkList.push(c);
