@@ -849,6 +849,8 @@ export function carEngineDetail(color) {
   // against the vehicle they are fitted to and re-routes them (zoomies, dumps under the floor, stacks) if they would
   // run into the body or through glass.
   g.userData.exhaust = { from: [V(0.42, 0.08, 0.3), V(-0.42, 0.08, 0.3)], r: 0.05 };
+  // engine mounts: four legs off the block, carried down to whatever the engine sits on (carDetail.js feet)
+  g.userData.feet = [-1, 1].flatMap((sx) => [-1, 1].map((sz) => ({ p: [sx * 0.19, 0.08, sz * 0.22], d: [sx * 0.25, -1, 0], r: 0.03, kind: 'sq', mat: M.darkMetal(), on: 'any', reach: 1.0 })));
   g.add(exhaustPipes(EXHAUST_ROUTES[0], g.userData.exhaust));
   // intake manifold, the blower (ribbed case), injector hat with an open mouth and throttle butterflies
   const man = new THREE.BoxGeometry(0.22, 0.1, 0.56); man.translate(0, 0.43, 0); b.add(man, alu);

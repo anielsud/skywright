@@ -21,6 +21,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { blendSkins } from './skinBlend.js';
 import { addCrew } from './crew.js';
 import { routeGear, routeStruts } from './gearRoute.js';
+import { assembleCar } from './carDetail.js';
 
 const BODY = new Set(['fuselage', 'cockpit']), BODY_X = new Set(['x_nosecone', 'x_tailcone']);
 const isBody = (id) => BODY.has(PARTS[id].cat) || BODY_X.has(id);
@@ -608,29 +609,9 @@ function engineCollar(obj, body) {
   }
   addTo(body, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 84, 0.03, 6, true), M.rubber());
 }
-// A car wheel on a body: a half shaft from the hub in towards the centreline (it rides with the wheel), a differential
-// on the centreline (one per axle line), and on truck bodies a mud flap behind each rear wheel.
-function carCorner(p, obj, bp, bobj, ctx) {
-  const u = obj.userData, gi = PARTS[p.id].gear, sl = linScale(p), W = obj.matrixWorld;
-  const hub = V().setFromMatrixPosition(u.wheelsFixed.matrixWorld), B = bobj.matrixWorld, inv = B.clone().invert();
-  const hl = hub.clone().applyMatrix4(inv), sideSign = Math.sign(hl.x) || 1, r = gi.r * sl;
-  if (Math.abs(hl.x) > 0.5) {
-    const inner = V(0.3 * sideSign, hl.y, hl.z).applyMatrix4(B), from = hub.clone().add(inner.clone().sub(hub).normalize().multiplyScalar(r * 0.45));
-    const g = bar(from, inner, r * 0.09, r * 0.09, true, 10); addTo(u.wheelsFixed, g, M.darkMetal());
-    const key = Math.round(hl.z * 4) + ':' + Math.round(hl.y * 4); ctx.diffs = ctx.diffs || new Map(); const done = ctx.diffs.get(bobj) || new Set(); ctx.diffs.set(bobj, done);
-    if (!done.has(key)) { done.add(key); const d = new THREE.SphereGeometry(r * 0.28, 16, 12); d.scale(1, 1, 0.8); d.applyMatrix4(new THREE.Matrix4().makeTranslation(...V(0, hl.y, hl.z).applyMatrix4(B).toArray())); addTo(bobj, d, M.darkMetal()); }
-  }
-  if (!PARTS[bp.id].mudFlaps) fender(u, bp.color);
-  // mud flap: rubber, hung from the body behind the tyre, on the rear wheels of bodies that carry them
-  if (!PARTS[bp.id].mudFlaps || hl.z < 0.2) return;
-  const fw = V(0, 0, -1).transformDirection(B).normalize(), upB = V(0, 1, 0).transformDirection(B).normalize(), side = V(1, 0, 0).transformDirection(B).normalize();
-  const top = V().setFromMatrixPosition(W), w = (gi.w || r * 0.8) * 1.1 * sl, back = hub.clone().addScaledVector(fw, -(r + 0.08));
-  const yTop = top.clone().sub(back).dot(upB), y0 = -r * 0.55;
-  const flap = new THREE.BoxGeometry(w, yTop - y0, 0.025), m = new THREE.Matrix4().makeBasis(side, upB, fw.clone().negate()); flap.applyMatrix4(m);
-  flap.translate(...back.clone().addScaledVector(upB, (yTop + y0) / 2).toArray());
-  addTo(bobj, flap, M.rubber());
-  const brk = bar(back.clone().addScaledVector(upB, yTop).addScaledVector(fw, 0.02), back.clone().addScaledVector(upB, yTop).addScaledVector(fw, r * 0.6), 0.05, 0.05, true, 6); addTo(bobj, brk, M.darkMetal());
-}
+// A car wheel on an open-wheel body gets a fender (truck bodies carry mud flaps instead: carDetail.js, which also
+// builds the axles, drivetrain and moving suspension).
+function carCorner(p, obj, bp) { if (!PARTS[bp.id].mudFlaps) fender(obj.userData, bp.color); }
 
 // A cycle-wing fender over a car wheel (open-wheel bodies: a truck body has its own wheel arches and mud flaps): a
 // crowned strip in the body's paint following the tyre from behind the axle to ahead of the top, with a rolled edge
@@ -749,7 +730,7 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
     partner: (gp) => { const j = parts.findIndex((o, k) => valid(k) && o !== gp && o.id === gp.id && Math.abs(gp.pos[0]) > 0.05 && Math.abs(o.pos[0] + gp.pos[0]) < 0.02 && Math.abs(o.pos[1] - gp.pos[1]) < 0.02 && Math.abs(o.pos[2] - gp.pos[2]) < 0.02); return j >= 0 ? objs[j] : null; },
   };
   parts.forEach((p, i) => {
-    if (!valid(i) || !valid(p.parent) || !PARTS[p.id].gear) return;
+    if (!valid(i) || !valid(p.parent) || !PARTS[p.id].gear || objs[i].userData.corner) return; // (car corners: carDetail.js)
     try { T('gear', () => gearJoint(p, objs[i], parts[p.parent], structure, out, gc)); } catch (e) { console.warn('planeDetail gear', p.id, e); }
   });
   parts.forEach((p, i) => {
@@ -761,10 +742,12 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
       if (POD[p.id]?.ex) T('soot', () => soot(p, objs[i], ctx, valid(p.parent) ? objs[p.parent] : null));
       if (objs[i].userData.exhaust) T('exhaust', () => routeExhaust(objs[i], objs));
       if (objs[i].userData.navHead) navLight(objs[i], ctx);
-      if (d.cat === 'car' && objs[i].userData.wheelsFixed && valid(p.parent) && isBody(parts[p.parent].id)) T('axle', () => carCorner(p, objs[i], parts[p.parent], objs[p.parent], ctx));
+      if (d.cat === 'car' && objs[i].userData.wheelsFixed && valid(p.parent) && isBody(parts[p.parent].id)) T('fender', () => carCorner(p, objs[i], parts[p.parent]));
       if (d.cat === 'car' && objs[i].userData.exhaust && valid(p.parent)) T('collar', () => engineCollar(objs[i], objs[p.parent]));
     } catch (e) { console.warn('planeDetail furniture', p.id, e); }
   });
+  // cars: rigged suspension, axles and drivetrain, mud flaps, feet carried to the surfaces they stand on (carDetail.js)
+  try { out.rig = T('car', () => assembleCar(design, objs, root, { valid, isBody, cast, solidMeshes, addTo, structure, near, ids: parts.map((p) => p.id), rootW: root.matrixWorld.clone() })); } catch (e) { console.warn('carDetail', e); }
   for (const [obj, bag] of nearBags) ctx.flush(bag, obj, true);
   if (near) try { T('crew', () => addCrew(design, objs)); } catch (e) { console.warn('crew', e); } // pilots and drivers on the declared seats (crew.js)
   // near-only items: everything tagged near anywhere in the plane
@@ -853,6 +836,7 @@ export function updateDetail(ac, dt) {
       for (const s of u.spoilers) s.obj.rotation.x = lerp(s.obj.rotation.x, -tgt, k * 2);
     }
   }
+  D.rig?.update(); // suspension links follow the wheels (carRig.js)
   return crewMoving;
 }
 

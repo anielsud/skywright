@@ -11,7 +11,7 @@ import { RoomEnvironment } from '../vendor/addons/RoomEnvironment.js';
 import { OutputPass } from '../vendor/addons/postprocessing/OutputPass.js';
 import { buildDesign, uprightStage } from './hangar.js';
 
-const STYLE = 2; // bump when the look of the pictures changes: every picture is redrawn
+const STYLE = 3; // bump when the look of the pictures changes: every picture is redrawn (3: land vehicles)
 export const SAVED_SIZE = [320, 240], STOCK_SIZE = [400, 300];
 const SS = 2; // drawn at twice the size and scaled down: smooth edges on thin wings and struts
 

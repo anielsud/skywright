@@ -62,9 +62,15 @@ assembly pass), and fails on:
   transparent materials are fine; a mesh whose hole is covered by design can say so with `userData.openOk = 'why'`
   (e.g. a cockpit opening closed by its tub and sill). Landing gear is skipped for now.
 - **exhausts through glass**: each car engine's chosen exhaust path (`userData.exhaustPaths`) against the vehicle's glass.
+- **floating parts on cars**: the stock cars plus 16 seeded random car builds (`carBuilds`: a body, wheels dropped from
+  below and an engine, cage, light bar and wing dropped from above the way the hangar places them; some resized,
+  resized as a whole or mirrored). Every connected piece of every mesh (each instance of an instanced suspension link)
+  must touch another piece, to within 1 cm, and all of them must hang together as one vehicle. Checked at rest and
+  again with every wheel pushed 60 % up its travel and the steered wheels turned, so the moving suspension (carRig.js)
+  has to follow. Crew (posed at runtime), prop discs, glows and registration decals are left out. `--cars N` for more.
 
 ```sh
-python3 tools/test/meshcheck.py                 # serves the repo itself, ~30 s
+python3 tools/test/meshcheck.py                 # serves the repo itself, ~2 min
 python3 tools/test/meshcheck.py --json out.json # full report
 ```
 
