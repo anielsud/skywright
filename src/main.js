@@ -667,15 +667,37 @@ function trackFlightEnd(f, exit) {
   });
 }
 analytics.onLeave = () => trackFlightEnd(F, 'closed');
+// Geometries, materials and textures reachable from a scene (including material uniforms such as custom shader maps).
+function collectGpu(root) {
+  const geo = new Set(), mat = new Set(), tex = new Set();
+  const addTex = (v) => { if (v?.isTexture) tex.add(v); else if (Array.isArray(v)) v.forEach(addTex); };
+  root.traverse((o) => {
+    if (o.geometry) geo.add(o.geometry);
+    for (const m of [].concat(o.material || [])) {
+      if (!m) continue; mat.add(m);
+      for (const v of Object.values(m)) addTex(v);
+      if (m.uniforms) for (const u of Object.values(m.uniforms)) addTex(u?.value);
+      if (m.userData?.U) for (const u of Object.values(m.userData.U)) addTex(u?.value);
+    }
+  });
+  if (root.environment?.isTexture) tex.add(root.environment); if (root.background?.isTexture) tex.add(root.background);
+  return { geo, mat, tex };
+}
 function endFlight(restarting = false) {
   if (!F) return;
   trackFlightEnd(F, restarting ? 'restart' : 'hangar');
   net.detach(); if (!restarting) net.leave();
   if (updatePending) { reloadFresh(); return; }
   const f = F; F = null;
+  // Collect every GPU resource the flight scene holds BEFORE the subsystems detach their groups (anything detached first
+  // used to be skipped, and materials/textures were never freed: ~64 geometries + ~18 textures leaked per flight, #80).
+  const res = collectGpu(f.scene);
   f.world.dispose(); f.effects.dispose(); f.sonic.dispose(); post.shimmer(null); f.traffic.dispose(); f.mission?.dispose?.();
   f.worldSound?.dispose();
-  f.scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+  // free geometry and textures (the GPU memory), except what the hangar also uses. Materials stay: their compiled shader
+  // programs are shared by key and reused by the next flight, so keeping them avoids recompiling ~100 shaders per flight.
+  const keep = collectGpu(hangar.scene);
+  for (const kind of ['geo', 'tex']) for (const r of res[kind]) if (!keep[kind].has(r)) r.dispose();
   renderer.renderLists.dispose();
   audio.silence();
   flightUI.style.display = 'none'; $('#hangar-ui').style.display = '';
