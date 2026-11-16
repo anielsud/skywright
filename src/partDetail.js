@@ -14,9 +14,24 @@ const _e = new THREE.Euler(), _q = new THREE.Quaternion();
 export const mx = (p = [0, 0, 0], r = [0, 0, 0], s = [1, 1, 1]) => new THREE.Matrix4().compose(V(...p), _q.setFromEuler(_e.set(...r)), V(...s));
 
 // Same attribute set + an index on every geometry so a Bag can merge them.
+// Zero-length normals (degenerate tips, collapsed rings) turn into NaN in the lighting shader, and bloom smears a NaN
+// pixel into a black block: give them the direction away from the geometry's centre instead.
+export function fixNormals(g) {
+  const n = g.attributes.normal, p = g.attributes.position; if (!n) return g;
+  let c = null;
+  for (let i = 0; i < n.count; i++) {
+    const x = n.getX(i), y = n.getY(i), z = n.getZ(i), l = Math.hypot(x, y, z);
+    if (l > 1e-6 && Number.isFinite(l)) continue;
+    if (!c) { g.computeBoundingBox(); c = g.boundingBox.getCenter(new THREE.Vector3()); }
+    const d = new THREE.Vector3(p.getX(i), p.getY(i), p.getZ(i)).sub(c); if (d.lengthSq() < 1e-12) d.set(0, 1, 0); d.normalize();
+    n.setXYZ(i, d.x, d.y, d.z);
+  }
+  n.needsUpdate = true; return g;
+}
 export function norm(g) {
   for (const k of Object.keys(g.attributes)) if (!KEEP.includes(k)) g.deleteAttribute(k);
   if (!g.attributes.normal) g.computeVertexNormals();
+  fixNormals(g);
   const n = g.attributes.position.count;
   if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(n * 2), 2));
   if (!g.attributes.uv1) g.setAttribute('uv1', new THREE.Float32BufferAttribute(new Float32Array(n * 2), 2));
@@ -280,6 +295,53 @@ function wheelDetailed(r, w, brake) {
   return g;
 }
 
+// Wheel spat (fixed gear): a teardrop shell round the upper two thirds of the wheel with a flat floor and a slot the
+// tyre pokes through, a dark liner, a lip round the slot and a collar where the spring leg enters the shell.
+// Frame: origin at the axle, forward -Z; the leg comes down on the -X side to (legX, ~0).
+function wheelSpat(bag, { r, ww, paint, legX, len }) {
+  const R0 = r * 1.02, y0 = r * 0.1, Hs = r * 1.05, W = ww / 2 + 0.045 + r * 0.09, cut = -r * 0.72;
+  // side profile: blunt nose just ahead of the tyre, long tapering tail
+  const fz = new THREE.SplineCurve([[-1.5, 0], [-1.35, 0.55], [-1.05, 0.88], [-0.6, 0.99], [0, 1], [0.7, 0.96], [1.3, 0.82], [1.9, 0.55], [2.4, 0.25], [2.75, 0]].map(([z, f]) => new THREE.Vector2(z * r, f))).getPoints(30);
+  // section: ellipse on top, fuller (superellipse) below so the floor is wide enough for the tyre slot
+  const sec = (f, ph) => { const c = Math.cos(ph), sn = Math.sin(ph), e = c < 0 ? 2 / 3 : 1; return V(W * f * Math.sign(sn) * Math.abs(sn) ** e, y0 + Hs * f * Math.sign(c) * Math.abs(c) ** e, 0); };
+  const N = fz.length - 1, MS = 20, rings = [], outline = [];
+  for (let k = 0; k <= N; k++) {
+    const z = fz[k].x, f = Math.max(0.03, fz[k].y), q = f > 1e-4 ? (y0 - cut) / (Hs * f) : 2, al = q >= 1 ? Math.PI : Math.acos(-(q ** 1.5)), ring = [];
+    for (let i = 0; i <= MS; i++) ring.push(sec(f, -al + (2 * al * i) / MS).setZ(z));
+    rings.push(ring); outline.push([al >= Math.PI ? 0 : sec(f, al).x, z]);
+  }
+  const grid = (rs, flip) => { // rows = stations, cols = arc points (open strip)
+    const pos = [], idx = [], C = rs[0].length;
+    for (const r of rs) for (const p of r) pos.push(p.x, p.y, p.z);
+    for (let k = 0; k < rs.length - 1; k++) for (let i = 0; i < C - 1; i++) { const a = k * C + i, b = a + 1, c = a + C + 1, d = a + C; flip ? idx.push(a, c, b, a, d, c) : idx.push(a, b, c, a, c, d); }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals(); return g;
+  };
+  // winding: the arc runs -x (left) over the top to +x with stations nose->tail: check one normal points up
+  const shell = grid(rings, false), nY = shell.attributes.normal.getY(Math.floor(N / 2) * (MS + 1) + MS / 2);
+  bag.add(nY > 0 ? shell : grid(rings, true), paint);
+  const liner = rings.map((r) => r.map((p) => V(p.x * 0.975, y0 + (p.y - y0) * 0.975, p.z * 0.99)));
+  bag.add(grid(liner, false), M.intake());
+  // floor with the tyre slot (a shape in the x/z plane at y = cut)
+  const sh = new THREE.Shape();
+  outline.forEach(([x, z], i) => (i ? sh.lineTo(x, z) : sh.moveTo(x, z)));
+  for (let k = N; k >= 0; k--) sh.lineTo(-outline[k][0], outline[k][1]);
+  const ws = ww / 2 + 0.015, ls = Math.sqrt(Math.max(0.01, R0 * R0 - cut * cut)) + 0.03, rr = Math.min(ws, ls) * 0.9, hole = new THREE.Path(), slot = [];
+  for (let i = 0; i <= 24; i++) { // rounded rectangle, counter-clockwise
+    const q = Math.floor(i / 6.0001), t = (i - q * 6) / 6 * Math.PI / 2 + q * Math.PI / 2, cx = (q === 0 || q === 3 ? 1 : -1) * (ws - rr), cz = (q < 2 ? 1 : -1) * (ls - rr);
+    slot.push([cx + Math.cos(t) * rr, cz + Math.sin(t) * rr]);
+  }
+  slot.forEach(([x, z], i) => (i ? hole.lineTo(x, z) : hole.moveTo(x, z))); sh.holes.push(hole);
+  const floor = new THREE.ShapeGeometry(sh, 4); floor.rotateX(Math.PI / 2); floor.translate(0, cut, 0); // shape y -> world z, normal now faces -y
+  bag.add(floor, paint);
+  const fl = floor.clone(); fl.translate(0, 0.004, 0); bag.add(fl, M.intake());
+  bag.add(tube(slot.map(([x, z]) => V(x, cut - 0.002, z)).concat([V(slot[0][0], cut - 0.002, slot[0][1])]), 0.009, 5, 48), M.rubber());
+  // collar where the spring leg passes into the top of the shell
+  const legTop = V(0, len, 0), legBot = V(legX, r * 0.05, 0), dir = legTop.clone().sub(legBot).normalize();
+  const sAt = Math.abs(legX) < W ? y0 + Hs * Math.sqrt(1 - (legX / W) ** 2) * 0.97 : y0, t = (sAt - legBot.y) / (dir.y || 1);
+  const hit = legBot.clone().addScaledVector(dir, t);
+  bag.add(bar(hit.clone().addScaledVector(dir, -0.03), hit.clone().addScaledVector(dir, 0.07), 0.16, 0.07), paint);
+}
+
 // Full gear leg. Same contract as parts.js gearLeg (origin = strut top, userData.strut / .wheels / .steer, wheels at
 // y = -len), plus userData.wheelsFixed: fork, axle, piston and spat that follow the wheel up and down without spinning
 // (planeDetail.updateDetail keeps them on the wheel; aircraft.js only spins the children of .wheels).
@@ -294,8 +356,7 @@ export function gearLegDetailed({ len, r, w = null, color = 0xdddddd, fairing = 
     const leg = bar(top, bot, 0.11, 0.032); sB.add(leg, paint);
     const step = new THREE.BoxGeometry(0.16, 0.012, 0.12); step.translate(bot.x * 0.55 - 0.08, -len * 0.55, 0); sN.add(step, M.aluminum()); sN.add(bar(V(bot.x * 0.55, -len * 0.55, 0), V(bot.x * 0.55 - 0.08, -len * 0.55, 0), 0.02, 0.02, true, 5), steel);
     sN.add(tube([V(0, -0.05, 0.02), V(bot.x * 0.5, -len * 0.5, 0.03), V(bot.x, -len + r * 0.25, 0.03)], 0.007, 4), rub);
-    const spat = new THREE.LatheGeometry([[-r * 1.3, 0], [-r * 1.15, r * 0.3], [-r, r * 0.45], [-r * 0.5, r * 0.58], [0, r * 0.62], [r * 0.7, r * 0.5], [r * 1.5, 0.02]].map(([z, rr]) => new THREE.Vector2(rr, z)), 20);
-    spat.rotateX(Math.PI / 2); spat.scale(0.55, 1, 1); fB.add(spat, paint);
+    wheelSpat(fB, { r, ww, paint, legX: bot.x, len });
     const axle = new THREE.CylinderGeometry(0.025, 0.025, ww + 0.12, 8); axle.rotateZ(Math.PI / 2); fB.add(axle, steel);
   } else if (bogie) {
     // heavy bogie: oleo, side brace, torque links; the beam and four wheels hang below and ride with the oleo
@@ -353,24 +414,89 @@ export function gearLegDetailed({ len, r, w = null, color = 0xdddddd, fairing = 
 }
 
 // ---------- cockpits ----------
-export function cockpitDetail(id, g, color) {
-  const b = new Bag(), nb = new Bag(), paint = PM.skin(color), black = M.black(), alu = M.aluminum();
+// Glass shapes shared with the assembly pass (skinBlend.js), which seats the canopy into the body skin.
+export const FIGHTER_GLASS = [[-1.6, 0.02], [-0.8, 0.42], [0.3, 0.5], [1.4, 0.3], [2.0, 0.04]];
+const _fgc = new THREE.SplineCurve(FIGHTER_GLASS.map(([z, r]) => new THREE.Vector2(z, r))).getPoints(48);
+export const fighterGlassR = (z) => { if (z <= _fgc[0].x || z >= _fgc.at(-1).x) return 0; for (let i = 1; i < _fgc.length; i++) if (_fgc[i].x >= z) { const a = _fgc[i - 1], b = _fgc[i]; return Math.max(0, a.y + (b.y - a.y) * ((z - a.x) / (b.x - a.x || 1))); } return 0; };
+// a frame bow following a glass cross-section: half-width w and height h of the section at z, from just below the base
+function bowGeo(w, h, z, rad, y0 = -0.06) {
+  const pts = [V(-w, y0, z)];
+  for (let i = 0; i <= 16; i++) { const a = Math.PI * (i / 16); pts.push(V(-Math.cos(a) * w, Math.sin(a) * h, z)); }
+  pts.push(V(w, y0, z));
+  return tube(pts, rad, 6, 60);
+}
+// seat: a reclined, padded shell (back + pan) as a lofted section; headrest as a pillow
+function seatGeo(width, backH, panL, tilt) {
+  // back: section is a shallow U (wings at the sides), swept up the back line
+  const back = [];
+  for (let i = 0; i <= 6; i++) {
+    const t = i / 6, y = backH * t, zb = Math.sin(tilt) * y, ring = [];
+    for (const [x, dz] of [[-0.5, -0.07], [-0.42, 0.0], [0, 0.02], [0.42, 0.0], [0.5, -0.07], [0.46, 0.035], [0, 0.06], [-0.46, 0.035]]) ring.push(V(x * width * (1 - 0.12 * t), y * Math.cos(tilt), zb + dz));
+    back.push(ring);
+  }
+  const g = ringLoft(back, true, true);
+  const pan = new THREE.CapsuleGeometry(width * 0.42, width * 0.2, 4, 10); pan.rotateZ(Math.PI / 2); pan.scale(1, 0.3, 1.5 * panL / width); pan.translate(0, 0.02, -panL * 0.45);
+  return mergeGeometries([norm(g), norm(pan)]);
+}
+// Pilot: helmet + visor, shoulders and torso in a flight suit, sitting at (0, y, z) with the helmet at hy above.
+function pilotInto(b, nb, { y, z, hy, suit = 0x55603f, hr = 0.13, lean = 0.15 }) {
+  const torso = new THREE.CapsuleGeometry(0.15, 0.24, 4, 12); torso.scale(1.15, 1, 0.75); torso.rotateX(lean); torso.translate(0, y + 0.16, z + 0.03); b.add(torso, M.paint(suit, 'matte'));
+  const neck = new THREE.CylinderGeometry(0.05, 0.06, 0.1, 10); neck.translate(0, y + hy - hr - 0.02, z); b.add(neck, M.paint(suit, 'matte'));
+  const helmet = new THREE.SphereGeometry(hr, 18, 12); helmet.scale(1, 1.05, 1.08); helmet.translate(0, y + hy, z); b.add(helmet, M.pilot());
+  const visor = new THREE.SphereGeometry(hr + 0.006, 18, 8, -0.95, 1.9, 1.0, 0.75); visor.rotateY(Math.PI); visor.translate(0, y + hy, z); b.add(visor, M.visor());
+  nb.add(bar(V(-0.16, y + 0.28, z - 0.05), V(0.16, y + 0.28, z - 0.05), 0.03, 0.03, true, 6), M.paint(0x2a2c30, 'matte')); // harness bar
+}
+// Detail build of the glazed cockpits. Replaces the plain part's boxes: everything inside fits under the glass.
+// The glass carries a skirt below its base (hidden): skinBlend clips it to the body skin and shows it when seated.
+export function cockpitBuild(id, color) {
+  const g = new THREE.Group(), b = new Bag(), nb = new Bag(), paint = PM.skin(color), black = M.black(), seatM = PM.seat();
   if (id === 'ck_bubble') {
-    const hr = new THREE.BoxGeometry(0.36, 0.22, 0.1); hr.translate(0, 0.42, 0.52); b.add(hr, PM.seat());
-    const coam = new THREE.CylinderGeometry(0.34, 0.34, 0.12, 16, 1, false, -1.2, 2.4); coam.scale(1, 1, 0.5); coam.translate(0, 0.17, -0.6); b.add(coam, black);
-    for (let i = 0; i < 5; i++) { const d = new THREE.CircleGeometry(0.035, 12); d.applyMatrix4(mx([-0.2 + i * 0.1, 0.1, -0.435], [0.3, Math.PI, 0])); nb.add(d, PM.dial()); }
-    nb.add(bar(V(0, 0, -0.15), V(0, 0.3, -0.2), 0.025, 0.025, true, 6), black);
-    // rails the canopy slides on
-    for (const sx of [-1, 1]) nb.add(bar(V(sx * 0.43, 0.01, -0.6), V(sx * 0.43, 0.01, 0.9), 0.025, 0.02), alu);
+    const a = 0.45, bb = 1.0, c = 0.425;
+    const dome = new THREE.SphereGeometry(1, 56, 22, 0, Math.PI * 2, 0, Math.PI / 2); dome.scale(a, c, bb);
+    g.add(new THREE.Mesh(dome, PM.canopy()));
+    const skirt = new THREE.Mesh((() => { const s = new THREE.CylinderGeometry(1, 1, 0.5, 56, 1, true); s.scale(a, 1, bb); s.translate(0, -0.25, 0); return s; })(), PM.canopy());
+    skirt.visible = false; skirt.userData.glassSkirt = true; g.add(skirt);
+    // windscreen bow and the rear hoop of the sliding hood (they follow the glass)
+    for (const [z, rad] of [[-0.6, 0.018], [0.42, 0.014]]) { const k = Math.sqrt(1 - (z / bb) ** 2); b.add(bowGeo(a * k + 0.006, c * k + 0.006, z, rad), paint); }
+    // tub fittings: seat, pilot, glare shield with the instrument panel under it, stick
+    const st = seatGeo(0.36, 0.52, 0.34, 0.32); st.translate(0, -0.3, 0.42); b.add(st, seatM);
+    const hrest = new THREE.CapsuleGeometry(0.06, 0.12, 4, 10); hrest.rotateZ(Math.PI / 2); hrest.scale(1, 1, 0.6); hrest.translate(0, 0.23, 0.6); b.add(hrest, seatM);
+    pilotInto(b, nb, { y: -0.28, z: 0.24, hy: 0.55 });
+    const gl = new THREE.CylinderGeometry(0.26, 0.26, 0.16, 18, 1, true, -1.25, 2.5); gl.scale(1, 1, 0.55); gl.rotateY(Math.PI); gl.translate(0, 0.08, -0.55); b.add(gl, black);
+    const glTop = new THREE.CylinderGeometry(0.26, 0.26, 0.012, 18, 1, false, -1.25, 2.5); glTop.scale(1, 1, 0.55); glTop.rotateY(Math.PI); glTop.translate(0, 0.16, -0.55); b.add(glTop, black);
+    const pnl = new THREE.PlaneGeometry(0.46, 0.2); pnl.rotateX(-0.25); pnl.translate(0, 0.02, -0.47); b.add(pnl, black);
+    for (let i = 0; i < 5; i++) { const d = new THREE.CircleGeometry(0.032, 12); d.applyMatrix4(mx([-0.18 + i * 0.09, 0.04 - (i % 2) * 0.06, -0.462], [-0.25, 0, 0])); nb.add(d, PM.dial()); }
+    nb.add(bar(V(0, -0.3, -0.12), V(0, 0.0, -0.2), 0.022, 0.022, true, 6), black);
   } else if (id === 'ck_fighter') {
-    // windscreen bow + canopy frame arch, HUD combiner, ejection-seat head box with its yellow/black handle
-    const bow = new THREE.TorusGeometry(0.43, 0.03, 6, 20, Math.PI); bow.scale(1, 1.15, 1); bow.applyMatrix4(mx([0, 0, -0.62], [0.25, 0, 0])); b.add(bow, paint);
-    const arch = new THREE.TorusGeometry(0.47, 0.025, 6, 20, Math.PI); arch.scale(1, 1.15, 1); arch.translate(0, 0, 0.75); b.add(arch, paint);
-    for (const sx of [-1, 1]) b.add(bar(V(sx * 0.44, 0.02, -1.5), V(sx * 0.44, 0.02, 1.9), 0.06, 0.05), paint);
-    const hud = new THREE.PlaneGeometry(0.16, 0.14); hud.applyMatrix4(mx([0, 0.3, -0.62], [-0.35, 0, 0])); nb.add(hud, PM.canopy(0x3c6b52));
-    const hb = new THREE.BoxGeometry(0.36, 0.2, 0.18); hb.translate(0, 0.62, 0.55); b.add(hb, PM.seat());
-    const handle = new THREE.TorusGeometry(0.07, 0.012, 4, 10, Math.PI); handle.applyMatrix4(mx([0, 0.73, 0.45], [0, 0, 0])); nb.add(handle, M.propTip());
-  } else if (id === 'ck_airliner') {
+    const glass = revolveZ(smoothPts(FIGHTER_GLASS, 40), 48, 1.15);
+    g.add(new THREE.Mesh(glass, PM.canopy(0x6b5524)));
+    // windscreen bow (thick) and the canopy arch, following the glass section
+    for (const [z, rad] of [[-0.62, 0.026], [0.78, 0.02]]) { const r = fighterGlassR(z); b.add(bowGeo(r + 0.006, r * 1.15 + 0.006, z, rad, -r * 0.35), paint); }
+    // ejection seat: padded back, head box (inside the glass) with the yellow/black firing handle
+    const st = seatGeo(0.42, 0.62, 0.4, 0.28); st.translate(0, -0.32, 0.52); b.add(st, seatM);
+    const hb = new THREE.CapsuleGeometry(0.1, 0.16, 4, 10); hb.rotateZ(Math.PI / 2); hb.scale(1, 1.05, 0.8); hb.translate(0, 0.36, 0.72); b.add(hb, seatM);
+    const handle = new THREE.TorusGeometry(0.06, 0.011, 4, 10, Math.PI); handle.translate(0, 0.42, 0.66); nb.add(handle, M.propTip());
+    pilotInto(b, nb, { y: -0.3, z: 0.24, hy: 0.6, suit: 0x4d5560, hr: 0.14 });
+    const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.18, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.6); gl.rotateY(Math.PI); gl.translate(0, 0.14, -0.6); b.add(gl, black);
+    const glTop = new THREE.CylinderGeometry(0.3, 0.3, 0.012, 18, 1, false, -1.3, 2.6); glTop.scale(1, 1, 0.6); glTop.rotateY(Math.PI); glTop.translate(0, 0.23, -0.6); b.add(glTop, black);
+    const pnl = new THREE.PlaneGeometry(0.52, 0.24); pnl.rotateX(-0.2); pnl.translate(0, 0.06, -0.5); b.add(pnl, black);
+    for (let i = 0; i < 2; i++) { const d = new THREE.PlaneGeometry(0.13, 0.11); d.applyMatrix4(mx([-0.1 + i * 0.2, 0.06, -0.49], [-0.2, 0, 0])); nb.add(d, PM.dial()); }
+    const hud = new THREE.PlaneGeometry(0.15, 0.13); hud.applyMatrix4(mx([0, 0.33, -0.62], [-0.35, 0, 0])); nb.add(hud, PM.canopy(0x3c6b52));
+    nb.add(bar(V(0, -0.32, -0.08), V(0, -0.02, -0.12), 0.024, 0.024, true, 6), black);
+  }
+  b.to(g); nb.to(g, true);
+  return g;
+}
+// small local copies of parts.js revolve helpers (parts.js imports this file)
+function smoothPts(pts, n) { return new THREE.SplineCurve(pts.map(([z, r]) => new THREE.Vector2(z, r))).getPoints(n).map((p) => [p.x, Math.max(0, p.y)]); }
+function revolveZ(prof, segs, sy) {
+  const rings = prof.map(([z, r]) => { const ring = []; for (let i = 0; i < segs; i++) { const t = (i / segs) * Math.PI * 2; ring.push(V(Math.sin(t) * r, Math.cos(t) * r * sy, z)); } return ring; });
+  return ringLoft(rings);
+}
+
+export function cockpitDetail(id, g, color) {
+  const b = new Bag(), nb = new Bag(), black = M.black(), alu = M.aluminum();
+  if (id === 'ck_airliner') {
     // radome seam, windscreen frame posts and wipers, pitot probes and static ports on both cheeks
     const seam = new THREE.TorusGeometry(0.72, 0.012, 4, 32); seam.scale(1, 1, 1); seam.translate(0, 0.17, -4.22); b.add(seam, black);
     for (const a of [-0.55, -0.18, 0.18, 0.55]) nb.add(bar(V(Math.sin(a) * 1.62, 0.62, -2.25 + Math.abs(a) * 0.55), V(Math.sin(a) * 1.5, 1.08, -1.75 + Math.abs(a) * 0.4), 0.05, 0.05), black);

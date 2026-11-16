@@ -45,7 +45,7 @@ export function buildStatic(design) {
     const o = d.build(p.color, { detail: 1 }); partMatrix(p, m); m.decompose(o.position, o.quaternion, o.scale);
     g.add(o); objs[i] = o;
   });
-  assemble(design, objs, g, { near: false }); // fillets, pylons, wells and doors (merged later, so no extra draw calls)
+  assemble(design, objs, g, { near: false, quick: true }); // fillets, pylons, wells and doors, a coarse skin blend (merged later, so no extra draw calls)
   kitify(g); // all small fittings share one material, so they merge into one mesh
   for (const o of objs) if (o) o.traverse((c) => { if (c.isMesh) { c.castShadow = !c.material.transparent; c.receiveShadow = true; } if (c.userData.isDisc || c.userData.planeLight) c.visible = false; }); // parked: lights off
   // rest on the ground: lowest point at y=0
