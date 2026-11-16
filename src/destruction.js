@@ -490,7 +490,8 @@ export class Destruction {
     if (a.mound) this.setMound(a.mound, 0.02 + 0.98 * Math.min(1, k * 1.15));
     // chunks off the falling edge, dust pouring out of each floor as it goes, a rolling cloud along the street
     const big = Math.min(1, Math.sqrt(B.V) / 300) * (a.quiet ? 0.4 : 1), per = Math.max(o.hl, o.hw);
-    a.acc += dt * (14 + 70 * big) * T.chunks / 480 * (a.quiet ? 0.3 : 1);
+    const share = Math.min(1, 2.5 / this.anims.length); // (many coming down at once share the debris and dust budget)
+    a.acc += dt * (14 + 70 * big) * T.chunks / 480 * (a.quiet ? 0.3 : 1) * share;
     const look = this.lookArr(L.cell, L.col);
     while (a.acc >= 1) {
       a.acc--;
@@ -501,7 +502,7 @@ export class Destruction {
       if (L.glass && Math.random() < 0.8) this.spawn(this.shards, x, y, z, nx * 6 + rnd(3), Math.random() * 2, nz * 6 + rnd(3), 0.3 + Math.random() * 0.5, 0.3 + Math.random() * 0.5, 1, glassCol(L), 9);
     }
     const dc = this.dustCol(L);
-    a.dacc += dt * (8 + 55 * big) * T.dust * (a.quiet ? 0.3 : 1);
+    a.dacc += dt * (8 + 55 * big) * T.dust * (a.quiet ? 0.3 : 1) * share;
     while (a.dacc >= 1) {
       a.dacc--;
       const ang = Math.random() * 6.28, cs = Math.cos(ang), sn = Math.sin(ang), r = per * (0.7 + Math.random() * 0.5);
