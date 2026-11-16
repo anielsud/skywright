@@ -19,6 +19,7 @@ import { SpaceView } from './space.js';
 import { RealScenery } from './realBuildings.js';
 import { BAKED, preloadBake, bakeFor, withBake, landAt } from './terrainBake.js';
 import { Landcover } from './landcover.js';
+import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
 
 export const RWY = { len: 1800, width: 45 };
 // Two parallel runways (the airport is centred on the east one, which has the PAPI and the landing mission).
@@ -571,8 +572,7 @@ export class World {
     this.envScene = new THREE.Scene();
     this.envSky = new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), skyMaterial(this.atmo.texture, { env: true })); this.envScene.add(this.envSky);
     this.envGround = new THREE.Mesh(new THREE.CircleGeometry(45, 16), new THREE.MeshBasicMaterial({ color: 0x40453a })); this.envGround.rotation.x = -Math.PI / 2; this.envGround.position.y = -2; this.envScene.add(this.envGround);
-    const moon = new THREE.Mesh(new THREE.SphereGeometry(500, 24, 16), new THREE.MeshBasicMaterial({ color: 0xf4f1e6, fog: false }));
-    this.moon = moon; this.scene.add(moon);
+    loadMoonTexture(); // the moon is drawn by the sky dome (src/moon.js)
     // overcast deck: a lumpy ceiling from below, a sunlit cloud sea from above
     const dm = deckMaterial(cloudNoiseTexture());
     this.deck = new THREE.Mesh(new THREE.PlaneGeometry(60000, 60000), dm); this.deck.rotation.x = -Math.PI / 2; this.deck.position.y = this.loc.cloudBase + 200; this.deck.renderOrder = 1; this.scene.add(this.deck);
@@ -581,18 +581,29 @@ export class World {
 
   setTime(t) {
     this.time = ((t % 24) + 24) % 24;
-    const dayFrac = (this.time - 6) / 12; // 0 at 6:00, 1 at 18:00
+    const sun = this.skyPath(this.time);
+    this.sunDir = sun.dir; this.sunElev = sun.el;
+    // the moon: today's real phase, trailing the sun along the same path (src/moon.js)
+    this.moonAge ??= moonAge();
+    const moon = this.skyPath(this.time - moonLagHours(this.moonAge));
+    this.moonDir = moon.dir; this.moonElev = moon.el; this.moonPh = moonPhase(this.moonAge);
+    this.applyLighting();
+  }
+  setMoonAge(age) { this.moonAge = age; this.setTime(this.time); }
+  // Direction to a body on the sun's daily path at a given hour (and its elevation, rad)
+  skyPath(hour) {
+    const time = ((hour % 24) + 24) % 24;
+    const dayFrac = (time - 6) / 12; // 0 at 6:00, 1 at 18:00
     const elev = Math.sin(dayFrac * Math.PI) * (dayFrac >= 0 && dayFrac <= 1 ? 62 : 25) * (dayFrac < 0 || dayFrac > 1 ? 1 : 1);
     const el = THREE.MathUtils.degToRad(dayFrac >= 0 && dayFrac <= 1 ? elev : -Math.abs(Math.sin(dayFrac * Math.PI)) * 30);
     const az = THREE.MathUtils.degToRad(90 + dayFrac * 180 - 25);
-    this.sunDir = new THREE.Vector3(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az)).normalize();
+    const dir = new THREE.Vector3(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az)).normalize();
     if (this.loc.sunLat != null) { // a real place's sun path (equinox): due east at 6:00, true south at noon, due west at 18:00
-      const h = (this.time - 12) * Math.PI / 12, phi = THREE.MathUtils.degToRad(this.loc.sunLat), ce = Math.cos(el);
+      const h = (time - 12) * Math.PI / 12, phi = THREE.MathUtils.degToRad(this.loc.sunLat), ce = Math.cos(el);
       const b = Math.PI + Math.atan2(Math.sin(h), Math.sin(phi) * Math.cos(h)) - THREE.MathUtils.degToRad(this.loc.north || 0); // bearing in the game frame
-      this.sunDir.set(ce * Math.sin(b), Math.sin(el), -ce * Math.cos(b));
-    } else if (this.loc.north) this.sunDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(this.loc.north)); // the world is turned: keep the sun in the true south
-    this.sunElev = el;
-    this.applyLighting();
+      dir.set(ce * Math.sin(b), Math.sin(el), -ce * Math.cos(b));
+    } else if (this.loc.north) dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(this.loc.north)); // the world is turned: keep the sun in the true south
+    return { dir, el };
   }
   setWeather(id) {
     this.weatherId = id; this.W = WEATHER[id] || WEATHER.clear;
@@ -607,6 +618,7 @@ export class World {
     const day = smoothstep(-0.12, 0.25, el); // 0 night, 1 day
     const golden = smoothstep(0.45, 0.02, el) * smoothstep(-0.15, 0.02, el);
     this.night = day < 0.25;
+    this.scene.userData.nightK = clamp(1 - day + dark * 0.6, 0, 1); // running lights (navLights.js): full glow after dark or in murk
     // the atmosphere decides the sky, the horizon haze and the colour of the sunlight
     const atmoKey = `${this.sunDir.x.toFixed(4)},${this.sunDir.y.toFixed(4)},${this.sunDir.z.toFixed(4)},${W.haze ?? 1}`;
     if (atmoKey !== this.atmoKey) { this.atmoKey = atmoKey; this.atmo.update(this.sunDir, W.haze ?? 1); } // GPU bake + readback: only when it changes
@@ -615,21 +627,27 @@ export class World {
     const sunCol = new THREE.Color(trans.r / tm, trans.g / tm, trans.b / tm).lerp(new THREE.Color(1, 0.97, 0.92).lerp(new THREE.Color(1, 0.62, 0.32), golden), 0.45);
     this.sun.color.copy(sunCol);
     this.sun.intensity = 3.2 * day * (1 - dark * 0.85);
-    if (el < 0) { // moonlight
-      this.sun.color.set(0x8aa4d6); this.sun.intensity = 0.25 * (1 - dark);
+    // the moon: how high, how full, and the light it gives (0 new or set, 1 a high full moon)
+    const mPh = this.moonPh, mUp = smoothstep(-0.02, 0.12, this.moonElev), moonK = mPh.bright * mUp * (1 - dark) * (1 - 0.75 * (W.cover || 0));
+    this.moonLight = moonK;
+    if (el < 0) { // night: moonlight (cool and dim, by phase), or just starlight
+      this.sun.color.set(0x9fb6e6); this.sun.intensity = (0.1 + 1.3 * moonK) * (1 - dark);
     }
-    const lightDir = el < 0 ? new THREE.Vector3(-this.sunDir.x, Math.abs(this.sunDir.y) + 0.3, -this.sunDir.z).normalize() : this.sunDir;
+    const lightDir = el >= 0 ? this.sunDir : mUp > 0 ? new THREE.Vector3(this.moonDir.x, Math.max(this.moonDir.y, 0.22), this.moonDir.z).normalize() : new THREE.Vector3(0.25, 1, 0.15).normalize();
     this.lightDir = lightDir;
     const grey = (k) => new THREE.Color(0x808890).multiplyScalar(k);
     const skyC = new THREE.Color(0x9ec4ff).lerp(new THREE.Color(0xffb27a), golden * 0.5).lerp(new THREE.Color(0x0a1020), 1 - day).lerp(grey(0.3 + day * 0.7), dark * 0.85);
     this.hemi.color.copy(skyC); this.hemi.groundColor.set(0x4a4436).multiplyScalar(0.3 + day * 0.7);
-    this.hemi.intensity = 0.25 + day * 0.9 + (el < 0 ? 0.15 : 0);
+    this.hemi.intensity = 0.25 + day * 0.9 + (el < 0 ? 0.08 + 0.4 * moonK : 0);
     // fog / horizon: the sky's own horizon colour, greyed by cloud cover
     const hz = this.atmo.horizon.clone(), zen = this.atmo.zenith.clone();
     const hzMax = Math.max(hz.r, hz.g, hz.b);
     if (hzMax > 0.95) hz.multiplyScalar(0.95 / hzMax); // the low sun's glow stays in the sky, not in the flat fog colour
     const fogC = hz.clone().lerp(new THREE.Color(0x9aa1aa).multiplyScalar(0.25 + 0.75 * day), dark * 0.9);
     if (this.loc.desert) fogC.lerp(new THREE.Color(0xe8c9a6).multiplyScalar(0.2 + 0.8 * day), 0.2 * day);
+    // a moonlit night: the faint blue of the moonlit sky (the dome adds the same), so far hills fade into it, not black
+    const moonSky = new THREE.Color(0.006, 0.011, 0.024).multiplyScalar(moonK * (1 - day) * 1.0);
+    fogC.add(moonSky.clone().multiplyScalar(1.3));
     this.scene.fog.color.copy(fogC); this.fogBase = W.fog * (this.weatherId === 'clear' ? 1.0 : 1.5) * (this.q.res < 200 ? 1.3 : 1);
     this.scene.fog.density = W.fog;
     FOG.fogLin.value = this.fogBase;
@@ -660,13 +678,23 @@ export class World {
       const u = m.uniforms;
       u.sunDir.value.copy(this.sunDir); u.sunDisc.value.copy(disc); u.cirrus.value = cirrus;
       u.cirrusLit.value.copy(sunLit); u.cirrusAmb.value.copy(cirrusAmb);
-      u.stars.value = (1 - smoothstep(-0.25, 0.02, el)) * (1 - dark);
+      u.stars.value = (1 - smoothstep(-0.25, 0.02, el)) * (1 - dark) * (1 - 0.45 * moonK); // a bright moon washes out the faint stars
+    }
+    // the moon's disc and glow (src/moon.js): lit from the sun's side by its phase, reddened low down like the sun
+    {
+      const md = this.moonDir, sd = this.sunDir, i = Math.PI - mPh.E; // phase angle
+      const perp = sd.clone().addScaledVector(md, -sd.dot(md)); if (perp.lengthSq() < 1e-6) perp.set(0, 1, 0).addScaledVector(md, -md.y);
+      MOON_U.moonDir.value.copy(md);
+      MOON_U.moonLit.value.copy(md).multiplyScalar(-Math.cos(i)).addScaledVector(perp.normalize(), Math.sin(i)).normalize();
+      const mt = Atmosphere.sunTransmittance(md, W.haze ?? 1), mtm = Math.max(mt.r, mt.g, mt.b, 1e-4);
+      const disc = (1 - dark * 0.95) * smoothstep(-0.03, 0.0, this.moonElev) * (0.6 + 1.6 * (1 - day)); // pale by day
+      MOON_U.moonCol.value.setRGB(mt.r / mtm, mt.g / mtm, mt.b / mtm).lerp(new THREE.Color(1, 0.97, 0.92), 0.5).multiplyScalar(disc * Math.min(1, mtm * 1.5));
+      MOON_U.moonGlow.value.copy(MOON_U.moonCol.value).multiplyScalar(0.05 * (1 - day) * mPh.frac * (0.6 + 0.4 * (W.haze ?? 1)));
+      MOON_U.moonSky.value.copy(moonSky);
     }
     // reflections under an overcast sky see the grey cloud base, not the blue sky above it
     this.envSky.material.uniforms.grey.value = W.cover * 0.9; this.envSky.material.uniforms.greyCol.value.copy(fogC).multiplyScalar(1.1);
     this.sky.material.uniforms.greyCol.value.copy(fogC); this.sky.material.uniforms.grey.value = this.weatherId === 'fog' ? 0.6 : 0;
-    this.moon.position.set(-this.sunDir.x, Math.abs(this.sunDir.y) * 0.6 + 0.25, -this.sunDir.z).normalize().multiplyScalar(38000);
-    this.moon.visible = el < 0.1 && dark < 0.6;
     // overcast deck
     const deckOp = W.cover;
     for (const [d, k] of [[this.deck, 1], [this.deck2, 0.9]]) {
@@ -681,11 +709,12 @@ export class World {
     if (this.clouds) {
       const cu = this.clouds.uniforms;
       const moon = el < 0;
-      const lit = (moon ? new THREE.Color(0x8aa4d6).multiplyScalar(0.08 * (1 - dark)) : sunCol.clone().multiplyScalar(1.15 * day * (1 - dark * 0.75)));
+      const lit = (moon ? new THREE.Color(0x8aa4d6).multiplyScalar((0.015 + 0.3 * moonK) * (1 - dark)) : sunCol.clone().multiplyScalar(1.15 * day * (1 - dark * 0.75)));
       cu.sunDir.value.copy(lightDir); cu.sunCol.value.copy(lit);
       const top = zen.clone().multiplyScalar(1.15).add(hz.clone().multiplyScalar(0.3)).lerp(grey(0.55 * (0.2 + 0.8 * day)), dark * 0.8);
+      top.add(moonSky.clone().multiplyScalar(8)); // under a bright moon the clouds glow grey against the deep blue, not black
       cu.ambTop.value.copy(top);
-      cu.ambBottom.value.copy(this.hemi.groundColor).multiplyScalar(0.5).add(hz.clone().multiplyScalar(0.3)).lerp(grey(0.35 * (0.2 + 0.8 * day)), dark * 0.7);
+      cu.ambBottom.value.copy(this.hemi.groundColor).multiplyScalar(0.5).add(hz.clone().multiplyScalar(0.3)).lerp(grey(0.35 * (0.2 + 0.8 * day)), dark * 0.7).add(moonSky.clone().multiplyScalar(6));
       cu.litColor.value.copy(lit).multiplyScalar(0.85).add(top); cu.shadeColor.value.copy(top).multiplyScalar(0.9);
       if (!this.cloudLitDir || this.cloudLitDir.distanceTo(lightDir) > 0.001) { this.cloudLitDir = lightDir.clone(); this.clouds.light(lightDir); }
     }
@@ -1039,8 +1068,6 @@ export class World {
     this.sun.position.copy(tgt).addScaledVector(this.lightDir, 600);
     this.sun.shadow.camera.updateProjectionMatrix();
     this.cascades?.update(camera, this.lightDir);
-    this.moon.position.add(camera.position.clone().sub(this.lastCam || camera.position));
-    this.lastCam = camera.position.clone();
     this.deck.position.x = camera.position.x - (camera.position.x % 4000); this.deck.position.z = camera.position.z - (camera.position.z % 4000);
     this.deck2.position.x = this.deck.position.x; this.deck2.position.z = this.deck.position.z;
     // cloud layers drift with the wind
@@ -1094,7 +1121,7 @@ export class World {
   }
   dispose() {
     this.cascades?.dispose(this.scene);
-    this.scene.remove(this.group, this.sky, this.sun, this.sun.target, this.hemi, this.moon, this.deck, this.deck2, this.clouds.mesh, this.rain, this.snow);
+    this.scene.remove(this.group, this.sky, this.sun, this.sun.target, this.hemi, this.deck, this.deck2, this.clouds.mesh, this.rain, this.snow);
     this.tiles?.dispose(); this.space.dispose();
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     if (this.envRT) this.envRT.dispose();

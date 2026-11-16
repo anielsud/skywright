@@ -7,6 +7,7 @@ import { M, glowTexture } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { Vehicles } from './vehicles.js';
 import { assemble, kitify } from './planeDetail.js';
+import { NavLights, lightLayout, heliLamps } from './navLights.js';
 
 // Merge a static object tree into one mesh per material (huge draw-call saving for parked planes etc.).
 export function mergeByMaterial(root, skip = () => false) {
@@ -199,6 +200,7 @@ export class Traffic {
     const pts = [[-700, -1400], [-700, 1400], [-450, 1900], [0, 2050], [450, 1900], [700, 1400], [700, -1400], [450, -1900], [0, -2050], [-450, -1900]].map(([x, z]) => new THREE.Vector3(x - 600, h, z));
     this.pattern = { obj: merged, curve: new THREE.CatmullRomCurve3(pts, true), t: 0, speed: 52 };
     this.pattern.len = this.pattern.curve.getLength();
+    this.pattern.nav = new NavLights(merged, lightLayout(obj, design.parts.map((p, i) => ({ obj: obj.children[i], d: PARTS[p.id], i })), 'plane'), { phase: 0.5 }); // running lights, landing lights on in the circuit
     this.group.add(merged);
   }
   updatePattern(dt) {
@@ -211,6 +213,7 @@ export class Traffic {
     P.obj.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), fwd);
     P.obj.rotateZ(clamp(turn * 25, -0.6, 0.6));
     for (const pr of P.obj.userData.props) pr.userData.spinner.rotation.z += dt * 120;
+    P.nav.update(dt, { land: 1 });
   }
   // ---------- helicopter shuttling between town and airport ----------
   buildHeli() {
@@ -227,7 +230,7 @@ export class Traffic {
     g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
     this.group.add(g);
     const a = new THREE.Vector3(250, W.loc.rwyH, -60), b = t.c.clone().setY(W.sampleGrid(t.c.x, t.c.z));
-    this.heli = { g, rotor, tail, a, b, t: 0, phase: 0 };
+    this.heli = { g, rotor, tail, a, b, t: 0, phase: 0, nav: new NavLights(g, heliLamps({ side: 1.45, top: [0, 1.25, 1.2], belly: [0, -1.45, 0.2], tail: [0, 1.05, 7.7], nose: [0, -1.1, -1.9] }), { phase: 0.9 }) };
   }
   updateHeli(dt) {
     const H = this.heli; if (!H) return;
@@ -239,6 +242,7 @@ export class Traffic {
     const dir = to.clone().sub(from).setY(0).normalize();
     H.g.position.copy(p); H.g.rotation.set(0, Math.atan2(-dir.x, -dir.z), 0); H.g.rotateX(-0.15 * Math.sin(k * Math.PI));
     H.rotor.rotation.y += dt * (leg > 0.03 && leg < 0.97 ? 30 : 6); H.tail.rotation.x += dt * 50;
+    H.nav.update(dt, { land: p.y - this.world.sampleGrid(p.x, p.z) < 250 ? 1 : 0 }); // searchlight on near the ground
   }
   update(dt, fx, cam) {
     this.vehicles.update(dt, cam); this.updateBirds(dt); this.updateHeli(dt);

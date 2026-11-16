@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.68.0', items: [
+    'Night flying! Every plane has red and green wingtip lights, flashing white strobes, a red beacon and bright landing lights that light up the runway. Helicopters get a searchlight and cars get headlights.',
+    'A real moon with its real phase for today: watch it light up the mountains and make a shiny path on the lakes.',
+  ] },
   { v: '1.67.0', items: [
     'NEW PLACE: New York City! Take off from LaGuardia and fly down the Hudson past the giant skyscrapers of Midtown and Downtown, the Empire State Building, Central Park and the Statue of Liberty.',
     'Land on the George Washington or Brooklyn Bridge, or fly under them! At night the whole skyline lights up.',
