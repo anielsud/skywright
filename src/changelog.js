@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.65.0', items: [
+    'Your builds look like real engineers made them: cockpits sink smoothly into the body (even if you put them in a weird spot!), wheel covers wrap around the wheels, and long rows of engines hang from a proper beam.',
+    'Every cockpit now has a pilot and a curved dashboard inside the glass.',
+  ] },
   { v: '1.64.0', items: [
     'Behind the scenes: the game now notices what kinds of vehicles get built (no names, nothing personal), so we know which new parts and vehicles to make next.',
   ] },
