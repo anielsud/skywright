@@ -16,7 +16,7 @@ export class TerrainTiles {
     this.tiles = new Map(); this.queue = [];
     this.group = new THREE.Group(); world.group.add(this.group);
     // texels per tile at full detail: the core's bake spacing
-    this.texR = Math.round(world.q.bake / 4);
+    this.texR = Math.round(world.q.bake * world.coreK / 4);
     this.white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1); this.white.needsUpdate = true;
     this.lastCam = null; this.treeCam = null;
     this.far = new FarField(world, this); // coarse land beyond the tiles, out to the haze

@@ -527,6 +527,7 @@ function helpModal() {
   <p>Jungfrau Region and Bora Bora: satellite imagery <a href="https://s2maps.eu" target="_blank" rel="noopener">Sentinel-2 cloudless 2016</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016, CC BY 4.0); elevation from Terrain Tiles on AWS; Bora Bora's lagoon depths are estimated from the imagery; map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</p>
   <p>Grand Canyon: aerial imagery from the USDA National Agriculture Imagery Program (NAIP) via the USGS <a href="https://www.usgs.gov/programs/national-geospatial-program/national-map" target="_blank" rel="noopener">National Map</a> (public domain); elevation from Terrain Tiles on AWS (USGS 3DEP); map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</p>
   <p>Earth from space: NASA Visible Earth (<a href="https://visibleearth.nasa.gov" target="_blank" rel="noopener">Blue Marble Next Generation and Earth at Night</a>, public domain).</p>
+  <p>New York City: aerial imagery from the USGS National Map (NAIP, public domain) and Sentinel-2 cloudless 2016 by EOX (CC BY 4.0); building footprints and heights from <a href="https://opendata.cityofnewyork.us/" target="_blank" rel="noopener">NYC Open Data</a> (NYC OTI Building Footprints); elevation from Terrain Tiles on AWS; map data and building parts © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</p>
   </div><div class="modal-foot"><button data-close class="primary">Got it</button></div>`, 'wide');
 }
 
@@ -847,16 +848,17 @@ function stepFlight(dtReal) {
   ac.brake = c.brake || (thr < 0.03 && ac.onGround && ac.v.length() < 3 && !(ac.isCar && c.pitch > 0.2) ? 1 : 0); // parking brake (not while a car reverses)
   ac.step(dt, f.env);
   // trees
-  if (!ac.dead && ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), 0) < 30) {
+  if (!ac.dead && (ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), 0) < 30 || world.towns.tall)) { // (a city's towers reach far higher)
     for (const p of ac.parts) {
       if (!p.alive) continue;
       const wp = ac.worldPoint(p.center, _v);
       const t = world.treeHit(wp);
       if (t && ac.v.length() > 5) {
-        effects.leaves(wp); audio.play('impact', 0.5, wp.clone()); rig.shake(0.5);
+        if (t.solid) effects.dust(wp, { x: 0, z: 0 }, 'rock', 6); else effects.leaves(wp);
+        audio.play('impact', 0.5, wp.clone()); rig.shake(0.5);
         ac.damage(p, ac.v.length() * 8 / ac.R.crashMult, wp);
         ac.v.multiplyScalar(0.92);
-        t[3] = 0; // flatten the tree so we don't hit it forever
+        if (!t.solid) t[3] = 0; // flatten the tree so we don't hit it forever (walls stay)
       }
     }
   }
