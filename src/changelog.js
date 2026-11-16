@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.69.0', items: [
+    "Pick the moon! Choose tonight's real moon, a full moon, a half moon, a crescent or no moon at all.",
+    'The flight menu is tidier: four amazing real places in one row, and the FLY button is right next to the start options.',
+  ] },
   { v: '1.68.0', items: [
     'Night flying! Every plane has red and green wingtip lights, flashing white strobes, a red beacon and bright landing lights that light up the runway. Helicopters get a searchlight and cars get headlights.',
     'A real moon with its real phase for today: watch it light up the mountains and make a shiny path on the lakes.',
