@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.74.0', items: [
+    'Smoother crashes: no more freezing for a moment when you crash or when the game adjusts its graphics.',
+  ] },
   { v: '1.73.0', items: [
     'Smashing buildings sounds HUGE now: bricks crumble, wood splinters, windows shatter, and when a tower comes down you hear the rumble and the rubble settling. From far away you see it fall first, then hear it a moment later, just like real life!',
   ] },
