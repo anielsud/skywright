@@ -211,8 +211,9 @@ body.touch-on .hud-ctl { display: none; }
 .t-rudder { position: relative; width: 260px; height: 68px; border-radius: 34px; background: rgba(0, 0, 0, .35); border: 1px solid rgba(255, 255, 255, .2); display: flex; align-items: center; justify-content: center; }
 .t-rud-knob { position: absolute; left: calc(50% - 28px); width: 56px; height: 56px; border-radius: 50%; background: #f0f2f5; box-shadow: 0 2px 6px rgba(0,0,0,.5); pointer-events: none; }
 .t-rud-label { font-size: 11px; letter-spacing: .15em; color: rgba(255,255,255,.5); pointer-events: none; }
-/* the whole lower-right of the screen is the stick */
-.t-stick-zone { position: absolute; right: 0; bottom: 0; width: 42%; height: min(68%, calc(100% - 250px)); }
+/* the stick grabs only the bottom-right corner (about a fifth of the screen each way, never smaller than the stick),
+   so the rest of the screen is free for dragging to orbit the camera and pinching to zoom */
+.t-stick-zone { position: absolute; right: 0; bottom: 0; width: max(22vw, 260px); height: max(36vh, 260px); }
 .t-stick { position: absolute; right: 36px; bottom: 36px; width: 200px; height: 200px; border-radius: 50%; background: radial-gradient(circle, rgba(255,255,255,.08), rgba(0,0,0,.35)); border: 1px solid rgba(255, 255, 255, .25); pointer-events: none; transition: opacity .2s; }
 .t-stick.live { border-color: rgba(255, 210, 120, .6); }
 .t-stick-ring { position: absolute; inset: 30%; border-radius: 50%; border: 1px dashed rgba(255,255,255,.25); }
