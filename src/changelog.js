@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.60.0', items: [
+    "Pull too hard and you'll hear the wings groan and creak before they snap: that's your cue to ease off!",
+  ] },
   { v: '1.59.0', items: [
     'Wings are tougher in quick, twitchy moves: they only snap if you keep pulling too many G for nearly a second, and you get a “straining! Ease off!” warning first.',
   ] },

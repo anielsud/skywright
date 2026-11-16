@@ -776,6 +776,7 @@ function handleEvents(f, dt) {
   for (const e of ac.events) {
     switch (e.type) {
       case 'msg': hud.toast(e.text, e.bad ? 'bad' : ''); if (e.bad) audio.play('warn'); break;
+      case 'strain': audio.strain(ac.x, rig.mode === 'cockpit'); break;
       case 'impact': {
         const p = Math.min(2, e.speed / 18);
         if (e.surf === 'water') effects.splash(e.pos, e.speed);
