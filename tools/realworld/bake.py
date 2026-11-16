@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bake a real-world location for Skywright into static assets under assets/real/<id>/.
 
-Usage:  python3 tools/realworld/bake.py lauterbrunnen [--cache DIR] [--only heights,imagery,osm]
+Usage:  python3 tools/realworld/bake.py lauterbrunnen [--cache DIR] [--only heights,imagery,osm,city]
 Needs:  Python 3 with numpy, Pillow and scipy. Network access to the sources below (only while baking:
         the game itself loads nothing but the baked files, so it works offline and needs no API keys).
 
@@ -30,6 +30,10 @@ import argparse, gzip, io, json, math, os, sys, time, urllib.error, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
+
+try:  # Mozilla's CA bundle when available (some Python builds can't verify every host with the system store)
+    import certifi, ssl; SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except ImportError: SSL_CTX = None
 
 R_EARTH = 6371008.8
 UA = 'skywright-bake/1.0 (offline asset bake for a hobby flight game)'
@@ -70,6 +74,32 @@ LOCS = {
         imagery='naip', naipM=3.5, naipFarM=110,  # USGS NAIP (public domain): source metres per pixel
         deshadow=True, forest='rgb', river='Colorado River',
     ),
+    'nyc': dict(
+        # LaGuardia (LGA): the centre of runway 04/22, which runs 032/212 true, so game -z points to bearing 032
+        # (Manhattan's street grid runs 029: the avenues are almost exactly along the game's z axis)
+        lat0=40.77730, lon0=-73.87740, north=32, rwyH=6, centre=(40.758, -73.985),
+        # 28 km square: Queens round LGA, all of Manhattan, the Bronx shore, Brooklyn, Jersey City and Liberty Island
+        hi=(-17000, -8500, 28000), hiN=2048, hiImg=4096, hiZoomH=14, hiZoomI=15,
+        far=(-60000, -60000, 120000), farN=1024, farImg=2048, farZoomH=11, farZoomI=11,
+        water=0, seabed=-60, depth=(0.05, 25), clearDark=0.72, roadsMax=1,
+        imagery='naiptiles',  # USGS The National Map NAIP tile cache (public domain, ~1 m) for the detailed square; Sentinel-2 farther out
+        coast=True,      # the sea, the rivers and the harbour come from the OSM coastline (the heights are hydro-flattened)
+        city=True,       # buildings packed into city.bin.gz (tools/realworld/city.py), not osm.json
+        nyc_open_data=True, osm_west=-74.0, osm_west_min=-74.11, osm_west_tall=True,  # footprints: NYC Open Data in the five boroughs; New Jersey's towers from OSM
+        landmarks={'Statue of Liberty': 1},
+        bridges={        # deck height above water at mid-span (m), tower height (m), structure: by OSM name
+            'Brooklyn Bridge': dict(deck=41, tower=84, kind='masonry', width=26),
+            'Manhattan Bridge': dict(deck=41, tower=102, kind='suspension', width=37),
+            'Williamsburg Bridge': dict(deck=41, tower=102, kind='suspension', width=36),
+            'George Washington Bridge Upper Level': dict(deck=65, tower=184, kind='suspension', width=36),
+            'George Washington Bridge Lower Level': dict(deck=57, kind='plain'),
+            'Queensboro Bridge': dict(deck=40, tower=106, kind='cantilever', width=30),
+            'Robert F. Kennedy Bridge': dict(deck=43, tower=96, kind='suspension', width=30),
+            'Bronx–Whitestone Bridge': dict(deck=46, tower=115, kind='suspension', width=26),
+            'Throgs Neck Bridge': dict(deck=43, tower=110, kind='suspension', width=30),
+            'Pulaski Bridge': dict(deck=12, kind='plain'),
+        },
+    ),
 }
 
 # ---------------------------------------------------------------- geo helpers
@@ -100,13 +130,13 @@ def fetch(url, path, tries=4):
     for t in range(tries):
         try:
             req = urllib.request.Request(url, headers={'User-Agent': UA})
-            data = urllib.request.urlopen(req, timeout=60).read()
+            data = urllib.request.urlopen(req, timeout=120, context=SSL_CTX).read()
             with open(path + '.tmp', 'wb') as f: f.write(data)
             os.replace(path + '.tmp', path)
             return path
         except Exception as e:
             if t == tries - 1: raise RuntimeError(f'{url}: {e}')
-            time.sleep(1.5 * (t + 1))
+            time.sleep(1.5 * (t + 1) ** 1.5)
 
 def mosaic(L, sq, zoom, url_fn, cache, kind):
     """Fetch every tile covering the square, return (mosaic array, px0, py0) in global pixel coords."""
@@ -119,7 +149,7 @@ def mosaic(L, sq, zoom, url_fn, cache, kind):
     print(f'  {kind} z{zoom}: {len(jobs)} tiles', flush=True)
     def get(j):
         tx, ty = j
-        return j, fetch(url_fn(zoom, tx, ty), os.path.join(cache, kind, str(zoom), f'{tx}_{ty}' + ('.png' if kind == 'terrarium' else '.jpg')))
+        return j, fetch(url_fn(zoom, tx, ty), os.path.join(cache, kind, str(zoom), f'{tx}_{ty}' + ('.png' if kind == 'terrarium' else '.jpg')), tries=10 if kind == 'naip' else 4)
     W, H = (tx1 - tx0 + 1) * 256, (ty1 - ty0 + 1) * 256
     out = np.zeros((H, W, 3), np.uint8)
     with ThreadPoolExecutor(6) as ex:
@@ -157,9 +187,13 @@ def bake_heights(L, sq, N, zoom, cache):
     px, py = merc_px(lat, lon, zoom)
     return bilinear(elev, px - px0, py - py0).astype(np.float32)
 
-def bake_image(L, sq, N, zoom, cache):
+def naip_url(z, x, y):
+    """USGS The National Map "Imagery Only" tile cache (public domain): NAIP aerial photos (0.6-1 m) over the US."""
+    return f'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}'
+
+def bake_image(L, sq, N, zoom, cache, source='s2'):
     eox = lambda z, x, y: f'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg'
-    m, px0, py0 = mosaic(L, sq, zoom, eox, cache, 's2cloudless')
+    m, px0, py0 = mosaic(L, sq, zoom, naip_url if source == 'naip' else eox, cache, 'naip' if source == 'naip' else 's2cloudless')
     X, Z = grid_xy(sq, N, centers=True)
     lat, lon = to_latlon(L, X, Z)
     px, py = merc_px(lat, lon, zoom)
@@ -473,14 +507,14 @@ def clear_roofs(L, img, osm):
     from scipy import ndimage
     N = img.shape[0]; x0, z0, S = L['hi']; k = N / S
     m = Image.new('L', (N, N), 0); d = ImageDraw.Draw(m)
-    for b in osm['blds']:
+    for b in osm.get('clear', osm['blds']):
         P = np.array(b[6]).reshape(-1, 2)
         d.polygon([((x - x0) * k - 0.5, (z - z0) * k - 0.5) for x, z in P], fill=255)
     mask = ndimage.binary_dilation(np.asarray(m) > 0, iterations=1)
     _, (iy, ix) = ndimage.distance_transform_edt(mask, return_indices=True)
     out = img[iy, ix].astype(np.float32)
     soft = ndimage.uniform_filter(out, size=(5, 5, 1))
-    out = np.where(mask[..., None], soft, out)
+    out = np.where(mask[..., None], soft * L.get('clearDark', 1.0), out)  # (a city: what fills in for the roofs is mostly kerb and pavement, shade it like the streets)
     print(f'  cleared {int(mask.sum())} roof pixels', flush=True)
     return np.clip(out + 0.5, 0, 255).astype(np.uint8)
 
@@ -498,6 +532,108 @@ def lift_shadows(c):
     out[..., 0] *= 1 + 0.12 * s
     return out
 
+def sample_grid(L, H, x, z):
+    x0, z0, S = L['hi']; n = H.shape[0]; k = (n - 1) / S
+    return bilinear(H, (np.asarray(x) - x0) * k + 0.5, (np.asarray(z) - z0) * k + 0.5)
+
+def bridge_profiles(L, H, osm):
+    """Road bridges over water get real deck heights: OSM has no heights, and the ends of a bridge way are not where it
+    meets the ground (long bridges are split into several ways). Bridge ways are chained end to end, the chain's free
+    ends stand on the ground, and the deck climbs from them at most 4.5 % up to its clearance over the water (the
+    location's table by bridge name, else from the width of the water). The heights go into each road as a 5th field.
+    The big named bridges also get their structure (towers at the ends of the main span) in osm.json 'bridges'."""
+    wl = L['water']; cfg = L.get('bridges', {})
+    B = osm['bridges']; roads = osm['roads']
+    key = lambda p: (round(p[0]), round(p[1]))
+    ends = {}
+    for k, b in enumerate(B):
+        for e in (0, -1): ends.setdefault(key(b['pts'][e]), []).append((k, e))
+    used, chains = set(), []
+    for k in range(len(B)):
+        if k in used: continue
+        # walk back to the start of this chain, then forward
+        cur, e = k, 0
+        seen = {k}
+        while True:
+            nb = [(j, f) for j, f in ends.get(key(B[cur]['pts'][e]), []) if j != cur]
+            if len(nb) != 1 or nb[0][0] in seen or B[nb[0][0]]['name'] != B[k]['name']: break
+            cur, e = nb[0][0], (-1 if nb[0][1] == 0 else 0); seen.add(cur)
+        start, rev = cur, e == -1  # chain starts at `cur`, at its end e
+        chain, cur, fwd = [], start, not rev
+        while True:
+            chain.append((cur, fwd)); used.add(cur)
+            tail = B[cur]['pts'][-1 if fwd else 0]
+            nb = [(j, f) for j, f in ends.get(key(tail), []) if j != cur and j not in used]
+            if len(nb) != 1 or B[nb[0][0]]['name'] != B[k]['name'] or len(ends.get(key(tail), [])) != 2: break
+            cur, fwd = nb[0][0], nb[0][1] == 0
+        chains.append(chain)
+    out = []
+    for chain in chains:
+        P, seg = [], []
+        for j, fwd in chain:
+            p = B[j]['pts'] if fwd else B[j]['pts'][::-1]
+            seg.append((j, fwd, len(P) - (1 if P else 0)))
+            P.extend(p if not P else p[1:])
+        P = np.array(P)
+        s = np.concatenate([[0], np.cumsum(np.hypot(*np.diff(P, axis=0).T))]); S = s[-1]
+        # fine samples to find the water under the deck
+        fs = np.linspace(0, S, max(2, int(S / 4)))
+        fx, fz = np.interp(fs, s, P[:, 0]), np.interp(fs, s, P[:, 1])
+        g = sample_grid(L, H, fx, fz); wet = g < wl
+        if not wet.any(): continue  # over roads, railways, streams: the runtime's straight line between the ends is fine
+        runs, a = [], None
+        for i, w in enumerate(np.append(wet, False)):
+            if w and a is None: a = i
+            elif not w and a is not None: runs.append((fs[a], fs[i - 1])); a = None
+        main = max(runs, key=lambda r: r[1] - r[0]); wlen = main[1] - main[0]
+        name = B[chain[0][0]]['name']; c = cfg.get(name)
+        deck = c['deck'] if c else min(22, 6 + wlen / 40)
+        gr = 0.045
+        g0, g1 = max(g[0], wl + 0.6), max(g[-1], wl + 0.6)
+        top = wl + deck + 3 * (1 - ((fs - (main[0] + main[1]) / 2) / max(1, (main[1] - main[0]) / 2 + 200)) ** 2).clip(0, 1)
+        y = np.minimum(top, np.minimum(g0 + gr * fs, g1 + gr * (S - fs)))
+        y = np.maximum(y, g + 0.6)
+        ys = np.interp(s, fs, y)
+        for j, fwd, o in seg:
+            n = len(B[j]['pts']); yy = ys[o:o + n]
+            roads[B[j]['i']].append([round(float(v), 1) for v in (yy if fwd else yy[::-1])])
+        if c and c.get('tower') and wlen > 150:
+            # towers stand a little inside the shores; the main span hangs between them
+            sa, sb = main[0] + wlen * 0.04, main[1] - wlen * 0.04
+            pa = [float(np.interp(sa, s, P[:, 0])), float(np.interp(sa, s, P[:, 1]))]; pb = [float(np.interp(sb, s, P[:, 0])), float(np.interp(sb, s, P[:, 1]))]
+            prev = next((b for b in out if b['name'] == name), None)
+            if prev is None or prev['span'] < sb - sa:
+                if prev: out.remove(prev)
+                out.append(dict(name=name, kind=c['kind'], tower=c['tower'], width=c.get('width', 28), deck=round(float(np.interp((sa + sb) / 2, fs, y)), 1), span=round(sb - sa, 1),
+                                a=[round(v, 1) for v in pa], b=[round(v, 1) for v in pb], ya=round(float(np.interp(sa, fs, y)), 1), yb=round(float(np.interp(sb, fs, y)), 1),
+                                ends=[[round(float(P[0][0]), 1), round(float(P[0][1]), 1), round(float(y[0]), 1)], [round(float(P[-1][0]), 1), round(float(P[-1][1]), 1), round(float(y[-1]), 1)]]))
+    # the big named bridges: OSM splits them into many ways (carriageways, ramps, junctions), so a chain rarely spans
+    # the whole bridge. Profile every way of the name together: up from the outermost ends of the whole group along
+    # its axis (6 %, the steeper approaches of the old bridges) to the table's deck height
+    for name, c in cfg.items():
+        grp = [b for b in B if b['name'] == name and len(roads[b['i']]) > 4]
+        if not grp: continue
+        P = np.concatenate([b['pts'] for b in grp]); m = P.mean(0)
+        u, sv, vt = np.linalg.svd(P - m, full_matrices=False); ax = vt[0]
+        t = (P - m) @ ax; t0, t1 = t.min(), t.max()
+        e0, e1 = m + ax * t0, m + ax * t1
+        g0, g1 = max(float(sample_grid(L, H, [e0[0]], [e0[1]])[0]), wl + 0.6), max(float(sample_grid(L, H, [e1[0]], [e1[1]])[0]), wl + 0.6)
+        for b in grp:
+            tt = (b['pts'] - m) @ ax
+            g = sample_grid(L, H, b['pts'][:, 0], b['pts'][:, 1])
+            y = np.minimum(wl + c['deck'], np.minimum(g0 + 0.06 * (tt - t0), g1 + 0.06 * (t1 - tt)))
+            y = np.maximum(y, g + 0.6)
+            roads[b['i']][4] = [round(float(v), 1) for v in y]
+        for o in out:
+            if o['name'] != name: continue
+            for k, key in (('ya', 'a'), ('yb', 'b')):
+                tt = (np.array(o[key]) - m) @ ax
+                o[k] = round(float(min(wl + c['deck'], g0 + 0.06 * (tt - t0), g1 + 0.06 * (t1 - tt))), 1)
+            o['ends'] = [[round(float(e0[0]), 1), round(float(e0[1]), 1), round(g0, 1)], [round(float(e1[0]), 1), round(float(e1[1]), 1), round(g1, 1)]]
+            o['deck'] = round(wl + c['deck'], 1)
+    osm['out']['bridges'] = out
+    print(f'  {len(chains)} bridge chains, {sum(1 for r in roads if len(r) > 4)} bridge ways over water with decks, structures: {[b["name"] for b in out]}', flush=True)
+
 def write_heights(path, H):
     q = np.clip(np.round((H + 200) * 8), 0, 65535).astype(np.int64)
     d = q.copy(); d[:, 1:] = q[:, 1:] - q[:, :-1]
@@ -506,27 +642,32 @@ def write_heights(path, H):
     return os.path.getsize(path)
 
 # ---------------------------------------------------------------- OSM
-def overpass(q, path):
+def overpass(q, path, rounds=6):
+    """Overpass query, cached. The public servers are often at capacity: retry across mirrors with exponential backoff.
+    A reply with an error remark (a timeout part way) is incomplete: retried, never cached."""
     if os.path.exists(path): return json.load(open(path))
-    for url in ['https://maps.mail.ru/osm/tools/overpass/api/interpreter', 'https://overpass.osm.jp/api/interpreter', 'https://overpass-api.de/api/interpreter',
-                'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter']:
-        for t in range(3):
+    for r in range(rounds):
+        for url in ['https://maps.mail.ru/osm/tools/overpass/api/interpreter', 'https://overpass.osm.jp/api/interpreter', 'https://overpass-api.de/api/interpreter',
+                    'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter']:
             try:
                 try:
                     req = urllib.request.Request(url, data=urllib.parse.urlencode({'data': q}).encode(), headers={'User-Agent': UA})
-                    d = urllib.request.urlopen(req, timeout=900).read()
+                    d = urllib.request.urlopen(req, timeout=900, context=SSL_CTX).read()
                 except urllib.error.URLError as e:
                     if 'CERTIFICATE' not in str(e): raise
                     # some mirrors' chains are only in the system store (which curl uses, Python's bundle may not)
                     import subprocess
                     d = subprocess.run(['curl', '-sf', '-m', '900', '-A', UA, '--data-urlencode', 'data@-', url], input=q.encode(), capture_output=True, check=True).stdout
                 js = json.loads(d)
-                if js.get('remark'): print('   overpass remark:', js['remark'], flush=True)
+                if js.get('remark'):
+                    print('   overpass remark:', js['remark'], flush=True)
+                    if 'error' in js['remark'].lower(): raise RuntimeError('incomplete reply')
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, 'wb') as f: f.write(d)
                 return js
             except Exception as e:
-                print('   overpass', url, e, flush=True); time.sleep(5 * (t + 1))
+                print('   overpass', url, e, flush=True)
+        time.sleep(min(300, 15 * 2 ** r))
     raise RuntimeError('overpass failed')
 
 def bbox(L, sq, pad=0):
@@ -632,17 +773,27 @@ def osm_api(L, bb, cache, step=0.08):
 def bake_osm(L, cache, api=False):
     bb = bbox(L, L['hi'], 500)
     hdr = f'[out:json][timeout:900][maxsize:1073741824][bbox:{bb}];'
-    js_r = None
+    js_r = None; js_c = {'elements': []}
+    city = L.get('city')
     try:
         if api: raise RuntimeError('--osm-api')
         # ways: tags + geometry; relations (multipolygons) also need their members ("body")
-        js_b = overpass(hdr + 'way["building"];out tags geom qt;', os.path.join(cache, 'osm', 'buildings.json'))
-        js_b['elements'] += overpass(hdr + 'relation["building"]["type"="multipolygon"];out body geom qt;', os.path.join(cache, 'osm', 'buildings_rel.json'))['elements']
+        if city: js_b = {'elements': []}  # a city's buildings are baked separately (city.py)
+        else:
+            js_b = overpass(hdr + 'way["building"];out tags geom qt;', os.path.join(cache, 'osm', 'buildings.json'))
+            js_b['elements'] += overpass(hdr + 'relation["building"]["type"="multipolygon"];out body geom qt;', os.path.join(cache, 'osm', 'buildings_rel.json'))['elements']
         js_w = overpass(hdr + f'(way["highway"~"{HWAYS}"];'
                         'way["railway"~"^(rail|narrow_gauge|light_rail|funicular)$"];way["aerialway"~"^(cable_car|gondola|chair_lift|mixed_lift)$"];);out tags geom qt;', os.path.join(cache, 'osm', 'ways.json'))
         js_l = overpass(hdr + '(way["natural"~"^(water|wood|glacier|scrub)$"];way["landuse"~"^(forest|reservoir|basin)$"];way["waterway"="riverbank"];);out tags geom qt;', os.path.join(cache, 'osm', 'land.json'))
         js_l['elements'] += overpass(hdr + '(relation["natural"~"^(water|wood|glacier|scrub)$"];relation["landuse"~"^(forest|reservoir)$"];);out body geom qt;', os.path.join(cache, 'osm', 'land_rel.json'))['elements']
         if L.get('river'): js_r = overpass(hdr + 'way["waterway"="river"];out tags geom qt;', os.path.join(cache, 'osm', 'rivers.json'))
+        if city:  # parks and lawns (trees, grass), piers (land), the coastline (where the sea is)
+            # (both optional: the public Overpass servers are often at capacity. Without parks there are fewer park trees;
+            # without the coastline the sea comes from the hydro-flattened heights, see carve_water)
+            try: js_l['elements'] += overpass(hdr + '(way["leisure"~"^(park|garden|golf_course|nature_reserve)$"];way["landuse"~"^(grass|recreation_ground|cemetery)$"];relation["leisure"~"^(park|nature_reserve)$"];);out body geom qt;', os.path.join(cache, 'osm', 'parks.json'), rounds=2)['elements']
+            except RuntimeError: print('   no parks (Overpass busy)', flush=True)
+            try: js_c = overpass(hdr + '(way["natural"="coastline"];way["man_made"~"^(pier|breakwater)$"];);out tags geom qt;', os.path.join(cache, 'osm', 'coast.json'), rounds=2)
+            except RuntimeError: print('   no coastline (Overpass busy): the sea from the heights', flush=True)
         try: js_p = overpass(f'[out:json][timeout:120][bbox:{bb}];(node["place"~"^(city|town|village)$"];);out body;', os.path.join(cache, 'osm', 'places.json'))
         except RuntimeError: js_p = {'elements': []}; print('   no place names (Overpass busy): towns left out', flush=True)
     except RuntimeError as e:
@@ -679,7 +830,7 @@ def bake_osm(L, cache, api=False):
         if a < 0: r = r[::-1]  # consistent winding: positive signed area in (x, z)
         blds.append([kind, q(h if h is not None else -1), q(lv if lv is not None else -1), rs, q(rh if rh is not None else -1), q(mh), flat(r)])
     # ---- roads / rail / cable cars
-    roads, rails, cables, tunnels = [], [], [], []
+    roads, rails, cables, tunnels, bridges = [], [], [], [], []
     for tags, pts in lines(L, js_w):
         if not in_square(pts, sq, 200): continue
         tun = tags.get('tunnel') in ('yes', 'building_passage', 'culvert') or str(tags.get('layer', '0')).startswith('-')
@@ -689,6 +840,7 @@ def bake_osm(L, cache, api=False):
             w = num(tags.get('width'), HWIDTH[c]); w = min(max(w, 3.5), 16)
             if tun: tunnels.append([c, q(w), flat(pts)]); continue  # [class, width, x,z...]: not drawn yet
             roads.append([c, q(w), br, flat(pts)])
+            if br and city: bridges.append(dict(i=len(roads) - 1, name=tags.get('name', ''), pts=pts, layer=num(tags.get('layer'), 1)))
         elif 'railway' in tags:
             if tun: continue
             rails.append([1 if tags['railway'] == 'funicular' else 0, br, flat(pts)])
@@ -703,7 +855,12 @@ def bake_osm(L, cache, api=False):
             places.append([t['name'], q(x), q(z), t['place']])
     land = areas(L, js_l)
     print(f'  {len(blds)} buildings, {len(roads)} roads, {len(rails)} rails, {len(cables)} cable cars, {len(land)} land areas, {len(places)} places', flush=True)
-    return dict(out=dict(buildings=blds, roads=roads, rails=rails, cables=cables, places=places, tunnels=tunnels), land=land, roads=roads, blds=blds, rails=rails, js_r=js_r)
+    res = dict(out=dict(buildings=blds, roads=roads, rails=rails, cables=cables, places=places, tunnels=tunnels), land=land, roads=roads, blds=blds, rails=rails, js_r=js_r)
+    if city:
+        res['coast'] = [pts for tags, pts in lines(L, js_c) if tags.get('natural') == 'coastline']
+        res['piers'] = [rings[0] for tags, rings in areas(L, js_c) if tags.get('man_made')]
+        res['bridges'] = bridges
+    return res
 
 def raster(L, N, polys, value, img=None, grid=False):
     """Draw polygons (arrays of x,z) into an N x N 8-bit image over the hi square.
@@ -719,6 +876,34 @@ def raster(L, N, polys, value, img=None, grid=False):
 
 def water_areas(osm):
     return [(t, rings) for t, rings in osm['land'] if t.get('natural') == 'water' or t.get('landuse') in ('reservoir', 'basin') or t.get('waterway') == 'riverbank']
+
+def sea_mask(L, H, coast):
+    """Where the sea is, from the OSM coastline (land on its left, water on its right): the coastline cuts the height
+    grid into regions, and samples just either side of every coastline segment vote on whether a region is sea.
+    Regions with no votes (inland) are land."""
+    from scipy import ndimage
+    N = H.shape[0]; x0, z0, S = L['hi']; k = (N - 1) / S
+    wall = Image.new('L', (N, N), 0); d = ImageDraw.Draw(wall)
+    votes = []
+    for P in coast:
+        G = np.stack([(P[:, 0] - x0) * k, (P[:, 1] - z0) * k], 1)
+        d.line([tuple(p) for p in G], fill=255, width=1)
+        a, b = G[:-1], G[1:]; m = (a + b) / 2; t = b - a; L_ = np.hypot(t[:, 0], t[:, 1]) + 1e-9
+        rt = np.stack([-t[:, 1], t[:, 0]], 1) / L_[:, None]  # to the right of the way in the local frame: the water
+        votes.append((m + rt * 1.6, 1)); votes.append((m - rt * 1.6, -1))
+    w = np.asarray(wall) > 0
+    lab, n = ndimage.label(~w)
+    score = np.zeros(n + 1)
+    for pts, v in votes:
+        i, j = np.round(pts[:, 0]).astype(int), np.round(pts[:, 1]).astype(int)
+        ok = (i >= 0) & (j >= 0) & (i < N) & (j < N)
+        np.add.at(score, lab[j[ok], i[ok]], v)
+    sea = score > 0; sea[0] = False
+    m = sea[lab]
+    _, (iy, ix) = ndimage.distance_transform_edt(w, return_indices=True)  # the coastline pixels themselves: like their neighbours
+    m = np.where(w, m[iy, ix], m)
+    print(f'  coastline: {n} regions, {int(sea.sum())} sea, {int(m.sum())} sea samples', flush=True)
+    return m
 
 def carve_water(L, H, osm):
     """Lakes in the valley floor become real (game) water: carve them under the location's water level, and keep
@@ -743,8 +928,18 @@ def carve_water(L, H, osm):
                 d = ndimage.distance_transform_edt(er) * sp
                 H[er] = np.minimum(H[er], lvl - 0.8 - np.minimum(25, d[er] * 0.12))
     mk = np.asarray(low) > 0
+    if osm.get('coast'): mk |= sea_mask(L, H, osm['coast'])
+    elif L.get('coast'):  # no coastline data: the heights are hydro-flattened at sea level, so big low areas are the sea
+        lab, n = ndimage.label(H < wl + 0.35); sz = np.bincount(lab.ravel())
+        big = sz > 3000; big[0] = False
+        mk |= ndimage.binary_closing(big[lab], iterations=1)
+        print(f'  sea from the heights (no coastline): {int(big[lab].sum())} samples', flush=True)
+    if osm.get('piers'):  # piers and breakwaters stand out of the water
+        pier = np.asarray(raster(L, N, osm['piers'], 255, grid=True)) > 0
+        mk &= ~pier; H[pier] = np.maximum(H[pier], wl + 1.8)
     d = ndimage.distance_transform_edt(mk) * sp
-    H = np.where(mk, wl - 1.2 - np.minimum(90, d * 0.14), np.maximum(H, wl + 0.6)).astype(np.float32)
+    k, dmax = L.get('depth', (0.14, 90))
+    H = np.where(mk, wl - 1.2 - np.minimum(dmax, d * k), np.maximum(H, wl + 0.6)).astype(np.float32)
     osm['out']['lakes'] = lakes
     print(f'  carved {int(mk.sum())} lake samples, {len(lakes)} mountain lakes', flush=True)
     return H
@@ -773,8 +968,13 @@ def bake_cover(L, osm, N, base=None, forest=None):
         f = np.clip(1 + np.round(forest * 16) / 16 * 254 + 0.5, 1, 255).astype(np.uint8)  # 17 levels: plenty, and a much smaller PNG
         img = Image.fromarray(np.minimum(f, base) if base is not None else f)
     else:
-        img = Image.fromarray(base) if base is not None else Image.new('L', (N, N), 1)
-        for test, v in ((lambda t: t.get('landuse') == 'forest' or t.get('natural') == 'wood', 255), (lambda t: t.get('natural') == 'scrub', 110), (lambda t: t.get('natural') == 'glacier', 0)):
+        city = L.get('city')
+        img = Image.fromarray(base) if base is not None else Image.new('L', (N, N), 0 if city else 1)  # a city is paved unless mapped as green
+        green = []
+        if city:  # parks: scattered trees on lawns; golf courses and cemeteries: fewer
+            green = [(lambda t: t.get('leisure') in ('park', 'garden', 'nature_reserve') or t.get('landuse') == 'recreation_ground', 28),
+                     (lambda t: t.get('landuse') in ('grass', 'cemetery') or t.get('leisure') == 'golf_course', 22)]
+        for test, v in green + [(lambda t: t.get('landuse') == 'forest' or t.get('natural') == 'wood', 255), (lambda t: t.get('natural') == 'scrub', 110), (lambda t: t.get('natural') == 'glacier', 0)]:
             raster(L, N, [r for t, rings in land if test(t) for r in rings], v, img)
             raster(L, N, [r for t, rings in land if test(t) for r in t.get('_inner', [])], 1, img)  # clearings
     raster(L, N, [r for t, rings in water_areas(osm) for r in rings], 0, img)
@@ -786,7 +986,7 @@ def bake_cover(L, osm, N, base=None, forest=None):
             ImageDraw.Draw(img).line([((a[0] - x0) * k - 0.5, (a[1] - z0) * k - 0.5), ((b[0] - x0) * k - 0.5, (b[1] - z0) * k - 0.5)], fill=0, width=max(1, int(round(2 * a[3] * k))))
     x0, z0, S = L['hi']; k = N / S
     d = ImageDraw.Draw(img)
-    for c, w, br, pts in osm['roads']:
+    for c, w, br, pts, *_ in osm['roads']:
         P = np.array(pts).reshape(-1, 2)
         d.line([((x - x0) * k - 0.5, (z - z0) * k - 0.5) for x, z in P], fill=0, width=max(1, int(round((w + 4) * k))))
     for kind, br, pts in osm['rails']:
@@ -805,7 +1005,7 @@ def main():
     ap.add_argument('loc', choices=sorted(LOCS))
     ap.add_argument('--cache', default=os.path.expanduser('~/.cache/skywright-real'))
     ap.add_argument('--out', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'assets', 'real'))
-    ap.add_argument('--only', default='heights,imagery,osm')
+    ap.add_argument('--only', default='heights,imagery,osm,city')
     ap.add_argument('--osm-api', action='store_true', help='skip Overpass, read the main OSM API (small areas only)')
     a = ap.parse_args()
     L = dict(LOCS[a.loc], id=a.loc); only = set(a.only.split(','))
@@ -819,9 +1019,16 @@ def main():
     if L.get('sea'):  # coasts, lagoons and reefs (bathymetry from the imagery) instead of lakes
         import sea
         osm['out']['piers'] = sea.piers(L, L['hi'], cache)
+    if L.get('city'):  # a city: every building footprint (vegetation mask, roofs cleared from the photo), baked as meshes below
+        import city
+        cb = city.load_buildings(L, cache)
+        osm['blds'] = [[0, 0, 0, 0, 0, 0, b['ring']] for b in cb['blds'] if not b['part']]
+        osm['clear'] = [[0, 0, 0, 0, 0, 0, b['ring']] for b in cb['blds'] if not b['part'] and b['tall']]
+    hi = None
     if 'heights' in only:
         print('heights', flush=True)
         far = bake_heights(L, L['far'], L['farN'], L['farZoomH'], cache)
+        if L.get('seabed'): far = np.maximum(far, L['seabed'])  # (bathymetry spikes)
         hi = bake_heights(L, L['hi'], L['hiN'], L['hiZoomH'], cache)
         if sea: hi, far = sea.bake_sea(L, hi, far, cache); osm['out']['lakes'] = []
         else: hi = carve_water(L, hi, osm)
@@ -830,6 +1037,12 @@ def main():
         print('  runway centre height', float(hi[int(round(-L['hi'][1] / L['hi'][2] * (L['hiN'] - 1))), int(round(-L['hi'][0] / L['hi'][2] * (L['hiN'] - 1)))]))
         print('  hi.bin.gz', write_heights(os.path.join(out, 'hi.bin.gz'), hi))
         print('  far.bin.gz', write_heights(os.path.join(out, 'far.bin.gz'), far))
+    elif L.get('city') or L.get('bridges'):
+        hi = read_heights(os.path.join(out, 'hi.bin.gz'), L['hiN'])
+    if L.get('bridges') and osm.get('bridges'): bridge_profiles(L, hi, osm)
+    if L.get('city') and 'city' in only:
+        print('city', flush=True)
+        city.bake_city(L, hi, cb, out, cache, osm)
     def write_cover(forest=None):
         cover = bake_cover(L, osm, L.get('coverN', L['hiImg']), sea.cover_base(L, cache, out) if sea else None, forest)
         if sea: cover = sea.bare_cliffs(L, cover, out)
@@ -840,6 +1053,8 @@ def main():
         old = json.load(open(os.path.join(out, 'osm.json'))) if os.path.exists(os.path.join(out, 'osm.json')) else {}
         for k in ('lakes', 'rivers', 'riverStart'):  # made with the heights
             if k not in osm['out'] and k in old: osm['out'][k] = old[k]
+        if L.get('roadsMax') is not None:  # (a city draws only its main roads: realworld.js loc.roads.maxClass)
+            osm['out']['roads'] = [r for r in osm['out']['roads'] if r[0] <= L['roadsMax']]
         with open(os.path.join(out, 'osm.json'), 'w') as f: json.dump(osm['out'], f, separators=(',', ':'))
         print('  osm.json', os.path.getsize(os.path.join(out, 'osm.json')), flush=True)
     meta_p = os.path.join(out, 'meta.json')
@@ -852,6 +1067,7 @@ def main():
                 except RuntimeError as e:
                     if key == 'hi': raise
                     print('  NAIP far imagery failed, Sentinel-2 instead:', e, flush=True); img = bake_image(L, L[key], N, L['farZoomI'], cache)
+            elif L.get('imagery') == 'naiptiles' and key == 'hi': img = bake_image(L, L[key], N, L[key + 'ZoomI'], cache, 'naip')  # (the tile cache: a city's 28 km at zoom 15)
             else: img = bake_image(L, L[key], N, L[key + 'ZoomI'], cache)
             if key == 'hi':
                 if L.get('deshadow'):

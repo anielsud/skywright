@@ -63,8 +63,34 @@ export const REAL_LOCATIONS = {
     colors: { grass: [0x8a7a55, 0x9a8a60, 0x7a6a48], rock: 0x9a5a3c, snow: 0xd9b48a, sand: 0xc49a6c, dirt: 0x9a6a48 },
     height(n, x, z) { const D = cache.get(this.id); return D ? D.height(x, z) : this.rwyH; },
   },
+  nyc: {
+    id: 'nyc', name: 'New York City', real: true,
+    desc: 'Take off from LaGuardia and fly the Hudson: the Statue of Liberty, the skyscrapers, Central Park and the bridges.',
+    credit: 'Imagery: USGS NAIP (public domain), Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) · Buildings: NYC Open Data, © OpenStreetMap contributors · Heights: AWS Terrain Tiles',
+    seed: 53, rwyH: 6, water: 0, north: 32, cloudBase: 1800, trees: 'pine', snowline: 99999, erosion: false, boats: true,
+    core: 33000, // the detailed core reaches from LaGuardia to the Statue of Liberty (16 km)
+    roads: { maxClass: 1, maxClassLow: 0, step: 16, chunk: 2500 }, // highways and avenues (medium / low: highways only; the photo shows the side streets, NYC's full grid is ~25k ways), meshes per 2.5 km
+    // deciduous parks and street trees: the alpine palette's valley floor, with no rocks or shrubs on the pavement
+    flora: { biome: 'alpine', snowline: 99999, h: (h) => h * 0.5, wl: 0, bare: true },
+    waterColors: { deep: 0x1c3a44, shallow: 0x3a6a6a, sand: 0x5a5a50 }, // the harbour: green-grey, silty
+    colors: { grass: [0x4f6b35, 0x5d7a3c, 0x46612f], rock: 0x6a6866, snow: 0xf4f6f8, sand: 0x8a8270, dirt: 0x6a5a48 },
+    satGain: 1.0, sat: { deshade: 0.2, detail: 0.3 }, // aerial photos (NAIP): little photo grass on top of them, less de-shading
+    city: {
+      // antenna masts / spires (top above the ground, m) on the tallest building at that point
+      masts: [{ name: 'Empire State Building', lat: 40.748440, lon: -73.985664, top: 443 }, { name: 'One World Trade Center', lat: 40.712742, lon: -74.013382, top: 541 }],
+      // the Statue of Liberty: a model (realLandmarks.js) instead of the footprints there; facing: compass bearing
+      statue: { lat: 40.689247, lon: -74.044502, facing: 125 },
+    },
+    height(n, x, z) { const D = cache.get(this.id); return D ? D.height(x, z) : this.rwyH; },
+  },
 };
 
+// a lat / lon in the game frame (the same equirectangular projection as tools/realworld/bake.py to_local)
+export function toLocal(meta, lat, lon) {
+  const th = THREE.MathUtils.degToRad(meta.north || 0), d = Math.PI / 180, R = 6371008.8;
+  const E = (lon - meta.lon0) * d * R * Math.cos(meta.lat0 * d), N = (lat - meta.lat0) * d * R;
+  return [E * Math.cos(th) - N * Math.sin(th), -(E * Math.sin(th) + N * Math.cos(th))];
+}
 async function gunzip(buf) {
   const s = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
   return new Uint8Array(await new Response(s).arrayBuffer());
@@ -74,6 +100,15 @@ function decodeHeights(bytes, n) {
   const u = new Uint16Array(bytes.buffer, bytes.byteOffset, n * n), H = new Float32Array(n * n);
   for (let j = 0; j < n; j++) { let acc = 0; for (let i = 0, k = j * n; i < n; i++, k++) { acc = (acc + u[k]) & 0xffff; H[k] = acc / 8 - 200; } }
   return H;
+}
+// city.bin (tools/realworld/city.py): 'SKC1', uint32 header length, JSON header, int16 words (the building records)
+function decodeCity(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (String.fromCharCode(...bytes.subarray(0, 4)) !== 'SKC1') throw new Error('city.bin: bad header');
+  const hl = dv.getUint32(4, true), hdr = JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + hl)));
+  const o = bytes.byteOffset + 8 + hl, n = (bytes.byteLength - 8 - hl) >> 1;
+  const buf = o % 2 ? bytes.slice(8 + hl).buffer : bytes.buffer, off = o % 2 ? 0 : o;
+  return { hdr, S: new Int16Array(buf, off, n), U: new Uint16Array(buf, off, n) };
 }
 async function get(url, kind) {
   const r = await fetch(url);
@@ -91,10 +126,10 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   const id = loc.id, key = id + ':' + quality;
   if (cache.get(id)?.key === key) return cache.get(id);
   const dir = BASE + id + '/';
-  let done = 0; const tick = (p) => { done++; onProgress?.(done / 7); return p; };
-  const [meta, hiZ, farZ, hiB, farB, coverB, osm] = await Promise.all([
-    get(dir + 'meta.json', 'json'), get(dir + 'hi.bin.gz'), get(dir + 'far.bin.gz'), get(dir + (loc.img?.[quality] || 'hi.jpg'), 'blob'), get(dir + 'far.jpg', 'blob'), get(dir + 'cover.png', 'blob'), get(dir + 'osm.json', 'json'),
-  ].map((p) => p.then(tick)));
+  const files = [get(dir + 'meta.json', 'json'), get(dir + 'hi.bin.gz'), get(dir + 'far.bin.gz'), get(dir + (loc.img?.[quality] || 'hi.jpg'), 'blob'), get(dir + 'far.jpg', 'blob'), get(dir + 'cover.png', 'blob'), get(dir + 'osm.json', 'json')];
+  if (loc.city) files.push(get(dir + 'city.bin.gz')); // a city's buildings (realCity.js)
+  let done = 0; const tick = (p) => { done++; onProgress?.(done / files.length); return p; };
+  const [meta, hiZ, farZ, hiB, farB, coverB, osm, cityZ] = await Promise.all(files.map((p) => p.then(tick)));
   // the largest imagery texture on this tier; a place with loc.img has a ready-made hi file per tier (no resize)
   const texSize = quality === 'high' || quality === 'ultra' ? 4096 : 2048, fit = { resizeWidth: texSize, resizeHeight: texSize, resizeQuality: 'high' };
   const opt = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
@@ -103,6 +138,7 @@ export async function loadReal(loc, quality = 'high', onProgress) {
     createImageBitmap(farB, texSize < 4096 ? fit : {}), createImageBitmap(coverB, opt),
   ]);
   const D = new RealData(loc, meta, decodeHeights(await gunzip(hiZ), meta.hi.n), decodeHeights(await gunzip(farZ), meta.far.n), hiBmp, farBmp, coverBmp, osm);
+  if (cityZ) D.city = decodeCity(await gunzip(cityZ));
   D.key = key;
   cache.get(id)?.dispose();
   cache.set(id, D);
@@ -185,6 +221,11 @@ class RealData {
     return f + (this.sampleH(this.hi, x, z) - f) * smoothstep(0, this.edge, e);
   }
   // imagery colour (sRGB 0..1, like the baked albedo) at (x,z)
+  // nothing grows here (buildings, roads, water; in a city everything but the parks): Flora's bare mask
+  bare(x, z) {
+    const C = this.cover, n = C.n, i = Math.floor((x - C.x0) / C.size * n), j = Math.floor((z - C.z0) / C.size * n);
+    return i >= 0 && j >= 0 && i < n && j < n && C.d[j * n + i] === 0;
+  }
   samplePx(P, x, z, c) {
     const n = P.n, fx = clamp((x - P.x0) / P.size * n - 0.5, 0, n - 1.001), fz = clamp((z - P.z0) / P.size * n - 0.5, 0, n - 1.001);
     const i = fx | 0, j = fz | 0, u = fx - i, v = fz - j, d = P.d, k = (j * n + i) * 4, k2 = k + n * 4;
@@ -217,7 +258,7 @@ class RealData {
     return {
       satHi: { value: this.tex.hi }, satFar: { value: this.tex.far },
       satHiR: { value: new THREE.Vector4(h.x0, h.z0, 1 / h.size, 0) }, satFarR: { value: new THREE.Vector4(f.x0, f.z0, 1 / f.size, 0) },
-      satSun: { value: this.captureSun() }, satGain: { value: this.gain }, satDeshade: { value: DESHADE },
+      satSun: { value: this.captureSun() }, satGain: { value: this.gain }, satDeshade: { value: this.loc.sat?.deshade ?? DESHADE }, satDetail: { value: this.loc.sat?.detail ?? 1 },
       satCliff: { value: new THREE.Vector4(...(this.loc.cliff || [0.15, 0.14, 0.125, 0.75])) }, // colour of steep rock the photo can't see, and how much
     };
   }
@@ -235,14 +276,22 @@ class RealData {
   // existing road meshes, terrain flattening, painting and car traffic all work on them. No fields, no rail line.
   network(w) {
     const lim = w.half + 300, roads = [], kinds = ['highway', 'main', 'main', 'street'];
-    for (const [cls, width, br, flat] of this.osm.roads) {
+    const spans = (this.osm.bridges || []).map((b) => ({ ax: b.a[0], az: b.a[1], dx: b.b[0] - b.a[0], dz: b.b[1] - b.a[1] }));
+    const RC = this.loc.roads || {}, step = RC.step || 8; // a city: fewer road classes (the photo shows the side streets)
+    for (const [cls, width, br, flat, ys] of this.osm.roads) {
       if (w.qName === 'low' && cls === 3) continue;
+      if (RC.maxClass !== undefined && cls > (w.qBase === 'high' ? RC.maxClass : RC.maxClassLow ?? Math.min(RC.maxClass, 1))) continue;
       const pts = [];
-      for (let k = 0; k < flat.length; k += 2) pts.push(new THREE.Vector3(flat[k], 0, flat[k + 1]));
+      for (let k = 0; k < flat.length; k += 2) pts.push(new THREE.Vector3(flat[k], ys ? ys[k / 2] : 0, flat[k + 1]));
+      if (ys) { // a bridge over water with baked deck heights (bake.py bridge_profiles): keep them, no pillars under the suspended spans
+        const rp = resample(pts, step), span = rp.map((p) => spans.some((b) => { const L2 = b.dx * b.dx + b.dz * b.dz, t = ((p.x - b.ax) * b.dx + (p.z - b.az) * b.dz) / L2; return t > 0.02 && t < 0.98 && Math.abs((p.x - b.ax) * b.dz - (p.z - b.az) * b.dx) / Math.sqrt(L2) < 40; }));
+        roads.push({ pts: rp, kind: kinds[cls], width: Math.min(width, cls === 0 ? 12 : 9), bridge: rp.map(() => true), span, real: true, baked: true });
+        continue;
+      }
       // keep the parts inside the core and off the game's airport (a road can leave and come back: split it)
       const runs = []; let cur = [];
       const ok = (p) => Math.abs(p.x) < lim && Math.abs(p.z) < lim && !(Math.abs(p.x - 100) < 520 && Math.abs(p.z) < 1300);
-      for (const p of resample(pts, 8)) { if (ok(p)) cur.push(p); else if (cur.length) { runs.push(cur); cur = []; } }
+      for (const p of resample(pts, step)) { if (ok(p)) cur.push(p); else if (cur.length) { runs.push(cur); cur = []; } }
       if (cur.length) runs.push(cur);
       for (const rp of runs) {
         if (rp.length < 3) continue;

@@ -17,7 +17,8 @@
 // All generation is time-sliced (a few ms per frame) so streaming never hitches, even on a tablet.
 //
 // API for other systems (e.g. real-world land use):
-//   flora.setForestMask(fn)  fn(x, z) -> 0..1 forest density (null: back to the built-in noise / world.forestAt)
+//   flora.setForestMask(fn, bare?)  fn(x, z) -> 0..1 forest density (null: back to the built-in noise / world.forestAt);
+//                            bare(x, z) -> true where nothing at all grows (a city's pavements)
 //   flora.addTrees(list)     [{ x, z, kind?: 'conifer'|'broadleaf'|'palm'|'shrub'|..., scale? }] extra trees
 //   flora.clearTrees()       remove everything added with addTrees
 import * as THREE from 'three';
@@ -652,7 +653,7 @@ export class Flora {
     if (this.w.forestAt) return this.w.forestAt(x, z);
     return smoothstep(-0.02, 0.18, this.w.noise.fbm(x / 260 + 7, z / 260, 3));
   }
-  setForestMask(fn) { this.mask = fn || null; this.reset(); }
+  setForestMask(fn, bare = null) { this.mask = fn || null; this.bare = bare; this.reset(); } // bare(x, z): nothing grows there (a city's pavements)
   // extra trees from outside (e.g. OpenStreamMap): [{ x, z, kind?, scale? }]
   addTrees(list) {
     for (const t of list) {
@@ -735,6 +736,7 @@ export class Flora {
       if (fields.length && inField(x, z, 2)) continue;
       if (roadNear && W.nearRoad(x, z, 11)) continue;
       const h = W.sampleGrid(x, z); if (h < wl + 0.7) continue;
+      if (this.bare && this.bare(x, z)) continue;
       if (W.landAt && W.landAt(x, z, e.land || (e.land = [0, 0, 0, 0]))[0] > 0.3) continue; // not in rivers and lakes (world.js terrain bake)
       if (W.real?.waterAt(x, z, 16) != null) continue; // nor in real rivers above the water level (realworld.js)
       let t = u2 * tot, k = 0; while (k < G.length - 1 && (t -= dens[k]) > 0) k++;
@@ -1008,6 +1010,7 @@ class GroundCover {
       if (h > loc.snowline + 40) continue;
       const s = 1 - 3 / Math.hypot(W.sampleGrid(x + 3, z) - h, 3, W.sampleGrid(x, z + 3) - h); if (s > 0.42) continue;
       if (roadNear && W.nearRoad(x, z, 4)) continue;
+      if (this.f.bare && this.f.bare(x, z)) continue;
       if (apt && W.groundAt(x, z).type === 'runway') continue;
       c.copy(cc[0]).lerp(cc[1], fx).lerp(c.clone().copy(cc[2]).lerp(cc[3], fx), fz).multiplyScalar(0.95 + u * 0.35); c.lerp(straw, desert ? 0.55 : 0.12 + 0.3 * smoothstep(0.1, 0.6, cl) * u2);
       const isFern = !desert && F > 0.45 && u2 < 0.12 + 0.25 * F;

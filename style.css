@@ -120,6 +120,7 @@ body.hide-right .inspector { transform: translateX(310px); }
 .loc-card.islands { background-image: linear-gradient(180deg, rgba(0,0,0,0) 30%, rgba(0,0,0,.6)), url(assets/real/islands/card.jpg); background-color: #1aa0b0; }
 .loc-card.canyon { background-image: linear-gradient(180deg, rgba(0,0,0,0) 30%, rgba(0,0,0,.6)), url(assets/real/canyon/card.jpg), linear-gradient(170deg, #f5c890 0%, #f0dcc0 35%, #c06a3a 55%, #8e4a2c 80%, #5a2a1a 100%); background-color: #9a5a3c; }
 .loc-card.lauterbrunnen { background-image: linear-gradient(180deg, rgba(0,0,0,0) 30%, rgba(0,0,0,.6)), url(assets/real/lauterbrunnen/card.jpg); background-color: #4a6a8a; }
+.loc-card.nyc { background-image: linear-gradient(180deg, rgba(0,0,0,0) 30%, rgba(0,0,0,.6)), url(assets/real/nyc/card.jpg); background-color: #5a6a7a; }
 .loc-card.on, .opt-card.on { outline: 3px solid var(--accent); color: var(--text); background-color: rgba(255, 176, 32, .12); }
 .opt-card.on { background: rgba(255, 176, 32, .18); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }

@@ -151,6 +151,7 @@ export function terrainMaterial(maps, patch = false) {
         // farm parcels (farmland mask in the normal map's alpha), crisp up close
         float isField; alb.rgb = fieldShade(vTW.xz, nrmS.a, alb.rgb, dist, isField);
         vec3 mul, dn; terrainDetail(vTW, wn, dist, mul, dn);
+        ${real ? 'mul = mix(vec3(1.0), mul, satDetail); // (a city: the aerial photo, not grass and rock photo detail)' : ''}
         // snow keeps the relief but not the photo colour
         float snowy = smoothstep(0.55, 0.72, min(alb.r, min(alb.g, alb.b)));
         mul = mix(mul, vec3(0.92 + 0.08 * dot(mul, vec3(0.333))), snowy);
@@ -208,7 +209,7 @@ const REAL_SAT_GLSL = /* glsl */`
   }
   // the photo already has the light and shadow of the moment it was taken (satSun): take some of that out, so the
   // game's own sun does the shading, and lift it to the game's ground brightness
-  uniform vec3 satSun; uniform float satGain; uniform float satDeshade; uniform vec4 satCliff;
+  uniform vec3 satSun; uniform float satGain; uniform float satDeshade; uniform vec4 satCliff; uniform float satDetail;
   vec3 realGround(vec3 c, vec3 n) {
     float lit = max(dot(n, satSun), 0.0) * 0.75 + 0.25, ref = max(satSun.y, 0.2) * 0.75 + 0.25;
     float k = mix(1.0, clamp(ref / lit, 0.65, 2.0), satDeshade);

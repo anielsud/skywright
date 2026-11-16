@@ -94,7 +94,8 @@ export class World {
     if (this.loc.real && !this.real) throw new Error('location data not loaded');
     if (this.real) Object.assign(this.detailU, this.real.uniforms());
     this.landUniforms(); // no bake on real places: rivers/lakes off (and compiled out of the terrain shader)
-    this.size = 22000;
+    this.size = this.loc.core || 22000; // (a real place can ask for a bigger detailed core: New York's reaches the Statue of Liberty)
+    this.coreK = this.size / 22000; // grid and bake resolutions scale with it, so the spacing stays the same
     this.group = new THREE.Group(); scene.add(this.group);
     this.t = 0; this.night = false;
     this.windBase = new THREE.Vector3(); this.gust = new THREE.Vector3(); this.gustT = new THREE.Vector3();
@@ -179,7 +180,7 @@ export class World {
     return lerp(this.loc.rwyH, h, t);
   }
   buildTerrain() {
-    const N = this.q.res, S = this.size, half = S / 2, step = S / N;
+    const N = Math.round(this.q.res * this.coreK), S = this.size, half = S / 2, step = S / N;
     this.N = N; this.step = step; this.half = half;
     const H = new Float32Array((N + 1) * (N + 1));
     for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) H[j * (N + 1) + i] = this.rawHeight(-half + i * step, -half + j * step);
@@ -261,15 +262,15 @@ export class World {
     return t;
   }
   // Core bake resolution: ultra resolves the eroded terrain's gullies (~14 m texels; ~2 s more loading than 1024)
-  bakeRes() { return this.qName === 'ultra' && this.bake ? Math.max(this.q.bake, 1536) : this.q.bake; }
+  bakeRes() { return Math.round((this.qName === 'ultra' && this.bake ? Math.max(this.q.bake, 1536) : this.q.bake) * this.coreK / 8) * 8; }
   // Padding (texels) a bake needs around its grid: the wider AO blur radius, plus one for normals.
-  bakePad(st) { return Math.max(1, Math.round(10 * (this.size / this.q.bake) / st)) + 1; }
+  bakePad(st) { return Math.max(1, Math.round(10 * (this.size / this.coreK / this.q.bake) / st)) + 1; }
   // Albedo (+AO in alpha) and normal maps for an (R+1)^2 grid of texels at spacing st starting at (x0,z0). Hp holds the
   // heights with pad extra texels on every side. Shared by the core bake and the streamed outer tiles, so both look the
   // same. AO radii are fixed in metres (the core's 2 and 10 texels), so coarser tiles shade like the core. Generator:
   // yields every few rows so tiles can be built a few ms per frame.
   *bakeMaps(Hp, R, pad, x0, z0, st, paint, out) {
-    const W = R + 1, PW = W + 2 * pad, cs = this.size / this.q.bake;
+    const W = R + 1, PW = W + 2 * pad, cs = this.size / this.coreK / this.q.bake;
     const blur = (src, r) => { // separable box blur
       const a = new Float32Array(PW * PW), b = new Float32Array(PW * PW), M = PW - 1;
       for (let j = 0; j < PW; j++) { let acc = 0; for (let i = -r; i <= r; i++) acc += src[j * PW + Math.min(M, Math.max(0, i))]; for (let i = 0; i < PW; i++) { a[j * PW + i] = acc / (2 * r + 1); acc += src[j * PW + Math.min(M, i + r + 1)] - src[j * PW + Math.max(0, i - r)]; } }

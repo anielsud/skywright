@@ -5,6 +5,8 @@
 import * as THREE from 'three';
 import { Builder, buildingMaterial, C } from './buildings.js';
 import { mulberry32, smoothstep } from './noise.js';
+import { CityScenery } from './realCity.js';
+import { Landmarks } from './realLandmarks.js';
 
 const CHUNK = 1000; // m: buildings are merged per 1 km cell (one draw call each), hidden beyond VIEW
 const VIEW = { low: 4500, medium: 8000, high: 14000 };
@@ -25,9 +27,12 @@ export class RealScenery {
     this.group = new THREE.Group(); world.group.add(this.group);
     this.grid = new Map(); this.chunks = new Map(); this.count = 0;
     this.view = VIEW[W.qName] ?? 8000;
-    world.flora?.setForestMask?.((x, z) => D.forest(x, z)); // mapped forests (OSM) instead of noise
+    world.flora?.setForestMask?.((x, z) => D.forest(x, z), W.loc.flora?.bare ? (x, z) => D.bare(x, z) : null); // mapped forests (OSM) instead of noise
     const t0 = performance.now();
-    this.buildBuildings(D.osm.buildings);
+    if (D.city) this.city = new CityScenery(world, D, this.group); // a city: baked footprints, built as tiled meshes
+    else this.buildBuildings(D.osm.buildings);
+    this.landmarks = new Landmarks(world, D, this.group); // bridge structures, the Statue of Liberty, bridge decks to land on
+    this.tall = !!D.city || this.landmarks.boxes.length > 0; // obstacles far above the ground: main.js tests hits at any height
     this.buildRails(D.osm.rails);
     this.buildCables(D.osm.cables);
     this.buildLakes(D.osm.lakes || []);
@@ -308,12 +313,15 @@ export class RealScenery {
   }
 
   hit(p) {
+    const lh = this.landmarks.hit(p); if (lh) return lh;
+    if (this.city) return this.city.hit(p);
     const arr = this.grid.get(Math.floor(p.x / 50) + ',' + Math.floor(p.z / 50)); if (!arr) return null;
     for (const t of arr) { const dx = p.x - t[0], dz = p.z - t[2]; if (dx * dx + dz * dz < t[4] * t[4] && p.y < t[1] + t[3] && p.y > t[1] - 2) return t; }
     return null;
   }
   update(dt, t, fx, cam) {
     if (this.river) this.river.material.normalMap.offset.y = -(t || 0) * 0.06; // flowing downstream
+    if (this.city) { this.city.update(dt, cam); this.landmarks.update(dt, cam); return; }
     if (!cam || !this.chunkList) return;
     for (const c of this.chunkList) c.m.visible = Math.hypot(c.x - cam.x, c.z - cam.z) < this.view + c.r;
   }

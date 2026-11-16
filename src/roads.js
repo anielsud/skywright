@@ -276,6 +276,7 @@ export function gradeReal(w, net) {
   const hash = new Map(), key = (x, z) => Math.floor(x / 10) + ',' + Math.floor(z / 10);
   const at = (p) => { let best = null, bd = 9; for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const q of hash.get(key(p.x + i * 10, p.z + j * 10)) || []) { const d = (q.x - p.x) ** 2 + (q.z - p.z) ** 2; if (d < bd) { bd = d; best = q; } } return best; };
   for (const rd of net.roads) { // (sorted longest first by RealData.network)
+    if (rd.baked) { rd.terr = Float32Array.from(rd.pts, (p) => terr(p.x, p.z)); rd.wet = new Uint8Array(rd.pts.length); for (const p of rd.pts) { const k = key(p.x, p.z); if (!hash.has(k)) hash.set(k, []); hash.get(k).push(p); } continue; } // a bridge with a baked deck profile (realworld.js)
     const fixed = rd.bridge && rd.bridge.some(Boolean) ? rd.bridge.slice() : null, pins = [];
     for (const i of [0, rd.pts.length - 1]) { const q = at(rd.pts[i]); if (q) pins.push({ i, y: q.y }); }
     profileRoad(rd, { g: GRADE.real, terr, wetAt: () => false, wl, clear: 0, smooth: 2, bridges: false, fixed, pins });
@@ -342,8 +343,14 @@ export function buildRoadMeshes(w, net) {
   const verge = new THREE.MeshStandardMaterial({ color: 0x4a4538, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
   const concrete = new THREE.MeshStandardMaterial({ color: 0x9a978f, roughness: 0.8, side: THREE.DoubleSide });
   const steel = new THREE.MeshStandardMaterial({ color: 0x8b9097, metalness: 0.9, roughness: 0.35 });
-  const pending = new Map(); // ribbons are merged per material at the end (fewer draw calls)
-  const add = (material, g) => { if (!pending.has(material)) pending.set(material, []); pending.get(material).push(g); };
+  // ribbons are merged per material at the end (fewer draw calls); a big road network (loc.roads.chunk, m: a city)
+  // also per square of that size, so what's off screen is culled
+  const pending = new Map(), chunk = w.loc.roads?.chunk;
+  const add = (material, g) => {
+    const p = g.attributes.position.array, key = chunk ? material.uuid + Math.floor(p[0] / chunk) + ',' + Math.floor(p[2] / chunk) : material;
+    if (!pending.has(key)) pending.set(key, { material, geos: [] });
+    pending.get(key).geos.push(g);
+  };
   const frame = (P, i, closed) => { // unit direction and right vector at point i
     const n = P.length, a = P[closed ? (i - 1 + n) % n : Math.max(0, i - 1)], b = P[closed ? (i + 1) % n : Math.min(n - 1, i + 1)];
     const d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); return [d, new THREE.Vector3(-d.z, 0, d.x)];
@@ -424,7 +431,7 @@ export function buildRoadMeshes(w, net) {
       for (const [p, r, isEnd] of [[A, ra, start], [B, rb, end]]) {
         const bed = Math.min(w.sampleGrid(p.x, p.z), meshH(p.x, p.z)) - 1.5, ht = p.y - 1.4 - bed;
         if (isEnd) { if (ht > 0.2) bridgeGeos.push(new THREE.BoxGeometry(hw * 2 + 0.4, ht + 1.4, 2.5).rotateY(Math.atan2(-r.z, r.x)).translate(p.x, bed + (ht + 1.4) / 2, p.z)); continue; }
-        if (p !== B || runLen < 32 || ht < 2.5 || end) continue;
+        if (p !== B || runLen < 32 || ht < 2.5 || end || rd.span?.[j]) continue; // (no piers under a suspended span)
         runLen = 0;
         const yaw = Math.atan2(-r.z, r.x);
         bridgeGeos.push(new THREE.BoxGeometry(hw * 2 - 0.5, 1.2, 2.2).rotateY(yaw).translate(p.x, p.y - 2.0, p.z)); // pier cap
@@ -448,7 +455,7 @@ export function buildRoadMeshes(w, net) {
   const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3));
   const lampMat = new THREE.PointsMaterial({ size: 3, color: new THREE.Color(3.2, 2.2, 1.1), map: glow(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0 });
   group.add(new THREE.Points(lg, lampMat)); group.userData.lampMat = lampMat;
-  for (const [material, geos] of pending) { const m = new THREE.Mesh(mergeGeometries(geos), material); m.receiveShadow = true; group.add(m); }
+  for (const { material, geos } of pending.values()) { const m = new THREE.Mesh(mergeGeometries(geos), material); m.receiveShadow = true; group.add(m); }
   if (bridgeGeos.length) { const m = new THREE.Mesh(mergeAll(bridgeGeos), concrete); m.castShadow = m.receiveShadow = true; group.add(m); }
   if (railGeos.length) group.add(new THREE.Mesh(mergeAll(railGeos), steel));
   return group;

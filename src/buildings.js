@@ -267,8 +267,9 @@ const rectArr = () => { const a = []; for (let i = 0; i < NCELL; i++) { const w 
 const parArr = () => { const a = []; for (let i = 0; i < NCELL; i++) { const w = WIN[i]; a.push(new THREE.Vector4(w ? w.rec : 0, w ? w.room : 0, w ? w.kind : -1, i === C.METAL || i === C.SEAM || i === C.HANGAR_DOOR ? 0.6 : 0)); } return a; };
 
 // One material for every building. opts.interiors (default true): reveal + interior mapping; opts.ground: polygon
-// offset for lots / paving laid on the terrain; opts.cellPx: atlas resolution.
-export function buildingMaterial({ cellPx = 256, interiors = true, ground = false } = {}) {
+// offset for lots / paving laid on the terrain; opts.cellPx: atlas resolution; opts.glass: office glass (GLASS cells)
+// is reflective coated glass tinted by the vertex colour (city towers, realCity.js).
+export function buildingMaterial({ cellPx = 256, interiors = true, ground = false, glass = false } = {}) {
   const A = buildingAtlas(cellPx);
   const mat = new THREE.MeshStandardMaterial({ map: A.map, normalMap: A.nrm, vertexColors: true, roughness: 1, metalness: 0, emissive: 0xffffff, emissiveIntensity: 0, alphaTest: ground ? 0 : 0.5 });
   if (ground) { mat.polygonOffset = true; mat.polygonOffsetFactor = -2; mat.polygonOffsetUnits = -6; }
@@ -406,10 +407,17 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
             diffuseColor.rgb = mix(vec3(0.015), fc * 0.25, cov);
           }
         }
+        #ifdef BLD_GLASS
+        if (winM > 0.5 && cp.z > 3.5) { // curtain walls (city towers): coated glass mirrors the sky, tinted by the vertex colour
+          // (at night: the lit rooms show, not the sky, and no moon glare across every pane)
+          diffuseColor.rgb = vColor * 0.4; metalnessFactor = mix(0.1, 0.6, uDay); roughnessFactor = mix(0.45, 0.08, uDay);
+          rad *= vec3(1.0, 0.85, 0.62) * 0.3 * step(0.55, bh1(wid + 3.3)); // big panes: dimmer, warm, and fewer of them lit (dark floors and bays)
+        } else if (cp.z > 3.5) roughnessFactor = max(roughnessFactor, 0.55); // the mullions and spandrels: satin, not mirrors
+        #endif
         totalEmissiveRadiance = rad * winM;`);
   };
-  mat.defines = { ...(mat.defines || {}), ...(interiors ? { BLD_INTERIOR: '' } : {}) };
-  mat.customProgramCacheKey = () => 'bldg3' + (interiors ? 'i' : '') + (ground ? 'g' : '');
+  mat.defines = { ...(mat.defines || {}), ...(interiors ? { BLD_INTERIOR: '' } : {}), ...(glass ? { BLD_GLASS: '' } : {}) };
+  mat.customProgramCacheKey = () => 'bldg3' + (interiors ? 'i' : '') + (ground ? 'g' : '') + (glass ? 'q' : '');
   return mat;
 }
 
