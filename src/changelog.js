@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.59.0', items: [
+    'Wings are tougher in quick, twitchy moves: they only snap if you keep pulling too many G for nearly a second, and you get a “straining! Ease off!” warning first.',
+  ] },
   { v: '1.58.0', items: [
     'NEW PLACE: the real Grand Canyon! Red Canyon is now the Grand Canyon from real aerial photos: take off from Grand Canyon Airport, fly over the South Rim forest and village, and dive down into the canyon to the Colorado River.',
     'Seaplanes can land on the Colorado River at the bottom of the canyon!',
