@@ -297,3 +297,6 @@ body.touch-on #fps-meter { bottom: auto; top: calc(250px + env(safe-area-inset-t
 .mixer label { font-size: 14px; opacity: 0.85; }
 .mixer b { text-align: right; font-variant-numeric: tabular-nums; opacity: 0.7; font-weight: 600; }
 .mixer input[type=range] { width: 100%; }
+/* flight setup: start options and Back / FLY share one row */
+.start-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.start-go { display: flex; gap: 8px; margin-left: auto; }
