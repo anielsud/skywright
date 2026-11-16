@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.75.0', items: [
+    'New York sounds like New York: fly low between the skyscrapers and hear the roar of the traffic, with sirens wailing somewhere across the city!',
+  ] },
   { v: '1.74.0', items: [
     'Smoother crashes: no more freezing for a moment when you crash or when the game adjusts its graphics.',
   ] },
