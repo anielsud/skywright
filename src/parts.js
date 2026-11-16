@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { M } from './materials.js';
 import { PM, SKIN_TILE, lightGeometry } from './planeMaterials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
-import { bladeGeometry, rotorBlade, propEngineDetail, jetEngineDetail, rocketDetail, gearLegDetailed, strutLegs, cockpitBuild, openCockpitBuild, airlinerNoseBuild, carEngineDetail, rotorDetail, strutDetail, ringLoft, Bag, V, bar } from './partDetail.js';
+import { bladeGeometry, rotorBlade, propEngineDetail, jetEngineDetail, rocketDetail, gearLegDetailed, strutLegs, cockpitBuild, openCockpitBuild, airlinerNoseBuild, carEngineDetail, rotorDetail, strutDetail, ringLoft, Bag, V, bar, shell } from './partDetail.js';
 
 // ---------- geometry helpers ----------
 // Body of revolution around Z. profile: [[z, r], ...] nose (most negative z) first.
@@ -630,10 +630,11 @@ def({ id: 'e_turboprop', cat: 'engine', name: 'Turboprop', desc: 'Turbine-driven
   build: (c, lv) => propEngine({ len: 2.6, radius: 0.55, propR: 1.7, blades: 4, color: c, lv }) });
 def({ id: 'e_electric', cat: 'engine', name: 'Electric Fan', desc: 'Silent-ish ducted electric fan. Instant power, high whine.', mass: 60, hp: 400, color: 0x2a9d8f,
   engine: { type: 'prop', thrust: 2500, vmax: 110, sound: 'electric', idleRpm: 0, maxRpm: 9000, cyl: 0 },
-  build: (c) => {
+  build: (c, lv) => {
     const g = new THREE.Group();
     const duct = new THREE.Mesh(revolve([[-0.3, 0.42], [-0.25, 0.47], [0.3, 0.46], [0.5, 0.38]], { segs: 28 }), PM.skin(c)); g.add(duct);
     const di = new THREE.Mesh(revolve([[-0.3, 0.41], [0.5, 0.37]], { segs: 28 }), M.intake()); di.scale.x = -1; g.add(di);
+    if (lv) { duct.geometry = shell(duct.geometry, 0.012); di.material = PM.duct(0x4e5258); } // detail: a duct wall with a rim, a lit liner inside
     const p = propeller(0.4, 6); p.position.z = -0.05; g.add(p); g.userData.prop = p;
     const hub = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), M.chrome()); hub.scale.z = 1.8; g.add(hub);
     return g;

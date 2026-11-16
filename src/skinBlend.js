@@ -12,14 +12,15 @@
 import * as THREE from 'three';
 import { PARTS, revolve, airfoil } from './parts.js';
 import { PM } from './planeMaterials.js';
-import { V, ringLoft, fighterGlassR, fixNormals } from './partDetail.js';
+import { V, ringLoft, fighterGlassR, fixNormals, clipGeometry, posKey } from './partDetail.js';
+export { clipGeometry };
 import { clamp } from './noise.js';
 
 const smin = (a, b, k) => { const h = Math.max(k - Math.abs(a - b), 0) / k; return Math.min(a, b) - h * h * k * 0.25; };
 const smax = (a, b, k) => -smin(-a, -b, k);
 const axisScales = (W) => { const e = W.elements; return [Math.hypot(e[0], e[1], e[2]), Math.hypot(e[4], e[5], e[6]), Math.hypot(e[8], e[9], e[10])]; };
 const _l = V();
-const TUCK = 0.035, DEEP = 0.5;
+const TUCK = 0.035, DEEP = 0.5, RAMP_MAX = 1.6; // the windscreen fairing reaches at most 60 % of the glass's half-length ahead of it
 
 // ---------- cockpit shapes, in a frame (u across, h up out of the mount, v along) ----------
 const id3 = (q) => [q.x, q.y, q.z], idInv = (u, h, v) => V(u, h, v);
@@ -47,7 +48,7 @@ const CK = {
     wall(th, t) { return [0.37 * Math.sin(th), -DEEP + t * (DEEP + 0.3), -0.52 * Math.cos(th)]; },
   },
   ck_glassnose: { // dome looking forward (-z): h = -z, v = y
-    frame: (q) => [q.x, -q.z, q.y], local: (u, h, v) => V(u, v, -h), up: V(0, 0, -1), a: 0.7, b: 0.7, c: 0.98, v0: -0.7, v1: 0.7, flare: 0.45, rake: 0, tub: 0.6, sill: 0.04,
+    frame: (q) => [q.x, -q.z, q.y], local: (u, h, v) => V(u, v, -h), up: V(0, 0, -1), a: 0.7, b: 0.7, c: 0.98, v0: -0.7, v1: 0.7, flare: 0.45, ramp: 0, tub: 0.6, sill: 0.04,
     foot: (u, v, g) => Math.hypot(u, v) - 0.7 * g,
     vol: (u, h, v) => (h >= 0 ? (Math.hypot(u / 0.7, v / 0.7, h / 0.98) - 1) * 0.7 : Math.hypot(u, v) - 0.7),
     wall(th, t) { const s = Math.sin(th), c = Math.cos(th); if (t < 0.4) return [0.7 * s, -DEEP * (1 - t / 0.4), 0.7 * c]; const ph = ((t - 0.4) / 0.6) * Math.PI / 2 * 0.96; return [0.7 * s * Math.cos(ph), 0.98 * Math.sin(ph), 0.7 * c * Math.cos(ph)]; },
@@ -143,11 +144,16 @@ function cockpitSetup(cp, cobj, B) {
   const O = V().setFromMatrixPosition(W), A = axisPoint(B, O), [, hA] = C.frame(A.clone().applyMatrix4(inv));
   if (!(hA < -0.02)) return null; // the body is not under (or behind) the glass: nothing to sit on
   const gap = B.f(O); if (gap > 2.5) return null;
-  const hb = hA, gMax = 1 + C.flare * Math.max(0, -hb), T = C.turtle, vc = (C.v0 + C.v1) / 2;
+  const hb = hA, gMax = 1 + C.flare * Math.max(0, -hb), T = C.turtle, vc = (C.v0 + C.v1) / 2, ramp = C.ramp ?? 2.4;
+  // the fairing only runs forward over body: stop where the body ends ahead of the glass (a canopy at the very nose)
+  const span = Math.abs(C.v0 - vc); let ext = 0;
+  for (let k = 1; k <= 12; k++) { const e = span * (RAMP_MAX - 1) * (k / 12); if (B.f(C.local(0, hb * 0.6, C.v0 - e).applyMatrix4(W)) > 0) break; ext = e; }
+  const rampMax = 1 + ext / span, gvMax = Math.min(rampMax, 1 + ramp * Math.max(0, -hb));
   const fl = (p) => { _l.copy(p).applyMatrix4(inv); return C.frame(_l); };
   const f = (p) => {
-    const [u, h, v] = fl(p), dep = Math.max(0, -h), g = 1 + C.flare * dep, gv = Math.max(0.35, 1 - (C.rake ?? 0.9) * dep);
-    // sides flare out going down; the front rakes back (a sloping windscreen fairing rather than a cliff)
+    const [u, h, v] = fl(p), dep = Math.max(0, -h), g = 1 + C.flare * dep, gv = Math.min(rampMax, 1 + ramp * dep);
+    // sides flare out going down; the front runs forward as it goes down: a windscreen fairing sloping down into the skin
+    // ahead of the glass (it used to rake back, which left the glass front sticking out over a cliff)
     const vq = v < vc ? vc + (v - vc) / gv : v;
     let d = Math.max(smax(C.foot(u, vq, g), h - TUCK, 0.1), hb - h); // rounded deck edge
     if (T) { const dt = Math.max((Math.hypot(u / T.ex, h / T.ey, (v - T.cz) / T.ez) - 1) * Math.min(T.ex, T.ey, T.ez), hb - h); d = smin(d, dt, 0.1); }
@@ -156,7 +162,7 @@ function cockpitSetup(cp, cobj, B) {
   const vol = (p) => { const [u, h, v] = fl(p); return Math.max(C.vol(u, h, v), -(h + DEEP)) * s; };
   // world box of the pedestal (footprint grown by the flare, from the axis up to the turtledeck)
   const box = new THREE.Box3(), vMax = Math.max(C.v1, T ? T.cz + T.ez : C.v1);
-  for (const u of [-C.a * gMax, C.a * gMax]) for (const h of [hb, Math.max(TUCK, T ? T.ey : 0)]) for (const v of [C.v0 * gMax, vMax]) box.expandByPoint(C.local(u, h, v).applyMatrix4(W));
+  for (const u of [-C.a * gMax, C.a * gMax]) for (const h of [hb, Math.max(TUCK, T ? T.ey : 0)]) for (const v of [vc + (C.v0 * gMax - vc) * gvMax, vMax]) box.expandByPoint(C.local(u, h, v).applyMatrix4(W));
   const k = clamp(0.42 * C.a * s, 0.06, 0.4);
   const ped = { kind: 'ped', obj: cobj, f, box: box.expandByScalar(k), k, reach: Math.max(0.3, gap + C.a * s * 1.2 + k) };
   const vbox = new THREE.Box3();
@@ -207,32 +213,6 @@ function project(U, B, P, N, { steps = 12 } = {}) {
   return moved;
 }
 
-// ---------- clipping an indexed geometry by a per-vertex value (< 0 is cut away) ----------
-export function clipGeometry(geo, val) {
-  const idx = geo.index ? geo.index.array : [...Array(geo.attributes.position.count).keys()];
-  const names = Object.keys(geo.attributes), src = names.map((k) => geo.attributes[k]), arr = src.map((a) => Array.from(a.array));
-  let count = geo.attributes.position.count; const cache = new Map(), out = [];
-  let any = false; for (let i = 0; i < val.length; i++) if (val[i] < 0) { any = true; break; }
-  if (!any) return null;
-  const cut = (a, b) => {
-    const key = a < b ? a * 1e7 + b : b * 1e7 + a; if (cache.has(key)) return cache.get(key);
-    const t = val[a] / (val[a] - val[b]), n = count++;
-    src.forEach((A, k) => { const s = A.itemSize, d = arr[k]; for (let c = 0; c < s; c++) d.push(d[a * s + c] + (d[b * s + c] - d[a * s + c]) * t); if (names[k] === 'normal') { const o = n * 3, l = Math.hypot(d[o], d[o + 1], d[o + 2]) || 1; d[o] /= l; d[o + 1] /= l; d[o + 2] /= l; } });
-    cache.set(key, n); return n;
-  };
-  for (let i = 0; i < idx.length; i += 3) {
-    const tri = [idx[i], idx[i + 1], idx[i + 2]], ins = tri.map((v) => val[v] < 0), nIn = ins.filter(Boolean).length;
-    if (!nIn) { out.push(...tri); continue; }
-    if (nIn === 3) continue;
-    const poly = [];
-    for (let e = 0; e < 3; e++) { const a = tri[e], b = tri[(e + 1) % 3]; if (!ins[e]) poly.push(a); if (ins[e] !== ins[(e + 1) % 3]) poly.push(cut(a, b)); }
-    for (let k = 1; k < poly.length - 1; k++) out.push(poly[0], poly[k], poly[k + 1]);
-  }
-  const g = new THREE.BufferGeometry();
-  names.forEach((k, j) => g.setAttribute(k, new THREE.Float32BufferAttribute(arr[j], src[j].itemSize)));
-  g.setIndex(out); return g;
-}
-
 // ---------- reshaping one body ----------
 function reshape(B, fields, cks, quick) {
   const b = B.b, skin = b.skin, W = skin.matrixWorld, inv = B.inv, sc = B.sc;
@@ -254,6 +234,10 @@ function reshape(B, fields, cks, quick) {
   const pos = geo.attributes.position, nrm = geo.attributes.normal, n = pos.count, P = new Float32Array(n * 3), N = new Float32Array(n * 3);
   const nm = new THREE.Matrix3().getNormalMatrix(W), WT = new THREE.Matrix3().setFromMatrix4(W).transpose(), v = V();
   for (let i = 0; i < n; i++) { v.fromBufferAttribute(pos, i).applyMatrix4(W).toArray(P, i * 3); v.fromBufferAttribute(nrm, i).applyMatrix3(nm).normalize().toArray(N, i * 3); }
+  // vertices sharing a position (a nose or tail apex, the revolve seam) move along one averaged normal: a collapsed apex
+  // ring pushed along its spread of normals opened into a hole
+  { const groups = new Map(); for (let i = 0; i < n; i++) { const k = posKey(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]); const gk = groups.get(k); if (gk) gk.push(i); else groups.set(k, [i]); }
+    for (const gk of groups.values()) { if (gk.length < 2) continue; v.set(0, 0, 0); for (const i of gk) { v.x += N[i * 3]; v.y += N[i * 3 + 1]; v.z += N[i * 3 + 2]; } if (v.lengthSq() < 1e-12) continue; v.normalize(); for (const i of gk) v.toArray(N, i * 3); } }
   const moved = project(U, B, P, N, { steps: quick ? 7 : 12 });
   for (let i = 0; i < n; i++) {
     if (!moved[i]) continue;
@@ -268,7 +252,7 @@ function reshape(B, fields, cks, quick) {
       for (const ck of cks) { if (!ck.vbox.containsPoint(v)) continue; _g.fromArray(N, i * 3); if (_g.dot(ck.up) < 0.2) continue; m = Math.min(m, ck.vol(v)); } // only the deck facing the glass
       val[i] = m;
     }
-    const g2 = clipGeometry(geo, val); if (g2) { geo.dispose(); geo = g2; }
+    const g2 = clipGeometry(geo, val); if (g2) { geo.dispose(); geo = g2; skin.userData.openOk = 'cockpit opening: the sill and the tub close it'; }
   }
   fixNormals(geo); geo.computeBoundingSphere(); geo.computeBoundingBox();
   const old = skin.geometry; skin.geometry = geo; old.dispose();

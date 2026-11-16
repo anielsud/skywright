@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { PARTS, revolve, smoothProfile } from './parts.js';
 import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
-import { V, bar, tube, Bag, seatGeo, flightDeckGlass } from './partDetail.js';
+import { V, bar, tube, pipe, Bag, seatGeo, flightDeckGlass, shell, capHoles } from './partDetail.js';
 import { clipGeometry } from './skinBlend.js';
 
 const cached = new Map();
@@ -79,7 +79,7 @@ function chaikin(secs, passes = 2) {
 
 // ---------- wheels ----------
 // Knobby tyre around X: a lathe of the tyre section with staggered tread blocks (and shoulder lugs) pushed out.
-function knobbyTyre(r, w, { blocks = 18, rim = 0.6, knob = 0.045 } = {}) {
+function knobbyTyre(r, w, { blocks = 18, rim = 0.6, knob = 0.045, closed = false } = {}) {
   const NA = blocks * 8, prof = [];
   const ri = r * rim, sh = Math.min(r * 0.18, w * 0.3); // inner (bead) radius, shoulder rounding
   // section from the left bead round the tread to the right bead: [x, rho, tread?]
@@ -101,6 +101,8 @@ function knobbyTyre(r, w, { blocks = 18, rim = 0.6, knob = 0.045 } = {}) {
     }
   }
   for (let a = 0; a < NA; a++) for (let j = 0; j < NP - 1; j++) { const i0 = a * NP + j, i1 = (a + 1) * NP + j; idx.push(i0, i1, i0 + 1, i1, i1 + 1, i0 + 1); }
+  // detail: the bead seat closes the section (the tyre was an open lathe: from the inner side you looked through it)
+  if (closed) for (let a = 0; a < NA; a++) { const i0 = a * NP + NP - 1, i1 = (a + 1) * NP + NP - 1, j0 = a * NP, j1 = (a + 1) * NP; idx.push(i0, i1, j0, i1, j1, j0); }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setIndex(idx); g.computeVertexNormals();
@@ -109,7 +111,13 @@ function knobbyTyre(r, w, { blocks = 18, rim = 0.6, knob = 0.045 } = {}) {
 // Beadlock rim: barrel, a bolted ring on the outer face, six spokes and a hub cap (outer face towards +X).
 function beadlockRim(r, w, color, lv) {
   const b = new Bag(), paint = rimPaint(color), steel = M.steel(), dark = M.darkMetal(), rr = r * 0.62;
-  const barrel = new THREE.CylinderGeometry(rr, rr, w * 0.86, 28, 1, true); barrel.rotateZ(Math.PI / 2); b.add(barrel, dark);
+  const barrel = new THREE.CylinderGeometry(rr, rr, w * 0.86, 28, 1, true); barrel.rotateZ(Math.PI / 2); b.add(lv ? shell(barrel, r * 0.03) : barrel, dark);
+  if (lv) { // the inner side: the rim's back face dished in, a hub with studs where the axle comes in, and a brake rotor and caliper
+    const back = new THREE.CylinderGeometry(rr * 0.97, rr * 0.97, 0.02, 28); back.rotateZ(Math.PI / 2); back.translate(-w * 0.2, 0, 0); b.add(back, dark);
+    const hubIn = new THREE.CylinderGeometry(rr * 0.24, rr * 0.3, w * 0.18, 16); hubIn.rotateZ(Math.PI / 2); hubIn.translate(-w * 0.3, 0, 0); b.add(hubIn, paint);
+    const rotor = new THREE.CylinderGeometry(rr * 0.62, rr * 0.62, 0.025, 28); rotor.rotateZ(Math.PI / 2); rotor.translate(-w * 0.33, 0, 0); b.add(rotor, steel);
+    for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2, s = new THREE.CylinderGeometry(r * 0.02, r * 0.02, w * 0.1, 6); s.rotateZ(Math.PI / 2); s.translate(-w * 0.36, Math.cos(a) * rr * 0.18, Math.sin(a) * rr * 0.18); b.add(s, M.chrome()); }
+  }
   const ring = new THREE.TorusGeometry(rr * 0.97, r * 0.05, 8, 32); ring.rotateY(Math.PI / 2); ring.translate(w * 0.4, 0, 0); b.add(ring, paint);
   const face = new THREE.CylinderGeometry(rr * 0.92, rr * 0.92, 0.02, 28); face.rotateZ(Math.PI / 2); face.translate(w * 0.18, 0, 0); b.add(face, dark);
   for (let i = 0; i < 6; i++) {
@@ -144,7 +152,7 @@ function offroadCorner({ r, w, len, color, steer, lv, arm = 0.55, blocks = 18 })
   if (lv) for (const sz of [-1, 1]) { const xp = -w / 2 - arm, zp = sz * r * 0.56; sB.add(bar(V(xp, -len - r * 0.2, zp), V(xp, 0.02, zp * 0.85), r * 0.13, r * 0.06), dark); sB.add(bar(V(xp, -len + r * 0.3, zp), V(xi, -0.02, 0), r * 0.06, r * 0.06, true, 6), dark); }
   const axle = new THREE.CylinderGeometry(r * 0.05, r * 0.05, w * 0.6, 8); axle.rotateZ(Math.PI / 2); axle.translate(-w * 0.2, 0, 0); fB.add(axle, steel);
   // the spinning wheel: tyre + rim
-  const wh = new THREE.Group(); const tb = new Bag(); tb.add(knobbyTyre(r, w, { blocks }), knobby()); tb.to(wh); beadlockRim(r, w, color, lv).to(wh);
+  const wh = new THREE.Group(); const tb = new Bag(); tb.add(knobbyTyre(r, w, { blocks, closed: !!lv }), knobby()); tb.to(wh); beadlockRim(r, w, color, lv).to(wh);
   wheels.add(wh);
   sB.to(strut); fB.to(fixed); strut.add(fixed); strut.add(wheels); g.add(strut);
   g.userData.strut = strut; g.userData.wheels = wheels; g.userData.steer = steer; g.userData.wheelsFixed = fixed;
@@ -173,10 +181,11 @@ function buggyTub(c, lv) {
   const b = new Bag(), dark = M.darkMetal(), tp = tubePaint(0x1a1b1e);
   const mouth = new THREE.BoxGeometry(0.3, 0.1, 0.02); mouth.translate(0, 0.17, -1.355); b.add(mouth, M.intake());
   // front bumper / nerf bars / skid plate
-  b.add(tube([V(-0.55, -0.22, -2.0), V(-0.45, -0.18, -2.32), V(0, -0.16, -2.4), V(0.45, -0.18, -2.32), V(0.55, -0.22, -2.0)], 0.045, 8, 40), tp);
-  b.add(tube([V(-0.5, 0.0, -2.05), V(-0.35, 0.05, -2.3), V(0.35, 0.05, -2.3), V(0.5, 0.0, -2.05)], 0.035, 8, 30), tp);
+  const tb = lv ? pipe : tube; // detail: closed tube ends (the plain part keeps its geometry: its volume centroid is a physics input)
+  b.add(tb([V(-0.55, -0.22, -2.0), V(-0.45, -0.18, -2.32), V(0, -0.16, -2.4), V(0.45, -0.18, -2.32), V(0.55, -0.22, -2.0)], 0.045, 8, 40), tp);
+  b.add(tb([V(-0.5, 0.0, -2.05), V(-0.35, 0.05, -2.3), V(0.35, 0.05, -2.3), V(0.5, 0.0, -2.05)], 0.035, 8, 30), tp);
   const skid = new THREE.BoxGeometry(0.9, 0.04, 1.2); skid.translate(0, -0.37, -1.4); b.add(skid, M.aluminum());
-  for (const sx of [-1, 1]) b.add(tube([V(sx * 0.7, -0.3, -0.9), V(sx * 0.86, -0.28, -0.6), V(sx * 0.86, -0.28, 0.6), V(sx * 0.7, -0.3, 0.9)], 0.04, 8, 30), tp);
+  for (const sx of [-1, 1]) b.add(tb([V(sx * 0.7, -0.3, -0.9), V(sx * 0.86, -0.28, -0.6), V(sx * 0.86, -0.28, 0.6), V(sx * 0.7, -0.3, 0.9)], 0.04, 8, 30), tp);
   // rear: spare-wheel-style diffuser fins and tail lights
   for (const sx of [-0.3, 0, 0.3]) b.add(bar(V(sx, -0.25, 1.7), V(sx, -0.12, 2.05), 0.03, 0.12), dark);
   b.to(g);
@@ -199,21 +208,66 @@ function truckBody(c, lv) {
     { z: 2.25, hw: 0.92, top: 0.78, bot: -0.02, n: 6 },
     { z: 2.38, hw: 0.86, top: 0.72, bot: 0.02, n: 5 },
   ], 1);
-  if (lv) truckCab(g, S, c); else g.add(new THREE.Mesh(superLoft(S, 48), PM.skin(c)));
+  if (lv) truckCab(g, TRUCK, c); else g.add(new THREE.Mesh(superLoft(S, 48), PM.skin(c)));
   const b = new Bag(), tp = tubePaint(0x1a1b1e), dark = M.darkMetal();
   // ladder frame, axles, push bar, roof light mounts
-  for (const sx of [-0.55, 0.55]) { const r = new THREE.BoxGeometry(0.12, 0.18, 4.6); r.translate(sx, -0.12, 0); b.add(r, dark); }
-  for (const z of [-1.75, 1.75]) { const ax = new THREE.CylinderGeometry(0.09, 0.09, 2.3, 10); ax.rotateZ(Math.PI / 2); ax.translate(0, -0.55, z); b.add(ax, dark); const diff = new THREE.SphereGeometry(0.2, 12, 10); diff.translate(0, -0.55, z); b.add(diff, dark);
+  if (!lv) for (const sx of [-0.55, 0.55]) { const r = new THREE.BoxGeometry(0.12, 0.18, 4.6); r.translate(sx, -0.12, 0); b.add(r, dark); }
+  // (detail: a tube chassis instead (truckCab); the axles come from the wheels actually fitted, see planeDetail.axles)
+  if (!lv) for (const z of [-1.75, 1.75]) { const ax = new THREE.CylinderGeometry(0.09, 0.09, 2.3, 10); ax.rotateZ(Math.PI / 2); ax.translate(0, -0.55, z); b.add(ax, dark); const diff = new THREE.SphereGeometry(0.2, 12, 10); diff.translate(0, -0.55, z); b.add(diff, dark);
     for (const sx of [-0.55, 0.55]) b.add(bar(V(sx, -0.2, z), V(sx * 1.2, -0.55, z), 0.06, 0.06, true, 6), M.paint(0xf2b705, 'gloss')); }
-  b.add(tube([V(-0.8, 0.05, -2.38), V(-0.6, 0.0, -2.62), V(0.6, 0.0, -2.62), V(0.8, 0.05, -2.38)], 0.06, 8, 30), tp);
-  b.add(tube([V(-0.6, 0.0, -2.62), V(-0.5, 0.45, -2.6), V(0.5, 0.45, -2.6), V(0.6, 0.0, -2.62)], 0.045, 8, 30), tp);
+  const tb = lv ? pipe : tube;
+  b.add(tb([V(-0.8, 0.05, -2.38), V(-0.6, 0.0, -2.62), V(0.6, 0.0, -2.62), V(0.8, 0.05, -2.38)], 0.06, 8, 30), tp);
+  b.add(tb([V(-0.6, 0.0, -2.62), V(-0.5, 0.45, -2.6), V(0.5, 0.45, -2.6), V(0.6, 0.0, -2.62)], 0.045, 8, 30), tp);
+  if (lv) b.add(pipe([V(-0.8, 0.05, 2.42), V(-0.6, 0.0, 2.62), V(0.6, 0.0, 2.62), V(0.8, 0.05, 2.42)], 0.06, 8, 30), tp); // rear bumper
   b.to(g);
   if (lv) { const tl = new Bag(); for (const sx of [-1, 1]) { const l = new THREE.BoxGeometry(0.12, 0.22, 0.02); l.translate(sx * 0.74, 0.5, 2.39); tl.add(l, M.light(0xff2010)); } tl.to(g, true); }
   return g;
 }
 
+// Detail sections of the pickup: crisper than the plain part's (which physics reads), a flat hood with a cowl crease, a
+// raked windscreen, a flat roof, an upright back window, and a bed at hood height.
+const TRUCK = [
+  { z: -2.42, hw: 0.84, top: 0.66, bot: 0.06, n: 8 }, { z: -2.36, hw: 0.9, top: 0.72, bot: 0.0, n: 8 }, { z: -1.2, hw: 0.92, top: 0.75, bot: 0.0, n: 8 },
+  { z: -0.82, hw: 0.92, top: 0.77, bot: 0.0, n: 8 }, { z: -0.78, hw: 0.92, top: 0.79, bot: 0.0, n: 8 }, { z: -0.22, hw: 0.87, top: 1.4, bot: 0.0, n: 7 },
+  { z: -0.12, hw: 0.87, top: 1.44, bot: 0.0, n: 7 }, { z: 0.66, hw: 0.87, top: 1.44, bot: 0.0, n: 7 }, { z: 0.74, hw: 0.88, top: 1.4, bot: 0.0, n: 7 },
+  { z: 0.8, hw: 0.92, top: 0.82, bot: 0.0, n: 8 }, { z: 2.3, hw: 0.92, top: 0.82, bot: 0.0, n: 8 }, { z: 2.38, hw: 0.88, top: 0.76, bot: 0.04, n: 8 },
+];
 // Detail build of the pickup body: car paint, real glass in the cab (windscreen, door windows, rear window) with a dark
 // cab behind it, seats, a dash and a driver (crew.js); door and hood shut lines, door handles, mirrors and headlights.
+// the open bed: walls inside the cut, a floor with ribs, rail caps along the top, the tailgate's inside
+function truckBed(g, S) {
+  const b = new Bag(), nb = new Bag(), liner = M.paint(0x1d1e21, 'matte'), z0 = 0.86, z1 = 2.3, yF = 0.36, xw = 0.8;
+  const yTop = topY(secAt(S, 1.5), xw) - 0.003, L = z1 - z0;
+  for (const sx of [-1, 1]) { const w = new THREE.BoxGeometry(0.05, yTop - yF, L); w.translate(sx * (xw - 0.025), (yTop + yF) / 2, (z0 + z1) / 2); b.add(w, liner); }
+  for (const z of [z0 + 0.025, z1 - 0.025]) { const w = new THREE.BoxGeometry(2 * xw, yTop - yF, 0.05); w.translate(0, (yTop + yF) / 2, z); b.add(w, liner); }
+  const floor = new THREE.BoxGeometry(2 * xw, 0.04, L); floor.translate(0, yF, (z0 + z1) / 2); b.add(floor, liner);
+  for (let k = -3; k <= 3; k++) { const r = new THREE.BoxGeometry(0.05, 0.025, L - 0.1); r.translate(k * 0.22, yF + 0.03, (z0 + z1) / 2); nb.add(r, liner); }
+  b.to(g); nb.to(g, true);
+}
+// The monster truck's tube frame: a roll cage inside the cab (A-pillar bars along the windscreen, roof rails, main hoop
+// behind the seats with a diagonal and a harness bar, door bars), braces back through the bed, down tubes to the chassis.
+function truckCage(g) {
+  const b = new Bag(), p = tubePaint(0xd3d6db), r = 0.035, P = (pts) => b.add(pipe(pts.map((q) => V(...q)), r, 8, pts.length * 8), p), B = (a, c, k = 1) => b.add(bar(V(...a), V(...c), r * 2 * k, r * 2 * k, true, 8), p);
+  for (const sx of [-1, 1]) {
+    P([[sx * 0.7, -0.15, -0.74], [sx * 0.7, 0.8, -0.71], [sx * 0.64, 1.32, -0.18], [sx * 0.64, 1.34, 0.12]]); // A-pillar bar
+    B([sx * 0.64, 1.34, 0.1], [sx * 0.64, 1.34, 0.6]); // roof rail
+    B([sx * 0.72, 0.5, -0.7], [sx * 0.74, 0.6, 0.6], 0.9); B([sx * 0.72, 0.75, -0.7], [sx * 0.74, 0.35, 0.6], 0.9); // door bars (X)
+    B([sx * 0.62, 1.32, 0.64], [sx * 0.56, yBed, 1.7]); // rear brace through the bed
+    B([sx * 0.56, yBed, 1.7], [sx * 0.56, -0.15, 1.75]); // down to the chassis
+  }
+  P([[-0.72, -0.15, 0.64], [-0.72, 1.0, 0.64], [-0.62, 1.34, 0.64], [0.62, 1.34, 0.64], [0.72, 1.0, 0.64], [0.72, -0.15, 0.64]]); // main hoop
+  B([-0.72, 0.1, 0.64], [0.62, 1.34, 0.64]); B([-0.72, 0.85, 0.64], [0.72, 0.85, 0.64]); // diagonal, harness bar
+  B([-0.64, 1.34, -0.16], [0.64, 1.34, -0.16]); B([-0.64, 1.34, -0.16], [0.64, 1.34, 0.6], 0.9); // roof front bar, roof diagonal
+  b.to(g);
+}
+const yBed = 0.4;
+// the tube chassis under the body: two rails, cross members, front horns up to the bumper
+function truckChassis(g) {
+  const b = new Bag(), p = tubePaint(0x26272b), r = 0.05;
+  for (const sx of [-1, 1]) b.add(pipe([V(sx * 0.5, -0.05, -2.55), V(sx * 0.55, -0.2, -2.0), V(sx * 0.58, -0.2, 0), V(sx * 0.55, -0.2, 2.0), V(sx * 0.5, -0.05, 2.55)], r, 8, 40), p);
+  for (const z of [-2.0, -0.8, 0.64, 1.75]) b.add(bar(V(-0.58, -0.2, z), V(0.58, -0.2, z), r * 1.6, r * 1.6, true, 8), p);
+  b.to(g);
+}
 const lerpSec = (a, b, t) => Object.fromEntries(Object.keys(a).map((k) => [k, a[k] + (b[k] - a[k]) * t]));
 function densify(S, n) { const o = []; for (let i = 0; i < S.length - 1; i++) for (let k = 0; k < n; k++) o.push(lerpSec(S[i], S[i + 1], k / n)); o.push(S.at(-1)); return o; }
 function secAt(S, z) { for (let i = 1; i < S.length; i++) if (S[i].z >= z) return lerpSec(S[i - 1], S[i], (z - S[i - 1].z) / (S[i].z - S[i - 1].z || 1)); return S.at(-1); }
@@ -223,12 +277,14 @@ function truckCab(g, S0, c) {
   const S = densify(S0, 3), geo = superLoft(S, 56, true), P = geo.attributes.position;
   // window openings as slab boxes (negative inside): the skin is clipped exactly along them, the glass is the rest
   const win = (x, y, z) => {
-    const ax = Math.abs(x), band = Math.max(0.86 - y, y - 1.3);
-    return Math.min(Math.max(band, -0.74 - z, z + 0.2, ax - 0.66), Math.max(band, -0.02 - z, z - 0.62, 0.55 - ax), Math.max(0.92 - y, y - 1.3, 0.7 - z, ax - 0.56));
+    const ax = Math.abs(x), band = Math.max(0.88 - y, y - 1.34);
+    return Math.min(Math.max(band, -0.74 - z, z + 0.18, ax - 0.68), Math.max(band, -0.06 - z, z - 0.6, 0.55 - ax), Math.max(0.94 - y, y - 1.3, 0.7 - z, ax - 0.58));
   };
+  const bed = (x, y, z) => Math.max(0.86 - z, z - 2.3, Math.abs(x) - 0.8, 0.36 - y); // the open bed (< 0 inside)
   const d = new Float32Array(P.count), nd = new Float32Array(P.count), v = new THREE.Vector3();
-  for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i); d[i] = win(v.x, v.y, v.z); nd[i] = -d[i]; }
-  g.add(new THREE.Mesh(clipGeometry(geo, d) || geo, PM.carPaint(c)));
+  for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i); const w = win(v.x, v.y, v.z); d[i] = Math.min(w, bed(v.x, v.y, v.z)); nd[i] = -w; }
+  { const sk = new THREE.Mesh(clipGeometry(geo, d) || geo, PM.carPaint(c)); sk.userData.openOk = 'window openings (glazed) and the bed (walled)'; g.add(sk); }
+  truckBed(g, S); truckCage(g); truckChassis(g);
   const glass = clipGeometry(geo, nd); if (glass) g.add(new THREE.Mesh(glass, flightDeckGlass())); // tinted: the bubble-canopy glass went milky white in daylight
   // the cab seen through the glass: the skin's inside faces in a dark trim colour
   const inner = new THREE.Mesh(geo, mat('cabIn', () => new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.9, side: THREE.BackSide }))); inner.castShadow = false; g.add(inner);
@@ -273,7 +329,7 @@ function heliNose(c, lv) {
   glass.rotateX(-Math.PI / 2); glass.scale(0.95, 1.08, 1.45); // now opens towards +Z (the cabin)
   g.add(new THREE.Mesh(glass, PM.canopy(0x1d2a33)));
   const chin = new THREE.SphereGeometry(R * 1.015, 32, 10, Math.PI, Math.PI, Math.PI * 0.6, Math.PI * 0.4); // lower front quarter
-  chin.scale(0.95, 1.08, 1.45); g.add(new THREE.Mesh(chin, PM.skin(c)));
+  chin.scale(0.95, 1.08, 1.45); g.add(new THREE.Mesh(lv ? shell(chin, 0.02) : chin, PM.skin(c))); // detail: a wall thickness (seen from inside the bubble)
   const frame = new THREE.TorusGeometry(R * 0.97, 0.035, 8, 40); frame.scale(0.95, 1.08, 1); g.add(new THREE.Mesh(frame, PM.skin(c)));
   const b = new Bag();
   if (lv) { // detail: the crew sit forward in the bubble (the cabin's front bulkhead is at z = 0), a low console ahead of them
@@ -298,7 +354,7 @@ function heliNose(c, lv) {
 // ---------- parts ----------
 def({ id: 'fus_buggy', cat: 'fuselage', name: 'Buggy Tub', desc: 'Low, tough off-road racer body with a bumper and nerf bars. Add a cage, a motor and big wheels.', mass: 260, hp: 1100, color: 0x15161a,
   build: (c, lv) => buggyTub(c, lv) });
-def({ id: 'fus_truck', cat: 'fuselage', name: 'Monster Truck Body', desc: 'Pickup body on a ladder frame. Made for giant wheels.', mass: 620, hp: 2200, color: 0x1d4e89, eye: [-0.3, 1.0, -0.2],
+def({ id: 'fus_truck', cat: 'fuselage', name: 'Monster Truck Body', desc: 'Pickup body on a ladder frame. Made for giant wheels.', mass: 620, hp: 2200, color: 0x1d4e89, eye: [-0.3, 1.0, -0.2], mudFlaps: true,
   build: (c, lv) => truckBody(c, lv) });
 def({ id: 'fus_heli', cat: 'fuselage', name: 'Heli Cabin', desc: 'Helicopter cabin with an engine hump. Bubble Nose in front, Tail Boom behind, rotor on top.', mass: 260, hp: 1100, color: 0xc8102e,
   build: (c) => heliCabin(c) });
@@ -313,11 +369,11 @@ cornerDef('c_offroad_steer', 'Off-Road Steering Wheel', 'Knobby tyre on long-tra
 cornerDef('c_bigfoot', 'Monster Tyre', 'Gigantic knobby tyre that drives and steers. Climb over anything.', 140, { r: 0.85, w: 0.72, len: 0.7, limit: 12, hp: 1600, color: 0xc8102e, arm: 0.35, blocks: 16 }, true);
 
 def({ id: 'c_rollcage', cat: 'car', name: 'Roll Cage', desc: 'Steel tube cage. Looks tough and keeps the driver safe when you flip.', mass: 45, hp: 1400, color: 0xe8601c,
-  build: (c) => {
-    const g = new THREE.Group(), b = new Bag(), p = tubePaint(c), r = 0.042;
+  build: (c, lv) => {
+    const g = new THREE.Group(), b = new Bag(), p = tubePaint(c), r = 0.042, tb = lv ? pipe : tube;
     const hoopF = [V(-0.64, 0, -0.85), V(-0.6, 0.55, -0.6), V(-0.5, 0.95, -0.32), V(0.5, 0.95, -0.32), V(0.6, 0.55, -0.6), V(0.64, 0, -0.85)];
     const hoopM = [V(-0.66, 0, 0.5), V(-0.63, 0.75, 0.47), V(-0.48, 1.0, 0.45), V(0.48, 1.0, 0.45), V(0.63, 0.75, 0.47), V(0.66, 0, 0.5)];
-    b.add(tube(hoopF, r, 8, 60), p); b.add(tube(hoopM, r, 8, 60), p);
+    b.add(tb(hoopF, r, 8, 60), p); b.add(tb(hoopM, r, 8, 60), p);
     for (const sx of [-1, 1]) {
       b.add(bar(V(sx * 0.5, 0.95, -0.32), V(sx * 0.48, 1.0, 0.45), r * 2, r * 2, true, 8), p); // roof rails
       b.add(bar(V(sx * 0.48, 1.0, 0.45), V(sx * 0.56, 0.0, 1.75), r * 2, r * 2, true, 8), p); // rear braces
@@ -367,7 +423,7 @@ def({ id: 'fus_rocket', cat: 'fuselage', name: 'Rocket Stage', desc: 'Tall fuel 
     const W = { z: -3.75, r: 0.3 }, skin = revolve([...ROCKET_PROF.filter((q) => q[0] <= -4.4), ...Array.from({ length: 16 }, (_, k) => [-4.3 + k * 0.1, 0.9]), ...ROCKET_PROF.filter((q) => q[0] > -2.8)], { segs: 64, cap: true }); // denser rings round the porthole
     const P = skin.attributes.position, d = new Float32Array(P.count), v = new THREE.Vector3();
     for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i); d[i] = v.x > 0 ? Math.hypot(Math.atan2(v.y, v.x) * 0.9, v.z - W.z) - W.r : 1; }
-    const cut = clipGeometry(skin, d) || skin; g.add(new THREE.Mesh(cut, PM.skin(c)));
+    const cut = clipGeometry(skin, d) || skin, sk = new THREE.Mesh(cut, PM.skin(c)); sk.userData.openOk = 'porthole: glazed'; g.add(sk);
     const inner = new THREE.Mesh(revolve([[-5.0, 0.86], [-2.6, 0.88]], { segs: 32, cap: true }), mat('capsuleIn', () => new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.9, side: THREE.BackSide }))); g.add(inner);
     const xw = 0.865;
     const glass = new THREE.CircleGeometry(W.r + 0.03, 28); glass.rotateY(Math.PI / 2); glass.translate(xw, 0, W.z); g.add(new THREE.Mesh(glass, PM.canopy(0x1d2a33)));

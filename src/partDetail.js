@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { M } from './materials.js';
 import { PM } from './planeMaterials.js';
+import { revolve } from './parts.js'; // (circular, used at build time only)
 
 export const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const KEEP = ['position', 'normal', 'uv', 'uv1'];
@@ -88,6 +89,17 @@ export function bar(a, b, w, h = w, round = false, segs = 8) {
   return g;
 }
 export const tube = (pts, r, segs = 6, steps = 0) => new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), steps || pts.length * 5, r, segs, false);
+// a tube with its ends closed (pipes, cage tubes, bows: their open ends showed as holes)
+export function pipe(pts, r, segs = 6, steps = 0) {
+  const g = tube(pts, r, segs, steps), T = g.parameters.tubularSegments, R = segs, P = g.attributes.position, N = g.attributes.normal, U = g.attributes.uv;
+  const pos = Array.from(P.array), nrm = Array.from(N.array), uv = Array.from(U.array), idx = Array.from(g.index.array), c = g.parameters.path;
+  for (const [ring, t, flip] of [[0, 0, false], [T, 1, true]]) {
+    const p = c.getPointAt(t), d = c.getTangentAt(t).multiplyScalar(flip ? 1 : -1), ci = pos.length / 3; pos.push(p.x, p.y, p.z); nrm.push(d.x, d.y, d.z); uv.push(t, 0.5);
+    for (let i = 1; i <= R; i++) { const a = ring * (R + 1) + i - 1, b = a + 1; if (flip) idx.push(b, a, ci); else idx.push(a, b, ci); }
+  }
+  const o = new THREE.BufferGeometry(); o.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); o.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3)); o.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); o.setIndex(idx);
+  return o;
+}
 
 // Closed loops (all the same length) joined into a skin; optional caps. Winding is checked so normals face outwards.
 export function ringLoft(rings, capStart = false, capEnd = false) {
@@ -112,6 +124,97 @@ export function ringLoft(rings, capStart = false, capEnd = false) {
   return g;
 }
 
+// ---------- clipping an indexed geometry by a per-vertex value (< 0 is cut away) ----------
+export function clipGeometry(geo, val) {
+  const idx = geo.index ? geo.index.array : [...Array(geo.attributes.position.count).keys()];
+  const names = Object.keys(geo.attributes), src = names.map((k) => geo.attributes[k]), arr = src.map((a) => Array.from(a.array));
+  let count = geo.attributes.position.count; const cache = new Map(), out = [];
+  let any = false; for (let i = 0; i < val.length; i++) if (val[i] < 0) { any = true; break; }
+  if (!any) return null;
+  const cut = (a, b) => {
+    const key = a < b ? a * 1e7 + b : b * 1e7 + a; if (cache.has(key)) return cache.get(key);
+    const t = val[a] / (val[a] - val[b]), n = count++;
+    src.forEach((A, k) => { const s = A.itemSize, d = arr[k]; for (let c = 0; c < s; c++) d.push(d[a * s + c] + (d[b * s + c] - d[a * s + c]) * t); if (names[k] === 'normal') { const o = n * 3, l = Math.hypot(d[o], d[o + 1], d[o + 2]) || 1; d[o] /= l; d[o + 1] /= l; d[o + 2] /= l; } });
+    cache.set(key, n); return n;
+  };
+  for (let i = 0; i < idx.length; i += 3) {
+    const tri = [idx[i], idx[i + 1], idx[i + 2]], ins = tri.map((v) => val[v] < 0), nIn = ins.filter(Boolean).length;
+    if (!nIn) { out.push(...tri); continue; }
+    if (nIn === 3) continue;
+    const poly = [];
+    for (let e = 0; e < 3; e++) { const a = tri[e], b = tri[(e + 1) % 3]; if (!ins[e]) poly.push(a); if (ins[e] !== ins[(e + 1) % 3]) poly.push(cut(a, b)); }
+    for (let k = 1; k < poly.length - 1; k++) out.push(poly[0], poly[k], poly[k + 1]);
+  }
+  const g = new THREE.BufferGeometry();
+  names.forEach((k, j) => g.setAttribute(k, new THREE.Float32BufferAttribute(arr[j], src[j].itemSize)));
+  g.setIndex(out); return g;
+}
+
+// ---------- closing open surfaces ----------
+// Boundary of an (indexed or not) geometry: directed edges a->b of triangles whose reverse is not in the mesh, with
+// positions welded (revolve seams and primitive caps repeat vertices). Returns { tri, weld, edges: [[a, b]] } in
+// original vertex indices.
+// a numeric key for a position welded to 0.25 mm (parts are built within +-16 m of their origin; a string key beyond)
+export const posKey = (x, y, z) => { const a = Math.round(x * 4e3) + 65536, b = Math.round(y * 4e3) + 65536, c = Math.round(z * 4e3) + 65536; return a >= 0 && a < 131072 && b >= 0 && b < 131072 && c >= 0 && c < 131072 ? a + b * 131072 + c * 17179869184 : `${a},${b},${c}`; };
+function openEdges(geo) {
+  const P = geo.attributes.position, n = P.count, key = new Map(), weld = new Int32Array(n);
+  for (let i = 0; i < n; i++) { const k = posKey(P.getX(i), P.getY(i), P.getZ(i)); let j = key.get(k); if (j === undefined) { j = key.size; key.set(k, j); } weld[i] = j; }
+  const tri = geo.index ? Array.from(geo.index.array) : [...Array(n).keys()], dir = new Map();
+  for (let t = 0; t < tri.length; t += 3) for (let e = 0; e < 3; e++) { const a = tri[t + e], b = tri[t + (e + 1) % 3]; if (weld[a] !== weld[b]) dir.set(weld[a] * 1e7 + weld[b], [a, b]); }
+  const edges = [];
+  for (const [k, ab] of dir) { const wa = Math.floor(k / 1e7), wb = k % 1e7; if (!dir.has(wb * 1e7 + wa)) edges.push(ab); }
+  return { tri, weld, edges, nw: key.size };
+}
+// Close every hole of a surface with a fan from the hole's centre (end caps of blades, tubes, lofts). Winding follows
+// the surface, so the caps face out. Keeps the attribute set (cap vertices copy the rim's uv/uv1).
+export function capHoles(geo) {
+  const { tri, weld, edges, nw } = openEdges(geo); if (!edges.length) return geo;
+  const par = new Int32Array(nw).map((_, i) => i), find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+  for (const [a, b] of edges) par[find(weld[a])] = find(weld[b]);
+  const loops = new Map(); for (const e of edges) { const r = find(weld[e[0]]); if (!loops.has(r)) loops.set(r, []); loops.get(r).push(e); }
+  const names = Object.keys(geo.attributes).filter((k) => k !== 'normal'), arr = names.map((k) => Array.from(geo.attributes[k].array)), P = geo.attributes.position;
+  let count = P.count; const out = tri.slice();
+  for (const es of loops.values()) {
+    const c = count++;
+    names.forEach((k, j) => { const s = geo.attributes[k].itemSize, d = arr[j]; for (let q = 0; q < s; q++) { let m = 0; for (const [a] of es) m += d[a * s + q]; d.push(m / es.length); } });
+    for (const [a, b] of es) out.push(b, a, c);
+  }
+  const g = new THREE.BufferGeometry(); names.forEach((k, j) => g.setAttribute(k, new THREE.Float32BufferAttribute(arr[j], geo.attributes[k].itemSize)));
+  g.setIndex(out); g.computeVertexNormals(); return g;
+}
+// Give an open surface a wall thickness t: an inner copy offset along the (welded) normals, facing in, and a rim joining
+// the two along every hole. Ducts, nozzles, cowls and tyres then have real inside surfaces with proper normals.
+export function shell(geo, t, innerMat = null) {
+  if (!geo.attributes.normal) geo.computeVertexNormals();
+  const { tri, weld, edges, nw } = openEdges(geo), P = geo.attributes.position, N = geo.attributes.normal, n = P.count;
+  const wn = new Float32Array(nw * 3); for (let i = 0; i < n; i++) { const w = weld[i] * 3; wn[w] += N.getX(i); wn[w + 1] += N.getY(i); wn[w + 2] += N.getZ(i); }
+  const names = Object.keys(geo.attributes), arr = names.map((k) => Array.from(geo.attributes[k].array));
+  names.forEach((k, j) => {
+    const s = geo.attributes[k].itemSize, d = arr[j];
+    for (let i = 0; i < n; i++) {
+      const w = weld[i] * 3, l = Math.hypot(wn[w], wn[w + 1], wn[w + 2]) || 1;
+      for (let q = 0; q < s; q++) {
+        let v = d[i * s + q];
+        if (k === 'position') v -= (wn[w + q] / l) * t; else if (k === 'normal') v = -wn[w + q] / l;
+        d.push(v);
+      }
+    }
+  });
+  const out = tri.slice(), inner = [];
+  for (let i = 0; i < tri.length; i += 3) inner.push(tri[i] + n, tri[i + 2] + n, tri[i + 1] + n);
+  const rim = []; for (const [a, b] of edges) rim.push(b, a, a + n, b, a + n, b + n);
+  const g = new THREE.BufferGeometry(); names.forEach((k, j) => g.setAttribute(k, new THREE.Float32BufferAttribute(arr[j], geo.attributes[k].itemSize)));
+  if (innerMat) { g.setIndex([...out, ...rim, ...inner]); g.addGroup(0, out.length + rim.length, 0); g.addGroup(out.length + rim.length, inner.length, 1); }
+  else g.setIndex([...out, ...rim, ...inner]);
+  return g;
+}
+// split a shelled geometry's inner face off as its own geometry (for a different inside material)
+export function shellParts(geo, t) {
+  const g = shell(geo, t, true), idx = g.index.array, [o, i] = g.groups;
+  const a = g.clone(), b = g.clone(); a.setIndex(Array.from(idx.slice(o.start, o.start + o.count))); b.setIndex(Array.from(idx.slice(i.start, i.start + i.count)));
+  a.clearGroups(); b.clearGroups(); return [a, b];
+}
+
 // ---------- propellers ----------
 // Blade along +X spinning about Z (thrust towards -Z): chord peaks around 40 % radius and rounds off at the tip,
 // pitch angle falls from ~50° at the root to ~12° at the tip (constant geometric pitch), flat-bottomed section.
@@ -131,7 +234,7 @@ export function bladeGeometry(R, { chord = 1, pitch = 1.25, r0 = 0.15, band = 0.
     rings.push(ring);
   }
   const cut = Math.round(N * (1 - band));
-  const blade = ringLoft(rings.slice(0, cut + 1), false, false), tip = ringLoft(rings.slice(cut), false, true);
+  const blade = ringLoft(rings.slice(0, cut + 1), true, false), tip = ringLoft(rings.slice(cut), false, true);
   const shank = new THREE.CylinderGeometry(R * 0.028, R * 0.034, R * r0 * 1.05, 10); shank.rotateZ(Math.PI / 2); shank.translate(R * r0 * 0.5, 0, 0);
   // one mesh per blade: the colour comes from a two-texel map (u = 0.25 blade, 0.75 painted tip), see PM.blade()
   const paint = (g, u) => { norm(g); const a = g.attributes.uv; for (let i = 0; i < a.count; i++) a.setXY(i, u, 0.5); return g; };
@@ -156,18 +259,33 @@ export function propEngineDetail(g, { len, radius: r, radial, color, propR }) {
   const b = new Bag(), nb = new Bag();
   const turbo = !radial && len > 2;
   if (radial) {
-    // finned cylinders (replacing the plain ones), pushrod tubes, crankcase nose and reduction-gear dome
-    for (const m of g.children.slice()) if (m.geometry?.type === 'CylinderGeometry' && m.material === M.steel()) g.remove(m);
-    const nC = 9;
-    for (let i = 0; i < nC; i++) {
-      const a = (i / nC) * Math.PI * 2, rot = [0, 0, a - Math.PI / 2], c = Math.cos(a), s = Math.sin(a);
-      const cyl = new THREE.CylinderGeometry(0.075, 0.085, r * 0.58, 10); cyl.applyMatrix4(mx([c * r * 0.42, s * r * 0.42, 0.1], rot));
-      b.add(cyl, dark);
-      for (let f = 0; f < 6; f++) { const fin = new THREE.CylinderGeometry(0.12, 0.12, 0.012, 12); fin.applyMatrix4(mx([c * r * (0.24 + f * 0.05), s * r * (0.24 + f * 0.05), 0.1], rot)); b.add(fin, steel); }
-      const head = new THREE.BoxGeometry(0.15, 0.1, 0.16); head.applyMatrix4(mx([c * r * 0.6, s * r * 0.6, 0.1], rot)); b.add(head, steel);
-      nb.add(bar(V(c * r * 0.6, s * r * 0.6, 0.02), V(c * r * 0.16, s * r * 0.16, 0.0), 0.018, 0.018, true, 5), steel);
+    // An open NACA cowl ring instead of the plain part's closed blob (whose cylinders sat behind its front disc, out of
+    // sight): a rounded lip curling into the cowl, so the cylinder bank shows through the opening. Behind the bank a
+    // dark baffle and the cowl's back closes it off.
+    for (const m of g.children.slice()) if ((m.geometry?.type === 'CylinderGeometry' && m.material === M.steel()) || m.geometry?.type === 'CircleGeometry') g.remove(m);
+    const cowl = g.children.find((m) => m.isMesh && m.material === paint);
+    if (cowl) {
+      const ri = r * 0.7, lip = smoothPts([[0.5, ri * 0.97], [0.16, ri], [0.03, ri * 1.02], [-0.03, (ri + r) / 2], [0.03, r * 0.95], [0.16, r * 0.995], [len * 0.5, r * 0.98], [len, r * 0.7]], 40);
+      cowl.geometry = revolve(lip, { segs: 48 }); cowl.geometry = capHoles(cowl.geometry); // the back end (under the gills) and the inside end behind the engine
     }
-    const dome = new THREE.SphereGeometry(r * 0.3, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2); dome.rotateX(-Math.PI / 2); dome.translate(0, 0, 0.0); b.add(dome, steel);
+    const baffle = new THREE.CircleGeometry(r * 0.69, 32); baffle.rotateY(Math.PI); baffle.translate(0, 0, 0.42); b.add(baffle, PM.exhaust());
+    // the engine: crankcase drum, reduction-gear case in front (behind the spinner), nine finned cylinders with their
+    // heads, rocker boxes and pushrods, the ignition harness ring and the intake pipes behind
+    const crank = new THREE.CylinderGeometry(r * 0.24, r * 0.24, 0.3, 18); crank.rotateX(Math.PI / 2); crank.translate(0, 0, 0.16); b.add(crank, PM.metal('titanium'));
+    const red = new THREE.CylinderGeometry(r * 0.3, r * 0.22, 0.14, 24); red.rotateX(Math.PI / 2); red.translate(0, 0, 0.0); b.add(red, PM.metal('brushed'));
+    const nC = 9, cz = 0.17;
+    for (let i = 0; i < nC; i++) {
+      const a = (i / nC) * Math.PI * 2 + Math.PI / 2, rot = [0, 0, a - Math.PI / 2], c = Math.cos(a), s = Math.sin(a), at = (k) => [c * r * k, s * r * k, cz];
+      const cyl = new THREE.CylinderGeometry(r * 0.085, r * 0.095, r * 0.3, 12); cyl.applyMatrix4(mx(at(0.36), rot)); b.add(cyl, dark);
+      for (let f = 0; f < 7; f++) { const fin = new THREE.CylinderGeometry(r * 0.12, r * 0.12, r * 0.012, 14); fin.applyMatrix4(mx(at(0.29 + f * 0.03), rot)); b.add(fin, dark); }
+      const head = new THREE.CylinderGeometry(r * 0.12, r * 0.14, r * 0.14, 12); head.applyMatrix4(mx(at(0.55), rot)); b.add(head, PM.metal('brushed'));
+      for (let f = 0; f < 4; f++) { const hf = new THREE.BoxGeometry(r * 0.3, r * 0.012, r * 0.2); hf.applyMatrix4(mx(at(0.5 + f * 0.035), rot)); nb.add(hf, PM.metal('brushed')); }
+      for (const dz of [-1, 1]) { const rb = new THREE.BoxGeometry(r * 0.07, r * 0.07, r * 0.1); rb.applyMatrix4(mx([c * r * 0.6, s * r * 0.6, cz + dz * r * 0.08], rot)); b.add(rb, steel); }
+      for (const dz of [-1, 1]) nb.add(bar(V(c * r * 0.58, s * r * 0.58, cz - r * 0.1 + dz * 0.012), V(c * r * 0.25, s * r * 0.25, cz - r * 0.14 + dz * 0.012), r * 0.025, r * 0.025, true, 5), steel);
+      nb.add(pipe([V(c * r * 0.3, s * r * 0.3, cz + r * 0.12), V(c * r * 0.32, s * r * 0.32, cz + r * 0.3), V(c * r * 0.2, s * r * 0.2, cz + r * 0.42)], r * 0.035, 6, 10), steel); // intake pipe
+    }
+    const harness = new THREE.TorusGeometry(r * 0.31, r * 0.02, 6, 36); harness.translate(0, 0, cz - r * 0.15); b.add(harness, PM.metal('anodised'));
+    for (let i = 0; i < nC; i++) { const a = (i / nC) * Math.PI * 2 + Math.PI / 2; nb.add(tube([V(Math.cos(a) * r * 0.31, Math.sin(a) * r * 0.31, cz - r * 0.15), V(Math.cos(a) * r * 0.45, Math.sin(a) * r * 0.45, cz - r * 0.12), V(Math.cos(a) * r * 0.55, Math.sin(a) * r * 0.55, cz - r * 0.06)], r * 0.01, 4, 8), M.black()); }
     // cowl flaps (gills) round the cowl's trailing edge, slightly open
     const nG = 18, rr = r * 0.69;
     for (let i = 0; i < nG; i++) {
@@ -178,7 +296,7 @@ export function propEngineDetail(g, { len, radius: r, radial, color, propR }) {
     }
     // exhaust collector stubs low on each side, with sooty ends
     for (const sx of [-1, 1]) {
-      const ex = tube([V(sx * r * 0.55, -r * 0.45, len - 0.25), V(sx * r * 0.68, -r * 0.55, len + 0.05), V(sx * r * 0.74, -r * 0.6, len + 0.3)], 0.06, 8);
+      const ex = pipe([V(sx * r * 0.55, -r * 0.45, len - 0.25), V(sx * r * 0.68, -r * 0.55, len + 0.05), V(sx * r * 0.74, -r * 0.6, len + 0.3)], 0.06, 8);
       b.add(ex, dark);
       const mouth = new THREE.CircleGeometry(0.055, 10); mouth.applyMatrix4(mx([sx * r * 0.74, -r * 0.6, len + 0.301])); b.add(mouth, soot);
     }
@@ -189,16 +307,17 @@ export function propEngineDetail(g, { len, radius: r, radial, color, propR }) {
       // turboprop: big curved exhaust stacks either side, chin intake scoop under the spinner
       for (const sx of [-1, 1]) {
         const p0 = V(sx * r * 0.55, r * 0.05, len * 0.36), p1 = V(sx * r * 1.0, r * 0.08, len * 0.44), p2 = V(sx * r * 1.12, r * 0.06, len * 0.56);
-        b.add(tube([p0, p1, p2], r * 0.2, 12, 14), dark);
+        b.add(pipe([p0, p1, p2], r * 0.2, 12, 14), dark);
         const lip = new THREE.TorusGeometry(r * 0.2, r * 0.025, 6, 16); lip.applyMatrix4(mx(p2.toArray(), [0, sx * 0.5, 0])); b.add(lip, steel);
         const m = new THREE.CircleGeometry(r * 0.19, 14); m.applyMatrix4(mx(p2.clone().add(V(sx * 0.005, 0, 0.01)).toArray(), [0, sx * 0.5, 0])); b.add(m, soot);
       }
-      const scoop = new THREE.SphereGeometry(1, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2); scoop.applyMatrix4(mx([0, -r * 0.72, len * 0.22], [Math.PI, 0, 0], [r * 0.42, r * 0.3, len * 0.22])); b.add(scoop, paint);
+      const scoop = new THREE.SphereGeometry(1, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2); scoop.applyMatrix4(mx([0, -r * 0.72, len * 0.22], [Math.PI, 0, 0], [r * 0.42, r * 0.3, len * 0.22])); b.add(shell(scoop, r * 0.02), paint);
       const mouth = new THREE.CircleGeometry(1, 16, Math.PI, Math.PI); mouth.applyMatrix4(mx([0, -r * 0.74, 0.012], [0, Math.PI, 0], [r * 0.34, r * 0.22, 1])); b.add(mouth, intake);
     } else {
-      // flat-four: two cooling inlets beside the spinner, two short stacks each side under the cowl
+      // flat-four: two real cooling inlets cut into the cowl face beside the spinner, each a duct back to the finned
+      // cylinder heads behind a baffle; an oil-cooler scoop under the chin; two short stacks each side under the cowl
+      pistonCowl(g, b, nb, { len, r, paint });
       for (const sx of [-1, 1]) {
-        const inl = new THREE.CircleGeometry(1, 16, 0, Math.PI); inl.applyMatrix4(mx([sx * r * 0.62, r * 0.05, 0.03], [0, Math.PI, sx * 0.25], [r * 0.2, r * 0.17, 1])); b.add(inl, intake);
         for (const dz of [0, 0.11]) {
           const p0 = V(sx * r * 0.42, -r * 0.78, len * 0.68 + dz), p1 = V(sx * r * 0.46, -r * 1.02, len * 0.76 + dz);
           b.add(bar(p0, p1, 0.05, 0.05, true, 8), dark);
@@ -210,7 +329,7 @@ export function propEngineDetail(g, { len, radius: r, radial, color, propR }) {
     }
     // louvres: little raked slots high on each side of the cowl (near only)
     for (const sx of [-1, 1]) for (let i = 0; i < 5; i++) {
-      const z = len * (turbo ? 0.62 : 0.5) + i * 0.04, a = sx * 1.0, rr = r * (turbo ? 1.0 : 0.985);
+      const z = len * (turbo ? 0.62 : 0.5) + i * 0.04, a = sx * 1.0, rr = r * (turbo ? 1.0 : 0.998);
       const l = new THREE.BoxGeometry(r * 0.16, 0.01, 0.014); l.applyMatrix4(mx([Math.sin(a) * rr, Math.cos(a) * rr, z], [0, 0, -a]));
       nb.add(l, dark);
     }
@@ -220,10 +339,48 @@ export function propEngineDetail(g, { len, radius: r, radial, color, propR }) {
   b.to(g); nb.to(g, true);
 }
 
+// The flat-four cowl: the plain part's front is a closed disc (a checkered blob). Rebuilt finer, with two elliptical
+// inlets cut exactly into the face (clipGeometry), each lined with a duct to a finned cylinder-head face, a rounded lip
+// round each opening, and an oil-cooler scoop under the chin with its radiator grille.
+function pistonCowl(g, b, nb, { len, r, paint }) {
+  const cowl = g.children.find((m) => m.isMesh && m.material === paint); if (!cowl) return;
+  const prof = [[0, 0], [0, 0.18 * r], [0, 0.32 * r], [0, 0.44 * r], [0.004, 0.55 * r], [0.014, 0.63 * r], [0.03, 0.71 * r], [0.055, 0.79 * r], [0.09, 0.85 * r], [0.13, 0.9 * r], [0.22, 0.95 * r], [len * 0.45, r], [len, 0.92 * r], [len + 0.01, 0]]; // (behind the lip: the plain cowl's lines, so the louvres sit on it)
+  const zAt = (rho) => { for (let i = 1; i < 11; i++) if (prof[i][1] >= rho) { const a = prof[i - 1], c = prof[i]; return a[0] + (c[0] - a[0]) * ((rho - a[1]) / (c[1] - a[1] || 1)); } return 0.22; };
+  const IN = [[0.6 * r, 0.1 * r], [-0.6 * r, 0.1 * r]], ax = 0.19 * r, ay = 0.145 * r;
+  const geo = revolve(prof, { segs: 72 }), P = geo.attributes.position, val = new Float32Array(P.count);
+  for (let i = 0; i < P.count; i++) { const x = P.getX(i), y = P.getY(i), z = P.getZ(i); val[i] = z > 0.2 ? 1 : Math.min(...IN.map(([cx, cy]) => (Math.hypot((x - cx) / ax, (y - cy) / ay) - 1) * ay)); }
+  cowl.geometry = clipGeometry(geo, val) || geo; cowl.geometry.computeVertexNormals(); cowl.userData.openOk = 'cooling inlets: each lined by its duct';
+  const ductM = PM.duct(0x2a2c30), depth = Math.min(0.32, len * 0.3);
+  for (const [cx, cy] of IN) {
+    const ring = (k, shrink, dz) => { const o = []; for (let i = 0; i < 28; i++) { const a = (i / 28) * Math.PI * 2, x = cx + Math.cos(a) * ax * shrink, y = cy + Math.sin(a) * ay * shrink; o.push(V(x, y, k === 0 ? zAt(Math.hypot(x, y)) - 0.004 : dz)); } return o; };
+    const rings = [ring(0, 1.0), ring(1, 0.98, depth * 0.45), ring(2, 0.9, depth)], duct = ringLoft(rings);
+    b.add(duct, ductM);
+    b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(ring(0, 1.04).map((p) => p.add(V(0, 0, -0.006))), true), 56, Math.max(0.008, r * 0.022), 6, true), PM.metal('polished')); // rolled lip, bare metal
+    const face = new THREE.CircleGeometry(1, 24); face.applyMatrix4(mx([cx, cy, depth - 0.005], [0, Math.PI, 0], [ax * 0.9, ay * 0.9, 1])); b.add(face, M.darkMetal());
+    for (let k = -2; k <= 2; k++) nb.add(bar(V(cx - ax * 0.8 * Math.sqrt(1 - (k / 2.6) ** 2), cy + k * ay * 0.32, depth - 0.02), V(cx + ax * 0.8 * Math.sqrt(1 - (k / 2.6) ** 2), cy + k * ay * 0.32, depth - 0.02), r * 0.02, r * 0.012), PM.metal('brushed')); // cylinder-head fins
+  }
+  // oil-cooler scoop: a rounded box under the chin, open at the front, fairing back into the cowl
+  const rings = [];
+  for (const [z, w, h, dy] of [[0.16, 0.2, 0.09, 0], [0.22, 0.21, 0.095, 0], [0.4, 0.19, 0.08, 0.01], [0.62, 0.12, 0.03, 0.03]]) {
+    const ring = [], yc = -0.905 * r - h * r + dy * r;
+    for (let i = 0; i < 20; i++) { const a = (i / 20) * Math.PI * 2, c = Math.cos(a), s = Math.sin(a); ring.push(V(Math.sign(c) * Math.abs(c) ** 0.5 * w * r, yc + Math.sign(s) * Math.abs(s) ** 0.5 * h * r, z * len / 1.1)); }
+    rings.push(ring);
+  }
+  b.add(shell(ringLoft(rings, false, true), r * 0.015), paint);
+  const gr = new THREE.PlaneGeometry(0.38 * r, 0.16 * r); gr.rotateY(Math.PI); gr.translate(0, -1.02 * r, 0.21 * len / 1.1); b.add(gr, M.darkMetal());
+  for (let k = -4; k <= 4; k++) nb.add(bar(V(k * 0.04 * r, -1.1 * r, 0.205 * len / 1.1), V(k * 0.04 * r, -0.94 * r, 0.205 * len / 1.1), r * 0.008, r * 0.006), M.steel());
+}
+
 // Jet intake lip, twisted compressor/fan blades, exhaust plug or afterburner petals and turbine face.
 export function jetEngineDetail(g, { len, radius: r, fan, ab }) {
   const lipMat = PM.metal('polished'), dark = M.darkMetal(), steel = M.steel(), hot = PM.metal('hot');
   const b = new Bag();
+  // inside surfaces: the cowl gets a wall thickness (a rim where it ends), the duct inside it an acoustic-liner grey
+  // instead of a black void, the nozzle a thick wall
+  const [outerM, ductM, , nozM, coreM] = g.children; // skin, duct, fan group, nozzle, core disc
+  if (outerM?.isMesh) outerM.geometry = shell(outerM.geometry, r * 0.04);
+  if (ductM?.isMesh) ductM.material = PM.duct(fan ? 0x8e9399 : 0x4e5258);
+  if (fan) { g.remove(nozM); g.remove(coreM); } else if (nozM?.isMesh && !ab) nozM.geometry = shell(nozM.geometry, r * 0.05);
   const lipR = fan ? r * 0.94 : r * 0.88;
   const lip = new THREE.TorusGeometry(fan ? r * 0.93 : lipR, r * (fan ? 0.075 : 0.06), 10, 48); lip.translate(0, 0, fan ? 0.03 : 0.02); b.add(lip, lipMat);
   // compressor / fan face: replace the box blades with twisted blades, keep the group (aircraft.js spins userData.fan)
@@ -239,31 +396,46 @@ export function jetEngineDetail(g, { len, radius: r, fan, ab }) {
         for (const [x, y] of [[-0.5, 0], [0, 0.012], [0.5, 0], [0, -0.012]]) ring.push(V(0, rr, 0).addScaledVector(d, x * c).add(V(0, 0, y * 0).addScaledVector(V(-Math.sin(tw), 0, Math.cos(tw)), y * r)));
         rings.push(ring);
       }
-      const bg = ringLoft(rings, false, true); bg.rotateZ((i / nb) * Math.PI * 2); bg.translate(0, 0, len * 0.12); blades.push(norm(bg));
+      const bg = ringLoft(rings, true, true); bg.rotateZ((i / nb) * Math.PI * 2); bg.translate(0, 0, len * 0.12); blades.push(norm(bg));
     }
     const bm = new THREE.Mesh(mergeGeometries(blades), fan ? PM.metal('titanium') : steel); fanG.add(bm);
     if (fan) { // white swirl on the spinner (so you can see it turning)
       const sw = []; for (let k = 0; k <= 12; k++) { const t = k / 12, a = t * Math.PI * 1.6, rr = r * 0.3 * (1 - t) * 1.03; sw.push(V(Math.sin(a) * rr, Math.cos(a) * rr, len * 0.05 + r * 0.3 - t * r * 0.6)); } // on the hub cone
-      const swirl = new THREE.Mesh(tube(sw, r * 0.02, 5, 24), M.paint(0xffffff, 'matte'));
+      const swirl = new THREE.Mesh(pipe(sw, r * 0.02, 5, 24), M.paint(0xffffff, 'matte'));
       swirl.userData.near = true; fanG.add(swirl);
     }
   }
+  const glow = (rr, z) => { // the turbine face / flame holder glows with the flame (shares the flame core's material)
+    const fc = g.userData.flameCore; if (!fc) return;
+    const d = new THREE.Mesh(new THREE.CircleGeometry(rr, 24), fc.material); d.position.z = z; d.userData.cosmetic = true; d.castShadow = false; g.add(d);
+  };
   if (fan) {
-    // exhaust plug and core nozzle sleeve
-    const plug = new THREE.LatheGeometry([[0.0, r * 0.38], [0.25 * r, r * 0.36], [0.7 * r, r * 0.22], [1.15 * r, 0.02], [1.16 * r, 0]].map(([z, rr]) => new THREE.Vector2(rr, z)), 20);
-    plug.rotateX(Math.PI / 2); plug.translate(0, 0, len + r * 0.2); b.add(plug, dark);
+    // high-bypass exhaust: the bypass duct ends at the cowl; inside it the core cowl (bare metal) with its own nozzle, the
+    // turbine face deep inside and the exhaust plug (the plain part's black disc read as a hole straight through)
+    const core = revolveZ(smoothPts([[len * 0.45, r * 0.5], [len * 0.75, r * 0.53], [len, r * 0.5], [len + r * 0.42, r * 0.42]], 14), 32, 1);
+    b.add(shell(core, r * 0.03), PM.metal('brushed'));
+    const coreIn = revolveZ([[len + r * 0.1, r * 0.4], [len + r * 0.41, r * 0.4]], 32, 1); b.add(coreIn, PM.duct(0x3a3c40));
+    const face = new THREE.CircleGeometry(r * 0.41, 28); face.translate(0, 0, len + r * 0.1); b.add(face, PM.exhaust());
+    const plug = new THREE.LatheGeometry([[0.0, 0], [0.0, r * 0.3], [0.3 * r, r * 0.29], [0.75 * r, r * 0.18], [1.15 * r, 0.02], [1.16 * r, 0]].map(([z, rr]) => new THREE.Vector2(rr, z)), 24);
+    plug.rotateX(Math.PI / 2); plug.translate(0, 0, len + r * 0.1); b.add(plug, dark);
+    // bypass exit: a ring of outlet guide vanes deep in the duct, and the duct lining in a darker grey round the core
+    for (let i = 0; i < 28; i++) { const a = (i / 28) * Math.PI * 2, v = new THREE.BoxGeometry(0.012, r * 0.32, r * 0.18); v.rotateY(0.25); v.translate(0, r * 0.67, len * 0.42); v.rotateZ(a); b.add(v, steel); }
+    glow(r * 0.4, len + r * 0.12);
   } else if (ab) {
-    // afterburner: ring of overlapping petals (heat-tinted), flame-holder rings and a dark turbine face inside
-    for (const m of g.children.slice()) if (m.material === M.darkMetal() && m.geometry?.attributes?.position?.count < 200) g.remove(m); // old plain nozzle
-    const nP = 16;
+    // afterburner: ring of overlapping petals (heat-tinted, seen from inside too), a sleeve, flame-holder rings and a
+    // dark turbine face inside that glows when it lights
+    for (const m of g.children.slice()) if (m.material === M.darkMetal() && m.geometry?.attributes?.position?.count < 400) g.remove(m); // old plain nozzle
+    const nP = 16, petalM = PM.duct(0x5a4a3e, 'hot');
     for (let i = 0; i < nP; i++) {
       const a0 = (i / nP) * Math.PI * 2, da = (Math.PI * 2 / nP) * 0.62;
       const petal = new THREE.CylinderGeometry(r * 0.79, r * 0.6, r * 0.62, 3, 1, true, a0 - da, da * 2);
-      petal.rotateX(-Math.PI / 2); petal.translate(0, 0, len + r * 0.3); b.add(petal, hot);
+      petal.rotateX(-Math.PI / 2); petal.translate(0, 0, len + r * 0.3); b.add(petal, petalM);
     }
-    const inner = new THREE.CylinderGeometry(r * 0.76, r * 0.58, r * 0.6, 24, 1, true); inner.rotateX(-Math.PI / 2); inner.translate(0, 0, len + r * 0.3); inner.scale(-1, 1, 1); b.add(inner, dark);
+    const inner = new THREE.CylinderGeometry(r * 0.76, r * 0.58, r * 0.6, 24, 1, true); inner.rotateX(-Math.PI / 2); inner.translate(0, 0, len + r * 0.3); b.add(inner, PM.duct(0x2b2d31));
     for (const [rr, z] of [[0.45, -0.05], [0.25, -0.12]]) { const t = new THREE.TorusGeometry(r * rr, 0.02, 6, 24); t.translate(0, 0, len + z); b.add(t, steel); }
+    glow(r * 0.55, len + 0.06);
   } else {
+    glow(r * 0.5, len + 0.06);
     for (const [rr, z] of [[0.4, 0.02]]) { const t = new THREE.TorusGeometry(r * rr, 0.015, 6, 20); t.translate(0, 0, len + z); b.add(t, steel); }
     const cone = new THREE.ConeGeometry(r * 0.25, r * 0.5, 16); cone.rotateX(Math.PI / 2); cone.translate(0, 0, len + 0.02); b.add(cone, dark);
   }
@@ -273,7 +445,17 @@ export function jetEngineDetail(g, { len, radius: r, fan, ab }) {
 export function rocketDetail(g, { len, radius: r }) {
   const b = new Bag();
   for (const z of [0.15, 0.5, 0.85]) { const t = new THREE.TorusGeometry(r * 1.004, 0.012, 4, 28); t.translate(0, 0, len * z + r); b.add(t, M.darkMetal()); }
+  // nozzle: the plain part's single-sided cone vanished when you looked into it (its inside faces were culled). A bell
+  // with a wall: throat, bell contour out to the exit lip, heat-tinted inside, cooling-tube bands outside, a sooty throat
+  // and a glow deep in the throat that lights with the flame.
+  for (const m of g.children.slice()) if (m.isMesh && m.material === M.darkMetal() && m.geometry.type === 'BufferGeometry' && m.geometry.attributes.position.count < 60) g.remove(m);
+  const bell = revolveZ(smoothPts([[len - 0.02 * r, r * 0.36], [len + 0.08 * r, r * 0.27], [len + 0.22 * r, r * 0.34], [len + 0.55 * r, r * 0.6], [len + 0.92 * r, r * 0.8]], 18), 36, 1);
+  b.add(shell(bell, r * 0.035), PM.metal('hot'));
+  for (const t of [0.35, 0.62, 0.86]) { const z = len + (0.08 + 0.84 * t) * r, rr = 0.27 + (0.8 - 0.27) * (1 - (1 - t) ** 1.6), band = new THREE.TorusGeometry(r * rr * 1.02, r * 0.018, 4, 36); band.translate(0, 0, z); b.add(band, M.darkMetal()); }
+  const throat = new THREE.CircleGeometry(r * 0.3, 20); throat.translate(0, 0, len + 0.06 * r); b.add(throat, PM.exhaust());
   b.to(g);
+  const fc = g.userData.flameCore;
+  if (fc) { const d = new THREE.Mesh(new THREE.CircleGeometry(r * 0.3, 20), fc.material); d.position.z = len + 0.09 * r; d.userData.cosmetic = true; d.castShadow = false; g.add(d); }
 }
 
 // ---------- landing gear ----------
@@ -524,7 +706,7 @@ function bowGeo(w, h, z, rad, y0 = -0.06) {
   const pts = [V(-w, y0, z)];
   for (let i = 0; i <= 16; i++) { const a = Math.PI * (i / 16); pts.push(V(-Math.cos(a) * w, Math.sin(a) * h, z)); }
   pts.push(V(w, y0, z));
-  return tube(pts, rad, 6, 60);
+  return pipe(pts, rad, 6, 60);
 }
 // seat: a reclined, padded shell (back + pan) as a lofted section; headrest as a pillow
 export function seatGeo(width, backH, panL, tilt) {
@@ -555,8 +737,8 @@ export function cockpitBuild(id, color) {
     const st = seatGeo(0.36, 0.52, 0.34, 0.32); st.translate(0, -0.3, 0.42); b.add(st, seatM);
     const hrest = new THREE.CapsuleGeometry(0.06, 0.12, 4, 10); hrest.rotateZ(Math.PI / 2); hrest.scale(1, 1, 0.6); hrest.translate(0, 0.23, 0.6); b.add(hrest, seatM);
     g.userData.seats = [{ p: [0, -0.37, 0.3], s: 0.8 }]; // planeDetail seats a pilot here (crew.js)
-    const gl = new THREE.CylinderGeometry(0.26, 0.26, 0.16, 18, 1, true, -1.25, 2.5); gl.scale(1, 1, 0.55); gl.rotateY(Math.PI); gl.translate(0, 0.08, -0.55); b.add(gl, black);
-    const glTop = new THREE.CylinderGeometry(0.26, 0.26, 0.012, 18, 1, false, -1.25, 2.5); glTop.scale(1, 1, 0.55); glTop.rotateY(Math.PI); glTop.translate(0, 0.16, -0.55); b.add(glTop, black);
+    const gl = new THREE.CylinderGeometry(0.26, 0.26, 0.16, 18, 1, true, -1.25, 2.5); gl.scale(1, 1, 0.55); gl.rotateY(Math.PI); gl.translate(0, 0.08, -0.55); b.add(shell(gl, 0.008), black);
+    const glTop = new THREE.CylinderGeometry(0.26, 0.26, 0.012, 18, 1, false, -1.25, 2.5); glTop.scale(1, 1, 0.55); glTop.rotateY(Math.PI); glTop.translate(0, 0.16, -0.55); b.add(capHoles(glTop), black);
     const pnl = new THREE.PlaneGeometry(0.46, 0.2); pnl.rotateX(-0.25); pnl.translate(0, 0.02, -0.47); b.add(pnl, black);
     for (let i = 0; i < 5; i++) { const d = new THREE.CircleGeometry(0.032, 12); d.applyMatrix4(mx([-0.18 + i * 0.09, 0.04 - (i % 2) * 0.06, -0.462], [-0.25, 0, 0])); nb.add(d, PM.dial()); }
   } else if (id === 'ck_fighter') {
@@ -569,8 +751,8 @@ export function cockpitBuild(id, color) {
     const hb = new THREE.CapsuleGeometry(0.1, 0.16, 4, 10); hb.rotateZ(Math.PI / 2); hb.scale(1, 1.05, 0.8); hb.translate(0, 0.36, 0.72); b.add(hb, seatM);
     const handle = new THREE.TorusGeometry(0.06, 0.011, 4, 10, Math.PI); handle.translate(0, 0.42, 0.66); nb.add(handle, M.propTip());
     g.userData.seats = [{ p: [0, -0.42, 0.38], s: 0.88 }];
-    const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.18, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.6); gl.rotateY(Math.PI); gl.translate(0, 0.14, -0.6); b.add(gl, black);
-    const glTop = new THREE.CylinderGeometry(0.3, 0.3, 0.012, 18, 1, false, -1.3, 2.6); glTop.scale(1, 1, 0.6); glTop.rotateY(Math.PI); glTop.translate(0, 0.23, -0.6); b.add(glTop, black);
+    const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.18, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.6); gl.rotateY(Math.PI); gl.translate(0, 0.14, -0.6); b.add(shell(gl, 0.008), black);
+    const glTop = new THREE.CylinderGeometry(0.3, 0.3, 0.012, 18, 1, false, -1.3, 2.6); glTop.scale(1, 1, 0.6); glTop.rotateY(Math.PI); glTop.translate(0, 0.23, -0.6); b.add(capHoles(glTop), black);
     const pnl = new THREE.PlaneGeometry(0.52, 0.24); pnl.rotateX(-0.2); pnl.translate(0, 0.06, -0.5); b.add(pnl, black);
     for (let i = 0; i < 2; i++) { const d = new THREE.PlaneGeometry(0.13, 0.11); d.applyMatrix4(mx([-0.1 + i * 0.2, 0.06, -0.49], [-0.2, 0, 0])); nb.add(d, PM.dial()); }
     const hud = new THREE.PlaneGeometry(0.15, 0.13); hud.applyMatrix4(mx([0, 0.33, -0.62], [-0.35, 0, 0])); nb.add(hud, PM.canopy(0x3c6b52));
@@ -596,6 +778,27 @@ function revolveZ(prof, segs, sy) {
   return ringLoft(rings);
 }
 
+// Exhaust routes from a car engine's collectors, in engine space (x mirrored per side): the first one the assembly finds
+// clear of body and glass is used.
+export const EXHAUST_ROUTES = [
+  { name: 'side pipes', pts: [[0.42, 0.08, 0.3], [0.42, 0.09, 0.5], [0.43, 0.12, 0.85]] },
+  { name: 'zoomies', pts: [[0.42, 0.08, 0.3], [0.52, 0.13, 0.33], [0.66, 0.26, 0.36], [0.82, 0.46, 0.44]] },
+  { name: 'dump under', pts: [[0.42, 0.08, 0.3], [0.42, -0.06, 0.48], [0.4, -0.2, 0.8], [0.4, -0.22, 1.5]] },
+  { name: 'stacks', pts: [[0.42, 0.08, 0.3], [0.5, 0.18, 0.36], [0.52, 0.6, 0.4], [0.52, 1.05, 0.42]] },
+  { name: 'stubs', pts: [[0.42, 0.08, 0.3], [0.5, 0.1, 0.36], [0.56, 0.1, 0.4]] }, // last resort: short open headers
+];
+export function exhaustPipes(route, ex) {
+  const g = new THREE.Group(), b = new Bag(), chrome = M.chrome(), r = ex.r; g.userData.route = route.name;
+  for (const sx of [1, -1]) {
+    const pts = route.pts.map(([x, y, z]) => V(sx * x, y, z)), end = pts.at(-1), dir = end.clone().sub(pts.at(-2)).normalize();
+    b.add(pipe(pts, r, 12, pts.length * 8), chrome);
+    // the tip: a flared open ring with a sooty inside, and the pipe's dark bore just inside it
+    const tip = new THREE.CylinderGeometry(r * 1.15, r * 1.02, r * 1.4, 16, 1, true), q = new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), dir);
+    tip.applyMatrix4(new THREE.Matrix4().compose(end.clone().addScaledVector(dir, r * 0.5), q, V(1, 1, 1))); b.add(shell(tip, r * 0.12), chrome);
+    const bore = new THREE.CircleGeometry(r * 0.95, 14); bore.applyMatrix4(new THREE.Matrix4().compose(end.clone().addScaledVector(dir, 0.004), new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), dir), V(1, 1, 1))); b.add(bore, PM.exhaust());
+  }
+  b.to(g); return g;
+}
 // Detail build of the car engine: a supercharged V8 (the plain part is three boxes). Front towards -Z. Block and heads in
 // the part colour, chrome rocker covers, polished blower with its drive belt and pulleys, an injector hat with an open
 // mouth, four-into-one headers on each bank sweeping down into the side pipes, timing cover, alternator, oil pan.
@@ -614,12 +817,15 @@ export function carEngineDetail(color) {
     const outF = V(sx * 0.29, 0.31, 0);
     for (let k = 0; k < 4; k++) {
       const z = -0.24 + k * 0.16, p0 = V(outF.x, outF.y, z), p1 = V(sx * 0.36, 0.26, z), p2 = V(sx * 0.4, 0.12, z * 0.6 + 0.08), p3 = V(sx * 0.42, 0.08, 0.3);
-      b.add(tube([p0, p1, p2, p3], 0.024, 8, 24), hot);
+      b.add(pipe([p0, p1, p2, p3], 0.024, 8, 24), hot);
     }
-    b.add(tube([V(sx * 0.42, 0.08, 0.28), V(sx * 0.42, 0.09, 0.45), V(sx * 0.42, 0.12, 0.75)], 0.05, 12, 16), chrome); // collector into the side pipe
-    const tip = new THREE.CylinderGeometry(0.056, 0.05, 0.06, 14, 1, true); tip.rotateX(Math.PI / 2); tip.translate(sx * 0.42, 0.12, 0.77); b.add(tip, chrome);
-    const soot = new THREE.CircleGeometry(0.048, 14); soot.translate(sx * 0.42, 0.12, 0.79); b.add(soot, PM.exhaust());
+    const coll = new THREE.SphereGeometry(0.055, 12, 8); coll.translate(sx * 0.42, 0.08, 0.3); b.add(coll, hot); // collector
   }
+  // The exhaust from each collector: side pipes by default. The assembly pass (planeDetail.routeExhaust) checks them
+  // against the vehicle they are fitted to and re-routes them (zoomies, dumps under the floor, stacks) if they would
+  // run into the body or through glass.
+  g.userData.exhaust = { from: [V(0.42, 0.08, 0.3), V(-0.42, 0.08, 0.3)], r: 0.05 };
+  g.add(exhaustPipes(EXHAUST_ROUTES[0], g.userData.exhaust));
   // intake manifold, the blower (ribbed case), injector hat with an open mouth and throttle butterflies
   const man = new THREE.BoxGeometry(0.22, 0.1, 0.56); man.translate(0, 0.43, 0); b.add(man, alu);
   const blower = new THREE.CapsuleGeometry(0.11, 0.42, 4, 14); blower.rotateX(Math.PI / 2); blower.scale(1.25, 0.85, 1); blower.translate(0, 0.56, 0.0); b.add(blower, alu);
@@ -653,64 +859,76 @@ export function flightDeckGlass() {
   return _fdg;
 }
 export const AIRLINER_NOSE =[[-4.6, 0], [-4.4, 0.7], [-3.4, 1.4], [-1.8, 1.82], [0, 1.9]];
+// Detail nose shape, in side view: crown line T, keel line B and half-width W along z (z = 0 joins the tube, r = 1.9).
+// Like a 747 / A320 / 787 nose: the tip sits low, the radome rises to a windscreen face raked back ~45-50 deg, and the
+// crown line flattens out behind it; the keel curves up gently. (The plain part, which physics reads, is unchanged.)
+const NOSE_T = [[-4.6, -0.2], [-4.52, 0.12], [-4.3, 0.42], [-3.95, 0.64], [-3.55, 0.84], [-3.1, 1.24], [-2.6, 1.64], [-2.1, 1.84], [-1.2, 1.9], [0, 1.9]];
+const NOSE_B = [[-4.6, -0.2], [-4.52, -0.5], [-4.3, -0.86], [-3.9, -1.24], [-3.3, -1.58], [-2.5, -1.8], [-1.4, -1.89], [0, -1.9]];
+const NOSE_W = [[-4.6, 0], [-4.52, 0.36], [-4.3, 0.72], [-3.9, 1.06], [-3.3, 1.42], [-2.5, 1.7], [-1.4, 1.87], [0, 1.9]];
+function lineFn(pts) { // spline through (z, v), tabulated on a uniform z grid
+  const s = new THREE.SplineCurve(pts.map(([z, v]) => new THREE.Vector2(z, v))).getPoints(160), z0 = pts[0][0], z1 = pts.at(-1)[0], N = 1024, t = new Float32Array(N + 1);
+  for (let k = 0, i = 1; k <= N; k++) { const z = z0 + (z1 - z0) * (k / N); while (i < s.length - 1 && s[i].x < z) i++; const a = s[i - 1], c = s[i]; t[k] = a.y + (c.y - a.y) * Math.min(1, Math.max(0, (z - a.x) / (c.x - a.x || 1))); }
+  return (z) => { const u = Math.min(1, Math.max(0, (z - z0) / (z1 - z0))) * N, k = Math.min(N - 1, Math.floor(u)); return t[k] + (t[k + 1] - t[k]) * (u - k); };
+}
+const nT = lineFn(NOSE_T), nB = lineFn(NOSE_B), nW = lineFn(NOSE_W);
+// a point on the nose skin: z along, th round from the top (+ = right)
+const nosePt = (z, th, k = 1) => { const T = nT(z), B = nB(z), mid = (T + B) / 2, c = Math.cos(th), h = c >= 0 ? T - mid : mid - B; return V(Math.sin(th) * nW(z) * k, mid + c * h * k, z); };
+// flight-deck window set: above a sill line (horizontal in side view, rising a little aft), ahead of a top edge that
+// sweeps back towards the sides; > 0 inside the glazing
+const SILL = (z) => 0.82 + 0.06 * (z + 3.5), WTOP = (th) => -2.7 + 0.7 * th * th, WSIDE = 1.12;
+const winVal = (z, th) => { const p = nosePt(z, th); return Math.min(p.y - SILL(z), WTOP(th) - z, (WSIDE - Math.abs(th)) * 0.8); };
 export function airlinerNoseBuild(color, skinMat) {
   const g = new THREE.Group(), b = new Bag(), nb = new Bag(), black = M.black();
-  const prof = smoothPts(AIRLINER_NOSE, 46), yOff = (z) => z * -0.04;
-  const rAt = (z) => { if (z <= prof[0][0]) return 0; for (let i = 1; i < prof.length; i++) if (prof[i][0] >= z) { const a = prof[i - 1], c = prof[i]; return a[1] + (c[1] - a[1]) * ((z - a[0]) / (c[0] - a[0] || 1)); } return prof.at(-1)[1]; };
-  const at = (z, ph, dr = 0) => { const r = rAt(z) + dr; return V(Math.sin(ph) * r, Math.cos(ph) * r + yOff(z), z); };
-  // window outline: azimuth from the top (phi, right = +), front and back edges sweep aft towards the sides
-  const PH = 1.25, zf = (ph) => -3.82 + 0.6 * (ph / PH) ** 2, zb = (ph) => -3.22 + 0.68 * (ph / PH) ** 2;
-  const inWin = (z, ph) => Math.abs(ph) <= PH && z >= zf(ph) && z <= zb(ph);
-  // skin: the plain nose's surface (finer), minus the window triangles
-  const SEG = 88, pos = [], uv = [], uv1 = [], idx = [], row = SEG + 1, circ = 2 * Math.PI * 1.9;
-  for (const [z, r] of prof) for (let i = 0; i <= SEG; i++) { const th = (i / SEG) * Math.PI * 2; pos.push(Math.sin(th) * r, Math.cos(th) * r + yOff(z), z); uv.push((z + 4.6) / 4.6, i / SEG); uv1.push(z, (i / SEG) * circ); }
-  const phOf = (i) => { const th = (i / SEG) * Math.PI * 2; return th > Math.PI ? th - Math.PI * 2 : th; };
-  for (let j = 0; j < prof.length - 1; j++) for (let i = 0; i < SEG; i++) {
-    const a = j * row + i, bb = (j + 1) * row + i, c = (j + 1) * row + i + 1, d = j * row + i + 1;
-    const zc = (prof[j][0] + prof[j + 1][0]) / 2, pc = (phOf(i) + phOf(i + 1)) / 2;
-    if (inWin(zc, pc)) continue;
-    idx.push(a, bb, c, a, c, d);
-  }
-  { const ci = pos.length / 3, z = prof.at(-1)[0]; pos.push(0, yOff(z), z); uv.push(1, 0.5); uv1.push(z, 0); for (let i = 0; i < SEG; i++) idx.push(ci, (prof.length - 1) * row + i + 1, (prof.length - 1) * row + i); }
-  const sk = new THREE.BufferGeometry(); sk.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); sk.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); sk.setAttribute('uv1', new THREE.Float32BufferAttribute(uv1, 2)); sk.setIndex(idx); sk.computeVertexNormals();
-  g.add(new THREE.Mesh(sk, skinMat));
-  // glass: the window patch just under the skin (the cut's stepped edge overlaps it), tinted
-  const NA = 40, NZ = 10, gp = [], gi = [];
-  for (let k = 0; k <= NZ; k++) for (let i = 0; i <= NA; i++) { const ph = -PH - 0.03 + (2 * PH + 0.06) * (i / NA), z = zf(ph) - 0.04 + (zb(ph) - zf(ph) + 0.08) * (k / NZ); gp.push(...at(z, ph, -0.012).toArray()); }
-  for (let k = 0; k < NZ; k++) for (let i = 0; i < NA; i++) { const a = k * (NA + 1) + i; gi.push(a, a + 1, a + NA + 1, a + 1, a + NA + 2, a + NA + 1); }
-  const glass = new THREE.BufferGeometry(); glass.setAttribute('position', new THREE.Float32BufferAttribute(gp, 3)); glass.setIndex(gi); glass.computeVertexNormals();
-  g.add(new THREE.Mesh(glass, flightDeckGlass()));
-  // frames: the outline and the posts between the panes (black, like an airline's window mask)
-  const loop = [];
-  for (let i = 0; i <= 24; i++) { const ph = -PH + 2 * PH * (i / 24); loop.push(at(zf(ph), ph, 0.004)); }
-  for (let i = 0; i <= 24; i++) { const ph = PH - 2 * PH * (i / 24); loop.push(at(zb(ph), ph, 0.004)); }
-  b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(loop, true), 160, 0.035, 5, true), black);
-  for (const ph of [0, -0.45, 0.45, -0.86, 0.86]) { const pts = []; for (let k = 0; k <= 6; k++) pts.push(at(zf(ph) + (zb(ph) - zf(ph)) * (k / 6), ph, 0.004)); b.add(tube(pts, ph ? 0.026 : 0.034, 5, 20), black); }
-  // wipers resting along the bottom of the two front panes
-  for (const sx of [-1, 1]) nb.add(tube([at(zf(sx * 0.12) + 0.03, sx * 0.12, 0.02), at(zf(sx * 0.38) + 0.05, sx * 0.38, 0.02)], 0.012, 4, 6), black);
-  // radome seam (the plain part's dark radome sphere poked through the skin as a black blotch), pitot probes, static ports
-  const seam = new THREE.TorusGeometry(0.72, 0.012, 4, 32); seam.translate(0, yOff(-4.22), -4.22); b.add(seam, black);
+  // skin grid: dense rings round the windscreen, coarser elsewhere
+  const zs = []; for (let z = -4.6; z < -4.2; z += 0.05) zs.push(z); for (let z = -4.2; z < -1.9; z += 0.05) zs.push(z); for (let z = -1.9; z < -0.001; z += 0.2) zs.push(z); zs.push(0);
+  const SEG = 96, row = SEG + 1, circ = 2 * Math.PI * 1.9, pos = [], uv = [], uv1 = [], idx = [];
+  for (const z of zs) for (let i = 0; i <= SEG; i++) { const th = (i / SEG) * Math.PI * 2, p = nosePt(z, th > Math.PI ? th - Math.PI * 2 : th); pos.push(p.x, p.y, p.z); uv.push((z + 4.6) / 4.6, i / SEG); uv1.push(z, (i / SEG) * circ); }
+  for (let j = 0; j < zs.length - 1; j++) for (let i = 0; i < SEG; i++) { const a = j * row + i, c = (j + 1) * row + i; idx.push(a, c, c + 1, a, c + 1, a + 1); }
+  { const ci = pos.length / 3; pos.push(0, 0, 0); uv.push(1, 0.5); uv1.push(0, 0); const j = zs.length - 1; for (let i = 0; i < SEG; i++) idx.push(ci, j * row + i + 1, j * row + i); }
+  const sk = new THREE.BufferGeometry(); sk.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); sk.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); sk.setAttribute('uv1', new THREE.Float32BufferAttribute(uv1, 2)); sk.setIndex(idx); sk.computeVertexNormals(); fixNormals(sk);
+  // the glazing is cut out of the skin exactly along the outline (clipGeometry); the glass is the cut-out piece, set
+  // in a little
+  const P = sk.attributes.position, N = sk.attributes.normal, val = new Float32Array(P.count), neg = new Float32Array(P.count);
+  for (let i = 0; i < P.count; i++) { const z = P.getZ(i), T = nT(z), B = nB(z), mid = (T + B) / 2, dy = P.getY(i) - mid, th = Math.atan2(P.getX(i) / Math.max(1e-4, nW(z)), dy / Math.max(1e-4, dy >= 0 ? T - mid : mid - B)); val[i] = z > -1.5 || z < -4.0 ? -1 : winVal(z, th); neg[i] = -val[i]; }
+  const skin = new THREE.Mesh(clipGeometry(sk, neg) || sk, skinMat); skin.userData.openOk = 'flight-deck windows: glazed'; g.add(skin);
+  const glass = clipGeometry(sk, val);
+  if (glass) { const gp = glass.attributes.position, gn = glass.attributes.normal; for (let i = 0; i < gp.count; i++) gp.setXYZ(i, gp.getX(i) - gn.getX(i) * 0.012, gp.getY(i) - gn.getY(i) * 0.012, gp.getZ(i) - gn.getZ(i) * 0.012); g.add(new THREE.Mesh(glass, flightDeckGlass())); }
+  // frames: the outline (traced along the cut) and the posts between the six panes, black like an airline's window mask
+  const lift = (p, th, d = 0.006) => { const q = nosePt(p.z, th, 1); const n = q.clone().sub(V(0, (nT(p.z) + nB(p.z)) / 2, p.z)).normalize(); return p.clone().addScaledVector(n, d); };
+  const edgeZ = (th) => { let lo = -4.0, hi = WTOP(th); for (let it = 0; it < 30; it++) { const m = (lo + hi) / 2; if (nosePt(m, th).y - SILL(m) > 0) hi = m; else lo = m; } return hi; }; // sill crossing at this azimuth
+  const loop = [], TH = WSIDE - 0.004;
+  for (let i = 0; i <= 30; i++) { const th = -TH + 2 * TH * (i / 30); loop.push(lift(nosePt(edgeZ(th), th), th)); }
+  for (let i = 0; i <= 30; i++) { const th = TH - 2 * TH * (i / 30), z = WTOP(th); loop.push(lift(nosePt(z, th), th)); }
+  b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(loop, true, 'centripetal'), 220, 0.032, 6, true), black);
+  for (const th of [0, -0.38, 0.38, -0.76, 0.76]) { const z0 = edgeZ(th), z1 = WTOP(th), pts = []; for (let k = 0; k <= 8; k++) { const z = z0 + (z1 - z0) * (k / 8); pts.push(lift(nosePt(z, th), th)); } b.add(pipe(pts, th ? 0.03 : 0.04, 6, 24), black); }
+  // wipers parked along the bottom of the two front panes
+  for (const sx of [-1, 1]) { const a = sx * 0.06, c = sx * 0.34; nb.add(tube([lift(nosePt(edgeZ(a) + 0.05, a), a, 0.02), lift(nosePt(edgeZ(c) + 0.08, c), c, 0.02)], 0.012, 4, 6), black); }
+  // radome seam, pitot probes, static ports
+  { const pts = []; for (let i = 0; i < 48; i++) { const th = (i / 48) * Math.PI * 2; pts.push(lift(nosePt(-4.12, th), th, 0.003)); } b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 96, 0.005, 4, true), M.darkMetal()); }
   const alu = M.aluminum();
   for (const sx of [-1, 1]) {
-    const pb = V(sx * 1.38, -0.15, -3.25);
+    const pb = lift(nosePt(-3.25, sx * 1.75), sx * 1.75, 0);
     nb.add(bar(pb, pb.clone().add(V(sx * 0.13, -0.03, 0)), 0.03, 0.03, true, 6), alu);
     nb.add(bar(pb.clone().add(V(sx * 0.13, -0.03, 0.02)), pb.clone().add(V(sx * 0.13, -0.03, -0.22)), 0.022, 0.022, true, 6), alu);
-    const sp = new THREE.CircleGeometry(0.05, 12); sp.applyMatrix4(mx([sx * 1.715, 0.05, -2.4], [0, sx * Math.PI / 2 * 0.92, 0])); nb.add(sp, alu);
+    const sp = lift(nosePt(-2.4, sx * 1.5), sx * 1.5, 0.004), d = new THREE.CircleGeometry(0.05, 12); d.applyMatrix4(new THREE.Matrix4().compose(sp, new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), V(sx, 0.07, 0).normalize()), V(1, 1, 1))); nb.add(d, alu);
   }
-  // flight deck: dark lining (the inside of the skin), back bulkhead, floor, glare shield and panel, centre pedestal, seats
+  // flight deck: dark lining (the inside of the skin), back bulkhead, floor, glare shield and panel under the sill,
+  // centre pedestal, seats
   const dark = new THREE.MeshStandardMaterial({ color: 0x2c2f34, roughness: 0.9, side: THREE.BackSide });
-  const lin = []; for (const [z, r] of prof) if (z > -4.0 && z < -1.4) lin.push([z, r * 0.97]);
-  const liner = revolveZ(lin, 32, 1); liner.translate(0, 0, 0); { const p2 = liner.attributes.position; for (let i = 0; i < p2.count; i++) p2.setY(i, p2.getY(i) + yOff(p2.getZ(i))); }
+  const lz = zs.filter((z) => z > -4.05 && z < -1.4), lp = [], li = [], LS = 40;
+  for (const z of lz) for (let i = 0; i <= LS; i++) { const th = (i / LS) * Math.PI * 2, p = nosePt(z, th > Math.PI ? th - Math.PI * 2 : th, 0.97); lp.push(p.x, p.y, p.z); }
+  for (let j = 0; j < lz.length - 1; j++) for (let i = 0; i < LS; i++) { const a = j * (LS + 1) + i, c = a + LS + 1; li.push(a, c, c + 1, a, c + 1, a + 1); }
+  const liner = new THREE.BufferGeometry(); liner.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3)); liner.setIndex(li); liner.computeVertexNormals();
   g.add(new THREE.Mesh(liner, dark));
-  const bulk = new THREE.CircleGeometry(rAt(-1.5) * 0.97, 32); bulk.rotateY(Math.PI); bulk.translate(0, yOff(-1.5), -1.5); b.add(bulk, M.paint(0x3a3d42, 'matte'));
-  const floor = new THREE.BoxGeometry(2.2, 0.05, 2.4); floor.translate(0, -0.12, -2.7); b.add(floor, M.paint(0x34373c, 'matte'));
-  const glare = new THREE.CylinderGeometry(1.05, 1.05, 0.08, 24, 1, false, -1.0, 2.0); glare.scale(1, 1, 0.45); glare.rotateY(Math.PI); glare.translate(0, 0.72, -3.25); b.add(glare, black);
-  const pnl = new THREE.BoxGeometry(1.9, 0.5, 0.06); pnl.rotateX(-0.25); pnl.translate(0, 0.45, -3.5); b.add(pnl, M.paint(0x2b2d31, 'matte'));
-  for (let i = 0; i < 6; i++) { const d = new THREE.PlaneGeometry(0.22, 0.18); d.applyMatrix4(mx([-0.75 + i * 0.3, 0.5, -3.465], [-0.25, 0, 0])); nb.add(d, PM.dial()); }
-  const ped = new THREE.BoxGeometry(0.34, 0.42, 0.8); ped.translate(0, 0.1, -2.95); b.add(ped, M.paint(0x2b2d31, 'matte'));
-  for (const sx of [-1, 1]) { const st = seatGeo(0.5, 0.75, 0.48, 0.2); st.translate(sx * 0.55, 0.18, -2.36); b.add(st, PM.seat()); }
+  const bulk = new THREE.CircleGeometry(1.84, 32); bulk.rotateY(Math.PI); bulk.translate(0, 0, -1.5); b.add(bulk, M.paint(0x3a3d42, 'matte'));
+  const floor = new THREE.BoxGeometry(2.2, 0.05, 2.3); floor.translate(0, -0.12, -2.65); b.add(floor, M.paint(0x34373c, 'matte'));
+  const glare = new THREE.CylinderGeometry(0.95, 0.95, 0.07, 24, 1, false, -1.0, 2.0); glare.scale(1, 1, 0.42); glare.rotateY(Math.PI); glare.translate(0, 0.74, -3.15); b.add(capHoles(glare), black);
+  const pnl = new THREE.BoxGeometry(1.5, 0.42, 0.06); pnl.rotateX(-0.3); pnl.translate(0, 0.46, -3.3); b.add(pnl, M.paint(0x2b2d31, 'matte'));
+  for (let i = 0; i < 5; i++) { const d = new THREE.PlaneGeometry(0.2, 0.16); d.applyMatrix4(mx([-0.56 + i * 0.28, 0.5, -3.265], [-0.3, 0, 0])); nb.add(d, PM.dial()); }
+  const ped = new THREE.BoxGeometry(0.34, 0.42, 0.8); ped.translate(0, 0.1, -2.85); b.add(ped, M.paint(0x2b2d31, 'matte'));
+  for (const sx of [-1, 1]) { const st = seatGeo(0.5, 0.75, 0.48, 0.2); st.translate(sx * 0.55, 0.18, -2.3); b.add(st, PM.seat()); }
   b.to(g); nb.to(g, true);
-  g.userData.seats = [{ p: [0.55, 0.22, -2.6], s: 1 }, { p: [-0.55, 0.22, -2.6], s: 1 }];
+  g.userData.seats = [{ p: [0.55, 0.22, -2.54], s: 1 }, { p: [-0.55, 0.22, -2.54], s: 1 }];
   return g;
 }
 // Helicopter rotor head: grips, pitch links, swashplate.

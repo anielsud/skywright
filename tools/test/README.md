@@ -50,3 +50,22 @@ dropped on bodies, wings, wingtips, pods and flaps, some resized or rotated, all
 rays that no strut passes through a part (control surfaces included), every leg and brace ends on a solid skin, every
 wheel stands upright, and mirrored gear mirrors. `--seed N --random K` for other builds, `--dump` prints failing
 designs, `--url` checks another server (e.g. a build of main, for a before/after count). About 4 minutes.
+
+## Mesh check
+
+`meshcheck.py` builds every stock vehicle plus 20 seeded random player builds (engines, canopies and car parts in
+varied places, some resized, some mirrored) in headless Chrome, the way the hangar shows them (detail parts and the
+assembly pass), and fails on:
+
+- **open shells**: a connected, non-flat piece of an opaque one-sided mesh with a hole you could look into (a duct,
+  nozzle, tyre or cowl with no inside surface, a missing end cap). Flat sheets (dials, decals) and double-sided or
+  transparent materials are fine; a mesh whose hole is covered by design can say so with `userData.openOk = 'why'`
+  (e.g. a cockpit opening closed by its tub and sill). Landing gear is skipped for now.
+- **exhausts through glass**: each car engine's chosen exhaust path (`userData.exhaustPaths`) against the vehicle's glass.
+
+```sh
+python3 tools/test/meshcheck.py                 # serves the repo itself, ~30 s
+python3 tools/test/meshcheck.py --json out.json # full report
+```
+
+Run it when you change part builders (`parts.js`, `partDetail.js`, `vehicleParts.js`) or the assembly pass.

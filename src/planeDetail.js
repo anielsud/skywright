@@ -14,7 +14,7 @@ import { PARTS, partInfo, airfoil } from './parts.js';
 import { partMatrix, partScale, scaleSurface, linScale } from './design.js';
 import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
-import { V, bar, tube, norm, ringLoft, Bag, kitMaterial, kitSlot, kitUV } from './partDetail.js';
+import { V, bar, tube, pipe, norm, ringLoft, Bag, kitMaterial, kitSlot, kitUV, EXHAUST_ROUTES, exhaustPipes } from './partDetail.js';
 import { clamp, lerp } from './noise.js';
 import { applyLivery } from './liveries.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
@@ -557,6 +557,63 @@ function soot(p, obj, ctx, parent) {
   }
 }
 
+// ---------- car parts ----------
+const glassOf = (obj, out) => obj.traverse((m) => { if (m.isMesh && m.visible && m.material?.transparent && m.material.blending !== THREE.AdditiveBlending && !m.userData.isDisc) out.push(m); });
+// A car engine's exhaust: try each route (side pipes, zoomies, dump under, stacks) against everything else on the
+// vehicle and use the first that runs into neither body nor glass (on a front-engined truck the side pipes went
+// through the windscreen). Never a route through glass; if every route touches something, the shortest clear-of-glass
+// one. The chosen paths are kept in userData.exhaustPaths (world) for tools/test/meshcheck.
+function routeExhaust(obj, objs) {
+  const ex = obj.userData.exhaust, W = obj.matrixWorld, solid = [], glass = [];
+  for (const o of objs) { if (!o || o === obj) continue; solid.push(...solidMeshes(o)); glassOf(o, glass); }
+  const hits = (list, pts, skip0 = true) => { let n = 0; for (let i = 0; i < pts.length - 1; i++) { const a = pts[i], d = pts[i + 1].clone().sub(a), L = d.length(); d.normalize(); const s0 = i === 0 && skip0 ? Math.min(0.06, L * 0.3) : 0; /* a pipe may start on the skin it leaves */ if (cast(list, a.clone().addScaledVector(d, s0), d, L - s0 + ex.r, true)) n++; } return n; };
+  let best = null;
+  for (const route of EXHAUST_ROUTES) {
+    const paths = [1, -1].map((sx) => route.pts.map(([x, y, z]) => V(sx * x, y, z).applyMatrix4(W)));
+    const g = paths.reduce((s, p) => s + hits(glass, p, false), 0); if (g) continue;
+    const b = paths.reduce((s, p) => s + hits(solid, p), 0);
+    if (!best || b < best.b) best = { route, paths, b };
+    if (!b) break;
+  }
+  const old = obj.children.find((c) => c.userData.route);
+  if (!best) { if (old) old.visible = false; obj.userData.exhaustPaths = []; return; }
+  if (old?.userData.route !== best.route.name) { if (old) { obj.remove(old); old.traverse((m) => m.geometry?.dispose()); } obj.add(exhaustPipes(best.route, ex)); }
+  obj.userData.exhaustPaths = best.paths.map((p) => p.map((q) => q.toArray()));
+}
+// Where an engine sits on a body (through a hood or a deck): a rubber-edged collar on the skin round its sump.
+function engineCollar(obj, body) {
+  const W = obj.matrixWorld, solid = solidMeshes(body), pts = [], up = V(0, 1, 0).transformDirection(W).normalize();
+  for (let i = 0; i < 28; i++) {
+    const a = (i / 28) * Math.PI * 2, c = Math.cos(a), s = Math.sin(a), lx = Math.sign(c) * Math.abs(c) ** 0.4 * 0.24, lz = Math.sign(s) * Math.abs(s) ** 0.4 * 0.4;
+    const top = V(lx, 0.45, lz).applyMatrix4(W), h = cast(solid, top, up.clone().negate(), 0.75);
+    if (!h || h.n.dot(up) < 0.5) return; // not sitting on a deck all round: no collar
+    pts.push(h.p.addScaledVector(h.n, 0.012));
+  }
+  addTo(body, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 84, 0.03, 6, true), M.rubber());
+}
+// A car wheel on a body: a half shaft from the hub in towards the centreline (it rides with the wheel), a differential
+// on the centreline (one per axle line), and on truck bodies a mud flap behind each rear wheel.
+function carCorner(p, obj, bp, bobj, ctx) {
+  const u = obj.userData, gi = PARTS[p.id].gear, sl = linScale(p), W = obj.matrixWorld;
+  const hub = V().setFromMatrixPosition(u.wheelsFixed.matrixWorld), B = bobj.matrixWorld, inv = B.clone().invert();
+  const hl = hub.clone().applyMatrix4(inv), sideSign = Math.sign(hl.x) || 1, r = gi.r * sl;
+  if (Math.abs(hl.x) > 0.5) {
+    const inner = V(0.3 * sideSign, hl.y, hl.z).applyMatrix4(B), from = hub.clone().add(inner.clone().sub(hub).normalize().multiplyScalar(r * 0.45));
+    const g = bar(from, inner, r * 0.09, r * 0.09, true, 10); addTo(u.wheelsFixed, g, M.darkMetal());
+    const key = Math.round(hl.z * 4) + ':' + Math.round(hl.y * 4); ctx.diffs = ctx.diffs || new Map(); const done = ctx.diffs.get(bobj) || new Set(); ctx.diffs.set(bobj, done);
+    if (!done.has(key)) { done.add(key); const d = new THREE.SphereGeometry(r * 0.28, 16, 12); d.scale(1, 1, 0.8); d.applyMatrix4(new THREE.Matrix4().makeTranslation(...V(0, hl.y, hl.z).applyMatrix4(B).toArray())); addTo(bobj, d, M.darkMetal()); }
+  }
+  // mud flap: rubber, hung from the body behind the tyre, on the rear wheels of bodies that carry them
+  if (!PARTS[bp.id].mudFlaps || hl.z < 0.2) return;
+  const fw = V(0, 0, -1).transformDirection(B).normalize(), upB = V(0, 1, 0).transformDirection(B).normalize(), side = V(1, 0, 0).transformDirection(B).normalize();
+  const top = V().setFromMatrixPosition(W), w = (gi.w || r * 0.8) * 1.1 * sl, back = hub.clone().addScaledVector(fw, -(r + 0.08));
+  const yTop = top.clone().sub(back).dot(upB), y0 = -r * 0.55;
+  const flap = new THREE.BoxGeometry(w, yTop - y0, 0.025), m = new THREE.Matrix4().makeBasis(side, upB, fw.clone().negate()); flap.applyMatrix4(m);
+  flap.translate(...back.clone().addScaledVector(upB, (yTop + y0) / 2).toArray());
+  addTo(bobj, flap, M.rubber());
+  const brk = bar(back.clone().addScaledVector(upB, yTop).addScaledVector(fw, 0.02), back.clone().addScaledVector(upB, yTop).addScaledVector(fw, r * 0.6), 0.05, 0.05, true, 6); addTo(bobj, brk, M.darkMetal());
+}
+
 // ---------- LOD ----------
 // One per aircraft: hides the small near-only detail beyond a distance (the renderer calls update() for isLOD objects).
 class DetailLOD extends THREE.Object3D {
@@ -640,6 +697,9 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
       if (d.cat === 'fuselage') T('body', () => bodyFurniture(p, objs[i], partInfo(p.id), ctx));
       if (d.wing) T('wing', () => wingFurniture(p, objs[i], ctx, joined.get(i)));
       if (POD[p.id]?.ex) T('soot', () => soot(p, objs[i], ctx, valid(p.parent) ? objs[p.parent] : null));
+      if (objs[i].userData.exhaust) T('exhaust', () => routeExhaust(objs[i], objs));
+      if (d.cat === 'car' && objs[i].userData.wheelsFixed && valid(p.parent) && isBody(parts[p.parent].id)) T('axle', () => carCorner(p, objs[i], parts[p.parent], objs[p.parent], ctx));
+      if (d.cat === 'car' && objs[i].userData.exhaust && valid(p.parent)) T('collar', () => engineCollar(objs[i], objs[p.parent]));
     } catch (e) { console.warn('planeDetail furniture', p.id, e); }
   });
   for (const [obj, bag] of nearBags) ctx.flush(bag, obj, true);
