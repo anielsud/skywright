@@ -24,6 +24,7 @@ import { Analytics } from './analytics.js';
 import { designSummary, trackHangar } from './buildStats.js';
 import { loadReal } from './realworld.js';
 import { aircraftLights, updateAircraftLights } from './navLights.js';
+import { initThumbs, renderThumb, designKey, presetSlug, savedThumbs, storeThumb, stockThumbs, STOCK_SIZE } from './thumbs.js';
 installFog();
 
 // ---------- persistence ----------
@@ -88,6 +89,7 @@ const ui = {
 
 // ---------- hangar ----------
 const hangar = new Hangar(renderer, ui, audio);
+initThumbs(renderer);
 let thumbs = {};
 let activeCat = 'fuselage';
 
@@ -305,34 +307,72 @@ function saveCurrent() {
   const i = mine.findIndex((d) => d.name === name), c = cloneDesign(hangar.design);
   if (i >= 0) mine[i] = c; else mine.push(c);
   LS.set('designs', mine); audio.play('save');
+  const key = designKey(c); // its picture for the Vehicles menu, drawn on the next frame
+  if (!savedThumbs()[key]) renderThumb(c).then((url) => url && storeThumb(key, url, LS.get('designs', []).map(designKey)));
   analytics.capture('plane_saved', { parts: c.parts.length, overwrite: i >= 0, saved_planes: mine.length, design: designSummary(hangar.design, analyze(hangar.design), buildStats.base) });
   ui.hint(`Saved “${name}” — find it in Vehicles`);
 }
 function planesModal() {
   const mine = LS.get('designs', []);
-  const card = (d, i, kind) => { const s = analyze(d); return `<div class="plane-card"><b>${d.name}</b><small>${d.desc || `${d.parts.length} parts · ${fmt(s.mass)} kg`}</small><div class="row2"><button data-load="${kind}:${i}" class="primary">Load</button>${kind === 'mine' ? `<button data-delp="${i}" class="danger">Delete</button>` : ''}</div></div>`; };
+  const card = (d, i, kind) => { const s = analyze(d); return `<div class="plane-card"><button class="pc-pic" data-pic="${kind}:${i}" data-load="${kind}:${i}" aria-label="Load"></button><b>${d.name}</b><small>${d.desc || `${d.parts.length} parts · ${fmt(s.mass)} kg`}</small><div class="row2"><button data-load="${kind}:${i}" class="primary">Load</button>${kind === 'mine' ? `<button data-delp="${i}" class="danger">Delete</button>` : ''}</div></div>`; };
   const m = ui.modal(`
     <h2>Vehicles</h2>
     <div class="tabs"><button class="on" data-tab="presets">Hangar classics</button><button data-tab="mine">My vehicles (${mine.length})</button><button data-tab="share">Share / import</button></div>
-    <div data-pane="presets" class="plane-grid">${presets.map((d, i) => card(d, i, 'preset')).join('')}<div class="plane-card"><b>Blank sheet</b><small>Start from nothing.</small><div class="row2"><button data-new class="primary">New</button></div></div></div>
-    <div data-pane="mine" class="plane-grid" hidden>${mine.map((d, i) => card(d, i, 'mine')).join('') || '<p>No saved vehicles yet.</p>'}<div class="plane-card"><b>Save current</b><small>“${hangar.design.name}”</small><div class="row2"><button data-save class="primary">Save</button></div></div></div>
+    <div data-pane="presets" class="plane-grid">${presets.map((d, i) => card(d, i, 'preset')).join('')}<div class="plane-card"><div class="pc-pic blank">＋</div><b>Blank sheet</b><small>Start from nothing.</small><div class="row2"><button data-new class="primary">New</button></div></div></div>
+    <div data-pane="mine" class="plane-grid" hidden>${mine.map((d, i) => card(d, i, 'mine')).join('') || '<p>No saved vehicles yet.</p>'}<div class="plane-card"><div class="pc-pic blank">💾</div><b>Save current</b><small>“${hangar.design.name}”</small><div class="row2"><button data-save class="primary">Save</button></div></div></div>
     <div data-pane="share" hidden>
       <p>Copy this code to share <b>${hangar.design.name}</b>:</p>
       <textarea readonly rows="3" id="share-code">${encodeDesign(hangar.design)}</textarea>
       <div class="row2"><button id="copy-code">Copy code</button></div>
       <p>Paste a code to import a vehicle:</p>
       <textarea rows="3" id="import-code" placeholder="paste code here"></textarea>
+      <div id="import-preview" class="import-preview" hidden></div>
       <div class="row2"><button id="import-btn" class="primary">Import</button></div>
     </div>
     <div class="modal-foot"><button data-close>Close</button></div>`, 'wide');
   const el = m.el;
   el.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => { el.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === b)); el.querySelectorAll('[data-pane]').forEach((p) => (p.hidden = p.dataset.pane !== b.dataset.tab)); }));
   el.querySelectorAll('[data-load]').forEach((b) => b.addEventListener('click', () => { const [k, i] = b.dataset.load.split(':'); hangar.load(k === 'preset' ? presets[+i] : mine[+i]); buildStats.setBase(k === 'preset' ? presets[+i].name : 'saved'); audio.play('load'); m.close(); analytics.capture('plane_loaded', { source: k, plane: k === 'preset' ? presets[+i].name : 'custom' }); }));
-  el.querySelectorAll('[data-delp]').forEach((b) => b.addEventListener('click', () => { mine.splice(+b.dataset.delp, 1); LS.set('designs', mine); m.close(); planesModal(); }));
+  el.querySelectorAll('[data-delp]').forEach((b) => b.addEventListener('click', () => { mine.splice(+b.dataset.delp, 1); LS.set('designs', mine); storeThumb(null, null, mine.map(designKey)); m.close(); planesModal(); }));
   el.querySelector('[data-new]').addEventListener('click', () => { hangar.load({ name: 'My Vehicle', parts: [] }); analytics.capture('plane_loaded', { source: 'blank' }); activeCat = 'fuselage'; buildPalette(); m.close(); ui.hint('Pick a body to start'); });
   el.querySelector('[data-save]').addEventListener('click', () => { saveCurrent(); m.close(); });
   el.querySelector('#copy-code').addEventListener('click', () => { const t = el.querySelector('#share-code'); t.select(); navigator.clipboard?.writeText(t.value).then(() => ui.hint('Copied!'), () => document.execCommand('copy')); });
+  let previewT; // a look at a pasted vehicle before loading it
+  el.querySelector('#import-code').addEventListener('input', (e) => {
+    clearTimeout(previewT); previewT = setTimeout(() => {
+      const box = el.querySelector('#import-preview'); let d = null;
+      try { d = e.target.value.trim() ? decodeDesign(e.target.value) : null; } catch { /* not a code (yet) */ }
+      box.hidden = !d?.parts.length; if (box.hidden) return;
+      box.innerHTML = `<div class="pc-pic"></div><div><b>${esc(d.name)}</b><small>${d.parts.length} parts · ${fmt(analyze(d).mass)} kg</small></div>`;
+      const pic = box.firstChild; renderThumb(d, { alive: () => pic.isConnected }).then((url) => url && showPic(pic, url));
+    }, 250);
+  });
   el.querySelector('#import-btn').addEventListener('click', () => { try { hangar.load(decodeDesign(el.querySelector('#import-code').value)); audio.play('load'); m.close(); ui.hint('Imported!'); buildStats.setBase('import'); analytics.capture('plane_loaded', { source: 'import' }); } catch (e) { ui.hint('That code didn’t work'); } });
+  // pictures: stock ones from assets/thumbs/ (drawn live if a vehicle changed since they were made), saved ones from
+  // localStorage (drawn now if missing). Placeholders shimmer until then; drawing stops when the menu closes.
+  const alive = () => el.isConnected, saved = savedThumbs(), keep = mine.map(designKey);
+  stockThumbs().then((ix) => presets.forEach((d, i) => {
+    const pic = el.querySelector(`[data-pic="preset:${i}"]`), key = designKey(d), slug = presetSlug(d.name);
+    if (ix?.[slug] === key) showPic(pic, `assets/thumbs/${slug}.webp`, () => livePreset(d, key, pic, alive));
+    else livePreset(d, key, pic, alive);
+  }));
+  mine.forEach((d, i) => {
+    const pic = el.querySelector(`[data-pic="mine:${i}"]`), key = keep[i];
+    if (saved[key]) showPic(pic, saved[key]);
+    else renderThumb(d, { alive }).then((url) => { if (!url) return; storeThumb(key, url, LS.get('designs', []).map(designKey)); showPic(pic, url); });
+  });
+}
+const livePictures = new Map(); // stock vehicles whose pre-made picture is out of date: drawn once a session
+function livePreset(d, key, pic, alive) {
+  if (livePictures.has(key)) { showPic(pic, livePictures.get(key)); return; }
+  renderThumb(d, { size: STOCK_SIZE, quality: 0.88, alive }).then((url) => { if (!url) return; livePictures.set(key, url); showPic(pic, url); });
+}
+function showPic(pic, url, onError) {
+  if (!pic?.isConnected) return;
+  const img = new Image(); img.alt = ''; img.decoding = 'async';
+  img.onload = () => pic.classList.add('ready');
+  img.onerror = () => { img.remove(); onError?.(); };
+  img.src = url; pic.replaceChildren(img);
 }
 
 function timeLabel(t) { const h = Math.floor(t), mm = Math.round((t - h) * 60); const lab = t < 5 || t > 20.5 ? 'Night' : t < 7.5 ? 'Dawn' : t < 11 ? 'Morning' : t < 15 ? 'Midday' : t < 18 ? 'Afternoon' : 'Sunset'; return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${lab}`; }
