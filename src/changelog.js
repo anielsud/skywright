@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.72.0', items: [
+    'CRASH! Buildings can be smashed now: clip a roof and knock a hole in it, or plough right through and watch it crumble into a pile of rubble with dust and smoke. Then fly through the gap!',
+    'Water towers burst, gas stations go boom and silos puff out clouds of grain.',
+  ] },
   { v: '1.71.0', items: [
     'Rockets are easier to steer: push the stick left and the nose goes left on your screen, push up and it tips up. Q and E roll it.',
     'Cars drive like real cars: W is gas, S is brake (hold it to reverse), let go and you slow down and stop. The wheels steer properly now, and on a tablet you get big GAS and BRAKE pedals.',
