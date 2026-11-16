@@ -20,11 +20,24 @@ self.addEventListener('fetch', (e) => {
   const req = e.request; if (req.method !== 'GET') return;
   if (req.url.includes('/assets/music/')) return; // streamed media uses range requests: leave them to the network + HTTP cache
   const isDoc = req.mode === 'navigate';
-  e.respondWith(isDoc
-    ? fetch(req, { cache: 'no-cache' }).then((r) => { caches.open(CACHE).then((c) => c.put(req, r.clone())); return r; }).catch(() => caches.match(req).then((r) => r || caches.match('index.html')))
-    : caches.match(req).then((cached) => {
-      const store = req.url.includes('/assets/real/') ? REAL : req.url.includes('/assets/hangar/') ? HANGAR : CACHE;
-      const net = fetch(req, { cache: 'no-cache' }).then((resp) => /* revalidate with the server (cheap 304s), never trust a stale HTTP cache */ { if (resp.ok) { const copy = resp.clone(); caches.open(store).then((c) => c.put(req, copy)); } return resp; }).catch(() => cached);
-      return cached || net; // stale-while-revalidate: next load gets the update
+  const store = req.url.includes('/assets/real/') ? REAL : req.url.includes('/assets/hangar/') ? HANGAR : CACHE;
+  const put = (resp) => { if (resp.ok) { const copy = resp.clone(); caches.open(store).then((c) => c.put(req, copy)); } return resp; };
+  // Code and styles (and the page) are network-first, so one load always gets one consistent version: with
+  // stale-while-revalidate each file updated on its own, and a release could run new main.js with an old style.css.
+  // The cache answers when offline, or if the network is slower than 3 s.
+  const code = isDoc || /\.(js|css|html|webmanifest)(\?|$)/.test(new URL(req.url).pathname) && new URL(req.url).origin === location.origin;
+  if (code) {
+    e.respondWith(caches.match(req).then((cached) => {
+      const net = fetch(req, { cache: 'no-cache' }).then(put);
+      const fallback = () => cached || (isDoc ? caches.match('index.html') : undefined) || net;
+      if (!cached && !isDoc) return net.catch(() => caches.match(req));
+      return Promise.race([net, new Promise((res) => setTimeout(() => res(null), 3000))]).then((r) => r || fallback()).catch(fallback);
     }));
+    return;
+  }
+  // everything else (textures, models, real-world data, sounds): stale-while-revalidate
+  e.respondWith(caches.match(req).then((cached) => {
+    const net = fetch(req, { cache: 'no-cache' }).then(put).catch(() => cached); // revalidate (cheap 304s), never trust a stale HTTP cache
+    return cached || net;
+  }));
 });
