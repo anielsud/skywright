@@ -86,10 +86,12 @@ function bodyField(obj) {
   const rMax = Math.max(...b.prof.map((q) => q[1]));
   return { kind: 'body', obj, f, box: new THREE.Box3().setFromObject(b.skin), rW: rMax * Math.max(b.sx, b.sy) * Math.max(sc[0], sc[1]), T, inv, W, sc, b };
 }
-// capsule along local z from z0 to z1, radius r (engines, tanks, boosters)
-function podField(obj, P) {
-  const W = obj.matrixWorld, inv = W.clone().invert(), s = Math.min(...axisScales(W)), za = P.z0 + P.r * 0.4, zb = P.z1 - P.r * 0.3;
-  const f = (p) => { _l.copy(p).applyMatrix4(inv); const zc = clamp(_l.z, za, zb); return (Math.hypot(_l.x, _l.y, _l.z - zc) - P.r) * s; };
+// tapered capsule along local z from z0 to z1 (engines, tanks, boosters), kept just inside the real cowl so skin that
+// runs into it is hidden by the cowl; rear radius as a fraction of the front one per pod
+const POD_TAPER = { e_radial: 0.7, e_piston: 0.92, e_turboprop: 0.92, e_jet_small: 0.8, e_jet_ab: 0.8, e_turbofan: 0.62, e_electric: 0.82, x_tank: 0.6, x_smoke: 0.6 };
+function podField(obj, P, id) {
+  const W = obj.matrixWorld, inv = W.clone().invert(), s = Math.min(...axisScales(W)), r0 = P.r * 0.9, r1 = r0 * (POD_TAPER[id] ?? 1), za = P.z0 + r0 * 0.4, zb = P.z1 - r1 * 0.4;
+  const f = (p) => { _l.copy(p).applyMatrix4(inv); const zc = clamp(_l.z, za, zb), r = r0 + (r1 - r0) * ((zc - za) / (zb - za || 1)); return (Math.hypot(_l.x, _l.y, _l.z - zc) - r) * s; };
   const box = new THREE.Box3(V(-P.r, -P.r, P.z0), V(P.r, P.r, P.z1)).applyMatrix4(W);
   return { kind: 'pod', obj, f, box, rW: P.r * s };
 }
@@ -346,7 +348,7 @@ export function blendSkins(design, objs, { pods, addTo, quick = false, rivets = 
           const Cb = bf.get(j), k = clamp(0.45 * Math.min(B.rW, Cb.rW), 0.05, 1.0);
           if (boxNear(B.box, Cb.box, k)) fields.push({ ...Cb, box: Cb.box.clone().expandByScalar(k), k, reach: k * 0.9, stop: 'bis' });
         } else if (pods[q.id] && !d.wing) {
-          const F = podField(o, pods[q.id]); F.k = clamp(0.4 * F.rW, 0.05, 0.4); F.reach = F.k; // thicker than the reach: skin that runs into it just ends up hidden inside
+          const F = podField(o, pods[q.id], q.id); F.k = clamp(0.4 * F.rW, 0.05, 0.4); F.reach = F.k; // thicker than the reach: skin that runs into it just ends up hidden inside
           if (boxNear(B.box, F.box, F.k)) { F.box.expandByScalar(F.k); fields.push(F); }
         } else if (CK[q.id] && q.parent === i) {
           const ck = cockpitSetup(q, o, B); if (ck) { fields.push(ck.ped); cks.push(ck); }
