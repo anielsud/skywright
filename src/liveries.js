@@ -77,7 +77,7 @@ const LIV_GLSL = /* glsl */`
         vec2 ctr = proj == 1 ? vec2(A.x, -A.y) : proj == 2 ? vec2(-A.x, A.y) : A.xy;
         vec2 d = (p - ctr) / A.zw + 0.5;
         if (face > 0.15 && all(greaterThan(d, vec2(0.0))) && all(lessThan(d, vec2(1.0)))) {
-          bool flip = (fl & 2) != 0 && P.x > 0.0;
+          bool flip = (fl & 2) != 0 && (proj == 0 ? N.x > 0.0 : P.x > 0.0); // side text reads right from whichever side you look at it (N faces the viewer): no mirrored text on the inside of a wing endplate
           if (flip) d.x = 1.0 - d.x;
           vec2 sz = B.zw - B.xy, tuv = B.xy + d * sz;
           vec2 gx = (proj == 0 ? dpx.zy : proj == 1 ? vec2(dpx.x, -dpx.z) : vec2(-dpx.x, dpx.y)) / A.zw * sz;

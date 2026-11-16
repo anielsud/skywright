@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { M } from './materials.js';
 import { PM, SKIN_TILE, lightGeometry } from './planeMaterials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
-import { bladeGeometry, rotorBlade, propEngineDetail, jetEngineDetail, rocketDetail, gearLegDetailed, cockpitDetail, cockpitBuild, rotorDetail, strutDetail, ringLoft, Bag, V, bar } from './partDetail.js';
+import { bladeGeometry, rotorBlade, propEngineDetail, jetEngineDetail, rocketDetail, gearLegDetailed, cockpitBuild, openCockpitBuild, airlinerNoseBuild, carEngineDetail, rotorDetail, strutDetail, ringLoft, Bag, V, bar } from './partDetail.js';
 
 // ---------- geometry helpers ----------
 // Body of revolution around Z. profile: [[z, r], ...] nose (most negative z) first.
@@ -471,9 +471,15 @@ function rotorHead({ R, blades, chord, mast = 0, side = false, color, lv = 0 }) 
   if (lv) rotorDetail(g, { R, blades, chord, mast });
   return g;
 }
-function skid({ len, h, color }) {
+function skid({ len, h, color, lv = 0 }) {
   const g = new THREE.Group();
   const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, len, 10), M.paint(color)); tube.rotation.x = Math.PI / 2; tube.position.y = -h; g.add(tube);
+  if (lv) { // detail: the toe curls up from the end of the skid tube (the plain part's quarter-torus floated beside it)
+    const toe = new THREE.TorusGeometry(0.22, 0.06, 8, 12, Math.PI / 2); toe.rotateZ(-Math.PI / 2); toe.rotateY(Math.PI / 2); toe.translate(0, -h + 0.22, -len / 2);
+    g.add(new THREE.Mesh(toe, M.paint(color)));
+    for (const dz of [-len * 0.25, len * 0.25]) { const st = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, h, 8), M.steel()); st.position.set(0, -h / 2, dz); g.add(st); }
+    return g;
+  }
   const tipF = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.06, 8, 12, Math.PI / 2), M.paint(color)); tipF.rotation.y = Math.PI / 2; tipF.position.set(0, -h + 0.22, -len / 2); g.add(tipF);
   for (const dz of [-len * 0.25, len * 0.25]) { const st = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, h, 8), M.steel()); st.position.set(0, -h / 2, dz); g.add(st); }
   return g;
@@ -560,12 +566,12 @@ def({ id: 'ck_fighter', cat: 'cockpit', name: 'Fighter Canopy', desc: 'Gold-tint
   } });
 def({ id: 'ck_airliner', cat: 'cockpit', name: 'Airliner Nose', desc: 'Flight deck with wrap-around windscreen. Bolts to the front of a tube.', mass: 1600, hp: 2500, color: C.white, eye: [0, 0.9, -2.8],
   build: (c, lv) => {
+    if (lv) return airlinerNoseBuild(c, PM.skin(c)); // detail: windscreen cut into the skin, flight deck and crew seats
     const g = new THREE.Group();
     g.add(new THREE.Mesh(revolve(smoothProfile([[-4.6, 0], [-4.4, 0.7], [-3.4, 1.4], [-1.8, 1.82], [0, 1.9]], 24), { segs: 40, yOff: (z) => (z + 0) * -0.04, cap: true }), PM.skin(c)));
     const ws = new THREE.Mesh(new THREE.SphereGeometry(1.86, 24, 8, Math.PI * 0.3, Math.PI * 0.4, Math.PI * 0.3, Math.PI * 0.12), PM.windscreen());
     ws.position.set(0, 0.0, -1.7); ws.scale.set(1, 1, 1.25); ws.rotation.y = Math.PI / 2 + Math.PI; g.add(ws);
     const radome = new THREE.Mesh(new THREE.SphereGeometry(0.72, 16, 12), PM.skin(0x30343a)); radome.position.z = -4.25; radome.scale.z = 0.5; g.add(radome);
-    if (lv) cockpitDetail('ck_airliner', g, c);
     return g;
   } });
 def({ id: 'ck_glassnose', cat: 'cockpit', name: 'Greenhouse Nose', desc: 'Framed glass nose, like an old bomber.', mass: 220, hp: 400, color: C.navy, eye: [0, 0.1, -0.6],
@@ -577,7 +583,8 @@ def({ id: 'ck_glassnose', cat: 'cockpit', name: 'Greenhouse Nose', desc: 'Framed
     return g;
   } });
 def({ id: 'ck_open', cat: 'cockpit', name: 'Open Cockpit', desc: 'Windscreen, leather seat and a pilot with goggles. Wind in your hair.', mass: 40, hp: 150, color: 0x6b4226, eye: [0, 0.35, 0.25],
-  build: (c) => {
+  build: (c, lv) => {
+    if (lv) return openCockpitBuild(c); // detail: seat for a crew.js pilot
     const g = new THREE.Group();
     const ws = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.25, 16, 1, true, -0.9, 1.8), PM.canopy()); ws.position.set(0, 0.12, -0.2); ws.rotation.y = Math.PI; g.add(ws);
     const rim = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.05, 8, 24), PM.skin(c)); rim.rotation.x = Math.PI / 2; rim.scale.set(1, 1.4, 1); g.add(rim); g.userData.rim = rim; // skinBlend swaps it for a coaming along the seam
@@ -670,12 +677,12 @@ gearDef('g_bogie', 'Heavy Bogie', 'Four-wheel airliner bogie. Handles huge weigh
 def({ id: 'g_float', cat: 'gear', name: 'Float', desc: 'Pontoon float. Land on water! (Skids on ground.)', mass: 90, hp: 700, color: C.white, attach: 'gear',
   gear: { float: true, len: 1.0, r: 0.35, flen: 5.2, limit: 6, k: 3 }, build: (c) => float_({ len: 5.2, r: 0.4, color: c }) });
 def({ id: 'g_skid', cat: 'gear', name: 'Helicopter Skid', desc: 'Landing skid for helicopters. Use one each side.', mass: 30, hp: 600, color: 0x4a4f57, attach: 'gear',
-  gear: { float: true, skid: true, flen: 3.0, clen: 0.95, cr: 0.11, limit: 6, k: 3 }, build: (c) => skid({ len: 3.0, h: 1.0, color: c }) });
+  gear: { float: true, skid: true, flen: 3.0, clen: 0.95, cr: 0.11, limit: 6, k: 3 }, build: (c, lv) => skid({ len: 3.0, h: 1.0, color: c, lv }) });
 
 // --- Car parts: a Car Engine drives every wheel marked drive. Throttle = go, stick left/right = steer, pull back = reverse.
 def({ id: 'c_motor', cat: 'car', name: 'Car Engine', desc: 'V8 with a blower. Drives the car wheels. Throttle to go, pull the stick back to reverse.', mass: 220, hp: 900, color: C.red,
   engine: { type: 'drive', thrust: 5000, vmax: 50, sound: 'piston', idleRpm: 800, maxRpm: 2700, cyl: 8 },
-  build: (c) => carMotor({ color: c }) });
+  build: (c, lv) => (lv ? carEngineDetail(c) : carMotor({ color: c })) }); // detail: a real supercharged V8
 const carWheel = (id, name, desc, mass, r, len, w, steer) => def({ id, cat: 'car', name, desc, mass, hp: 700, color: 0x2a2a2a, attach: 'gear',
   gear: { len, r, steer, brake: true, drive: true, limit: 8, k: 3 }, build: (c, lv) => gearLeg({ len, r, w, steer, color: c, lv }) });
 carWheel('c_wheel', 'Car Wheel', 'Driven wheel with a fat tyre. Put them at the back.', 30, 0.36, 0.35, 0.3, false);

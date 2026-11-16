@@ -238,6 +238,19 @@ export const PM = {
       return m;
     });
   },
+  // Car paint: the same skin program (so liveries paint it) over a clean, seamless texture: no aircraft panel grid or
+  // rivet rows on a buggy tub or a pickup body (their shut lines are modelled), deeper gloss.
+  carPaint(color) {
+    return cached('carPaint' + color, () => {
+      const t = cached('carTex', () => {
+        const c = document.createElement('canvas'); c.width = c.height = 4; const g = c.getContext('2d'); g.fillStyle = 'rgb(255,190,0)'; g.fillRect(0, 0, 4, 4);
+        const tx = new THREE.CanvasTexture(c); tx.channel = 1; tx.wrapS = tx.wrapT = THREE.RepeatWrapping; return tx;
+      });
+      const m = new THREE.MeshPhysicalMaterial({ color, metalness: 0.1, roughness: 0.38, clearcoat: 1, clearcoatRoughness: 0.05, bumpMap: t, bumpScale: 0, roughnessMap: t, aoMap: t, aoMapIntensity: 1 });
+      m.onBeforeCompile = skinCompile;
+      return m;
+    });
+  },
   // Canopy glass: faint tint where you look straight through, mirror-like at grazing angles (premultiplied
   // blending, so environment reflections add on top instead of being faded by the low opacity).
   canopy: (tint = 0x2c3c4a) => cached('canopy' + tint, () => {
