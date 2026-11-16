@@ -77,7 +77,7 @@ const presets = makePresets();
 
 // ---------- UI helpers ----------
 const ui = {
-  hint(t) { const h = $('#hint'); h.textContent = t; h.classList.add('show'); clearTimeout(this._h); this._h = setTimeout(() => h.classList.remove('show'), 2200); },
+  hint(t, ms = 2200) { const h = $('#hint'); h.textContent = t; h.classList.add('show'); clearTimeout(this._h); this._h = setTimeout(() => h.classList.remove('show'), ms); },
   modal(html, cls = '') {
     const root = $('#modal-root'); root.innerHTML = `<div class="modal-bg"><div class="modal ${cls}">${html}</div></div>`; root.style.display = 'block';
     const close = () => { root.innerHTML = ''; root.style.display = 'none'; };
@@ -566,6 +566,7 @@ function helpModal() {
   <h4>Fly — keyboard</h4>
   <table><tr><td>↑ ↓ / W S</td><td>Pitch (↓ pulls the nose up)</td></tr><tr><td>← → / A D</td><td>Roll</td></tr><tr><td>Q E</td><td>Rudder / steer on the ground</td></tr>
   <tr><td>Shift / Ctrl, R / F, 1–0</td><td>Throttle</td></tr><tr><td>B</td><td>Brakes</td></tr><tr><td>G</td><td>Gear up/down</td></tr><tr><td>V</td><td>Flaps</td></tr><tr><td>Space</td><td>Airshow smoke</td></tr><tr><td>C</td><td>Change camera</td></tr><tr><td>H</td><td>Hide HUD (photo mode)</td></tr><tr><td>Esc / P</td><td>Pause</td></tr></table>
+  <p><b>Cars:</b> W / ↑ gas, S / ↓ brake (keep holding to reverse), A D steer, Space handbrake. On a tablet: the GAS and BRAKE pedals, and the stick steers.<br><b>Rockets:</b> the stick points the nose left, right, up or down on the screen; Q E (or the slider) roll.</p>
   <h4>Fly — tablet</h4><p>Left thumb: throttle lever and rudder slider. Right thumb: the stick (pull down to climb). Or switch on <b>Tilt the tablet</b> in Settings. Drag the sky to look around; pinch to zoom.</p>
   <h4>Gamepad</h4><p>Left stick flies, right stick X is rudder, triggers set throttle, A brakes, B gear, X flaps, Y camera, LB smoke.</p>
   <h4>Tips</h4><p>Take off around the stall speed shown in the hangar. In Simulator mode, land gently (under ~3 m/s sink) or your gear will snap! Sailplanes can ride rising air under cumulus clouds and along sunny ridges.</p>
@@ -640,11 +641,11 @@ function buildFlight(cfg) {
   else if (start === 'water' || (start === 'runway' && st.floats && !gearOK)) start = 'water';
   if (start === 'runway' && (!ac.hasEngine)) start = 'air';
   if (st.car && st.wingArea < 0.5 && (start === 'air' || start === 'approach')) start = 'runway'; // cars without wings start on the ground
-  if (design.vertical && start !== 'water') start = 'runway'; // rockets launch standing on their tail
+  if (st.vertical && start !== 'water') start = 'runway'; // rockets launch standing on their tail
   const slot = cfg.mpSlot || 0, slotX = slot ? (slot % 2 ? 1 : -1) * Math.ceil(slot / 2) * 70 : 0; // multiplayer: side by side, stepped up
   const vApp = clamp(Number.isFinite(st.stall) ? st.stall * 1.45 : 45, 32, 110);
   const rwy = world.runways[net.active ? net.freeRunway(world) : cfg.rwy || 0] || world.runway; // online: a runway nobody is on
-  if (start === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0, design.vertical ? { pitch: Math.PI / 2 } : {}); }
+  if (start === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0, st.vertical ? { pitch: Math.PI / 2 } : {}); }
   else if (start === 'water') {
     const w = findWater(world);
     if (w) ac.spawn(env, w.pos || w, w.heading || 0); else { start = 'air'; }
@@ -659,7 +660,10 @@ function buildFlight(cfg) {
     ac.gearDown = true; ac.gearT = 1; ac.flaps = 1; controls.setThrottle(st.heli ? 0.45 : 0.55);
   } else controls.setThrottle(0);
   if (start === 'air') { ac.flaps = 0; }
-  if (st.car && !st.heli) setTimeout(() => ui.hint('Car: throttle to go, stick to steer, pull the stick back to reverse'), 1500);
+  const touchUI = settings.touch === 'on' || (settings.touch === 'auto' && isTouch);
+  controls.setVehicle(st.car && !st.heli ? 'car' : st.rocket ? 'rocket' : 'plane'); ac.viewQ = flightCam.quaternion; // rockets steer relative to the screen
+  if (st.car && !st.heli) setTimeout(() => ui.hint(touchUI ? 'Car: GAS to go, BRAKE to stop (keep holding it to reverse), stick to steer' : 'Car: W go · S brake, hold to reverse · A D steer · Space handbrake', 6000), 1500);
+  else if (st.rocket) setTimeout(() => ui.hint(touchUI ? 'Rocket: full throttle to launch · the stick points the nose left/right/up/down on screen · the slider rolls' : 'Rocket: full throttle to launch · arrows / WASD point the nose left/right/up/down on screen · Q E roll', 6000), 1500);
   if (st.heli) setTimeout(() => ui.hint(cfg.realism === 'sim' ? 'Helicopter: throttle is the collective. Good luck!' : 'Helicopter: throttle to the middle to hover, more to climb'), 1500);
   let mission = null;
   if (cfg.mode === 'rings') mission = new RingRace(scene, world, ac, cfg.realism);
@@ -891,9 +895,16 @@ function stepFlight(dtReal) {
   f.t = (f.t || 0) + dtReal;
   if (f.slowmo > 0) { f.slowmo -= dtReal; f.timeScale = 0.3; } else f.timeScale = Math.min(1, f.timeScale + dtReal * 2);
   const dt = Math.min(dtReal, 1 / 20) * f.timeScale;
-  const c = controls.update(dtReal), thr = engineSwitch(f, ac, c.throttle, dtReal);
-  ac.setControls({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: thr });
-  ac.brake = c.brake || (thr < 0.03 && ac.onGround && ac.v.length() < 3 && !(ac.isCar && c.pitch > 0.2) ? 1 : 0); // parking brake (not while a car reverses)
+  const c = controls.update(dtReal);
+  if (ac.isCar) { // pedals: the engine starts on the first press of either (it drives you backwards too)
+    const want = Math.max(c.gas, c.rev), go = want > 0 ? engineSwitch(f, ac, want, dtReal) / want : (engineSwitch(f, ac, 0, dtReal), 1);
+    ac.setControls({ pitch: 0, roll: c.roll, yaw: 0, throttle: c.gas * go, rev: c.rev * (go || (ac.groundSpeed > 0.6 ? 1 : 0)), hand: c.hand });
+    ac.brake = want < 0.03 && ac.onGround && ac.v.length() < 1.5 ? 1 : 0; // parked: hold still (even on a slope)
+  } else {
+    const thr = engineSwitch(f, ac, c.throttle, dtReal);
+    ac.setControls({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: thr });
+    ac.brake = c.brake || (thr < 0.03 && ac.onGround && ac.v.length() < 3 ? 1 : 0); // parking brake
+  }
   ac.step(dt, f.env);
   // trees
   if (!ac.dead && (ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), 0) < 30 || world.towns.tall)) { // (a city's towers reach far higher)

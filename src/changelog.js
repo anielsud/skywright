@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.71.0', items: [
+    'Rockets are easier to steer: push the stick left and the nose goes left on your screen, push up and it tips up. Q and E roll it.',
+    'Cars drive like real cars: W is gas, S is brake (hold it to reverse), let go and you slow down and stop. The wheels steer properly now, and on a tablet you get big GAS and BRAKE pedals.',
+  ] },
   { v: '1.70.0', items: [
     'The Vehicles menu has pictures! See every vehicle before you load it, including the ones you saved, and get a preview when you paste a share code.',
   ] },

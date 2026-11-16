@@ -1,7 +1,7 @@
 // Runtime aircraft: rigid-body flight model built from parts, ground contact, damage & break-up.
 import * as THREE from 'three';
 import { PARTS, partInfo } from './parts.js';
-import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale, partPower, partBurn } from './design.js';
+import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale, partPower, partBurn, isRocketDesign } from './design.js';
 import { M } from './materials.js';
 import { clamp, lerp } from './noise.js';
 import { keepHeatPatch } from './sonic.js';
@@ -17,6 +17,7 @@ export const REALISM = {
 
 const G = 9.81;
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _qi = new THREE.Quaternion();
+const _rf = new THREE.Vector3(), _ra = new THREE.Vector3(), _rb = new THREE.Vector3(), _rc = new THREE.Vector3(), _rd = new THREE.Vector3();
 // ---- the atmosphere, from the runway to space ----
 // Air density (kg/m³): the old exponential (a near-perfect fit to the ISA troposphere) up to 11 km, then the
 // US Standard Atmosphere 1976, interpolated log-linearly: 1/14 of sea level at 20 km, 1/1000 at 48 km, ~0 above 100 km.
@@ -139,7 +140,7 @@ export class Aircraft {
     this.parts = [];
     this.events = [];
     this.flaps = 0; this.trim = 0; this.gearDown = true; this.gearT = 1; this.smokeOn = false; this.brake = 0;
-    this.ctl = { pitch: 0, roll: 0, yaw: 0, throttle: 0 };
+    this.ctl = { pitch: 0, roll: 0, yaw: 0, throttle: 0, rev: 0, hand: 0 }; // rev/hand: a car's brake-then-reverse pedal and handbrake
     this.x = new THREE.Vector3(); this.v = new THREE.Vector3(); this.q = new THREE.Quaternion(); this.w = new THREE.Vector3();
     this.wW = new THREE.Vector3(); this.invIW = new THREE.Matrix3();
     this.stats = { maxSpeed: 0, maxAlt: 0, maxG: 1, time: 0, airTime: 0, landings: 0, bestLanding: null, partsLost: 0, distance: 0 };
@@ -217,11 +218,19 @@ export class Aircraft {
     this.hasAB = this.parts.some((p) => p.engine?.ab);
     this.isHeli = this.parts.some((p) => p.engine?.type === 'rotor');
     this.isCar = this.parts.some((p) => p.engine?.type === 'drive');
-    this.driveF = 0; this.flipT = 0;
+    this.driveF = 0; this.flipT = 0; this.svcBrake = 0; this.reversing = false; this.groundSpeed = 0;
+    this.motorCount = this.parts.filter((p) => p.engine?.type === 'drive').length;
+    // Rockets (any build with a rocket body) steer like rockets: see rocketControls(). A mixed build (rocket body + main
+    // wings) blends between the rocket and plane schemes by rocketK (1 = rocket); a pure rocket is always 1.
+    this.isRocket = isRocketDesign(design) && !this.isHeli && !this.isCar;
+    this.rocketPure = this.isRocket && !this.parts.some((p) => p.d.cat === 'wing');
+    this.rocketK = this.rocketPure ? 1 : 0; this.liftRatio = 0; this.viewQ = null; // viewQ: the camera's world rotation (main.js)
+    this.ce = this.ctl;
     this.hasRCS = this.parts.some((p) => p.d.rcs || p.engine?.type === 'rocket'); // little gas jets (or the rockets' own) turn you in space
     this.rho = airDensity(0); this.airFx = 1; this.rcsFire = 0;
     this.updateMass(true);
     this.initialMass = this.mass;
+    this.steerGeometry();
     let r = 1; for (const p of this.parts) for (const h of p.hull) r = Math.max(r, h.distanceTo(this.com)); for (const p of this.parts) if (p.gear) r = Math.max(r, p.gear.wheels[0].top.distanceTo(this.com) + p.gear.wheels[0].len + 0.5);
     this.radius = r;
   }
@@ -312,6 +321,7 @@ export class Aircraft {
     const n = Math.max(1, Math.ceil(dtFrame * hz));
     const dt = dtFrame / n;
     const v0 = this.v.clone(), x0 = this.x.clone(), q0 = this.q.clone();
+    if (this.isRocket) this.rocketControls(dtFrame); else this.ce = this.ctl;
     for (let i = 0; i < n; i++) this.substep(dt, env);
     if (!Number.isFinite(this.x.x + this.x.y + this.x.z + this.v.x + this.v.y + this.v.z + this.q.x + this.q.y + this.q.z + this.q.w + this.w.x + this.w.y + this.w.z)) {
       // numerical blow-up (absurd speeds): never let NaN reach the renderer (bloom turns it into a black frame)
@@ -324,12 +334,35 @@ export class Aircraft {
   }
 
   // ---- car ----
-  // Stick left/right steers (as well as the rudder). Pull the stick back to reverse.
+  // Stick left/right steers (as well as the rudder). W / the GAS pedal goes, S / BRAKE brakes and then reverses.
   steerCmd() { return this.isCar ? clamp(this.ctl.yaw + this.ctl.roll, -1, 1) : this.ctl.yaw; }
-  steerAngle() {
+  // Steering angle (rad, + = left) of the reference front wheel; steerAngle(w) gives one wheel its own angle.
+  steerAngle(w = null) {
     if (!this.isCar) return -this.ctl.yaw * 0.55 * clamp(1 - this.airspeed / 45, 0.15, 1);
-    // cars: the faster you go, the less the wheels turn, keeping corners under ~0.6 g so it slides before it tips
-    return -this.steerCmd() * Math.min(0.55, Math.atan(2.5 * 6 / Math.max(1, this.airspeed ** 2)));
+    // cars: full lock (~34°) at walking pace, less as you speed up so corners stay under cornerG (it slides before it tips)
+    const v = Math.hypot(this.v.x, this.v.z), L = this.wheelbase || 2.5;
+    const th = -this.steerCmd() * Math.min(0.6, Math.atan(L * (this.cornerG || 6) / Math.max(1, v * v)));
+    if (!w || w.L === undefined) return th;
+    // Ackermann: every steered wheel points square to the radius from one turning centre beside the pivot axle, so the
+    // inside wheel turns more than the outside one, and wheels behind the pivot (4-wheel steer) turn the other way
+    const sn = Math.sin(th);
+    return Math.atan((w.L * sn) / (L * Math.cos(th) + w.xo * sn));
+  }
+  // Where the car turns about: the middle of the fixed (unsteered) wheels, or of all of them for 4-wheel steer.
+  steerGeometry() {
+    if (!this.isCar) return;
+    const ws = []; for (const p of this.parts) if (p.gear && !p.gear.float) ws.push(...p.gear.wheels);
+    const fixed = ws.filter((w) => !w.steer), base = fixed.length ? fixed : ws;
+    if (!ws.length) return;
+    const zp = base.reduce((a, w) => a + w.top.z, 0) / base.length, xc = ws.reduce((a, w) => a + w.top.x, 0) / ws.length;
+    let L = 0; for (const w of ws) if (w.steer) { w.L = zp - w.top.z; w.xo = w.top.x - xc; L = Math.max(L, Math.abs(w.L)); }
+    if (L < 0.3) for (const w of ws) delete w.L; // one axle only: nothing to turn about, plain steering
+    this.wheelbase = Math.max(0.6, L);
+    // how hard it can corner before it tips: ~3/4 of the static rollover limit (half the track over the CoM height), so a
+    // low buggy corners at 0.8 g and a tall monster truck at about half that
+    const half = ws.reduce((a, w) => a + Math.abs(w.top.x - xc), 0) / ws.length;
+    const h = this.com.y - ws.reduce((a, w) => a + w.top.y - w.len - w.r, 0) / ws.length;
+    this.cornerG = clamp(0.75 * G * half / Math.max(0.3, h), 3, 8);
   }
   // Arcade and Pilot: a car stuck on its roof or side for 2 s is set back on its wheels.
   carRecover(dt) {
@@ -340,6 +373,55 @@ export class Aircraft {
     this.q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(-fwd.x, -fwd.z));
     this.x.y += 1.5; this.v.set(0, 0, 0); this.w.set(0, 0, 0); this.wW.set(0, 0, 0); this.flipT = 0;
     this.emit('msg', { text: 'Back on your wheels!' });
+  }
+
+  // ---- rocket ----
+  // The stick moves the nose across the SCREEN: left/right swings it left/right, back/forward tips it up/down, whatever
+  // way up the rocket is and wherever the camera is (a rocket standing on its tail has no "wings level" to bank from,
+  // so plane-style roll-to-turn makes no sense from the chase camera). The rudder (Q/E, the touch slider) rolls.
+  // Writes this.ce, the body-axis commands the surfaces and assists use, blended with the plane scheme by rocketK.
+  rocketControls(dt) {
+    const c = this.ctl, fwd = _rf.set(0, 0, -1).applyQuaternion(this.q);
+    let want = 1;
+    if (!this.rocketPure) { // rocket plane: rocket-style when the nose is high or the rockets burn with the wings not yet carrying it
+      if (this.onGround) want = fwd.y > 0.6 ? 1 : 0;
+      else {
+        this.liftS = (this.liftS ?? 1) + (Math.abs(this.liftRatio) - (this.liftS ?? 1)) * Math.min(1, dt / 0.6); // (lift jumps about in rolls and pushes)
+        want = Math.max(smooth(0.5, 0.8, fwd.y), this.rocketBurn ? 1 - smooth(0.55, 0.9, this.liftS) : 0);
+      }
+    }
+    this.rocketK += (want - this.rocketK) * Math.min(1, dt / 0.5);
+    if (!this.rocketPure && Math.abs(want - (this.rocketMode ? 1 : 0)) > 0.7) { this.rocketMode = want > 0.5; this.emit('msg', { text: this.rocketMode ? 'Rocket steering: stick points the nose' : 'Plane steering: stick banks' }); }
+    if (this.ce === this.ctl) this.ce = {};
+    const ce = Object.assign(this.ce, c), k = this.rocketK;
+    if (k < 0.002) return;
+    const vq = this.viewQ || this.q;
+    const camR = _ra.set(1, 0, 0).applyQuaternion(vq), camU = _rb.set(0, 1, 0).applyQuaternion(vq);
+    // screen-right and screen-up, each made square to the nose (two estimates of "right" summed so neither degenerates)
+    const a = _rc.copy(camR).addScaledVector(fwd, -fwd.dot(camR)).add(_rd.copy(fwd).cross(camU));
+    if (a.lengthSq() < 0.04) a.copy(camR).addScaledVector(fwd, -fwd.dot(camR));
+    if (a.lengthSq() < 1e-4) a.set(1, 0, 0).applyQuaternion(this.q);
+    a.normalize();
+    const b = _rd.copy(a).cross(fwd);
+    const d = a.multiplyScalar(c.roll).addScaledVector(b, c.pitch);
+    const w = _rb.copy(fwd).cross(d).applyQuaternion(_qi.copy(this.q).invert()); // turn rate wanted, in the body frame
+    if (w.lengthSq() > 1) w.normalize();
+    ce.pitch = lerp(c.pitch, w.x, k); ce.yaw = lerp(c.yaw, -w.y, k); ce.roll = lerp(c.roll, c.yaw, k);
+  }
+
+  // Arcade/Pilot: the stick sets the turn rate (let go and it holds its heading, and the roll stops), worked by the swivelling
+  // engines while they burn and by the fins once there's airflow. Sim: just the engines' swivel (a few degrees), no help.
+  rocketAssist(F, T, ctl, V, air, vAirB) {
+    const R = this.R, k = this.rocketK, sf = clamp((V - 6) / 22, 0, 1) * air;
+    if (R.assist > 0) {
+      const auth = Math.max(sf, this.rocketBurn ? 1 : 0) * k, rate = 0.45 + 0.25 * R.assist; // rad/s at full stick
+      const err = _v3.set(ctl.pitch * rate, -ctl.yaw * rate, -ctl.roll * 1.6).sub(this.w).multiplyScalar(6 * (0.5 + 0.5 * R.assist) * auth);
+      T.add(err.applyMatrix3(this.I));
+      if (R.sideslipKill > 0) { const kill = this.mass * R.sideslipKill * sf * k * 0.6; F.x -= vAirB.x * kill; F.y -= vAirB.y * kill; } // flies like a dart, the same in every direction
+    } else if (this.rocketBurn) {
+      let tv = 0; for (const p of this.parts) if (p.alive && p.engine?.type === 'rocket') tv += p.engine.thrustNow * Math.max(1, Math.abs(p.engine.pos.z - this.com.z)) * 0.09;
+      T.x += ctl.pitch * tv * k; T.y -= ctl.yaw * tv * k; T.z -= ctl.roll * Math.min(tv * 0.2, this.I.elements[8] * 1.2) * k; // (a slim rocket spins up easily: gentle roll)
+    }
   }
 
   // ---- helicopter ----
@@ -415,7 +497,7 @@ export class Aircraft {
     const wave = 1 + waveDrag(mach) * (R.waveMult ?? 1);
     const air = airAuthority(rho, 0.5 * rho * V * V); // 1 below ~22 km: the assists below fade only in near-vacuum
     const F = new THREE.Vector3(), T = new THREE.Vector3(), Taero = new THREE.Vector3();
-    const ctl = this.ctl;
+    const ctl = this.ce || this.ctl;
     const flapDefl = [0, 0.18, 0.35, 0.6][this.flaps];
     // automatic pitch trim (like a fly-by-wire autotrim): holds attitude when the stick is centred
     if (R.aeroTorque > 0) {
@@ -482,26 +564,36 @@ export class Aircraft {
         F.add(Fs); Taero.add(_v3.copy(r).cross(Fs));
       }
     }
-    this.alpha = maxAlpha;
+    this.alpha = maxAlpha; this.liftRatio = totalLift / (mass * G);
     this.stalled = R.stallSharp > 0 && maxAlpha > 0.29 && V > 8 && !this.onGround && air > 0.5; // (no stalling in a vacuum)
     // ---- engines ----
     const fwdSpeed = -vAirB.z;
     if (this.isHeli) this.rotors(dt, rho, ctl, F, T, q, _qi);
-    this.driveF = 0;
+    this.driveF = 0; let burningNow = false;
+    if (this.isCar) { // pedals: gas goes; brake slows you, and once stopped (and still held) reverses; gas while rolling back brakes too
+      const vg = -_v2.copy(this.v).applyQuaternion(_qi).z; // ground speed along the car
+      this.svcBrake = 0;
+      if (ctl.rev > 0.02 && ctl.rev >= ctl.throttle) { if (vg > 0.6 && !this.reversing) this.svcBrake = ctl.rev; else this.reversing = true; }
+      else { this.reversing = false; if (ctl.throttle > 0.02 && vg < -0.6) this.svcBrake = ctl.throttle; }
+      this.groundSpeed = vg;
+    }
     for (const p of this.parts) {
       const e = p.engine; if (!e || !p.alive || e.type === 'rotor' || e.type === 'tailrotor') continue;
       if (e.type === 'drive') { // force goes through the driven wheels (see contacts)
-        const rev = this.onGround && ctl.throttle < 0.05 ? clamp((ctl.pitch - 0.2) / 0.6, 0, 1) : 0;
-        e.spoolT = (e.spoolT || 0) + (Math.max(ctl.throttle, rev) - (e.spoolT || 0)) * Math.min(1, dt / 0.25);
+        const rev = this.reversing ? ctl.rev : 0, gas = rev > 0 ? 0 : ctl.throttle, vg = this.groundSpeed;
+        e.spoolT = (e.spoolT || 0) + (Math.max(gas, rev) - (e.spoolT || 0)) * Math.min(1, dt / 0.25);
         const dmgF = (1 - clamp(p.dmg / p.hp, 0, 1) * 0.7) * (p.dmg > p.hp * 0.75 ? 0.2 : 1);
-        this.driveF += rev > 0 ? -e.thrust * 0.5 * e.spoolT * Math.max(0, 1 - (Math.max(0, -fwdSpeed) / 10) ** 2) * dmgF
-          : e.thrust * e.spoolT * Math.max(0, 1 - (Math.max(0, fwdSpeed) / e.vmax) ** 2) * dmgF;
+        this.driveF += rev > 0 ? -e.thrust * 0.5 * e.spoolT * Math.max(0, 1 - (Math.max(0, -vg) / 10) ** 2) * dmgF
+          : e.thrust * e.spoolT * Math.max(0, 1 - (Math.max(0, vg) / e.vmax) ** 2) * dmgF;
+        // off the pedals the engine holds you back (engine braking): the car slows to a stop instead of coasting for ever
+        if (gas < 0.05 && rev < 0.05) this.driveF -= clamp(vg / 1.5, -1, 1) * mass * G * 0.14 * (1 - Math.max(gas, rev) * 20) / Math.max(1, this.motorCount);
         e.thrustNow = 0;
         e.rpm = lerp(e.idleRpm, e.maxRpm, Math.max(e.spoolT * 0.6, clamp(Math.abs(fwdSpeed) / e.vmax, 0, 1)));
         continue;
       }
       let target = ctl.throttle;
       if (e.type === 'rocket') {
+        if (e.burning) burningNow = true;
         if (!e.burning && ctl.throttle > 0.5 && e.burn > 0) { e.burning = true; this.emit('msg', { text: 'Rocket ignition!' }); this.emit('rocket', {}); }
         target = e.burning ? 1 : 0;
         if (e.burning) { e.burn -= dt; if (e.burn <= 0) { e.burning = false; this.emit('msg', { text: 'Rocket burnt out' }); } }
@@ -533,6 +625,7 @@ export class Aircraft {
       T.addScaledVector(_v3.copy(r).cross(Fs), R.thrustTorque);
       if (e.type === 'prop') T.addScaledVector(e.dir, -thrust * 0.035 * e.spinDir * R.propTorque);
     }
+    this.rocketBurn = burningNow;
     // ---- gravity ----
     F.add(_v2.set(0, -gravityAt(alt, this.v.x * this.v.x + this.v.z * this.v.z) * mass, 0).applyQuaternion(_qi));
     // ---- arcade/pilot assistance ----
@@ -542,8 +635,8 @@ export class Aircraft {
       const right = _v2.set(1, 0, 0).applyQuaternion(q), bank = Math.asin(clamp(right.y, -1, 1));
       T.add(_v3.set(0, 0, -bank * 6 * R.assist - this.w.z * 3 * R.assist).applyMatrix3(this.I));
     }
-    else if (R.assist > 0 && !(this.isCar && this.onGround)) {
-      const sf = clamp((V - 6) / 22, 0, 1);
+    else if (R.assist > 0 && !(this.isCar && this.onGround) && this.rocketK < 0.999) {
+      const sf = clamp((V - 6) / 22, 0, 1) * (1 - this.rocketK); // (a rocket plane fades this out as it goes rocket-style)
       const des = new THREE.Vector3(ctl.pitch * 1.3, -ctl.yaw * 0.7, -ctl.roll * 2.4);
       const beta = Math.atan2(vAirB.x, Math.max(1, -vAirB.z));
       des.y += -beta * 3 * R.assist;
@@ -560,6 +653,7 @@ export class Aircraft {
       // kill sideslip
       if (R.sideslipKill > 0) F.x -= vAirB.x * mass * R.sideslipKill * sf * air;
     }
+    if (this.isRocket && this.rocketK > 0.001 && !this.onGround) this.rocketAssist(F, T, ctl, V, air, vAirB);
     // ---- reaction control: in near-vacuum the stick fires attitude jets (rate command: let go and the spin stops) ----
     const rcs = (this.hasRCS || R.spaceRCS) && !this.onGround && !this.isCar ? 1 - air : 0;
     this.rcsFire = 0;
@@ -658,23 +752,25 @@ export class Aircraft {
         if (w.float && !water) N *= 1; // skid on ground
         // directions
         const fwdW = fwdB.clone();
-        if (w.steer) fwdW.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.steerAngle());
+        if (w.steer) fwdW.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.steerAngle(w));
         fwdW.applyQuaternion(q);
         fwdW.addScaledVector(g.n, -fwdW.dot(g.n)).normalize();
         const latW = new THREE.Vector3().crossVectors(g.n, fwdW).normalize();
         const vf = vpt.dot(fwdW), vl = vpt.dot(latW);
         let muRoll = 0.025, muLat = 0.9;
         if (g.type === 'grass') muRoll = 0.05;
-        if (w.brake) muRoll += this.brake * 0.65;
+        if (w.brake) muRoll += Math.max(this.brake, this.svcBrake) * 0.65;
+        const hand = this.isCar && this.ctl.hand > 0 && w.top.z > this.com.z ? this.ctl.hand : 0; // handbrake locks the back wheels: slide!
+        if (hand) { muRoll += hand * 0.6; muLat *= 1 - 0.5 * hand; }
         if (w.float) { muRoll = water ? 0.03 + Math.min(0.12, Math.abs(vf) * 0.004) : 0.35; muLat = water ? 0.35 : 0.5; }
         else if (water) { muRoll = 0.6; muLat = 0.6; }
         const DBG = globalThis.__dbg || {};
         const Ff = -clamp(vf / 0.4, -1, 1) * muRoll * N * (DBG.roll ?? 1);
         const Fl = -clamp(vl / 0.25, -1, 1) * muLat * N * (DBG.lat ?? 1);
-        const Fd = w.drive && nDrive ? clamp(this.driveF / nDrive, -0.8 * N, 0.8 * N) * (water ? 0.15 : 1) : 0; // engine through the tyre
+        const Fd = w.drive && nDrive ? clamp(this.driveF / nDrive, -0.8 * N, 0.8 * N) * (water ? 0.15 : 1) * (1 - hand) : 0; // engine through the tyre
         // one grip budget per tyre: pushing and cornering share it, so a spinning wheel slides instead of adding grip
         let Fx = Ff + Fd, Fy = Fl; const cap = Math.max(muLat, muRoll) * N, tot = Math.hypot(Fx, Fy);
-        if (Fd && tot > cap) { Fx *= cap / tot; Fy *= cap / tot; }
+        if ((Fd || hand) && tot > cap) { Fx *= cap / tot; Fy *= cap / tot; }
         const Fw = g.n.clone().multiplyScalar(N).addScaledVector(fwdW, Fx).addScaledVector(latW, Fy);
         // apply as impulse
         applyImpulse(this, rr, Fw.multiplyScalar(dt));
@@ -873,7 +969,7 @@ export class Aircraft {
         if (p.gear.wheelObj && !w.float) {
           p.gear.wheelObj.position.y = (-w.len + w.comp) / w.ls;
           p.gear.wheelObj.children.forEach((c) => { if (!p.d.gear.wheels) c.rotation.x = -(w.spin || 0); });
-          if (w.steer) p.gear.wheelObj.rotation.y = this.steerAngle();
+          if (w.steer) p.gear.wheelObj.rotation.y = this.steerAngle(w) * (p.p.mirror ? -1 : 1); // (a mirrored part's local frame is flipped)
         }
       }
       if (p.light?.bulb && p.light.type === 'nav') {
