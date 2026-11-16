@@ -1,6 +1,9 @@
 // Design model: a list of parts with transforms + parent links. Presets and analysis.
 import * as THREE from 'three';
 import { PARTS, partInfo } from './parts.js';
+import './vehicleParts.js';
+import './stockLiveries.js';
+import { LIVERIES } from './liveries.js';
 
 export const partScale = (p) => p.scale || [1, 1, 1];
 export function partMatrix(p, out = new THREE.Matrix4()) {
@@ -156,7 +159,8 @@ export function analyze(design) {
       if (driveWheels && wheels >= 3) warnings.push(['good', 'Ready to drive! Throttle to go, stick to steer, pull the stick back to reverse.']);
     }
     else if (!engines) warnings.push(['info', 'No engines: it’s a glider. It will start in the air.']);
-    const plane = !heli && !(car && wingArea < 0.5);
+    const plane = !heli && !(car && wingArea < 0.5) && !design.vertical; // rockets (design.vertical) launch standing up
+    if (design.vertical && engines) warnings.push(tw > 1.1 ? ['good', 'Rocket ready! It launches standing up: full throttle, keep the nose pointing at the sky.'] : ['bad', 'Not enough thrust to lift off. Add rockets or more Power.']);
     if (plane && wingArea < 0.5) warnings.push(['bad', 'No wings. Only Arcade mode will get this off the ground.']);
     if (plane && wingArea > 0.5 && margin < -0.02) warnings.push(['bad', 'Tail-heavy: the centre of mass is behind the lift. Expect flips in Sim mode. Move wings back or add weight up front.']);
     else if (plane && margin > 0.6) warnings.push(['warn', 'Very nose-heavy. It will be hard to lift the nose. Move wings forward.']);
@@ -171,6 +175,7 @@ export function analyze(design) {
 }
 
 // ---------- presets ----------
+// Every stock vehicle wears a livery (stockLiveries.js): design.livery names its key.
 function wingLE(id, s) { // leading edge point (part-local) at span fraction s
   const o = PARTS[id].wing; const dih = THREE.MathUtils.degToRad(o.dihedral || 0);
   const chord = o.planform === 'ellipse' ? Math.max(o.tip, o.root * Math.sqrt(1 - s * s)) : o.root + (o.tip - o.root) * s;
@@ -198,97 +203,107 @@ export function makePresets() {
   const P = [];
   { // Kestrel — high-wing trainer
     const b = new PB('Kestrel', 'Friendly high-wing trainer. The best first plane.');
+    b.d.livery = 'kestrel';
     const f = b.add('fus_light', [0, 0, 0]);
     b.add('e_piston', [0, 0, -4.1], { parent: f, color: 0xc8102e });
     b.add('ck_bubble', [0, 0.62, -2.15], { parent: f });
     const w = b.pair('w_trainer', [0, 0.8, -0.7], { parent: f });
-    b.pair('t_hstab', [0, 0.05, 3.75], { parent: f, color: 0xc8102e });
+    b.pair('t_hstab', [0, 0.05, 3.75], { parent: f });
     b.add('t_vfin', [0, 0.18, 3.55], { parent: f, color: 0xc8102e });
     b.add('g_nose', [0, -0.68, -2.55], { parent: f });
-    b.pair('g_main', [0.55, -0.52, -0.25], { parent: f, rot: [0, 0, 24] });
+    b.pair('g_main', [0.55, -0.52, -0.25], { parent: f, rot: [0, 0, 24], color: 0xc8102e });
     const tip = wingLE('w_trainer', 1);
     b.add('x_navlight', [tip.x + 0.05, 0.8 + tip.y, -0.7], { parent: w[0] }); b.add('x_navlight', [-tip.x - 0.05, 0.8 + tip.y, -0.7], { parent: w[1] });
     b.add('x_landlight', [0, -0.55, -3.0], { parent: f });
     P.push(b.d);
   }
   { // Viper — jet fighter
-    const b = new PB('Viper', 'Afterburning jet fighter. Fast, twitchy, loud.');
-    const f = b.add('fus_fighter', [0, 0, 0]);
-    b.add('ck_fighter', [0, 0.6, -3.4], { parent: f });
-    const w = b.pair('w_swept', [0.95, -0.15, 1.3], { parent: f });
-    b.add('e_jet_ab', [0, 0, 1.5], { parent: f });
-    b.pair('t_jet_hstab', [0.6, -0.05, 4.7], { parent: f });
-    b.add('t_jet_vfin', [0, 0.55, 3.6], { parent: f });
+    const b = new PB('Viper', 'Afterburning jet fighter with a sharkmouth. Fast, twitchy, loud.');
+    b.d.livery = 'viper';
+    const G = 0x4b535d;
+    const f = b.add('fus_fighter', [0, 0, 0], { color: G });
+    b.add('ck_fighter', [0, 0.6, -3.4], { parent: f, color: G });
+    const w = b.pair('w_swept', [0.95, -0.15, 1.3], { parent: f, color: G });
+    b.add('e_jet_ab', [0, 0, 1.5], { parent: f, color: 0x2b2e33 });
+    b.pair('t_jet_hstab', [0.6, -0.05, 4.7], { parent: f, color: G });
+    b.add('t_jet_vfin', [0, 0.55, 3.6], { parent: f, color: G });
     b.add('g_retract_nose', [0, -0.3, -3.9], { parent: f });
     b.pair('g_retract', [1.7, -0.3, 2.5], { parent: f });
-    b.pair('x_tank', [3.2, -0.65, 1.7], { parent: w[0] });
+    b.pair('x_tank', [3.2, -0.65, 1.7], { parent: w[0], color: G });
     b.add('x_smoke', [0, -0.75, 4.2], { parent: f, color: 0xc8102e });
     P.push(b.d);
   }
   { // Tempest — warbird taildragger
-    const b = new PB('Tempest', 'Radial-engined warbird taildragger with an elliptical wing.');
-    const f = b.add('fus_sport', [0, 0, 0], { color: 0x5a6b45 });
-    b.add('e_radial', [0, 0.05, -3.95], { parent: f, color: 0x5a6b45 });
-    b.add('ck_bubble', [0, 0.45, -0.6], { parent: f, color: 0x5a6b45 });
-    b.pair('w_ellipse', [0.25, -0.3, -1.3], { parent: f, color: 0x5a6b45 });
-    b.pair('t_hstab', [0, 0.05, 2.9], { parent: f, color: 0x5a6b45 });
-    b.add('t_vfin', [0, 0.15, 2.7], { parent: f, color: 0x5a6b45 });
-    b.pair('g_main', [1.3, -0.35, -2.35], { parent: f });
+    const b = new PB('Tempest', 'Radial-engined warbird taildragger with invasion stripes and a checkerboard nose.');
+    b.d.livery = 'tempest';
+    const O = 0x4f5d38;
+    const f = b.add('fus_sport', [0, 0, 0], { color: O });
+    b.add('e_radial', [0, 0.05, -3.95], { parent: f, color: 0xf2b705 });
+    b.add('ck_bubble', [0, 0.45, -0.6], { parent: f, color: O });
+    b.pair('w_ellipse', [0.25, -0.3, -1.3], { parent: f, color: O });
+    b.pair('t_hstab', [0, 0.05, 2.9], { parent: f, color: O });
+    b.add('t_vfin', [0, 0.15, 2.7], { parent: f, color: O });
+    b.pair('g_main', [1.3, -0.35, -2.35], { parent: f, color: O });
     b.add('g_tail', [0, -0.18, 2.9], { parent: f });
     P.push(b.d);
   }
   { // Twin Pod — two fuselages joined by a wing
-    const b = new PB('Twin Pod', 'Two fuselages joined by one wing. Double the fun.');
+    const b = new PB('Twin Pod', 'Two racing fuselages joined by one wing. Double the fun.');
+    b.d.livery = 'twinpod';
     const f = b.add('fus_sport', [-2.4, 0, 0], { color: 0x1d4e89 });
     const c = b.pair('w_stub', [0, -0.05, -0.3], { parent: f, color: 0xf2f2ee });
     const f2 = b.add('fus_sport', [2.4, 0, 0], { parent: c[0], color: 0x1d4e89 });
     for (const [x, par] of [[-2.4, f], [2.4, f2]]) {
-      b.add('e_piston', [x, 0, -3.5], { parent: par, color: 0xf2f2ee });
+      b.add('e_piston', [x, 0, -3.5], { parent: par, color: 0xf2b705 });
       b.add('t_vfin', [x, 0.15, 2.6], { parent: par, color: 0xf2b705 });
-      b.add('g_main', [x, -0.3, -0.9], { parent: par });
+      b.add('g_main', [x, -0.3, -0.9], { parent: par, color: 0x1d4e89 });
       b.add('g_tail', [x, -0.15, 2.8], { parent: par });
     }
     b.add('t_hstab', [-2.4, 0.05, 2.75], { parent: f, color: 0xf2f2ee });
     b.add('t_hstab', [2.4, 0.05, 2.75], { parent: f2, color: 0xf2f2ee, mirror: true });
-    b.add('w_taper', [2.85, -0.05, -0.3], { parent: f2 });
-    b.add('w_taper', [-2.85, -0.05, -0.3], { parent: f, mirror: true });
-    b.add('ck_bubble', [-2.4, 0.42, -0.9], { parent: f });
-    b.add('ck_bubble', [2.4, 0.42, -0.9], { parent: f2 });
+    b.add('w_taper', [2.85, -0.05, -0.3], { parent: f2, color: 0xf2f2ee });
+    b.add('w_taper', [-2.85, -0.05, -0.3], { parent: f, mirror: true, color: 0xf2f2ee });
+    b.add('ck_bubble', [-2.4, 0.42, -0.9], { parent: f, color: 0x1d4e89 });
+    b.add('ck_bubble', [2.4, 0.42, -0.9], { parent: f2, color: 0x1d4e89 });
     P.push(b.d);
   }
   { // Albatross — seaplane
-    const b = new PB('Albatross', 'Float plane. Take off and land on water!');
+    const b = new PB('Albatross', 'Island-hopping float plane. Take off and land on water!');
+    b.d.livery = 'albatross';
     const f = b.add('fus_light', [0, 0, 0], { color: 0xf2b705 });
-    b.add('e_piston', [0, 0, -4.1], { parent: f, color: 0x1b2a41 });
-    b.add('ck_bubble', [0, 0.62, -2.15], { parent: f });
+    b.add('e_piston', [0, 0, -4.1], { parent: f, color: 0x0f6f7c });
+    b.add('ck_bubble', [0, 0.62, -2.15], { parent: f, color: 0xf2b705 });
     b.pair('w_trainer', [0, 0.8, -0.65], { parent: f, color: 0xf2b705 });
-    b.pair('t_hstab', [0, 0.05, 3.75], { parent: f, color: 0x1b2a41 });
-    b.add('t_vfin', [0, 0.18, 3.55], { parent: f, color: 0x1b2a41 });
-    b.pair('g_float', [0.62, -0.45, -1.0], { parent: f });
+    b.pair('t_hstab', [0, 0.05, 3.75], { parent: f, color: 0x0f6f7c });
+    b.add('t_vfin', [0, 0.18, 3.55], { parent: f, color: 0x0f6f7c });
+    b.pair('g_float', [0.62, -0.45, -1.0], { parent: f, color: 0xf2f2ee });
     P.push(b.d);
   }
   { // Jumbo — 4-engine airliner
-    const b = new PB('Jumbo', 'Four-engine airliner. Heavy, stable, majestic.');
+    const b = new PB('Jumbo', 'Skywright Airlines four-engine airliner. Heavy, stable, majestic.');
+    b.d.livery = 'airline';
+    const NAVY = 0x16306e;
     const f = b.add('fus_airliner', [0, 0, 0]);
     b.add('ck_airliner', [0, 0, -11], { parent: f });
     const wp = [1.5, -0.9, -1.5];
-    const w = b.pair('w_airliner', wp, { parent: f });
-    b.underWing('e_turbofan', 'w_airliner', w[0], wp, 0.32, 1.6, 2.2);
-    b.underWing('e_turbofan', 'w_airliner', w[0], wp, 0.62, 1.2, 2.0);
-    b.pair('t_big_hstab', [0.6, 0.6, 9.8], { parent: f });
-    b.add('t_big_vfin', [0, 1.4, 8.4], { parent: f });
+    const w = b.pair('w_airliner', wp, { parent: f, color: 0xdfe3e8 });
+    b.underWing('e_turbofan', 'w_airliner', w[0], wp, 0.32, 1.6, 2.2, { color: NAVY });
+    b.underWing('e_turbofan', 'w_airliner', w[0], wp, 0.62, 1.2, 2.0, { color: NAVY });
+    b.pair('t_big_hstab', [0.6, 0.6, 9.8], { parent: f, color: 0xdfe3e8 });
+    b.add('t_big_vfin', [0, 1.4, 8.4], { parent: f, color: NAVY });
     b.add('g_retract_nose', [0, -1.9, -8.0], { parent: f });
     b.pair('g_bogie', [2.6, -0.5, 1.2], { parent: w[0] });
     P.push(b.d);
   }
   { // Centipede — 14 engines
-    const b = new PB('Centipede', 'Fourteen engines. Props AND jets. Because why not.');
-    const f = b.add('fus_airliner', [0, 0, 0], { color: 0x7b2d8b });
-    b.add('ck_airliner', [0, 0, -11], { parent: f, color: 0x7b2d8b });
+    const b = new PB('Centipede', 'Fourteen engines. Props AND jets. And a big grin. Because why not.');
+    b.d.livery = 'centipede';
+    const f = b.add('fus_airliner', [0, 0, 0], { color: 0x6a2c91 });
+    b.add('ck_airliner', [0, 0, -11], { parent: f, color: 0x6a2c91 });
     const wp = [1.5, 0.6, -1.0];
     const w = b.pair('w_airliner', wp, { parent: f, color: 0xf2f2ee });
     for (const s of [0.18, 0.32, 0.46, 0.6, 0.74, 0.88]) b.underWing('e_turboprop', 'w_airliner', w[0], wp, s, 0.75 - s * 0.35, 1.2, { color: 0xf2b705 });
-    b.pair('e_jet_small', [2.4, 1.2, 6.5], { parent: f, color: 0xf2f2ee });
+    b.pair('e_jet_small', [2.4, 1.2, 6.5], { parent: f, color: 0x7bc142 });
     b.pair('t_big_hstab', [0.6, 0.6, 9.8], { parent: f, color: 0xf2f2ee });
     b.add('t_big_vfin', [0, 1.4, 8.4], { parent: f, color: 0xf2b705 });
     b.add('g_retract_nose', [0, -1.9, -8.0], { parent: f });
@@ -298,62 +313,115 @@ export function makePresets() {
   }
   { // Kite — glider
     const b = new PB('Kite', 'Sailplane. No engine: find rising air over hills and glide forever.');
+    b.d.livery = 'kite';
     const f = b.add('fus_glider', [0, 0, 0]);
     b.add('ck_bubble', [0, 0.32, -1.0], { parent: f });
     b.pair('w_glider', [0, 0.25, 0.7], { parent: f });
-    b.pair('t_hstab', [0, 0.85, 5.5], { parent: f, color: 0xc8102e });
-    b.add('t_vfin', [0, 0.05, 5.1], { parent: f, color: 0xc8102e });
+    b.pair('t_hstab', [0, 0.85, 5.5], { parent: f });
+    b.add('t_vfin', [0, 0.05, 5.1], { parent: f });
     b.add('g_main', [0, -0.35, 1.05], { parent: f });
     b.add('g_nose', [0, -0.3, -1.4], { parent: f });
     P.push(b.d);
   }
   { // Firecracker — rocket delta
-    const b = new PB('Firecracker', 'Delta wing + two rocket boosters + a jet. Hold on tight.');
+    const b = new PB('Firecracker', 'Delta wing + two rocket boosters + a jet, painted with flames. Hold on tight.');
+    b.d.livery = 'firecracker';
     const f = b.add('fus_fighter', [0, 0, 0], { color: 0xf2f2ee });
     b.add('ck_fighter', [0, 0.6, -3.4], { parent: f, color: 0xf2f2ee });
     b.pair('w_delta', [0.9, -0.2, 2.6], { parent: f, color: 0xe8601c });
     b.add('e_jet_ab', [0, 0, 1.5], { parent: f });
-    b.pair('e_rocket', [1.3, 0.55, 2.0], { parent: f });
+    b.pair('e_rocket', [1.3, 0.55, 2.0], { parent: f, color: 0xf2f2ee });
     b.add('t_jet_vfin', [0, 0.55, 3.6], { parent: f, color: 0xe8601c });
     b.add('g_retract_nose', [0, -0.35, -3.9], { parent: f });
     b.pair('g_retract', [1.9, -0.35, 3.0], { parent: f });
     b.pair('x_smoke', [4.9, -0.2, 6.8], { parent: f, color: 0xe8601c });
     P.push(b.d);
   }
-  { // Dragonfly — light helicopter
-    const b = new PB('Dragonfly', 'Light helicopter. Throttle to the middle to hover, stick to fly around.');
-    const f = b.add('fus_pod', [0, 0, 0], { color: 0xf2b705 });
-    b.add('x_nosecone', [0, 0, -1.6], { parent: f, color: 0xf2b705 });
-    b.add('ck_bubble', [0, 0.45, -0.6], { parent: f });
-    const boom = b.add('fus_boom', [0, 0.2, 4.6], { parent: f, color: 0xf2b705 });
-    b.add('t_vfin', [0, 0.25, 7.3], { parent: boom, color: 0x111111 });
-    b.add('r_tail', [0.12, 0.75, 7.9], { parent: boom });
-    b.add('r_main', [0, 0.55, 1.44], { parent: f });
-    b.pair('g_skid', [0.6, -0.4, 0.3], { parent: f });
+  { // Dragonfly — rescue helicopter
+    const b = new PB('Dragonfly', 'Rescue helicopter with a bubble nose. Throttle to the middle to hover, stick to fly around.');
+    b.d.livery = 'rescue';
+    const f = b.add('fus_heli', [0, 0, 0], { color: 0xc8102e });
+    b.add('ck_heli', [0, 0, -1.05], { parent: f, color: 0xc8102e });
+    const boom = b.add('fus_boom', [0, 0.38, 4.6], { parent: f, color: 0xf2f2ee });
+    b.add('t_vfin', [0, 0.43, 7.05], { parent: boom, color: 0xc8102e });
+    b.add('r_tail', [0.14, 0.95, 7.65], { parent: boom });
+    const r = b.add('r_main', [0, 1.12, 1.3], { parent: f, color: 0x1b1b1f });
+    b.d.parts[r].power = 1.2;
+    b.pair('g_skid', [0.72, -0.72, 0.35], { parent: f, color: 0x1b1b1f });
+    b.add('x_landlight', [0, -1.0, -1.2], { parent: f });
     P.push(b.d);
   }
-  { // Dune Buggy — a car
-    const b = new PB('Dune Buggy', 'A fast little car. Throttle to go, stick to steer, pull back to reverse.');
-    const f = b.add('fus_pod', [0, 0, 0], { color: 0xe8601c });
-    b.add('x_nosecone', [0, 0, -1.6], { parent: f, color: 0xe8601c });
-    b.add('ck_open', [0, 0.45, -0.2], { parent: f });
-    b.add('c_motor', [0, 0.35, 1.2], { parent: f });
-    b.pair('c_wheel_steer', [0.78, -0.2, -1.1], { parent: f });
-    b.pair('c_wheel', [0.78, -0.2, 1.1], { parent: f });
+  { // Dune Buggy — an off-road racer
+    const b = new PB('Dune Buggy', 'Off-road racer: giant knobby tyres, a roll cage and a supercharged V8. Throttle to go, stick to steer, pull back to reverse.');
+    b.d.livery = 'buggy';
+    const f = b.add('fus_buggy', [0, 0, 0], { color: 0x15161a });
+    b.add('ck_open', [0, 0.36, -0.1], { parent: f, color: 0x15161a });
+    const m = b.add('c_motor', [0, 0.26, 1.15], { parent: f, color: 0xc8102e });
+    b.d.parts[m].power = 1.5;
+    const cage = b.add('c_rollcage', [0, 0.3, 0], { parent: f, color: 0xe8601c });
+    b.add('c_lightbar', [0, 1.37, -0.3], { parent: cage });
+    b.add('c_rearwing', [0, 0.24, 1.9], { parent: f, color: 0x15161a });
+    b.pair('c_offroad_steer', [1.08, 0.02, -1.35], { parent: f, color: 0xd9a400 });
+    b.pair('c_offroad', [1.08, 0.02, 1.35], { parent: f, color: 0xd9a400 });
     P.push(b.d);
   }
   { // Stardust — rocket plane for the edge of space
-    const b = new PB('Stardust', 'Rocket plane for the edge of space. Full throttle, pull up until you point at the sky, and hold on!');
-    const f = b.add('fus_fighter', [0, 0, 0], { color: 0x1b1b1f });
-    b.add('ck_fighter', [0, 0.6, -3.4], { parent: f, color: 0x1b1b1f });
-    b.pair('w_swept', [0.95, -0.15, 1.3], { parent: f, color: 0x1b1b1f });
-    const r = b.add('e_rocket', [0, 0, 1.9], { parent: f, color: 0xf2f2ee });
+    const b = new PB('Stardust', 'Black rocket plane for the edge of space. Full throttle, pull up until you point at the sky, and hold on!');
+    b.d.livery = 'stardust';
+    const K = 0x17181b;
+    const f = b.add('fus_fighter', [0, 0, 0], { color: K });
+    b.add('ck_fighter', [0, 0.6, -3.4], { parent: f, color: K });
+    b.pair('w_swept', [0.95, -0.15, 1.3], { parent: f, color: K });
+    const r = b.add('e_rocket', [0, 0, 1.9], { parent: f, color: 0x2a2c30 });
     Object.assign(b.d.parts[r], { power: 2.5, burn: 65 });
-    b.pair('t_jet_hstab', [0.6, -0.05, 4.7], { parent: f, color: 0x1b1b1f });
-    b.add('t_jet_vfin', [0, 0.55, 3.6], { parent: f, color: 0x1b1b1f });
-    b.add('x_rcs', [0, 0.1, -5.2], { parent: f, color: 0xf2f2ee });
+    b.pair('t_jet_hstab', [0.6, -0.05, 4.7], { parent: f, color: K });
+    b.add('t_jet_vfin', [0, 0.55, 3.6], { parent: f, color: K });
+    b.add('x_rcs', [0, 0.1, -5.2], { parent: f, color: K });
     b.add('g_retract_nose', [0, -0.3, -3.9], { parent: f });
     b.pair('g_retract', [1.7, -0.3, 2.5], { parent: f });
+    P.push(b.d);
+  }
+  { // Chomper — monster truck
+    const b = new PB('Chomper', 'Monster truck with a shark grin and wheels taller than you. Throttle to go, stick to steer, pull back to reverse.');
+    b.d.livery = 'chomper';
+    const f = b.add('fus_truck', [0, 0, 0], { color: 0x1565c0 });
+    const m = b.add('c_motor', [0, 0.68, -1.45], { parent: f, color: 0xc0c4ca });
+    b.d.parts[m].power = 2.2;
+    b.add('c_lightbar', [0, 1.5, -0.05], { parent: f });
+    b.pair('c_bigfoot', [1.35, 0.0, -1.75], { parent: f, color: 0xc8102e });
+    b.pair('c_bigfoot', [1.35, 0.0, 1.75], { parent: f, color: 0xc8102e });
+    P.push(b.d);
+  }
+  { // Hornet — air racer
+    const b = new PB('Hornet', 'Pylon air racer: a big engine on a tiny plane, checkerboard and all. Very fast, very loud.');
+    b.d.livery = 'racer';
+    const Y = 0xf2b705;
+    const f = b.add('fus_sport', [0, 0, 0], { color: Y });
+    const e = b.add('e_piston', [0, 0, -3.45], { parent: f, color: 0x15161a });
+    b.d.parts[e].power = 1.8;
+    b.add('ck_bubble', [0, 0.42, 0.2], { parent: f, color: 0x15161a });
+    for (const i of b.pair('w_taper', [0.25, -0.25, -0.3], { parent: f, color: Y })) b.d.parts[i].scale = [0.72, 1, 1];
+    b.pair('t_hstab', [0, 0.05, 2.75], { parent: f, color: Y });
+    b.add('t_vfin', [0, 0.15, 2.55], { parent: f, color: 0x15161a });
+    b.pair('g_main', [1.1, -0.32, -1.15], { parent: f, color: Y });
+    b.add('g_tail', [0, -0.15, 2.8], { parent: f });
+    P.push(b.d);
+  }
+  { // Rocket — a real launcher: stands on its fins, goes straight up
+    const b = new PB('Rocket', 'A real space rocket! It starts standing up. Full throttle to launch, keep it pointing up, and fly all the way to space.');
+    Object.assign(b.d, { livery: 'rocket', vertical: true });
+    const f = b.add('fus_rocket', [0, 0, 0], { color: 0xf2f2ee });
+    const core = b.add('e_rocket', [0, 0, -2.4], { parent: f, color: 0x2a2c30 });
+    Object.assign(b.d.parts[core], { scale: [2, 2, 2], power: 0.35, burn: 120 });
+    for (const [x, y] of [[1.33, 0], [-1.33, 0], [0, 1.33], [0, -1.33]]) {
+      const i = b.add('e_rocket', [x, y, -0.16], { parent: f, color: 0xf2f2ee });
+      Object.assign(b.d.parts[i], { scale: [1.3, 1.3, 1.3], power: 0.22, burn: 40 });
+    }
+    for (const a of [45, 135, 225, 315]) {
+      const t = THREE.MathUtils.degToRad(a), i = b.add('t_vfin', [-Math.sin(t) * 0.85, Math.cos(t) * 0.85, 3.7], { parent: f, rot: [0, 0, a], color: 0xc8102e });
+      b.d.parts[i].scale = [1.4, 1.4, 1.4];
+    }
+    b.add('x_rcs', [0, 0, -5.0], { parent: f, color: 0xf2f2ee });
     P.push(b.d);
   }
   return P;
@@ -361,12 +429,12 @@ export function makePresets() {
 
 export function cloneDesign(d) { return JSON.parse(JSON.stringify(d)); }
 export function encodeDesign(d) {
-  const slim = { n: d.name, p: d.parts.map((p) => [p.id, p.pos.map((v) => +v.toFixed(3)), p.quat.map((v) => +v.toFixed(4)), p.mirror ? 1 : 0, p.color, p.parent, ...(p.scale || p.power != null || p.burn != null ? [p.scale ? p.scale.map((v) => +v.toFixed(3)) : 0] : []), ...(p.power != null || p.burn != null ? [{ w: p.power, b: p.burn }] : [])]) };
+  const slim = { n: d.name, ...(d.livery ? { l: d.livery } : {}), ...(d.vertical ? { v: 1 } : {}), p: d.parts.map((p) => [p.id, p.pos.map((v) => +v.toFixed(3)), p.quat.map((v) => +v.toFixed(4)), p.mirror ? 1 : 0, p.color, p.parent, ...(p.scale || p.power != null || p.burn != null ? [p.scale ? p.scale.map((v) => +v.toFixed(3)) : 0] : []), ...(p.power != null || p.burn != null ? [{ w: p.power, b: p.burn }] : [])]) };
   return btoa(unescape(encodeURIComponent(JSON.stringify(slim))));
 }
 const inRange = (v, [lo, hi]) => Number.isFinite(v) && v >= lo && v <= hi;
 const tuneOf = (t) => (t && typeof t === 'object' ? { ...(inRange(t.w, POWER_RANGE) ? { power: t.w } : {}), ...(inRange(t.b, BURN_RANGE) ? { burn: t.b } : {}) } : {});
 export function decodeDesign(s) {
   const slim = JSON.parse(decodeURIComponent(escape(atob(s.trim()))));
-  return { name: slim.n || 'Imported', parts: slim.p.filter((a) => PARTS[a[0]]).map((a) => ({ id: a[0], pos: a[1], quat: a[2], mirror: !!a[3], color: a[4], parent: a[5], ...(Array.isArray(a[6]) && a[6].length === 3 && a[6].every((v) => Number.isFinite(v) && v > 0) ? { scale: a[6] } : {}), ...tuneOf(a[7]) })) };
+  return { name: slim.n || 'Imported', ...(typeof slim.l === 'string' && LIVERIES[slim.l] ? { livery: slim.l } : {}), ...(slim.v ? { vertical: true } : {}), parts: slim.p.filter((a) => PARTS[a[0]]).map((a) => ({ id: a[0], pos: a[1], quat: a[2], mirror: !!a[3], color: a[4], parent: a[5], ...(Array.isArray(a[6]) && a[6].length === 3 && a[6].every((v) => Number.isFinite(v) && v > 0) ? { scale: a[6] } : {}), ...tuneOf(a[7]) })) };
 }

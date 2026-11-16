@@ -591,10 +591,11 @@ function buildFlight(cfg) {
   else if (start === 'water' || (start === 'runway' && st.floats && !gearOK)) start = 'water';
   if (start === 'runway' && (!ac.hasEngine)) start = 'air';
   if (st.car && st.wingArea < 0.5 && (start === 'air' || start === 'approach')) start = 'runway'; // cars without wings start on the ground
+  if (design.vertical && start !== 'water') start = 'runway'; // rockets launch standing on their tail
   const slot = cfg.mpSlot || 0, slotX = slot ? (slot % 2 ? 1 : -1) * Math.ceil(slot / 2) * 70 : 0; // multiplayer: side by side, stepped up
   const vApp = clamp(Number.isFinite(st.stall) ? st.stall * 1.45 : 45, 32, 110);
   const rwy = world.runways[net.active ? net.freeRunway(world) : cfg.rwy || 0] || world.runway; // online: a runway nobody is on
-  if (start === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0); }
+  if (start === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0, design.vertical ? { pitch: Math.PI / 2 } : {}); }
   else if (start === 'water') {
     const w = findWater(world);
     if (w) ac.spawn(env, w.pos || w, w.heading || 0); else { start = 'air'; }

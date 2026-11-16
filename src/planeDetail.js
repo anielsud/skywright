@@ -16,6 +16,7 @@ import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
 import { V, bar, tube, norm, ringLoft, Bag, kitMaterial, kitSlot, kitUV } from './partDetail.js';
 import { clamp, lerp } from './noise.js';
+import { applyLivery } from './liveries.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { blendSkins } from './skinBlend.js';
 
@@ -616,6 +617,7 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
   const items = [];
   for (const o of objs) if (o) o.traverse((m) => { if (m.isMesh && m.userData.near) { m.castShadow = false; if (near) items.push(m); else m.visible = false; } });
   if (near) { let r = 2; root.updateMatrixWorld(true); const box = new THREE.Box3(); for (const o of objs) if (o) box.expandByObject(o); if (!box.isEmpty()) r = box.getSize(V()).length() / 2; const lod = new DetailLOD(items, r); root.add(lod); out.lod = lod; }
+  applyLivery(design, objs, root); // paint scheme over the skins (liveries.js)
   root.userData.detail = out;
   return out;
 }
