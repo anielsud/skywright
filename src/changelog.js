@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.67.0', items: [
+    'NEW PLACE: New York City! Take off from LaGuardia and fly down the Hudson past the giant skyscrapers of Midtown and Downtown, the Empire State Building, Central Park and the Statue of Liberty.',
+    'Land on the George Washington or Brooklyn Bridge, or fly under them! At night the whole skyline lights up.',
+  ] },
   { v: '1.66.0', items: [
     'NEW: a real Rocket! It launches standing up: full throttle, keep the nose pointing at the sky, and ride it all the way to space.',
     'Every vehicle got a cool makeover: an off-road racer buggy, a sharkmouth Viper, a rescue helicopter, Skywright Airlines, flames, checkers and more.',
