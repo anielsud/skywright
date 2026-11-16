@@ -1121,13 +1121,16 @@ let last = performance.now();
 function applyQuality() {
   const tier = qualityTier();
   renderer.setPixelRatio(pixelRatio());
-  post.enabled = tier !== 'low' && perf.level < 2;
+  // Never switch the composer off mid-flight: rendering straight to the canvas changes every material's shader key
+  // (output colour space / tone mapping) and recompiles them all, right when the frame rate is already struggling (#99).
+  // Under load shed the bloom pass instead.
+  post.enabled = tier !== 'low'; post.bloom.enabled = perf.level < 2;
   post.setSamples(0); // MSAA cost 7-22 ms/frame at these resolutions; SMAA does the job for ~1 ms
   post.setSMAA(isHigh(tier) && perf.level < 2);
   post.setUltra(tier === 'ultra' && perf.level < 1); // AO and sun shafts: the first things Auto sheds on Ultra
   post.setSharpen(renderer.getPixelRatio() < (window.devicePixelRatio || 1) - 0.01 ? 0.6 : 0.2);
   renderer.shadowMap.type = isHigh(tier) ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
-  if (F) { if (F.world.cascades) F.world.cascades.enabled = F.world.q.shadows && perf.level < 3; else F.world.sun.castShadow = F.world.q.shadows && perf.level < 3; }
+  if (F) { if (F.world.cascades) F.world.cascades.enabled = F.world.q.shadows && perf.level < 3; else { const on = F.world.q.shadows && perf.level < 3; F.world.sun.shadow.intensity = on ? 1 : 0; F.world.sun.shadow.autoUpdate = on; } } // never toggle castShadow mid-flight: it recompiles every lit shader
   if (F) F.world.detailU.tDetail.value = perf.level < 3 ? 1 : 0; // photo ground detail goes last, with shadows
   if (F) F.world.setPerfLevel?.(perf.level); // thinner clouds, no cirrus when struggling
   if (F) F.world.flora.setPerf?.(perf.level); // grass ring, then tree LOD range shrink under load
@@ -1207,6 +1210,8 @@ function frame(now) {
       fitNearPlane(F);
       const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene) : null;
       post.render(F.scene, flightCam, dt);
+      // shader programs must all exist before take-off (the warm-up above); flag any compiled mid-flight
+      if (!F.warm) { const n = renderer.info.programs.length; if (F.progs != null && n > F.progs) { const names = renderer.info.programs.slice(F.progs).map((p) => p.name || p.cacheKey?.slice(0, 40)).join(', '); console.warn(`[shaders] ${n - F.progs} compiled in flight: ${names}`); window.__inflightCompiles = (window.__inflightCompiles || 0) + n - F.progs; } F.progs = n; }
       if (restore) { restore(); compileWith(F.scene, F.effects.boom, warm); } // and every shader as lit by a crash's explosion flash (effects.js)
       // ...and until the ground photos have arrived (their upload, and the rock impostors' re-capture, would hitch)
       else if (warm && (F.world.loaded?.() !== false || performance.now() - warm.t > 3000)) { F.warm = null; $('#loading').classList.remove('show'); }
@@ -1222,7 +1227,8 @@ function frame(now) {
 function compileWith(scene, light, warm) {
   const target = () => renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null);
   warm.pending = true;
-  target(); scene.add(light); const done = renderer.compileAsync(scene, flightCam); scene.remove(light); renderer.setRenderTarget(null);
+  const had = !!light.parent; // the explosion light now lives in the scene permanently: don't take it out again
+  target(); if (!had) scene.add(light); const done = renderer.compileAsync(scene, flightCam); if (!had) scene.remove(light); renderer.setRenderTarget(null);
   const finish = () => { if (!warm.pending) return; target(); renderer.compile(scene, flightCam); renderer.setRenderTarget(null); warm.pending = false; warm.t = performance.now(); };
   done.catch(() => {}).then(finish); setTimeout(finish, 15000);
 }
@@ -1319,6 +1325,6 @@ async function boot() {
     addEventListener('online', autoCheckUpdate);
     addEventListener('focus', autoCheckUpdate);
   }
-  window.__sky = { THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, net, presets, settings, flightCfg, controls, rig, analytics };
+  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, net, presets, settings, flightCfg, controls, rig, analytics };
 }
 boot();
