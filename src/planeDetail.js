@@ -20,6 +20,7 @@ import { applyLivery } from './liveries.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { blendSkins } from './skinBlend.js';
 import { addCrew } from './crew.js';
+import { routeGear, routeStruts } from './gearRoute.js';
 
 const BODY = new Set(['fuselage', 'cockpit']), BODY_X = new Set(['x_nosecone', 'x_tailcone']);
 const isBody = (id) => BODY.has(PARTS[id].cat) || BODY_X.has(id);
@@ -60,7 +61,7 @@ function chunks(g) {
   }
   accel.set(g, ch); return ch;
 }
-function cast(meshes, from, dir, far = Infinity) {
+function cast(meshes, from, dir, far = Infinity, both = false) {
   rc.set(from, dir);
   let best = null, bestD = far;
   for (const m of meshes) {
@@ -68,7 +69,7 @@ function cast(meshes, from, dir, far = Infinity) {
     _sph.copy(g.boundingSphere).applyMatrix4(m.matrixWorld);
     if (!rc.ray.intersectsSphere(_sph) || rc.ray.distanceToPoint(_sph.center) > _sph.radius) continue;
     _inv.copy(m.matrixWorld).invert(); _ray.copy(rc.ray).applyMatrix4(_inv);
-    const pos = g.attributes.position, idx = g.index, cull = m.material.side === THREE.FrontSide;
+    const pos = g.attributes.position, idx = g.index, cull = !both && m.material.side === THREE.FrontSide;
     for (const c of chunks(g)) {
       if (!_ray.intersectsBox(c.box)) continue;
       for (let t = c.t0; t < c.t1; t++) {
@@ -77,7 +78,7 @@ function cast(meshes, from, dir, far = Infinity) {
         if (!_ray.intersectTriangle(_a, _b, _c, cull, _hit)) continue;
         const wp = _hit.clone().applyMatrix4(m.matrixWorld), d = wp.distanceTo(from);
         if (d < bestD) {
-          bestD = d; const n = _b.clone().sub(_a).cross(_c.clone().sub(_a)).applyMatrix3(_m3.getNormalMatrix(m.matrixWorld)).normalize(); best = { p: wp, n, d };
+          bestD = d; const n = _b.clone().sub(_a).cross(_c.clone().sub(_a)).applyMatrix3(_m3.getNormalMatrix(m.matrixWorld)).normalize(); best = { p: wp, n, d, m };
           const u1 = g.attributes.uv1; // panel-skin uv of the hit, so joints can carry the panel lines on
           if (u1) { const i0 = idx ? idx.getX(i) : i, i1 = idx ? idx.getX(i + 1) : i + 1, i2 = idx ? idx.getX(i + 2) : i + 2; best.uv1 = THREE.Triangle.getInterpolation(_hit, _a, _b, _c, _u0.fromBufferAttribute(u1, i0), _u1.fromBufferAttribute(u1, i1), _u2.fromBufferAttribute(u1, i2), new THREE.Vector2()); }
         }
@@ -363,13 +364,18 @@ function seat(cp, cobj, bp, structure) {
 }
 
 // ---------- landing gear: wells, doors, boots ----------
-function gearJoint(gp, gobj, qp, structure, out) {
-  const d = PARTS[gp.id], gi = d.gear; if (!gi || gi.float) return;
+// Legs, braces, struts and boots are routed to the skin by gearRoute.js; here the wells and doors of retracting gear.
+function gearJoint(gp, gobj, qp, structure, out, gc) {
+  const d = PARTS[gp.id], gi = d.gear; if (!gi) return;
+  if (gi.float) { routeStruts(gp, gobj, gc, gc.partner(gp)); return; }
+  const legs = routeGear(gp, gobj, gc);
+  if (legs && (!gi.retract || legs[0].knee || !legs[0].n)) return; // fixed legs end in boots; a leg bent round a flap gets a boot, no well
+  if (legs) structure = gc.solid; // wells and doors never on a control surface
   const W = gobj.matrixWorld, down = V(0, -1, 0).transformDirection(W).normalize(), up = down.clone().negate(), o = V(0, 0, 0).applyMatrix4(W);
-  const sk = cast(structure, o.clone().addScaledVector(down, 0.1), up, 1.2);
+  const sk = legs ? { p: legs[0].top, n: legs[0].n } : cast(structure, o.clone().addScaledVector(down, 0.1), up, 1.2);
   if (!sk) return;
   const sl = Math.cbrt(Math.abs(W.determinant()));
-  if (!gi.retract) {
+  if (!gi.retract) { // (car wheels: not routed)
     // boot fairing where the leg enters the skin
     const rr = (0.035 + gi.r * 0.08) * sl, boot = new THREE.SphereGeometry(1, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2);
     boot.scale(rr, rr * 0.9, rr * 3); boot.translate(0, 0, rr * 0.9); // low teardrop, longer behind the leg
@@ -386,10 +392,11 @@ function gearJoint(gp, gobj, qp, structure, out) {
   // the well follows the skin where it is close to the plane of the strut's attachment, and stays flat where the skin
   // curves away or changes part (wing root / intake / belly), so the doors stay clean panels
   const NL = 7, NW = 4, P = [], inv = W.clone().invert(), ySk = sk.p.clone().applyMatrix4(inv).y, tol = Wb * 0.14;
+  const at0 = legs ? sk.p.clone().applyMatrix4(inv).setY(0) : V(); // a raked leg: the well opens where it meets the skin
   for (let i = 0; i <= NL; i++) {
     const row = []; let off = false;
     for (let j = 0; j <= NW; j++) {
-      const lp = fl.clone().multiplyScalar(-0.12 * Lb + 1.12 * Lb * (i / NL)).addScaledVector(cl, (j / NW - 0.5) * Wb);
+      const lp = fl.clone().multiplyScalar(-0.12 * Lb + 1.12 * Lb * (i / NL)).addScaledVector(cl, (j / NW - 0.5) * Wb).add(at0);
       const wp = lp.clone().setY(ySk + 0.5).applyMatrix4(W), h = cast(structure, wp.clone().addScaledVector(down, 1.6), up, 2.6);
       const hy = h ? h.p.clone().applyMatrix4(inv).y : ySk - 1;
       if (Math.abs(hy - ySk) > tol) off = true;
@@ -602,11 +609,30 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
       if (POD[p.id] && (dj.wing || isBody(q.id))) pl = T('pylon', () => pylon(p, objs[i], q, objs[j]));
       else if (POD[q.id] && (di.wing || isBody(p.id))) pl = T('pylon', () => pylon(q, objs[j], p, objs[i]));
       if (pl && PARTS[pl.qp.id].wing) { T('nacelle', () => nacelle(pl)); if (!pylons.has(pl.qobj)) pylons.set(pl.qobj, []); pylons.get(pl.qobj).push(pl); }
-      if (di.gear) T('gear', () => gearJoint(p, objs[i], q, structure, out));
       if (CANOPY[p.id] && isBody(q.id) && !seated.has(i)) T('seat', () => seat(p, objs[i], q, solidMeshes(objs[j]))); // only the body it sits on (a roll cage above is not a skin)
     } catch (e) { console.warn('planeDetail joint', p.id, q.id, e); }
   });
   for (const list of pylons.values()) try { T('beam', () => engineBeams(list, ctx)); } catch (e) { console.warn('planeDetail beam', e); }
+  // landing gear once every skin, fillet, pylon and nacelle is in place: gearRoute.js routes the legs to whatever is
+  // really there. Control surfaces (and what rides on them) move, so no strut may meet them.
+  root.updateMatrixWorld(true); // (the joints added above have no world matrix yet)
+  const movable = new Set(), gearSolid = [];
+  const shown = (m) => { for (let o = m; o; o = o.parent) if (!o.visible) return false; return true; };
+  parts.forEach((p, i) => {
+    if (!valid(i)) return; const o = objs[i];
+    for (const u of [o.userData, o.children[0]?.userData || {}]) for (const c of [...(u.controls || []), ...(u.slats || []), ...(u.spoilers || [])]) c.obj.traverse((m) => movable.add(m));
+    if (PARTS[p.id].gear || PARTS[p.id].cat === 'rotor') return;
+    const skip = new Set(); for (const k of ['prop', 'fan', 'flame', 'flameCore']) o.userData[k]?.traverse((m) => skip.add(m));
+    o.traverse((m) => { if (m.isMesh && !skip.has(m) && !m.userData.isDisc && !m.userData.near && !m.material.transparent && m.material.blending !== THREE.AdditiveBlending && shown(m)) gearSolid.push(m); });
+  });
+  const gc = {
+    cast, all: gearSolid, solid: gearSolid.filter((m) => !movable.has(m)), movable, fw, right, up, rootW: root.matrixWorld.clone(), rootInv: root.matrixWorld.clone().invert(),
+    partner: (gp) => { const j = parts.findIndex((o, k) => valid(k) && o !== gp && o.id === gp.id && Math.abs(gp.pos[0]) > 0.05 && Math.abs(o.pos[0] + gp.pos[0]) < 0.02 && Math.abs(o.pos[1] - gp.pos[1]) < 0.02 && Math.abs(o.pos[2] - gp.pos[2]) < 0.02); return j >= 0 ? objs[j] : null; },
+  };
+  parts.forEach((p, i) => {
+    if (!valid(i) || !valid(p.parent) || !PARTS[p.id].gear) return;
+    try { T('gear', () => gearJoint(p, objs[i], parts[p.parent], structure, out, gc)); } catch (e) { console.warn('planeDetail gear', p.id, e); }
+  });
   parts.forEach((p, i) => {
     if (!valid(i)) return;
     try {

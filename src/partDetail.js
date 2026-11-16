@@ -296,9 +296,9 @@ function wheelDetailed(r, w, brake) {
 }
 
 // Wheel spat (fixed gear): a teardrop shell round the upper two thirds of the wheel with a flat floor and a slot the
-// tyre pokes through, a dark liner, a lip round the slot and a collar where the spring leg enters the shell.
-// Frame: origin at the axle, forward -Z; the leg comes down on the -X side to (legX, ~0).
-function wheelSpat(bag, { r, ww, paint, legX, len }) {
+// tyre pokes through, a dark liner, a lip round the slot and a collar where each spring leg enters the shell.
+// Frame: origin at the axle, forward -Z; the legs come down beside the tyre.
+function wheelSpat(bag, { r, ww, paint, legs }) {
   const R0 = r * 1.02, y0 = r * 0.1, Hs = r * 1.05, W = ww / 2 + 0.045 + r * 0.09, cut = -r * 0.72;
   // side profile: blunt nose just ahead of the tyre, long tapering tail
   const fz = new THREE.SplineCurve([[-1.5, 0], [-1.35, 0.55], [-1.05, 0.88], [-0.6, 0.99], [0, 1], [0.7, 0.96], [1.3, 0.82], [1.9, 0.55], [2.4, 0.25], [2.75, 0]].map(([z, f]) => new THREE.Vector2(z * r, f))).getPoints(30);
@@ -335,85 +335,182 @@ function wheelSpat(bag, { r, ww, paint, legX, len }) {
   bag.add(floor, paint);
   const fl = floor.clone(); fl.translate(0, 0.004, 0); bag.add(fl, M.intake());
   bag.add(tube(slot.map(([x, z]) => V(x, cut - 0.002, z)).concat([V(slot[0][0], cut - 0.002, slot[0][1])]), 0.009, 5, 48), M.rubber());
-  // collar where the spring leg passes into the top of the shell
-  const legTop = V(0, len, 0), legBot = V(legX, r * 0.05, 0), dir = legTop.clone().sub(legBot).normalize();
-  const sAt = Math.abs(legX) < W ? y0 + Hs * Math.sqrt(1 - (legX / W) ** 2) * 0.97 : y0, t = (sAt - legBot.y) / (dir.y || 1);
-  const hit = legBot.clone().addScaledVector(dir, t);
-  bag.add(bar(hit.clone().addScaledVector(dir, -0.03), hit.clone().addScaledVector(dir, 0.07), 0.16, 0.07), paint);
+  // collars where the spring legs pass into the top of the shell (legs: [{ a, dir }] in this frame)
+  for (const { a, dir } of legs) {
+    const sAt = Math.abs(a.x) < W ? y0 + Hs * Math.sqrt(1 - (a.x / W) ** 2) * 0.97 : y0, t = (sAt - a.y) / (dir.y || 1);
+    const hit = a.clone().addScaledVector(dir, t);
+    bag.add(fairedBar(hit.clone().addScaledVector(dir, -0.03), hit.clone().addScaledVector(dir, 0.07), 0.07, 0.17), paint);
+  }
+}
+
+// Streamlined strut from a to b: a teardrop section (round nose, tapering tail) w thick and c long, its long axis
+// along fwd (projected square to the strut), so the thin side faces the airflow. Capped both ends.
+const _sec = (() => { const n = 14, out = []; for (let i = 0; i < n; i++) { const t = (i / n) * Math.PI * 2, c = Math.cos(t); out.push([0.5 * Math.sin(t) * (c < 0 ? 1 + c * 0.45 : 1), c > 0 ? 0.42 * c : 0.58 * c]); } return out; })();
+export function fairedBar(a, b, w, c, fwd = V(0, 0, -1), stations = [[0, 1], [1, 1]]) {
+  const d = b.clone().sub(a), y = d.clone(); if (y.lengthSq() < 1e-10) y.set(0, 1e-5, 0); y.normalize();
+  const z = fwd.clone().addScaledVector(y, -fwd.dot(y)); if (z.lengthSq() < 1e-6) z.set(0, 0, -1).addScaledVector(y, y.z); if (z.lengthSq() < 1e-6) z.set(1, 0, 0); z.normalize();
+  const x = y.clone().cross(z).normalize();
+  const ring = (p, k) => _sec.map(([sx, sz]) => p.clone().addScaledVector(x, sx * w * k).addScaledVector(z, sz * c * k));
+  return ringLoft(stations.map(([t, k]) => ring(a.clone().addScaledVector(d, t), k)), true, true);
+}
+// Where a strut meets the skin: the strut flares out into a fairing that runs on into the skin (top: the skin point,
+// dir: up the strut, n: the skin's outward normal), so the joint reads as one piece wherever the skin curves away.
+export function strutFlare(top, dir, n, w, c, fwd) {
+  const L = w * 2.5 + 0.05, e = 0.03 + c * 0.7 * (1 - Math.abs(n.dot(dir)));
+  return fairedBar(top.clone().addScaledVector(dir, -L), top.clone().addScaledVector(dir, e), w, c, fwd, [[0, 1], [0.45, 1.08], [0.75, 1.35], [L / (L + e), 1.75], [1, 2]]);
+}
+
+// ---------- landing gear ----------
+// A gear leg is built round its wheel frame: origin at the axle, +y up, -z forward, x along the axle. In the part
+// (strut) frame that frame sits at y = -len, turned by route.q: the assembly pass (gearRoute.js) turns it so the wheel
+// stands upright and rolls straight ahead whatever angle the part was placed at, and routes the legs from the wheel up
+// to the skin they really meet (route.legs), plus braces to structure (route.braces). Without a route (part pictures)
+// the legs run to the part origin as before.
+const oleoK = 1.7; // chord / thickness of a faired oleo cylinder
+function gearDims({ len, r, w, bogie }) {
+  const ww = w || r * 0.6, ro = 0.04 + r * 0.085, cl = len - r * 1.25 - 0.08;
+  const kind = bogie ? 'bogie' : r * 1.1 + 0.04 > len * 0.8 ? 'car' : 'oleo';
+  return { ww, ro, cl, kind, gland: kind === 'bogie' ? len * 0.4 : kind === 'car' ? len * 0.5 : len - cl * 0.62 };
+}
+// Where the legs start, in the wheel frame. side: the side of the wheel a spring leg runs down (+1 / -1), or 0 for a
+// yoke either side of the wheel (a gear on the centreline). Oleo legs start at the gland nut on the wheel's axis.
+export function gearAnchors(o, side = -1) {
+  if (o.fairing) { const x = gearDims(o).ww * 0.5 + 0.05, y = o.r * 0.05; return side ? [V(side * x, y, 0)] : [V(-x, y, 0), V(x, y, 0)]; }
+  return [V(0, gearDims(o).gland, 0)];
+}
+function defaultRoute(o) {
+  const { ro, cl, kind } = gearDims(o), T = V(0, -o.len, 0);
+  const legs = gearAnchors(o, -1).map((a) => ({ a: a.clone().add(T), top: V(0, 0, 0) })), braces = [];
+  if (kind === 'oleo' && !o.steer && !o.fairing && o.len > 1.2) braces.push({ a: V(0, -cl * 0.45, 0), b: V(0, 0, o.len * 0.38) });
+  if (kind === 'bogie') braces.push({ a: V(0, -o.len * 0.32, 0), b: V(0, 0, o.len * 0.42) }, { a: V(0, -o.len * 0.25, 0), b: V(ro * 6, 0, 0) });
+  return { q: new THREE.Quaternion(), side: -1, legs, braces, fwd: V(0, 0, -1) };
 }
 
 // Full gear leg. Same contract as parts.js gearLeg (origin = strut top, userData.strut / .wheels / .steer, wheels at
 // y = -len), plus userData.wheelsFixed: fork, axle, piston and spat that follow the wheel up and down without spinning
-// (planeDetail.updateDetail keeps them on the wheel; aircraft.js only spins the children of .wheels).
-export function gearLegDetailed({ len, r, w = null, color = 0xdddddd, fairing = false, bogie = false, steer = false }) {
-  const g = new THREE.Group(), strut = new THREE.Group(), wheels = new THREE.Group(), fixed = new THREE.Group();
-  wheels.position.y = -len; fixed.position.y = -len;
-  const ww = w || r * 0.6, ro = 0.04 + r * 0.085, paint = PM.skin(color), steel = M.steel(), chrome = M.chrome(), dark = M.darkMetal(), rub = M.rubber();
-  const sB = new Bag(), sN = new Bag(), fB = new Bag(), fN = new Bag();
-  if (fairing) {
-    // spring-steel leg (flat, tapered), meeting the wheel on its inboard side under a streamlined spat
-    const top = V(0, 0, 0), bot = V(-(ww * 0.5 + 0.05), -len + r * 0.05, 0);
-    const leg = bar(top, bot, 0.11, 0.032); sB.add(leg, paint);
-    const step = new THREE.BoxGeometry(0.16, 0.012, 0.12); step.translate(bot.x * 0.55 - 0.08, -len * 0.55, 0); sN.add(step, M.aluminum()); sN.add(bar(V(bot.x * 0.55, -len * 0.55, 0), V(bot.x * 0.55 - 0.08, -len * 0.55, 0), 0.02, 0.02, true, 5), steel);
-    sN.add(tube([V(0, -0.05, 0.02), V(bot.x * 0.5, -len * 0.5, 0.03), V(bot.x, -len + r * 0.25, 0.03)], 0.007, 4), rub);
-    wheelSpat(fB, { r, ww, paint, legX: bot.x, len });
+// (planeDetail.updateDetail keeps them on the wheel; aircraft.js only spins the children of .wheels), and
+// userData.reroute(route) for the assembly pass.
+export function gearLegDetailed(o) {
+  const g = new THREE.Group(), strut = new THREE.Group(), wheels = new THREE.Group(), fixed = new THREE.Group(), leg = new THREE.Group();
+  wheels.position.y = -o.len; fixed.position.y = -o.len;
+  strut.add(leg); if (!o.bogie) strut.add(fixed); strut.add(wheels); g.add(strut);
+  g.userData.strut = strut; g.userData.wheels = wheels; g.userData.steer = !!o.steer; if (!o.bogie) g.userData.wheelsFixed = fixed;
+  g.userData.gearLeg = { opts: o, anchors: (side) => gearAnchors(o, side), dims: gearDims(o) };
+  g.userData.reroute = (route) => buildGearLeg(o, route, leg, fixed, wheels);
+  buildGearLeg(o, null, leg, fixed, wheels);
+  return g;
+}
+function clearGroup(grp) { for (const c of grp.children.slice()) { grp.remove(c); c.traverse((m) => m.geometry?.dispose()); } }
+function buildGearLeg(o, route, leg, fixed, wheels) {
+  for (const grp of [leg, fixed, wheels]) clearGroup(grp);
+  const R = route || defaultRoute(o), { len, r, steer, color = 0xdddddd } = o, { ww, ro, cl, kind, gland } = gearDims(o);
+  const paint = PM.skin(color), steel = M.steel(), chrome = M.chrome(), dark = M.darkMetal(), rub = M.rubber();
+  // wheel frame <-> part frame
+  const T = new THREE.Matrix4().compose(V(0, -len, 0), R.q, V(1, 1, 1)), Rq = new THREE.Matrix4().makeRotationFromQuaternion(R.q), Ti = T.clone().invert();
+  const toL = (p) => p.clone().applyMatrix4(Ti), fwd = R.fwd;
+  const lB = new Bag(), lN = new Bag(); // leg pieces in the wheel frame (strut)
+  const sB = new Bag(), sN = new Bag(); // routed pieces, already in the part frame (strut)
+  const fB = new Bag(), fN = new Bag(); // fork / spat / axle: wheel frame, ride with the wheel
+  const fU = new Bag(), fUN = new Bag(); // piston and lower torque link: also raked with the leg about the fork crown
+  const legs = R.legs.map((l) => ({ ...l, aL: toL(l.a), topL: toL(l.top), kneeL: l.knee ? toL(l.knee) : null }));
+  // the legs: from the anchor (via a knee where the straight path was blocked) to the top, streamlined, plus boots
+  const legW = o.fairing ? 0.036 : kind === 'bogie' ? ro * 3 : ro * 2, legC = o.fairing ? 0.12 : legW * oleoK;
+  for (const l of legs) {
+    const pts = [l.a, ...(l.knee ? [l.knee] : []), l.top];
+    for (let i = 0; i < pts.length - 1; i++) sB.add(fairedBar(pts[i], pts[i + 1].clone().addScaledVector(pts[i + 1].clone().sub(pts[i]).normalize(), i < pts.length - 2 ? legW * 0.3 : 0), legW, legC, fwd), paint);
+    if (l.knee) sB.add(new THREE.SphereGeometry(legW * 0.62, 12, 8).translate(l.knee.x, l.knee.y, l.knee.z), paint);
+    if (l.n && R.boot) sB.add(strutFlare(l.top, l.top.clone().sub(pts.at(-2)).normalize(), l.n, legW, legC, fwd), paint);
+    else { const up = l.top.clone().sub(pts.at(-2)).normalize(); sB.add(fairedBar(l.top.clone().addScaledVector(up, -0.05), l.top.clone().addScaledVector(up, 0.02), legW * 1.25, legC * 1.15, fwd), PM.metal('anodised')); } // collar
+  }
+  const lg0 = legs[0], segBot = lg0.a, segTop = lg0.knee || lg0.top; // first leg segment
+  const aft = (a, b) => { const d = b.clone().sub(a).normalize(); return fwd.clone().negate().addScaledVector(d, fwd.dot(d)).normalize(); };
+  // braces: streamlined, from the leg to structure
+  for (const br of R.braces || []) sB.add(fairedBar(br.a, br.b, ro * (kind === 'bogie' ? 1.1 : 0.9), ro * (kind === 'bogie' ? 1.1 : 0.9) * oleoK, fwd), paint);
+  if (o.fairing) {
+    // spring-steel legs into a streamlined spat; a step on a single leg, brake line down its back
+    if (legs.length === 1) {
+      const p = segBot.clone().lerp(segTop, 0.5), upP = V(0, 1, 0).applyQuaternion(R.q), out = V(R.side > 0 ? 1 : -1, 0, 0).applyQuaternion(R.q);
+      const step = new THREE.BoxGeometry(0.16, 0.012, 0.12); step.translate(0.08, 0, 0); step.applyMatrix4(new THREE.Matrix4().makeBasis(out, upP, out.clone().cross(upP).normalize()).setPosition(p));
+      sN.add(step, M.aluminum()); sN.add(bar(p, p.clone().addScaledVector(out, 0.08), 0.02, 0.02, true, 5), steel);
+      const af = aft(segBot, segTop); sN.add(tube([0.95, 0.5, 0.08].map((t) => segBot.clone().lerp(lg0.top, t).addScaledVector(af, 0.03)), 0.007, 4), rub);
+    }
+    wheelSpat(fB, { r, ww, paint, legs: legs.map((l) => ({ a: l.aL, dir: (l.kneeL || l.topL).clone().sub(l.aL).normalize() })) });
     const axle = new THREE.CylinderGeometry(0.025, 0.025, ww + 0.12, 8); axle.rotateZ(Math.PI / 2); fB.add(axle, steel);
-  } else if (bogie) {
-    // heavy bogie: oleo, side brace, torque links; the beam and four wheels hang below and ride with the oleo
-    const cyl = new THREE.CylinderGeometry(ro * 1.5, ro * 1.5, len * 0.6, 14); cyl.translate(0, -len * 0.3, 0); sB.add(cyl, paint);
-    const gland = new THREE.CylinderGeometry(ro * 1.65, ro * 1.65, 0.08, 14); gland.translate(0, -len * 0.6, 0); sB.add(gland, steel);
-    sB.add(bar(V(0, -len * 0.32, 0), V(0, 0, len * 0.42), ro * 0.8, ro * 0.8, true, 8), paint); // drag brace
-    sB.add(bar(V(0, -len * 0.25, 0), V(ro * 6, 0, 0), ro * 0.6, ro * 0.6, true, 8), paint); // side brace
-    sN.add(bar(V(0, -len * 0.58, -ro * 1.5), V(0, -len * 0.7, -ro * 3.2), 0.07, 0.04), steel);
-    sN.add(tube([V(0, -0.1, ro * 1.6), V(0, -len * 0.5, ro * 1.65), V(0, -len * 0.62, ro * 1.4)], 0.018, 5), rub);
-    const piston = new THREE.CylinderGeometry(ro * 1.05, ro * 1.05, len * 0.5, 14); piston.translate(0, len * 0.25 + 0.05, 0); fB.add(piston, chrome);
-    fN.add(bar(V(0, len * 0.3, -ro * 3.2), V(0, len * 0.12, -ro * 1.2), 0.07, 0.04), steel);
+  } else if (kind === 'bogie') {
+    // heavy bogie: faired oleo, gland, torque links; the beam and four wheels hang below and ride with the oleo
+    lB.add(fairedBar(V(0, gland - 0.04, 0), V(0, gland + 0.04, 0), legW * 1.1, legC * 1.1), steel); // gland
+    lN.add(bar(V(0, len * 0.42, -ro * 2.5), V(0, len * 0.3, -ro * 4), 0.07, 0.04), steel);
+    const af = aft(segBot, segTop); sN.add(tube([0.9, 0.5, 0.1].map((t) => segBot.clone().lerp(segTop, t).addScaledVector(af, ro * 3.05)), 0.018, 5), rub);
+    const piston = new THREE.CylinderGeometry(ro * 1.05, ro * 1.05, len * 0.5, 14); piston.translate(0, len * 0.25 + 0.05, 0); fU.add(piston, chrome);
+    fUN.add(bar(V(0, len * 0.3, -ro * 4), V(0, len * 0.12, -ro * 1.2), 0.07, 0.04), steel);
     const beam = new THREE.CylinderGeometry(0.06 + r * 0.06, 0.06 + r * 0.06, r * 3.4, 12); beam.rotateX(Math.PI / 2); fB.add(beam, steel);
     for (const dz of [-1, 1]) { const ax = new THREE.CylinderGeometry(0.05 + r * 0.04, 0.05 + r * 0.04, ww * 2.1, 10); ax.rotateZ(Math.PI / 2); ax.translate(0, 0, dz * r * 1.2); fB.add(ax, steel); }
-    for (const dz of [-1, 1]) for (const dx of [-1, 1]) { const wh = wheelDetailed(r, ww, true); wh.position.set(dx * ww * 0.75, 0, dz * r * 1.2); wheels.add(wh); }
-    // the bogie doesn't spin its wheels (aircraft.js), so the beam can ride in the wheels group itself
-    fB.to(wheels); fN.to(wheels, true);
-  } else if (r * 1.1 + 0.04 > len * 0.8) {
+    for (const dz of [-1, 1]) for (const dx of [-1, 1]) { const wh = wheelDetailed(r, ww, true); wh.position.set(dx * ww * 0.75, 0, dz * r * 1.2).applyQuaternion(R.q); wh.quaternion.copy(R.q); wheels.add(wh); }
+  } else if (kind === 'car') {
     // car / monster wheel: short upright, an arm out to the hub, a coil-over shock
-    const cyl = new THREE.CylinderGeometry(ro, ro, len * 0.5, 12); cyl.translate(0, -len * 0.25, 0); sB.add(cyl, paint);
-    const coil = []; for (let k = 0; k <= 40; k++) { const a = k * 0.9; coil.push(V(Math.cos(a) * ro * 1.6, -k / 40 * len * 0.45 - 0.02, Math.sin(a) * ro * 1.6)); }
-    sN.add(tube(coil, 0.012, 4, 80), M.propTip());
+    const cyl = new THREE.CylinderGeometry(ro, ro, len * 0.5, 12); cyl.translate(0, len * 0.75, 0); lB.add(cyl, paint);
+    const coil = []; for (let k = 0; k <= 40; k++) { const a = k * 0.9; coil.push(V(Math.cos(a) * ro * 1.6, len - k / 40 * len * 0.45 - 0.02, Math.sin(a) * ro * 1.6)); }
+    lN.add(tube(coil, 0.012, 4, 80), M.propTip());
     const piston = new THREE.CylinderGeometry(ro * 0.7, ro * 0.7, len * 0.6, 10); piston.translate(0, len * 0.3, 0); fB.add(piston, chrome);
     fB.add(bar(V(0, 0, 0), V(-(ww * 0.5 + 0.02), 0, 0), 0.07, 0.07, true, 8), steel);
   } else {
-    // oleo: painted cylinder + gland nut on the strut; chrome piston, fork crown, fork legs and axle ride with the wheel
-    const cl = len - r * 1.25 - 0.08; // cylinder length
-    const cyl = new THREE.CylinderGeometry(ro, ro, cl * 0.62, 14); cyl.translate(0, -cl * 0.31, 0); sB.add(cyl, paint);
-    const gland = new THREE.CylinderGeometry(ro * 1.12, ro * 1.12, 0.035, 14); gland.translate(0, -cl * 0.62, 0); sB.add(gland, steel);
-    const collar = new THREE.CylinderGeometry(ro * 1.25, ro * 1.25, 0.05, 14); collar.translate(0, -0.03, 0); sB.add(collar, PM.metal('anodised'));
+    // oleo: faired cylinder (the routed leg) + gland nut; chrome piston, fork crown, fork legs and axle ride with the wheel
+    lB.add(fairedBar(V(0, gland - 0.018, 0), V(0, gland + 0.018, 0), legW * 1.12, legC * 1.12), steel); // gland nut
     const crown = r * 1.1 + 0.04; // fork crown height above the axle
-    const piston = new THREE.CylinderGeometry(ro * 0.72, ro * 0.72, len - crown - cl * 0.35, 12); piston.translate(0, crown + (len - crown - cl * 0.35) / 2, 0); fB.add(piston, chrome);
+    const pl = len - crown - cl * 0.35; // piston length (its top hides inside the cylinder)
+    const piston = new THREE.CylinderGeometry(ro * 0.72, ro * 0.72, pl, 12); piston.translate(0, crown + pl / 2, 0); fU.add(piston, chrome);
     const cr = new THREE.BoxGeometry(ww + 0.12, 0.07, 0.1); cr.translate(0, crown, 0); fB.add(cr, steel);
-    for (const sx of [-1, 1]) fB.add(bar(V(sx * (ww * 0.5 + 0.04), crown, 0), V(sx * (ww * 0.5 + 0.04), 0, 0), 0.045, 0.07), steel);
+    for (const sx of [-1, 1]) fB.add(bar(V(sx * (ww * 0.5 + 0.04), crown, 0), V(sx * (ww * 0.5 + 0.04), 0, 0), 0.03, 0.08), steel);
     const axle = new THREE.CylinderGeometry(0.025, 0.025, ww + 0.14, 8); axle.rotateZ(Math.PI / 2); fB.add(axle, steel);
-    // torque links (scissor) on the front of the oleo
-    const zT = -ro * 1.05 - 0.02, apex = V(0, -cl * 0.62 - 0.04 - (len - cl * 0.62 - crown) * 0.35, zT - Math.max(0.06, len * 0.08));
-    sN.add(bar(V(0, -cl * 0.52, zT), apex, 0.03, 0.022), steel);
-    fN.add(bar(apex.clone().sub(V(0, -len, 0)), V(0, crown + 0.02, zT), 0.03, 0.022), steel);
-    // lugs tying the links' ends to the cylinder and the fork crown (the links floated in front of the leg)
-    sN.add(bar(V(0, -cl * 0.52, -ro * 0.7), V(0, -cl * 0.52, zT - 0.012), 0.05, 0.035), steel);
-    fN.add(bar(V(0, crown + 0.02, -0.03), V(0, crown + 0.02, zT - 0.012), 0.05, 0.035), steel);
-    sN.add(bar(V(-0.02, apex.y, apex.z), V(0.02, apex.y, apex.z), 0.03, 0.03, true, 6), steel); // apex pin
+    // torque links (scissor) on the front of the oleo, with lugs on the cylinder and the fork crown and an apex pin
+    const yL = len - cl * 0.52, zT = -ro * 1.5 - 0.02, apex = V(0, gland - 0.04 - (gland - crown) * 0.35, zT - Math.max(0.06, len * 0.08));
+    lN.add(bar(V(0, yL, zT), apex, 0.03, 0.022), steel);
+    fUN.add(bar(apex, V(0, crown + 0.02, zT), 0.03, 0.022), steel);
+    lN.add(bar(V(0, yL, -ro * 0.5), V(0, yL, zT - 0.012), 0.05, 0.035), steel);
+    fUN.add(bar(V(0, crown + 0.02, -0.03), V(0, crown + 0.02, zT - 0.012), 0.05, 0.035), steel);
+    lN.add(bar(V(-0.02, apex.y, apex.z), V(0.02, apex.y, apex.z), 0.03, 0.03, true, 6), steel); // apex pin
     if (!steer) { // brake line down the back of the leg
-      sN.add(tube([V(0, -0.02, ro * 1.1), V(0, -cl * 0.3, ro * 1.15), V(0, -cl * 0.6, ro * 1.25)], 0.009, 5), rub);
+      const af = aft(segBot, segTop); sN.add(tube([0.95, 0.5, 0.05].map((t) => segBot.clone().lerp(segTop, t).addScaledVector(af, ro * 2 + 0.01)), 0.009, 5), rub);
       fN.add(tube([V(0, crown + 0.2, ro * 1.2), V(-ww * 0.3, crown * 0.6, ro * 1.4), V(-(ww * 0.5 + 0.04), r * 0.2, 0.06)], 0.009, 5), rub);
-      if (len > 1.2) sB.add(bar(V(0, -cl * 0.45, 0), V(0, 0, len * 0.38), ro * 0.75, ro * 0.75, true, 8), paint); // drag brace
     } else {
-      const sc = new THREE.CylinderGeometry(ro * 1.35, ro * 1.35, 0.08, 14); sc.translate(0, -cl * 0.2, 0); sB.add(sc, steel); // steering collar
-      sN.add(bar(V(0, -cl * 0.2, 0), V(ro * 2.6, -cl * 0.08, ro * 0.6), 0.035, 0.035, true, 6), chrome); // steering actuator
+      const c = segBot.clone().lerp(segTop, 0.75), du = segTop.clone().sub(segBot).normalize(); // steering collar and actuator on the cylinder
+      sB.add(fairedBar(c.clone().addScaledVector(du, -0.04), c.clone().addScaledVector(du, 0.04), legW * 1.3, legC * 1.25, fwd), steel);
+      sN.add(bar(c, c.clone().add(V(ro * 2.6, 0.1, ro * 0.6).applyQuaternion(R.q)), 0.035, 0.035, true, 6), chrome);
     }
     if (steer && r < 0.3 && len > 0.6) { const mg = new THREE.TorusGeometry(r * 1.05, 0.02, 4, 16, Math.PI * 0.6); mg.rotateY(Math.PI / 2); mg.rotateX(-Math.PI * 0.2); fN.add(mg, dark); } // mudguard
   }
-  if (!bogie) wheels.add(wheelDetailed(r, ww, !steer));
-  sB.to(strut); sN.to(strut, true);
-  if (!bogie) { fB.to(fixed); fN.to(fixed, true); strut.add(fixed); }
-  strut.add(wheels); g.add(strut);
-  g.userData.strut = strut; g.userData.wheels = wheels; g.userData.steer = steer; if (!bogie) g.userData.wheelsFixed = fixed;
+  if (kind !== 'bogie') { // one wheel: stood upright by its own rotation (aircraft.js spins it about x), ZYX so the spin comes first
+    const wh = wheelDetailed(r, ww, !steer), e = new THREE.Euler().setFromQuaternion(R.q, 'ZYX');
+    wh.rotation.set(0, e.y, e.z, 'ZYX'); wheels.add(wh);
+  }
+  // an oleo whose leg was raked (to clear a control surface) leans its gland, links and piston with it, about the crown
+  const Cl = V(0, kind === 'bogie' ? 0 : r * 1.1 + 0.04, 0), u = kind === 'oleo' || kind === 'bogie' ? lg0.aL.clone().sub(Cl).normalize() : V(0, 1, 0);
+  const Mu = new THREE.Matrix4().makeTranslation(Cl.x, Cl.y, Cl.z).multiply(new THREE.Matrix4().makeRotationFromQuaternion(new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), u))).multiply(new THREE.Matrix4().makeTranslation(-Cl.x, -Cl.y, -Cl.z));
+  const put = (bag, grp, near, m) => { const n0 = grp.children.length; bag.to(grp, near); for (const c of grp.children.slice(n0)) c.geometry.applyMatrix4(m); };
+  const TU = T.clone().multiply(Mu), RU = Rq.clone().multiply(Mu);
+  put(lB, leg, false, TU); put(lN, leg, true, TU); sB.to(leg); sN.to(leg, true);
+  const fg = kind === 'bogie' ? wheels : fixed; put(fB, fg, false, Rq); put(fN, fg, true, Rq); put(fU, fg, false, RU); put(fUN, fg, true, RU);
+}
+
+// Float / skid struts. stations: z of the struts along the float (part frame), y: the float's top. Without the
+// assembly pass they are posts up to the part origin; gearRoute.js calls userData.restrut(segs, boots, fwd) with
+// struts routed up to the skin (N-struts, spreader bars), all in the part frame.
+export function strutLegs(g, spec) {
+  const grp = new THREE.Group(); g.add(grp);
+  const build = (segs, boots = [], fwd = V(0, 0, -1)) => {
+    clearGroup(grp);
+    const b = new Bag(), fit = spec.kind === 'float' ? M.steel() : spec.paint;
+    for (const s of segs) {
+      const w = spec.w * (s.k || 1), c = spec.c * (s.k || 1);
+      b.add(fairedBar(s.a, s.b, w, c, fwd), spec.kind === 'float' ? M.steel() : spec.paint);
+      if (s.foot) { const d = s.b.clone().sub(s.a).normalize(); b.add(fairedBar(s.a.clone().addScaledVector(d, -0.02), s.a.clone().addScaledVector(d, 0.06), w * 1.5, c * 1.3, fwd), fit); } // clamp on the float / skid
+    }
+    for (const t of boots) b.add(strutFlare(t.p, t.dir, t.n, spec.w, spec.c, fwd), spec.kind === 'float' ? M.steel() : spec.paint);
+    b.to(grp);
+  };
+  g.userData.strutLegs = spec;
+  g.userData.restrut = build;
+  build(spec.stations.map((z) => ({ a: V(0, spec.y, z), b: V(0, 0, z), foot: true })));
   return g;
 }
 

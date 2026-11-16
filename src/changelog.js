@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.78.0', items: [
+    'Landing gear looks real now: streamlined legs that reach up to the wing or body, upright wheels, matching left and right sides, and proper floats with N-struts. Wherever you put gear, it works out how to attach itself!',
+  ] },
   { v: '1.77.0', items: [
     'Fixed: after an update the game could look jumbled until you reloaded. Updates now always arrive all at once.',
   ] },
