@@ -208,7 +208,7 @@ const REAL_SAT_GLSL = /* glsl */`
   }
   // the photo already has the light and shadow of the moment it was taken (satSun): take some of that out, so the
   // game's own sun does the shading, and lift it to the game's ground brightness
-  uniform vec3 satSun; uniform float satGain; uniform float satDeshade;
+  uniform vec3 satSun; uniform float satGain; uniform float satDeshade; uniform vec4 satCliff;
   vec3 realGround(vec3 c, vec3 n) {
     float lit = max(dot(n, satSun), 0.0) * 0.75 + 0.25, ref = max(satSun.y, 0.2) * 0.75 + 0.25;
     float k = mix(1.0, clamp(ref / lit, 0.65, 2.0), satDeshade);
@@ -219,7 +219,7 @@ const REAL_SAT_GLSL = /* glsl */`
     c *= vec3(1.0 + 0.05 * veg, 1.0 + 0.02 * veg, 1.0 - 0.2 * veg);
     // cliffs: seen from above the satellite hardly sees a wall, and smears the meadow above / forest below down it
     float cliff = smoothstep(0.42, 0.7, 1.0 - n.y) * (1.0 - smoothstep(0.35, 0.6, dot(c, vec3(0.3, 0.59, 0.11))));
-    c = mix(c, vec3(0.15, 0.14, 0.125) * (0.8 + 0.4 * fract(sin(dot(floor(n.xz * 9.0), vec2(12.9, 78.2))) * 43758.5)), cliff * 0.75);
+    c = mix(c, satCliff.rgb * (0.8 + 0.4 * fract(sin(dot(floor(n.xz * 9.0), vec2(12.9, 78.2))) * 43758.5)), cliff * satCliff.a); // (the place's rock colour)
     c *= vec3(1.0 + 0.06 * sh, 1.0 + 0.03 * sh, 1.0 - 0.3 * sh);
     return min(c * k * satGain, vec3(0.92));
   }`;
