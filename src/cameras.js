@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { clamp } from './noise.js';
 
 export const CAM_MODES = ['chase', 'cockpit', 'orbit', 'tower', 'flyby'];
-const _want = new THREE.Vector3(), _mv = new THREE.Vector3(), _off = new THREE.Vector3();
+const _want = new THREE.Vector3(), _mv = new THREE.Vector3(), _off = new THREE.Vector3(), _yAxis = new THREE.Vector3(0, 1, 0);
 const CAM_NAMES = { chase: 'Chase cam', cockpit: 'Cockpit', orbit: 'Orbit (drag to look)', tower: 'Tower cam', flyby: 'Fly-by' };
 
 export class CameraRig {
@@ -47,15 +47,28 @@ export class CameraRig {
     if (mode === 'chase') {
       const fwd = ac.forward; const vdir = ac.v.lengthSq() > 25 ? ac.v.clone().normalize() : fwd;
       const dir = fwd.clone().lerp(vdir, 0.35).normalize();
-      const flat = new THREE.Vector3(dir.x, 0, dir.z);
       const rk = ac.isRocket ? ac.rocketK : 0;
+      if (rk > 0.01) {
+        // A rocket's camera follows where the nose points slowly (~1 s), so when you steer you see the nose swing away
+        // from the middle of the screen and stay there for a moment against the sky and the HUD's pitch ladder, instead
+        // of the view snapping round behind it at once (which read as the nose springing back to the middle).
+        if (!this.rocketDir || !this.init) this.rocketDir = dir.clone();
+        this.rocketDir.lerp(dir, Math.min(1, dt * 1.1)).normalize();
+        dir.lerp(this.rocketDir, rk).normalize();
+      } else this.rocketDir = null;
+      const flat = new THREE.Vector3(dir.x, 0, dir.z);
       if (rk > 0.01) {
         // A rocket points (nearly) straight up, so "behind it" has no direction: hold the camera's heading and only swing
         // round as the nose tips over. (Chasing the tiny sideways lean flipped the camera about, and with it which way
-        // the stick seemed to steer.)
+        // the stick seemed to steer.) It swings round the side, never over the top: turning the old heading towards the
+        // new one (a straight blend between opposite headings passed through zero and flipped the view upside down).
         const h = flat.length();
         if (!this.rocketFlat || !this.init) this.rocketFlat = h > 0.3 ? flat.clone().normalize() : new THREE.Vector3(-ac.up.x, 0, -ac.up.z).normalize();
-        if (h > 1e-3) this.rocketFlat.lerp(flat.clone().divideScalar(h), Math.min(1, dt * 2.5 * h ** 4)).normalize();
+        if (h > 1e-3) {
+          const f = this.rocketFlat, tx = flat.x / h, tz = flat.z / h;
+          const ang = Math.atan2(f.z * tx - f.x * tz, f.x * tx + f.z * tz); // signed turn (about +Y) from the old heading to the new
+          f.applyAxisAngle(_yAxis, ang * Math.min(1, dt * 1.6 * h ** 4)).normalize();
+        }
         flat.lerp(this.rocketFlat, rk);
       } else this.rocketFlat = null;
       if (flat.lengthSq() < 1e-4) flat.set(0, 0, -1); flat.normalize();
@@ -77,10 +90,10 @@ export class CameraRig {
       cam.up.set(0, 1, 0).lerp(ac.up, 0.15 * (1 - rk)).normalize();
       fov = 60 + clamp((ac.v.length() - 60) / 6, 0, 18);
     } else if (mode === 'cockpit') {
-      const eye = ac.worldPoint(ac.eyePoint());
+      const eye = ac.worldPoint(ac.capsuleEye || ac.eyePoint()); // (a crew capsule in a body: capsule.js)
       this.pos.copy(eye);
       const q = ac.q.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(-this.look.pitch * 0.8, this.look.yaw, 0, 'YXZ')));
-      cam.position.copy(eye); cam.quaternion.copy(q);
+      cam.position.copy(eye); cam.quaternion.copy(q); cam.userData.cockpit = true;
       cam.fov = 70; cam.updateProjectionMatrix();
       this.finish(dt, world, true); return;
     } else if (mode === 'orbit') {
@@ -109,6 +122,7 @@ export class CameraRig {
       this.pos.copy(this.flyPos); this.lookAt.copy(target); cam.up.set(0, 1, 0);
       fov = clamp(THREE.MathUtils.radToDeg(2 * Math.atan((R * 4) / this.pos.distanceTo(target))), 15, 65);
     }
+    cam.userData.cockpit = false;
     // keep above ground
     const gh = Math.max(world.heightAt(this.pos.x, this.pos.z), world.waterLevel) + 1.2;
     if (this.pos.y < gh) this.pos.y = gh;

@@ -63,6 +63,52 @@ export function mirroredOf(p) {
   return m;
 }
 
+// ---------- symmetry ----------
+// A part can have symmetric copies: Mirror (2) reflects it across the centreline (x = 0, the copy carries the mirror
+// flag); 3 and 4 copy it round the vehicle's long axis (radial symmetry: rocket fins, boosters and engines, an X tail).
+// The copies are ordinary parts (physics, analyze() and save codes see each one on its own), and they are linked only
+// by where they sit, as mirrored pairs always were, so old designs and share codes need nothing new.
+export const SYM_MODES = [0, 2, 3, 4]; // off, mirror, 3-way, 4-way
+// The long axis radial copies turn about: parallel to z through the centreline (x = 0) at the height of the root body's
+// centre (a rocket's or fuselage's middle).
+export function symAxis(design) {
+  const r = design.parts[0]; if (!r || !PARTS[r.id]) return [0, 0];
+  return [0, partInfo(r.id).center.clone().applyMatrix4(partMatrix(r)).y];
+}
+const _zAxis = new THREE.Vector3(0, 0, 1);
+// p turned by ang (radians) about the long axis
+export function rotatedOf(p, ang, axis = [0, 0]) {
+  const c = Math.cos(ang), s = Math.sin(ang), dx = p.pos[0] - axis[0], dy = p.pos[1] - axis[1];
+  const q = new THREE.Quaternion().setFromAxisAngle(_zAxis, ang).multiply(new THREE.Quaternion(...p.quat));
+  const m = { ...p, pos: [+(axis[0] + dx * c - dy * s).toFixed(4), +(axis[1] + dx * s + dy * c).toFixed(4), p.pos[2]], quat: [q.x, q.y, q.z, q.w] };
+  if (p.scale) m.scale = [...p.scale];
+  return m;
+}
+// The other n - 1 copies of p for symmetry n (each a function of the edited original, so edits can be passed on)
+export function symMakers(n, axis) {
+  if (n === 2) return [(p) => mirroredOf(p)];
+  if (n < 2) return [];
+  return Array.from({ length: n - 1 }, (_, k) => (p) => rotatedOf(p, ((k + 1) * 2 * Math.PI) / n, axis));
+}
+// distance of a part from the long axis (an on-axis part gets no radial copies; an on-centreline one no mirror twin)
+export const offAxis = (p, n, axis) => (n === 2 ? Math.abs(p.pos[0]) : Math.hypot(p.pos[0] - axis[0], p.pos[1] - axis[1]));
+// round parts (bodies, round extras, engines but car motors and rotors) look the same turned about their own long axis
+const roundPart = (id) => { const d = PARTS[id]; return d.cat === 'fuselage' || ROUND_EXTRAS.has(id) || (!!d.engine && !['drive', 'rotor', 'tailrotor'].includes(d.engine.type)); };
+const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion();
+// does part b sit exactly where a's copy c is? (same part, same place, turned the same way, same size; a round part
+// may be spun differently about its own axis, as the stock Rocket's boosters are)
+export function sameSpot(c, b) {
+  if (!b || b.id !== c.id || !!b.mirror !== !!c.mirror) return false;
+  if (Math.hypot(b.pos[0] - c.pos[0], b.pos[1] - c.pos[1], b.pos[2] - c.pos[2]) > 0.02) return false;
+  const sb = b.scale || [1, 1, 1], sc = c.scale || [1, 1, 1];
+  if (!sb.every((v, k) => Math.abs(v - sc[k]) < 0.01)) return false;
+  _qa.set(...c.quat); _qb.set(...b.quat);
+  if (Math.abs(_qa.dot(_qb)) > 0.9995) return true;
+  if (!roundPart(c.id) || Math.abs(sb[0] - sb[1]) > 0.01) return false;
+  const d = _qa.invert().multiply(_qb); // b relative to c, in c's frame: a pure spin about local z?
+  return Math.hypot(d.x, d.y) < 0.012;
+}
+
 export function newPart(id, pos, opts = {}) {
   const q = opts.rot ? new THREE.Quaternion().setFromEuler(new THREE.Euler(...opts.rot.map(THREE.MathUtils.degToRad))) : new THREE.Quaternion();
   return { id, pos: [...pos], quat: [q.x, q.y, q.z, q.w], mirror: !!opts.mirror, color: opts.color ?? PARTS[id].color, parent: opts.parent ?? -1 };

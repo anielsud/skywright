@@ -18,6 +18,7 @@ export const REALISM = {
 const G = 9.81;
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _qi = new THREE.Quaternion();
 const _rf = new THREE.Vector3(), _ra = new THREE.Vector3(), _rb = new THREE.Vector3(), _rc = new THREE.Vector3(), _rd = new THREE.Vector3();
+const _rq = new THREE.Quaternion(), _rq2 = new THREE.Quaternion(), _rv = new THREE.Vector3(); // rocket attitude hold
 // ---- the atmosphere, from the runway to space ----
 // Air density (kg/m³): the old exponential (a near-perfect fit to the ISA troposphere) up to 11 km, then the
 // US Standard Atmosphere 1976, interpolated log-linearly: 1/14 of sea level at 20 km, 1/1000 at 48 km, ~0 above 100 km.
@@ -411,16 +412,41 @@ export class Aircraft {
     const w = _rb.copy(fwd).cross(d).applyQuaternion(_qi.copy(this.q).invert()); // turn rate wanted, in the body frame
     if (w.lengthSq() > 1) w.normalize();
     ce.pitch = lerp(c.pitch, w.x, k); ce.yaw = lerp(c.yaw, -w.y, k); ce.roll = lerp(c.roll, c.yaw, k);
+    this.rocketHoldTarget(ce, k);
+  }
+  // Arcade/Pilot attitude hold. While the stick is held the target attitude rides just ahead of the nose, at the point a
+  // plain rate damper would stop it (now + spin / damper gain); let go and the target stays put, and rocketAssist()
+  // steers the nose onto it. Before this the assist only damped the spin, so once the fins had airflow they weathervaned
+  // the nose back towards the old flight path ("snaps back to the middle" in Pilot). Dropped (it follows the nose) on
+  // the ground, without authority (no burn, no air), in Sim, and while a rocket plane flies plane-style.
+  rocketHoldTarget(ce, k) {
+    const hq = this.rocketHold || (this.rocketHold = this.q.clone());
+    const stick = Math.max(Math.abs(ce.pitch), Math.abs(ce.yaw), Math.abs(ce.roll)) > 0.04;
+    if (this.R.assist <= 0 || this.onGround || k < 0.5 || (this.rocketAuth ?? 0) < 0.05) { hq.copy(this.q); this.rocketHolding = false; return; }
+    if (stick || !this.rocketHolding) {
+      const lead = _rv.copy(this.w).divideScalar(this.rocketGain || 6), a = lead.length(); // where the spin would die out
+      hq.copy(this.q); if (a > 1e-6) hq.multiply(_rq.setFromAxisAngle(lead.divideScalar(a), Math.min(a, 0.35)));
+      this.rocketHolding = !stick;
+    }
   }
 
   // Arcade/Pilot: the stick sets the turn rate (let go and it holds its heading, and the roll stops), worked by the swivelling
   // engines while they burn and by the fins once there's airflow. Sim: just the engines' swivel (a few degrees), no help.
-  rocketAssist(F, T, ctl, V, air, vAirB) {
+  rocketAssist(F, T, ctl, V, air, vAirB, Taero) {
     const R = this.R, k = this.rocketK, sf = clamp((V - 6) / 22, 0, 1) * air;
     if (R.assist > 0) {
       const auth = Math.max(sf, this.rocketBurn ? 1 : 0) * k, rate = 0.45 + 0.25 * R.assist; // rad/s at full stick
-      const err = _v3.set(ctl.pitch * rate, -ctl.yaw * rate, -ctl.roll * 1.6).sub(this.w).multiplyScalar(6 * (0.5 + 0.5 * R.assist) * auth);
+      const gain = (this.rocketGain = 6 * (0.5 + 0.5 * R.assist)); this.rocketAuth = auth;
+      const des = _v3.set(ctl.pitch * rate, -ctl.yaw * rate, -ctl.roll * 1.6);
+      if (this.rocketHolding) { // stick centred: turn towards the held attitude (body-frame error, critically damped)
+        const e = _rq2.copy(this.q).invert().multiply(this.rocketHold), s = (e.w < 0 ? -2 : 2) * gain * 0.25;
+        des.set(e.x * s, e.y * s, e.z * s);
+      }
+      const err = des.sub(this.w).multiplyScalar(gain * auth);
       T.add(err.applyMatrix3(this.I));
+      // the swivelling engines and fins' autopilot also take out the fins' pull towards the airflow (Pilot feels its
+      // aero torque, Arcade none), so the nose goes where the stick points and stays there instead of weathervaning back
+      T.addScaledVector(Taero, -R.aeroTorque * auth);
       if (R.sideslipKill > 0) { const kill = this.mass * R.sideslipKill * sf * k * 0.6; F.x -= vAirB.x * kill; F.y -= vAirB.y * kill; } // flies like a dart, the same in every direction
     } else if (this.rocketBurn) {
       let tv = 0; for (const p of this.parts) if (p.alive && p.engine?.type === 'rocket') tv += p.engine.thrustNow * Math.max(1, Math.abs(p.engine.pos.z - this.com.z)) * 0.09;
@@ -657,7 +683,7 @@ export class Aircraft {
       // kill sideslip
       if (R.sideslipKill > 0) F.x -= vAirB.x * mass * R.sideslipKill * sf * air;
     }
-    if (this.isRocket && this.rocketK > 0.001 && !this.onGround) this.rocketAssist(F, T, ctl, V, air, vAirB);
+    if (this.isRocket && this.rocketK > 0.001 && !this.onGround) this.rocketAssist(F, T, ctl, V, air, vAirB, Taero);
     // ---- reaction control: in near-vacuum the stick fires attitude jets (rate command: let go and the spin stops) ----
     const rcs = (this.hasRCS || R.spaceRCS) && !this.onGround && !this.isCar ? 1 - air : 0;
     this.rcsFire = 0;

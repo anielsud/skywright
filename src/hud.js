@@ -9,10 +9,13 @@ const UNITS = {
   imperial: { spd: 1.94384, spdU: 'kt', alt: 3.28084, altU: 'ft', vs: 196.85, vsU: 'fpm', temp: (c) => c * 1.8 + 32, tempU: '°F' },
 };
 
+const _lv = new THREE.Vector3(), _lf = new THREE.Vector3(), _ld = new THREE.Vector3();
+
 export class HUD {
   constructor(root) {
     this.root = root; this.units = UNITS.imperial; this.visible = true;
     root.innerHTML = `
+      <canvas id="h-ladder" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"></canvas>
       <div class="hud-tl">
         <div class="hud-big"><span id="h-spd">0</span><small id="h-spdu">kt</small></div>
         <div class="hud-row"><label>ALT</label><span id="h-alt">0</span><small id="h-altu">ft</small></div>
@@ -96,7 +99,7 @@ export class HUD {
     this.$('l-mach').style.display = M >= 1 && !ac.dead ? '' : 'none'; L('l-mach', M >= 1);
     const ge = this.$('l-g'); ge.textContent = `${ac.g.toFixed(1)} G`; ge.classList.toggle('warn', Math.abs(ac.g) > 6);
     this.$('h-mission').textContent = mission?.hud ? mission.hud() : '';
-    this.drawADI(ac); this.drawMap(ac, world, mission, others);
+    this.drawADI(ac); this.drawMap(ac, world, mission, others); this.drawLadder(ac, camera, camera?.userData.cockpit);
     this.updateControls(ac);
     // arrow to target
     const arrow = this.$('h-arrow');
@@ -142,6 +145,61 @@ export class HUD {
     g.restore();
     g.strokeStyle = '#ffcc00'; g.lineWidth = 3; g.beginPath(); g.moveTo(c - 30, c); g.lineTo(c - 10, c); g.lineTo(c, c + 6); g.lineTo(c + 10, c); g.lineTo(c + 30, c); g.stroke();
     g.strokeStyle = 'rgba(255,255,255,0.6)'; g.lineWidth = 2; g.beginPath(); g.arc(c, c, c - 2, 0, Math.PI * 2); g.stroke();
+  }
+  // Rocket mode: a frame of reference drawn over the view, all of it fixed to the world and projected through the camera
+  // (a rocket climbing sees only sky, so without it a turn looks like nothing happened once the camera has swung round
+  // behind it): a pitch ladder every 10° with the horizon, the straight-up point (UP star), the flight-path marker
+  // (where you are going) and the nose cross (where you are pointing).
+  drawLadder(ac, cam, inside = false) { // inside: the cockpit view (just the horizon, UP and the flight path over the cabin)
+    const cv = this.$('h-ladder'), on = !!(ac.isRocket && ac.rocketK > 0.5 && !ac.dead);
+    if (on !== this.ladderOn) { this.ladderOn = on; cv.style.display = on ? '' : 'none'; }
+    if (!on || !cam) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1), W = cv.clientWidth, H = cv.clientHeight;
+    if (!W || !H) return;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+    cam.updateMatrixWorld();
+    const v = _lv, cf = _lf.set(0, 0, -1).applyQuaternion(cam.quaternion);
+    // a world direction -> screen px, or null when it is behind the camera
+    const P = (d) => { if (d.dot(cf) < 0.05) return null; v.copy(d).multiplyScalar(1000).add(cam.position).project(cam); return [(v.x + 1) * W / 2, (1 - v.y) * H / 2]; };
+    const dir = (el, az) => _ld.set(Math.cos(el) * Math.sin(az), Math.sin(el), -Math.cos(el) * Math.cos(az));
+    const line = (pts, dash) => { // a polyline, drawn twice (dark halo, then bright) so it reads on cloud and on sky
+      for (const [w, c] of [[4, 'rgba(0,0,0,0.45)'], [2, this.ladderCol]]) {
+        g.setLineDash(dash ? [7, 5] : []); g.lineWidth = w; g.strokeStyle = c; g.beginPath(); let pen = false;
+        for (const p of pts) { if (!p) { pen = false; continue; } if (pen) g.lineTo(p[0], p[1]); else g.moveTo(p[0], p[1]); pen = true; }
+        g.stroke();
+      }
+      g.setLineDash([]);
+    };
+    const text = (s, p, align) => { g.textAlign = align; g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,0.6)'; g.strokeText(s, p[0], p[1]); g.fillStyle = this.ladderCol; g.fillText(s, p[0], p[1]); };
+    this.ladderCol = '#8dffb0'; g.font = 'bold 13px system-ui, sans-serif'; g.textBaseline = 'middle';
+    const az = Math.atan2(cf.x, -cf.z), D = Math.PI / 180;
+    // horizon: a long line all the way round (in pieces, so it bends with the lens)
+    const hz = []; for (let a = -90; a <= 90; a += 6) hz.push(P(dir(0, az + a * D)));
+    line(hz, false);
+    // rungs every 10° (dashed below the horizon), centred on where the camera looks, with a gap in the middle
+    for (let el = -80; el <= 80 && !inside; el += 10) {
+      if (!el) continue;
+      const e = el * D, wHalf = 9 * D / Math.max(0.2, Math.cos(e)), gap = 3 * D / Math.max(0.2, Math.cos(e));
+      for (const s of [-1, 1]) {
+        const a = P(dir(e, az + s * gap)), b = P(dir(e, az + s * wHalf));
+        if (!a || !b) continue;
+        const tip = P(dir(e - Math.sign(el) * 1.2 * D, az + s * wHalf)); // little end ticks point at the horizon
+        line([a, b, tip], el < 0);
+        if (s > 0) text(String(Math.abs(el)), [b[0] + 8, b[1]], 'left'); else text(String(Math.abs(el)), [b[0] - 8, b[1]], 'right');
+      }
+    }
+    // straight up: a star with UP under it
+    const up = P(_ld.set(0, 1, 0));
+    if (up) { g.save(); g.translate(up[0], up[1]); for (const [w, c] of [[4, 'rgba(0,0,0,0.45)'], [2, '#ffd400']]) { g.lineWidth = w; g.strokeStyle = c; g.beginPath(); for (let k = 0; k <= 10; k++) { const r = k % 2 ? 6 : 14, a = (k / 10) * Math.PI * 2 - Math.PI / 2; if (k) g.lineTo(Math.cos(a) * r, Math.sin(a) * r); else g.moveTo(Math.cos(a) * r, Math.sin(a) * r); } g.stroke(); } g.restore(); this.ladderCol = '#ffd400'; text('UP', [up[0], up[1] + 24], 'center'); this.ladderCol = '#8dffb0'; }
+    // flight-path marker: a circle with wings and a fin, where the rocket is actually going
+    if (ac.v.lengthSq() > 25) {
+      const fp = P(_ld.copy(ac.v).normalize());
+      if (fp) { const [x, y] = fp; for (const [w, c] of [[4, 'rgba(0,0,0,0.5)'], [2, '#8dffb0']]) { g.lineWidth = w; g.strokeStyle = c; g.beginPath(); g.arc(x, y, 8, 0, Math.PI * 2); g.moveTo(x - 8, y); g.lineTo(x - 20, y); g.moveTo(x + 8, y); g.lineTo(x + 20, y); g.moveTo(x, y - 8); g.lineTo(x, y - 15); g.stroke(); } }
+    }
+    // nose cross: where the nose points (steer this onto the UP star to go straight up)
+    const nz = !inside && P(_ld.copy(ac.forward));
+    if (nz) { const [x, y] = nz; for (const [w, c] of [[5, 'rgba(0,0,0,0.5)'], [2.5, '#ffd400']]) { g.lineWidth = w; g.strokeStyle = c; g.beginPath(); g.moveTo(x - 12, y); g.lineTo(x - 4, y); g.moveTo(x + 4, y); g.lineTo(x + 12, y); g.moveTo(x, y - 12); g.lineTo(x, y - 4); g.moveTo(x, y + 4); g.lineTo(x, y + 12); g.stroke(); } }
   }
   drawMap(ac, world, mission, others) {
     const g = this.map, S = 180, R = this.mapRange;

@@ -9,6 +9,7 @@ import { PM, lightGeometry } from './planeMaterials.js';
 import { V, bar, tube, pipe, Bag, seatGeo, flightDeckGlass, shell, capHoles } from './partDetail.js';
 import { clipGeometry } from './skinBlend.js';
 import { Rig, cornerLinks, cornerGeometry } from './carRig.js';
+import { capsuleWindows } from './capsule.js';
 
 const cached = new Map();
 const mat = (k, make) => { if (!cached.has(k)) cached.set(k, make()); return cached.get(k); };
@@ -556,5 +557,6 @@ def({ id: 'fus_rocket', cat: 'fuselage', name: 'Rocket Stage', desc: 'Tall fuel 
     // the astronaut lies with the head towards the nose, facing the porthole (+x): rig up = -z, rig forward = +x
     const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(V(0, 1, 0), V(0, 0, -1), V(-1, 0, 0)));
     g.userData.seats = [{ p: [-0.14, 0, -3.1], s: 0.85, quat: q.toArray(), ctl: 'none' }]; // (no stick in front of the face)
+    capsuleWindows(g, ROCKET_PROF, g.userData.seats[0].p); // more windows for the crew to look out of (capsule.js: also the first-person cabin)
     return g;
   } });
