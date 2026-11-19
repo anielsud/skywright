@@ -279,3 +279,29 @@ L('rocket', {
     { type: 'band', on: ['e_rocket'], color: 0xc8102e, dir: [0, 0, 1], hi: 0.3 },
   ],
 });
+
+// Dirt Bike: factory-orange motocross graphics: race number 21 on the side plates, lightning on the shrouds
+L('dirtbike', {
+  name: 'Factory Orange',
+  art: { num: ART.number('21', 256, { square: true, bg: '#f4f4f0', fg: '#111', ring: '#111' }), bolt: bolt(600, 200, '#f4f4f0', '#111'), title: ART.text('SKYWRIGHT', 700, 140, { fill: '#111', italic: true }) },
+  layers: [
+    { type: 'decal', on: ['b_dirt'], art: 'num', at: [0.42, 0.11], size: [0.26, 0.22], text: true, box: box([0.12, null, 0.2], []), absx: true },
+    { type: 'decal', on: ['b_dirt'], art: 'bolt', at: [-0.2, 0.12], size: [0.36, 0.14], box: box([0.17], []), absx: true },
+    { type: 'band', on: ['b_dirt'], color: 0x15161a, dir: [0, 1, 0], hi: 0.0, box: box([0.17], []), absx: true },
+    { type: 'decal', on: ['b_dirt'], art: 'title', at: [0.75, 0.29], size: [0.3, 0.06], text: true, box: box([null, 0.25, 0.6], [null, null, 0.95]) },
+  ],
+});
+
+// Sport Bike: race blue over white with a red pinstripe, number 7, titles down the fairing
+L('sportbike', {
+  name: 'Blue Thunder',
+  art: { num: ART.number('7', 256, { bg: '#f4f4f0', fg: '#1d4e89', ring: '#c8102e' }), title: ART.text('SKYWRIGHT', 900, 150, { fill: '#f4f4f0', italic: true }) },
+  layers: [
+    { type: 'band', on: ['b_sport'], color: 0xf4f4f0, dir: [0, 1, 0], hi: -0.2 },
+    { type: 'band', on: ['b_sport'], color: 0xc8102e, dir: [0, 1, 0], lo: -0.2, hi: -0.165 },
+    { type: 'band', on: ['b_sport'], color: 0xf4f4f0, dir: [1, 0, 0], lo: -0.04, hi: 0.04, box: box([null, 0.2, null], [null, null, 0.3]) },
+    { type: 'decal', on: ['b_sport'], art: 'num', at: [-0.12, -0.05], size: [0.26, 0.26], text: true, box: box([0.24], []), absx: true },
+    { type: 'decal', on: ['b_sport'], art: 'num', at: [0.62, 0.23], size: [0.15, 0.15], text: true, box: box([0.06, null, 0.4], []), absx: true },
+    { type: 'decal', on: ['b_sport'], art: 'title', at: [-0.62, 0.28], size: [0.36, 0.06], text: true, box: box([0.15, 0.2], [null, null, -0.45]), absx: true },
+  ],
+});

@@ -735,6 +735,7 @@ export const CATEGORIES = [
   { id: 'gear', name: 'Gear', icon: '◉' },
   { id: 'rotor', name: 'Rotors', icon: '✢' },
   { id: 'car', name: 'Car', icon: '🚗' },
+  { id: 'bike', name: 'Bike', icon: '🏍️' },
   { id: 'extra', name: 'Extras', icon: '✦' },
 ];
 

@@ -8,6 +8,7 @@ import { assemble, ControlPreview } from './planeDetail.js';
 import { HangarEnv, HW, HD, EAVE } from './hangarEnv.js';
 import { M } from './materials.js';
 import { Bag, bar } from './partDetail.js';
+import { bikeStand } from './bikeParts.js';
 
 // the hour the flight settings will fly at: the hangar's daylight follows it
 const flightHour = () => { try { const t = JSON.parse(localStorage.getItem('skywright.flight'))?.time; return Number.isFinite(t) ? t : 10; } catch { return 10; } };
@@ -476,7 +477,7 @@ export function buildDesign(design, root, { quick = false, near = true } = {}) {
 // tower, so it can swing away at ignition) and info gives the shapes it collides with (deck ring, tower).
 export function uprightStage(design, root, stats = analyze(design), { floor = 0 } = {}) {
   root.rotation.set(0, 0, 0); root.position.set(0, 0, 0);
-  if (!stats.vertical || !design.parts.length) { root.updateMatrixWorld(true); return null; }
+  if (!stats.vertical || !design.parts.length) { root.updateMatrixWorld(true); return stats.bike ? bikeStand(design, root) : null; } // a motorbike stands on a stand
   root.rotation.x = Math.PI / 2; root.updateMatrixWorld(true); // nose up
   const pts = [], v = new THREE.Vector3();
   root.traverse((o) => {
