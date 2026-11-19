@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.83.0', items: [
+    'When you drive a car or truck, the speedometer now shows miles per hour (mph), just like a real car!',
+  ] },
   { v: '1.82.0', items: [
     "Trucks and buggies are built like real off-roaders now: Chomper has real axles, springs and mud flaps with stars, the buggy's roll cage and bumper are welded on, and the suspension moves when you drive over bumps!",
   ] },

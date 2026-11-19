@@ -4,6 +4,8 @@ import { clamp } from './noise.js';
 
 const UNITS = {
   metric: { spd: 3.6, spdU: 'km/h', alt: 1, altU: 'm', vs: 1, vsU: 'm/s', temp: (c) => c, tempU: '°C' },
+  // driving: road units (mph / km/h stay km/h)
+  drive: { spd: 2.23694, spdU: 'mph', alt: 3.28084, altU: 'ft', vs: 196.85, vsU: 'fpm', temp: (c) => c * 1.8 + 32, tempU: '°F' },
   imperial: { spd: 1.94384, spdU: 'kt', alt: 3.28084, altU: 'ft', vs: 196.85, vsU: 'fpm', temp: (c) => c * 1.8 + 32, tempU: '°F' },
 };
 
@@ -42,7 +44,7 @@ export class HUD {
     this.mapRange = 5000;
     this.$('h-map').addEventListener('click', () => { this.mapRange = this.mapRange === 5000 ? 12000 : this.mapRange === 12000 ? 2000 : 5000; });
   }
-  setUnits(u) { this.units = UNITS[u] || UNITS.imperial; this.altUnit = this.vsUnit = null; this.$('h-spdu').textContent = this.units.spdU; this.$('h-altu').textContent = this.units.altU; this.$('h-vsu').textContent = this.units.vsU; this.$('h-skinu').textContent = this.units.tempU; }
+  setUnits(u, car = false) { this.units = car && u !== 'metric' ? UNITS.drive : UNITS[u] || UNITS.imperial; this.altUnit = this.vsUnit = null; this.$('h-spdu').textContent = this.units.spdU; this.$('h-altu').textContent = this.units.altU; this.$('h-vsu').textContent = this.units.vsU; this.$('h-skinu').textContent = this.units.tempU; }
   toast(text, kind = '') {
     const d = document.createElement('div'); d.className = 'toast ' + kind; d.textContent = text;
     this.toasts.prepend(d);
