@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from '../vendor/addons/OrbitControls.js';
 import { RoomEnvironment } from '../vendor/addons/RoomEnvironment.js';
 import { PARTS, CATEGORIES, PAINTS, partInfo } from './parts.js';
-import { analyze, partMatrix, partScale, sizeAxes, mirroredOf, newPart, subtree, removeParts, cloneDesign } from './design.js';
+import { analyze, partMatrix, partScale, sizeAxes, mirroredOf, newPart, subtree, removeParts, cloneDesign, SYM_MODES, symAxis, symMakers, offAxis, sameSpot } from './design.js';
 import { assemble, ControlPreview } from './planeDetail.js';
 import { HangarEnv, HW, HD, EAVE } from './hangarEnv.js';
 import { M } from './materials.js';
@@ -25,7 +25,7 @@ export class Hangar {
     this.controls.minDistance = 3; this.controls.maxDistance = 150; // (fitted to the vehicle on every rebuild: fitOrbit)
     this.sphere = new THREE.Sphere(new THREE.Vector3(0, 1.5, 0), 4);
     this.controls.enabled = false;
-    this.symmetry = true; this.showBalance = true;
+    this.symMode = 2; this.showBalance = true; // symmetry: 0 off, 2 mirror, 3 / 4 round the long axis (SYM_MODES)
     this.design = { name: 'My Vehicle', parts: [] };
     this.undoStack = []; this.redoStack = [];
     this.sel = -1; this.placing = null; this.ghost = null;
@@ -84,6 +84,24 @@ export class Hangar {
   redo() { if (!this.redoStack.length) return; this.undoStack.push(JSON.stringify(this.design)); this.design = JSON.parse(this.redoStack.pop()); this.sel = -1; this.rebuild(); }
   load(design, frame = true) { this.design = cloneDesign(design); this.sel = -1; this.undoStack = []; this.redoStack = []; this.rebuild(); if (frame) this.frame(); this.preview.playCheck(); }
 
+  get symmetry() { return this.symMode > 0; }
+  set symmetry(on) { this.symMode = on ? this.symMode || 2 : 0; }
+  setSymmetry(n) { if (SYM_MODES.includes(n)) this.symMode = n; }
+  // The symmetric set the part belongs to: [{ j, make }] for each copy j, make(edited original) = the copy's new part.
+  // Tries the selected symmetry first, then the others, and takes the first whose copies are all there, so editing an
+  // existing set moves all of it (a pair of wings stays a pair while 4-way is selected for some new fins); with
+  // symmetry off a part is on its own. Mirror pairs are found the way they always were (partner()).
+  symGroup(i) {
+    const parts = this.design.parts, p = parts[i]; if (!p || !this.symMode) return [];
+    const axis = symAxis(this.design), out = {};
+    for (const n of [this.symMode, ...[4, 3, 2].filter((m) => m !== this.symMode)]) {
+      if (n === 2) { const j = this.partner(i); out[n] = j >= 0 ? [{ j, make: (q) => mirroredOf(q) }] : []; }
+      else if (offAxis(p, n, axis) < 0.12) out[n] = [];
+      else out[n] = symMakers(n, axis).map((make) => ({ j: parts.findIndex((q, j) => j !== i && sameSpot(make(p), q)), make })).filter((c) => c.j >= 0);
+      if (out[n].length === n - 1) return out[n];
+    }
+    return out[this.symMode];
+  }
   partner(i) {
     // centreline-rooted pairs (wings/tailplanes mounted at x=0) count too: the mirror flag tells the twins apart
     const p = this.design.parts[i]; if (!p) return -1;
@@ -92,14 +110,48 @@ export class Hangar {
   edit(fn, undo = true) {
     if (this.sel < 0) return;
     if (undo) this.pushUndo();
-    const i = this.sel, j = this.symmetry ? this.partner(i) : -1;
-    fn(this.design.parts[i]);
-    if (j >= 0) { const m = mirroredOf(this.design.parts[i]); m.parent = this.design.parts[j].parent; m.color = this.design.parts[i].color; this.design.parts[j] = m; }
+    const i = this.sel, parts = this.design.parts, grp = this.symGroup(i);
+    fn(parts[i]);
+    for (const { j, make } of grp) { const m = make(parts[i]); m.parent = parts[j].parent; m.color = parts[i].color; parts[j] = m; }
     this.rebuild();
   }
   // Fine placement. Move/rotate take absolute values so the inspector can drive them with sliders;
   // pass undo=false for follow-up steps of one slider drag or button hold.
   setPos(axis, v, undo = true) { this.edit((p) => { p.pos[axis] = +v.toFixed(3); }, undo); }
+  // Line the selected part up with its parent part or the whole vehicle: axis 0 = side to side, 1 = up and down, as
+  // shown (display frame: a standing rocket's up is along it). Puts the middle of the part's box on the middle of the
+  // target's box; the symmetry copies follow. A mirrored / radial set moved onto the axis it is copied about becomes
+  // one part (its copies would sit inside it).
+  alignSel(axis, to = 'parent') {
+    const i = this.sel, parts = this.design.parts, p = parts[i]; if (!p) return false;
+    // a part's own shape (not the dressing the assembly adds round it) as a box in the display frame
+    const R = new THREE.Matrix4().makeRotationFromQuaternion(this.displayQuat()), m = new THREE.Matrix4(), c = new THREE.Vector3();
+    const boxOf = (k, box = new THREE.Box3()) => { const q = parts[k], b = partInfo(q.id).box; partMatrix(q, m).premultiply(R);
+      for (let n = 0; n < 8; n++) box.expandByPoint(c.set(n & 1 ? b.max.x : b.min.x, n & 2 ? b.max.y : b.min.y, n & 4 ? b.max.z : b.min.z).applyMatrix4(m)); return box; };
+    const tb = new THREE.Box3();
+    if (to === 'parent' && p.parent >= 0) boxOf(p.parent, tb); else parts.forEach((_, k) => boxOf(k, tb));
+    const a = boxOf(i).getCenter(new THREE.Vector3()), b = tb.getCenter(new THREE.Vector3());
+    const d = new THREE.Vector3(); d.setComponent(axis, b.getComponent(axis) - a.getComponent(axis));
+    if (d.length() < 0.002) return false;
+    const dd = this.toDesign(d), grp = this.symGroup(i);
+    this.pushUndo();
+    this.edit((q) => { q.pos = q.pos.map((v, n) => +(v + dd.getComponent(n)).toFixed(3)); }, false);
+    if (grp.length) { // a mirrored / radial set moved onto the axis it is copied about would sit inside itself: keep one
+      const n = grp.length + 1, ax = symAxis(this.design), mid = this.toDesign(boxOf(i).getCenter(new THREE.Vector3()));
+      if ((n === 2 ? Math.abs(mid.x) : Math.hypot(mid.x - ax[0], mid.y - ax[1])) < 0.05) {
+        let idxs = []; for (const { j } of grp) idxs = idxs.concat(subtree(this.design.parts, j));
+        const keep = this.design.parts[i]; removeParts(this.design, [...new Set(idxs)]); this.sel = this.design.parts.indexOf(keep); this.rebuild();
+      }
+    }
+    return true;
+  }
+  setPosVec(pos, undo = true) { this.edit((p) => { p.pos = pos.map((v) => +v.toFixed(3)); }, undo); }
+  // The way the vehicle is shown (a vertical launcher stands nose-up): the design group's rotation. The Move and Turn
+  // pads work in this display frame, so Up is up on screen whatever way the vehicle stands; positions stay stored in
+  // the design frame (saved designs don't change).
+  displayQuat() { return this.designGroup.quaternion.clone(); }
+  toDesign(v) { return v.clone().applyQuaternion(this.displayQuat().invert()); } // a display-frame direction in the design frame
+  toDisplay(v) { return v.clone().applyQuaternion(this.displayQuat()); }
   // Rotation as yaw/pitch/roll Euler degrees (order YXZ: yaw about Y, then pitch about X, then roll about Z).
   euler() {
     const p = this.design.parts[this.sel]; if (!p) return [0, 0, 0];
@@ -116,7 +168,7 @@ export class Hangar {
   // a saved quaternion so a held button can apply its running total without drift or gimbal lock.
   rotateFrom(baseQuat, axis, deg, undo = true) {
     this.edit((p) => {
-      const ax = new THREE.Vector3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0);
+      const ax = this.toDesign(new THREE.Vector3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0)); // (display axes)
       const q = new THREE.Quaternion().setFromAxisAngle(ax, THREE.MathUtils.degToRad(deg)).multiply(new THREE.Quaternion(...baseQuat));
       p.quat = [q.x, q.y, q.z, q.w];
     }, undo);
@@ -128,8 +180,7 @@ export class Hangar {
   resizePart(axis, v, undo = true) {
     if (this.sel < 0) return;
     if (undo) this.pushUndo();
-    const j = this.symmetry ? this.partner(this.sel) : -1;
-    for (const k of j >= 0 ? [this.sel, j] : [this.sel]) this.scalePart(k, axis, v);
+    for (const k of [this.sel, ...this.symGroup(this.sel).map((c) => c.j)]) this.scalePart(k, axis, v);
     this.rebuild();
   }
   scalePart(i, axis, v) {
@@ -150,9 +201,8 @@ export class Hangar {
   deleteSel() {
     if (this.sel < 0) return;
     this.pushUndo();
-    const j = this.symmetry ? this.partner(this.sel) : -1;
     let idxs = subtree(this.design.parts, this.sel);
-    if (j >= 0) idxs = idxs.concat(subtree(this.design.parts, j));
+    for (const { j } of this.symGroup(this.sel)) idxs = idxs.concat(subtree(this.design.parts, j));
     if (this.sel === 0) idxs = this.design.parts.map((_, k) => k);
     removeParts(this.design, [...new Set(idxs)]);
     this.sel = -1; this.rebuild(); this.audio.play('remove');
@@ -182,9 +232,9 @@ export class Hangar {
       pos = p.clone().addScaledVector(n, -0.04);
       mirror = n.x < -0.3 || (Math.abs(n.x) <= 0.3 && p.x < -0.1);
     } else if (att === 'fin') {
+      // stood square to the skin round the body, in 45° steps (top 0°, an X tail 45°, sides ±90°, underneath 180°)
       pos = p.clone().addScaledVector(n, -0.04);
-      if (n.y < -0.5) rot = [0, 0, 180];
-      else if (Math.abs(n.x) > 0.7) rot = [0, 0, n.x > 0 ? -90 : 90];
+      if (Math.hypot(n.x, n.y) > 0.5) { const a = Math.round(THREE.MathUtils.radToDeg(Math.atan2(-n.x, n.y)) / 45) * 45; if (a) rot = [0, 0, a]; }
     } else if (att === 'gear') {
       pos = p.clone().addScaledVector(n, -0.05);
     } else {
@@ -204,12 +254,20 @@ export class Hangar {
     const parentIdx = hit ? this.partIndexOf(hit.object) : -1;
     part.parent = this.design.parts.length ? Math.max(0, parentIdx) : -1;
     this.design.parts.push(part);
-    const i = this.design.parts.length - 1;
-    if (this.symmetry && Math.abs(part.pos[0]) > 0.12) {
+    const i = this.design.parts.length - 1, n = this.symMode, axis = symAxis(this.design);
+    if (n === 2 && Math.abs(part.pos[0]) > 0.12) {
       const m = mirroredOf(part);
       const pp = part.parent >= 0 ? this.partner(part.parent) : -1;
       m.parent = pp >= 0 ? pp : part.parent;
       this.design.parts.push(m);
+    } else if (n > 2 && offAxis(part, n, axis) > 0.12) {
+      // radial copies round the long axis; each hangs on the matching copy of the parent when there is one (fins on
+      // a set of boosters), else on the same parent (fins on the core)
+      const par = this.design.parts[part.parent];
+      for (const make of symMakers(n, axis)) {
+        const m = make(part), pc = par && make(par), pj = pc ? this.design.parts.findIndex((q) => sameSpot(pc, q)) : -1;
+        m.parent = pj >= 0 ? pj : part.parent; this.design.parts.push(m);
+      }
     }
     this.cancelPlacing();
     this.sel = i;

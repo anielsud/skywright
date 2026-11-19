@@ -24,6 +24,8 @@ import { Analytics } from './analytics.js';
 import { designSummary, trackHangar } from './buildStats.js';
 import { loadReal } from './realworld.js';
 import { aircraftLights, updateAircraftLights } from './navLights.js';
+import { Streaks } from './streaks.js';
+import { CapsuleView } from './capsule.js';
 import { initThumbs, renderThumb, designKey, presetSlug, savedThumbs, storeThumb, stockThumbs, STOCK_SIZE } from './thumbs.js';
 installFog();
 
@@ -159,8 +161,8 @@ function padHTML(kind, btns, centre = '') {
     `<button class="at-${at}" data-nudge="${k},${dir}" aria-label="${name}"><i>${icon}</i><small>${name}</small></button>`).join('')}${centre}</div>`;
 }
 function padReadout(p) {
-  const e = hangar.euler(), m = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}`;
-  return { m: `Side ${m(p.pos[0])} · Up ${m(p.pos[1])} · Back ${m(p.pos[2])} m`, r: `Nose ${Math.round(e[0])}° · Turn ${Math.round(e[1])}° · Roll ${Math.round(e[2])}°` };
+  const e = hangar.euler(), m = (v) => `${v >= 0 ? '+' : ''}${(Math.abs(v) < 0.005 ? 0 : v).toFixed(2)}`, d = hangar.toDisplay(new THREE.Vector3(...p.pos)); // as shown (a standing rocket's Up is along it)
+  return { m: `Side ${m(d.x)} · Up ${m(d.y)} · Back ${m(d.z)} m`, r: `Nose ${Math.round(e[0])}° · Turn ${Math.round(e[1])}° · Roll ${Math.round(e[2])}°` };
 }
 function wirePads(sp, sel) {
   const L = Math.max(4, Math.ceil(Math.max(...hangar.design.parts.flatMap((q) => q.pos.map(Math.abs)))) + 2);
@@ -173,12 +175,17 @@ function wirePads(sp, sel) {
   };
   sp.querySelectorAll('[data-nudge]').forEach((b) => {
     const [k, d] = b.dataset.nudge.split(','), dir = +d, axis = +k[1];
-    let v = 0, base = null;
+    let v = 0, base = null, p0 = null, u = null;
     holdRepeat(b, (first, held, ticks) => {
       // 1 step per tick at first, ramping over ~2 s to 10 cm or 6° per tick (about 1.7 m/s or 100°/s)
       const per = Math.min(k[0] === 'm' ? 10 : 6, 1 + (held / 0.06) ** 2 / 40) * ticks;
-      if (first) { sizeDrag = true; audio.play(k[0] === 'm' ? 'move' : 'rotate'); const p = hangar.design.parts[hangar.sel]; v = k[0] === 'm' ? p.pos[axis] : 0; base = [...p.quat]; } else audio.tick(k[0] === 'm' ? 'slide' : 'ratchet');
-      if (k[0] === 'm') { v = clamp(v + dir * 0.01 * per, -L, L); const t = Math.round(v * 100) / 100; apply((u) => hangar.setPos(axis, t, u), first); }
+      // Move works in the display frame (Up is up on screen, along a standing rocket): the pad's axis is turned into the
+      // design frame the part's position is stored in
+      if (first) { sizeDrag = true; audio.play(k[0] === 'm' ? 'move' : 'rotate'); const p = hangar.design.parts[hangar.sel]; v = 0; p0 = [...p.pos]; u = hangar.toDesign(new THREE.Vector3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0)).toArray(); base = [...p.quat]; } else audio.tick(k[0] === 'm' ? 'slide' : 'ratchet');
+      if (k[0] === 'm') {
+        v += dir * 0.01 * per; const t = Math.round(v * 100) / 100, pos = p0.map((x, n) => clamp(Math.abs(u[n]) < 1e-6 ? x : x + u[n] * t, -L, L));
+        apply((un) => hangar.setPosVec(pos, un), first);
+      }
       else { v += dir * per; const t = Math.round(v); apply((u) => hangar.rotateFrom(base, axis, t, u), first); }
     }, () => { if (raf) { cancelAnimationFrame(raf); raf = 0; pending(false); } pending = null; sizeDrag = false; renderInspector(); });
   });
@@ -225,11 +232,17 @@ function renderInspector() {
   else if (sel) {
     const def = PARTS[sel.id];
     sp.hidden = false;
-    sp.innerHTML = `<h3>${def.name}${hangar.partner(hangar.sel) >= 0 && hangar.symmetry ? ' <span class="pill">×2 mirrored</span>' : ''}</h3>
+    const grp = hangar.symGroup(hangar.sel), mirrored = grp.length === 1 && hangar.partner(hangar.sel) === grp[0].j;
+    sp.innerHTML = `<h3>${def.name}${grp.length ? ` <span class="pill">×${grp.length + 1} ${mirrored ? 'mirrored' : 'round'}</span>` : ''}</h3>
       <p class="desc">${def.desc}</p>
       <label class="lbl grp">Move</label>
       ${padHTML('move', PAD_MOVE, '<span class="pad-plane" aria-hidden="true">✈</span>')}
       <p class="pad-ro" data-ro="m">${padReadout(sel).m}</p>
+      <label class="lbl grp">Line up</label>
+      <div class="align">
+        <span>On its part</span><button data-align="0,parent" aria-label="Centre side to side on its part"><i>⇹</i><small>Side</small></button><button data-align="1,parent" aria-label="Centre up and down on its part"><i>⇳</i><small>Up/down</small></button>
+        <span>On whole vehicle</span><button data-align="0,all" aria-label="Centre side to side on the whole vehicle"><i>⇹</i><small>Side</small></button><button data-align="1,all" aria-label="Centre up and down on the whole vehicle"><i>⇳</i><small>Up/down</small></button>
+      </div>
       <label class="lbl grp">Turn</label>
       ${padHTML('rot', PAD_ROT, '<button class="at-c" data-reset aria-label="Straighten"><i>⊙</i><small>Straight</small></button>')}
       <p class="pad-ro" data-ro="r">${padReadout(sel).r}</p>
@@ -245,6 +258,7 @@ function renderInspector() {
     sp.querySelector('[data-flip]').addEventListener('click', () => { hangar.flip(); audio.play('flip'); });
     sp.querySelectorAll('[data-c]').forEach((b) => b.addEventListener('click', () => hangar.paint(+b.dataset.c)));
     sp.querySelector('[data-del]').addEventListener('click', () => hangar.deleteSel());
+    sp.querySelectorAll('[data-align]').forEach((b) => b.addEventListener('click', () => { const [ax, to] = b.dataset.align.split(','); if (hangar.alignSel(+ax, to)) audio.play('move'); else ui.hint('Already lined up'); }));
     wireCtls(sp, sel); wirePads(sp, sel);
   } else sp.hidden = true;
   const marginPct = clamp(s.margin, -0.5, 1);
@@ -264,7 +278,7 @@ function renderInspector() {
     ${s.heli || (s.car && s.wingArea < 0.5) ? '' : `<label class="lbl">Balance <small>(<span style="color:#ffd400">●</span> mass &nbsp;<span style="color:#3ab0ff">●</span> lift)</small></label>
     <div class="balance"><div class="zone"></div><div class="needle" style="left:${balPos}%"></div><span class="l">tail-heavy</span><span class="r">nose-heavy</span></div>`}
     <ul class="warnings">${s.warnings.map(([k, t]) => `<li class="${k}">${t}</li>`).join('')}</ul>`;
-  $('#btn-sym').classList.toggle('on', hangar.symmetry);
+  for (const b of document.querySelectorAll('#sym-seg [data-sym]')) { const on = +b.dataset.sym === hangar.symMode; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); }
   $('#btn-bal').classList.toggle('on', hangar.showBalance);
   $('#btn-fly').disabled = !d.parts.length;
   $('#placing-bar').hidden = !hangar.placing;
@@ -277,7 +291,7 @@ $('#plane-name').addEventListener('input', (e) => { hangar.design.name = e.targe
 const undo = () => { if (hangar.undoStack.length) audio.play('undo'); hangar.undo(); }, redo = () => { if (hangar.redoStack.length) audio.play('redo'); hangar.redo(); };
 $('#btn-undo').addEventListener('click', undo);
 $('#btn-redo').addEventListener('click', redo);
-$('#btn-sym').addEventListener('click', () => { hangar.symmetry = !hangar.symmetry; renderInspector(); });
+for (const b of document.querySelectorAll('#sym-seg [data-sym]')) b.addEventListener('click', () => { audio.play('select'); hangar.setSymmetry(+b.dataset.sym); renderInspector(); });
 $('#btn-bal').addEventListener('click', () => { hangar.showBalance = !hangar.showBalance; hangar.rebuild(); });
 $('#btn-frame').addEventListener('click', () => hangar.frame());
 $('#placing-bar button').addEventListener('click', () => { hangar.cancelPlacing(); buildPalette(); });
@@ -677,6 +691,8 @@ function buildFlight(cfg) {
   };
   sonic.onMilestone = (n) => { hud.center(`MACH ${n}!`, 1800); audio.play('ring'); };
   F = { scene, world, ac, nav, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
+  if (ac.isRocket) F.streaks = new Streaks(scene); // rockets: air rushing past (a climbing rocket sees only sky)
+  F.capsule = CapsuleView.for(ac); // flown from inside a round body: its first-person cabin (built now, so its shaders warm up with the rest)
   applyQuality(); // the tier may have changed since the last flight (post effects, shadow cascades)
   F.callouts = new Callouts(audio, ac);
   F.worldSound = new WorldSound(audio, world, traffic);
@@ -977,7 +993,8 @@ function stepFlight(dtReal) {
   let focus = null;
   if (ac.dead || ac.wrecked) { const biggest = ac.dead ? f.debris.reduce((a, d) => (!a || d.mass > a.mass ? d : a), null) : null; focus = biggest ? biggest.x : null; if (rig.mode === 'cockpit') rig.set('orbit'); }
   rig.update(dtReal, ac, world, focus);
-  ac.setCockpitView(rig.mode === 'cockpit' && !focus);
+  f.streaks?.update(dtReal, flightCam.position, ac, ac.rocketK > 0.5 && (rig.mode === 'chase' || rig.mode === 'cockpit'));
+  ac.setCockpitView(rig.mode === 'cockpit' && !focus); f.capsule?.set(rig.mode === 'cockpit' && !focus);
   world.update(dtReal, flightCam, rig.vel, f.events);
   updateAircraftLights(f.nav, dtReal, f.env);
   effects.setLighting(world, flightCam);
@@ -1334,6 +1351,6 @@ async function boot() {
     addEventListener('online', autoCheckUpdate);
     addEventListener('focus', autoCheckUpdate);
   }
-  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, net, presets, settings, flightCfg, controls, rig, analytics };
+  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, net, presets, settings, flightCfg, controls, rig, analytics, hud };
 }
 boot();
