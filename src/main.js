@@ -543,6 +543,7 @@ function settingsModal() {
     <label class="check"><input type="checkbox" id="stats" ${settings.analytics !== false ? 'checked' : ''}> Share anonymous usage stats (which vehicles and places get used, frame rate, errors). No names or locations.</label>
     <p class="version">${buildInfo()} · device ${analytics.id}</p>
     <div class="update-row"><button id="upd">Check for updates</button><button id="wn">What’s new</button><span id="upd-status"></span></div>
+    ${/Android/.test(navigator.userAgent) && !/SkywrightApp\//.test(navigator.userAgent) ? '<p class="version" style="text-align:left"><a href="https://github.com/anielsud/skywright/releases/download/android/Skywright.apk">Get the Skywright app for Android</a> (full screen, works offline, updates itself)</p>' : ''}
     <div class="modal-foot"><button data-close class="primary">Done</button></div>`);
   const el = m.el;
   const pick = (attr, key, after) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { settings[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); LS.set('settings', settings); analytics.capture('setting_changed', { setting: key, value: settings[key] }); after?.(); }));

@@ -7,8 +7,9 @@ android {
         applicationId "com.anielsud.skywright"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // CI passes the run number so each new APK installs over the last one
+        versionCode((System.getenv("SKYWRIGHT_VERSION_CODE") ?: "1") as int)
+        versionName(System.getenv("SKYWRIGHT_VERSION_NAME") ?: "1.0")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +17,22 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Release signing: the permanent key (kept outside the repo: ~/.config/skywright/android-release.* locally,
+    // ANDROID_KEYSTORE_* secrets in CI). Android only installs an update signed with the same key, so never replace it.
+    def ks = System.getenv("SKYWRIGHT_KEYSTORE")
+    signingConfigs {
+        if (ks) {
+            release {
+                storeFile file(ks)
+                storePassword System.getenv("SKYWRIGHT_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("SKYWRIGHT_KEY_ALIAS") ?: "skywright"
+                keyPassword System.getenv("SKYWRIGHT_KEYSTORE_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
+            if (ks) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

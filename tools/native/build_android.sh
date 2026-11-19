@@ -4,15 +4,18 @@
 #   tools/native/build_android.sh            build native/android/app/build/outputs/apk/debug/app-debug.apk
 #   tools/native/build_android.sh --install  ...and adb install it on the connected tablet (USB debugging on)
 #   tools/native/build_android.sh --lite     bundle the offline copy without assets/real (smaller APK)
+#   tools/native/build_android.sh --release  release APK signed with the permanent key (SKYWRIGHT_KEYSTORE* env, or
+#                                            ~/.config/skywright/android-release.env); CI does this, see .github/workflows/android.yml
 #
 # Needs: Node/npm, a JDK 21 and the Android SDK (see native/README.md, "One-time setup").
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 NATIVE="$ROOT/native"
-INSTALL=0; WWW_ARGS=()
+INSTALL=0; RELEASE=0; WWW_ARGS=()
 for a in "$@"; do case "$a" in
   --install) INSTALL=1 ;;
   --lite) WWW_ARGS+=(--lite) ;;
+  --release) RELEASE=1 ;;
   -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
   *) echo "unknown option: $a" >&2; exit 2 ;;
 esac; done
@@ -58,9 +61,17 @@ cd "$NATIVE"
 echo "→ copying the site into native/www (the offline fallback)"
 node scripts/sync-www.mjs "${WWW_ARGS[@]+"${WWW_ARGS[@]}"}"
 npx cap sync android
-echo "→ gradle assembleDebug"
-(cd android && ./gradlew --no-daemon assembleDebug) || fail "Gradle build failed (see the output above)."
-APK="$NATIVE/android/app/build/outputs/apk/debug/app-debug.apk"
+if [ "$RELEASE" = 1 ]; then
+  if [ -z "${SKYWRIGHT_KEYSTORE:-}" ] && [ -f "$HOME/.config/skywright/android-release.env" ]; then set -a; . "$HOME/.config/skywright/android-release.env"; set +a; fi
+  [ -n "${SKYWRIGHT_KEYSTORE:-}" ] && [ -f "$SKYWRIGHT_KEYSTORE" ] || fail "No release key (SKYWRIGHT_KEYSTORE)." "Expected ~/.config/skywright/android-release.env, or build without --release for a debug APK."
+  echo "→ gradle assembleRelease"
+  (cd android && ./gradlew --no-daemon assembleRelease) || fail "Gradle build failed (see the output above)."
+  APK="$NATIVE/android/app/build/outputs/apk/release/app-release.apk"
+else
+  echo "→ gradle assembleDebug"
+  (cd android && ./gradlew --no-daemon assembleDebug) || fail "Gradle build failed (see the output above)."
+  APK="$NATIVE/android/app/build/outputs/apk/debug/app-debug.apk"
+fi
 [ -f "$APK" ] || fail "Build finished but $APK is missing."
 echo; echo "✓ APK: $APK ($(du -h "$APK" | cut -f1))"
 
