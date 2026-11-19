@@ -222,30 +222,11 @@ export class Hangar {
 
   // compute placement transform for current part at a hit
   placement(hit) {
-    const id = this.placing, d = PARTS[id], info = partInfo(id);
+    const id = this.placing;
     if (!hit) return newPart(id, [0, 0, 0]);
     const p = this.designGroup.worldToLocal(hit.point.clone());
     const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).transformDirection(this.designGroup.matrixWorld.clone().invert()); // in design space (an upright rocket stands turned)
-    const att = d.attach;
-    let pos, mirror = false, rot = null;
-    if (att === 'wing') {
-      pos = p.clone().addScaledVector(n, -0.04);
-      mirror = n.x < -0.3 || (Math.abs(n.x) <= 0.3 && p.x < -0.1);
-    } else if (att === 'fin') {
-      // stood square to the skin round the body, in 45° steps (top 0°, an X tail 45°, sides ±90°, underneath 180°)
-      pos = p.clone().addScaledVector(n, -0.04);
-      if (Math.hypot(n.x, n.y) > 0.5) { const a = Math.round(THREE.MathUtils.radToDeg(Math.atan2(-n.x, n.y)) / 45) * 45; if (a) rot = [0, 0, a]; }
-    } else if (att === 'gear') {
-      pos = p.clone().addScaledVector(n, -0.05);
-    } else {
-      const c = info.center, h = info.size.clone().multiplyScalar(0.5);
-      const ext = Math.abs(n.x) * h.x + Math.abs(n.y) * h.y + Math.abs(n.z) * h.z;
-      pos = p.clone().addScaledVector(n, ext * 0.9).sub(c);
-    }
-    const snap = (v) => Math.round(v * 20) / 20;
-    pos.set(Math.abs(pos.x) < 0.15 ? 0 : snap(pos.x), snap(pos.y), snap(pos.z));
-    const part = newPart(id, pos.toArray(), { mirror, rot: rot || undefined });
-    return part;
+    return placePart(id, p, n);
   }
   place(hit) {
     const id = this.placing; if (!id) return;
@@ -411,6 +392,37 @@ export class Hangar {
   setQuality(tier) { this.env.setTier(tier); this.envDirty = true; this.needsRender = true; }
   resize(w, h) { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); this.controls.maxDistance = Math.max(30, this.fitDistance() * 2.5); this.needsRender = true; }
   render() { this.renderer.render(this.scene, this.camera); }
+}
+
+// A part placed where a tap's ray met the vehicle: p, n (the surface point and its normal, design space). Wings and fins
+// go 4 cm into the surface, gear 5 cm, anything else rests on it by its box (sunk 10 %), all snapped to 5 cm and centred
+// within 15 cm of the middle. The box is the part's solid one: a jet's or rocket's exhaust flame and a prop disc count
+// for nothing (with them a jet tapped onto a nose sat metres off it in mid-air). Placement only: physics reads partInfo.
+const _solid = new Map();
+function solidBox(id) {
+  if (!_solid.has(id)) { const b = new THREE.Box3().setFromPoints(partInfo(id).hull); _solid.set(id, { center: b.getCenter(new THREE.Vector3()), size: b.getSize(new THREE.Vector3()) }); }
+  return _solid.get(id);
+}
+export function placePart(id, p, n) {
+  const att = PARTS[id].attach;
+  let pos, mirror = false, rot = null;
+  if (att === 'wing') {
+    pos = p.clone().addScaledVector(n, -0.04);
+    mirror = n.x < -0.3 || (Math.abs(n.x) <= 0.3 && p.x < -0.1);
+  } else if (att === 'fin') {
+    pos = p.clone().addScaledVector(n, -0.04);
+    // stood square to the skin round the body, in 45° steps (top 0°, an X tail 45°, sides ±90°, underneath 180°)
+    if (Math.hypot(n.x, n.y) > 0.5) { const a = Math.round(THREE.MathUtils.radToDeg(Math.atan2(-n.x, n.y)) / 45) * 45; if (a) rot = [0, 0, a]; }
+  } else if (att === 'gear') {
+    pos = p.clone().addScaledVector(n, -0.05);
+  } else {
+    const { center: c, size } = solidBox(id), h = size.clone().multiplyScalar(0.5);
+    const ext = Math.abs(n.x) * h.x + Math.abs(n.y) * h.y + Math.abs(n.z) * h.z;
+    pos = p.clone().addScaledVector(n, ext * 0.9).sub(c);
+  }
+  const snap = (v) => Math.round(v * 20) / 20;
+  pos.set(Math.abs(pos.x) < 0.15 ? 0 : snap(pos.x), snap(pos.y), snap(pos.z));
+  return newPart(id, pos.toArray(), { mirror, rot: rot || undefined });
 }
 
 // Build a design's parts under `root` and join them up (planeDetail.js): what the hangar shows, also used for the

@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { PARTS, revolve, smoothProfile } from './parts.js';
 import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
-import { V, bar, tube, pipe, Bag, seatGeo, flightDeckGlass, shell, capHoles } from './partDetail.js';
+import { V, bar, tube, pipe, Bag, seatGeo, flightDeckGlass, shell, capHoles, ringLoft } from './partDetail.js';
 import { clipGeometry } from './skinBlend.js';
 import { Rig, cornerLinks, cornerGeometry } from './carRig.js';
 import { capsuleWindows } from './capsule.js';
@@ -413,9 +413,19 @@ function heliCabinDetail(g, prof, c) {
   if (chin) b.add(shell(chin, 0.02), PM.skin(c));
   const ring = new THREE.TorusGeometry(1, 0.03, 8, 48); ring.scale(rx, ry, 1); ring.translate(0, 0, z0); b.add(ring, PM.skin(c));
   const post = []; for (let i = 0; i <= 12; i++) { const a = (i / 12) * Math.PI * 0.62; post.push(V(0, Math.cos(a) * ry * 1.01, z0 - Math.sin(a) * L * 1.01)); } b.add(pipe(post, 0.022, 6, 30), PM.skin(c));
-  const con = new THREE.BoxGeometry(rx * 0.9, 0.1, 0.24); con.rotateX(-0.55); con.translate(0, -0.3 * ry, z0 + 0.12); b.add(con, M.black());
-  const floor = new THREE.BoxGeometry(rx * 1.5, 0.03, 1.1); floor.translate(0, -0.52, z0 + 0.6); b.add(floor, M.paint(0x2b2d31, 'matte'));
-  for (const s of [-0.3, 0.3]) { const st = seatGeo(0.42, 0.6, 0.38, 0.22); st.translate(s, -0.47, z0 + 0.92); b.add(st, PM.seat()); }
+  // the cabin skin's inside half-width at (y, z) (the same ellipse sections the skin is revolved from)
+  const rAt = (z) => { for (let i = 1; i < prof.length; i++) if (prof[i][0] >= z) { const [za, ra] = prof[i - 1], [zb, rb] = prof[i]; return ra + (rb - ra) * ((z - za) / (zb - za || 1)); } return prof.at(-1)[1]; };
+  const halfW = (y, z) => { const r = rAt(z), k = (y - heliYOff(z)) / (r * sy); return k * k >= 1 ? 0 : r * sx * Math.sqrt(1 - k * k); };
+  // console: a dash across the front of the cabin, its ends on the skin (it stood free in the middle)
+  { const cy = -0.3 * ry, cz = z0 + 0.12, q = new THREE.Matrix4().makeRotationX(-0.55); let w = Infinity;
+    for (const sy2 of [-1, 1]) for (const sz of [-1, 1]) { const c = V(0, sy2 * 0.05, sz * 0.12).applyMatrix4(q); w = Math.min(w, halfW(cy + c.y, cz + c.z)); }
+    const con = new THREE.BoxGeometry(2 * w + 0.008, 0.1, 0.24); con.applyMatrix4(q); con.translate(0, cy, cz); b.add(con, M.black()); }
+  // floor: a deck from the nose ring back to the bulkhead whose edges follow the skin (a box 1.5 x the nose ring wide
+  // hung in the air), the seats standing on it
+  { const top = -0.498, bot = top - 0.03, z1 = z0 + 1.25, n = 14, rows = [];
+    for (let k = 0; k <= n; k++) { const z = z0 + (z1 - z0) * (k / n), wt = halfW(top, z) - 0.002, wb = halfW(bot, z) - 0.002; rows.push([V(-wt, top, z), V(wt, top, z), V(wb, bot, z), V(-wb, bot, z)]); }
+    b.add(ringLoft(rows, true, true), M.paint(0x2b2d31, 'matte')); }
+  for (const s of [-0.3, 0.3]) { const st = seatGeo(0.42, 0.6, 0.38, 0.22); st.translate(s, -0.47, z0 + 0.92); b.add(st, PM.seat()); } // (pan 5 mm into the deck)
   { const zb = z0 + 1.25, rb = prof.find(([z]) => z >= zb)?.[1] ?? r0, bh = new THREE.CircleGeometry(rb * 0.99, 40); bh.scale(sx, sy, 1); bh.rotateY(Math.PI); bh.translate(0, heliYOff(zb), zb); b.add(bh, M.paint(0x4a4e55, 'matte')); } // bulkhead behind the seats
   b.to(nose); nb.to(nose, true); g.add(nose);
   g.userData.noseCap = { obj: nose, front: [0, 0, z0 - L * 0.6] };
@@ -549,10 +559,15 @@ def({ id: 'fus_rocket', cat: 'fuselage', name: 'Rocket Stage', desc: 'Tall fuel 
     for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i); d[i] = v.x > 0 ? Math.hypot(Math.atan2(v.y, v.x) * 0.9, v.z - W.z) - W.r : 1; }
     const cut = clipGeometry(skin, d) || skin, sk = new THREE.Mesh(cut, PM.skin(c)); sk.userData.openOk = 'porthole: glazed'; g.add(sk);
     const inner = new THREE.Mesh(revolve([[-5.0, 0.86], [-2.6, 0.88]], { segs: 32, cap: true }), mat('capsuleIn', () => new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.9, side: THREE.BackSide }))); g.add(inner);
-    const xw = 0.865;
-    const glass = new THREE.CircleGeometry(W.r + 0.03, 28); glass.rotateY(Math.PI / 2); glass.translate(xw, 0, W.z); g.add(new THREE.Mesh(glass, PM.canopy(0x1d2a33)));
-    const ring = new THREE.TorusGeometry(W.r + 0.02, 0.035, 8, 32); ring.rotateY(Math.PI / 2); ring.translate(0.875, 0, W.z); b.add(ring, M.darkMetal());
-    for (let k = 0; k < 10; k++) { const a = (k / 10) * Math.PI * 2, bolt = new THREE.SphereGeometry(0.014, 6, 4); bolt.translate(0.905, Math.sin(a) * (W.r + 0.075), W.z + Math.cos(a) * (W.r + 0.075)); b.add(bolt, M.steel()); }
+    // glass, frame ring and bolt circle laid on the curved skin (the porthole is a circle in arc length round the
+    // tank and z, as cut above): the flat ring and bolts stood off the curve, the bolts up to 8 cm proud of it
+    const Rs = 0.9, onSkin = (s, dz, rr = Rs) => V(Math.cos(s / Rs) * rr, Math.sin(s / Rs) * rr, W.z + dz); // s: arc length from +x
+    const glass = new THREE.CircleGeometry(W.r + 0.03, 28), GP = glass.attributes.position;
+    for (let i = 0; i < GP.count; i++) { const p = onSkin(GP.getX(i), GP.getY(i), Rs - 0.03); GP.setXYZ(i, p.x, p.y, p.z); }
+    glass.computeVertexNormals(); g.add(new THREE.Mesh(glass, PM.canopy(0x1d2a33)));
+    const loop = (rr, n) => Array.from({ length: n + 1 }, (_, k) => { const a = (k / n) * Math.PI * 2; return onSkin(Math.sin(a) * rr, Math.cos(a) * rr, Rs + 0.008); });
+    b.add(pipe(loop(W.r + 0.02, 40), 0.035, 8, 80), M.darkMetal());
+    for (let k = 0; k < 10; k++) { const a = (k / 10) * Math.PI * 2, bolt = new THREE.SphereGeometry(0.014, 6, 4), p = onSkin(Math.sin(a) * (W.r + 0.075), Math.cos(a) * (W.r + 0.075), Rs + 0.004); bolt.translate(p.x, p.y, p.z); b.add(bolt, M.steel()); }
     b.to(g);
     // the astronaut lies with the head towards the nose, facing the porthole (+x): rig up = -z, rig forward = +x
     const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(V(0, 1, 0), V(0, 0, -1), V(-1, 0, 0)));
