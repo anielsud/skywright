@@ -1,0 +1,23 @@
+{
+  "appId": "com.anielsud.skywright",
+  "appName": "Skywright",
+  "webDir": "www",
+  "backgroundColor": "#14181d",
+  "server": {
+    "url": "https://anielsud.github.io/skywright/",
+    "errorPath": "index.html"
+  },
+  "android": {
+    "appendUserAgent": "SkywrightApp/android",
+    "webContentsDebuggingEnabled": true
+  },
+  "ios": {
+    "appendUserAgent": "SkywrightApp/ios",
+    "contentInset": "never",
+    "limitsNavigationsToAppBoundDomains": true,
+    "webContentsDebuggingEnabled": true
+  },
+  "plugins": {
+    "SystemBars": { "hidden": true }
+  }
+}

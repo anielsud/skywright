@@ -1,0 +1,21 @@
+{
+  "name": "skywright-native",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Capacitor shells that wrap Skywright (the web app one folder up) as Android and iOS apps for our own devices.",
+  "type": "module",
+  "scripts": {
+    "sync": "node scripts/sync-www.mjs && cap sync",
+    "www": "node scripts/sync-www.mjs",
+    "assets": "node scripts/make-assets.mjs && capacitor-assets generate --android --ios --iconBackgroundColor '#14181d' --iconBackgroundColorDark '#14181d' --splashBackgroundColor '#14181d' --splashBackgroundColorDark '#14181d'"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
+    "@capacitor/ios": "^8.6.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^4.0.0",
+    "@capacitor/cli": "^8.6.2"
+  }
+}

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Skywright</string>
+    <string name="title_activity_main">Skywright</string>
+    <string name="package_name">com.anielsud.skywright</string>
+    <string name="custom_url_scheme">com.anielsud.skywright</string>
+</resources>
