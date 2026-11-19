@@ -31,6 +31,7 @@ jobs:
           # a fresh offline-cache name per deploy, so installed apps always pick up the new build
           sed -i "s/^const CACHE = .*/const CACHE = 'skywright-${SHA}';/" sw.js
           cat src/version.js
+          rm -rf native # the Capacitor app projects are not part of the site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

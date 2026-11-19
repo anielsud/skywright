@@ -34,8 +34,9 @@ function deviceInfo() {
     : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Other';
   const short = Math.min(screen.width, screen.height), touch = navigator.maxTouchPoints > 0;
   const deviceType = !touch || os === 'Windows' || os === 'Mac OS X' || os === 'Linux' ? 'Desktop' : short < 600 ? 'Mobile' : 'Tablet';
-  const installed = matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
-  return { $os: os, $browser: browser, $device_type: deviceType, $screen_width: screen.width, $screen_height: screen.height, installed, cpu_cores: navigator.hardwareConcurrency || null, memory_gb: navigator.deviceMemory || null };
+  const app = (ua.match(/SkywrightApp\/(\w+)/) || [])[1] || null; // the Android/iOS app shell (native/) tags its user agent
+  const installed = !!app || matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+  return { $os: os, $browser: browser, $device_type: deviceType, $screen_width: screen.width, $screen_height: screen.height, installed, native_app: app, cpu_cores: navigator.hardwareConcurrency || null, memory_gb: navigator.deviceMemory || null };
 }
 
 export class Analytics {

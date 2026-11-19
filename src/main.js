@@ -1296,6 +1296,14 @@ function scrollRail(scroller, rail) {
 scrollRail($('#insp-scroll'), $('.inspector .rail'));
 scrollRail($('#part-list'), $('.palette .rail'));
 document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'flight' && F && !F.paused) togglePause(true); });
+// Android app back button (native/android MainActivity calls this): close a dismissable dialog; in flight, open the
+// pause menu or resume from it; in the hangar, act like Escape. Never quits the app. Unused in the browser.
+window.skywrightBack = () => {
+  const m = $('#modal-root .modal');
+  if (m && !m.classList.contains('sticky')) { $('#modal-root .modal-bg').dispatchEvent(new Event('pointerdown')); return; }
+  if (state === 'flight' && F) { if (!m) togglePause(true); else if (F.paused) togglePause(false); return; }
+  if (!m) dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+};
 
 // ---------- boot ----------
 function gpuName() { try { const gl = renderer.getContext(), x = gl.getExtension('WEBGL_debug_renderer_info'); return x ? gl.getParameter(x.UNMASKED_RENDERER_WEBGL) : null; } catch { return null; } }

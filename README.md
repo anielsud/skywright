@@ -9,7 +9,7 @@ python3 -m http.server 8000   # any static server works
 open http://localhost:8000
 ```
 
-On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and offline install need a secure origin. In Chrome, use "Add to Home screen" to get a full-screen landscape app.
+On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and offline install need a secure origin. In Chrome, use "Add to Home screen" to get a full-screen landscape app. There are also Android and iPad app shells for sideloading onto our own tablets: see [native/README.md](native/README.md).
 
 ## What's in it
 

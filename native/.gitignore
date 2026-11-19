@@ -1,0 +1,7 @@
+node_modules/
+# the bundled offline copy of the site: rebuilt by `npm run www` (scripts/sync-www.mjs)
+www/
+# build outputs
+*.apk
+*.ipa
+ios/build/
