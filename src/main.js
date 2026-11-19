@@ -684,7 +684,7 @@ function buildFlight(cfg) {
   F.eng = { on: start === 'air' || start === 'approach', hold: 0, idleT: 0 }; ac.engineRunning = F.eng.on; audio.engineReset(F.eng.on);
   net.attach(F);
   rig.init = false; rig.set('chase'); rig.look.dist = 1;
-  hud.setUnits(settings.units); hud.show(true);
+  hud.setUnits(settings.units, ac.isCar); hud.show(true);
   flightUI.style.display = ''; $('#hangar-ui').style.display = 'none';
   const showTouch = settings.touch === 'on' || (settings.touch === 'auto' && isTouch);
   controls.showTouch(showTouch); controls.enabled = true;
@@ -801,7 +801,7 @@ function togglePause(force) {
 }
 function restartFlight() { const c = F.cfg; endFlight(true); startFlight(c); }
 function statsHTML(ac) {
-  const U = settings.units === 'metric' ? { s: 3.6, su: 'km/h', a: 1, au: 'm' } : { s: 1.944, su: 'kt', a: 3.28, au: 'ft' };
+  const U = settings.units === 'metric' ? { s: 3.6, su: 'km/h', a: 1, au: 'm' } : ac.isCar ? { s: 2.237, su: 'mph', a: 3.28, au: 'ft' } : { s: 1.944, su: 'kt', a: 3.28, au: 'ft' };
   const t = ac.stats;
   return `<div class="stat-grid">
     <div><label>Flight time</label><b>${Math.floor(t.time / 60)}:${String(Math.floor(t.time % 60)).padStart(2, '0')}</b></div>
