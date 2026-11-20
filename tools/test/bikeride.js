@@ -83,7 +83,7 @@ export function plan(presets, others = []) {
     if (!(rest.final.fc && rest.final.rc)) { out.push({ name: `kid ${d.name}: skipped`, ok: true, skip: true, why: 'its wheels don\'t both reach the ground' }); continue; }
     const ride = run(d, 'arcade', (t, ac) => t < 3 ? { throttle: 0.6 } : t < 8 ? { throttle: 0.15, roll: -1 } : t < 10 ? { throttle: 0.3 } : t < 22 ? { rev: Math.abs(ac.groundSpeed) > 0.3 ? 0.9 : 0 } : {}, { T: 24 }); // (a short, tall bike can only brake gently before it tips onto its nose)
     check(`kid ${d.name}: ride`, ride, [[ride.isBike, 'not detected as a bike'], [!ride.dead, 'wrecked'], [ride.maxLean < 0.95, `fell over (lean ${ride.maxLean.toFixed(2)})`], [!ride.flips, 'had to be picked up'],
-      [ride.maxSpeed > 8, `slow (${ride.maxSpeed.toFixed(1)} m/s)`], [unwrapYaw(ride, 3, 8) > 0.4, 'did not turn left'], [ride.final.spd < 0.5 && Math.abs(ride.final.lean) < 0.1, 'not stopped upright at the end']]);
+      [ride.maxSpeed > 8, `slow (${ride.maxSpeed.toFixed(1)} m/s)`], [ride.minPitch > -0.6, `nose dived (${ride.minPitch.toFixed(2)})`], [unwrapYaw(ride, 3, 8) > 0.4, 'did not turn left'], [ride.final.spd < 0.5 && Math.abs(ride.final.lean) < 0.1, 'not stopped upright at the end']]);
   }
   // and everything else stays what it was
   for (const d of others) { const ac = new Aircraft(d, REALISM.arcade); out.push({ name: `${d.name}: not a bike`, ok: !ac.isBike, why: ac.isBike ? 'detected as a bike' : '' }); }

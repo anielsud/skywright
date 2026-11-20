@@ -117,26 +117,28 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
     return { Ieff: Ix + mass * _a.lengthSq(), grav: mass * G * _a.dot(fh) };
   };
   b.trick = '';
-  if (ground && m.tricks && !fallen && Math.abs(lean) < 0.35) {
-    const straight = Math.abs(lean) < 0.2 && Math.abs(s) < 0.4;
-    // a wheelie lasts up to 2.5 s per twist of the gas (ease off and open it again for another), so holding full gas
-    // launches with the front up and then gets on with going fast
-    if (ctl.throttle < 0.5) b.wheelieT = 0;
-    const wantW = ctl.throttle > 0.85 && vg > 1 && vg < 20 && rc && straight && b.wheelieT < 2.5, wantS = ctl.rev > 0.95 && vg > 4 && fc && !wantW && straight;
-    if (wantW || b.wheelieT > 0 && ctl.throttle >= 0.5) b.wheelieT = b.wheelieT + dt;
-    if (wantW) { // front up, held at the wheelie angle on the back wheel
-      const tgt = WHEELIE * clamp((ctl.throttle - 0.85) / 0.12, 0, 1), P = pivot(b.rear);
-      T.x += P.Ieff * (20 * (tgt - rel) - 6 * w.x) + (fc ? 0 : P.grav * 0.5); b.trick = 'wheelie';
-    } else if (wantS) { // back up, balanced on the front wheel
-      const tgt = STOPPIE * clamp((ctl.rev - 0.95) / 0.04, 0, 1), P = pivot(b.front);
-      T.x += P.Ieff * (8 * (tgt - rel) - 4 * w.x); b.trick = 'stoppie'; b.stoppieT = tgt;
-    } else if (!fc && rc && rel > 0.02) { // let go: the front comes back down, gently (not slammed)
-      const P = pivot(b.rear), wDes = -Math.min(1.2, 2.5 * rel); T.x += P.Ieff * 5 * (wDes - w.x);
-    } else if (fc && !rc && rel < -0.02) { // and the back
-      const P = pivot(b.front), wDes = Math.min(1.2, -2.5 * rel); T.x += P.Ieff * 5 * (wDes - w.x);
+  if (ground && !fallen) {
+    if (m.tricks && Math.abs(lean) < 0.35) {
+      const straight = Math.abs(lean) < 0.2 && Math.abs(s) < 0.4;
+      // a wheelie lasts up to 2.5 s per twist of the gas (ease off and open it again for another), so holding full gas
+      // launches with the front up and then gets on with going fast
+      if (ctl.throttle < 0.5) b.wheelieT = 0;
+      const wantW = ctl.throttle > 0.85 && vg > 1 && vg < 20 && rc && straight && b.wheelieT < 2.5, wantS = ctl.rev > 0.95 && vg > 4 && fc && !wantW && straight;
+      if (wantW || b.wheelieT > 0 && ctl.throttle >= 0.5) b.wheelieT = b.wheelieT + dt;
+      if (wantW) { // front up, held at the wheelie angle on the back wheel
+        const tgt = WHEELIE * clamp((ctl.throttle - 0.85) / 0.12, 0, 1), P = pivot(b.rear);
+        T.x += P.Ieff * (20 * (tgt - rel) - 6 * w.x) + (fc ? 0 : P.grav * 0.5); b.trick = 'wheelie';
+      } else if (wantS) { // back up, balanced on the front wheel
+        const tgt = STOPPIE * clamp((ctl.rev - 0.95) / 0.04, 0, 1), P = pivot(b.front);
+        T.x += P.Ieff * (8 * (tgt - rel) - 4 * w.x); b.trick = 'stoppie'; b.stoppieT = tgt;
+      }
     }
-    if (rel > LOOP && w.x > -1) T.x -= pivot(b.rear).Ieff * (40 * (rel - LOOP) + 8 * Math.max(0, w.x)); // never over backwards
-    if (rel < -LOOP * 0.7 && w.x < 1) T.x += pivot(b.front).Ieff * (40 * (-LOOP * 0.7 - rel) + 8 * Math.max(0, -w.x)); // or over the bars
+    // (every mode, leaning or not) a wheel that came up without being asked comes back down, gently, and the bike
+    // never goes over backwards or over the bars
+    if (!b.trick && !fc && rc && rel > 0.02) { const P = pivot(b.rear), wDes = -Math.min(1.2, 2.5 * rel); T.x += P.Ieff * 5 * (wDes - w.x); }
+    else if (!b.trick && fc && !rc && rel < -0.02) { const P = pivot(b.front), wDes = Math.min(1.2, -2.5 * rel); T.x += P.Ieff * 5 * (wDes - w.x); }
+    if (rel > LOOP && w.x > -1) T.x -= pivot(b.rear).Ieff * (40 * (rel - LOOP) + 8 * Math.max(0, w.x));
+    if (rel < -LOOP * 0.7 && w.x < 1) T.x += pivot(b.front).Ieff * (40 * (-LOOP * 0.7 - rel) + 8 * Math.max(0, -w.x));
   }
   // wheelie control (every mode): the engine eases off when the front lifts on its own (or a wanted wheelie goes past
   // its height), so the gas never flips the bike over backwards
