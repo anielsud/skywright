@@ -91,6 +91,13 @@ assembly pass), and fails on:
   the engines or the tail and turned to a random cant, a Tandem Canopy dropped onto the top, retractable gear from
   below; some resized or mirrored), checked for open shells and floating parts. `--speed N`.
 
+- **tube seams**: every vehicle, plus 16 seeded random tube-to-tube builds (`seamBuilds`: a body with a nose cone,
+  tail cone, airliner nose, heli bubble, boom or another body bolted to an end, some at an angle, a few cm apart or into
+  each other, sized to match or not, some rolled, whole builds resized or mirrored; a boom pushed into a body's tail).
+  At each join the surface radius is sampled across the seam at 32 angles; a dip below the neighbouring skin deeper than
+  0.6 % of the radius (at least 6 mm), or a turn of the shading normal of more than 10 deg between samples 2.5 % of the
+  radius apart, fails. Glass and `userData.trim` (frames, flanges) are looked through. `--seams N` for more.
+
 ```sh
 python3 tools/test/meshcheck.py                 # serves the repo itself
 python3 tools/test/meshcheck.py --json out.json # full report
