@@ -6,6 +6,7 @@ import { M } from './materials.js';
 import { clamp, lerp } from './noise.js';
 import { keepHeatPatch } from './sonic.js';
 import { assemble, updateDetail, mergeStatic } from './planeDetail.js';
+import { groundUnder, groundAtPoint } from './collide.js';
 
 // spaceRCS: every plane can turn in space (no RCS part needed). rocketHigh: rockets push up to 1 + rocketHigh times harder
 // in the thin air above ~10 km (a generous shove towards space). Nothing changes lower down.
@@ -120,7 +121,7 @@ export class Debris {
       let maxPen = 0; let touching = false; const p = new THREE.Vector3();
       for (const h of this.hull) {
         p.copy(h).applyQuaternion(this.q).add(this.x);
-        const g = env.groundAt(p.x, p.z, p.y);
+        const g = groundAtPoint(env, p); // (terrain, or a stunt ramp it is inside)
         const r = contactPoint(this, p, g, { e: 0.25, mu: g.type === 'water' ? 0.1 : 0.6 });
         if (r) { touching = true; maxPen = Math.max(maxPen, r.pen); if (r.vn < -6 && env.onDebrisHit) env.onDebrisHit(this, p, -r.vn, g); }
       }
@@ -345,8 +346,10 @@ export class Aircraft {
       return -tail * this.ctl.yaw * 0.55 * clamp(1 - this.airspeed / 45, 0.15, 1);
     }
     // cars: full lock (~34°) at walking pace, less as you speed up so corners stay under cornerG (it slides before it tips)
-    const v = Math.hypot(this.v.x, this.v.z), L = this.wheelbase || 2.5;
-    const th = -this.steerCmd() * Math.min(0.6, Math.atan(L * (this.cornerG || 6) / Math.max(1, v * v)));
+    const v = this.stuntUp ? this.v.length() : Math.hypot(this.v.x, this.v.z), L = this.wheelbase || 2.5; // (up a loop's side the speed is all vertical)
+    // (on a banked ramp, bowl or loop the banking holds you in the turn too: more lock allowed)
+    const cg = (this.cornerG || 6) + (this.stuntUp ? G * Math.tan(Math.min(1.3, Math.acos(clamp(this.stuntUp.y, -1, 1)))) : 0);
+    const th = -this.steerCmd() * Math.min(0.6, Math.atan(L * cg / Math.max(1, v * v)));
     if (!w || w.L === undefined) return th;
     // Ackermann: every steered wheel points square to the radius from one turning centre beside the pivot axle, so the
     // inside wheel turns more than the outside one, and wheels behind the pivot (4-wheel steer) turn the other way
@@ -371,7 +374,7 @@ export class Aircraft {
   }
   // Arcade and Pilot: a car stuck on its roof or side for 2 s is set back on its wheels.
   carRecover(dt) {
-    const stuck = this.R.assist > 0 && this.onGround && this.up.y < 0.3 && this.v.length() < 2;
+    const stuck = this.R.assist > 0 && this.onGround && this.up.y < 0.3 && this.v.length() < 2 && !this.stuntUp; // (on its wheels up a steep ramp is not stuck)
     this.flipT = stuck ? this.flipT + dt : 0;
     if (this.flipT < 2) return;
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.q); fwd.y = 0;
@@ -662,7 +665,7 @@ export class Aircraft {
     T.addScaledVector(Taero, R.aeroTorque);
     if (this.isHeli) this.heliAssist(F, T, ctl, q, _qi, fwdSpeed);
     else if (this.isCar && this.onGround && R.assist > 0) { // Arcade/Pilot: stability control keeps the wheels down
-      const right = _v2.set(1, 0, 0).applyQuaternion(q), bank = Math.asin(clamp(right.y, -1, 1));
+      const right = _v2.set(1, 0, 0).applyQuaternion(q), bank = Math.asin(clamp(this.stuntUp ? right.dot(this.stuntUp) : right.y, -1, 1)); // level with the ramp/loop/banking the wheels are on
       T.add(_v3.set(0, 0, -bank * 6 * R.assist - this.w.z * 3 * R.assist).applyMatrix3(this.I));
     }
     else if (R.assist > 0 && !(this.isCar && this.onGround) && this.rocketK < 0.999) {
@@ -741,7 +744,7 @@ export class Aircraft {
 
   contacts(dt, env) {
     const lowest = this.x.y - this.radius;
-    if (lowest > env.maxGround(this.x.x, this.x.z) + 2) { this.onGround = false; for (const p of this.parts) if (p.gear) for (const w of p.gear.wheels) { w.contact = false; w.comp = 0; } return; }
+    if (lowest > env.maxGround(this.x.x, this.x.z) + 2) { this.onGround = false; this.stuntUp = null; for (const p of this.parts) if (p.gear) for (const w of p.gear.wheels) { w.contact = false; w.comp = 0; } return; }
     const q = this.q;
     const down = new THREE.Vector3(0, -1, 0).applyQuaternion(q);
     const fwdB = new THREE.Vector3(0, 0, -1);
@@ -752,6 +755,7 @@ export class Aircraft {
     const kBase = (this.mass * G) / (0.09 * Math.max(2, nW));
     const cBase = 2 * Math.sqrt(kBase * this.mass / Math.max(2, nW)) * 0.6;
     const top = new THREE.Vector3(), pt = new THREE.Vector3(), rr = new THREE.Vector3(), vpt = new THREE.Vector3();
+    const stuntN = new THREE.Vector3(); let nStunt = 0, stuntPen = 0; const stuntPush = new THREE.Vector3();
     for (const p of this.parts) {
       if (!p.alive || !p.gear) continue;
       const usable = !p.gear.retract || this.gearT > 0.95;
@@ -759,15 +763,15 @@ export class Aircraft {
         w.contact = false;
         if (!usable) continue;
         this.worldPoint(w.top, top);
-        const g = env.groundAt(top.x, top.z, top.y);
         const L = w.len + w.r;
         down.copy(w.dir).applyQuaternion(q);
-        const cosd = Math.max(0.35, -down.dot(g.n));
-        const d = (top.y - g.h) / cosd;
+        const g = groundUnder(env, top, down, L); // the terrain, or a stunt ramp/loop the strut points at (collide.js)
+        const d = g.d;
         const comp = L - d;
         w.comp = clamp(comp, 0, w.len * 0.6);
         if (comp <= 0) continue;
         w.contact = true; anyWheel = true;
+        if (g.stunt) { stuntN.add(g.n); nStunt++; }
         pt.copy(top).addScaledVector(down, d);
         rr.copy(pt).sub(this.x);
         vpt.copy(this.wW).cross(rr).add(this.v);
@@ -819,12 +823,13 @@ export class Aircraft {
       for (const h of p.hull) {
         this.worldPoint(h, hp);
         if (hp.y > this.x.y + 50) continue;
-        const g = env.groundAt(hp.x, hp.z, hp.y);
+        const g = groundAtPoint(env, hp); // (terrain, or a stunt ramp the point is inside)
         if (hp.y > g.h) continue;
         const water = g.type === 'water';
         const res = contactPoint(this, hp, g, { e: water ? 0 : 0.12, mu: water ? 0.12 : g.type === 'runway' ? 0.4 : 0.55 });
         if (!res) continue;
-        maxPen = Math.max(maxPen, res.pen);
+        if (g.stunt) { if (res.pen > stuntPen) { stuntPen = res.pen; stuntPush.copy(g.n); } } // pushed out along the face, not up
+        else maxPen = Math.max(maxPen, res.pen);
         const impact = -res.vn;
         const thr = (water ? 9 : 4.5) * R.crashMult;
         if (impact > thr * 0.6 && (!hits.has(p) || hits.get(p).impact < impact)) hits.set(p, { impact, pt: hp.clone(), n: g.n.clone(), thr, surf: g.type });
@@ -847,8 +852,10 @@ export class Aircraft {
       }
     }
     if (maxPen > 0) this.x.y += Math.min(maxPen, 0.5) * 0.3;
+    if (stuntPen > 0) this.x.addScaledVector(stuntPush, Math.min(stuntPen, 0.5) * 0.3);
+    this.stuntUp = nStunt ? stuntN.normalize() : null; // wheels on a structure: the surface they stand on (assists level with it)
     const wasGround = this.onGround;
-    this.onGround = anyWheel || maxPen > 0;
+    this.onGround = anyWheel || maxPen > 0 || stuntPen > 0;
     if (anyWheel && !wasGround && this.airTimeNow > 3) {
       const vs = -this.v.y;
       this.stats.landings++;

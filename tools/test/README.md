@@ -95,3 +95,25 @@ python3 tools/test/padcheck.py --ref http://127.0.0.1:9000 --all-spawns   # ever
 ```
 
 Run it when you change the pad, the launch stand (`uprightStage` in `hangar.js`) or the spawn code in `main.js`.
+
+## Stunt park check
+
+`stunts.py` starts a car at the Grand Canyon, where cars begin in the stunt park (`src/stuntPark.js`), and drives the
+stock Dune Buggy and Chomper through it on the real flight model (paused flight, stepped at a fixed 60 Hz from
+`stunts.js`, with scripted inputs: gas plus a simple lane-keeping steer; gusts are zeroed so every run is the same),
+in Pilot and Arcade. It fails unless:
+
+- the car starts at the start arch facing the first kicker, with no shader compiled mid-flight;
+- the loop run (kickers, tabletop, boost, loop) gets air off the tabletop and lands upright, goes over the top of the
+  loop upside down with its wheels on the deck, and comes out upright in the exit lane, all parts intact;
+- coasting into the loop at the boost pad's speed still makes it round, and far too slow it rolls back down;
+- the canyon jump clears the gap between the mesas and lands upright;
+- the bowl is ridden at 14, 20 and 26 m/s, up the wall and back out upright on four wheels;
+- a Kestrel set down on a mesa stands on it, and one flown into a cliff hits it.
+
+```sh
+python3 tools/test/stunts.py                      # ~30 s
+python3 tools/test/stunts.py --shots DIR          # also screenshots of the park and of cars mid-stunt
+```
+
+Run it when you change ground contact (`collide.js`, the contact code in `aircraft.js`), car physics or the park.

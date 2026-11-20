@@ -649,6 +649,8 @@ function buildFlight(cfg) {
   const env = {
     groundAt: (x, z, y) => world.groundAt(x, z, y), maxGround: (x, z) => world.maxGround(x, z), windAt: (p) => world.windAt(p),
     get night() { return world.night || world.W.dark > 0.6; }, groundHeightAtSpawn: world.loc.rwyH,
+    // built structures (the canyon's stunt park): wheel rays and hull points hit their collision mesh (collide.js)
+    ...(world.stunts ? { surfRay: (o, d, len) => world.stunts.cm.ray(o, d, len), surfPoint: (p) => world.stunts.cm.point(p) } : {}),
     onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40, p.clone()); },
   };
   let start = cfg.start; let F_approach = null;
@@ -663,7 +665,11 @@ function buildFlight(cfg) {
   const slot = cfg.mpSlot || 0, slotX = slot ? (slot % 2 ? 1 : -1) * Math.ceil(slot / 2) * 70 : 0; // multiplayer: side by side, stepped up
   const vApp = clamp(Number.isFinite(st.stall) ? st.stall * 1.45 : 45, 32, 110);
   const rwy = world.runways[net.active ? net.freeRunway(world) : cfg.rwy || 0] || world.runway; // online: a runway nobody is on
-  if (start === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0, st.vertical ? { pitch: Math.PI / 2 } : {}); }
+  const park = ac.isCar && world.stunts && start !== 'water' && cfg.mode !== 'landing' ? world.stunts.start : null; // cars at the Grand Canyon start in the stunt park
+  if (park) { // at the start arch, facing the first kicker; online, the others line up behind in alternate lanes
+    start = 'runway';
+    ac.spawn(env, park.pos.clone().add(new THREE.Vector3(-9 * slot, 0, slot % 2 ? -2 * park.lane : 0)), park.heading);
+  } else if (start === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0, st.vertical ? { pitch: Math.PI / 2 } : {}); }
   else if (start === 'pad') padSpawn(ac, world.pad, env);
   else if (start === 'water') {
     const w = findWater(world);
@@ -931,6 +937,8 @@ function stepFlight(dtReal) {
   ac.step(dt, f.env);
   if (f.clamp) holdDown(f, ac, world.pad);
   if (f.cfgStart === 'pad') world.pad.update(dtReal, f.eng.on && !ac.dead ? f.thr || 0 : 0, ac.x.y - world.pad.deckY, effects, f.eng.hold > 0 || f.eng.on);
+  const stunt = world.stunts?.drive(ac, dt); // boost pads, big air, loops
+  if (stunt) for (const m of stunt) { if (m.center) hud.center(m.center, 1200); if (m.toast) hud.toast(m.toast, m.good ? 'good' : ''); }
   // trees
   if (!ac.dead && (ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), 0) < 30 || world.towns.tall)) { // (a city's towers reach far higher)
     for (const p of ac.parts) {

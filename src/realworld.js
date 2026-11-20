@@ -50,6 +50,7 @@ export const REAL_LOCATIONS = {
     credit: 'Imagery: USDA NAIP via USGS The National Map (public domain) · Heights: AWS Terrain Tiles (USGS 3DEP) · Map data © OpenStreetMap contributors',
     seed: 37, rwyH: 2002, water: 200, north: 40.5, cloudBase: 4300, trees: 'pine', snowline: 99999, erosion: false, desert: true,
     fogBase: 1300, // haze settles into the canyon
+    stunts: { x: 2200, z: 2400 }, // the stunt park (src/stuntPark.js) on the open rim plateau south-east of the airport: cars start there
     satGain: 1.05, // NAIP is brighter than Sentinel-2
     cliff: [0.36, 0.24, 0.18, 0.4], // the walls: red-stained limestone and sandstone (the deshadowed photos see most of them)
     sunLat: 36.05, // the real sun path: sunset light from the west on the canyon walls (world.js setTime)

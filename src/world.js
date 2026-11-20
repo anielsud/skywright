@@ -21,6 +21,7 @@ import { Destruction } from './destruction.js';
 import { BAKED, preloadBake, bakeFor, withBake, landAt } from './terrainBake.js';
 import { Landcover } from './landcover.js';
 import { LaunchPad } from './launchpad.js';
+import { StuntPark, stuntPad, padHeight } from './stuntPark.js';
 import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
 
 export const RWY = { len: 1800, width: 45 };
@@ -99,6 +100,7 @@ export class World {
     this.landUniforms(); // no bake on real places: rivers/lakes off (and compiled out of the terrain shader)
     this.size = this.loc.core || 22000; // (a real place can ask for a bigger detailed core: New York's reaches the Statue of Liberty)
     this.coreK = this.size / 22000; // grid and bake resolutions scale with it, so the spacing stays the same
+    this.stuntPad = this.loc.stunts ? stuntPad(this, this.loc.stunts) : null; // the stunt park's levelled pad (rawHeight)
     this.group = new THREE.Group(); scene.add(this.group);
     this.t = 0; this.night = false;
     this.windBase = new THREE.Vector3(); this.gust = new THREE.Vector3(); this.gustT = new THREE.Vector3();
@@ -111,6 +113,10 @@ export class World {
     this.flora = new Flora(this);
     if (this.real) this.net.towns = this.real.towns(this);
     this.towns = this.real ? new RealScenery(this) : new Towns(this);
+    if (this.stuntPad) { // the stunt park (src/stuntPark.js): nothing grows on its dirt
+      this.stunts = new StuntPark(this, this.loc.stunts);
+      const F = this.flora, bare = F.bare, S = this.stunts; F.setForestMask(F.mask, (x, z) => S.bare(x, z) || (bare ? bare(x, z) : false));
+    }
     this.destruct = new Destruction(this); // buildings you can knock down
     this.pad = new LaunchPad(this); // the launch complex rockets start from (after the scenery: it keeps clear of it)
     this.buildClouds();
@@ -178,6 +184,7 @@ export class World {
   shoreSnap(h) { const wl = this.waterLevel; return h < wl ? Math.min(h, wl - SHORE_UNDER) : Math.max(h, wl + SHORE_OVER); }
   rawHeight(x, z) {
     let h = this.height(x, z);
+    if (this.stuntPad) h = padHeight(this.stuntPad, x, z, h);
     // flatten airport
     const dx = Math.max(0, Math.abs(x - 100) - 350), dz = Math.max(0, Math.abs(z) - RWY.len / 2 - 250);
     const d = Math.hypot(dx, dz);
@@ -422,7 +429,7 @@ export class World {
   heightAt(x, z) { return this.sampleGrid(x, z); }
   maxGround(x, z) {
     const S = this.roadSurf, deck = S && S.q(x, z, true) ? S.y : -Infinity; // bridge decks count
-    return Math.max(this.sampleGrid(x, z), this.waterLevel, deck, this.pad ? this.pad.maxAt(x, z) : -Infinity) + (this.inAirportBox(x, z) ? 25 : 0);
+    return Math.max(this.sampleGrid(x, z), this.waterLevel, deck, this.pad ? this.pad.maxAt(x, z) : -Infinity, this.stunts ? this.stunts.topAt(x, z) : -Infinity) + (this.inAirportBox(x, z) ? 25 : 0); // (the launch pad, and the stunt park's ramps and loop)
   }
   inAirportBox(x, z) { return x > 150 && x < 420 && Math.abs(z) < 260; }
   // y (optional): height of the point asking. A bridge deck is the ground for anything not well below it, so cars
@@ -1115,6 +1122,7 @@ export class World {
     for (let k = 0; k < 4; k++) { const white = ang > th[k]; cols.setXYZ(k, 1, white ? 1 : 0.1, white ? 1 : 0.1); }
     cols.needsUpdate = true;
     this.space.update(camera, dt);
+    this.stunts?.update(dt, this, camera.position);
     this.updateEnv();
   }
 
@@ -1127,7 +1135,7 @@ export class World {
   dispose() {
     this.cascades?.dispose(this.scene);
     this.scene.remove(this.group, this.sky, this.sun, this.sun.target, this.hemi, this.deck, this.deck2, this.clouds.mesh, this.rain, this.snow);
-    this.tiles?.dispose(); this.space.dispose();
+    this.tiles?.dispose(); this.space.dispose(); this.stunts?.dispose();
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     if (this.envRT) this.envRT.dispose();
     this.pmrem.dispose();
