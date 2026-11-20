@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.97.0', items: [
+    "Boats are here! Take the Speedboat, Jet Ski, Fireboat or Pontoon out from the marina in New York, Bora Bora, the Swiss lake or the Colorado River, or build your own from the Boat parts. The Fireboat sprays water with the smoke button!",
+  ] },
   { v: '1.96.0', items: [
     "Stunt parks everywhere! Central Park in New York, a hay-bale park in the Swiss valley and a tiki park in Bora Bora. In the Grand Canyon, try the Daredevil Canyon Jump: hit the rocket boost and fly over the canyon! Cars and bikes can also start on the road or the runway.",
   ] },
