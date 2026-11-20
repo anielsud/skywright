@@ -20,6 +20,7 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 - Undo and redo.
 - Save planes, or share one as a copy-paste code.
 - Live flight check: mass, thrust-to-weight, wing area and stall speed. A balance meter (yellow dot = centre of mass, blue dot = centre of lift) and plain-English warnings such as "Tail-heavy".
+- Wind tunnel (`src/windTunnel.js`): the design as a scale model on a sting in a glass test section, with smoke streamlines from a rake, wingtip vortices, separated smoke over a stalled wing and shock cones above Mach 1. Sliders for wind speed (a breeze to Mach 3), angle of attack, sideslip, elevator, ailerons, rudder and flaps; arrows for lift, drag and side force against the weight; gauges for lift, drag, lift-to-drag, stall angle and pitch/yaw stability; a lift-against-angle chart; tips in plain English. "Free pivot" lets the model swing in pitch and yaw so you can see whether it weathervanes back into the wind or flips round. The forces are the flight model's own (`Aircraft.aeroAt`, the function every flight step uses); the smoke is a potential-flow sketch sized from them (`src/tunnelFlow.js`).
 
 **Starter planes (9)**
 

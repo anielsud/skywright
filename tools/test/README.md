@@ -143,3 +143,21 @@ python3 tools/test/bikeride.py --json out.json  # full report, with samples
 ```
 
 Run it when you change `src/bike.js`, the bike parts (`src/bikeParts.js`) or ground contact in `src/aircraft.js`.
+
+## Wind tunnel check
+
+`tunnelcheck.py` opens the wind tunnel for every stock vehicle in headless Chrome and fails if any of them: logs an
+error; (planes) has a lift curve that doesn't rise and then stall as the angle of attack is swept from -10 to +30
+degrees; reports forces or moments that differ from what a real flight substep integrates at the same state (a fresh
+`Aircraft` in free flight at the same attitude, airspeed, controls and flaps, gravity and engine thrust taken out;
+subsonic and supersonic, relative error over 1e-6); compiles a shader while it runs; runs slower than `--max-ms`
+(default 50 ms a frame) or does more than `--max-cpu` ms of its own work a frame (default 12) while sweeping the angle
+and swinging on the free pivot; or, when closed, leaves geometries or textures on the GPU (`renderer.info.memory`, no
+higher than in the hangar before; a second visit must end exactly where the first did and compile nothing new).
+
+```sh
+python3 tools/test/tunnelcheck.py               # serves the repo itself, ~3 min
+python3 tools/test/tunnelcheck.py --only Viper --shots /tmp/tunnel
+```
+
+Run it when you change `aircraft.js` (the aero model), `windTunnel.js`, `tunnelFlow.js` or `tunnelScene.js`.

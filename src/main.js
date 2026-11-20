@@ -26,6 +26,7 @@ import { loadReal } from './realworld.js';
 import { aircraftLights, updateAircraftLights } from './navLights.js';
 import { Streaks } from './streaks.js';
 import { CapsuleView } from './capsule.js';
+import { WindTunnel } from './windTunnel.js';
 import { initThumbs, renderThumb, designKey, presetSlug, savedThumbs, storeThumb, stockThumbs, STOCK_SIZE } from './thumbs.js';
 installFog();
 
@@ -281,7 +282,7 @@ function renderInspector() {
   if (!hangar.symAllowed(hangar.symMode)) hangar.symMode = 2; // 3 / 4 round the body are for rockets only
   for (const b of document.querySelectorAll('#sym-seg [data-sym]')) { b.hidden = !hangar.symAllowed(+b.dataset.sym); const on = +b.dataset.sym === hangar.symMode; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); }
   $('#btn-bal').classList.toggle('on', hangar.showBalance);
-  $('#btn-fly').disabled = !d.parts.length;
+  $('#btn-fly').disabled = !d.parts.length; $('#btn-tunnel').disabled = !d.parts.length;
   $('#placing-bar').hidden = !hangar.placing;
   if (hangar.placing) $('#placing-bar span').textContent = `Placing: ${PARTS[hangar.placing].name}`;
   LS.set('current', hangar.design);
@@ -301,6 +302,7 @@ $('#btn-planes').addEventListener('click', () => { audio.init(); planesModal(); 
 $('#btn-settings').addEventListener('click', () => settingsModal());
 $('#btn-help').addEventListener('click', () => helpModal());
 $('#btn-fly').addEventListener('click', () => { audio.init(); flightModal(); });
+$('#btn-tunnel').addEventListener('click', () => openTunnel());
 $('#btn-toggle-left').addEventListener('click', () => document.body.classList.toggle('hide-left'));
 $('#btn-toggle-right').addEventListener('click', () => document.body.classList.toggle('hide-right'));
 window.addEventListener('keydown', (e) => {
@@ -755,13 +757,14 @@ function trackFlightEnd(f, exit) {
     quality_level: f.maxLevel, res_scale: +perf.scale.toFixed(2), players_max: f.playersMax,
   });
 }
-analytics.onLeave = () => trackFlightEnd(F, 'closed');
+analytics.onLeave = () => { trackFlightEnd(F, 'closed'); tunnel?.track('closed'); };
 // Geometries, materials and textures reachable from a scene (including material uniforms such as custom shader maps).
 function collectGpu(root) {
   const geo = new Set(), mat = new Set(), tex = new Set();
   const addTex = (v) => { if (v?.isTexture) tex.add(v); else if (Array.isArray(v)) v.forEach(addTex); };
   root.traverse((o) => {
     if (o.geometry) geo.add(o.geometry);
+    if (o.skeleton?.boneTexture) tex.add(o.skeleton.boneTexture); // the crew's bones (crew.js), uploaded as a texture
     for (const m of [].concat(o.material || [])) {
       if (!m) continue; mat.add(m);
       for (const v of Object.values(m)) addTex(v);
@@ -792,6 +795,30 @@ function endFlight(restarting = false) {
   flightUI.style.display = 'none'; $('#hangar-ui').style.display = '';
   controls.enabled = false; controls.showTouch(false);
   state = 'hangar'; hangar.activate(true); audio.music(true); audio.setSpace('hangar');
+  onResize();
+}
+
+// ---------- wind tunnel (windTunnel.js): tests the hangar's design; it borrows the renderer while open ----------
+let tunnel = null;
+function openTunnel() {
+  if (state !== 'hangar' || !hangar.design.parts.length) return;
+  audio.init();
+  const design = cloneDesign(hangar.design), st = analyze(design), usePost = isHigh(qualityTier()) && perf.level < 2; // drawn like the hangar
+  state = 'tunnel'; hangar.activate(false); $('#hangar-ui').style.display = 'none'; audio.music(false);
+  tunnel = new WindTunnel({ renderer, tier: qualityTier(), audio, settings, analytics, collectGpu, keepGpu: () => collectGpu(hangar.scene), onExit: closeTunnel,
+    render: (scene, cam, dt) => {
+      if (!usePost) { renderer.render(scene, cam); return; }
+      post.look({ bloom: 0.35, threshold: 2.4, vignette: 0.35, warmth: 0 }); post.ambientOcclusion({ radiusK: 0.03, rMin: 0.12, rMax: 1.2, maxDist: 250, strength: 1.1 }); post.shafts(post.atmos.sunUV, 0);
+      post.render(scene, cam, dt);
+    },
+    target: () => (usePost && post.enabled ? post.composer.readBuffer : null),
+    track: { plane: planeLabel(design), kind: planeKind(st), design_hash: designSummary(design, st, buildStats.base).design_hash } });
+  tunnel.open(design).catch((e) => { console.error(e); closeTunnel(); ui.hint('The wind tunnel broke: ' + e.message); });
+}
+function closeTunnel() {
+  if (!tunnel) return;
+  const t = tunnel; tunnel = null; t.track('hangar'); t.dispose();
+  state = 'hangar'; $('#hangar-ui').style.display = ''; hangar.activate(true); audio.music(true);
   onResize();
 }
 
@@ -1262,6 +1289,7 @@ function frame(now) {
       if (isHigh(qualityTier()) && perf.level < 2) post.render(hangar.scene, hangar.camera, dt); else renderer.render(hangar.scene, hangar.camera);
     }
   }
+  else if (state === 'tunnel') tunnel?.frame(dt);
   else if (state === 'flight' && F && !F.warm?.pending) {
     stepFlight(dt);
     if (F) {
@@ -1370,6 +1398,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && sta
 window.skywrightBack = () => {
   const m = $('#modal-root .modal');
   if (m && !m.classList.contains('sticky')) { $('#modal-root .modal-bg').dispatchEvent(new Event('pointerdown')); return; }
+  if (state === 'tunnel') { tunnel?.exit('back'); return; }
   if (state === 'flight' && F) { if (!m) togglePause(true); else if (F.paused) togglePause(false); return; }
   if (!m) dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
 };
@@ -1402,6 +1431,6 @@ async function boot() {
     addEventListener('online', autoCheckUpdate);
     addEventListener('focus', autoCheckUpdate);
   }
-  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, net, presets, settings, flightCfg, controls, rig, analytics, hud };
+  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, get tunnel() { return tunnel; }, openTunnel, closeTunnel, net, presets, settings, flightCfg, controls, rig, analytics, hud };
 }
 boot();

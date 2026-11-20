@@ -18,6 +18,8 @@ export const REALISM = {
 };
 
 const G = 9.81;
+// flap deflection (rad) for each flap notch: up, 10°, 20°, full
+export const FLAP_DEFL = [0, 0.18, 0.35, 0.6];
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _qi = new THREE.Quaternion();
 const _rf = new THREE.Vector3(), _ra = new THREE.Vector3(), _rb = new THREE.Vector3(), _rc = new THREE.Vector3(), _rd = new THREE.Vector3();
 const _rq = new THREE.Quaternion(), _rq2 = new THREE.Quaternion(), _rv = new THREE.Vector3(); // rocket attitude hold
@@ -519,29 +521,14 @@ export class Aircraft {
     }
   }
 
-  substep(dt, env) {
-    const R = this.R, q = this.q, mass = this.mass;
-    _qi.copy(q).invert();
-    const alt = this.x.y;
-    const rho = airDensity(alt);
-    this.rho = rho;
-    const wind = env.windAt(this.x);
-    const vAirB = _v.copy(this.v).sub(wind).applyQuaternion(_qi).clone();
-    const V = vAirB.length();
-    this.airspeed = V;
-    const mach = V / speedOfSound(alt);
-    this.mach = mach;
+  // The air's forces on the airframe at one instant: every lifting strip (lift, drag, stall, control and flap
+  // deflection) and every body's drag, in the body frame, added to F; their moments about the CoM added to Taero. Uses
+  // this.w (rotation adds airflow at the tips and tail), this.com, this.R. The flight (substep) and the wind tunnel
+  // (windTunnel.js, through aeroAt) both call this, so the tunnel shows exactly the forces the plane flies with.
+  // probe (tunnel only): an array that gets one entry per lifting strip.
+  aeroLoads(vAirB, V, rho, mach, ctl, pitchCmd, flapDefl, F, Taero, probe = null) {
+    const R = this.R;
     const wave = 1 + waveDrag(mach) * (R.waveMult ?? 1);
-    const air = airAuthority(rho, 0.5 * rho * V * V); // 1 below ~22 km: the assists below fade only in near-vacuum
-    const F = new THREE.Vector3(), T = new THREE.Vector3(), Taero = new THREE.Vector3();
-    const ctl = this.ce || this.ctl;
-    const flapDefl = [0, 0.18, 0.35, 0.6][this.flaps];
-    // automatic pitch trim (like a fly-by-wire autotrim): holds attitude when the stick is centred
-    if (R.aeroTorque > 0) {
-      if (this.onGround || V < 12) this.trim *= 1 - Math.min(1, dt * 0.5);
-      else if (Math.abs(ctl.pitch) < 0.08) this.trim = clamp(this.trim - this.w.x * dt * 1.2, -0.7, 0.7);
-    }
-    const pitchCmd = clamp(ctl.pitch + (R.aeroTorque > 0 ? this.trim : 0), -1, 1);
     // control surfaces can't swing fully against a supersonic airstream (also keeps Mach 4 rockets flyable)
     const maxDefl = 0.38 * Math.min(1, 60000 / Math.max(1, 0.5 * rho * V * V));
     let liftScale = R.liftMult;
@@ -559,7 +546,7 @@ export class Aircraft {
         r.copy(s.pos).sub(this.com);
         vp.copy(this.w).cross(r).add(vAirB);
         vp.addScaledVector(s.s, -vp.dot(s.s));
-        const V2 = vp.lengthSq(); if (V2 < 0.5) { s.load = 0; continue; }
+        const V2 = vp.lengthSq(); if (V2 < 0.5) { s.load = 0; if (probe) probe.push({ s, a: 0, aEff: 0, stalled: false, L: 0, cl: 0, cd: 0, Vs: 0, F: new THREE.Vector3() }); continue; }
         const Vs = Math.sqrt(V2);
         const along = vp.dot(s.f), nrm = vp.dot(s.n);
         const a = Math.atan2(-nrm, along);
@@ -584,6 +571,7 @@ export class Aircraft {
         const L = qd * cl * liftScale;
         Fs.copy(ld).multiplyScalar(L).addScaledVector(vh, -qd * cd * R.dragMult);
         s.load = L; partLift += L;
+        if (probe) probe.push({ s, a, aEff, stalled: aeAbs > a0, L, cl, cd, Vs, F: Fs.clone() });
         F.add(Fs); Taero.add(_v3.copy(r).cross(Fs));
         if (Math.abs(s.n.y) > 0.6 && s.role !== 'ctrl') maxAlpha = Math.max(maxAlpha, aeAbs * (Math.abs(a) < 1.5 ? 1 : 0));
         totalLift += L * Math.abs(s.n.y);
@@ -601,6 +589,41 @@ export class Aircraft {
         F.add(Fs); Taero.add(_v3.copy(r).cross(Fs));
       }
     }
+    const out = this._aero || (this._aero = { maxAlpha: 0, totalLift: 0 });
+    out.maxAlpha = maxAlpha; out.totalLift = totalLift;
+    return out;
+  }
+  // The same, at a state the caller sets up (the wind tunnel): air velocity in the body frame, altitude (air density
+  // and speed of sound), flap notch (0-3). Control inputs come from this.ce / this.ctl and this.trim, as in flight.
+  aeroAt(vAirB, alt, flaps, F, Taero, probe = null) {
+    const rho = airDensity(alt), V = vAirB.length(), mach = V / speedOfSound(alt), ctl = this.ce || this.ctl;
+    const pitchCmd = clamp(ctl.pitch + (this.R.aeroTorque > 0 ? this.trim : 0), -1, 1);
+    return this.aeroLoads(vAirB, V, rho, mach, ctl, pitchCmd, FLAP_DEFL[flaps], F, Taero, probe);
+  }
+
+  substep(dt, env) {
+    const R = this.R, q = this.q, mass = this.mass;
+    _qi.copy(q).invert();
+    const alt = this.x.y;
+    const rho = airDensity(alt);
+    this.rho = rho;
+    const wind = env.windAt(this.x);
+    const vAirB = _v.copy(this.v).sub(wind).applyQuaternion(_qi).clone();
+    const V = vAirB.length();
+    this.airspeed = V;
+    const mach = V / speedOfSound(alt);
+    this.mach = mach;
+    const air = airAuthority(rho, 0.5 * rho * V * V); // 1 below ~22 km: the assists below fade only in near-vacuum
+    const F = new THREE.Vector3(), T = new THREE.Vector3(), Taero = new THREE.Vector3();
+    const ctl = this.ce || this.ctl;
+    // automatic pitch trim (like a fly-by-wire autotrim): holds attitude when the stick is centred
+    if (R.aeroTorque > 0) {
+      if (this.onGround || V < 12) this.trim *= 1 - Math.min(1, dt * 0.5);
+      else if (Math.abs(ctl.pitch) < 0.08) this.trim = clamp(this.trim - this.w.x * dt * 1.2, -0.7, 0.7);
+    }
+    const pitchCmd = clamp(ctl.pitch + (R.aeroTorque > 0 ? this.trim : 0), -1, 1);
+    const { maxAlpha, totalLift } = this.aeroLoads(vAirB, V, rho, mach, ctl, pitchCmd, FLAP_DEFL[this.flaps], F, Taero);
+    const r = new THREE.Vector3(), Fs = new THREE.Vector3();
     this.alpha = maxAlpha; this.liftRatio = totalLift / (mass * G);
     this.stalled = R.stallSharp > 0 && maxAlpha > 0.29 && V > 8 && !this.onGround && air > 0.5; // (no stalling in a vacuum)
     // ---- engines ----
