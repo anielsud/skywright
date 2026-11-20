@@ -43,13 +43,25 @@ run is not a substitute for running it locally.
 
 When you add a preset, a sound clip or a modal, the test picks presets and clips up automatically.
 
+It also flies the **SR-71 Blackbird** with an autopilot (`sr71flight.js`), in Pilot mode, through the real flight model
+and world: the game starts the flight as a player would, then pauses its loop while the autopilot steps the aircraft
+headless, much faster than real time (about 10 s for 10 minutes of flight).
+- *climb*: runway start, take off, climb at about Mach 0.9 to 30,000 ft, dive gently through Mach 1, then climb on a
+  Mach schedule to about 75,000 ft. Fails unless it goes faster than Mach 2.5 above 60,000 ft with nothing broken.
+  Leaves `sr71-mach3.png` (the game running at Mach 3 for a moment, afterburners lit).
+- *land*: Landing Challenge start (on final approach), fly the glide path, flare, touch down and brake. Fails unless it
+  stops on the runway with nothing broken.
+`--only 'SR-71 Blackbird'` runs just these (and its 4 s flight).
+
 ## Landing gear check
 
 `gearcheck.py` builds every preset (as is, resized, mirrored) and seeded random player builds (gear, floats and skids
 dropped on bodies, wings, wingtips, pods and flaps, some resized or rotated, all mirrored) and checks with double-sided
 rays that no strut passes through a part (control surfaces included), every leg and brace ends on a solid skin, every
-wheel stands upright, and mirrored gear mirrors. `--seed N --random K` for other builds, `--dump` prints failing
-designs, `--url` checks another server (e.g. a build of main, for a before/after count). About 4 minutes.
+wheel stands upright, and mirrored gear mirrors. Six more builds drop gear on the speed parts (a Chined Body with a
+thin wing, Spike Ramjets under it; their own seeded stream, `--speed N`). `--seed N --random K` for other builds,
+`--dump` prints failing designs, `--url` checks another server (e.g. a build of main, for a before/after count). About
+4 minutes.
 
 ## Mesh check
 
@@ -74,6 +86,10 @@ assembly pass), and fails on:
   swingarms swing. Crew (posed at runtime), prop discs, glows and registration decals are left out; a piece may opt out
   with `userData.floatOk = 'why'` (a deliberate gap). Each floating piece is reported with how far it is from the
   vehicle. `--placed N`, `--cars N`, `--bikes N` for more.
+- **floating parts on the speed parts**: also 10 seeded random speed builds (`speedBuilds`: a Chined Body or another
+  body with a delta wing through it, Spike Ramjets mid-wing, under the wing or on the body, All-Moving Fins dropped onto
+  the engines or the tail and turned to a random cant, a Tandem Canopy dropped onto the top, retractable gear from
+  below; some resized or mirrored), checked for open shells and floating parts. `--speed N`.
 
 ```sh
 python3 tools/test/meshcheck.py                 # serves the repo itself

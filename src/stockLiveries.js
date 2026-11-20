@@ -305,3 +305,21 @@ L('sportbike', {
     { type: 'decal', on: ['b_sport'], art: 'title', at: [-0.62, 0.28], size: [0.36, 0.06], text: true, box: box([0.15, 0.2], [null, null, -0.45]), absx: true },
   ],
 });
+
+// SR-71 Blackbird: very dark blue-black all over (soft, not glossy), red tail numbers and "no step" lines on the wings,
+// small white titles on the nose and a white star on each nacelle
+L('blackbird', {
+  name: 'Blackbird',
+  art: { num: ART.text('71', 300, 160, { fill: '#c8202c' }), title: ART.text('SKYWRIGHT', 900, 120, { fill: '#d6d6d0' }), star: ART.star(256, { fill: '#e8e8e2' }) },
+  finish: [{ on: 'all', kind: 'deep' }], roundels: false,
+  layers: [
+    { type: 'band', on: 'all', color: 0x0c0e15 },
+    { type: 'decal', on: ['t_allmove'], art: 'num', at: [11.2, 3.0], size: [1.2, 0.64], text: true },
+    { type: 'decal', on: ['fus_chine'], art: 'title', at: [-13.4, 0.1], size: [1.5, 0.2], text: true },
+    { type: 'decal', on: ['e_ramjet'], art: 'star', at: [7.6, 0.1], size: [0.6, 0.6] },
+    // red "no step" outlines on top of the inner wing (along the span and along the chord)
+    { type: 'band', on: ['w_delta'], color: 0xb3141e, dir: [1, 0, 0], absx: true, lo: 2.86, hi: 2.92, box: box([null, 0], [null, null, 10.2]) },
+    { type: 'band', on: ['w_delta'], color: 0xb3141e, dir: [0, 0, 1], lo: 10.0, hi: 10.06, box: box([null, 0], []), absx: true },
+    { type: 'band', on: ['w_delta'], color: 0xb3141e, dir: [1, 0, 0], absx: true, lo: 5.3, hi: 5.36, box: box([null, 0], [null, null, 10.2]) },
+  ],
+});

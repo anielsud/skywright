@@ -24,6 +24,7 @@ import { routeGear, routeStruts } from './gearRoute.js';
 import { assembleCar } from './carDetail.js';
 import { fitOut } from './fitOut.js';
 import { bikeSync, wireRiders, riderInput } from './bikeParts.js';
+import { TANDEM_SHAPE, RAMJET } from './supersonicParts.js';
 
 const BODY = new Set(['fuselage', 'cockpit']), BODY_X = new Set(['x_nosecone', 'x_tailcone']);
 const isBody = (id) => BODY.has(PARTS[id].cat) || BODY_X.has(id);
@@ -33,7 +34,7 @@ const POD = { // engine / store pods: radius and length along local z (front, ba
   e_turboprop: { r: 0.55, z0: 0, z1: 2.6, ex: [[0.616, 0.033, 1.46]], soot: 2.6 },
   e_electric: { r: 0.47, z0: -0.3, z1: 0.5 },
   e_jet_small: { r: 0.38, z0: 0, z1: 2.2 }, e_jet_ab: { r: 0.55, z0: 0, z1: 4.2 }, e_turbofan: { r: 1.17, z0: 0, z1: 4.0 },
-  e_rocket: { r: 0.32, z0: 0, z1: 3.2 }, x_tank: { r: 0.3, z0: -1.3, z1: 1.5 }, x_smoke: { r: 0.1, z0: -0.5, z1: 0.5 },
+  e_rocket: { r: 0.32, z0: 0, z1: 3.2 }, e_ramjet: { r: RAMJET.R, z0: 0, z1: RAMJET.L }, x_tank: { r: 0.3, z0: -1.3, z1: 1.5 }, x_smoke: { r: 0.1, z0: -0.5, z1: 0.5 },
 };
 const rc = new THREE.Raycaster();
 const _m3 = new THREE.Matrix3();
@@ -338,6 +339,7 @@ const CANOPY = {
     const rAt = (z) => { for (let i = 1; i < c.length; i++) if (c[i].x >= z) { const a = c[i - 1], b = c[i]; return a.y + (b.y - a.y) * ((z - a.x) / (b.x - a.x || 1)); } return 0.04; };
     return (th, ph) => { const f = th < Math.PI ? th / Math.PI : (2 * Math.PI - th) / Math.PI, side = th < Math.PI ? 1 : -1, z = -1.45 + 3.3 * f, r = Math.max(0.05, rAt(z)) * 0.98; return V(side * r * Math.cos(ph), 1.15 * r * Math.sin(ph), z); };
   })() },
+  ck_tandem: { n: 40, g: TANDEM_SHAPE },
 };
 function seat(cp, cobj, bp, structure) {
   const C = CANOPY[cp.id]; if (!C) return;
@@ -518,7 +520,7 @@ function bodyFurniture(p, obj, info, ctx) {
 }
 // walkway, fuel cap, worn leading edge and (left main wing) a pitot tube
 function wingFurniture(p, obj, ctx, rootJoined) {
-  const d = PARTS[p.id]; if (!d.wing) return;
+  const d = PARTS[p.id]; if (!d.wing || d.allMoving) return; // (an all-moving fin turns as a whole: nothing fixed on it)
   const F = wingFrame(p, obj), spanW = F.pt(0, 0.3, 1).distanceTo(F.pt(1, 0.3, 1)), main = d.cat === 'wing';
   const big = new Bag(), bag = ctx.near(obj);
   // worn leading edge: bare metal strip round the nose, ragged at its edges
@@ -782,7 +784,7 @@ export function mergeStatic(objs, root) {
     const u = obj.userData, rigid = new Set([obj]), skip = new Set();
     for (const c of u.controls || obj.children[0]?.userData?.controls || []) rigid.add(c.obj);
     for (const s of [...(u.slats || []), ...(u.spoilers || [])]) rigid.add(s.obj);
-    for (const k of ['fan', 'strut', 'wheelsFixed']) if (u[k]) rigid.add(u[k]);
+    for (const k of ['fan', 'strut', 'wheelsFixed', 'spike']) if (u[k]) rigid.add(u[k]);
     for (const r of u.rigid || []) rigid.add(r); // a part's own moving pieces (bike forks, swingarms, shocks)
     if (u.wheels) { if (PARTS_BOGIE(u)) rigid.add(u.wheels); else for (const c of u.wheels.children) rigid.add(c); }
     for (const k of ['flame', 'flameCore', 'bulb', 'prop']) if (u[k]) skip.add(u[k]);
@@ -843,6 +845,7 @@ export function updateDetail(ac, dt) {
       for (const r of u.crew) if (r.update({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: c.throttle, steer, ...(r.bars ? riderInput(ac, r) : null) }, dt)) crewMoving = true;
     }
     if (u.wheelsFixed && u.wheels) { u.wheelsFixed.position.copy(u.wheels.position); u.wheelsFixed.rotation.y = u.wheels.rotation.y; }
+    if (u.spike) u.spike.position.z = RAMJET.spikeTravel * smooth(clamp(((ac.mach || 0) - 1.6) / 1.6, 0, 1)); // inlet spike: locked forward to Mach 1.6, fully back by 3.2
     if (u.slats) { const t = ac.flaps > 0 ? 1 : 0; for (const s of u.slats) { s.t = lerp(s.t || 0, t, k * 0.6); s.obj.position.set(0, -0.022 * s.chord * s.t, -0.05 * s.chord * s.t); } }
     if (u.spoilers) {
       const ail = p.surfaces.find((s) => s.role === 'aileron'), roll = ail ? Math.max(0, -ail.delta) * 1.6 : 0, tgt = Math.max(ground * 0.9, roll);

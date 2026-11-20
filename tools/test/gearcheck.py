@@ -30,6 +30,7 @@ def main():
     ap.add_argument('--only', action='append', help='check just this preset (repeatable; no random builds)')
     ap.add_argument('--random', type=int, default=20, help='number of random player builds (default 20)')
     ap.add_argument('--seed', type=int, default=1)
+    ap.add_argument('--speed', type=int, default=6, help='number of random builds on the speed parts (Chined Body, Spike Ramjet) (default 6)')
     ap.add_argument('-v', '--verbose', action='store_true', help='list every build, not just failures')
     ap.add_argument('--dump', action='store_true', help='print the design JSON of each failing build')
     ap.add_argument('--url', help='check the game served here instead of this checkout (e.g. a baseline build)')
@@ -39,7 +40,7 @@ def main():
     srv = None if args.url else start_server(port)
     proc, ws_url = launch_chrome(cdp_port, profile, '1280,800')
     try:
-        res = asyncio.run(run(args.url or f'http://127.0.0.1:{port}/', ws_url, {'only': args.only, 'random': args.random, 'seed': args.seed}))
+        res = asyncio.run(run(args.url or f'http://127.0.0.1:{port}/', ws_url, {'only': args.only, 'random': args.random, 'seed': args.seed, 'speed': args.speed}))
     finally:
         proc.terminate()
         try:
