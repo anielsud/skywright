@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.86.0', items: [
+    'Nothing floats any more! Seats, dashboards, rotor masts and engines are all properly bolted on, even when you put a cockpit on a car. Jet engines now land right where you tap them.',
+  ] },
   { v: '1.85.0', items: [
     "Rockets steer much better: point the nose and it stays there, and there's a new sky ladder to show which way is up. The capsule has real windows to look out of. In the hangar you can pick 3-way or 4-way symmetry for fins, and Line up buttons centre a part on its body.",
   ] },
