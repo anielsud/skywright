@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.93.0', items: [
+    'The SR-71 Blackbird is here! The fastest jet ever: take off, light the afterburners and climb to the edge of space at Mach 3. Watch the inlet spikes slide back as you speed up.',
+  ] },
   { v: '1.92.0', items: [
     'Helicopters in New York now start on a rooftop helipad high above the city, looking out at the Statue of Liberty! There are two more rooftop pads to land on, too.',
   ] },
