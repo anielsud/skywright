@@ -299,7 +299,7 @@ export function buildStations(ac) {
   for (const p of ac.parts) {
     const crews = []; p.obj.traverse((o) => { if (o.userData.crewRig?.eye) crews.push(o); });
     for (const c of crews) {
-      const r = c.userData.crewRig, f = frameOf(c.matrixWorld, r.eye, inv);
+      const r = c.userData.crewRig, f = frameOf(c.matrixWorld, r.eye, inv, r.ctl === 'bars' ? -0.36 : 0); // (a rider looks down the road over the bars)
       // a motorbike rider moves on the bike (bends over the tank, tucks, leans into turns): the eye follows the head
       const live = r.ctl === 'bars' ? new THREE.Matrix4().multiplyMatrices(inv, c.matrixWorld) : null;
       list.push({ part: p, crew: c, rig: r, role: r.role || 'pilot', kind: r.kind || 'light', bike: r.ctl === 'bars', live, ...f });
@@ -347,6 +347,14 @@ const _e = V();
 export function stationEye(st, out = V()) {
   if (!st.live) return out.copy(st.eye);
   return out.copy(st.rig.eyeNow(_e).applyMatrix4(st.live)).add(st.eye).sub(st.eyeRest);
+}
+
+// For the loading screen's shader warm-up: show what only a seat's view shows (capsule cabins, inside linings) so it
+// compiles with the rest; returns the undo.
+export function warmStations(list) {
+  const undo = [], show = (o) => { if (o && !o.visible) { o.visible = true; undo.push(() => (o.visible = false)); } };
+  for (const s of list) { show(s.cabin?.root); for (const l of s.linings || []) l.inside.forEach(show); }
+  return () => undo.forEach((u) => u());
 }
 
 // First person at station `st` (or none): its own figure's head and torso go, everyone else stays.

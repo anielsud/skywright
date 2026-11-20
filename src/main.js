@@ -13,6 +13,7 @@ import { Callouts } from './callouts.js';
 import { Controls } from './controls.js';
 import { HUD } from './hud.js';
 import { CameraRig } from './cameras.js';
+import { warmStations } from './stations.js';
 import { MODES, RingRace, LandingChallenge } from './missions.js';
 import { clamp, smoothstep } from './noise.js';
 import { installFog } from './shaders.js';
@@ -742,7 +743,9 @@ function buildFlight(cfg) {
   // shader; and with the reflection environment in place, which the first world update would otherwise add)
   world.updateEnv();
   renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null);
+  const seats = warmStations(ac.stations); // (the cockpit views' own cabins and linings, hidden until you sit there)
   renderer.compileAsync(scene, flightCam).catch(() => {}).then(compiled);
+  seats();
   renderer.setRenderTarget(null);
   onResize();
   const msg = { pad: `Launch pad · ${world.loc.name}. Full throttle to launch!`, helipad: `Rooftop helipad · ${site?.name}. Throttle to the middle to lift off!`, runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.' }[start];

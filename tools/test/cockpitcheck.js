@@ -1,6 +1,6 @@
 // Cockpit check (browser module, driven by cockpitcheck.py): builds every stock vehicle (as is, resized and mirrored),
-// seeded random player builds and multi-station builds (bombers with a glass nose, top, tail and belly gunner bubbles,
-// twin cockpits, cars, capsules) as flight Aircraft, and checks every cockpit view (Aircraft.stations, stations.js):
+// seeded random player builds (planes, cars, fittings, motorbikes) and multi-station builds (bombers with a glass nose,
+// top, tail and belly gunner bubbles, twin cockpits, cars, capsules) as flight Aircraft, and checks every cockpit view (Aircraft.stations, stations.js):
 //   1. the eye is inside its cockpit: within the box of its seat's part (canopy, nose, cab, capsule) and its figure,
 //   2. the eye is not inside solid geometry: nothing within 3 cm of it, and it doesn't look out through the backs of
 //      one-sided surfaces (10 of 14 directions first meet a back face: the head is buried in a body skin, a seat or a
@@ -13,7 +13,7 @@
 import * as THREE from 'three';
 import { Aircraft, REALISM } from '../../src/aircraft.js';
 import { newPart, mirroredOf } from '../../src/design.js';
-import { randomBuilds, fittingBuilds } from './meshcheck.js';
+import { randomBuilds, fittingBuilds, bikeBuilds } from './meshcheck.js';
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 
@@ -160,7 +160,7 @@ function check(design) {
 export function designs(presets, random = 20, seed = 7) {
   const out = [];
   for (const p of presets) out.push(p, resized(p), mirrored(p));
-  out.push(...stationBuilds(), ...randomBuilds(random, seed), ...fittingBuilds(12, seed + 24));
+  out.push(...stationBuilds(), ...randomBuilds(random, seed), ...fittingBuilds(12, seed + 24), ...bikeBuilds(8, seed + 64));
   return out;
 }
 export function run({ presets, random = 20, seed = 7 } = {}) {
