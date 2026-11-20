@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.94.0', items: [
+    "Cockpit views are fixed! You sit right in the pilot's seat now, and vehicles with more than one seat (like the Jumbo's Captain and First Officer) let you switch seats with the camera button. Bike riders and rocket astronauts get their own view too.",
+  ] },
   { v: '1.93.0', items: [
     'The SR-71 Blackbird is here! The fastest jet ever: take off, light the afterburners and climb to the edge of space at Mach 3. Watch the inlet spikes slide back as you speed up.',
   ] },
