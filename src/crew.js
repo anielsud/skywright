@@ -355,6 +355,13 @@ function figureGeometry(rig) {
   return k.build();
 }
 
+// Where the figure looks from (rig space, rest pose, head straight): just behind the eyes on the head bone.
+function eyePoint(rig) {
+  const r = new Rig(rig.kind, rig.ctl, rig.o, rig.seed, { pegs: rig.pegs, groundY: rig.groundY }); // (posed at rest)
+  const k = rig.o.head === 'bubble' ? 1.18 : 1;
+  return V(0, 0.155, -0.075 * k).applyQuaternion(r.q[B.head]).add(r.p[B.head]);
+}
+
 const geoCache = new Map();
 // outfit: OUTFITS key or object; ctl: 'stick' | 'cyclic' | 'yoke' | 'wheel' | 'none'; seed picks skin/hair tones
 export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, pegs = null, groundY } = {}) {
@@ -376,6 +383,12 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
   const smooth = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 };
   root.userData.crewRig = {
     rig, root,
+    eye: eyePoint(rig), // rig space: between the eyes, head straight (cockpit view, stations.js)
+    // where the eyes are now (rig space): a motorbike rider bends over the tank and leans into turns (stations.js)
+    eyeNow(out = V()) { return out.set(0, 0.155, -0.075 * (outfit.head === 'bubble' ? 1.18 : 1)).applyQuaternion(rig.q[B.head]).add(rig.p[B.head]); },
+    // first person: the head and torso (with whatever they wear) shrink to nothing so the camera in the head sees out;
+    // hands, arms, legs and the controls stay
+    firstPerson(on) { const k = on ? 1e-4 : 1; for (const i of [B.head, B.spine]) bones[i].scale.setScalar(k); },
     // c: { pitch, roll, yaw, throttle, steer } (stick back = +pitch, right = +roll and +yaw); returns true while still moving
     update(c, dt) {
       const k = Math.min(1, (dt || 0.016) * 12), s = smooth;
@@ -426,6 +439,7 @@ export function addCrew(design, objs) {
         if (st.ground != null) groundY = (st.ground - st.p[1]) / sc;
       }
       const c = buildCrew(outfit, ctl, { seed: i * 3 + k, colors, pegs, groundY });
+      Object.assign(c.userData.crewRig, { role: st.role || 'pilot', kind, ctl, part: i, seat: k }); // (stations.js names the cockpit views from these)
       c.position.set(...st.p); if (st.quat) c.quaternion.fromArray(st.quat); else if (st.yaw) c.rotation.y = st.yaw; c.scale.setScalar(st.s || 1);
       obj.add(c); list.push(c.userData.crewRig);
     });

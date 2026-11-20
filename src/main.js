@@ -13,6 +13,7 @@ import { Callouts } from './callouts.js';
 import { Controls } from './controls.js';
 import { HUD } from './hud.js';
 import { CameraRig } from './cameras.js';
+import { warmStations } from './stations.js';
 import { MODES, RingRace, LandingChallenge } from './missions.js';
 import { clamp, smoothstep } from './noise.js';
 import { installFog } from './shaders.js';
@@ -25,7 +26,6 @@ import { designSummary, trackHangar } from './buildStats.js';
 import { loadReal } from './realworld.js';
 import { aircraftLights, updateAircraftLights } from './navLights.js';
 import { Streaks } from './streaks.js';
-import { CapsuleView } from './capsule.js';
 import { WindTunnel } from './windTunnel.js';
 import { initThumbs, renderThumb, designKey, presetSlug, savedThumbs, storeThumb, stockThumbs, STOCK_SIZE } from './thumbs.js';
 installFog();
@@ -646,6 +646,7 @@ function buildFlight(cfg) {
   const design = cloneDesign(hangar.design);
   const ac = new Aircraft(design, realism);
   scene.add(ac.root);
+  void ac.stations; // the cockpit views (stations.js, with a capsule's cabin): made while loading, so their shaders warm up with the rest and the camera button never waits
   const nav = aircraftLights(ac, { spot: world.sunElev < 0.2 || world.W.dark > 0.6 }); // running lights (a real landing light after dark)
   const effects = new Effects(scene);
   const sonic = new SonicFX(ac, scene);
@@ -712,7 +713,6 @@ function buildFlight(cfg) {
   sonic.onMilestone = (n) => { hud.center(`MACH ${n}!`, 1800); audio.play('ring'); };
   F = { scene, world, ac, nav, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
   if (ac.isRocket) F.streaks = new Streaks(scene); // rockets: air rushing past (a climbing rocket sees only sky)
-  F.capsule = CapsuleView.for(ac); // flown from inside a round body: its first-person cabin (built now, so its shaders warm up with the rest)
   if (start === 'pad') F.clamp = { x: ac.x.clone(), q: ac.q.clone() }; // held down on the stand until the engines lift it
   applyQuality(); // the tier may have changed since the last flight (post effects, shadow cascades)
   F.callouts = new Callouts(audio, ac);
@@ -743,7 +743,9 @@ function buildFlight(cfg) {
   // shader; and with the reflection environment in place, which the first world update would otherwise add)
   world.updateEnv();
   renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null);
+  const seats = warmStations(ac.stations); // (the cockpit views' own cabins and linings, hidden until you sit there)
   renderer.compileAsync(scene, flightCam).catch(() => {}).then(compiled);
+  seats();
   renderer.setRenderTarget(null);
   onResize();
   const msg = { pad: `Launch pad · ${world.loc.name}. Full throttle to launch!`, helipad: `Rooftop helipad · ${site?.name}. Throttle to the middle to lift off!`, runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.' }[start];
@@ -836,7 +838,7 @@ function onAction(a) {
   switch (a) {
     case 'gear': ac.toggleGear(); break;
     case 'flaps': ac.cycleFlaps(); audio.play('flaps'); break;
-    case 'camera': hud.toast(rig.next()); break;
+    case 'camera': { const t = rig.next(ac); if (rig.mode === 'cockpit') hud.station(rig.stationName(ac)); else { hud.station(''); hud.toast(t); } break; } // cockpit: one view per seat, named
     case 'smoke': if (ac.hasSmoke) { ac.smokeOn = !ac.smokeOn; hud.toast(ac.smokeOn ? 'Smoke on!' : 'Smoke off'); } else hud.toast('Add a Smoke Generator in the hangar for airshow smoke'); break;
     case 'pause': togglePause(); break;
     case 'hud': hud.show(!hud.visible); controls.showTouch(hud.visible && document.body.classList.contains('touch-on')); break;
@@ -1044,7 +1046,7 @@ function stepFlight(dtReal) {
   if (ac.dead || ac.wrecked) { const biggest = ac.dead ? f.debris.reduce((a, d) => (!a || d.mass > a.mass ? d : a), null) : null; focus = biggest ? biggest.x : null; if (rig.mode === 'cockpit') rig.set('orbit'); }
   rig.update(dtReal, ac, world, focus);
   f.streaks?.update(dtReal, flightCam.position, ac, ac.rocketK > 0.5 && (rig.mode === 'chase' || rig.mode === 'cockpit'));
-  ac.setCockpitView(rig.mode === 'cockpit' && !focus); f.capsule?.set(rig.mode === 'cockpit' && !focus);
+  ac.setCockpitView(rig.mode === 'cockpit' && !focus ? rig.curStation(ac) : null); // (a capsule seat switches its cabin on: stations.js)
   world.update(dtReal, flightCam, rig.vel, f.events);
   updateAircraftLights(f.nav, dtReal, f.env);
   effects.setLighting(world, flightCam);
@@ -1285,7 +1287,8 @@ function fitNearPlane(f) {
     const dGnd = p.y - Math.max(w.heightAt(p.x, p.z), w.waterLevel) - 60; // trees, buildings, hills nearby
     room = Math.min(dAc, dGnd);
   }
-  const near = clamp(room * 0.5, 0.2, w.rain?.visible || w.snow?.visible ? 0.5 : 20); // rain/snow streaks right in front of the lens
+  let near = clamp(room * 0.5, 0.2, w.rain?.visible || w.snow?.visible ? 0.5 : 20); // rain/snow streaks right in front of the lens
+  if (rig.mode === 'cockpit' && !ac.dead && rig.near) near = rig.near; // from the seat's clearance (stations.js): the panel and canopy frame never clip
   // the far plane reaches the edge of the far terrain (where the haze has swallowed everything); depth precision is
   // set by the near plane, so the long far plane costs next to nothing
   const view = w.tiles?.far.viewDist() ?? 0, far = Math.max(60000, view, p.y > 5000 ? Math.hypot(view, p.y) * 1.1 : 0); // up high: still reach the world's far edge

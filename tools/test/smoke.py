@@ -295,6 +295,15 @@ async def run(args, url, ws_url, shots):
                 await asyncio.sleep(FLIGHT_SECONDS)
                 if shoot:
                     await cdp.screenshot(os.path.join(shots, f'flight-{name}.png'))
+                # every cockpit view (one per seat, src/stations.js), the way the camera button steps through them
+                views = await cdp.js(f'(() => {{ const a = {S}.F.ac; {S}.rig.set("cockpit", a); return a.stations.length; }})()')
+                for _ in range(views):
+                    await asyncio.sleep(0.3)
+                    await cdp.js(f'{S}.rig.next({S}.F.ac)')
+                await asyncio.sleep(0.2)
+                if await cdp.js(f'{S}.rig.mode') == 'cockpit':
+                    raise AssertionError('the camera button did not leave the cockpit after every seat')
+                await cdp.js(f'{S}.rig.set("chase")')
                 s = await cdp.js(f"""(() => {{ const F = {S}.F; if (!F) return null; const a = F.ac;
                     const n = (v) => [v.x, v.y, v.z].every(Number.isFinite);
                     return {{ t: F.t, pos: n(a.x), vel: n(a.v), alive: a.parts.filter((p) => p.alive).length,
@@ -318,7 +327,7 @@ async def run(args, url, ws_url, shots):
                 await cdp.js(f'{S}.endFlight()')
                 await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 10, 'the hangar')
                 return (f"{s['speed']:.0f} m/s, alt {s['alt']:.0f} m, {s['alive']}/{s['parts']} parts, "
-                        f"{ran / wall * 100:.0f}% realtime")
+                        f"{ran / wall * 100:.0f}% realtime, {views} cockpit view(s)")
             await r.step(f'fly: {name}', fly, timeout=150)
 
         if SR71 in names:  # (also with --only 'SR-71 Blackbird')

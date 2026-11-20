@@ -257,10 +257,13 @@ export const PM = {
     const m = new THREE.MeshPhysicalMaterial({ color: tint, metalness: 0, roughness: 0.03, transparent: true, opacity: 0.16, clearcoat: 1, clearcoatRoughness: 0.02,
       envMapIntensity: 1.4, side: THREE.DoubleSide, depthWrite: false, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor });
     m.onBeforeCompile = (sh) => {
+      THREE.Material.prototype.onBeforeCompile.call(m, sh); // the shared height-fog uniforms (shaders.js): without them fogEnd is 0 and the glass is all haze from a metre away
       sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', `
         float fres = pow(1.0 - clamp(abs(dot(normalize(vViewPosition), normal)), 0.0, 1.0), 4.0);
         float ga = mix(diffuseColor.a, 0.9, fres);
-        gl_FragColor = vec4(totalDiffuse * ga + max(outgoingLight - totalDiffuse, 0.0), ga);`);
+        gl_FragColor = vec4(totalDiffuse * ga + max(outgoingLight - totalDiffuse, 0.0), ga);`)
+        // premultiplied: the haze laid over the glass is only as strong as the glass is opaque
+        .replace('#include <fog_fragment>', 'vec3 preFog = gl_FragColor.rgb;\n#include <fog_fragment>\ngl_FragColor.rgb = mix(preFog, gl_FragColor.rgb, gl_FragColor.a);');
     };
     m.customProgramCacheKey = () => 'canopy';
     return m;

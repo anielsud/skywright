@@ -121,11 +121,9 @@ const seatMat = () => mat('seat', () => cabin({ color: 0x3b4450, roughness: 0.9,
 const glassIn = () => mat('glassIn', () => new THREE.MeshPhysicalMaterial({ color: 0xcfe6ff, roughness: 0.05, transparent: true, opacity: 0.12, depthWrite: false }));
 
 // For a vehicle flown from inside a round body: the body part (its built object is hidden while you're in the view) and
-// a first-person interior in its place. ac: the Aircraft. Returns null when there is nothing to do (a canopy part has
-// an eye already, or no round crewed body).
+// a first-person interior in its place. ac: the Aircraft. Returns null when there is no round crewed body.
 export class CapsuleView {
-  static for(ac) {
-    if (ac.parts.some((p) => p.eye)) return null; // a cockpit part: the planes' way (hide the canopy) already works
+  static for(ac) { // (made by stations.js for the capsule's seat: a build may have canopies as well)
     const p = ac.parts.find((q) => { const u = q.obj?.userData; return u?.body?.prof && (u.body.sx ?? 1) === 1 && (u.body.sy ?? 1) === 1 && u.capsuleSeat; });
     return p ? new CapsuleView(ac, p) : null;
   }
