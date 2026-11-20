@@ -22,8 +22,7 @@ S = 'window.__sky'
 
 
 async def place(cdp, loc, a):
-    await cdp.js(f"""(() => {{ if ({S}.F) {S}.endFlight();
-        Object.assign({S}.flightCfg, {{ location: {json.dumps(loc)}, online: false, mode: 'free', start: 'runway', time: 11, realism: 'pilot' }}); {S}.settings.quality = {json.dumps(a.quality)};
+    await cdp.js(f"""(() => {{ Object.assign({S}.flightCfg, {{ location: {json.dumps(loc)}, online: false, mode: 'free', start: 'runway', time: 11, realism: 'pilot' }}); {S}.settings.quality = {json.dumps(a.quality)};
         {S}.hangar.load({S}.presets.find((d) => d.name === 'Dune Buggy')); {S}.startFlight(); return 1; }})()""")
     await cdp.wait_for(f'{S}.F && {S}.F.t > 1', 180, f'the flight at {loc} to start')
     await asyncio.sleep(3)  # (New York streams its nearby tiles in)
@@ -39,39 +38,41 @@ async def game(cdp):
 async def main(a):
     port = a.port or free_port()
     srv = None if a.url else start_server(port)
-    profile = tempfile.mkdtemp(prefix='skywalls-')
-    proc, ws_url = launch_chrome(a.cdp_port or free_port(), profile, '1000,700')
     origin = (a.url or f'http://127.0.0.1:{port}').rstrip('/')
     results, report, t0 = [], {}, time.time()
     add = lambda name, ok, detail='': results.append((name, bool(ok), detail))
     try:
-        async with websockets.connect(ws_url, max_size=None) as ws:
-            cdp = CDP(ws)
-            probs = Problems(origin)
-            cdp.handlers.append(probs.on)
-            await cdp.send('Runtime.enable')
-            await cdp.send('Page.navigate', url=origin + '/')
-            await cdp.wait_for(f'{S} && {S}.hangar', 60, 'the app to boot')
-            for loc in a.places.split(','):
-                r = json.loads(await place(cdp, loc, a))
-                report[loc] = r
-                add(f'{loc}: clear building faces found', len(r['faces']) >= 1, f"{len(r['faces'])}: " + ', '.join(f"{f['size'][0]}x{f['size'][1]} m, {f['h']} m tall" for f in r['faces']))
-                for name in ('Dune Buggy', 'Dirt Bike'):
-                    runs = [x for x in r['runs'] if x['name'] == name]
-                    worst = max(runs, key=lambda x: x['maxPen'], default=None)
-                    add(f'{loc}: {name} stays out of the buildings ({len(runs)} runs)', runs and worst['maxPen'] <= a.tol,
-                        f"deepest {worst['maxPen']} m (face {worst['face']}, {worst['v']} m/s, {worst['a']} deg)" if worst else 'no runs')
-                    far = [x for x in runs if x['a'] == 0 and x['v'] >= 15 and x['closest'] > 4]
-                    add(f'{loc}: {name} reaches the wall', runs and not far, f"{len(far)} straight-on runs stopped short" if far else 'every straight-on run hit it')
-                if not a.no_game:
-                    g = json.loads(await game(cdp))
-                    report[loc + ':game'] = g
-                    worst = max(g, key=lambda x: x['maxPen'], default=None)
-                    add(f'{loc}: in the game loop the Dune Buggy stays out ({len(g)} runs)', g and worst['maxPen'] <= a.tol, f"deepest {worst['maxPen']} m ({worst['v']} m/s, {worst['a']} deg)" if worst else 'no runs')
-                p = probs.take()
-                add(f'{loc}: no page errors', not p, '; '.join(p[:5]))
+        for loc in a.places.split(','):  # a fresh browser for each place (one page switching between whole cities is a test of something else)
+            profile = tempfile.mkdtemp(prefix='skywalls-')
+            proc, ws_url = launch_chrome(a.cdp_port or free_port(), profile, '1000,700')
+            try:
+                async with websockets.connect(ws_url, max_size=None) as ws:
+                    cdp = CDP(ws)
+                    probs = Problems(origin)
+                    cdp.handlers.append(probs.on)
+                    await cdp.send('Runtime.enable')
+                    await cdp.send('Page.navigate', url=origin + '/')
+                    await cdp.wait_for(f'{S} && {S}.hangar', 60, 'the app to boot')
+                    r = json.loads(await place(cdp, loc, a))
+                    report[loc] = r
+                    add(f'{loc}: clear building faces found', len(r['faces']) >= 1, f"{len(r['faces'])}: " + ', '.join(f"{f['size'][0]}x{f['size'][1]} m, {f['h']} m tall" for f in r['faces']))
+                    for name in ('Dune Buggy', 'Dirt Bike'):
+                        runs = [x for x in r['runs'] if x['name'] == name]
+                        worst = max(runs, key=lambda x: x['maxPen'], default=None)
+                        add(f'{loc}: {name} stays out of the buildings ({len(runs)} runs)', runs and worst['maxPen'] <= a.tol,
+                            f"deepest {worst['maxPen']} m (face {worst['face']}, {worst['v']} m/s, {worst['a']} deg)" if worst else 'no runs')
+                        far = [x for x in runs if x['a'] == 0 and x['v'] >= 15 and x['closest'] > 4]
+                        add(f'{loc}: {name} reaches the wall', runs and not far, f"{len(far)} straight-on runs stopped short" if far else 'every straight-on run hit it')
+                    if not a.no_game:
+                        g = json.loads(await game(cdp))
+                        report[loc + ':game'] = g
+                        worst = max(g, key=lambda x: x['maxPen'], default=None)
+                        add(f'{loc}: in the game loop the Dune Buggy stays out ({len(g)} runs)', g and worst['maxPen'] <= a.tol, f"deepest {worst['maxPen']} m ({worst['v']} m/s, {worst['a']} deg)" if worst else 'no runs')
+                    p = probs.take()
+                    add(f'{loc}: no page errors', not p, '; '.join(p[:5]))
+            finally:
+                proc.kill(); proc.wait(); shutil.rmtree(profile, ignore_errors=True)
     finally:
-        proc.kill(); proc.wait(); shutil.rmtree(profile, ignore_errors=True)
         if srv:
             srv.shutdown()
     if a.json:

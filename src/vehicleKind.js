@@ -46,16 +46,17 @@ export function modeChoice(k, R) { // -> { label, name, desc } for realism level
 
 // What the game says as you start: keyed by the vehicle kind and the start id ('runway', 'road', 'stunt', 'pad',
 // 'helipad', 'air', 'water', 'approach'; the land-vehicle starts come from the start choices), with the kind's own
-// fallback (named for where it starts), then the plane's. c: { loc, rwy, stall (the take-off speed, already in the player's units), touch }
+// fallback (named for where it starts), then the plane's. c: { loc, rwy, site (a helipad's name), stall (the take-off speed, already in the player's units), touch }
 export function startMessage(k, start, c) {
   const go = c.touch ? 'GAS to go' : 'W to go', steer = c.touch ? 'steer with the stick' : 'A D to steer', lean = c.touch ? 'lean into the turns with the stick' : 'A D to lean into the turns';
-  const at = start === 'runway' ? `Runway ${c.rwy} · ${c.loc}.` : start === 'stunt' ? `Stunt park · ${c.loc}.` : start === 'road' ? `On the road · ${c.loc}.` : start === 'helipad' ? `Helipad · ${c.loc}.` : `${c.loc}.`;
+  const at = start === 'runway' ? `Runway ${c.rwy} · ${c.loc}.` : start === 'stunt' ? `Stunt park · ${c.loc}.` : start === 'road' ? `On the road · ${c.loc}.` : start === 'helipad' ? `Rooftop helipad · ${c.site || c.loc}.` : `${c.loc}.`;
   const M = {
     car: { stunt: `${at} ${go}: hit the ramps, loop the loop!`, '*': `${at} ${go}, ${steer}!` },
     bike: { stunt: `${at} ${go}, lean into the turns, full gas for a wheelie!`, '*': `${at} ${go}, ${lean}!` },
     heli: {
       air: 'Hovering! Push the stick to fly forwards.',
       approach: 'On final approach. Slow down and hover over the runway, then let down gently.',
+      helipad: `${at} Throttle to the middle to lift off!`,
       '*': `${at} Throttle up to the middle to lift off and hover!`,
     },
     rocket: { pad: `Launch pad · ${c.loc}. Full throttle to launch!`, '*': `${at} Full throttle and point the nose at the sky!` },
