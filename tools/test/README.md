@@ -62,15 +62,19 @@ assembly pass), and fails on:
   transparent materials are fine; a mesh whose hole is covered by design can say so with `userData.openOk = 'why'`
   (e.g. a cockpit opening closed by its tub and sill). Landing gear is skipped for now.
 - **exhausts through glass**: each car engine's chosen exhaust path (`userData.exhaustPaths`) against the vehicle's glass.
-- **floating parts on cars**: the stock cars plus 16 seeded random car builds (`carBuilds`: a body, wheels dropped from
-  below and an engine, cage, light bar and wing dropped from above the way the hangar places them; some resized,
-  resized as a whole or mirrored). Every connected piece of every mesh (each instance of an instanced suspension link)
-  must touch another piece, to within 1 cm, and all of them must hang together as one vehicle. Checked at rest and
-  again with every wheel pushed 60 % up its travel and the steered wheels turned, so the moving suspension (carRig.js)
-  has to follow. Crew (posed at runtime), prop discs, glows and registration decals are left out. `--cars N` for more.
+- **floating parts**: every connected piece of every mesh (each instance of an instanced suspension link) must touch
+  another piece, to within 1 cm, and all of them must hang together as one vehicle. Checked on every stock vehicle, on
+  the 20 random builds re-placed the way the hangar places parts (`randomBuilds(n, seed, { placed: true })`: each part
+  dropped onto the vehicle along a ray the way `Hangar.placement` seats a tapped part, mirrored copies on the partner)
+  and on 16 seeded random car builds (`carBuilds`: wheels dropped from below, an engine, cage, light bar and wing from
+  above; some resized, resized as a whole or mirrored). Checked at rest and again with every wheel pushed 60 % up its
+  travel and the steered wheels turned, so the moving suspension (carRig.js) has to follow. Crew (posed at runtime),
+  prop discs, glows and registration decals are left out; a piece may opt out with `userData.floatOk = 'why'` (a
+  deliberate gap). Each floating piece is reported with how far it is from the vehicle. `--placed N`, `--cars N` for
+  more.
 
 ```sh
-python3 tools/test/meshcheck.py                 # serves the repo itself, ~2 min
+python3 tools/test/meshcheck.py                 # serves the repo itself
 python3 tools/test/meshcheck.py --json out.json # full report
 ```
 

@@ -22,6 +22,7 @@ import { blendSkins } from './skinBlend.js';
 import { addCrew } from './crew.js';
 import { routeGear, routeStruts } from './gearRoute.js';
 import { assembleCar } from './carDetail.js';
+import { fitOut } from './fitOut.js';
 
 const BODY = new Set(['fuselage', 'cockpit']), BODY_X = new Set(['x_nosecone', 'x_tailcone']);
 const isBody = (id) => BODY.has(PARTS[id].cat) || BODY_X.has(id);
@@ -311,8 +312,13 @@ function filletRivets(made, bobj, ctx, mainWing) {
       for (let t = (0.07 - acc) / (L || 1); t < 1; t += 0.07 / (L || 1)) rivet(bag, a.clone().lerp(b, Math.max(0, t)).addScaledVector(e.n, 0.002), e.n, 0.009);
       acc = (acc + L) % 0.07;
     }
-    if (mainWing && e.pts.length > 6) { const lead = e.pts[Math.floor(e.pts.length / 2)], p = lead.clone().addScaledVector(ctx.fw, 0.35).addScaledVector(e.n, 0.003); plate(bag, p, e.n, ctx.fw, 0.12); }
+    if (mainWing && e.pts.length > 6) { const lead = e.pts[Math.floor(e.pts.length / 2)], h = snap(solidMeshes(bobj), lead.clone().addScaledVector(ctx.fw, 0.35), e.n, 0.15); if (h) plate(bag, h.p.addScaledVector(h.n, 0.002), h.n, ctx.fw, 0.12); } // (on the skin ahead of the fillet: it stood off the curve)
   }
+}
+// a surface point near p (within `reach` along the normal n either way) on meshes: { p, n } with n facing along n, or null
+function snap(meshes, p, n, reach = 0.04) {
+  const h = cast(meshes, p.clone().addScaledVector(n, reach), n.clone().negate(), 2 * reach, true); if (!h) return null;
+  if (h.n.dot(n) < 0) h.n.negate(); return h;
 }
 // small fittings: a domed rivet head; a riveted builder's plate (aluminium with a dark border)
 function rivet(bag, p, n, s) { const g = new THREE.SphereGeometry(s, 5, 2, 0, Math.PI * 2, 0, Math.PI / 2); g.scale(1, 0.4, 1); g.applyMatrix4(frameAt(p, n, V(0, 0, -1))); bag.add(g, M.aluminum()); }
@@ -679,7 +685,9 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
     }
   });
   const t0 = performance.now(); let seated = new Set();
-  try { seated = blendSkins(design, objs, { pods: POD, addTo, quick, rivets: (obj, pts, n) => { const bag = nearBag(obj); pts.forEach((p, k) => rivet(bag, p, n[k], 0.008)); } }); } catch (e) { console.warn('skinBlend', e); }
+  // (the canopy's rivet row is found on the blended skin's field: each rivet is snapped onto the built skin, or left out)
+  let skins = null; const skinOf = () => skins || (skins = objs.flatMap((o, j) => (valid(j) && isBody(parts[j].id) ? solidMeshes(o) : [])));
+  try { seated = blendSkins(design, objs, { pods: POD, addTo, quick, rivets: (obj, pts, n) => { const bag = nearBag(obj), m = skinOf().filter((x) => !obj.children.includes(x)); pts.forEach((p, k) => { const h = snap(m, p, n[k]); if (h) rivet(bag, h.p, h.n, 0.008); }); } }); } catch (e) { console.warn('skinBlend', e); }
   const tSkin = performance.now() - t0;
   const fw = V(0, 0, -1).transformDirection(root.matrixWorld).normalize(), right = V(1, 0, 0).transformDirection(root.matrixWorld).normalize(), up = V(0, 1, 0).transformDirection(root.matrixWorld).normalize();
   const gearSet = new Set();
@@ -746,6 +754,8 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
       if (d.cat === 'car' && objs[i].userData.exhaust && valid(p.parent)) T('collar', () => engineCollar(objs[i], objs[p.parent]));
     } catch (e) { console.warn('planeDetail furniture', p.id, e); }
   });
+  // cockpit seats and panels, rotor masts and shafts carried to the surfaces they stand on (fitOut.js)
+  try { T('fit', () => fitOut(design, objs, root, { valid, cast, addTo, structure, quick })); } catch (e) { console.warn('fitOut', e); }
   // cars: rigged suspension, axles and drivetrain, mud flaps, feet carried to the surfaces they stand on (carDetail.js)
   try { out.rig = T('car', () => assembleCar(design, objs, root, { valid, isBody, cast, solidMeshes, addTo, structure, near, ids: parts.map((p) => p.id), rootW: root.matrixWorld.clone() })); } catch (e) { console.warn('carDetail', e); }
   for (const [obj, bag] of nearBags) ctx.flush(bag, obj, true);

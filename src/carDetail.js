@@ -39,9 +39,8 @@ export function assembleCar(design, objs, root, h) {
   });
   if (!corners.length && !feet.length) return null;
   // ---- corners, grouped by the body they hang from: mirrored pairs share an axle line
-  const byBody = new Map();
+  const byBody = new Map(), rs = sOf(root); // (rs before the first addCorner: a corner hung off a non-body part threw here)
   for (const k of corners) { if (k.bi < 0) { addCorner(k, null); continue; } if (!byBody.has(k.bi)) byBody.set(k.bi, []); byBody.get(k.bi).push(k); }
-  const rs = sOf(root);
   function addCorner(k, solid) { const { links, feet: f } = cornerLinks(k.c, { solid, scale: k.s / rs }); for (const l of links) rig.link(l); for (const x of f) feet.push(x); }
   for (const [bi, list] of byBody) {
     // the body's metric frame (its axes, unscaled): sizes are metres whatever the body's size sliders say
@@ -209,12 +208,18 @@ function foot(f, objs, h, b, cache = new Map()) {
     return o;
   }];
   let best = null;
-  for (const tier of tiers) {
-    for (const dir of tier()) {
-      const from = P.clone().addScaledVector(dir, -back), hit = h.cast(targets, from, dir, back + reach, true);
-      if (hit && (!best || hit.d < best.hit.d - 0.05 * s)) best = { hit, dir, from };
+  const search = (targets) => {
+    for (const tier of tiers) {
+      for (const dir of tier()) {
+        const from = P.clone().addScaledVector(dir, -back), hit = h.cast(targets, from, dir, back + reach, true);
+        if (hit && (!best || hit.d < best.hit.d - 0.05 * s)) best = { hit, dir, from };
+      }
+      if (best) break;
     }
-    if (best) break;
+  };
+  search(targets);
+  if (!best && f.on === 'body') { // no body within reach (a wheel hung off an engine pod or a wing): whatever it hangs from
+    const own = new Set(); f.obj.traverse((m) => own.add(m)); search(h.structure.filter((m) => !own.has(m)));
   }
   if (!best) return;
   const { hit, dir } = best, gap = hit.d - back;

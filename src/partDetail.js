@@ -329,7 +329,7 @@ export function propEngineDetail(g, { len, radius: r, radial, color, propR }) {
     }
     // louvres: little raked slots high on each side of the cowl (near only)
     for (const sx of [-1, 1]) for (let i = 0; i < 5; i++) {
-      const z = len * (turbo ? 0.62 : 0.5) + i * 0.04, a = sx * 1.0, rr = r * (turbo ? 1.0 : 0.998);
+      const z = len * (turbo ? 0.62 : 0.5) + i * 0.04, a = sx * 1.0, rr = r * (1 - 0.08 * Math.max(0, z - len * 0.45) / (len * 0.55)) - 0.003; // on the cowl, which tapers aft of 45 % (they stood off it)
       const l = new THREE.BoxGeometry(r * 0.16, 0.01, 0.014); l.applyMatrix4(mx([Math.sin(a) * rr, Math.cos(a) * rr, z], [0, 0, -a]));
       nb.add(l, dark);
     }
@@ -405,6 +405,16 @@ export function jetEngineDetail(g, { len, radius: r, fan, ab }) {
       swirl.userData.near = true; fanG.add(swirl);
     }
   }
+  // what holds it all together: a drum from the fan hub back through the engine (the blade roots sit in it; the fan face
+  // and the parts behind it hung free in the duct), radial struts from it to the duct wall. Duct wall radius as built
+  // by parts.js jetEngine (the inner duct is the outer profile x 0.88).
+  const prof = fan ? [[0, r * 0.92], [0.05, r], [len * 0.35, r * 1.02], [len * 0.8, r * 0.85], [len, r * 0.62]] : [[0, r * 0.85], [0.1, r], [len * 0.6, r], [len, r * 0.78]];
+  const ductR = (z) => { for (let i = 1; i < prof.length; i++) if (prof[i][0] >= z) { const [z0, r0] = prof[i - 1], [z1, r1] = prof[i]; return 0.88 * (r0 + (r1 - r0) * ((z - z0) / (z1 - z0 || 1))); } return 0.88 * prof.at(-1)[1]; };
+  const zHub = len * 0.05 + r * 0.3, zEnd = fan ? len * 0.48 : len + 0.06, rd = r * 0.29;
+  { const d = new THREE.CylinderGeometry(rd, rd, zEnd - zHub + 0.02, 20, 1); d.rotateX(Math.PI / 2); d.translate(0, 0, (zHub - 0.02 + zEnd) / 2); b.add(d, steel); }
+  if (fan) { const c = new THREE.CylinderGeometry(r * 0.505, rd, len * 0.04, 24); c.rotateX(Math.PI / 2); c.translate(0, 0, len * 0.435); b.add(c, steel); } // the core's front closes onto the drum
+  const spokes = (n, z, rOut, depth, mat, a0 = 0) => { for (let i = 0; i < n; i++) { const a = a0 + (i / n) * Math.PI * 2, c = Math.cos(a), sn = Math.sin(a); b.add(bar(V(c * rd * 0.9, sn * rd * 0.9, z), V(c * rOut, sn * rOut, z), 0.03 * r / 0.55, depth), mat); } };
+  if (!fan) spokes(4, len * 0.12 + r * 0.32, ductR(len * 0.12 + r * 0.32) + 0.012, r * 0.12, dark, Math.PI / 4); // compressor-case struts behind the blades
   const glow = (rr, z) => { // the turbine face / flame holder glows with the flame (shares the flame core's material)
     const fc = g.userData.flameCore; if (!fc) return;
     const d = new THREE.Mesh(new THREE.CircleGeometry(rr, 24), fc.material); d.position.z = z; d.userData.cosmetic = true; d.castShadow = false; g.add(d);
@@ -419,7 +429,8 @@ export function jetEngineDetail(g, { len, radius: r, fan, ab }) {
     const plug = new THREE.LatheGeometry([[0.0, 0], [0.0, r * 0.3], [0.3 * r, r * 0.29], [0.75 * r, r * 0.18], [1.15 * r, 0.02], [1.16 * r, 0]].map(([z, rr]) => new THREE.Vector2(rr, z)), 24);
     plug.rotateX(Math.PI / 2); plug.translate(0, 0, len + r * 0.1); b.add(plug, dark);
     // bypass exit: a ring of outlet guide vanes deep in the duct, and the duct lining in a darker grey round the core
-    for (let i = 0; i < 28; i++) { const a = (i / 28) * Math.PI * 2, v = new THREE.BoxGeometry(0.012, r * 0.32, r * 0.18); v.rotateY(0.25); v.translate(0, r * 0.67, len * 0.42); v.rotateZ(a); b.add(v, steel); }
+    { const z = len * 0.5, r0 = r * 0.49, r1 = ductR(z) + 0.012; // (from the core cowl out to the duct wall: they floated between the two)
+      for (let i = 0; i < 28; i++) { const a = (i / 28) * Math.PI * 2, v = new THREE.BoxGeometry(0.012, r1 - r0, r * 0.18); v.rotateY(0.25); v.translate(0, (r0 + r1) / 2, z); v.rotateZ(a); b.add(v, steel); } }
     glow(r * 0.4, len + r * 0.12);
   } else if (ab) {
     // afterburner: ring of overlapping petals (heat-tinted, seen from inside too), a sleeve, flame-holder rings and a
@@ -433,10 +444,12 @@ export function jetEngineDetail(g, { len, radius: r, fan, ab }) {
     }
     const inner = new THREE.CylinderGeometry(r * 0.76, r * 0.58, r * 0.6, 24, 1, true); inner.rotateX(-Math.PI / 2); inner.translate(0, 0, len + r * 0.3); b.add(inner, PM.duct(0x2b2d31));
     for (const [rr, z] of [[0.45, -0.05], [0.25, -0.12]]) { const t = new THREE.TorusGeometry(r * rr, 0.02, 6, 24); t.translate(0, 0, len + z); b.add(t, steel); }
+    spokes(6, len - 0.085, ductR(len - 0.085) + 0.012, 0.1, steel); // radial flame-holder gutters carry the rings
     glow(r * 0.55, len + 0.06);
   } else {
     glow(r * 0.5, len + 0.06);
     for (const [rr, z] of [[0.4, 0.02]]) { const t = new THREE.TorusGeometry(r * rr, 0.015, 6, 20); t.translate(0, 0, len + z); b.add(t, steel); }
+    spokes(4, len + 0.02, r * 0.77, 0.04, steel, Math.PI / 4); // turbine exit struts out to the nozzle wall carry the ring
     const cone = new THREE.ConeGeometry(r * 0.25, r * 0.5, 16); cone.rotateX(Math.PI / 2); cone.translate(0, 0, len + 0.02); b.add(cone, dark);
   }
   b.to(g);
@@ -449,9 +462,10 @@ export function rocketDetail(g, { len, radius: r }) {
   // with a wall: throat, bell contour out to the exit lip, heat-tinted inside, cooling-tube bands outside, a sooty throat
   // and a glow deep in the throat that lights with the flame.
   for (const m of g.children.slice()) if (m.isMesh && m.material === M.darkMetal() && m.geometry.type === 'BufferGeometry' && m.geometry.attributes.position.count < 60) g.remove(m);
-  const bell = revolveZ(smoothPts([[len - 0.02 * r, r * 0.36], [len + 0.08 * r, r * 0.27], [len + 0.22 * r, r * 0.34], [len + 0.55 * r, r * 0.6], [len + 0.92 * r, r * 0.8]], 18), 36, 1);
+  const bp = smoothPts([[len - 0.02 * r, r * 0.36], [len + 0.08 * r, r * 0.27], [len + 0.22 * r, r * 0.34], [len + 0.55 * r, r * 0.6], [len + 0.92 * r, r * 0.8]], 18), bell = revolveZ(bp, 36, 1);
   b.add(shell(bell, r * 0.035), PM.metal('hot'));
-  for (const t of [0.35, 0.62, 0.86]) { const z = len + (0.08 + 0.84 * t) * r, rr = 0.27 + (0.8 - 0.27) * (1 - (1 - t) ** 1.6), band = new THREE.TorusGeometry(r * rr * 1.02, r * 0.018, 4, 36); band.translate(0, 0, z); b.add(band, M.darkMetal()); }
+  const bellR = (z) => { for (let i = 1; i < bp.length; i++) if (bp[i][0] >= z) { const [z0, r0] = bp[i - 1], [z1, r1] = bp[i]; return r0 + (r1 - r0) * ((z - z0) / (z1 - z0 || 1)); } return bp.at(-1)[1]; };
+  for (const t of [0.35, 0.62, 0.86]) { const z = len + (0.08 + 0.84 * t) * r, band = new THREE.TorusGeometry(bellR(z) + r * 0.009, r * 0.018, 4, 36); band.translate(0, 0, z); b.add(band, M.darkMetal()); } // on the bell (they stood off it)
   const throat = new THREE.CircleGeometry(r * 0.3, 20); throat.translate(0, 0, len + 0.06 * r); b.add(throat, PM.exhaust());
   b.to(g);
   const fc = g.userData.flameCore;
@@ -753,8 +767,9 @@ export function cockpitBuild(id, color) {
     g.userData.seats = [{ p: [0, -0.37, 0.3], s: 0.8 }]; // planeDetail seats a pilot here (crew.js)
     const gl = new THREE.CylinderGeometry(0.26, 0.26, 0.16, 18, 1, true, -1.25, 2.5); gl.scale(1, 1, 0.55); gl.rotateY(Math.PI); gl.translate(0, 0.08, -0.55); b.add(shell(gl, 0.008), black);
     const glTop = new THREE.CylinderGeometry(0.26, 0.26, 0.012, 18, 1, false, -1.25, 2.5); glTop.scale(1, 1, 0.55); glTop.rotateY(Math.PI); glTop.translate(0, 0.16, -0.55); b.add(capHoles(glTop), black);
-    const pnl = new THREE.PlaneGeometry(0.46, 0.2); pnl.rotateX(-0.25); pnl.translate(0, 0.02, -0.47); b.add(pnl, black);
-    for (let i = 0; i < 5; i++) { const d = new THREE.CircleGeometry(0.032, 12); d.applyMatrix4(mx([-0.18 + i * 0.09, 0.04 - (i % 2) * 0.06, -0.462], [-0.25, 0, 0])); nb.add(d, PM.dial()); }
+    const pf = mx([0, 0.06, -0.54], [-0.25, 0, 0]), pnl = new THREE.BoxGeometry(0.46, 0.2, 0.012); pnl.applyMatrix4(pf); b.add(pnl, black); // (its top edge up under the glare shield's lid: the shield hung ahead of it)
+    for (let i = 0; i < 5; i++) { const d = new THREE.CircleGeometry(0.032, 12); d.applyMatrix4(pf.clone().multiply(mx([-0.18 + i * 0.09, 0.02 - (i % 2) * 0.06, 0.0065]))); nb.add(d, PM.dial()); } // on the panel face (they hung in front of it, or behind)
+    g.userData.fit = [{ kind: 'seat', p: [0, -0.333, 0.29], w: 0.2, d: 0.2 }, { kind: 'panel', p: V(0, -0.1, 0).applyMatrix4(pf).toArray(), w: 0.4, d: 0.05, tilt: -0.25 }];
   } else if (id === 'ck_fighter') {
     const glass = revolveZ(smoothPts(FIGHTER_GLASS, 40), 48, 1.15);
     g.add(new THREE.Mesh(glass, PM.canopy(0x6b5524)));
@@ -767,9 +782,12 @@ export function cockpitBuild(id, color) {
     g.userData.seats = [{ p: [0, -0.42, 0.38], s: 0.88 }];
     const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.18, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.6); gl.rotateY(Math.PI); gl.translate(0, 0.14, -0.6); b.add(shell(gl, 0.008), black);
     const glTop = new THREE.CylinderGeometry(0.3, 0.3, 0.012, 18, 1, false, -1.3, 2.6); glTop.scale(1, 1, 0.6); glTop.rotateY(Math.PI); glTop.translate(0, 0.23, -0.6); b.add(capHoles(glTop), black);
-    const pnl = new THREE.PlaneGeometry(0.52, 0.24); pnl.rotateX(-0.2); pnl.translate(0, 0.06, -0.5); b.add(pnl, black);
-    for (let i = 0; i < 2; i++) { const d = new THREE.PlaneGeometry(0.13, 0.11); d.applyMatrix4(mx([-0.1 + i * 0.2, 0.06, -0.49], [-0.2, 0, 0])); nb.add(d, PM.dial()); }
-    const hud = new THREE.PlaneGeometry(0.15, 0.13); hud.applyMatrix4(mx([0, 0.33, -0.62], [-0.35, 0, 0])); nb.add(hud, PM.canopy(0x3c6b52));
+    const pf = mx([0, 0.11, -0.6], [-0.2, 0, 0]), pnl = new THREE.BoxGeometry(0.52, 0.24, 0.012); pnl.applyMatrix4(pf); b.add(pnl, black); // (top edge under the glare shield's lid)
+    for (let i = 0; i < 2; i++) { const d = new THREE.PlaneGeometry(0.13, 0.11); d.applyMatrix4(pf.clone().multiply(mx([-0.1 + i * 0.2, 0, 0.0065]))); nb.add(d, PM.dial()); } // (on the panel face)
+    // HUD combiner on two posts standing on the glare shield (it hung in the air above it)
+    const hf = mx([0, 0.33, -0.62], [-0.35, 0, 0]), hud = new THREE.PlaneGeometry(0.15, 0.13); hud.applyMatrix4(hf); nb.add(hud, PM.canopy(0x3c6b52));
+    for (const sx of [-1, 1]) { const top = V(sx * 0.068, -0.06, 0).applyMatrix4(hf); nb.add(bar(top, V(top.x, 0.226, top.z - 0.05), 0.012, 0.012, true, 6), black); }
+    g.userData.fit = [{ kind: 'seat', p: [0, -0.355, 0.36], w: 0.24, d: 0.22 }, { kind: 'panel', p: V(0, -0.12, 0).applyMatrix4(pf).toArray(), w: 0.46, d: 0.05, tilt: -0.2 }];
   }
   b.to(g); nb.to(g, true);
   return g;
@@ -792,6 +810,7 @@ export function openCockpitBuild(color) {
   const st = seatGeo(0.4, 0.5, 0.36, 0.3); st.translate(0, -0.36, 0.32); b.add(st, PM.seat());
   const hrest = new THREE.CapsuleGeometry(0.06, 0.12, 4, 10); hrest.rotateZ(Math.PI / 2); hrest.scale(1, 1, 0.6); hrest.translate(0, 0.17, 0.48); b.add(hrest, PM.seat());
   b.to(g);
+  g.userData.fit = [{ kind: 'seat', p: [0, -0.393, 0.18], w: 0.22, d: 0.2 }];
   g.userData.seats = [{ p: [0, -0.36, 0.16], s: 0.84 }];
   return g;
 }
@@ -928,7 +947,7 @@ export function airlinerNoseBuild(color, skinMat) {
   b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(loop, true, 'centripetal'), 220, 0.032, 6, true), black);
   for (const th of [0, -0.38, 0.38, -0.76, 0.76]) { const z0 = edgeZ(th), z1 = WTOP(th), pts = []; for (let k = 0; k <= 8; k++) { const z = z0 + (z1 - z0) * (k / 8); pts.push(lift(nosePt(z, th), th)); } b.add(pipe(pts, th ? 0.03 : 0.04, 6, 24), black); }
   // wipers parked along the bottom of the two front panes
-  for (const sx of [-1, 1]) { const a = sx * 0.06, c = sx * 0.34; nb.add(tube([lift(nosePt(edgeZ(a) + 0.05, a), a, 0.02), lift(nosePt(edgeZ(c) + 0.08, c), c, 0.02)], 0.012, 4, 6), black); }
+  for (const sx of [-1, 1]) { const a = sx * 0.06, c = sx * 0.34; nb.add(tube([lift(nosePt(edgeZ(a) - 0.03, a), a, 0.006), lift(nosePt(edgeZ(a) + 0.05, a), a, 0.02), lift(nosePt(edgeZ(c) + 0.08, c), c, 0.02)], 0.012, 4, 8), black); } // (from a pivot on the skin below the glass: they lay on the glass)
   // radome seam, pitot probes, static ports
   { const pts = []; for (let i = 0; i < 48; i++) { const th = (i / 48) * Math.PI * 2; pts.push(lift(nosePt(-4.12, th), th, 0.003)); } b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 96, 0.005, 4, true), M.darkMetal()); }
   const alu = M.aluminum();
@@ -948,11 +967,14 @@ export function airlinerNoseBuild(color, skinMat) {
   g.add(new THREE.Mesh(liner, dark));
   const bulk = new THREE.CircleGeometry(1.84, 32); bulk.rotateY(Math.PI); bulk.translate(0, 0, -1.5); b.add(bulk, M.paint(0x3a3d42, 'matte'));
   const floor = new THREE.BoxGeometry(2.2, 0.05, 2.3); floor.translate(0, -0.12, -2.65); b.add(floor, M.paint(0x34373c, 'matte'));
-  const glare = new THREE.CylinderGeometry(0.95, 0.95, 0.07, 24, 1, false, -1.0, 2.0); glare.scale(1, 1, 0.42); glare.rotateY(Math.PI); glare.translate(0, 0.74, -3.15); b.add(capHoles(glare), black);
-  const pnl = new THREE.BoxGeometry(1.5, 0.42, 0.06); pnl.rotateX(-0.3); pnl.translate(0, 0.46, -3.3); b.add(pnl, M.paint(0x2b2d31, 'matte'));
-  for (let i = 0; i < 5; i++) { const d = new THREE.PlaneGeometry(0.2, 0.16); d.applyMatrix4(mx([-0.56 + i * 0.28, 0.5, -3.265], [-0.3, 0, 0])); nb.add(d, PM.dial()); }
+  const glare = new THREE.CylinderGeometry(0.95, 0.95, 0.07, 24, 1, false, -1.0, 2.0); glare.scale(1, 1, 0.42); glare.rotateY(Math.PI); glare.translate(0, 0.69, -3.15); b.add(capHoles(glare), black); // (on the panel top: it hovered over it)
+  const pf = mx([0, 0.46, -3.3], [-0.3, 0, 0]), pnl = new THREE.BoxGeometry(1.5, 0.42, 0.06); pnl.applyMatrix4(pf); b.add(pnl, M.paint(0x2b2d31, 'matte'));
+  for (let i = 0; i < 5; i++) { const d = new THREE.PlaneGeometry(0.2, 0.16); d.applyMatrix4(pf.clone().multiply(mx([-0.56 + i * 0.28, 0.04, 0.0305]))); nb.add(d, PM.dial()); } // (on the panel face)
   const ped = new THREE.BoxGeometry(0.34, 0.42, 0.8); ped.translate(0, 0.1, -2.85); b.add(ped, M.paint(0x2b2d31, 'matte'));
-  for (const sx of [-1, 1]) { const st = seatGeo(0.5, 0.75, 0.48, 0.2); st.translate(sx * 0.55, 0.18, -2.3); b.add(st, PM.seat()); }
+  for (const sx of [-1, 1]) {
+    const st = seatGeo(0.5, 0.75, 0.48, 0.2); st.translate(sx * 0.55, 0.18, -2.3); b.add(st, PM.seat());
+    const rs = new THREE.BoxGeometry(0.3, 0.27, 0.3); rs.translate(sx * 0.55, 0.03, -2.52); b.add(rs, M.darkMetal()); // seat base down to the floor (the seats hung 24 cm over it)
+  }
   b.to(g); nb.to(g, true);
   g.userData.seats = [{ p: [0.55, 0.22, -2.54], s: 1 }, { p: [-0.55, 0.22, -2.54], s: 1 }];
   return g;
