@@ -467,13 +467,13 @@ forkDef('b_fork_dirt', 'Dirt Fork Wheel', 'Knobby front wheel on long-travel for
 forkDef('b_fork_road', 'Road Fork Wheel', 'Sticky front wheel on stiff racing forks with low clip-on bars and twin brakes. It steers.', SPORT_F, 18);
 swingDef('b_swing_dirt', 'Dirt Swingarm Wheel', 'Knobby back wheel on a swingarm with a big shock and a chain. The engine drives it.', DIRT_R, 18);
 swingDef('b_swing_road', 'Road Swingarm Wheel', 'Fat slick back wheel on a racing swingarm with a shock. The engine drives it.', SPORT_R, 22);
-// Engines: the 'drive' engine type, like the Car Engine: it pushes through the driven wheels. pitch: a hint for the
-// engine sound (higher than a car's), see the audio note in main.js.
+// Engines: the 'drive' engine type, like the Car Engine: it pushes through the driven wheels. sound: the engine voice
+// (motorSound.js: a single-cylinder thumper, a screaming inline four).
 def({ id: 'b_single', cat: 'bike', name: 'Dirt Bike Engine', desc: 'Big single-cylinder thumper with a high pipe. Drives the back wheel. Full gas for a wheelie!', mass: 34, hp: 700, color: 0x2b2d31,
-  engine: { type: 'drive', thrust: 2300, vmax: 44, sound: 'piston', idleRpm: 1400, maxRpm: 2700, cyl: 1, pitch: 1.6 },
+  engine: { type: 'drive', thrust: 2300, vmax: 44, sound: 'dirtbike', idleRpm: 1400, maxRpm: 2700, cyl: 1 },
   build: (c, lv) => bikeEngine({ four: false, color: c, lv }) });
 def({ id: 'b_four', cat: 'bike', name: 'Sport Bike Engine', desc: 'Screaming four-cylinder racing engine. Very fast!', mass: 60, hp: 900, color: 0x2b2d31,
-  engine: { type: 'drive', thrust: 2700, vmax: 70, sound: 'piston', idleRpm: 1300, maxRpm: 2700, cyl: 4, pitch: 2 },
+  engine: { type: 'drive', thrust: 2700, vmax: 70, sound: 'sportbike', idleRpm: 1300, maxRpm: 2700, cyl: 4 },
   build: (c, lv) => bikeEngine({ four: true, color: c, lv }) });
 
 // ---------- per frame (planeDetail.updateDetail): every bike wheel follows its physics wheel ----------

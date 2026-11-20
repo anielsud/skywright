@@ -7,6 +7,7 @@
 // out of earshot has its source stopped, not just muted.
 import * as THREE from 'three';
 import { SAMPLE_ENGINES, SAMPLE_LEVEL, RPM_RANGE } from './audio.js';
+import { isMotor } from './motorSound.js';
 
 // Linear trims (clips are normalised to ≈-26 dB weighted, then the master's -12 dB headroom applies).
 // Weighted dBFS at the reference distance, sliders at 100%: car ≈-32 @10 m, truck ≈-30, train ≈-32 @30 m,
@@ -222,9 +223,9 @@ export class WorldSound {
   remoteEngine(ac) {
     let kind = null, n = 0, count = 0, running = false;
     for (const p of ac.parts) {
-      const e = p.alive && p.engine; if (!e?.sound || !SAMPLE_ENGINES[e.sound]) continue;
-      if (kind && e.sound !== kind) continue;
-      kind = e.sound; count++;
+      const e = p.alive && p.engine, snd = SAMPLE_ENGINES[e?.sound] ? e.sound : isMotor(e?.sound) ? 'piston' : null; if (!snd) continue; // (a remote car or boat: the piston recording stands in)
+      if (kind && snd !== kind) continue;
+      kind = snd; count++;
       const rr = RPM_RANGE[kind];
       n = Math.max(n, rr ? Math.min(1, Math.max(0, ((e.rpm || 0) - rr[0]) / (rr[1] - rr[0]))) : e.spoolT || 0);
       running = running || (kind === 'rocket' ? !!e.burning : rr ? (e.rpm || 0) > 50 : true);

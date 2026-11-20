@@ -47,9 +47,12 @@ const ENG_SEQ = {
   rotor: { clip: 'eng_spool', rate: 1, gain: 0.6, catch: 2.8, blend: [2.6, 4.2], stop: 'eng_stop_jet', stopGain: 0.5, stopFade: 2.5, stopDur: 8 },
   fan: { clip: 'eng_start_jet', rate: 0.9, gain: 0.4, catch: 3.3, blend: [3.6, 5.8], stop: 'eng_stop_jet', stopGain: 0.45, stopFade: 3.5, stopDur: 10 },
 };
+// cars, bikes and boats (motorSound.js): no recording, the synthesized starter (a quick chug, then it catches with a rev)
+for (const k of Object.keys(MOTOR)) ENG_SEQ[k] = { prop: true, motor: true, clip: null, rate: 1, catch: MOTOR[k].cyl === 1 ? 0.45 : 0.8, blend: MOTOR[k].cyl === 1 ? [0.45, 0.9] : [0.75, 1.3], stop: null, stopFade: 0.35, stopDur: 1.2 };
 const DMG = { pop: 0.35, fire: 1, creak: 0.6, strain: 0.45, rattle: 0.28, flutter: 0.34 }; // damage audio (engineDamage, airframe)
 const BOOM = { crack: 0.2, rumble: 0.22, cockpit: 1 }; // sonic boom (sonicBoom) peaks (weighted, 100%): ≈-23 close outside, ≈-36 at 1.5 km, cockpit thump ≈-30; limiter ≥ -2 dB
 const ROTOR = { whop: 0.6, whine: 0.012, tail: 0.05 }; // helicopter extras (rotorTick)
+import { MOTOR, isMotor, makeMotor, updateMotor } from './motorSound.js';
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }; // -12 dB overall: a game shouldn't hit the speaker at full scale
 
 export class Audio {
@@ -172,7 +175,7 @@ export class Audio {
   // ---------- continuous voices ----------
   makeVoice(kind) {
     const v = { kind, out: this.gain(0) };
-    const spatial = !['wind', 'roll', 'stall', 'rain', 'buffet', 'whistle'].includes(kind);
+    const spatial = !['wind', 'roll', 'stall', 'rain', 'buffet', 'whistle', 'skid'].includes(kind);
     // engines: out -> air absorption (distant = duller) -> propagation delay (sound arrives d/343 s late; a changing delay
     // is also physically correct Doppler) -> 3D panner
     if (spatial) { v.pan = this.panner(); v.air = this.filt('lowpass', 22000, 0.5); v.dl = this.ctx.createDelay(4); v.seq = this.gain(this.seqGain(kind)); v.out.connect(v.seq); v.seq.connect(v.air); v.air.connect(v.dl); v.dl.connect(v.pan); v.pan.connect(this.engBus); } else v.out.connect(kind === 'stall' ? this.fx : kind === 'rain' ? this.amb : this.airBus);
@@ -183,7 +186,8 @@ export class Audio {
       if (d.ab) { const src = this.loop(d.ab), g = this.gain(0); src.connect(g); to(g); v.layers.push({ role: 'ab', src, g, rate: [0.95, 1.05] }); }
       return v;
     }
-    if (kind === 'piston' || kind === 'radial') {
+    if (isMotor(kind)) makeMotor(this, v, kind);
+    else if (kind === 'piston' || kind === 'radial') {
       const rad = kind === 'radial';
       v.o1 = this.osc(null, 40, rad ? this.radialWave : this.pistonWave); this.wobble(v.o1.detune, rad ? 22 : 12);
       v.sh = this.shape(); v.pre = this.gain(rad ? 1.2 : 0.9); v.o1.connect(v.pre); v.pre.connect(v.sh);
@@ -231,6 +235,13 @@ export class Audio {
     } else if (kind === 'buffet') {
       v.n = this.noise('brown'); v.nf = this.filt('lowpass', 90, 1); v.am = this.gain(0.5); v.lfo = this.osc('square', 9); v.lg = this.gain(0.5); v.lfo.connect(v.lg); v.lg.connect(v.am.gain);
       v.n.connect(v.nf); v.nf.connect(v.am); to(v.am);
+    } else if (kind === 'skid') { // tyres sliding: a squeal on hard ground (two wavering tones over a hiss), gravel spray on loose ground
+      v.s1 = this.osc('triangle', 820); this.wobble(v.s1.detune, 90, 9); v.s2 = this.osc('triangle', 1190); this.wobble(v.s2.detune, 120, 11);
+      v.sf = this.filt('bandpass', 1100, 3); v.s1.connect(v.sf); v.s2.connect(v.sf);
+      v.sn = this.noise(); v.snf = this.filt('bandpass', 1600, 2.5); v.sn.connect(v.snf);
+      v.sq = this.gain(0); v.sf.connect(v.sq); v.snf.connect(v.sq); v.sq.connect(v.out);
+      v.gn = this.noise(); v.gf = this.filt('bandpass', 2600, 0.8); v.gr = this.gain(0); v.gn.connect(v.gf); v.gf.connect(v.gr); v.gr.connect(v.out);
+      v.gl = this.noise(); v.glf = this.filt('lowpass', 25, 0.5); v.glg = this.gain(0); v.gl.connect(v.glf); v.glf.connect(v.glg); v.glg.connect(v.gr.gain); // crunchy, uneven
     } else if (kind === 'roll') {
       v.n = this.noise('brown'); v.nf = this.filt('lowpass', 160, 1); v.n.connect(v.nf); to(v.nf);
       v.bump = this.noise('crackle'); v.bf = this.filt('lowpass', 300); v.bg = this.gain(1.5); v.bump.connect(v.bf); v.bf.connect(v.bg); to(v.bg);
@@ -289,6 +300,7 @@ export class Audio {
       const multi = Math.sqrt(e.count);
       if (e.sound === 'rotor') this.rotorTick(v, e, s, multi);
       if (v.sampled) { this.updateSampled(v, e, s, 1, multi); continue; } // doppler comes from the delay line
+      if (v.motor) { updateMotor(this, v, e, s, multi); continue; } // cars, bikes, boats (doppler from the delay line too)
       if (e.sound === 'piston' || e.sound === 'radial') {
         const rad = e.sound === 'radial', rps = Math.max(1, e.rpm) / 60;
         this.set(v.o1.frequency, rps * 0.5 * dop * (rad ? 1 : 2)); // two-revolution cycle
@@ -321,7 +333,7 @@ export class Audio {
         this.set(v.out.gain, on * 0.75 * multi, 0.05);
       }
     }
-    for (const k of ['piston', 'radial', 'turboprop', 'electric', 'jet', 'fan', 'rocket', 'rotor']) if (!seen.has(k) && this.voices[k]) this.set(this.voices[k].out.gain, 0, 0.15);
+    for (const k of ['piston', 'radial', 'turboprop', 'electric', 'jet', 'fan', 'rocket', 'rotor', ...Object.keys(MOTOR)]) if (!seen.has(k) && this.voices[k]) this.set(this.voices[k].out.gain, 0, 0.15);
     // airflow
     const sp = s.airspeed, ck = s.cockpit ? 0.65 : 1;
     const wAmt = Math.min(0.4, (sp / 90) ** 2 * 0.3); // wind sits under the engine, even at jet speeds
@@ -338,6 +350,13 @@ export class Audio {
     this.set(rv.out.gain, recRoll || s.surface === 'water' ? 0 : rollAmt * (s.surface === 'runway' ? 0.45 : 1.0), 0.05);
     this.set(rv.nf.frequency, s.surface === 'runway' ? 120 : 260); this.set(rv.bg.gain, s.surface === 'runway' ? 0.4 : 2.2);
     this.set(rv.cg.gain, s.scrape ? Math.min(0.5, s.scrape / 40) : 0, 0.05);
+    // tyres sliding sideways (s.slip, m/s: cars and bikes on their wheels)
+    if (s.slip != null || this.voices.skid) {
+      const sk = this.voice('skid'), slide = s.onGround ? smooth(1.2, 5, s.slip || 0) * Math.min(1, (s.groundSpeed || 0) / 4) : 0;
+      const hard = !s.surface || s.surface === 'runway'; // (roads, ramps and rooftops are 'runway' too)
+      this.set(sk.sq.gain, hard ? 0.5 : 0, 0.05); this.set(sk.gr.gain, hard ? 0 : 0.6, 0.05); this.set(sk.glg.gain, hard ? 0 : 0.5, 0.05);
+      this.set(sk.sf.frequency, 950 + 250 * Math.min(1, (s.slip || 0) / 10)); this.set(sk.out.gain, slide * (hard ? 0.22 : 0.3) * (s.cockpit ? 0.7 : 1), 0.05);
+    }
     const st = this.voice('stall'); this.set(st.out.gain, s.stall ? STALL_HORN : 0, s.stall ? 0.03 : 0.1); // continuous while stalled, like the real reed
     const recRain = this.bedGain('rain', this.amb, s.rain * REC.rain * (s.cockpit ? 1.4 : 1), 0.4);
     const rn = this.voice('rain'); this.set(rn.out.gain, recRain ? 0 : s.rain * 0.13 * (s.cockpit ? 1.6 : 1), 0.3);
@@ -437,7 +456,7 @@ export class Audio {
     // stop: keep the voice "running" at idle while its pitch winds down and the seq gain fades it out
     if (t > d.stopDur) { q.mode = 'off'; this.set(v.seq.gain, 0, 0.05); return e; }
     v.rateMul = 1 - (d.prop ? 0.55 : 0.6) * Math.min(1, t / d.stopFade);
-    return { ...e, rpm: Math.max(e.rpm, rr ? rr[0] : 0), spoolT: 0, ab: false };
+    return { ...e, rpm: Math.max(e.rpm, rr ? rr[0] : d.motor ? e.idleRpm || 60 : 0), spoolT: 0, ab: false };
   }
   // synthesized start when the recording isn't loaded
   synthStart(d, dest) {
