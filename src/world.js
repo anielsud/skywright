@@ -974,6 +974,31 @@ export class World {
     return false;
   }
   treeHit(p) { return this.flora.hit(p) || this.towns.hit(p) || this.tiles?.treeHit(p) || this.pad?.hit(p) || this.helipads?.hit(p) || this.marina?.hit(p); }
+  // Buildings within r of (x, z), as solid boxes for a car's or bike's wall contacts (aircraft.js wallContacts): every
+  // building the towns, a real place or New York has, and the landmarks, each once, with its full footprint (destruct.box:
+  // the oriented box, not the disc the part-centre test above uses) and its current height (lower once knocked down).
+  // Towns and real places file a building under its centre's 50 m cell only, so the search reaches as far as the
+  // biggest building does; New York files every box under each cell it covers.
+  wallBoxes(x, z, r, out = []) {
+    out.length = 0;
+    const seen = this._wbSeen || (this._wbSeen = new Set()), D = this.destruct, T = this.towns;
+    seen.clear();
+    const add = (e) => {
+      if (seen.has(e) || !(e[3] > 0.3)) return; seen.add(e);
+      const b = D.box(e); if ((b.x - x) ** 2 + (b.z - z) ** 2 > (r + Math.hypot(b.hl, b.hw)) ** 2) return;
+      out.push({ x: b.x, z: b.z, ux: b.ux, uz: b.uz, hl: b.hl, hw: b.hw, y0: e[1], y1: e[1] + e[3], e });
+    };
+    const scan = (g, reach) => {
+      if (!g) return;
+      const R = r + reach, i0 = Math.floor((x - R) / 50), i1 = Math.floor((x + R) / 50), j0 = Math.floor((z - R) / 50), j1 = Math.floor((z + R) / 50);
+      for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) { const a = g.get(i + ',' + j); if (a) for (const e of a) if (e.solid) add(e); }
+    };
+    const reach = (g) => { let m = 0; for (const a of g.values()) for (const e of a) { const b = D.box(e); m = Math.max(m, Math.hypot(b.hl, b.hw)); } return m; };
+    if (T.city) scan(T.city.grid, 0);
+    else if (T.grid) { if (T.wallN !== T.grid.size) { T.wallN = T.grid.size; T.wallReach = reach(T.grid); } scan(T.grid, T.wallReach); }
+    for (const e of T.landmarks?.boxes || []) add(e);
+    return out;
+  }
   // ---------------- clouds ----------------
   buildClouds() {
     this.clouds = new CloudField(this.q.clouds >= 1 ? 3200 : 1800);

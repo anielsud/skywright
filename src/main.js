@@ -10,6 +10,7 @@ import { SonicFX } from './sonic.js';
 import { Audio, MIX_DEFAULTS, OLD_MIX_DEFAULTS } from './audio.js';
 import { WorldSound } from './worldsound.js';
 import { Callouts } from './callouts.js';
+import { vehicleKind, isLand, words, modeChoice, startMessage } from './vehicleKind.js';
 import { Controls } from './controls.js';
 import { HUD } from './hud.js';
 import { CameraRig } from './cameras.js';
@@ -266,7 +267,7 @@ function renderInspector() {
   const marginPct = clamp(s.margin, -0.5, 1);
   const balPos = clamp(50 + marginPct * 60, 4, 96);
   $('#stats').innerHTML = `
-    <h3>${d.parts.length ? 'Flight check' : 'Empty hangar'}</h3>
+    <h3>${d.parts.length ? words(vehicleKind(s)).check : 'Empty hangar'}</h3>
     <div class="stat-grid">
       <div><label>Mass</label><b>${fmt(s.mass)} kg</b></div>
       <div><label>Parts</label><b>${d.parts.length}</b></div>
@@ -282,8 +283,9 @@ function renderInspector() {
     <ul class="warnings">${s.warnings.map(([k, t]) => `<li class="${k}">${t}</li>`).join('')}</ul>`;
   if (!hangar.symAllowed(hangar.symMode)) hangar.symMode = 2; // 3 / 4 round the body are for rockets only
   for (const b of document.querySelectorAll('#sym-seg [data-sym]')) { b.hidden = !hangar.symAllowed(+b.dataset.sym); const on = +b.dataset.sym === hangar.symMode; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); }
-  $('#btn-bal').classList.toggle('on', hangar.showBalance);
+  $('#btn-bal').classList.toggle('on', hangar.showBalance); $('#btn-bal').setAttribute('aria-pressed', hangar.showBalance); $('#btn-bal .bal-txt').textContent = hangar.showBalance ? 'Dots on' : 'Dots off';
   $('#btn-fly').disabled = !d.parts.length; $('#btn-tunnel').disabled = !d.parts.length;
+  $('#btn-fly').textContent = `${words(vehicleKind(s)).go} ▶`; // FLY, DRIVE (cars and bikes) or SAIL (boats)
   $('#placing-bar').hidden = !hangar.placing;
   if (hangar.placing) $('#placing-bar span').textContent = `Placing: ${PARTS[hangar.placing].name}`;
   LS.set('current', hangar.design);
@@ -295,7 +297,8 @@ const undo = () => { if (hangar.undoStack.length) audio.play('undo'); hangar.und
 $('#btn-undo').addEventListener('click', undo);
 $('#btn-redo').addEventListener('click', redo);
 for (const b of document.querySelectorAll('#sym-seg [data-sym]')) b.addEventListener('click', () => { audio.play('select'); hangar.applySymmetry(+b.dataset.sym); renderInspector(); });
-$('#btn-bal').addEventListener('click', () => { hangar.showBalance = !hangar.showBalance; hangar.rebuild(); });
+hangar.showBalance = LS.get('showBalance', true); // the balance dots: on unless the player switched them off (remembered)
+$('#btn-bal').addEventListener('click', () => { hangar.showBalance = !hangar.showBalance; LS.set('showBalance', hangar.showBalance); audio.play('click'); hangar.rebuild(); ui.hint(hangar.showBalance ? 'Balance dots on: yellow = weight, blue = lift' : 'Balance dots off'); });
 $('#btn-frame').addEventListener('click', () => hangar.frame());
 $('#placing-bar button').addEventListener('click', () => { hangar.cancelPlacing(); buildPalette(); });
 $('#btn-save').addEventListener('click', () => { audio.init(); saveCurrent(); });
@@ -414,13 +417,13 @@ function landChips() {
   return chip('park', 'At the stunt park') + chip('road', 'On the road') + chip('runway', 'On the runway') + chip('evel', 'Daredevil canyon jump', ` data-evel${LOCATIONS[flightCfg.location]?.stunts?.evel ? '' : ' hidden'}`);
 }
 function flightModal() {
-  const s = analyze(hangar.design);
+  const s = analyze(hangar.design), kind = vehicleKind(s), W = words(kind);
   const m = ui.modal(`
-    <h2>Ready for take-off: ${hangar.design.name}</h2>
+    <h2>${W.ready}: ${hangar.design.name}</h2>
     <label class="lbl">Location</label>
     <div class="choice-row">${Object.values(LOCATIONS).filter((l) => !l.hidden).map((l) => `<button class="loc-card ${l.id}${flightCfg.location === l.id ? ' on' : ''}" data-loc="${l.id}"><span class="loc-online" data-online="${l.id}"></span><b>${l.name}</b><small>${l.desc}</small></button>`).join('')}</div>
     <div class="mp-online">
-      <div class="mp-head"><b>Fly together</b><div class="chips"><button data-on="1" class="${flightCfg.online !== false ? 'on' : ''}">With others</button><button data-on="0" class="${flightCfg.online === false ? 'on' : ''}">Alone</button></div>
+      <div class="mp-head"><b>${W.verb[0].toUpperCase() + W.verb.slice(1)} together</b><div class="chips"><button data-on="1" class="${flightCfg.online !== false ? 'on' : ''}">With others</button><button data-on="0" class="${flightCfg.online === false ? 'on' : ''}">Alone</button></div>
         <label class="mp-name">Your name <input id="mp-name" maxlength="16" autocomplete="off" spellcheck="false" value="${esc(net.name)}"></label></div>
       <div id="mp-list"></div>
     </div>
@@ -430,13 +433,13 @@ function flightModal() {
     <div class="chips">${MOONS.map(([k, n]) => `<button data-moon="${k}" class="${(flightCfg.moon || 'real') === k ? 'on' : ''}">${n}</button>`).join('')}</div>
     <label class="lbl">Weather</label>
     <div class="chips">${Object.entries(WEATHER).map(([k, w]) => `<button data-w="${k}" class="${flightCfg.weather === k ? 'on' : ''}">${w.name}</button>`).join('')}</div>
-    <label class="lbl">Realism</label>
-    <div class="choice-row">${Object.values(REALISM).map((r) => `<button class="opt-card${flightCfg.realism === r.id ? ' on' : ''}" data-r="${r.id}"><b>${r.name}</b><small>${{ arcade: 'Anything flies, even with one wing. Very hard to break.', pilot: 'Balance and drag matter a bit. Gentle stalls and some help.', sim: 'Real weight, balance, stalls, G-limits and hard landings.' }[r.id]}</small></button>`).join('')}</div>
+    <label class="lbl">${modeChoice(kind, REALISM.pilot).label}</label>
+    <div class="choice-row" id="mode-row">${Object.values(REALISM).map((r) => { const c = modeChoice(kind, r); return `<button class="opt-card${flightCfg.realism === r.id ? ' on' : ''}" data-r="${r.id}"><b>${c.name}</b><small>${c.desc}</small></button>`; }).join('')}</div>
     <label class="lbl">Mode</label>
     <div class="choice-row">${Object.entries(MODES).map(([k, mo]) => `<button class="opt-card${flightCfg.mode === k ? ' on' : ''}" data-m="${k}"><b>${mo.name}</b><small>${mo.desc}</small></button>`).join('')}</div>
     <label class="lbl">Start</label>
     <div class="start-row"><div class="chips">${s.car && !s.heli ? landChips() : s.boat ? boatChips() : `<button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">${groundStartLabel(s, flightCfg.location)}</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}`}</div>
-    <div class="start-go"><button data-close>Back</button><button class="primary big" id="go">FLY ▶</button></div></div>`, 'wide');
+    <div class="start-go"><button data-close>Back</button><button class="primary big" id="go">${W.go} ▶</button></div></div>`, 'wide');
   const el = m.el;
   const pick = (attr, key) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { flightCfg[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); audio.play('click'); }));
   el.querySelectorAll('[data-loc]').forEach((b) => b.addEventListener('click', () => { const e = el.querySelector('[data-evel]'); if (e) e.hidden = !LOCATIONS[b.dataset.loc]?.stunts?.evel; })); // the canyon jump: only where there is one
@@ -453,16 +456,16 @@ function flightModal() {
       const n = net.sessionsAt(b.dataset.online).reduce((a, r) => a + Math.max(0, r.count), 0);
       b.textContent = on && n ? `👥 ${n} flying` : ''; b.hidden = !(on && n);
     }
-    if (!on) { list.innerHTML = '<p class="mp-note">You’ll fly on your own. Nobody else will see your vehicle.</p>'; return; }
+    if (!on) { list.innerHTML = `<p class="mp-note">You’ll ${W.verb} on your own. Nobody else will see your vehicle.</p>`; return; }
     const rows = net.sessionsAt(loc).filter((r) => r.count > 0);
     const target = rows.find((r) => r.count < r.max);
     const sess = rows.map((r) => `<div class="mp-row${r === target ? ' target' : ''}"><div><b>Session ${r.n}</b> · ${r.count} pilot${r.count === 1 ? '' : 's'}: ${r.names.slice(0, 4).map(esc).join(', ')}${r.names.length > 4 ? '…' : ''}
         <small>${esc(WEATHER[r.cfg.weather]?.name || '')}${Number.isFinite(r.cfg.time) ? ` · ${timeLabel(r.cfg.time)}` : ''}</small></div>
         <button data-join="${r.n}" ${r.count >= r.max ? 'disabled' : ''}>${r.count >= r.max ? 'Full' : 'Join'}</button></div>`).join('');
     const status = net.scanning && !rows.length ? 'Looking for other pilots…'
-      : net.scanError ? 'Couldn’t check who’s online. FLY will try again, or fly alone if there’s no internet.'
-      : target ? `FLY joins <b>Session ${target.n}</b> (it keeps its own time of day and weather).`
-      : `Nobody’s flying at ${esc(LOCATIONS[loc].name)} yet. FLY starts a session, and anyone who flies here joins you.`;
+      : net.scanError ? `Couldn’t check who’s online. ${W.go} will try again, or ${W.verb} alone if there’s no internet.`
+      : target ? `${W.go} joins <b>Session ${target.n}</b> (it keeps its own time of day and weather).`
+      : `Nobody’s here at ${esc(LOCATIONS[loc].name)} yet. ${W.go} starts a session, and anyone who comes here joins you.`;
     list.innerHTML = `${sess}<p class="mp-note">${status}</p>${rows.length ? `<button class="mp-new" data-newsess>+ Start a new session with my time and weather</button>` : ''}`;
     list.querySelectorAll('[data-join]').forEach((b) => b.addEventListener('click', () => fly({ join: +b.dataset.join })));
     list.querySelector('[data-newsess]')?.addEventListener('click', () => fly({ host: true }));
@@ -481,7 +484,7 @@ function flightModal() {
     try { o = await net.connect(flightCfg, choice); } catch (e) { console.warn(e); err = e; net.leave(); }
     txt.textContent = 'Generating world…';
     startFlight(o || {});
-    if (err) setTimeout(() => hud.toast(choice.auto ? 'Couldn’t go online, so you’re flying alone.' : `${err.message} Flying alone.`, 'bad'), 1500);
+    if (err) setTimeout(() => hud.toast(choice.auto ? `Couldn’t go online, so you’re ${W.ing} alone.` : `${err.message} ${W.ing[0].toUpperCase() + W.ing.slice(1)} alone.`, 'bad'), 1500);
   };
   el.querySelector('#go').addEventListener('click', () => fly(flightCfg.online !== false ? { auto: true } : null));
 }
@@ -599,7 +602,11 @@ function settingsModal() {
 function helpModal() {
   ui.modal(`<h2>How to play</h2>
   <div class="help">
-  <h4>Build</h4><p>Pick a part on the left, then tap your vehicle where it should attach. With <b>Mirror</b> on, side parts are added in pairs. Tap a part to move, rotate, paint or remove it. The yellow dot is the centre of mass, the blue dot is the centre of lift: for a stable plane keep the yellow dot slightly <b>in front of</b> the blue one.</p>
+  <h4>Build</h4><p>Pick a part on the left, then tap your vehicle where it should attach. With <b>Mirror</b> on, side parts are added in pairs. Tap a part to move, rotate, paint or remove it. The yellow dot is the centre of mass, the blue dot is the centre of lift: for a stable plane keep the yellow dot slightly <b>in front of</b> the blue one. The <b>Dots</b> button at the bottom hides or shows them; <b>Reset view</b> puts the camera back.</p>
+${isLand(vehicleKind(analyze(hangar.design))) ? `<h4>Drive — keyboard</h4>
+  <table><tr><td>W / ↑</td><td>Gas</td></tr><tr><td>S / ↓</td><td>Brake (keep holding to reverse)</td></tr><tr><td>A D / ← →</td><td>Steer (a bike leans into the turn)</td></tr><tr><td>Space</td><td>Handbrake (in Racer: steer + handbrake to drift!)</td></tr><tr><td>C</td><td>Change camera</td></tr><tr><td>Esc / P</td><td>Pause</td></tr></table>
+  <h4>Drive — tablet</h4><p>The GAS and BRAKE pedals, and the stick steers. Or switch on <b>Tilt the tablet</b> in Settings and steer by tilting.</p>
+  <h4>Driving modes</h4><p><b>Easy</b>: sharp steering and sticky tyres, it can’t roll over. <b>Racer</b>: race tyres, traction control and ABS, and the handbrake drifts. <b>Pro</b>: no help at all, real tyre grip, and you can roll it! On a bike, Easy and Racer do the balancing and the wheelies for you.</p>` : ''}
   <h4>Fly — keyboard</h4>
   <table><tr><td>↑ ↓ / W S</td><td>Pitch (↓ pulls the nose up)</td></tr><tr><td>← → / A D</td><td>Roll</td></tr><tr><td>Q E</td><td>Rudder / steer on the ground</td></tr>
   <tr><td>Shift / Ctrl, R / F, 1–0</td><td>Throttle</td></tr><tr><td>B</td><td>Brakes</td></tr><tr><td>G</td><td>Gear up/down</td></tr><tr><td>V</td><td>Flaps</td></tr><tr><td>Space</td><td>Airshow smoke</td></tr><tr><td>C</td><td>Change camera</td></tr><tr><td>H</td><td>Hide HUD (photo mode)</td></tr><tr><td>Esc / P</td><td>Pause</td></tr></table>
@@ -674,6 +681,8 @@ function buildFlight(cfg) {
     // built structures (the canyon's stunt park, rooftop helipads, a marina's docks and piers): wheel rays and hull points hit their collision meshes (collide.js)
     ...(world.surfs.length ? { surfRay: (o, d, len) => world.surfRay(o, d, len), surfPoint: (p) => world.surfPoint(p) } : {}),
     waveAmp: world.loc.marina?.waves ?? 0.06, // the swell boats ride (boat.js)
+    // buildings as solid boxes for cars and bikes (aircraft.js wallContacts); a hole knocked in one lets you through
+    walls: (x, z, r, out) => world.wallBoxes(x, z, r, out), wallPass: (e, p) => !!e.dk && world.destruct.passes(e, p),
     onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40, p.clone()); },
   };
   const land = st.car && !st.heli; // cars and bikes have their own start choices (LAND_STARTS), the stunt park by default
@@ -720,7 +729,7 @@ function buildFlight(cfg) {
   controls.setVehicle((st.car || st.boat) && !st.heli ? 'car' : st.rocket ? 'rocket' : 'plane'); ac.viewQ = flightCam.quaternion; // rockets steer relative to the screen
   if (st.bike) setTimeout(() => ui.hint(touchUI ? 'Bike: GAS to go, BRAKE to stop, stick to lean into turns. Full GAS for a wheelie!' : 'Bike: W go · S brake · A D lean and turn · full W for a wheelie, hard S for a stoppie', 6000), 1500);
   else if (st.boat) setTimeout(() => ui.hint(touchUI ? 'Boat: GAS to go, BRAKE to slow down (keep holding it to reverse), stick to steer. Full GAS to get up on the plane!' : 'Boat: W go · S slow down, hold to reverse · A D steer', 6000), 1500);
-  else if (st.car && !st.heli) setTimeout(() => ui.hint(touchUI ? 'Car: GAS to go, BRAKE to stop (keep holding it to reverse), stick to steer' : 'Car: W go · S brake, hold to reverse · A D steer · Space handbrake', 6000), 1500);
+  else if (st.car && !st.heli) setTimeout(() => ui.hint((touchUI ? 'Car: GAS to go, BRAKE to stop (keep holding it to reverse), stick to steer' : 'Car: W go · S brake, hold to reverse · A D steer · Space handbrake') + (cfg.realism === 'pilot' ? (touchUI ? ' · HANDBRAKE + steer to drift!' : ' · Space + steer to drift!') : ''), 6000), 1500);
   else if (st.rocket) setTimeout(() => ui.hint(touchUI ? 'Rocket: full throttle to launch · the stick points the nose left/right/up/down on screen · the slider rolls' : 'Rocket: full throttle to launch · arrows / WASD point the nose left/right/up/down on screen · Q E roll', 6000), 1500);
   if (st.heli) setTimeout(() => ui.hint(cfg.realism === 'sim' ? 'Helicopter: throttle is the collective. Good luck!' : 'Helicopter: throttle to the middle to hover, more to climb'), 1500);
   let mission = null;
@@ -733,19 +742,19 @@ function buildFlight(cfg) {
     ac.boomed = true; rig.shake(1.4); post.shock(0.45);
   };
   sonic.onMilestone = (n) => { hud.center(`MACH ${n}!`, 1800); audio.play('ring'); };
-  F = { scene, world, ac, nav, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
+  F = { kind: vehicleKind(st), stallWarn: vehicleKind(st) === 'plane', scene, world, ac, nav, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
   if (ac.isRocket) F.streaks = new Streaks(scene); // rockets: air rushing past (a climbing rocket sees only sky)
   if (ac.isBoat) F.boatFx = new BoatFX(scene, ac); // spray and wake (before the shaders compile)
   if (start === 'pad') F.clamp = { x: ac.x.clone(), q: ac.q.clone() }; // held down on the stand until the engines lift it
   applyQuality(); // the tier may have changed since the last flight (post effects, shadow cascades)
-  F.callouts = new Callouts(audio, ac);
+  F.callouts = new Callouts(audio, ac, F.kind);
   F.worldSound = new WorldSound(audio, world, traffic);
   world.destruct.onImpact = (m) => net.building(m); // online: the others see the same building come down
   // engines: already running for air starts; on the ground they start with the first throttle-up (see engineSwitch)
   F.eng = { on: start === 'air' || start === 'approach', hold: 0, idleT: 0 }; ac.engineRunning = F.eng.on; audio.engineReset(F.eng.on);
   net.attach(F);
   rig.init = false; rig.set('chase'); rig.look.dist = 1;
-  hud.setUnits(settings.units, ac.isCar || ac.isBoat); hud.show(true);
+  hud.setUnits(settings.units, ac.isCar || ac.isBoat); hud.stallLamp = F.stallWarn; hud.land = isLand(F.kind); hud.show(true); // (the stall horn, buffeting and STALL lamp are for planes)
   flightUI.style.display = ''; $('#hangar-ui').style.display = 'none';
   const showTouch = settings.touch === 'on' || (settings.touch === 'auto' && isTouch);
   controls.showTouch(showTouch); controls.enabled = true;
@@ -771,7 +780,9 @@ function buildFlight(cfg) {
   seats();
   renderer.setRenderTarget(null);
   onResize();
-  const msg = { pad: `Launch pad · ${world.loc.name}. Full throttle to launch!`, marina: `At ${site?.name} · ${world.loc.name}. Full gas to get up on the plane!`, helipad: `Rooftop helipad · ${site?.name}. Throttle to the middle to lift off!`, runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.', park: `Stunt park · ${world.loc.name}. Gas to go!`, road: `On the road · ${world.loc.name}. Gas to go!`, evel: 'Daredevil canyon jump. Full gas!' }[start];
+  // what to do first, for this kind of vehicle and this start (start ids: World.landStart's park / road / evel, the marina, ...)
+  const msg = startMessage(F.kind, start, { loc: world.loc.name, rwy: rwy.name, site: site?.name, touch: touchUI,
+    stall: `${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}` });
   hud.center(msg, 3500);
   if (world.loc.credit) setTimeout(() => { if (F?.world === world) hud.toast(world.loc.credit); }, 4000); // real places: data attribution
   if (!ac.hasEngine) hud.toast('Glider: look for rising air under clouds and over sunny ridges.');
@@ -875,7 +886,7 @@ function togglePause(force) {
     audio.silence();
     const m = ui.modal(`<h2>Paused</h2>${net.pauseHTML()}
       <div class="pause-stats">${statsHTML(F.ac)}</div>
-      <div class="col-buttons"><button class="primary big" data-a="resume">Resume</button><button data-a="restart">${net.active ? 'Respawn' : 'Restart flight'}</button><button data-a="calib" ${settings.controlMode !== 'tilt' ? 'hidden' : ''}>Re-centre tilt</button><button data-a="settings">Settings</button><button data-a="help">Controls help</button><button data-a="hangar" class="danger">Back to hangar${net.active ? ' (leave game)' : ''}</button></div>`, 'sticky');
+      <div class="col-buttons"><button class="primary big" data-a="resume">Resume</button><button data-a="restart">${net.active ? 'Respawn' : words(F.kind).restart}</button><button data-a="calib" ${settings.controlMode !== 'tilt' ? 'hidden' : ''}>Re-centre tilt</button><button data-a="settings">Settings</button><button data-a="help">Controls help</button><button data-a="hangar" class="danger">Back to hangar${net.active ? ' (leave game)' : ''}</button></div>`, 'sticky');
     m.el.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', () => {
       const a = b.dataset.a; m.close();
       if (a === 'resume') F.paused = false;
@@ -888,15 +899,15 @@ function togglePause(force) {
   } else { const r = $('#modal-root'); r.innerHTML = ''; r.style.display = 'none'; }
 }
 function restartFlight() { const c = F.cfg; endFlight(true); startFlight(c); }
-function statsHTML(ac) {
+function statsHTML(ac, W = words(F?.kind)) {
   const U = settings.units === 'metric' ? { s: 3.6, su: 'km/h', a: 1, au: 'm' } : ac.isCar || ac.isBoat ? { s: 2.237, su: 'mph', a: 3.28, au: 'ft' } : { s: 1.944, su: 'kt', a: 3.28, au: 'ft' };
   const t = ac.stats;
   return `<div class="stat-grid">
-    <div><label>Flight time</label><b>${Math.floor(t.time / 60)}:${String(Math.floor(t.time % 60)).padStart(2, '0')}</b></div>
+    <div><label>${W.time}</label><b>${Math.floor(t.time / 60)}:${String(Math.floor(t.time % 60)).padStart(2, '0')}</b></div>
     <div><label>Top speed</label><b>${Math.round(t.maxSpeed * U.s)} ${U.su}</b></div>
     <div><label>Highest</label><b>${Math.round(t.maxAlt * U.a).toLocaleString()} ${U.au}</b></div>
     <div><label>Max G</label><b>${t.maxG.toFixed(1)}</b></div>
-    <div><label>Landings</label><b>${t.landings}</b></div>
+    <div><label>${W.landings}</label><b>${t.landings}</b></div>
     <div><label>Softest landing</label><b>${t.bestLanding === null ? '—' : t.bestLanding.toFixed(1) + ' m/s'}</b></div>
     <div><label>Distance</label><b>${(t.distance / 1000).toFixed(1)} km</b></div>
     <div><label>Parts lost</label><b>${t.partsLost}</b></div>${t.maxMach >= 0.8 ? `
@@ -907,7 +918,7 @@ function showEnd(title, extra = '') {
   F.shownEnd = true;
   F.outcome = /Kaboom/.test(title) ? 'destroyed' : /Splash/.test(title) ? 'splashdown' : /Course/.test(title) ? 'race_done' : /Landing score/.test(title) ? 'landing_done' : 'crashed';
   const m = ui.modal(`<h2>${title}</h2>${extra}<div class="pause-stats">${statsHTML(F.ac)}</div>
-    <div class="col-buttons"><button class="primary big" data-a="restart">Fly again</button><button data-a="watch">Keep watching</button><button data-a="hangar">Back to hangar (repair)${net.active ? ' · leaves the game' : ''}</button></div>`, 'sticky');
+    <div class="col-buttons"><button class="primary big" data-a="restart">${words(F.kind).again}</button><button data-a="watch">Keep watching</button><button data-a="hangar">Back to hangar (repair)${net.active ? ' · leaves the game' : ''}</button></div>`, 'sticky');
   m.el.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', () => {
     const a = b.dataset.a; m.close();
     if (a === 'restart') restartFlight();
@@ -937,6 +948,19 @@ function handleEvents(f, dt) {
         hud.toast(`${ok}${vs.toFixed(1)} m/s`, vs < 2 ? 'good' : ''); break;
       }
       case 'scrape': if (e.surf !== 'water') { effects.sparks(e.pos, ac.v, 4); effects.dust(e.pos, ac.v, e.surf, 2); } f.scrapeT = 0.2; f.scrape = e.speed; break;
+      case 'wall': { // a car or bike into a building (aircraft.js wallContacts): sparks, a dent, and the blow shared with the building
+        const p = Math.min(2, e.speed / 18); effects.sparks(e.pos, ac.v, 6 + Math.round(p * 6)); effects.dust(e.pos, ac.v, 'rock', 3);
+        if (!f.lastImpact || f.t - f.lastImpact > 0.15) { audio.play('impact', p, e.pos); f.lastImpact = f.t; }
+        rig.shake(p * 0.7);
+        let part = null, bd = Infinity; for (const q of ac.parts) { if (!q.alive) continue; const d = ac.worldPoint(q.center, _v).distanceTo(e.pos); if (d < bd) { bd = d; part = q; } }
+        const thr = 4.5 * ac.R.crashMult;
+        if (part && e.speed > thr * 0.6) {
+          const give = e.e.dk ? world.destruct.impact(e.e, e.pos, ac, part) : 1;
+          ac.deform(part, e.pos, e.n, Math.min(0.5, (e.speed - thr * 0.4) * 0.025));
+          if (e.speed > thr) ac.damage(part, ((e.speed - thr) ** 2 * 22 * give) / (part.i === 0 ? 3 : 1), e.pos);
+        }
+        break;
+      }
       case 'spray': effects.spray(e.pos, e.speed); break;
       case 'dust': effects.dust(e.pos, ac.v, e.surf, 1); break;
       case 'gear': audio.play('gear'); hud.toast(e.down ? 'Gear down' : 'Gear up'); break;
@@ -1006,6 +1030,7 @@ function stepFlight(dtReal) {
       const wp = ac.worldPoint(p.center, _v);
       let t = world.treeHit(wp);
       if (t?.dk && world.destruct.passes(t, wp)) t = null; // through a hole knocked in a building
+      if (t?.solid && ac.walls) t = null; // cars and bikes meet buildings as solid walls (aircraft.js wallContacts, the 'wall' event)
       if (t && ac.v.length() > 5) {
         const give = t.dk ? world.destruct.impact(t, wp, ac, p) : 1; // a building that gives way takes some of the blow (never more than a wall would)
         if (t.solid) effects.dust(wp, { x: 0, z: 0 }, 'rock', 6); else effects.leaves(wp);
@@ -1112,9 +1137,9 @@ function stepFlight(dtReal) {
   const surf = world.groundAt(ac.x.x, ac.x.z).type;
   const camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(flightCam.quaternion), camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(flightCam.quaternion);
   const agl = flightCam.position.y - Math.max(world.heightAt(flightCam.position.x, flightCam.position.z), world.waterLevel);
-  audio.update({ engines: Object.values(engines), airspeed: ac.dead ? 0 : (ac.airspeed || 0), buffet: ac.dead || ac.onGround ? 0 : Math.max(0, ac.alpha - 0.22) + (ac.stalled ? 0.15 : 0),
+  audio.update({ engines: Object.values(engines), airspeed: ac.dead ? 0 : (ac.airspeed || 0), buffet: ac.dead || ac.onGround || !f.stallWarn ? 0 : Math.max(0, ac.alpha - 0.22) + (ac.stalled ? 0.15 : 0),
     onGround: ac.onGround && ac.parts.some((p) => p.alive && p.gear?.wheels.some((w) => w.contact)), groundSpeed: gs, surface: surf,
-    gear: contactGear(ac), scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead, cockpit, doppler, rain: world.rain.visible ? world.W.rain : 0,
+    gear: contactGear(ac), scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead && f.stallWarn, cockpit, doppler, rain: world.rain.visible ? world.W.rain : 0,
     listener: { pos: flightCam.position, fwd: camFwd, up: camUp },
     amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) },
     fire: dmgAudio.fire, rattle: dmgAudio.rattle, g: ac.dead ? 0 : ac.g, acPos: ac.x, airDensity: ac.rho ?? 1.225, // (kg/m³: wind and engines could fade in thin air)

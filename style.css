@@ -110,6 +110,12 @@ body.hide-right .inspector { transform: translateX(310px); }
 .bottombar { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding-bottom: calc(6px + env(safe-area-inset-bottom) * .5); }
 .bottombar .small { display: none; }
 .bottombar > button { min-height: 44px; }
+/* the balance dots toggle: the yellow (mass) and blue (lift) dots it shows, dimmed and crossed out when they're hidden */
+.bal-dots { display: inline-flex; gap: 2px; vertical-align: -1px; }
+.bal-dots i { width: 11px; height: 11px; border-radius: 50%; background: #ffd400; box-shadow: 0 0 0 2px #111; }
+.bal-dots i + i { background: #3ab0ff; }
+#btn-bal:not(.on) .bal-dots { opacity: .45; position: relative; }
+#btn-bal:not(.on) .bal-dots::after { content: ''; position: absolute; left: -2px; right: -2px; top: 50%; height: 2px; background: currentColor; transform: rotate(-30deg); }
 /* symmetry selector: Off · Mirror · 3 / 4 round the long axis (a segmented control, every button a full touch target) */
 .seg { display: flex; align-items: center; gap: 3px; padding: 0 3px 0 8px; background: rgba(0, 0, 0, .28); border: 1px solid var(--line); border-radius: 11px; }
 .seg-l { font-size: 11px; color: var(--dim); margin-right: 3px; letter-spacing: .03em; }
@@ -279,6 +285,7 @@ body.touch-on #h-mission:empty { display: none; }
   #plane-name { width: 120px; }
   .bottombar .small { display: inline-block; }
   .seg-l, .seg button span { display: none; }
+  .tb-actions { gap: 6px; } .fly { padding: 9px 14px; } .tunnel { padding: 9px 10px; }
 }
 @media (max-width: 760px) {
   .logo span { display: none; }
