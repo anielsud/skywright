@@ -436,7 +436,7 @@ function flightModal() {
     <label class="lbl">${modeChoice(kind, REALISM.pilot).label}</label>
     <div class="choice-row" id="mode-row">${Object.values(REALISM).map((r) => { const c = modeChoice(kind, r); return `<button class="opt-card${flightCfg.realism === r.id ? ' on' : ''}" data-r="${r.id}"><b>${c.name}</b><small>${c.desc}</small></button>`; }).join('')}</div>
     <label class="lbl">Mode</label>
-    <div class="choice-row">${Object.entries(MODES).map(([k, mo]) => `<button class="opt-card${flightCfg.mode === k ? ' on' : ''}" data-m="${k}"><b>${mo.name}</b><small>${mo.desc}</small></button>`).join('')}</div>
+    <div class="choice-row">${Object.entries(MODES).map(([k, mo]) => `<button class="opt-card${flightCfg.mode === k ? ' on' : ''}" data-m="${k}"><b>${k === 'free' && isLand(kind) ? 'Free Drive' : mo.name}</b><small>${mo.desc}</small></button>`).join('')}</div>
     <label class="lbl">Start</label>
     <div class="start-row"><div class="chips">${s.car && !s.heli ? landChips() : s.boat ? boatChips() : `<button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">${groundStartLabel(s, flightCfg.location)}</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}`}</div>
     <div class="start-go"><button data-close>Back</button><button class="primary big" id="go">${W.go} ▶</button></div></div>`, 'wide');

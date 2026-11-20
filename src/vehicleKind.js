@@ -45,31 +45,21 @@ export function modeChoice(k, R) { // -> { label, name, desc } for realism level
 }
 
 // What the game says as you start: keyed by the vehicle kind and the start id ('runway', 'road', 'stunt', 'pad',
-// 'air', 'water', 'approach'; the land-vehicle starts come from the start choices), with the kind's own fallback, then
-// the plane's. c: { loc, rwy, stall (the take-off speed, already in the player's units), touch }
+// 'helipad', 'air', 'water', 'approach'; the land-vehicle starts come from the start choices), with the kind's own
+// fallback (named for where it starts), then the plane's. c: { loc, rwy, stall (the take-off speed, already in the player's units), touch }
 export function startMessage(k, start, c) {
-  const pedals = c.touch ? 'GAS to go' : 'W to go', steer = c.touch ? 'steer with the stick' : 'A D to steer';
+  const go = c.touch ? 'GAS to go' : 'W to go', steer = c.touch ? 'steer with the stick' : 'A D to steer', lean = c.touch ? 'lean into the turns with the stick' : 'A D to lean into the turns';
+  const at = start === 'runway' ? `Runway ${c.rwy} · ${c.loc}.` : start === 'stunt' ? `Stunt park · ${c.loc}.` : start === 'road' ? `On the road · ${c.loc}.` : start === 'helipad' ? `Helipad · ${c.loc}.` : `${c.loc}.`;
   const M = {
-    car: {
-      stunt: `Stunt park · ${c.loc}. ${c.touch ? 'GAS' : 'W'} to go: hit the ramps, loop the loop!`,
-      runway: `Runway ${c.rwy} · ${c.loc}. ${pedals}, ${steer}!`,
-      '*': `${c.loc}. ${pedals}, ${steer}!`,
-    },
-    bike: {
-      stunt: `Stunt park · ${c.loc}. ${c.touch ? 'GAS' : 'W'} to go, lean into the turns, full gas for a wheelie!`,
-      '*': `${c.loc}. ${pedals}, lean into the turns with the stick!`,
-    },
+    car: { stunt: `${at} ${go}: hit the ramps, loop the loop!`, '*': `${at} ${go}, ${steer}!` },
+    bike: { stunt: `${at} ${go}, lean into the turns, full gas for a wheelie!`, '*': `${at} ${go}, ${lean}!` },
     heli: {
-      runway: `Helipad · ${c.loc}. Throttle up to the middle to lift off and hover!`,
       air: 'Hovering! Push the stick to fly forwards.',
       approach: 'On final approach. Slow down and hover over the runway, then let down gently.',
-      '*': `${c.loc}. Throttle up to the middle to lift off!`,
+      '*': `${at} Throttle up to the middle to lift off and hover!`,
     },
-    rocket: {
-      pad: `Launch pad · ${c.loc}. Full throttle to launch!`,
-      '*': `${c.loc}. Full throttle and point the nose at the sky!`,
-    },
-    boat: { '*': `${c.loc}. Throttle up to sail, steer with the stick!` },
+    rocket: { pad: `Launch pad · ${c.loc}. Full throttle to launch!`, '*': `${at} Full throttle and point the nose at the sky!` },
+    boat: { '*': `${at} Throttle up to sail, steer with the stick!` },
     plane: {
       pad: `Launch pad · ${c.loc}. Full throttle to launch!`,
       runway: `Runway ${c.rwy} · ${c.loc}. Throttle up and pull back gently at ${c.stall}!`,

@@ -262,3 +262,46 @@ python3 tools/test/cockpitcheck.py --random 60 --seed 9  # more random builds
 
 Run it when you change cockpit, seat or crew builders, or the camera's cockpit view. Smoke also visits every cockpit
 view of every preset through the camera button's path.
+## Car handling test
+
+`drivecheck.py` drives every stock car (not the bikes) on flat ground through the game's own physics (60 Hz, no
+rendering) in each driving mode: Easy, Racer and Pro (the Arcade / Pilot / Sim slots, `src/drive.js`). It fails unless:
+
+- **turning circles** at 5, 10, 15, 20, 25 and 30 m/s with the stick hard over: a radius under 6 m at walking pace; at
+  least 0.95 g of cornering in Easy and Racer (0.6 g in Pro) above it; the turn builds to 90 % within 0.45 s (Pro 0.9 s);
+  never tipping, and in Easy and Racer no wheel in the air;
+- **slalom** at 15 m/s, lock to lock every 1.2 s: the heading swings at least 36° (Pro 24°), on its wheels;
+- **fishhook** at 20 m/s (full lock one way, then the other): Easy and Racer stay on their wheels (Pro may roll);
+- **handbrake turn** at 18 m/s: Racer drifts (the tail out past 15°); Easy and Racer never spin out (under 50°) and
+  straighten up when you let go;
+- **brake and steer** from 20 m/s at once: with ABS (Easy, Racer) it still turns;
+- **a kid's own cars** (`meshcheck.js` `carBuilds`, some tall and narrow): hard turns at 10 and 20 m/s and the fishhook
+  keep them on their wheels in Easy and Racer.
+
+It prints the turning-circle table (radius and g per speed, per car and mode).
+
+```sh
+python3 tools/test/drivecheck.py                 # ~20 s
+python3 tools/test/drivecheck.py --json out.json # every number
+```
+
+Run it when you change car physics (`steerAngle`, the tyres in `contacts`, `carAssist` in `aircraft.js`) or `drive.js`.
+
+## Wall test
+
+`walls.py` drives cars and bikes into buildings and fails if anything of theirs gets inside one. At New York (its city
+boxes), Lauterbrunnen (a real village's OpenStreetMap buildings) and the Alpine Valley town (generated towns) it picks
+building faces with a clear, flat run-up near the start and drives the Dune Buggy and the Dirt Bike into each at 5, 15,
+30 and 45 m/s, straight on, at 35° and at 60° the other way, full gas, on the game's physics at 60 Hz
+(`tools/test/walls.js`). Every hull point and wheel is checked against every building box nearby, every frame: none
+may get more than 0.1 m inside (`--tol`), and the straight-on runs must reach the wall. A few runs then go through the
+real game loop (the flight's own vehicle, the pedal held down, building damage and all). The buildings are read from
+the world's own collision grids, not through `world.wallBoxes`, so the test doesn't trust the code it tests.
+
+```sh
+python3 tools/test/walls.py                      # ~70 s
+python3 tools/test/walls.py --places nyc --no-game
+```
+
+Run it when you change `wallContacts` in `aircraft.js`, `world.wallBoxes`, or how towns, real places or New York file
+their buildings.

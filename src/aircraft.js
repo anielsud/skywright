@@ -369,7 +369,9 @@ export class Aircraft {
     // (drive.js: Easy and Racer hold the car down so it can't tip; Pro stops at the car's own rollover limit, cornerG)
     const v = this.stuntUp ? this.v.length() : Math.hypot(this.v.x, this.v.z), L = this.wheelbase || 2.5; // (up a loop's side the speed is all vertical)
     // (on a banked ramp, bowl or loop the banking holds you in the turn too: more lock allowed)
-    const D = this.D, turn = D ? (D.antiRoll > 0 ? D.turnG * G : Math.min(D.turnG * G, (this.cornerG || 6) / 0.75 * 0.8)) : this.cornerG || 6;
+    // (the anti-roll hand raises the car's own rollover limit, rollG, by 1 / (1 - antiRoll): Easy can't tip at all;
+    // Pro asks for no more than 80 % of what tips it in a steady turn; a swerve, a kerb or a wobbly build can still roll it)
+    const D = this.D, turn = D ? (D.antiRoll >= 1 ? D.turnG * G : Math.min(D.turnG * G, (this.rollG || 8) / (1 - D.antiRoll) * 0.8)) : this.cornerG || 6;
     const cg = turn + (this.stuntUp ? G * Math.tan(Math.min(1.3, Math.acos(clamp(this.stuntUp.y, -1, 1)))) : 0);
     const th = -this.steerCmd() * Math.min(0.6, Math.atan(L * cg / Math.max(1, v * v)));
     if (!w || w.L === undefined) return th;
@@ -393,6 +395,7 @@ export class Aircraft {
     const half = ws.reduce((a, w) => a + Math.abs(w.top.x - xc), 0) / ws.length;
     const h = this.com.y - ws.reduce((a, w) => a + w.top.y - w.len - w.r, 0) / ws.length;
     this.cornerG = clamp(0.75 * G * half / Math.max(0.3, h), 3, 8);
+    this.rollG = G * half / Math.max(0.3, h); // the static rollover limit (m/s²), unclamped: drive.js modes steer below it
   }
   // Easy and Racer (drive.js): the yaw helper turns the car at the rate its steering asks for, so it turns in crisply
   // and never spins out. With the handbrake on, Racer lets it rotate further into a drift and holds the slide below
@@ -409,7 +412,7 @@ export class Aircraft {
     let acc = clamp(want - this.w.y, -3, 3) * k;
     const over = Math.abs(beta) - D.driftMax; // sliding further than the mode allows: catch it (and stop the spin)
     if (over > 0 && D.driftMax > 0 && Math.abs(vg) > 3) acc += -Math.sign(beta) * Math.min(1, over * 5) * (12 + 4 * Math.max(0, Math.sign(beta) * this.w.y));
-    T.y += acc * this.I.elements[4];
+    T.add(_rv.set(0, acc, 0).applyMatrix3(this.I)); // (through the whole inertia: a lopsided build's products of inertia would turn a bare yaw torque into a roll)
   }
   // Arcade and Pilot: a car stuck on its roof or side for 2 s is set back on its wheels.
   // A bike lying on its side is picked up in every mode, after 1.5 s.
@@ -731,7 +734,8 @@ export class Aircraft {
     else if (this.isHeli) this.heliAssist(F, T, ctl, q, _qi, fwdSpeed);
     else if (this.isCar && this.onGround && R.assist > 0) { // Arcade/Pilot: stability control keeps the wheels down
       const right = _v2.set(1, 0, 0).applyQuaternion(q), bank = Math.asin(clamp(this.stuntUp ? right.dot(this.stuntUp) : right.y, -1, 1)); // level with the ramp/loop/banking the wheels are on
-      T.add(_v3.set(0, 0, -bank * 6 * R.assist - this.w.z * 3 * R.assist).applyMatrix3(this.I));
+      const lv = this.D ? this.D.level : R.assist; // (a car's driving mode sets how firmly: a tall narrow build on soft springs falls over without it)
+      T.add(_v3.set(0, 0, -bank * 6 * lv - this.w.z * 3 * lv).applyMatrix3(this.I));
       if (this.D) this.carAssist(T);
     }
     else if (R.assist > 0 && !(this.isCar && this.onGround) && this.rocketK < 0.999) {
@@ -884,7 +888,7 @@ export class Aircraft {
           const room = Math.max(Math.sqrt(Math.max(0, cap * cap - Fy * Fy)), cap * 0.35);
           Fx = clamp(Fx, -room, room); const t2 = Math.hypot(Fx, Fy); if (t2 > cap) Fy *= Math.sqrt(Math.max(0, cap * cap - Fx * Fx)) / Math.abs(Fy);
         } else if ((Fd || hand || (D && Ff)) && tot > cap) { Fx *= cap / tot; Fy *= cap / tot; }
-        if (D && D.antiRoll) rollM += Fy * _rv.copy(rr).cross(latW).dot(fwdCar); // the tyres' sideways push rolls the car: summed to cancel below
+        if (D && D.antiRoll) rollM += _rv.copy(rr).cross(_rb.copy(fwdW).multiplyScalar(Fx).addScaledVector(latW, Fy)).dot(fwdCar); // the tyre's push along the road (sideways, and a turned wheel's drive) rolls the car: summed to cancel below
         const Fw = g.n.clone().multiplyScalar(N).addScaledVector(fwdW, Fx).addScaledVector(latW, Fy);
         // apply as impulse
         applyImpulse(this, rr, Fw.multiplyScalar(dt));

@@ -5,8 +5,11 @@
 //   slalom:  15 m/s, the stick swung from lock to lock every 1.2 s: how far the heading swings each way, and it stays
 //            on its wheels.
 //   fishhook: (the tip test) 20 m/s, full lock one way, then the other: it must stay on its wheels in Easy and Racer.
+//   a kid's own cars (meshcheck.js carBuilds: wheels, engine, cage and wing dropped on a body, some narrow and tall):
+//            hard turns at 10 and 20 m/s and the fishhook must keep them on their wheels in Easy and Racer.
 import * as THREE from 'three';
 import { Aircraft, REALISM } from '../../src/aircraft.js';
+import { carBuilds } from './meshcheck.js';
 
 const flat = (h = 0) => ({ groundAt: () => ({ h, n: new THREE.Vector3(0, 1, 0), type: 'runway' }), maxGround: () => h, windAt: () => new THREE.Vector3(), night: false, groundHeightAtSpawn: h });
 const C = (o = {}) => ({ pitch: 0, roll: 0, yaw: 0, throttle: 0, rev: 0, hand: 0, ...o });
@@ -99,6 +102,14 @@ export function plan(presets, modes = ['arcade', 'pilot', 'sim'], { strict = tru
     check(`${d.name} ${mode} fishhook`, [[pro || !tipped(fh), `tipped (up ${fh.minUp})`]]);
     check(`${d.name} ${mode} handbrake`, [[pro || !tipped(dr), `tipped (up ${dr.minUp})`], [mode !== 'pilot' || dr.maxBeta > 15, `Racer: no drift (${dr.maxBeta}°)`], [pro || dr.maxBeta < 50, `spun out (${dr.maxBeta}°)`], [pro || dr.endBeta < 8, `still sliding after letting go (${dr.endBeta}°)`]]);
     check(`${d.name} ${mode} brake + steer`, [[!tipped(bt), `tipped (up ${bt.minUp})`], [bt.turned > (pro ? 0 : 25), `ABS: barely turned while braking (${bt.turned}°)`]]);
+  }
+  if (strict) for (const [k, d] of carBuilds(12, 7).entries()) {
+    const st = d.parts.length && d; if (!st) continue;
+    for (const mode of modes.filter((m) => m !== 'sim')) {
+      const c = [10, 20].map((v) => circle(d, mode, v)), fh = fishhook(d, mode), up = Math.min(...c.map((x) => x.minUp), fh.minUp);
+      if (c[0].nW < 3) continue; // (a bike, or not a car)
+      check(`kid's car ${k} ${mode}: stays on its wheels`, [[up > 0.7, `tipped (up ${up})`]]);
+    }
   }
   return { results, checks };
 }

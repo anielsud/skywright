@@ -285,7 +285,7 @@ body.touch-on #h-mission:empty { display: none; }
   #plane-name { width: 120px; }
   .bottombar .small { display: inline-block; }
   .seg-l, .seg button span { display: none; }
-  .tb-actions { gap: 6px; } .fly { padding: 9px 14px; } .tunnel { padding: 9px 10px; }
+  .tb-actions { gap: 6px; } .fly { padding: 9px 14px; } .tunnel { padding: 9px 10px; } .logo span { display: none; } /* (room for DRIVE on a tablet held upright) */
 }
 @media (max-width: 760px) {
   .logo span { display: none; }
