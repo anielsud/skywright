@@ -688,7 +688,7 @@ def({ id: 'g_skid', cat: 'gear', name: 'Helicopter Skid', desc: 'Landing skid fo
 
 // --- Car parts: a Car Engine drives every wheel marked drive. Throttle = go, stick left/right = steer, pull back = reverse.
 def({ id: 'c_motor', cat: 'car', name: 'Car Engine', desc: 'V8 with a blower. Drives the car wheels. Throttle to go, pull the stick back to reverse.', mass: 220, hp: 900, color: C.red,
-  engine: { type: 'drive', thrust: 5000, vmax: 50, sound: 'piston', idleRpm: 800, maxRpm: 2700, cyl: 8 },
+  engine: { type: 'drive', thrust: 5000, vmax: 50, sound: 'v8', idleRpm: 800, maxRpm: 2700, cyl: 8 },
   build: (c, lv) => (lv ? carEngineDetail(c) : carMotor({ color: c })) }); // detail: a real supercharged V8
 const carWheel = (id, name, desc, mass, r, len, w, steer) => def({ id, cat: 'car', name, desc, mass, hp: 700, color: 0x2a2a2a, attach: 'gear',
   gear: { len, r, steer, brake: true, drive: true, limit: 8, k: 3 }, build: (c, lv) => gearLeg({ len, r, w, steer, color: c, lv }) });

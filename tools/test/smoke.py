@@ -293,6 +293,11 @@ async def run(args, url, ws_url, shots):
                     await cdp.js(f"{S}.controls.keys.add('w')")
                 t0, w0 = await cdp.js(f'{S}.F.t'), time.time()
                 await asyncio.sleep(FLIGHT_SECONDS)
+                # cars, bikes and boats have their own synthesized engine voice (src/motorSound.js): it must be running and audible
+                motor = await cdp.js(f'''(() => {{ const a = {S}.F.ac, e = a.parts.find((p) => p.alive && p.engine && {S}.audio.voices[p.engine.sound]?.motor);
+                    return e ? {{ kind: e.engine.sound, gain: {S}.audio.voices[e.engine.sound].out.gain.value }} : null; }})()''')
+                if motor and motor['gain'] < 0.01:
+                    raise AssertionError(f"its {motor['kind']} engine is silent at full throttle")
                 if shoot:
                     await cdp.screenshot(os.path.join(shots, f'flight-{name}.png'))
                 # every cockpit view (one per seat, src/stations.js), the way the camera button steps through them

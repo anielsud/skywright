@@ -405,13 +405,13 @@ def({ id: 'h_work', cat: 'boat', name: 'Workboat Hull', desc: 'Big tough hull fo
 // marine: { kind, thrust (N), vmax (m/s), propAt (what must be under water), thrustAt, steer (rad of swivel / rudder),
 // pivotZ (the steering axis, part-local z) }
 def({ id: 'm_outboard', cat: 'boat', name: 'Outboard Motor', desc: 'Clamps on the back of a boat and swivels to steer. Its propeller must be in the water.', mass: 220, hp: 900, color: 0x15161a,
-  engine: { type: 'marine', kind: 'swivel', thrust: 7600, vmax: 25, propAt: OB.prop, thrustAt: OB.prop, steer: 0.5, pivotZ: OB.pivotZ, sound: 'piston', idleRpm: 750, maxRpm: 3400, cyl: 6 },
+  engine: { type: 'marine', kind: 'swivel', thrust: 7600, vmax: 25, propAt: OB.prop, thrustAt: OB.prop, steer: 0.5, pivotZ: OB.pivotZ, sound: 'outboard', idleRpm: 750, maxRpm: 3400, cyl: 6 },
   build: (c, lv) => outboard(c, lv) });
 def({ id: 'm_inboard', cat: 'boat', name: 'Prop & Rudder', desc: 'An inboard engine turns a big propeller under the hull; the rudder behind it steers. Fit it underneath, at the back.', mass: 420, hp: 1400, color: 0x2b2d31,
-  engine: { type: 'marine', kind: 'rudder', thrust: 12000, vmax: 17, propAt: IB.prop, thrustAt: IB.prop, rudderAt: IB.rudder, rudderArea: 0.18, steer: 0.6, pivotZ: IB.rudder[2], sound: 'piston', idleRpm: 600, maxRpm: 2600, cyl: 8 },
+  engine: { type: 'marine', kind: 'rudder', thrust: 12000, vmax: 17, propAt: IB.prop, thrustAt: IB.prop, rudderAt: IB.rudder, rudderArea: 0.18, steer: 0.6, pivotZ: IB.rudder[2], sound: 'inboard', idleRpm: 600, maxRpm: 2600, cyl: 8 },
   build: (c, lv) => inboard(c, lv) });
 def({ id: 'm_jet', cat: 'boat', name: 'Water Jet', desc: 'Sucks water in underneath and squirts it out the back. The nozzle swivels to steer. Great for jet skis.', mass: 90, hp: 700, color: 0x8b9097,
-  engine: { type: 'marine', kind: 'swivel', thrust: 4400, vmax: 27, propAt: WJ.intake, thrustAt: WJ.nozzle, steer: 0.42, pivotZ: WJ.pivotZ, sound: 'piston', idleRpm: 1200, maxRpm: 4200, cyl: 3 },
+  engine: { type: 'marine', kind: 'swivel', thrust: 4400, vmax: 27, propAt: WJ.intake, thrustAt: WJ.nozzle, steer: 0.42, pivotZ: WJ.pivotZ, sound: 'jetski', idleRpm: 1200, maxRpm: 4200, cyl: 3 },
   build: (c, lv) => waterJet(c, lv) });
 def({ id: 'b_wheelhouse', cat: 'boat', name: 'Wheelhouse', desc: 'A cabin with windows all round and the captain at the wheel. Put it on a big deck.', mass: 650, hp: 2000, color: 0xc8102e,
   build: (c, lv) => wheelhouse(c, lv) });
