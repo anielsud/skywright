@@ -2,7 +2,7 @@
 // boats), "Flight time" or "Drive time", the start message, the driving modes, the voice callouts. The physics keeps its
 // own flags (ac.isCar, ac.isBike, ac.isHeli...); this is the player-facing kind.
 //   plane | heli | rocket | car | bike | boat
-// A car with real wings (a flying car) is a plane here: it flies. A boat (st.boat, from boats.js once that lands) sails.
+// A car with real wings (a flying car) is a plane here: it flies. A boat (st.boat / ac.isBoat: boat.js) sails.
 import { DRIVE } from './drive.js';
 
 export function vehicleKind(st) { // st: analyze(design)
@@ -44,15 +44,17 @@ export function modeChoice(k, R) { // -> { label, name, desc } for realism level
   return { label: 'Driving mode', name: D.name, desc: k === 'bike' ? BIKE_DESC[R.id] : D.desc };
 }
 
-// What the game says as you start: keyed by the vehicle kind and the start id ('runway', 'road', 'stunt', 'pad',
-// 'helipad', 'air', 'water', 'approach'; the land-vehicle starts come from the start choices), with the kind's own
-// fallback (named for where it starts), then the plane's. c: { loc, rwy, site (a helipad's name), stall (the take-off speed, already in the player's units), touch }
+// What the game says as you start: keyed by the vehicle kind and the start id (main.js: 'runway', 'air', 'water',
+// 'approach', 'pad', 'helipad'; cars' and bikes' 'park' (the stunt park), 'road' and 'evel' (the daredevil canyon
+// jump); boats' 'marina', 'water' and 'runway'), with the kind's own fallback named for where it starts, then the
+// plane's. c: { loc, rwy, site (a helipad's or marina's name), stall (the take-off speed, in the player's units), touch }
 export function startMessage(k, start, c) {
   const go = c.touch ? 'GAS to go' : 'W to go', steer = c.touch ? 'steer with the stick' : 'A D to steer', lean = c.touch ? 'lean into the turns with the stick' : 'A D to lean into the turns';
-  const at = start === 'runway' ? `Runway ${c.rwy} · ${c.loc}.` : start === 'stunt' ? `Stunt park · ${c.loc}.` : start === 'road' ? `On the road · ${c.loc}.` : start === 'helipad' ? `Rooftop helipad · ${c.site || c.loc}.` : `${c.loc}.`;
+  const at = { runway: `Runway ${c.rwy} · ${c.loc}.`, park: `Stunt park · ${c.loc}.`, road: `On the road · ${c.loc}.`, evel: 'Daredevil canyon jump.',
+    helipad: `Rooftop helipad · ${c.site || c.loc}.`, marina: `At ${c.site || 'the marina'} · ${c.loc}.`, water: `On the water · ${c.loc}.` }[start] || `${c.loc}.`;
   const M = {
-    car: { stunt: `${at} ${go}: hit the ramps, loop the loop!`, '*': `${at} ${go}, ${steer}!` },
-    bike: { stunt: `${at} ${go}, lean into the turns, full gas for a wheelie!`, '*': `${at} ${go}, ${lean}!` },
+    car: { park: `${at} ${go}: hit the ramps, loop the loop!`, evel: `${at} Full gas, hit the ramp and fly the canyon!`, '*': `${at} ${go}, ${steer}!` },
+    bike: { park: `${at} ${go}, lean into the turns, full gas for a wheelie!`, evel: `${at} Full gas, hit the ramp and fly the canyon!`, '*': `${at} ${go}, ${lean}!` },
     heli: {
       air: 'Hovering! Push the stick to fly forwards.',
       approach: 'On final approach. Slow down and hover over the runway, then let down gently.',
@@ -60,7 +62,10 @@ export function startMessage(k, start, c) {
       '*': `${at} Throttle up to the middle to lift off and hover!`,
     },
     rocket: { pad: `Launch pad · ${c.loc}. Full throttle to launch!`, '*': `${at} Full throttle and point the nose at the sky!` },
-    boat: { '*': `${at} Throttle up to sail, steer with the stick!` },
+    boat: {
+      marina: `${at} Full gas to get up on the plane!`,
+      '*': `${at} ${go}, ${steer}. Full gas to get up on the plane!`,
+    },
     plane: {
       pad: `Launch pad · ${c.loc}. Full throttle to launch!`,
       runway: `Runway ${c.rwy} · ${c.loc}. Throttle up and pull back gently at ${c.stall}!`,

@@ -94,7 +94,7 @@ export class HUD {
     if (skin > 45) { const t = this.$('h-skin'); t.textContent = Math.round(U.temp(skin)); t.style.color = skin > 900 ? '#fff4d6' : skin > 500 ? '#ff9a3d' : skin > 220 ? '#ff5a3d' : ''; }
     const L = (id, on, txt) => { const e = this.$(id); e.classList.toggle('on', !!on); if (txt) e.textContent = txt; };
     L('l-gear', ac.hasRetract ? ac.gearDown : false, ac.hasRetract ? (ac.gearT > 0.95 ? 'GEAR DOWN' : ac.gearT < 0.05 ? 'GEAR UP' : 'GEAR ···') : 'FIXED GEAR');
-    this.$('l-gear').style.display = ac.parts.some((p) => p.gear && p.alive) && !this.land ? '' : 'none'; // (a car's or bike's wheels aren't landing gear)
+    this.$('l-gear').style.display = ac.parts.some((p) => p.gear && p.alive) && !this.land ? '' : 'none'; // (a car's, bike's or boat's wheels aren't landing gear)
     L('l-flaps', ac.flaps > 0, `FLAPS ${[0, 10, 20, 35][ac.flaps]}°`); this.$('l-flaps').style.display = this.land ? 'none' : '';
     L('l-brake', ac.brake > 0.5 || ac.svcBrake > 0.5 || ac.ctl.hand > 0.5);
     this.$('l-smoke').style.display = ac.hasSmoke ? '' : 'none'; L('l-smoke', ac.smokeOn);

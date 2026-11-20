@@ -754,7 +754,7 @@ function buildFlight(cfg) {
   F.eng = { on: start === 'air' || start === 'approach', hold: 0, idleT: 0 }; ac.engineRunning = F.eng.on; audio.engineReset(F.eng.on);
   net.attach(F);
   rig.init = false; rig.set('chase'); rig.look.dist = 1;
-  hud.setUnits(settings.units, ac.isCar || ac.isBoat); hud.stallLamp = F.stallWarn; hud.land = isLand(F.kind); hud.show(true); // (the stall horn, buffeting and STALL lamp are for planes)
+  hud.setUnits(settings.units, ac.isCar || ac.isBoat); hud.stallLamp = F.stallWarn; hud.land = isLand(F.kind) || F.kind === 'boat'; hud.show(true); // (the stall horn, buffeting and STALL lamp are for planes)
   flightUI.style.display = ''; $('#hangar-ui').style.display = 'none';
   const showTouch = settings.touch === 'on' || (settings.touch === 'auto' && isTouch);
   controls.showTouch(showTouch); controls.enabled = true;
