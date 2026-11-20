@@ -3,7 +3,7 @@
 //   ride:    gas up, turn left, turn right, brake to a stop, wait: it must stay upright all the way, turn the way it was
 //            steered, reach a decent speed and stand still at the end.
 //   wheelie: (Arcade/Pilot) full gas from a roll lifts the front, it stays below the loop-out limit, and comes back down
-//            onto both wheels when the gas is eased.
+//            onto both wheels when the gas is eased; holding full gas from a stop wheelies and then rides on normally.
 //   stoppie: (Arcade/Pilot) a hard stop lifts the back wheel, and it lands again.
 //   jump:    launched off the ground at speed with the bike level: it lands upright and rides on.
 import * as THREE from 'three';
@@ -57,6 +57,11 @@ export function plan(presets, others = []) {
     const wh = run(d, mode, (t) => (t < 2 ? { throttle: 0.5 } : t < 4.5 ? { throttle: 1 } : { throttle: 0.3 }), { T: 8, spawn: { speed: 6 } });
     const up = wh.samples.filter((s) => s.t > 2 && s.t < 4.6 && !s.fc && s.rc).length, back = wh.samples.filter((s) => s.t > 6.5).every((s) => s.fc && s.rc);
     check(`${d.name} ${mode}: wheelie`, wh, [[up >= 5, `front never came up (${up} samples)`], [wh.maxPitch < 0.7, `too high (${wh.maxPitch.toFixed(2)} rad)`], [back, 'did not come back down'], [wh.minUp > 0.6, 'fell over'], [!wh.dead, 'wrecked']]);
+    // holding full gas from a stop (a kid on the keyboard): it launches on the back wheel, then puts the front down and
+    // gets going properly
+    const fg = run(d, mode, () => ({ throttle: 1 }), { T: 10 });
+    const upT = fg.samples.filter((s) => !s.fc && s.rc).length * 0.1, downEnd = fg.samples.filter((s) => s.t > 7).every((s) => s.fc && s.rc);
+    check(`${d.name} ${mode}: full gas`, fg, [[upT >= 1, `no wheelie (${upT.toFixed(1)} s)`], [downEnd, 'still on the back wheel after 7 s'], [fg.maxSpeed > 25, `slow (${fg.maxSpeed.toFixed(1)} m/s)`], [fg.maxPitch < 0.7, 'too high'], [fg.minUp > 0.6, 'fell over']]);
     // stoppie: 18 m/s, then a full hard stop
     const sp = run(d, mode, (t, ac) => (t < 1 ? { throttle: 0.6 } : { rev: Math.abs(ac.groundSpeed) > 0.3 ? 1 : 0 }), { T: 7, spawn: { speed: 18 } });
     const lift = sp.samples.filter((s) => s.fc && !s.rc && s.t > 1).length, down = sp.samples.filter((s) => s.t > 5.5).every((s) => s.fc && s.rc);

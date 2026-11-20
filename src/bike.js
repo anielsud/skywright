@@ -2,17 +2,22 @@
 // calls a bike; nothing here runs for planes or cars.
 //
 // A bike is any car (it has a drive engine) whose wheels are exactly two, in line, on the centreline: the stock bikes
-// and a kid's own build alike. On two wheels the rigid-body model would simply fall over, so a rider balances it:
-//   - the steering sets a LEAN: full stick is ~35° (less at walking pace, none at a stop, and less on a bike that would
-//     scrape its pegs or fairing first), and the front wheel is turned
-//     to the angle that holds the bike's ACTUAL lean in balance (tan(lean) = v·yaw rate / g), plus a correction towards
-//     the wanted lean. To lean right from upright that correction first steers left: counter-steering, done for you.
-//   - a balance torque helps the lean follow its target (strong in Arcade, softer in Pilot, a light assist in Sim,
-//     where the steering does most of the balancing), and below walking pace the rider "puts a foot down": the bike
-//     stays up at a stop in every mode.
-//   - Arcade/Pilot: full gas at low or medium speed lifts the front (a wheelie, up to ~24°); a hard stop lifts the back
-//     (a stoppie, up to ~16°). Both are held at their angle, can never loop over, and come down gently when you let go.
-//   - in the air the rider levels the bike (and keeps its nose near the flight path), so a jump lands on its wheels.
+// and a kid's own build alike. On two wheels the rigid-body model would simply fall over, so a rider rides it:
+//   - the steering sets a LEAN: full stick is ~35° (less at walking pace, none at a stop, less on a bike that would
+//     scrape its pegs or fairing first). The front wheel is turned to the angle that holds the bike's ACTUAL lean in
+//     balance (tan(lean) = v·yaw rate / g), plus a correction towards the wanted lean: to lean right from upright that
+//     correction first steers left. Counter-steering, done for you.
+//   - a balance torque helps the lean follow its target (strong in Arcade, softer in Pilot, a light assist in Sim, where
+//     the steering does more of the work). Below walking pace the rider puts a foot down: it stays up at a stop in
+//     every mode.
+//   - the rider keeps it pointing along its steering (a light back wheel under hard braking would slide out and spin
+//     it), steers into a sliding back wheel, eases the brakes before the back lifts on its own and the gas before the
+//     front does (every mode).
+//   - Arcade/Pilot: full gas from low speed lifts the front (a wheelie, ~25°, for up to 2.5 s per twist of the gas);
+//     a full stop from speed lifts the back (a stoppie, ~16°). Both are held at their angle, can't go over, and come
+//     back down gently.
+//   - in the air the rider levels the bike and keeps its nose near the flight path, so a jump lands on its wheels.
+//   - the rider (not a part) adds drag, less when tucked in; rolling backwards is only a shuffle.
 // Physics only: the visuals read ac.bike (lean, steer, tuck) through planeDetail.updateDetail.
 import * as THREE from 'three';
 import { clamp } from './noise.js';
@@ -55,7 +60,7 @@ export function detectBike(ac) {
     const t = clamp((h.z - f.top.z) / (r.top.z - f.top.z), 0, 1), hh = h.y - (gy(f) + (gy(r) - gy(f)) * t), x = Math.abs(h.x - xc);
     if (x > 0.02) clear = Math.min(clear, Math.atan2(Math.max(0, hh), x));
   }
-  return { front: lay.front.w, rear: lay.rear.w, L: lay.L, cdA, leanMax: clamp(clear - 0.12, 0.25, LEAN_MAX), lean: 0, leanT: 0, steer: 0, pitch: 0, tuck: 0, wheelie: 0, stoppie: 0, trick: '' };
+  return { front: lay.front.w, rear: lay.rear.w, L: lay.L, cdA, leanMax: clamp(clear - 0.12, 0.25, LEAN_MAX), lean: 0, leanT: 0, steer: 0, pitch: 0, tuck: 0, wheelie: 0, stoppie: 0, wheelieT: 0, stoppieT: 0, trick: '' };
 }
 
 // The front wheel's steering angle (rad, + = left, like aircraft.steerAngle), set every substep by bikeAssist.
@@ -97,7 +102,7 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
     const over = Math.max(0, Math.abs(lean) - b.leanMax - 0.08) * Math.sign(lean); // past what the tyres (or the clearance) can take: always caught
     const acc = (30 * (b.leanT - lean) - 10 * leanRate) * bal - 40 * over - (over ? 6 * leanRate : 0);
     T.z -= acc * Ir;
-  } else if (!ground) { // in the air: level the wings... the bars
+  } else if (!ground) { // in the air: level the bike
     const acc = (9 * (0 - lean) - 4 * leanRate) * m.air;
     T.z -= acc * Iz;
   }
@@ -114,7 +119,11 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
   b.trick = '';
   if (ground && m.tricks && !fallen && Math.abs(lean) < 0.35) {
     const straight = Math.abs(lean) < 0.2 && Math.abs(s) < 0.4;
-    const wantW = ctl.throttle > 0.85 && vg > 1 && vg < 20 && rc && straight, wantS = ctl.rev > 0.95 && vg > 4 && fc && !wantW && straight;
+    // a wheelie lasts up to 2.5 s per twist of the gas (ease off and open it again for another), so holding full gas
+    // launches with the front up and then gets on with going fast
+    if (ctl.throttle < 0.5) b.wheelieT = 0;
+    const wantW = ctl.throttle > 0.85 && vg > 1 && vg < 20 && rc && straight && b.wheelieT < 2.5, wantS = ctl.rev > 0.95 && vg > 4 && fc && !wantW && straight;
+    if (wantW || b.wheelieT > 0 && ctl.throttle >= 0.5) b.wheelieT = b.wheelieT + dt;
     if (wantW) { // front up, held at the wheelie angle on the back wheel
       const tgt = WHEELIE * clamp((ctl.throttle - 0.85) / 0.12, 0, 1), P = pivot(b.rear);
       T.x += P.Ieff * (20 * (tgt - rel) - 6 * w.x) + (fc ? 0 : P.grav * 0.5); b.trick = 'wheelie';

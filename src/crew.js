@@ -197,7 +197,8 @@ class Rig {
       this.neck = sp(0, D.spine, 0.0); this.shR = sp(D.shoulderW, D.shoulderUp, 0.02); this.shL = sp(-D.shoulderW, D.shoulderUp, 0.02);
       this.hipR = V(D.hipW, 0, 0).add(this.hipAt); this.hipL = V(-D.hipW, 0, 0).add(this.hipAt);
     }
-    p[B.hips].copy(bars ? this.hipAt : V()); q[B.hips].identity();
+    if (bars) p[B.hips].copy(this.hipAt); else p[B.hips].set(0, 0, 0);
+    q[B.hips].identity();
     p[B.spine].copy(this.spinePos); q[B.spine].copy(this.spineQ);
     p[B.head].copy(this.neck);
     if (bars) q[B.head].setFromEuler(new THREE.Euler(-0.1, s.look * 0.5, (s.bikeLean || 0) * 0.55 + (s.lean || 0) * 0.5, 'YXZ')); // eyes level, looking up the road
