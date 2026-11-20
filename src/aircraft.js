@@ -306,8 +306,9 @@ export class Aircraft {
       const pts = [];
       for (const p of this.parts) { for (const h of p.hull) pts.push(h); if (p.gear) for (const w of p.gear.wheels) pts.push(w.top.clone().addScaledVector(w.dir, w.len + w.r)); }
       for (const pt of pts) minY = Math.min(minY, pt.clone().sub(this.com).applyQuaternion(this.q).y);
-      const g = env.groundAt(pos.x, pos.z);
-      this.x.set(pos.x, g.h - minY + 0.03, pos.z);
+      let gh = env.groundAt(pos.x, pos.z).h;
+      const deck = env.surfRay?.(new THREE.Vector3(pos.x, gh + 40, pos.z), new THREE.Vector3(0, -1, 0), 40); if (deck) gh = gh + 40 - deck.t; // (on a built deck or ramp: on top of it)
+      this.x.set(pos.x, gh - minY + 0.03, pos.z);
       this.gearDown = true; this.gearT = 1;
     }
     this.syncVisual();
