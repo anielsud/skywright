@@ -37,8 +37,14 @@ export const words = (k) => WORDS[k] || FLY;
 // the driving modes (drive.js), which fill the same three slots (arcade / pilot / sim), so saved settings, online
 // sessions and the tests carry over.
 const REAL_DESC = { arcade: 'Anything flies, even with one wing. Very hard to break.', pilot: 'Balance and drag matter a bit. Gentle stalls and some help.', sim: 'Real weight, balance, stalls, G-limits and hard landings.' };
+const BOAT_MODE = { // boat.js: the help scales with R.assist (Arcade 1, Pilot 0.45, Sim 0)
+  arcade: { name: 'Easy', desc: 'Turns where you steer, never slides and is very hard to tip over.' },
+  pilot: { name: 'Skipper', desc: 'Some help steering. Flip it and it pops back up after two seconds.' },
+  sim: { name: 'Pro', desc: 'No help: it slides through turns, the bow can rear up and you can capsize.' },
+};
 const BIKE_DESC = { arcade: 'The rider balances for you. Wheelies and stoppies, and very hard to fall off.', pilot: 'Less help with balance. Wheelies and stoppies.', sim: 'Only a little balance help and no tricks: ride it yourself.' };
 export function modeChoice(k, R) { // -> { label, name, desc } for realism level R ({ id, name })
+  if (k === 'boat') { const B = BOAT_MODE[R.id] || BOAT_MODE.pilot; return { label: 'Boat mode', name: B.name, desc: B.desc }; }
   if (!isLand(k)) return { label: 'Realism', name: R.name, desc: REAL_DESC[R.id] || '' };
   const D = DRIVE[R.id] || DRIVE.pilot;
   return { label: 'Driving mode', name: D.name, desc: k === 'bike' ? BIKE_DESC[R.id] : D.desc };
@@ -63,8 +69,9 @@ export function startMessage(k, start, c) {
     },
     rocket: { pad: `Launch pad · ${c.loc}. Full throttle to launch!`, '*': `${at} Full throttle and point the nose at the sky!` },
     boat: {
-      marina: `${at} Full gas to get up on the plane!`,
-      '*': `${at} ${go}, ${steer}. Full gas to get up on the plane!`,
+      marina: `${at} Full gas and it lifts up to skim across the water!`,
+      runway: `${at} A boat on dry land! Its motor needs water, so bolt on a jet engine to get moving, or start at the marina.`,
+      '*': `${at} ${go}, ${steer}. Full gas and it lifts up to skim across the water!`,
     },
     plane: {
       pad: `Launch pad · ${c.loc}. Full throttle to launch!`,
