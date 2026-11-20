@@ -151,7 +151,8 @@ export class HUD {
   // behind it): a pitch ladder every 10° with the horizon, the straight-up point (UP star), the flight-path marker
   // (where you are going) and the nose cross (where you are pointing).
   drawLadder(ac, cam, inside = false) { // inside: the cockpit view (just the horizon, UP and the flight path over the cabin)
-    const cv = this.$('h-ladder'), on = !!(ac.isRocket && ac.rocketK > 0.5 && !ac.dead);
+    // only in the views that fly the rocket (chase and cockpit); the orbit, tower and fly-by cameras are for watching
+    const cv = this.$('h-ladder'), on = !!(ac.isRocket && ac.rocketK > 0.5 && !ac.dead && cam?.userData.ladder !== false);
     if (on !== this.ladderOn) { this.ladderOn = on; cv.style.display = on ? '' : 'none'; }
     if (!on || !cam) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1), W = cv.clientWidth, H = cv.clientHeight;
