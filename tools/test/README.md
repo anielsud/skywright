@@ -79,3 +79,19 @@ python3 tools/test/meshcheck.py --json out.json # full report
 ```
 
 Run it when you change part builders (`parts.js`, `partDetail.js`, `vehicleParts.js`) or the assembly pass.
+
+## Launch pad check
+
+`padcheck.py` checks the launch complex every location has (`src/launchpad.js`). At every location it starts the stock
+Rocket and checks that it stands upright on the pad's stand, on its axis, held by the hold-down clamps with the engines
+off; that it doesn't move, leave the deck or touch anything for 5 s; and that at full throttle the clamps let go once
+the swing arm is clear and it climbs past the service tower without touching it (no hull point inside it, a gap kept),
+without damage and standing straight. Then it starts every other preset and checks none of them is put on the pad;
+with `--ref URL` (a server of main) their spawn poses must match main's exactly.
+
+```sh
+python3 tools/test/padcheck.py                                   # ~3 min
+python3 tools/test/padcheck.py --ref http://127.0.0.1:9000 --all-spawns   # every preset at every location vs main
+```
+
+Run it when you change the pad, the launch stand (`uprightStage` in `hangar.js`) or the spawn code in `main.js`.

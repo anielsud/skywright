@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.88.0', items: [
+    'Rockets now start on a real launch pad with a tower, a flame trench and fuel tanks! Throttle up and the tower arm swings away while steam billows out.',
+  ] },
   { v: '1.87.0', items: [
     "In the hangar, tap a part and then pick Mirror, 3 or 4 to change its symmetry. The 3 and 4 buttons only show up when you're building a rocket. The rocket's sky ladder now only shows in the chase and cockpit views.",
   ] },

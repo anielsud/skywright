@@ -20,6 +20,7 @@ import { RealScenery } from './realBuildings.js';
 import { Destruction } from './destruction.js';
 import { BAKED, preloadBake, bakeFor, withBake, landAt } from './terrainBake.js';
 import { Landcover } from './landcover.js';
+import { LaunchPad } from './launchpad.js';
 import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
 
 export const RWY = { len: 1800, width: 45 };
@@ -111,6 +112,7 @@ export class World {
     if (this.real) this.net.towns = this.real.towns(this);
     this.towns = this.real ? new RealScenery(this) : new Towns(this);
     this.destruct = new Destruction(this); // buildings you can knock down
+    this.pad = new LaunchPad(this); // the launch complex rockets start from (after the scenery: it keeps clear of it)
     this.buildClouds();
     this.buildPrecip();
     this.setWeather(this.weatherId);
@@ -420,13 +422,14 @@ export class World {
   heightAt(x, z) { return this.sampleGrid(x, z); }
   maxGround(x, z) {
     const S = this.roadSurf, deck = S && S.q(x, z, true) ? S.y : -Infinity; // bridge decks count
-    return Math.max(this.sampleGrid(x, z), this.waterLevel, deck) + (this.inAirportBox(x, z) ? 25 : 0);
+    return Math.max(this.sampleGrid(x, z), this.waterLevel, deck, this.pad ? this.pad.maxAt(x, z) : -Infinity) + (this.inAirportBox(x, z) ? 25 : 0);
   }
   inAirportBox(x, z) { return x > 150 && x < 420 && Math.abs(z) < 260; }
   // y (optional): height of the point asking. A bridge deck is the ground for anything not well below it, so cars
   // drive over and planes can still fly under.
   groundAt(x, z, y) {
-    const e = 1.5, S = this.roadSurf;
+    const e = 1.5, S = this.roadSurf, pad = this.pad?.ground(x, z, y); // the launch pad's slab, trench and stand deck
+    if (pad) return pad;
     if (S && S.q(x, z, true, y ?? Infinity)) return { h: S.y, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: 'runway' };
     const h = this.sampleGrid(x, z);
     if (S && S.q(x, z) && S.e <= 0) return { h, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: 'runway' }; // on a road
@@ -934,7 +937,7 @@ export class World {
     }
     return false;
   }
-  treeHit(p) { return this.flora.hit(p) || this.towns.hit(p) || this.tiles?.treeHit(p); }
+  treeHit(p) { return this.flora.hit(p) || this.towns.hit(p) || this.tiles?.treeHit(p) || this.pad?.hit(p); }
   // ---------------- clouds ----------------
   buildClouds() {
     this.clouds = new CloudField(this.q.clouds >= 1 ? 3200 : 1800);

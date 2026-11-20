@@ -470,9 +470,11 @@ export function buildDesign(design, root, { quick = false, near = true } = {}) {
 // launches, on a launch stand sized from the vehicle itself: a deck ring it rests on by its lowest points outside the
 // ring's hole (fins, a skirt), with nozzles and anything narrower hanging down into the hole over a flame deflector;
 // splayed, braced legs; and a lattice service tower with a swing arm beside it. root: the built vehicle (its own
-// group). Returns null for anything else, else { stand, y }: the stand (world space: add it to the scene) and the
-// height to set root.position.y to. Visual only: physics and the flight's own launch don't use it.
-export function uprightStage(design, root, stats = analyze(design)) {
+// group). Returns null for anything else, else { stand, y, info }: the stand (world space: add it to the scene) and the
+// height to set root.position.y to. The flight's launch pad (launchpad.js) stands the same stand on its pad: opts.floor
+// drops the flame deflector's foot into its flame trench, stand.userData.arm is the swing arm (a group pivoting at the
+// tower, so it can swing away at ignition) and info gives the shapes it collides with (deck ring, tower).
+export function uprightStage(design, root, stats = analyze(design), { floor = 0 } = {}) {
   root.rotation.set(0, 0, 0); root.position.set(0, 0, 0);
   if (!stats.vertical || !design.parts.length) { root.updateMatrixWorld(true); return null; }
   root.rotation.x = Math.PI / 2; root.updateMatrixWorld(true); // nose up
@@ -504,7 +506,7 @@ export function uprightStage(design, root, stats = analyze(design)) {
     b.add(bar(foot.clone().lerp(top, 0.15), nt.clone().lerp(nf, 0.85), lw * 0.5, lw * 0.5, true, 6), red);
     const cl = new THREE.BoxGeometry(0.12 + Rf * 0.04, 0.1 + Rf * 0.04, 0.12 + Rf * 0.04); cl.translate(c.x + ca * (rIn + 0.1), H + 0.05, c.z + sa * (rIn + 0.1)); b.add(cl, steel); // hold-down clamps
   }
-  const dh = Math.min(H - t, rIn) * 0.8, defl = new THREE.ConeGeometry(rIn * 0.95, dh, 24); defl.translate(c.x, dh / 2, c.z); b.add(defl, soot); // flame deflector
+  const dh = Math.min(H - t, rIn) * 0.8, defl = new THREE.ConeGeometry(rIn * 0.95, dh - floor, 24); defl.translate(c.x, (dh + floor) / 2, c.z); b.add(defl, soot); // flame deflector
   // service tower (to one side of both the hangar view and the picture view): four posts, a cross-braced lattice every
   // ~1.5 m, a swing arm out to the vehicle two thirds of the way up
   const tw = 0.6 + Rf * 0.25, off = (rOut + tw * 0.5 + 0.6) * Math.SQRT1_2, tx = off, tz = -off, pr = 0.035 + Rf * 0.01, top = H + (box.max.y - yRest) * 0.8;
@@ -520,10 +522,12 @@ export function uprightStage(design, root, stats = analyze(design)) {
   const ya = H + (box.max.y - yRest) * 0.62, yv = ya - H + yRest, from = V3(tx, ya, tz), dirA = new THREE.Vector3(-tx, 0, -tz).normalize();
   let reach = Math.hypot(tx, tz);
   for (const p of pts) if (Math.abs(p.y - yv) < 0.3) { const q = new THREE.Vector3(p.x - c.x - tx, 0, p.z - c.z - tz), along = q.dot(dirA); if (along > 0 && q.addScaledVector(dirA, -along).length() < tw * 0.5) reach = Math.min(reach, along - 0.04); }
-  const end = from.clone().addScaledVector(dirA, Math.max(0.2, reach));
-  b.add(bar(from, end, tw * 0.35, tw * 0.25), red); b.add(bar(from.clone().setY(ya + tw * 0.25), end.clone().setY(ya + tw * 0.25), pr, pr, true, 5), steel);
+  const end = from.clone().addScaledVector(dirA, Math.max(0.2, reach)), pivot = V3(tx, 0, tz), arm = new THREE.Group(), ab = new Bag();
+  ab.add(bar(from, end, tw * 0.35, tw * 0.25).translate(-pivot.x, 0, -pivot.z), red); ab.add(bar(from.clone().setY(ya + tw * 0.25), end.clone().setY(ya + tw * 0.25), pr, pr, true, 5).translate(-pivot.x, 0, -pivot.z), steel);
+  arm.position.copy(pivot); ab.to(arm); stand.add(arm); stand.userData.arm = arm;
   b.to(stand); stand.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  return { stand, y: H - yRest };
+  const info = { c: new THREE.Vector2(c.x, c.z), H, rIn, rOut, legR: rl + H * 0.25, tower: { x: c.x + tx, z: c.z + tz, w: tw, top } };
+  return { stand, y: H - yRest, info };
 }
 
 // thumbnails of each part, rendered once

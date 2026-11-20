@@ -416,7 +416,7 @@ function flightModal() {
     <label class="lbl">Mode</label>
     <div class="choice-row">${Object.entries(MODES).map(([k, mo]) => `<button class="opt-card${flightCfg.mode === k ? ' on' : ''}" data-m="${k}"><b>${mo.name}</b><small>${mo.desc}</small></button>`).join('')}</div>
     <label class="lbl">Start</label>
-    <div class="start-row"><div class="chips"><button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">On the runway</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}</div>
+    <div class="start-row"><div class="chips"><button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">${s.vertical ? 'On the launch pad' : 'On the runway'}</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}</div>
     <div class="start-go"><button data-close>Back</button><button class="primary big" id="go">FLY ▶</button></div></div>`, 'wide');
   const el = m.el;
   const pick = (attr, key) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { flightCfg[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); audio.play('click'); }));
@@ -657,11 +657,14 @@ function buildFlight(cfg) {
   else if (start === 'water' || (start === 'runway' && st.floats && !gearOK)) start = 'water';
   if (start === 'runway' && (!ac.hasEngine)) start = 'air';
   if (st.car && st.wingArea < 0.5 && (start === 'air' || start === 'approach')) start = 'runway'; // cars without wings start on the ground
-  if (st.vertical && start !== 'water') start = 'runway'; // rockets launch standing on their tail
+  // the launch pad's stand is fitted to a rocket that is about to fly (anything else: to the stock Rocket, so it's never bare)
+  const padStand = world.pad?.setStand(st.vertical ? design : stockRocket());
+  if (st.vertical && start !== 'water') start = padStand && !padBusy(world.pad) ? 'pad' : 'runway'; // rockets launch standing on their tail
   const slot = cfg.mpSlot || 0, slotX = slot ? (slot % 2 ? 1 : -1) * Math.ceil(slot / 2) * 70 : 0; // multiplayer: side by side, stepped up
   const vApp = clamp(Number.isFinite(st.stall) ? st.stall * 1.45 : 45, 32, 110);
   const rwy = world.runways[net.active ? net.freeRunway(world) : cfg.rwy || 0] || world.runway; // online: a runway nobody is on
   if (start === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0, st.vertical ? { pitch: Math.PI / 2 } : {}); }
+  else if (start === 'pad') padSpawn(ac, world.pad, env);
   else if (start === 'water') {
     const w = findWater(world);
     if (w) ac.spawn(env, w.pos || w, w.heading || 0); else { start = 'air'; }
@@ -694,6 +697,7 @@ function buildFlight(cfg) {
   F = { scene, world, ac, nav, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
   if (ac.isRocket) F.streaks = new Streaks(scene); // rockets: air rushing past (a climbing rocket sees only sky)
   F.capsule = CapsuleView.for(ac); // flown from inside a round body: its first-person cabin (built now, so its shaders warm up with the rest)
+  if (start === 'pad') F.clamp = { x: ac.x.clone(), q: ac.q.clone() }; // held down on the stand until the engines lift it
   applyQuality(); // the tier may have changed since the last flight (post effects, shadow cascades)
   F.callouts = new Callouts(audio, ac);
   F.worldSound = new WorldSound(audio, world, traffic);
@@ -726,7 +730,7 @@ function buildFlight(cfg) {
   renderer.compileAsync(scene, flightCam).catch(() => {}).then(compiled);
   renderer.setRenderTarget(null);
   onResize();
-  const msg = { runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.' }[start];
+  const msg = { pad: `Launch pad · ${world.loc.name}. Full throttle to launch!`, runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.' }[start];
   hud.center(msg, 3500);
   if (world.loc.credit) setTimeout(() => { if (F?.world === world) hud.toast(world.loc.credit); }, 4000); // real places: data attribution
   if (!ac.hasEngine) hud.toast('Glider: look for rising air under clouds and over sunny ridges.');
@@ -920,11 +924,13 @@ function stepFlight(dtReal) {
     ac.setControls({ pitch: 0, roll: c.roll, yaw: 0, throttle: c.gas * go, rev: c.rev * (go || (ac.groundSpeed > 0.6 ? 1 : 0)), hand: c.hand });
     ac.brake = want < 0.03 && ac.onGround && ac.v.length() < 1.5 ? 1 : 0; // parked: hold still (even on a slope)
   } else {
-    const thr = engineSwitch(f, ac, c.throttle, dtReal);
+    const thr = engineSwitch(f, ac, c.throttle, dtReal); f.thr = thr;
     ac.setControls({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: thr });
     ac.brake = c.brake || (thr < 0.03 && ac.onGround && ac.v.length() < 3 ? 1 : 0); // parking brake
   }
   ac.step(dt, f.env);
+  if (f.clamp) holdDown(f, ac, world.pad);
+  if (f.cfgStart === 'pad') world.pad.update(dtReal, f.eng.on && !ac.dead ? f.thr || 0 : 0, ac.x.y - world.pad.deckY, effects, f.eng.hold > 0 || f.eng.on);
   // trees
   if (!ac.dead && (ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), 0) < 30 || world.towns.tall)) { // (a city's towers reach far higher)
     for (const p of ac.parts) {
@@ -1105,6 +1111,39 @@ function waterProximity(f, world, p) {
   const d = Math.hypot(best, Math.max(0, p.y - world.waterLevel));
   f.waterNear = best < 1e9 ? Math.max(0, 1 - d / 450) : 0;
   return f.waterNear;
+}
+
+// ---------- launch pad ----------
+// Rockets start standing on the launch pad's stand (launchpad.js), placed the way the hangar shows them on it, then
+// lowered onto the deck by the physics hull (the stand was fitted to the drawn mesh).
+let _stockRocket;
+function stockRocket() { return (_stockRocket ??= presets.find((d) => analyze(d).vertical)); }
+function padSpawn(ac, pad, env) {
+  const P = pad.spawnPose();
+  ac.spawn(env, P.origin, P.heading, { pitch: Math.PI / 2 }); // (gear state etc.; the pose is set below)
+  ac.q.copy(P.q); ac.v.set(0, 0, 0); ac.w.set(0, 0, 0); ac.wW.set(0, 0, 0);
+  ac.x.copy(ac.com).applyQuaternion(P.q).add(P.origin);
+  let lift = -Infinity; const hp = new THREE.Vector3();
+  for (const p of ac.parts) {
+    for (const h of p.hull) { ac.worldPoint(h, hp); lift = Math.max(lift, env.groundAt(hp.x, hp.z, hp.y).h - hp.y); }
+    if (p.gear) for (const w of p.gear.wheels) { ac.worldPoint(w.top.clone().addScaledVector(w.dir, w.len + w.r), hp); lift = Math.max(lift, env.groundAt(hp.x, hp.z, hp.y).h - hp.y); }
+  }
+  if (Number.isFinite(lift)) ac.x.y += lift - 0.001; // resting on it (in contact), not dropped onto it
+  ac.syncVisual();
+}
+// Hold-down clamps: the vehicle stays exactly where it stands (no jitter, no toppling over on a narrow deck) until its
+// engines push up harder than its weight and the swing arm is out of the way, then lets go.
+function holdDown(f, ac, pad) {
+  let up = 0;
+  if (!ac.dead && !ac.wrecked) for (const p of ac.parts) if (p.alive && p.engine) up += (p.engine.thrustNow || 0) * _v.copy(p.engine.dir).applyQuaternion(ac.q).y;
+  if (ac.dead || ac.wrecked || (up > ac.mass * 9.81 && pad.armClear)) { f.clamp = null; return; }
+  ac.x.copy(f.clamp.x); ac.q.copy(f.clamp.q); ac.v.set(0, 0, 0); ac.w.set(0, 0, 0); ac.wW.set(0, 0, 0); ac.syncVisual();
+}
+// online: someone is already on the pad (or just above it): start from the runway instead
+function padBusy(pad) {
+  if (!net.active || !pad) return false;
+  for (const p of net.players.values()) { const s = p.buf.snaps.at(-1); if (s && pad.axisDist(s.x.x, s.x.z) < 30 && s.x.y < pad.deckY + 40) return true; }
+  return false;
 }
 
 // ---------- spawn planning ----------
