@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from '../vendor/addons/OrbitControls.js';
 import { RoomEnvironment } from '../vendor/addons/RoomEnvironment.js';
 import { PARTS, CATEGORIES, PAINTS, partInfo } from './parts.js';
-import { analyze, partMatrix, partScale, sizeAxes, mirroredOf, newPart, subtree, removeParts, cloneDesign, SYM_MODES, symAxis, symMakers, offAxis, sameSpot } from './design.js';
+import { isRocketDesign, analyze, partMatrix, partScale, sizeAxes, mirroredOf, newPart, subtree, removeParts, cloneDesign, SYM_MODES, symAxis, symMakers, offAxis, sameSpot } from './design.js';
 import { assemble, ControlPreview } from './planeDetail.js';
 import { HangarEnv, HW, HD, EAVE } from './hangarEnv.js';
 import { M } from './materials.js';
@@ -235,26 +235,53 @@ export class Hangar {
     const parentIdx = hit ? this.partIndexOf(hit.object) : -1;
     part.parent = this.design.parts.length ? Math.max(0, parentIdx) : -1;
     this.design.parts.push(part);
-    const i = this.design.parts.length - 1, n = this.symMode, axis = symAxis(this.design);
-    if (n === 2 && Math.abs(part.pos[0]) > 0.12) {
-      const m = mirroredOf(part);
-      const pp = part.parent >= 0 ? this.partner(part.parent) : -1;
-      m.parent = pp >= 0 ? pp : part.parent;
-      this.design.parts.push(m);
-    } else if (n > 2 && offAxis(part, n, axis) > 0.12) {
-      // radial copies round the long axis; each hangs on the matching copy of the parent when there is one (fins on
-      // a set of boosters), else on the same parent (fins on the core)
-      const par = this.design.parts[part.parent];
-      for (const make of symMakers(n, axis)) {
-        const m = make(part), pc = par && make(par), pj = pc ? this.design.parts.findIndex((q) => sameSpot(pc, q)) : -1;
-        m.parent = pj >= 0 ? pj : part.parent; this.design.parts.push(m);
-      }
-    }
+    const i = this.design.parts.length - 1;
+    this.addCopies(i, this.symMode);
     this.cancelPlacing();
     this.sel = i;
     this.rebuild();
     this.audio.play('place');
     if (this.design.parts.length === 1) this.frame();
+  }
+  // Add the symmetry copies of part i for symmetry n (2 mirror, 3 / 4 round the long axis). Everything attached to the
+  // part (its ailerons, lights, fins on a booster) is copied with it.
+  addCopies(i, n) {
+    const parts = this.design.parts, part = parts[i], axis = symAxis(this.design), sub = subtree(parts, i);
+    let makers = [];
+    // (wings and tailplanes are rooted on the centreline: their twin is told apart by the mirror flag)
+    if (n === 2 && (Math.abs(part.pos[0]) > 0.12 || (PARTS[part.id]?.attach === 'wing' && this.partner(i) < 0))) makers = [(q) => mirroredOf(q)];
+    else if (n > 2 && offAxis(part, n, axis) > 0.12) makers = symMakers(n, axis);
+    const par = parts[part.parent];
+    for (const make of makers) {
+      // the copy hangs on the matching copy of the parent when there is one (a wing's twin on its mirrored pod, fins on
+      // a set of boosters), else on the same parent (fins on the core)
+      const pc = par && make(par), pj = pc ? parts.findIndex((q) => sameSpot(pc, q)) : n === 2 && part.parent >= 0 ? this.partner(part.parent) : -1;
+      const map = new Map();
+      for (const k of sub) {
+        const m = make(parts[k]);
+        m.parent = k === i ? (pj >= 0 ? pj : part.parent) : map.get(parts[k].parent);
+        map.set(k, parts.length); parts.push(m);
+      }
+    }
+  }
+  // 3- and 4-way symmetry only make sense round a rocket; anything else falls back to the mirror.
+  symAllowed(n) { return n <= 2 || isRocketDesign(this.design); }
+  // Pick a symmetry. With a part selected it also changes that part's set to the new rule: its current copies (a mirror
+  // twin, or 3 / 4 round the body) go and the new ones are added. The part itself stays where it is.
+  applySymmetry(n) {
+    if (!SYM_MODES.includes(n) || !this.symAllowed(n)) return;
+    this.symMode = n;
+    let i = this.sel; if (i < 0 || !this.design.parts[i]) return;
+    this.pushUndo();
+    const cur = this.symMode; this.symMode = 4; const grp = this.symGroup(i); this.symMode = cur; // whatever set it is in now
+    const drop = new Set(); for (const { j } of grp) for (const k of subtree(this.design.parts, j)) if (k !== i) drop.add(k);
+    const before = this.design.parts[i];
+    removeParts(this.design, [...drop]);
+    i = this.design.parts.indexOf(this.design.parts.find((p) => p.id === before.id && sameSpot(p, before)));
+    if (i < 0) { this.rebuild(); return; }
+    if (n) this.addCopies(i, n);
+    this.sel = i;
+    this.rebuild();
   }
   partIndexOf(obj) { let o = obj; while (o && o.userData.partIndex === undefined) o = o.parent; return o ? o.userData.partIndex : -1; }
 

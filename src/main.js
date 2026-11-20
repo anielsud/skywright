@@ -278,7 +278,8 @@ function renderInspector() {
     ${s.heli || (s.car && s.wingArea < 0.5) ? '' : `<label class="lbl">Balance <small>(<span style="color:#ffd400">●</span> mass &nbsp;<span style="color:#3ab0ff">●</span> lift)</small></label>
     <div class="balance"><div class="zone"></div><div class="needle" style="left:${balPos}%"></div><span class="l">tail-heavy</span><span class="r">nose-heavy</span></div>`}
     <ul class="warnings">${s.warnings.map(([k, t]) => `<li class="${k}">${t}</li>`).join('')}</ul>`;
-  for (const b of document.querySelectorAll('#sym-seg [data-sym]')) { const on = +b.dataset.sym === hangar.symMode; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); }
+  if (!hangar.symAllowed(hangar.symMode)) hangar.symMode = 2; // 3 / 4 round the body are for rockets only
+  for (const b of document.querySelectorAll('#sym-seg [data-sym]')) { b.hidden = !hangar.symAllowed(+b.dataset.sym); const on = +b.dataset.sym === hangar.symMode; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); }
   $('#btn-bal').classList.toggle('on', hangar.showBalance);
   $('#btn-fly').disabled = !d.parts.length;
   $('#placing-bar').hidden = !hangar.placing;
@@ -291,7 +292,7 @@ $('#plane-name').addEventListener('input', (e) => { hangar.design.name = e.targe
 const undo = () => { if (hangar.undoStack.length) audio.play('undo'); hangar.undo(); }, redo = () => { if (hangar.redoStack.length) audio.play('redo'); hangar.redo(); };
 $('#btn-undo').addEventListener('click', undo);
 $('#btn-redo').addEventListener('click', redo);
-for (const b of document.querySelectorAll('#sym-seg [data-sym]')) b.addEventListener('click', () => { audio.play('select'); hangar.setSymmetry(+b.dataset.sym); renderInspector(); });
+for (const b of document.querySelectorAll('#sym-seg [data-sym]')) b.addEventListener('click', () => { audio.play('select'); hangar.applySymmetry(+b.dataset.sym); renderInspector(); });
 $('#btn-bal').addEventListener('click', () => { hangar.showBalance = !hangar.showBalance; hangar.rebuild(); });
 $('#btn-frame').addEventListener('click', () => hangar.frame());
 $('#placing-bar button').addEventListener('click', () => { hangar.cancelPlacing(); buildPalette(); });
@@ -1045,6 +1046,7 @@ function stepFlight(dtReal) {
   f.worldSound?.update(f, flightCam.position, dtReal, net.players?.values(), cockpit);
   f.callouts?.update(world, dtReal);
   spaceMilestones(f, ac);
+  flightCam.userData.ladder = rig.mode === 'chase' || rig.mode === 'cockpit';
   hud.update(ac, world, f.mission, flightCam, net.markers());
   if (f.debug) $('#debug').textContent = `α ${(ac.alpha * 57.3).toFixed(1)}° g ${ac.g.toFixed(2)} V ${ac.airspeed?.toFixed(1)} m=${Math.round(ac.mass)} com=${ac.com.toArray().map((v) => v.toFixed(2))} w=${ac.w.toArray().map((v) => v.toFixed(2))}`;
   $('#debug').style.display = f.debug ? '' : 'none';
