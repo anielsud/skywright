@@ -21,6 +21,7 @@ import { Destruction } from './destruction.js';
 import { BAKED, preloadBake, bakeFor, withBake, landAt } from './terrainBake.js';
 import { Landcover } from './landcover.js';
 import { LaunchPad } from './launchpad.js';
+import { Helipads } from './helipad.js';
 import { StuntPark, stuntPad, padHeight } from './stuntPark.js';
 import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
 
@@ -117,6 +118,13 @@ export class World {
       this.stunts = new StuntPark(this, this.loc.stunts);
       const F = this.flora, bare = F.bare, S = this.stunts; F.setForestMask(F.mask, (x, z) => S.bare(x, z) || (bare ? bare(x, z) : false));
     }
+    // rooftop helipads (New York): on the roofs the city found for them; helicopters start on the first
+    const hp = this.towns.city?.helipads; this.helipads = hp?.some((h) => h.roof) ? new Helipads(this, hp) : null;
+    // structures the flight model stands on (collide.js CollisionMesh: World.surfRay / surfPoint)
+    this.surfs = [this.stunts?.cm, ...(this.helipads?.cms || [])].filter(Boolean);
+    // a place's own starts for some kinds of vehicle, instead of the runway (startSite): fits(st) picks the vehicles
+    this.sites = [];
+    if (this.helipads?.start) { const P = this.helipads.start; this.sites.push({ kind: 'helipad', name: P.name, fits: (st) => st.heli, pos: P.W(0, 0, 0), y: P.y, heading: P.heading, r: P.D }); }
     this.destruct = new Destruction(this); // buildings you can knock down
     this.pad = new LaunchPad(this); // the launch complex rockets start from (after the scenery: it keeps clear of it)
     this.buildClouds();
@@ -429,8 +437,13 @@ export class World {
   heightAt(x, z) { return this.sampleGrid(x, z); }
   maxGround(x, z) {
     const S = this.roadSurf, deck = S && S.q(x, z, true) ? S.y : -Infinity; // bridge decks count
-    return Math.max(this.sampleGrid(x, z), this.waterLevel, deck, this.pad ? this.pad.maxAt(x, z) : -Infinity, this.stunts ? this.stunts.topAt(x, z) : -Infinity) + (this.inAirportBox(x, z) ? 25 : 0); // (the launch pad, and the stunt park's ramps and loop)
+    return Math.max(this.sampleGrid(x, z), this.waterLevel, deck, this.pad ? this.pad.maxAt(x, z) : -Infinity, this.stunts ? this.stunts.topAt(x, z) : -Infinity, this.helipads ? this.helipads.topAt(x, z) : -Infinity) + (this.inAirportBox(x, z) ? 25 : 0); // (the launch pad, the stunt park's ramps and loop, rooftop helipads)
   }
+  // the nearest front-face hit on a structure's collision mesh along o + d*t, t <= len (collide.js), or null
+  surfRay(o, d, len) { let best = null; for (const cm of this.surfs) { const r = cm.ray(o, d, best ? best.t : len); if (r) best = r; } return best; }
+  surfPoint(p) { for (const cm of this.surfs) { const r = cm.point(p); if (r) return r; } return null; }
+  // where a vehicle of this kind starts at this place instead of the runway (null: the runway). analyze() result in.
+  startSite(st) { return this.sites.find((s) => s.fits(st)) || null; }
   inAirportBox(x, z) { return x > 150 && x < 420 && Math.abs(z) < 260; }
   // y (optional): height of the point asking. A bridge deck is the ground for anything not well below it, so cars
   // drive over and planes can still fly under.
@@ -944,7 +957,7 @@ export class World {
     }
     return false;
   }
-  treeHit(p) { return this.flora.hit(p) || this.towns.hit(p) || this.tiles?.treeHit(p) || this.pad?.hit(p); }
+  treeHit(p) { return this.flora.hit(p) || this.towns.hit(p) || this.tiles?.treeHit(p) || this.pad?.hit(p) || this.helipads?.hit(p); }
   // ---------------- clouds ----------------
   buildClouds() {
     this.clouds = new CloudField(this.q.clouds >= 1 ? 3200 : 1800);
@@ -1123,6 +1136,7 @@ export class World {
     cols.needsUpdate = true;
     this.space.update(camera, dt);
     this.stunts?.update(dt, this, camera.position);
+    this.helipads?.update(dt, this);
     this.updateEnv();
   }
 
@@ -1135,7 +1149,7 @@ export class World {
   dispose() {
     this.cascades?.dispose(this.scene);
     this.scene.remove(this.group, this.sky, this.sun, this.sun.target, this.hemi, this.deck, this.deck2, this.clouds.mesh, this.rain, this.snow);
-    this.tiles?.dispose(); this.space.dispose(); this.stunts?.dispose();
+    this.tiles?.dispose(); this.space.dispose(); this.stunts?.dispose(); this.helipads?.dispose();
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     if (this.envRT) this.envRT.dispose();
     this.pmrem.dispose();

@@ -544,7 +544,7 @@ export class Destruction {
     for (const e of this.near(o.x, o.z, Math.hypot(o.hl, o.hw) + 2)) {
       if (e.dk === B.dk || e[1] + e[3] < y + 1) continue;
       const b = this.box(e); if (!inBox(o, b.x, b.z, 1) && !inBox(b, o.x, o.z, 1)) continue;
-      if (!e.dk) { if (e.solid) e[3] = Math.max(0, y - e[1]); continue; }
+      if (!e.dk) { if (e.solid && !e.fixed) e[3] = Math.max(0, y - e[1]); continue; } // (a helipad's tower stays up)
       const C2 = this.get(e); if (!C2.anim && !C2.collapsed && C2.cut > y + 1) out.push(C2);
     }
     return out;
