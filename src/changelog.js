@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.89.0', items: [
+    'New stunt park in the Grand Canyon! Drive a car there and you start at the STUNT PARK arch: hit the ramps, drive all the way round the loop-the-loop, ride the wall and jump the canyon gap!',
+  ] },
   { v: '1.88.0', items: [
     'Rockets now start on a real launch pad with a tower, a flame trench and fuel tanks! Throttle up and the tower arm swings away while steam billows out.',
   ] },
