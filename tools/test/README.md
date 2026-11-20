@@ -175,6 +175,33 @@ python3 tools/test/bikeride.py --json out.json  # full report, with samples
 
 Run it when you change `src/bike.js`, the bike parts (`src/bikeParts.js`) or ground contact in `src/aircraft.js`.
 
+## Boat ride test
+
+`boatride.py` drives every stock boat through the game's own physics (60 Hz, no rendering) with the controls a player
+would use: full gas, a left turn, a right turn, brake (reverse) to a stop, a wait.
+
+- **open water** (a gentle swell), in Arcade, Pilot and Sim: it starts afloat and level; a planing hull gets up on the
+  plane (Froude number > 1.2, the bow rises during the hump and is level again once planing), a displacement hull
+  (the Pontoon, the Fireboat) reaches its hull speed; it turns both ways, never nearly capsizes, stops and is upright.
+- **capsized** (Arcade, Pilot): dropped in upside down, it is set the right way up.
+- **on land** at full gas: nothing moves, breaks or explodes; it just sits.
+- **a kid's boats**: ten seeded random builds (any hull, maybe resized, a motor where the hangar would put it, maybe a
+  cannon, a ballast block or a light bar) float, and the ones whose motor is in the water go.
+- every other stock vehicle must not be detected as a boat.
+- **at every marina** (Bora Bora, New York, Jungfrau, Grand Canyon): a flight is started there; the marina must exist
+  with open water ahead of its start, and every stock boat, in Arcade and Sim, starts afloat and level within 120 m of
+  it and does the ride in the real world (shore, docks, the docks' collision mesh). On the Colorado (a ~50 m channel)
+  the turns are a slow S-bend after getting up on the plane. A Dune Buggy drives out along each harbour's pier.
+
+```sh
+python3 tools/test/boatride.py                     # serves the repo itself, ~3 min
+python3 tools/test/boatride.py --only canyon       # just one marina
+python3 tools/test/boatride.py --json out.json     # full report
+```
+
+Run it when you change `src/boat.js`, the boat parts (`src/boatParts.js`), `src/marina.js` or water contact in
+`src/aircraft.js`.
+
 ## Wind tunnel check
 
 `tunnelcheck.py` opens the wind tunnel for every stock vehicle in headless Chrome and fails if any of them: logs an

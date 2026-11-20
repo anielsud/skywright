@@ -42,6 +42,8 @@ export const OUTFITS = {
   // motorbike riders: a motocross kit (jersey, goggles under a peaked helmet, big boots) and road-racing leathers
   mx: { head: 'fullface', peak: true, visor: 0xd9761c, helmet: 0xf2f2ee, helmet2: 0xe8601c, suit: 0xe8601c, suit2: 0x2b2d31, trim: 0xf2f2ee, glove: 0x15161a, boot: 0xf2f2ee, stripes: true, bigBoots: true },
   sport: { head: 'fullface', visor: 0x1b2127, helmet: 0xf2f2ee, helmet2: 0x1d4e89, suit: 0x1d4e89, suit2: 0xf2f2ee, trim: 0xc8102e, glove: 0x15161a, boot: 0x15161a, stripes: true, hump: true },
+  // boats: a cap, sunglasses and an orange life jacket over a T-shirt and shorts-coloured trousers
+  boat: { head: 'cap', glasses: true, vest: 0xf26a1b, suit: 0x2f5d8a, suit2: 0x3a4250, trim: 0x15161a, glove: null, boot: 0xe8e8e2, cap: 0xf2f2ee },
   airline: { head: 'headset', shirt: true, suit: 0xf2f2f0, suit2: 0x1b2433, trim: 0x15161a, glove: null, boot: 0x111111, cups: 0x26282b, epaulettes: 0xd4a82a },
 };
 
@@ -236,6 +238,11 @@ function figureGeometry(rig) {
     at(B.spine, boxG(0.07, 0.07, 0.03, V(0, 0.13, -0.135)), 0x9aa0a6, true);
   }
   if (o.hump) at(B.spine, ellipsoid(V(0, D.shoulderUp - 0.06, 0.12), 0.09, 0.12, 0.06, { w: 12 }), o.suit, true); // leathers' aero hump
+  if (o.vest) { // a life jacket: chunky foam front and back, a collar, two buckles
+    const lj = capsule(0.2, 0.16, 0.145, { sx: 1.22, sz: 0.92, seg: 14, ring: 3 }); lj.translate(0, 0.13, 0); at(B.spine, lj, o.vest);
+    at(B.spine, torusAB(0.085, 0.03, Math.PI * 2, 14).rotateX(Math.PI / 2).translate(0, D.shoulderUp + 0.02, 0.0), o.vest);
+    for (const y of [0.12, 0.24]) at(B.spine, boxG(0.06, 0.03, 0.02, V(0, y, -0.15)), 0x15161a, true);
+  }
   if (o.mask === true) { const vest = capsule(0.16, 0.15, 0.135, { sx: 1.25, sz: 0.88, seg: 14, ring: 2 }); vest.translate(0, 0.17, 0); at(B.spine, vest, o.suit2); } // survival vest
   if (o.stripes) for (const y of [0.2, 0.32]) { const r = 0.14 - (y - 0.06) * 0.067 + 0.004, st = new THREE.CylinderGeometry(r, r, 0.035, 16, 1, true); st.scale(1.25, 1, 0.85); st.translate(0, y, 0); at(B.spine, st, o.trim); }
   if (o.shirt) { // tie and epaulettes
@@ -263,7 +270,7 @@ function figureGeometry(rig) {
   }
   // head: neck, then per outfit
   const hc = V(0, 0.135, -0.01);
-  at(B.head, capsule(0.07, 0.05, 0.048), o.head === 'headset' || o.head === 'leather' ? skin : o.suit);
+  at(B.head, capsule(0.07, 0.05, 0.048), o.head === 'headset' || o.head === 'leather' || o.head === 'cap' ? skin : o.suit);
   if (o.head === 'leather') { // white silk scarf round the neck, the end tucked into the jacket
     at(B.head, torusAB(0.062, 0.022, Math.PI * 2, 14).rotateX(Math.PI / 2).translate(0, 0.03, 0), 0xf2f2ee);
   }
@@ -307,6 +314,12 @@ function figureGeometry(rig) {
     for (const sx of [-1, 1]) { const cup = new THREE.CylinderGeometry(0.038, 0.04, 0.03, 12); cup.rotateZ(Math.PI / 2); cup.translate(sx * 0.098, hc.y, hc.z + 0.01); at(B.head, cup, o.cups, true); }
     at(B.head, capAB(V(-0.1, hc.y - 0.02, hc.z - 0.01), V(-0.03, hc.y - 0.05, hc.z - 0.1), 0.006, 0.008, { seg: 5 }), 0x15161a); // boom mic
     if (o.glasses) { const gl = frontPatch(0.1, 0.62, Math.PI * 0.4, Math.PI * 0.48, 12, 2); gl.translate(hc.x, hc.y, hc.z); at(B.head, gl, 0x0e1114, true); }
+  } else if (o.head === 'cap') { // a peaked cap and sunglasses
+    face();
+    at(B.head, ellipsoid(V(0, hc.y + 0.02, hc.z + 0.015), 0.088, 0.088, 0.098, { th: [0, Math.PI * 0.55] }), hair);
+    at(B.head, ellipsoid(V(0, hc.y + 0.035, hc.z + 0.005), 0.093, 0.085, 0.1, { th: [0, Math.PI * 0.46] }), o.cap);
+    const pk = ellipsoid(V(0, hc.y + 0.05, hc.z - 0.1), 0.075, 0.01, 0.07, { w: 14, h: 5 }); pk.rotateX(-0.08); at(B.head, pk, o.cap);
+    const gl = frontPatch(0.1, 0.62, Math.PI * 0.4, Math.PI * 0.48, 12, 2); gl.translate(hc.x, hc.y, hc.z); at(B.head, gl, 0x0e1114, true);
   } else if (o.head === 'leather') {
     face();
     at(B.head, ellipsoid(hc, 0.092, 0.112, 0.105, { w: 18, h: 10, th: [0, Math.PI * 0.62] }), 0x5a3a22); // leather cap over the ears
@@ -411,6 +424,7 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
 export function crewKind(design, cockpitId) {
   const ids = new Set(design.parts.map((p) => p.id)), has = (f) => design.parts.some((p) => f(PARTS[p.id] || {}, p.id));
   if (cockpitId === 'ck_airliner') return 'airline';
+  if (has((d) => d.boatHull)) return 'boat';
   if (has((d) => d.engine?.type === 'rotor')) return 'heli';
   if (has((d) => d.engine?.type === 'drive')) return 'driver';
   if (ids.has('x_rcs') && has((d) => d.engine?.type === 'rocket')) return 'space';
@@ -419,7 +433,7 @@ export function crewKind(design, cockpitId) {
   if (design.livery === 'racer') return 'racer'; // air racer: helmet and race suit
   return 'light';
 }
-const CTL_OF = { airline: 'yoke', heli: 'cyclic', driver: 'wheel' };
+const CTL_OF = { airline: 'yoke', heli: 'cyclic', driver: 'wheel', boat: 'wheel' };
 
 // Add a figure to every declared seat (obj.userData.seats: [{ p: [x,y,z], s, ctl?, yaw? | quat?, role? }]).
 // role 'crew' = a passenger / second crew member with no controls. Returns the rigs (also on obj.userData.crew).

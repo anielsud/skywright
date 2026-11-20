@@ -5,6 +5,8 @@ import './vehicleParts.js';
 import { DIRT_AT, SPORT_AT } from './bikeParts.js';
 import { bikeLayout } from './bike.js';
 import './supersonicParts.js';
+import { BOAT_AT } from './boatParts.js';
+import { boatLayout } from './boat.js';
 import './stockLiveries.js';
 import { LIVERIES } from './liveries.js';
 
@@ -146,7 +148,7 @@ export function analyze(design) {
   const m = new THREE.Matrix4(), com = new THREE.Vector3();
   let drivePower = 0, motors = 0, driveWheels = 0, wheels = 0; const wheelAt = [];
   let rotorLift = 0, rotors = 0, tailRotors = 0, twist = 0, rotorOff = 0; const rotorAt = new THREE.Vector3();
-  let mass = 0, thrust = 0, wingArea = 0, finArea = 0, engines = 0, props = 0, jets = 0, rockets = 0, gear = 0, floats = 0, smoke = 0;
+  let mass = 0, thrust = 0, wingArea = 0, finArea = 0, engines = 0, props = 0, jets = 0, rockets = 0, gear = 0, floats = 0, smoke = 0, marine = 0;
   const lift = new THREE.Vector3(); let liftW = 0; let latLift = 0, latThrust = 0;
   const ctrl = { pitch: 0, roll: 0, yaw: 0 };
   const items = [];
@@ -167,7 +169,8 @@ export function analyze(design) {
       engines++; rotors++;
       const t = d.engine.thrust * thrustScale(p) * partPower(p), at = info.center.clone().applyMatrix4(mm);
       rotorLift += t; rotorAt.addScaledVector(at, t); twist += (p.mirror ? -1 : 1) * t;
-    } else if (d.engine) {
+    } else if (d.engine?.type === 'marine') { engines++; marine++; } // boat motors (boat.js)
+    else if (d.engine) {
       engines++; if (d.engine.type === 'jet') jets++; else if (d.engine.type === 'rocket') rockets++; else props++;
       const t = (d.engine.ab || d.engine.thrust) * thrustScale(p) * partPower(p); thrust += t;
       latThrust += (info.center.clone().applyMatrix4(mm).x - com.x) * t;
@@ -190,6 +193,7 @@ export function analyze(design) {
   const hover = mass > 0 ? rotorLift / (mass * G) : 0, heli = rotors > 0, car = motors > 0 && !heli;
   const grip = mass > 0 ? drivePower / (mass * G) : 0;
   const bike = car && bikeLayout(wheelAt); // two in-line wheels on the centreline: it rides like a motorbike (bike.js)
+  const boat = !heli && design.parts.some((p) => PARTS[p.id]?.boatHull) ? boatLayout(design, mass, partMatrix) : null; // a boat hull: it floats (boat.js)
   const col = liftW > 0 ? lift.divideScalar(liftW) : com.clone();
   const mac = wingArea > 0 ? Math.sqrt(wingArea / 7) : 1;
   const margin = (col.z - com.z) / mac; // + = stable (lift centre behind CoM)
@@ -214,6 +218,12 @@ export function analyze(design) {
       if (grip < 0.25 && driveWheels) warnings.push(['warn', 'Heavy for its engine: it will be slow. Add Power or a bigger engine.']);
       if (driveWheels && bike.front.d.steer) warnings.push(['good', 'Ready to ride! Gas to go, brake to stop, steer to lean into the turns. Full gas for a wheelie!']);
     }
+    else if (boat) {
+      if (boat.sinks) warnings.push(['bad', 'Too heavy for its hull: it will sink! Use a bigger hull or fewer heavy parts.']);
+      if (!marine) warnings.push(['bad', 'No motor. Add an Outboard Motor, a Prop & Rudder or a Water Jet from the Boat tab.']);
+      for (const m of boat.motors) if (!m.wet) warnings.push(['warn', `The ${PARTS[m.id].name}'s propeller is out of the water. Put it at the back, down low.`]);
+      if (marine && !boat.sinks && boat.motors.some((m) => m.wet)) warnings.push(['good', 'Ready to go boating! Gas to go, brake to slow down (keep holding it to reverse), stick to steer.']);
+    }
     else if (car) {
       if (!driveWheels) warnings.push(['bad', 'The Car Engine needs Car Wheels to push on. Add some from the Car tab.']);
       else if (wheels < 3) warnings.push(['warn', 'Fewer than 3 wheels: it will tip over. Use 4.']);
@@ -223,7 +233,7 @@ export function analyze(design) {
     }
     else if (!engines) warnings.push(['info', 'No engines: it’s a glider. It will start in the air.']);
     if (rocket && !vertical) warnings.push(['info', 'Rocket plane: it steers like a rocket when the nose is up or the rockets are burning, and like a plane when the wings carry it.']);
-    const plane = !heli && !(car && wingArea < 0.5) && !vertical; // rockets launch standing up
+    const plane = !heli && !(car && wingArea < 0.5) && !vertical && !boat; // rockets launch standing up
     if (vertical && engines) warnings.push(tw > 1.1 ? ['good', 'Rocket ready! It launches standing up: full throttle, keep the nose pointing at the sky.'] : ['bad', 'Not enough thrust to lift off. Add rockets or more Power.']);
     if (plane && wingArea < 0.5) warnings.push(['bad', 'No wings. Only Arcade mode will get this off the ground.']);
     if (plane && wingArea > 0.5 && margin < -0.02) warnings.push(['bad', 'Tail-heavy: the centre of mass is behind the lift. Expect flips in Sim mode. Move wings back or add weight up front.']);
@@ -235,7 +245,7 @@ export function analyze(design) {
     if (plane && (Math.abs(latLift) > wingArea * 0.4 || Math.abs(latThrust) > thrust * 0.3)) warnings.push(['warn', 'Lopsided! It will roll or yaw in Sim mode (Arcade forgives this).']);
     if (plane && stall < 40 && tw > 0.2 && margin >= -0.02 && margin <= 0.6 && finArea >= 0.4) warnings.push(['good', 'Looks flyable. Have fun!']);
   }
-  return { ...(bike ? { bike: true } : {}), car, rocket, vertical, grip, motors, driveWheels, wheels, heli, hover, rotors, tailRotors, mass, com, col, margin, stall, thrust, tw, wingArea, finArea, engines, props, jets, rockets, gear, floats, smoke, ctrl, warnings };
+  return { ...(bike ? { bike: true } : {}), ...(boat ? { boat: true, marine, waterline: boat.level } : {}), car, rocket, vertical, grip, motors, driveWheels, wheels, heli, hover, rotors, tailRotors, mass, com, col, margin, stall, thrust, tw, wingArea, finArea, engines, props, jets, rockets, gear, floats, smoke, ctrl, warnings };
 }
 
 // ---------- presets ----------
@@ -518,6 +528,34 @@ export function makePresets() {
     for (const i of b.pair('t_allmove', [3.7, 1.12, 9.9], { parent: e[0], color: K, rot: [0, 0, 15] })) b.d.parts[i].scale = [1.3, 1.05, 1.3];
     b.d.parts[b.add('g_retract_nose', [0, -0.45, -10.2], { parent: f })].scale = [1.3, 1.3, 1.3];
     for (const i of b.pair('g_retract', [2.2, -0.3, 5.2], { parent: w[0] })) b.d.parts[i].scale = [1.35, 1.35, 1.35];
+    P.push(b.d);
+  }
+  { // Speedboat — a deep-V bowrider with a big outboard
+    const b = new PB('Speedboat', 'A fast speedboat with a big outboard motor. Full gas: the bow comes up, then it zooms up on the plane!');
+    const f = b.add('h_speed', [0, 0, 0], { color: 0xc8102e });
+    b.add('m_outboard', BOAT_AT.speedOutboard, { parent: f });
+    P.push(b.d);
+  }
+  { // Jet Ski — ride it like a motorbike on the water
+    const b = new PB('Jet Ski', 'A zippy jet ski. Squirts water out the back to go, leans into the turns and leaves a big wake.');
+    const f = b.add('h_jetski', [0, 0, 0], { color: 0xf2b705 });
+    b.add('m_jet', BOAT_AT.skiJet, { parent: f });
+    P.push(b.d);
+  }
+  { // Fireboat — a harbour fireboat with three water cannons
+    const b = new PB('Fireboat', 'A big red harbour fireboat. Press the smoke button (or Space) to fire the water cannons!');
+    const f = b.add('h_work', [0, 0, 0], { color: 0xc8102e });
+    const wz = -0.4, wh = b.add('b_wheelhouse', [0, BOAT_AT.workDeck(wz) - 0.02, wz], { parent: f, color: 0xf2f2ee });
+    b.add('b_cannon', [0, BOAT_AT.workDeck(-3.3) - 0.02, -3.3], { parent: f, color: 0xc8102e });
+    b.add('b_cannon', [0, BOAT_AT.workDeck(wz) + 2.19, wz + 0.4], { parent: wh, color: 0xf2b705 });
+    b.add('b_cannon', [0, BOAT_AT.workDeck(3.2) - 0.02, 3.2], { parent: f, color: 0xc8102e, rot: [0, 180, 0] });
+    for (const x of [0.62, -0.62]) b.add('m_inboard', [x, BOAT_AT.workBottom(x, 2.9) + 0.01, 2.9], { parent: f });
+    P.push(b.d);
+  }
+  { // Pontoon — the party boat
+    const b = new PB('Pontoon', 'A party boat: two big tubes, comfy couches and a sunshade. Slow, steady and almost impossible to tip over.');
+    const f = b.add('h_pontoon', [0, 0, 0], { color: 0x1d4e89 });
+    b.add('m_outboard', BOAT_AT.pontoonOutboard, { parent: f, color: 0xf2f2ee });
     P.push(b.d);
   }
   return P;

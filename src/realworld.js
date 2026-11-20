@@ -28,6 +28,7 @@ export const REAL_LOCATIONS = {
     roadStart: { place: 'Wilderswil', maxClass: 3 }, // 'On the road': the village street of Wilderswil, by the airfield (landStart.js)
     stunts: { theme: 'alpine', layout: 'compact', near: [0, 0], r: 3500, maxForest: 0.15, seed: 117 },
     waterColors: { deep: 0x0d4a52, shallow: 0x2f8f8a, sand: 0x6b6a55 }, // glacial-milk turquoise lakes
+    marina: { at: [-1700, 3900], r: 2600, waves: 0.04 }, // boats start at a marina on Lake Thun, by Interlaken (marina.js finds the spot)
     colors: { grass: [0x4a6b2a, 0x5f7f35, 0x3f5d27], rock: 0x6b6660, snow: 0xf4f6f8, sand: 0x9a8d6a, dirt: 0x6f5a3c },
     height(n, x, z) { const D = cache.get(this.id); return D ? D.height(x, z) : this.rwyH; },
   },
@@ -40,6 +41,7 @@ export const REAL_LOCATIONS = {
     credit: 'Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) · Heights: AWS Terrain Tiles · Lagoon depths estimated from the imagery · Map data © OpenStreetMap contributors',
     seed: 23, rwyH: 2.5, water: 0, north: 124.6, cloudBase: 1100, trees: 'palm', snowline: 99999, erosion: false, boats: true,
     waterStart: [800, -2300], // seaplanes start in the lagoon off the airport, facing south-east along it
+    marina: { at: [5300, -3900], r: 2400, waves: 0.05 }, // boats: a marina in the lagoon off Vaitape
     padBlend: 160, // the airport sits on a narrow reef islet: its apron meets the sea within ~160 m
     // the stunt park: a palm-lined sand track with a tiki arch, on dry flat land of a motu or the main island (stuntSite.js)
     roadStart: { place: 'Vaitape', maxClass: 1 }, // 'On the road': the island's ring road at Vaitape (landStart.js)
@@ -57,6 +59,7 @@ export const REAL_LOCATIONS = {
     credit: 'Imagery: USDA NAIP via USGS The National Map (public domain) · Heights: AWS Terrain Tiles (USGS 3DEP) · Map data © OpenStreetMap contributors',
     seed: 37, rwyH: 2002, water: 200, north: 40.5, cloudBase: 4300, trees: 'pine', snowline: 99999, erosion: false, desert: true,
     fogBase: 1300, // haze settles into the canyon
+    marina: { river: true, at: [2330, -17474], r: 4000, waves: 0.02 }, // boats: a landing on the Colorado (flat water near Phantom Ranch)
     // the daredevil area on the South Rim: the canyon jump (src/evelJump.js) across a side canyon, found near this hint
     // (stuntSite.js findGap), and the stunt park (src/stuntPark.js) right behind its run-up, its track feeding the jump
     roadStart: { place: 'Tusayan', maxClass: 1 }, // cars and bikes 'On the road': the main road through Tusayan, by the airport (landStart.js)
@@ -80,6 +83,7 @@ export const REAL_LOCATIONS = {
     credit: 'Imagery: USGS NAIP (public domain), Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) · Buildings: NYC Open Data, © OpenStreetMap contributors · Heights: AWS Terrain Tiles',
     seed: 53, rwyH: 6, water: 0, north: 32, cloudBase: 1800, trees: 'pine', snowline: 99999, erosion: false, boats: true,
     core: 33000, // the detailed core reaches from LaGuardia to the Statue of Liberty (16 km)
+    marina: { at: [-700, 600], r: 2600, waves: 0.1 }, // boats: a marina on Flushing Bay, beside LaGuardia
     roads: { maxClass: 1, maxClassLow: 0, step: 16, chunk: 2500 }, // highways and avenues (medium / low: highways only; the photo shows the side streets, NYC's full grid is ~25k ways), meshes per 2.5 km
     // deciduous parks and street trees: the alpine palette's valley floor, with no rocks or shrubs on the pavement
     flora: { biome: 'alpine', snowline: 99999, h: (h) => h * 0.5, wl: 0, bare: true },

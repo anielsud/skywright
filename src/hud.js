@@ -121,13 +121,13 @@ export class HUD {
   // Hidden by CSS while the touch controls are showing, since those already show it.
   updateControls(ac) {
     const c = ac.ctl, t = clamp(c.throttle, 0, 1), P = 26; // stick travel in px
-    const v = ac.isCar && ac.reversing && c.rev > 0.02 ? 'REV' : t > 0.995 ? 'MAX' : `${Math.round(t * 100)}%`;
+    const v = (ac.isCar || ac.isBoat) && ac.reversing && c.rev > 0.02 ? 'REV' : t > 0.995 ? 'MAX' : `${Math.round(t * 100)}%`;
     if (v !== this.ctlV) { this.ctlV = v; this.$('c-thr-v').textContent = v; this.$('c-thr').style.height = `${t * 100}%`; }
-    const lbl = ac.isHeli ? 'LIFT' : ac.isCar ? 'GAS' : 'THR';
+    const lbl = ac.isHeli ? 'LIFT' : ac.isCar || ac.isBoat ? 'GAS' : 'THR';
     if (lbl !== this.ctlL) {
       this.ctlL = lbl; this.$('c-thr-l').textContent = lbl;
       const [kt, ks] = this.root.querySelectorAll('#h-ctl kbd'); // cars: W gas, S brake/reverse, A D steer, Space handbrake
-      kt.textContent = ac.isCar ? 'W / S' : '⇧ / Ctrl'; ks.textContent = ac.isCar ? 'A D · Space' : 'W A S D · Q E';
+      kt.textContent = ac.isCar || ac.isBoat ? 'W / S' : '⇧ / Ctrl'; ks.textContent = ac.isCar ? 'A D · Space' : ac.isBoat ? 'A D' : 'W A S D · Q E';
     }
     this.$('c-stick').style.transform = `translate(${clamp(c.roll, -1, 1) * P}px, ${clamp(c.pitch, -1, 1) * P}px)`;
     this.$('c-rud').style.transform = `translateX(${clamp(c.yaw, -1, 1) * 34}px)`;
