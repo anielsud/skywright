@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.91.0', items: [
+    'New Wind Tunnel! Press the blue Wind Tunnel button in the hangar to test your design: watch smoke flow over the wings, see the lift and drag, make it stall, and find out if your plane is stable.',
+  ] },
   { v: '1.90.0', items: [
     'Motorbikes are here! Ride the new Dirt Bike and Sport Bike, or build your own from the Bike parts. Lean into turns, and hold full gas for a wheelie!',
   ] },
