@@ -22,7 +22,8 @@ import { BAKED, preloadBake, bakeFor, withBake, landAt } from './terrainBake.js'
 import { Landcover } from './landcover.js';
 import { LaunchPad } from './launchpad.js';
 import { Helipads } from './helipad.js';
-import { StuntPark, stuntPad, padHeight } from './stuntPark.js';
+import { StuntParks, planStunts, padsHeight } from './stuntPark.js';
+import { roadStart } from './landStart.js';
 import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
 
 export const RWY = { len: 1800, width: 45 };
@@ -101,7 +102,7 @@ export class World {
     this.landUniforms(); // no bake on real places: rivers/lakes off (and compiled out of the terrain shader)
     this.size = this.loc.core || 22000; // (a real place can ask for a bigger detailed core: New York's reaches the Statue of Liberty)
     this.coreK = this.size / 22000; // grid and bake resolutions scale with it, so the spacing stays the same
-    this.stuntPad = this.loc.stunts ? stuntPad(this, this.loc.stunts) : null; // the stunt park's levelled pad (rawHeight)
+    this.stuntPlan = this.loc.stunts ? planStunts(this, this.loc.stunts) : null; // where the stunt sites go (found from the real data) and the ground they level (rawHeight)
     this.group = new THREE.Group(); scene.add(this.group);
     this.t = 0; this.night = false;
     this.windBase = new THREE.Vector3(); this.gust = new THREE.Vector3(); this.gustT = new THREE.Vector3();
@@ -114,14 +115,14 @@ export class World {
     this.flora = new Flora(this);
     if (this.real) this.net.towns = this.real.towns(this);
     this.towns = this.real ? new RealScenery(this) : new Towns(this);
-    if (this.stuntPad) { // the stunt park (src/stuntPark.js): nothing grows on its dirt
-      this.stunts = new StuntPark(this, this.loc.stunts);
+    if (this.stuntPlan) { // the stunt park and the canyon jump (src/stuntPark.js): nothing grows on them
+      this.stunts = new StuntParks(this, this.stuntPlan);
       const F = this.flora, bare = F.bare, S = this.stunts; F.setForestMask(F.mask, (x, z) => S.bare(x, z) || (bare ? bare(x, z) : false));
     }
     // rooftop helipads (New York): on the roofs the city found for them; helicopters start on the first
     const hp = this.towns.city?.helipads; this.helipads = hp?.some((h) => h.roof) ? new Helipads(this, hp) : null;
     // structures the flight model stands on (collide.js CollisionMesh: World.surfRay / surfPoint)
-    this.surfs = [this.stunts?.cm, ...(this.helipads?.cms || [])].filter(Boolean);
+    this.surfs = [...(this.stunts?.sites.map((x) => x.cm) || []), ...(this.helipads?.cms || [])];
     // a place's own starts for some kinds of vehicle, instead of the runway (startSite): fits(st) picks the vehicles
     this.sites = [];
     if (this.helipads?.start) { const P = this.helipads.start; this.sites.push({ kind: 'helipad', name: P.name, fits: (st) => st.heli, pos: P.W(0, 0, 0), y: P.y, heading: P.heading, r: P.D }); }
@@ -191,13 +192,13 @@ export class World {
   // leave ground and water at nearly the same height over wide areas, which no depth buffer can tell apart at a distance.
   shoreSnap(h) { const wl = this.waterLevel; return h < wl ? Math.min(h, wl - SHORE_UNDER) : Math.max(h, wl + SHORE_OVER); }
   rawHeight(x, z) {
-    let h = this.height(x, z);
-    if (this.stuntPad) h = padHeight(this.stuntPad, x, z, h);
+    const h = this.height(x, z);
     // flatten airport
     const dx = Math.max(0, Math.abs(x - 100) - 350), dz = Math.max(0, Math.abs(z) - RWY.len / 2 - 250);
     const d = Math.hypot(dx, dz);
     const t = smoothstep(0, this.loc.padBlend || 700, d); // padBlend: a tighter apron, e.g. an airport on a narrow reef islet
-    return lerp(this.loc.rwyH, h, t);
+    const a = lerp(this.loc.rwyH, h, t);
+    return this.stuntPlan ? padsHeight(this.stuntPlan.pads, x, z, a) : a; // the stunt sites' levelled ground (after the airport's: a park can sit near it)
   }
   buildTerrain() {
     const N = Math.round(this.q.res * this.coreK), S = this.size, half = S / 2, step = S / N;
@@ -444,6 +445,13 @@ export class World {
   surfPoint(p) { for (const cm of this.surfs) { const r = cm.point(p); if (r) return r; } return null; }
   // where a vehicle of this kind starts at this place instead of the runway (null: the runway). analyze() result in.
   startSite(st) { return this.sites.find((s) => s.fits(st)) || null; }
+  // where a car or bike starts (the flight setup's land choices): 'park' the stunt park's arch, 'evel' the canyon jump's
+  // run-up, 'road' a street among the buildings (landStart.js); null: the runway
+  landStart(start) {
+    if (start === 'road') return this.roadStartAt === undefined ? (this.roadStartAt = roadStart(this)) : this.roadStartAt;
+    if (start === 'park' || start === 'evel') return this.stunts?.startFor(start) || null;
+    return null;
+  }
   inAirportBox(x, z) { return x > 150 && x < 420 && Math.abs(z) < 260; }
   // y (optional): height of the point asking. A bridge deck is the ground for anything not well below it, so cars
   // drive over and planes can still fly under.

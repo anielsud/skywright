@@ -70,7 +70,8 @@ export function bikeSteer(ac) { return ac.bike.steer; }
 export function bikeAssist(ac, F, T, ctl, dt, env) {
   const b = ac.bike, m = MODE[ac.R.id] || MODE.pilot, q = ac.q, I = ac.I.elements, w = ac.w, mass = ac.mass;
   const fwd = _f.set(0, 0, -1).applyQuaternion(q), right = _r.set(1, 0, 0).applyQuaternion(q);
-  const lean = -Math.asin(clamp(right.y, -1, 1)), leanRate = -w.z; // + = leaning right
+  const su = ac.stuntUp; // (on a ramp, the loop or the bowl: lean, slope and the yaw catch are taken from its surface, not the world's)
+  const lean = -Math.asin(clamp(su ? right.dot(su) : right.y, -1, 1)), leanRate = -w.z; // + = leaning right
   const vg = ac.groundSpeed, spd = Math.abs(vg), s = clamp(ac.steerCmd(), -1, 1); // s: + = right
   const fc = b.front.contact, rc = b.rear.contact, ground = fc || rc;
   b.lean = lean;
@@ -109,7 +110,7 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
   // ---- pitch: wheelies, stoppies, loop-out guard, attitude in the air ----
   const pitch = Math.asin(clamp(fwd.y, -1, 1));
   let slope = 0;
-  if (ground) { _t.copy(fwd).addScaledVector(g0.n, -fwd.dot(g0.n)); if (_t.lengthSq() > 1e-6) slope = Math.asin(clamp(_t.normalize().y, -1, 1)); }
+  if (ground) { const n = su || g0.n; _t.copy(fwd).addScaledVector(n, -fwd.dot(n)); if (_t.lengthSq() > 1e-6) slope = Math.asin(clamp(_t.normalize().y, -1, 1)); }
   const rel = pitch - slope; b.pitch = rel;
   const pivot = (wh) => { // inertia about a wheel's contact patch and the weight's moment about it (+ = nose up)
     ac.worldPoint(wh.top, _p).addScaledVector(_a.set(0, -1, 0).applyQuaternion(q), wh.len - wh.comp); _p.y -= wh.r; // (the axle, then straight down)
@@ -156,8 +157,8 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
   // the bike points where its front wheel takes it: a light back wheel (hard braking, a stoppie) or no front wheel
   // (a wheelie) can't hold the line by itself, so the rider catches a slide before it becomes a spin (about the vertical)
   if (ground && !fallen) {
-    const wy = _a.copy(w).applyQuaternion(q).y, want = -vg * Math.tan(dg) / b.L, k = (fc && rc ? m.yaw : 30) * I[4] * (wy - want);
-    T.add(_t.set(0, -k, 0).applyQuaternion(_qi.copy(q).invert()));
+    const wy = su ? _a.copy(w).applyQuaternion(q).dot(su) : _a.copy(w).applyQuaternion(q).y, want = -vg * Math.tan(dg) / b.L, k = (fc && rc ? m.yaw : 30) * I[4] * (wy - want);
+    T.add((su ? _t.copy(su).multiplyScalar(-k) : _t.set(0, -k, 0)).applyQuaternion(_qi.copy(q).invert()));
   }
   if (!ground) { // in the air: nose near the flight path (a touch up, so the back wheel lands first), no spin
     const vh = Math.hypot(ac.v.x, ac.v.z), path = Math.atan2(ac.v.y, Math.max(1, vh)), tgt = clamp(path * 0.3, -0.15, 0.15) + 0.04;

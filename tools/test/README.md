@@ -123,25 +123,33 @@ Run it when you change the pad, the launch stand (`uprightStage` in `hangar.js`)
 
 ## Stunt park check
 
-`stunts.py` starts a car at the Grand Canyon, where cars begin in the stunt park (`src/stuntPark.js`), and drives the
-stock Dune Buggy and Chomper through it on the real flight model (paused flight, stepped at a fixed 60 Hz from
-`stunts.js`, with scripted inputs: gas plus a simple lane-keeping steer; gusts are zeroed so every run is the same),
-in Pilot and Arcade. It fails unless:
+`stunts.py` visits every location's stunt park (`src/stuntPark.js`; sites found by `src/stuntSite.js`) and the Grand
+Canyon's daredevil canyon jump (`src/evelJump.js`), and drives the stock Dune Buggy, Chomper, Dirt Bike and Sport Bike
+through them on the real flight model (paused flight, stepped at a fixed 60 Hz from `stunts.js`, with scripted inputs:
+gas plus a simple lane-keeping steer; gusts are zeroed so every run is the same), in Pilot and Arcade. At each
+location it fails unless:
 
-- the car starts at the start arch facing the first kicker, with no shader compiled mid-flight;
-- the loop run (kickers, tabletop, boost, loop) gets air off the tabletop and lands upright, goes over the top of the
-  loop upside down with its wheels on the deck, and comes out upright in the exit lane, all parts intact;
+- the park's site is dry, flat and clear (no water, buildings, roads, woods, or tree canopy where the location asks
+  for that);
+- every car and bike starts at the start arch ("At the stunt park") and on a street ("On the road"), facing the right
+  way, and no shader compiles mid-flight;
+- the loop run (kickers or tabletop, boost, loop) gets air off the last jump and lands upright, goes over the top of
+  the loop upside down with its wheels on the deck, and comes out upright in the exit lane, all parts intact;
 - coasting into the loop at the boost pad's speed still makes it round, and far too slow it rolls back down;
-- the canyon jump clears the gap between the mesas and lands upright;
-- the bowl is ridden at 14, 20 and 26 m/s, up the wall and back out upright on four wheels;
-- a Kestrel set down on a mesa stands on it, and one flown into a cliff hits it.
+- the mesa jump clears the gap and lands upright;
+- the bowl is ridden at 14, 20 and 26 m/s, up the wall and back out upright on its wheels;
+- at the Grand Canyon: a Kestrel set down on a mesa stands on it and one flown into a cliff hits it; the canyon jump's
+  start is at its run-up; a scripted run (full gas, no steering) clears the real gap, lands upright on the far ramp and
+  is stopped by the parachute; and a car too slow for it is lowered into the canyon by the rescue parachute.
 
 ```sh
-python3 tools/test/stunts.py                      # ~30 s
-python3 tools/test/stunts.py --shots DIR          # also screenshots of the park and of cars mid-stunt
+python3 tools/test/stunts.py                              # all four locations, ~4 min
+python3 tools/test/stunts.py --locations canyon --cars "Dune Buggy,Dirt Bike"
+python3 tools/test/stunts.py --shots DIR                  # also screenshots of each park, the jump, cars mid-stunt
 ```
 
-Run it when you change ground contact (`collide.js`, the contact code in `aircraft.js`), car physics or the park.
+Run it when you change ground contact (`collide.js`, the contact code in `aircraft.js`), car or bike physics, the
+parks, or the real-world data a site is found from.
 
 ## Bike ride test
 

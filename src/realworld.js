@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { resample } from './roads.js';
 import { smoothstep, clamp } from './noise.js';
+import { inStuntCut } from './stuntPark.js';
 
 const BASE = 'assets/real/';
 const GAIN = 1.35, DESHADE = 0.3; // imagery brightness (linear, loc.satGain overrides) and how much of its baked-in shading to remove (shaders.js)
@@ -23,6 +24,9 @@ export const REAL_LOCATIONS = {
     // the alpine tree palette, with real altitudes mapped onto the fictional valley's (tree line ~2000 m, beech below ~1200 m)
     // wl: the valley floor (towns, the airport) is only a few metres above the lakes: no riverside woods across it
     flora: { biome: 'alpine', snowline: 1250, h: (h) => (h - 540) * 0.68, wl: 25 },
+    // the stunt park: wooden ramps, hay bales and cowbell flags in a flat field of the valley near the airfield (stuntSite.js)
+    roadStart: { place: 'Wilderswil', maxClass: 3 }, // 'On the road': the village street of Wilderswil, by the airfield (landStart.js)
+    stunts: { theme: 'alpine', layout: 'compact', near: [0, 0], r: 3500, maxForest: 0.15, seed: 117 },
     waterColors: { deep: 0x0d4a52, shallow: 0x2f8f8a, sand: 0x6b6a55 }, // glacial-milk turquoise lakes
     colors: { grass: [0x4a6b2a, 0x5f7f35, 0x3f5d27], rock: 0x6b6660, snow: 0xf4f6f8, sand: 0x9a8d6a, dirt: 0x6f5a3c },
     height(n, x, z) { const D = cache.get(this.id); return D ? D.height(x, z) : this.rwyH; },
@@ -37,6 +41,9 @@ export const REAL_LOCATIONS = {
     seed: 23, rwyH: 2.5, water: 0, north: 124.6, cloudBase: 1100, trees: 'palm', snowline: 99999, erosion: false, boats: true,
     waterStart: [800, -2300], // seaplanes start in the lagoon off the airport, facing south-east along it
     padBlend: 160, // the airport sits on a narrow reef islet: its apron meets the sea within ~160 m
+    // the stunt park: a palm-lined sand track with a tiki arch, on dry flat land of a motu or the main island (stuntSite.js)
+    roadStart: { place: 'Vaitape', maxClass: 1 }, // 'On the road': the island's ring road at Vaitape (landStart.js)
+    stunts: { theme: 'tropical', layout: 'compact', near: [0, 0], r: 5000, maxForest: 1, minAbove: 1.0, forestW: 0, seed: 117 },
     townScale: 0.45, // small villages strung along the coast road: keep the palms between the houses
     osmStyle: 'tropical', // realBuildings.js: painted houses under metal roofs, thatched resorts, overwater bungalows
     waterColors: { deep: 0x0b3474, shallow: 0x12bcc8, sand: 0x9ae8dc }, waterReef: 0.15, // sapphire ocean, turquoise lagoon over pale sand
@@ -50,7 +57,10 @@ export const REAL_LOCATIONS = {
     credit: 'Imagery: USDA NAIP via USGS The National Map (public domain) · Heights: AWS Terrain Tiles (USGS 3DEP) · Map data © OpenStreetMap contributors',
     seed: 37, rwyH: 2002, water: 200, north: 40.5, cloudBase: 4300, trees: 'pine', snowline: 99999, erosion: false, desert: true,
     fogBase: 1300, // haze settles into the canyon
-    stunts: { x: 2200, z: 2400 }, // the stunt park (src/stuntPark.js) on the open rim plateau south-east of the airport: cars start there
+    // the daredevil area on the South Rim: the canyon jump (src/evelJump.js) across a side canyon, found near this hint
+    // (stuntSite.js findGap), and the stunt park (src/stuntPark.js) right behind its run-up, its track feeding the jump
+    roadStart: { place: 'Tusayan', maxClass: 1 }, // cars and bikes 'On the road': the main road through Tusayan, by the airport (landStart.js)
+    stunts: { atJump: true, layout: 'compact', flat: 60, blend: 80, fill: 0, evel: { near: [1420, -10100], heading: 200, span: 140, turn: 16, dip: 150 } },
     satGain: 1.05, // NAIP is brighter than Sentinel-2
     cliff: [0.36, 0.24, 0.18, 0.4], // the walls: red-stained limestone and sandstone (the deshadowed photos see most of them)
     sunLat: 36.05, // the real sun path: sunset light from the west on the canyon walls (world.js setTime)
@@ -75,6 +85,10 @@ export const REAL_LOCATIONS = {
     flora: { biome: 'alpine', snowline: 99999, h: (h) => h * 0.5, wl: 0, bare: true },
     waterColors: { deep: 0x1c3a44, shallow: 0x3a6a6a, sand: 0x5a5a50 }, // the harbour: green-grey, silty
     colors: { grass: [0x4f6b35, 0x5d7a3c, 0x46612f], rock: 0x6a6866, snow: 0xf4f6f8, sand: 0x8a8270, dirt: 0x6a5a48 },
+    // the stunt park: concrete, containers and graffiti on an open lawn of Central Park (no buildings, roads, water or
+    // tree canopy: stuntSite.js findSite searches the park)
+    roadStart: { near: { lat: 40.7587, lon: -73.9787 }, maxClass: 1 }, // 'On the road': a Midtown Manhattan avenue (landStart.js)
+    stunts: { theme: 'urban', layout: 'compact', near: { lat: 40.7813, lon: -73.9665 }, r: 2600, canopy: true, maxCanopy: 0.2, maxForest: 0.2, seed: 117 },
     satGain: 1.0, sat: { deshade: 0.2, detail: 0.3 }, // aerial photos (NAIP): little photo grass on top of them, less de-shading
     city: {
       // antenna masts / spires (top above the ground, m) on the tallest building at that point
@@ -299,7 +313,7 @@ class RealData {
       }
       // keep the parts inside the core and off the game's airport (a road can leave and come back: split it)
       const runs = []; let cur = [];
-      const ok = (p) => Math.abs(p.x) < lim && Math.abs(p.z) < lim && !(Math.abs(p.x - 100) < 520 && Math.abs(p.z) < 1300);
+      const ok = (p) => Math.abs(p.x) < lim && Math.abs(p.z) < lim && !(Math.abs(p.x - 100) < 520 && Math.abs(p.z) < 1300) && !inStuntCut(w.stuntPlan, p.x, p.z); // (and closed across a stunt site)
       for (const p of resample(pts, step)) { if (ok(p)) cur.push(p); else if (cur.length) { runs.push(cur); cur = []; } }
       if (cur.length) runs.push(cur);
       for (const rp of runs) {
