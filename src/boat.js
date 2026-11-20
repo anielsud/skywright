@@ -205,6 +205,7 @@ export function boatForces(ac, F, T, ctl, dt, env) {
     const fall = cmd >= 0 ? Math.max(0, 1 - (Math.max(0, u) / e.vmax) ** 2) : Math.max(0, 1 - (Math.max(0, -u) / 6) ** 2);
     const thrust = e.thrust * e.spoolT * Math.sign(cmd) * fall * mo.bite * dmg;
     e.thrustNow = Math.abs(thrust);
+    e.bite = mo.bite; // (the engine sound: a propeller out of the water over-revs)
     e.rpm = e.idleRpm + (e.maxRpm - e.idleRpm) * Math.max(e.spoolT * (mo.bite > 0.3 ? 0.85 : 1), clamp(Math.abs(u) / e.vmax, 0, 1) * 0.7);
     const fwd = mo.fwd.clone();
     if (mo.def.kind === 'swivel') fwd.applyAxisAngle(_n.set(0, 1, 0), mo.steer);
