@@ -3,7 +3,8 @@
 //
 // A bike is any car (it has a drive engine) whose wheels are exactly two, in line, on the centreline: the stock bikes
 // and a kid's own build alike. On two wheels the rigid-body model would simply fall over, so a rider balances it:
-//   - the steering sets a LEAN: full stick is ~35° (less at walking pace, none at a stop), and the front wheel is turned
+//   - the steering sets a LEAN: full stick is ~35° (less at walking pace, none at a stop, and less on a bike that would
+//     scrape its pegs or fairing first), and the front wheel is turned
 //     to the angle that holds the bike's ACTUAL lean in balance (tan(lean) = v·yaw rate / g), plus a correction towards
 //     the wanted lean. To lean right from upright that correction first steers left: counter-steering, done for you.
 //   - a balance torque helps the lean follow its target (strong in Arcade, softer in Pilot, a light assist in Sim,
@@ -46,7 +47,15 @@ export function detectBike(ac) {
   for (const p of ac.parts) if (p.gear && !p.gear.float) for (const w of p.gear.wheels) ws.push({ x: w.top.x, z: w.top.z, w });
   const lay = bikeLayout(ws); if (!lay) return null;
   const cdA = ac.parts.reduce((a, p) => Math.max(a, p.d.riderDrag || 0), 0) || 0.45; // the rider (not a part) catches the wind too
-  return { front: lay.front.w, rear: lay.rear.w, L: lay.L, cdA, lean: 0, leanT: 0, steer: 0, pitch: 0, tuck: 0, wheelie: 0, stoppie: 0, trick: '' };
+  // how far it can lean before something other than a tyre touches the road (a kid's bike on small wheels, a wide
+  // fairing): every hull point against the line between the two tyres' contact patches, sitting on its springs
+  const f = lay.front.w, r = lay.rear.w, gy = (w) => w.top.y - w.len - w.r + 0.09, xc = (f.top.x + r.top.x) / 2;
+  let clear = 1.2;
+  for (const p of ac.parts) for (const h of p.hull) {
+    const t = clamp((h.z - f.top.z) / (r.top.z - f.top.z), 0, 1), hh = h.y - (gy(f) + (gy(r) - gy(f)) * t), x = Math.abs(h.x - xc);
+    if (x > 0.02) clear = Math.min(clear, Math.atan2(Math.max(0, hh), x));
+  }
+  return { front: lay.front.w, rear: lay.rear.w, L: lay.L, cdA, leanMax: clamp(clear - 0.12, 0.25, LEAN_MAX), lean: 0, leanT: 0, steer: 0, pitch: 0, tuck: 0, wheelie: 0, stoppie: 0, trick: '' };
 }
 
 // The front wheel's steering angle (rad, + = left, like aircraft.steerAngle), set every substep by bikeAssist.
@@ -62,7 +71,7 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
   b.lean = lean;
   // ---- steering and lean ----
   const roll = smooth(1.2, 7, spd) * (vg > 0 ? 1 : 0); // how much leaning is possible: none at a stop or rolling back
-  const want = s * LEAN_MAX * m.lean * roll;
+  const want = s * b.leanMax * m.lean * roll;
   b.leanT += clamp(want - b.leanT, -2.6 * dt, 2.6 * dt); // (the lean target moves at a rider's pace)
   const fallen = Math.abs(lean) > 1.15;
   let dg; // ground steering angle, + = right
@@ -85,7 +94,7 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
   const Ix = I[0], Iz = I[8];
   const g0 = env.groundAt(ac.x.x, ac.x.z), h = clamp(ac.x.y - g0.h, 0.3, 2), Ir = Iz + mass * h * h; // (a bike rolls about its tyres' contact line)
   if (ground && !fallen) { // the rider's balance: lean follows its target
-    const over = Math.max(0, Math.abs(lean) - LEAN_MAX - 0.08) * Math.sign(lean); // past what the tyres can hold: always caught
+    const over = Math.max(0, Math.abs(lean) - b.leanMax - 0.08) * Math.sign(lean); // past what the tyres (or the clearance) can take: always caught
     const acc = (30 * (b.leanT - lean) - 10 * leanRate) * bal - 40 * over - (over ? 6 * leanRate : 0);
     T.z -= acc * Ir;
   } else if (!ground) { // in the air: level the wings... the bars
@@ -98,24 +107,24 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
   if (ground) { _t.copy(fwd).addScaledVector(g0.n, -fwd.dot(g0.n)); if (_t.lengthSq() > 1e-6) slope = Math.asin(clamp(_t.normalize().y, -1, 1)); }
   const rel = pitch - slope; b.pitch = rel;
   const pivot = (wh) => { // inertia about a wheel's contact patch and the weight's moment about it (+ = nose up)
-    ac.worldPoint(wh.top, _p).addScaledVector(_a.set(0, -1, 0).applyQuaternion(q), wh.len + wh.r - wh.comp);
+    ac.worldPoint(wh.top, _p).addScaledVector(_a.set(0, -1, 0).applyQuaternion(q), wh.len - wh.comp); _p.y -= wh.r; // (the axle, then straight down)
     _a.copy(ac.x).sub(_p); const fh = _t.set(fwd.x, 0, fwd.z).normalize();
     return { Ieff: Ix + mass * _a.lengthSq(), grav: mass * G * _a.dot(fh) };
   };
   b.trick = '';
   if (ground && m.tricks && !fallen && Math.abs(lean) < 0.35) {
     const straight = Math.abs(lean) < 0.2 && Math.abs(s) < 0.4;
-    const wantW = ctl.throttle > 0.85 && vg > 1 && vg < 26 && rc && straight, wantS = ctl.rev > 0.95 && vg > 4 && fc && !wantW && straight;
+    const wantW = ctl.throttle > 0.85 && vg > 1 && vg < 20 && rc && straight, wantS = ctl.rev > 0.95 && vg > 4 && fc && !wantW && straight;
     if (wantW) { // front up, held at the wheelie angle on the back wheel
       const tgt = WHEELIE * clamp((ctl.throttle - 0.85) / 0.12, 0, 1), P = pivot(b.rear);
-      T.x += P.Ieff * (8 * (tgt - rel) - 4 * w.x) + (fc ? 0 : P.grav); b.trick = 'wheelie';
+      T.x += P.Ieff * (20 * (tgt - rel) - 6 * w.x) + (fc ? 0 : P.grav * 0.5); b.trick = 'wheelie';
     } else if (wantS) { // back up, balanced on the front wheel
       const tgt = STOPPIE * clamp((ctl.rev - 0.95) / 0.04, 0, 1), P = pivot(b.front);
       T.x += P.Ieff * (8 * (tgt - rel) - 4 * w.x); b.trick = 'stoppie'; b.stoppieT = tgt;
-    } else if (!fc && rc && rel > 0.02) { // let go: the front comes down, not slammed
-      const P = pivot(b.rear), wDes = -Math.min(1.4, 3 * rel); if (w.x < wDes) T.x += P.Ieff * 5 * (wDes - w.x);
-    } else if (fc && !rc && rel < -0.02) {
-      const P = pivot(b.front), wDes = Math.min(1.4, -3 * rel); if (w.x > wDes) T.x += P.Ieff * 5 * (wDes - w.x);
+    } else if (!fc && rc && rel > 0.02) { // let go: the front comes back down, gently (not slammed)
+      const P = pivot(b.rear), wDes = -Math.min(1.2, 2.5 * rel); T.x += P.Ieff * 5 * (wDes - w.x);
+    } else if (fc && !rc && rel < -0.02) { // and the back
+      const P = pivot(b.front), wDes = Math.min(1.2, -2.5 * rel); T.x += P.Ieff * 5 * (wDes - w.x);
     }
     if (rel > LOOP && w.x > -1) T.x -= pivot(b.rear).Ieff * (40 * (rel - LOOP) + 8 * Math.max(0, w.x)); // never over backwards
     if (rel < -LOOP * 0.7 && w.x < 1) T.x += pivot(b.front).Ieff * (40 * (-LOOP * 0.7 - rel) + 8 * Math.max(0, -w.x)); // or over the bars
@@ -123,14 +132,14 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
   // wheelie control (every mode): the engine eases off when the front lifts on its own (or a wanted wheelie goes past
   // its height), so the gas never flips the bike over backwards
   if (rc && !fc && ac.driveF > 0) {
-    const lim = b.trick === 'wheelie' ? WHEELIE + 0.06 : 0.05;
-    if (rel > lim) ac.driveF *= clamp(1 - (rel - lim) * 6 - Math.max(0, w.x) * 0.6, 0.15, 1);
+    const lim = b.trick === 'wheelie' ? WHEELIE - 0.04 : 0.05;
+    if (rel > lim) ac.driveF *= clamp(1 - (rel - lim) * 12 - Math.max(0, w.x) * 0.8, 0.05, 1);
   }
   // braking (every mode, like ABS): the brakes ease off before the back wheel goes light (it would slide out and spin
   // the bike), or, in a stoppie, before the back goes higher than the stoppie
   if (ac.svcBrake > 0 && fc) {
     if (b.trick === 'stoppie') { if (rel < b.stoppieT) ac.svcBrake *= clamp(1 - (b.stoppieT - rel) * 8 + Math.min(0, w.x) * 0.5, 0.25, 1); }
-    else ac.svcBrake *= 1 - 0.5 * clamp((0.03 - (rc ? b.rear.comp : 0)) / 0.025, 0, 1);
+    else ac.svcBrake *= rc ? 1 - 0.5 * clamp((0.03 - b.rear.comp) / 0.025, 0, 1) : clamp(0.4 + rel * 3, 0.05, 0.4); // (back wheel up when you didn't ask: let it down)
   }
   b.wheelie = !fc && rc ? rel : 0; b.stoppie = fc && !rc ? -rel : 0;
   // the bike points where its front wheel takes it: a light back wheel (hard braking, a stoppie) or no front wheel
@@ -145,6 +154,8 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
     T.y -= 2 * w.y * I[4] * m.air;
   }
   b.tuck = smooth(16, 30, spd) * (ctl.throttle > 0.3 ? 1 : 0.6);
+  // bikes don't really reverse: rolling backwards is a walking-pace shuffle
+  if (ac.reversing && ac.driveF < 0) ac.driveF *= 0.35 * clamp(1 - Math.max(0, -vg) / 2.2, 0, 1);
   // the rider's drag (tucking in helps), along the bike
   _a.copy(ac.v).applyQuaternion(_qi.copy(q).invert()); F.z -= 0.5 * ac.rho * b.cdA * (1 - 0.25 * b.tuck) * _a.z * Math.abs(_a.z);
 }

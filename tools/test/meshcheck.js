@@ -164,6 +164,43 @@ export function carBuilds(n = 12, seed = 53) {
   return out;
 }
 
+// ---------- random bike builds (dropped the way the hangar places parts) ----------
+// A bike frame (or a pod or buggy body: any body with two wheels in line on the centreline is a bike), a fork wheel
+// dropped from below near the front and a swingarm wheel near the back (either kind, sometimes resized), and an engine
+// dropped from above or below the middle. Some whole builds resized.
+const BIKE_BODIES = ['b_dirt', 'b_sport', 'b_dirt', 'b_sport', 'fus_pod', 'fus_buggy'];
+export function bikeBuilds(n = 10, seed = 71, { forks = ['b_fork_dirt', 'b_fork_road'], rears = ['b_swing_dirt', 'b_swing_road'], engines = ['b_single', 'b_four'], bodies = BIKE_BODIES, fit = false } = {}) {
+  const R = rng(seed), pick = (a) => a[Math.floor(R() * a.length)], out = [], snap = (v) => Math.round(v * 20) / 20;
+  for (let k = 0; k < n; k++) {
+    const parts = [], add = (p) => (parts.push(p), parts.length - 1);
+    const body = bodies[k % bodies.length], f = add(newPart(body, [0, 0, 0]));
+    if (R() < 0.3) { const d = 0.85 + R() * 0.3, l = 0.85 + R() * 0.35; parts[f].scale = [d, d, l]; }
+    const built = () => { const root = new THREE.Group(), det = buildDesign({ parts }, root, { quick: true, near: false }); root.updateMatrixWorld(true); const all = []; det.parts.forEach((o, i) => o?.traverse((m) => { if (m.isMesh && !m.material.transparent && !m.userData.isDisc && !m.isInstancedMesh) { m.userData._pi = i; all.push(m); } })); return { root, all, box: new THREE.Box3().setFromObject(root) }; };
+    const drop = (id, z, fromBelow, o = {}) => {
+      const { root, all, box } = built(), rc = new THREE.Raycaster(); let h = null;
+      for (const kz of [1, 0.85, 0.7, 0.5]) { if (h) break; rc.set(new THREE.Vector3(0, fromBelow ? box.min.y - 2 : box.max.y + 2, z * kz), new THREE.Vector3(0, fromBelow ? 1 : -1, 0)); h = rc.intersectObjects(all, false)[0]; }
+      root.traverse((m) => m.geometry?.dispose?.()); if (!h) return -1;
+      const nrm = h.face.normal.clone().transformDirection(h.object.matrixWorld).normalize(), info = partInfo(id), pos = h.point.clone();
+      if (PARTS[id].attach === 'gear') pos.addScaledVector(nrm, -0.05);
+      else { const c = info.center, hh = info.size.clone().multiplyScalar(0.5); pos.addScaledVector(nrm, (Math.abs(nrm.x) * hh.x + Math.abs(nrm.y) * hh.y + Math.abs(nrm.z) * hh.z) * 0.9).sub(c); }
+      const p = newPart(id, [0, snap(pos.y), snap(pos.z)], { parent: h.object.userData._pi }); if (o.scale) p.scale = o.scale; return add(p);
+    };
+    const bb = built().box, L = bb.max.z - bb.min.z, ws = R() < 0.3 ? (() => { const s = +(0.8 + R() * 0.4).toFixed(2); return [s, s, s]; })() : undefined;
+    drop(pick(forks), bb.min.z + L * (0.12 + R() * 0.12), true, { scale: ws });
+    drop(pick(rears), bb.max.z - L * (0.12 + R() * 0.12), true, { scale: ws });
+    drop(pick(engines), bb.min.z + L * (0.4 + R() * 0.2), R() < 0.5);
+    if (fit) { // the kid then moves the wheels down (Move) until both tyres are the lowest things on it
+      const wheel = (p) => PARTS[p.id].gear && !PARTS[p.id].gear.float, { root, all } = built(); let low = Infinity;
+      for (const m of all) if (!wheel(parts[m.userData._pi])) low = Math.min(low, new THREE.Box3().setFromObject(m).min.y);
+      root.traverse((m) => m.geometry?.dispose?.());
+      for (const p of parts) if (wheel(p)) { const g = PARTS[p.id].gear, s = Math.cbrt((p.scale || [1, 1, 1]).reduce((a, v) => a * v, 1)), bottom = p.pos[1] - (g.len + g.r) * s; p.pos[1] = snap(p.pos[1] + Math.min(0, low - 0.12 - bottom)); }
+    }
+    if (k % 3 === 1) parts.forEach((p) => { p.scale = (p.scale || [1, 1, 1]).map((v) => v * 1.2); p.pos = p.pos.map((v) => v * 1.2); });
+    out.push({ name: `bike ${k} (${body}, ${parts.slice(1).map((p) => p.id).join('/')})`, parts });
+  }
+  return out;
+}
+
 // ---------- floating parts ----------
 // Every piece of a car (each connected piece of every mesh: a merged mesh holds many, an instanced link is one per
 // instance) must touch, or come within `tol` of, another piece, and all of them must hang together as one vehicle:
@@ -280,12 +317,16 @@ export function floatingParts(root, det, design, { tol = 0.01, gaps = true, coll
   for (const o of out.values()) if (o.gap !== undefined) o.gap = Number.isFinite(o.gap) ? +o.gap.toFixed(3) : '>0.5';
   return { pieces: comps.length, floating: [...out.values()] };
 }
-// pose every car corner: wheels pushed up by `comp` of their travel, steered wheels turned `steer` rad; rigs follow
+// pose every car corner and bike wheel: wheels pushed up by `comp` of their travel, steered wheels turned `steer` rad;
+// rigs, forks and swingarms follow
 export function poseCar(det, comp, steer) {
-  for (const o of det.parts) { const u = o?.userData; if (!u?.corner) continue; u.wheels.position.y = -u.corner.len * (1 - comp); u.wheels.rotation.y = u.steer ? steer : 0; u.wheelsFixed.position.copy(u.wheels.position); u.wheelsFixed.rotation.y = u.wheels.rotation.y; }
+  for (const o of det.parts) {
+    const u = o?.userData;
+    if (u?.bikeSync) { u.bikeSync({ comp: comp * -u.wheels.position.y, steer: u.bikeWheel === 'front' ? steer : 0, spin: comp }); continue; } // bike forks and swingarms (bikeParts.js)
+    if (!u?.corner) continue; u.wheels.position.y = -u.corner.len * (1 - comp); u.wheels.rotation.y = u.steer ? steer : 0; u.wheelsFixed.position.copy(u.wheels.position); u.wheelsFixed.rotation.y = u.wheels.rotation.y; }
   det.rig?.update();
 }
-export const isCarDesign = (d) => d.parts.some((p) => PARTS[p.id]?.cat === 'car' || p.id === 'fus_buggy' || p.id === 'fus_truck');
+export const isCarDesign = (d) => d.parts.some((p) => PARTS[p.id]?.cat === 'car' || PARTS[p.id]?.cat === 'bike' || p.id === 'fus_buggy' || p.id === 'fus_truck');
 
 // ---------- position lights ----------
 // Every detailed position light shows its side's colour (red left, green right, white on the centreline: aircraft.js's
@@ -360,10 +401,11 @@ function exhaustHits(root) {
   return { paths: paths.length, hits };
 }
 
-export async function run({ presets = [], random = 20, placed = 20, fittings = 12, cars = 16, floatOnly = false } = {}) {
-  const cb = carBuilds(cars), pb = randomBuilds(placed, 7, { placed: true }), designs = [...presets, ...randomBuilds(random), ...pb, ...fittingBuilds(fittings), ...cb], report = [];
-  // floating parts: every stock vehicle, the random builds re-placed the way the hangar places parts and the car builds
-  // (the plain random and fitting builds put parts at fixed spots, which can be in mid-air: the hangar never does that)
+export async function run({ presets = [], random = 20, placed = 20, fittings = 12, cars = 16, bikes = 10, floatOnly = false } = {}) {
+  const cb = [...carBuilds(cars), ...bikeBuilds(bikes)], pb = randomBuilds(placed, 7, { placed: true }), designs = [...presets, ...randomBuilds(random), ...pb, ...fittingBuilds(fittings), ...cb], report = [];
+  // floating parts: every stock vehicle, the random builds re-placed the way the hangar places parts and the car and
+  // bike builds (the plain random and fitting builds put parts at fixed spots, which can be in mid-air: the hangar never
+  // does that)
   const floatCheck = new Set([...presets, ...pb, ...cb]);
   for (const d of designs) {
     if (floatOnly && !floatCheck.has(d)) continue;

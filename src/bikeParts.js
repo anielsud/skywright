@@ -101,7 +101,7 @@ function wheelSpin(o, lv) {
   b.add(bikeTyre(o.r, o.w, o.h, { knobby: o.knobby && lv, segs: lv ? 0 : 24 }), rubber());
   const rimM = o.spokes ? anod(o.rimC ?? 0x1a1a1c) : framePaint(o.rimC ?? 0x1a1a1c);
   b.add(lathe([[ri, -wr / 2], [ri, wr / 2], [ri - 0.012, wr / 2 + 0.004], [ri - 0.022, wr * 0.25], [ri - 0.03, 0], [ri - 0.022, -wr * 0.25], [ri - 0.012, -wr / 2 - 0.004]], lv ? 48 : 20), rimM);
-  b.add(lathe([[0.022, -hubW / 2], [0.05, -hubW / 2], [0.055, -hubW * 0.4], [0.042, -hubW * 0.2], [0.04, hubW * 0.2], [0.055, hubW * 0.4], [0.05, hubW / 2], [0.022, hubW / 2]], 20), o.spokes ? M.aluminum() : rimM);
+  b.add(lathe([[0.012, -hubW / 2], [0.05, -hubW / 2], [0.055, -hubW * 0.4], [0.042, -hubW * 0.2], [0.04, hubW * 0.2], [0.055, hubW * 0.4], [0.05, hubW / 2], [0.012, hubW / 2]], 20), o.spokes ? M.aluminum() : rimM);
   if (lv) {
     if (o.spokes) for (let i = 0; i < 32; i++) { // tangentially laced, alternate flanges
       const sx = i % 2 ? 1 : -1, a = (i / 32) * Math.PI * 2, a2 = a + sx * 0.32, rh = 0.052, rr = ri - 0.026;
@@ -280,7 +280,7 @@ function swingWheel(o, color, lv) {
   hB.add(new THREE.CylinderGeometry(rb * 1.5, rb * 1.5, 0.018, 16).translate(0, 0.03, 0), dark); // bottom perch
   hB.add(xCyl(0.018, -0.03, 0.03, 0, 0, 10), dark); // bottom eye
   const sL = L0 - bL * 0.25 - 0.048; pB.add(coil(rb * 1.3, sL, 0.0075, 6.5), M.paint(o.springC ?? 0xf2b705, 'gloss'));
-  bB.to(body); hB.to(shaft); pB.to(spring);
+  aB.to(arm); bB.to(body); hB.to(shaft); pB.to(spring);
   // mounts carried to the frame: the shock's top eye up, the pivot bolt's ends forwards and up
   sB.add(xCyl(0.014, -o.ax - o.aw / 2 - 0.02, o.ax + o.aw / 2 + 0.02, P.y, P.z), M.steel()); // pivot bolt
   sB.add(box(0.06, 0.035, 0.035, 0, top.y + 0.0, top.z), dark); // shock top clevis
@@ -337,7 +337,7 @@ function bikeEngine({ four, color, lv }) {
     b.add(ex([V(0.0, -0.245, 0.06), V(0.04, -0.245, 0.16), V(0.16, -0.2, 0.22), V(0.255, -0.135, 0.255)], 0.032, 10, 24), hdrC);
     muffA = V(0.255, -0.13, 0.25); muffB = V(0.275, 0.0, 0.55);
   } else if (lv) {
-    b.add(ex([port(0), port(0).add(V(0.0, -0.02, -0.08)), V(0.1, 0.12, -0.26), V(0.16, -0.05, -0.21), V(0.16, -0.17, -0.02), V(0.17, -0.13, 0.18), V(0.18, -0.06, 0.3)], 0.022, 8, 40), hdrC);
+    b.add(ex([port(0), port(0).add(V(0.0, -0.02, -0.08)), V(0.05, 0.16, -0.21), V(0.13, 0.0, -0.2), V(0.16, -0.14, -0.08), V(0.17, -0.13, 0.18), V(0.18, -0.06, 0.3)], 0.022, 8, 40), hdrC);
     muffA = V(0.18, -0.05, 0.3); muffB = V(0.19, 0.13, 0.72);
   }
   if (lv) {
@@ -352,7 +352,7 @@ function bikeEngine({ four, color, lv }) {
   const dm = anod(0x2b2d31);
   g.userData.feet = lv ? [
     { p: [0, -0.185, 0.02], d: [0, -1, 0], r: 0.018, kind: 'sq', mat: dm, on: 'any', back: 0.02, reach: 0.9 }, // under the sump
-    { p: [0, hd.y, hd.z], d: [0, 1, 0.15], r: 0.016, kind: 'sq', mat: dm, on: 'any', back: 0.02, reach: 0.5 }, // head stay
+    { p: [0, hd.y, hd.z], d: [0, 1, 0.15], r: 0.016, kind: 'sq', mat: dm, on: 'any', back: 0.02, reach: 1.0 }, // head stay
     { p: [0, 0.0, -0.17], d: [0, -0.2, -1], r: 0.016, kind: 'sq', mat: dm, on: 'any', back: 0.02, reach: 0.35 }, // front mount
     { p: [mid.x - 0.03, mid.y + 0.03, mid.z], d: [-0.35, 1, 0], r: 0.012, kind: 'rod', mat: M.steel(), on: 'any', back: 0.02, reach: 0.6 }, // silencer hanger
   ] : undefined;
@@ -388,7 +388,8 @@ function dirtFrame(c, lv) {
   b.add(box(0.15, 0.012, 0.3, 0, -0.537, -0.08), blk); // skid plate on the cradle
   // radiators beside the down tube, shrouds over them, tank, seat, side plates, rear fender, airbox
   for (const sx of [-1, 1]) {
-    b.add(box(0.14, 0.26, 0.05, sx * 0.09, 0.0, -0.3), dark);
+    b.add(box(0.15, 0.26, 0.05, sx * 0.095, 0.0, -0.3), dark);
+    for (const y of [-0.08, 0.08]) b.add(bar(V(sx * 0.03, y, -0.31), V(0, y, -0.395), 0.02, 0.02), dark); // brackets to the down tube
     if (lv) for (let k = 0; k < 9; k++) b.add(box(0.13, 0.004, 0.052, sx * 0.09, -0.11 + k * 0.027, -0.3), M.aluminum());
     b.add(side([[-0.36, -0.05], [-0.4, 0.12], [-0.34, 0.26], [-0.2, 0.31], [-0.02, 0.28], [-0.06, 0.12], [-0.2, -0.1]], sx * 0.185, 0.016), paint); // shroud
     b.add(side([[0.22, 0.02], [0.3, 0.21], [0.62, 0.24], [0.6, 0.08], [0.4, -0.02]], sx * 0.135, 0.014), paint); // side number plate
@@ -420,7 +421,7 @@ function sportFrame(c, lv) {
   // bodywork: the nose with its headlights and screen, the side panels and belly pan, tank, seat, tail
   b.add(superLoft(chaikin([{ z: -0.9, hw: 0.04, top: 0.22, bot: 0.15, n: 2.5 }, { z: -0.84, hw: 0.15, top: 0.31, bot: 0.15, n: 3 }, { z: -0.7, hw: 0.24, top: 0.38, bot: 0.15, n: 3.5 }, { z: -0.54, hw: 0.29, top: 0.41, bot: 0.12, n: 4 }, { z: -0.44, hw: 0.29, top: 0.39, bot: 0.02, n: 4 }], 2), lv ? 36 : 14, !!lv), paint);
   for (const sx of [-1, 1]) b.add(side([[-0.44, 0.08], [-0.4, -0.1], [-0.32, -0.27], [-0.1, -0.31], [0.15, -0.27], [0.12, -0.05], [0.02, 0.06], [-0.25, 0.1]], sx * 0.255, 0.02), paint); // side panels (clear of the road at full lean)
-  b.add(superLoft([{ z: -0.27, hw: 0.22, top: -0.24, bot: -0.46, n: 2.2 }, { z: 0.13, hw: 0.17, top: -0.26, bot: -0.43, n: 2.2 }], 20, !!lv), paint); // belly pan
+  b.add(superLoft([{ z: -0.27, hw: 0.238, top: -0.22, bot: -0.46, n: 2.2 }, { z: 0.13, hw: 0.24, top: -0.22, bot: -0.43, n: 2.2 }], 20, !!lv), paint); // belly pan, meeting the side panels
   if (lv) for (const sx of [-1, 1]) { const vent = side([[-0.3, -0.06], [-0.12, -0.12], [-0.12, -0.16], [-0.3, -0.12]], sx * 0.266, 0.004, 0.001); b.add(vent, blk); }
   b.add(superLoft(chaikin([{ z: -0.34, hw: 0.1, top: 0.3, bot: 0.15, n: 3 }, { z: -0.26, hw: 0.17, top: 0.36, bot: 0.1, n: 3.5 }, { z: -0.1, hw: 0.18, top: 0.355, bot: 0.08, n: 4 }, { z: 0.05, hw: 0.13, top: 0.27, bot: 0.1, n: 3.5 }], 1), lv ? 28 : 12, !!lv), paint); // tank
   b.add(superLoft(chaikin([{ z: 0.0, hw: 0.11, top: 0.235, bot: 0.12, n: 3 }, { z: 0.12, hw: 0.13, top: 0.215, bot: 0.11, n: 4 }, { z: 0.36, hw: 0.11, top: 0.235, bot: 0.12, n: 4 }], 1), 20, !!lv), seatMat());
@@ -429,7 +430,7 @@ function sportFrame(c, lv) {
     const scr = superLoft(chaikin([{ z: -0.66, hw: 0.17, top: 0.39, bot: 0.36, n: 2.4 }, { z: -0.56, hw: 0.2, top: 0.5, bot: 0.4, n: 2.6 }, { z: -0.47, hw: 0.19, top: 0.52, bot: 0.38, n: 2.6 }], 1), 24, true);
     b.add(scr, glass()); // the screen
     for (const sx of [-1, 1]) { // twin headlights in the nose, mirrors on stalks
-      const l = new THREE.SphereGeometry(0.06, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2); l.scale(1.3, 0.55, 0.5); l.rotateX(-Math.PI / 2 - 0.35); l.translate(sx * 0.1, 0.25, -0.8); b.add(l, M.light(0xfff4dd));
+      const l = new THREE.SphereGeometry(0.06, 16, 10); l.scale(1.3, 0.55, 0.5); l.rotateX(-Math.PI / 2 - 0.35); l.translate(sx * 0.1, 0.25, -0.8); b.add(l, M.light(0xfff4dd));
       b.add(bar(V(sx * 0.27, 0.36, -0.5), V(sx * 0.33, 0.42, -0.47), 0.012, 0.012, true, 6), dark);
       const mr = new THREE.SphereGeometry(0.05, 12, 8); mr.scale(1, 0.55, 0.45); mr.translate(sx * 0.35, 0.43, -0.47); b.add(mr, paint);
     }
@@ -535,15 +536,17 @@ export function bikeStand(design, root) {
   wheels.sort((a, c) => a.hub.z - c.hub.z);
   if (style === 'paddock') {
     for (const w of wheels) {
-      const yA = w.hub.y + y - 0.012, x = w.half, z = w.hub.z, back = w === wheels[0] ? -1 : 1, zb = z + back * 0.32;
+      const yA = w.hub.y + y - 0.012, z = w.hub.z, back = w === wheels[0] ? -1 : 1, zb = z + back * 0.3, x = Math.max(w.half, w.r * 0.5);
       for (const sx of [-1, 1]) {
-        b.add(bar(V(sx * x, 0.05, zb), V(sx * x, yA - 0.03, z), 0.035, 0.035), red); // upright, leaning to the axle
-        b.add(bar(V(sx * x, yA - 0.035, z), V(sx * x, yA, z), 0.03, 0.05, true, 10), rub); // cup under the axle end
-        b.add(xCyl(0.045, sx * x - 0.02, sx * x + 0.02, 0.045, zb, 14), rub); // roller
+        b.add(bar(V(sx * x, 0.04, z), V(sx * x, yA - 0.04, z), 0.035, 0.035), red); // upright under the axle end
+        b.add(bar(V(sx * x, yA - 0.045, z), V(sx * x, yA + 0.002, z), 0.045, 0.06, true, 10), rub); // cup it sits in
+        b.add(bar(V(sx * x, 0.045, z + back * 0.02), V(sx * x, 0.045, zb), 0.035, 0.035), red); // base rail
+        b.add(xCyl(0.045, sx * x - 0.022, sx * x + 0.022, 0.045, zb, 14), rub); // roller
+        b.add(bar(V(sx * x, 0.06, z + back * 0.01), V(sx * x, Math.min(yA * 0.5, 0.25), zb * 0.5 + z * 0.5), 0.022, 0.022), red); // brace
       }
-      b.add(xCyl(0.02, -x, x, 0.05, zb), red);
-      b.add(bar(V(0, 0.05, zb), V(0, 0.42, zb + back * 0.5), 0.03, 0.03, true, 10), red); // handle
-      b.add(bar(V(0, 0.42, zb + back * 0.5), V(0, 0.44, zb + back * 0.54), 0.04, 0.04, true, 10), rub);
+      b.add(xCyl(0.02, -x, x, 0.045, zb), red); b.add(xCyl(0.018, -x, x, 0.045, z), red);
+      b.add(bar(V(0, 0.045, zb), V(0, 0.5, zb + back * 0.45), 0.03, 0.03, true, 10), red); // handle
+      b.add(bar(V(0, 0.5, zb + back * 0.45), V(0, 0.52, zb + back * 0.5), 0.045, 0.045, true, 10), rub);
     }
   } else { // box stand under the lowest point of the bike between its wheels
     const pts = [], v = V(), z0 = wheels[0].hub.z + wheels[0].r * 0.6, z1 = wheels.at(-1).hub.z - wheels.at(-1).r * 0.6;

@@ -288,6 +288,9 @@ async def run(args, url, ws_url, shots):
                 await cdp.js(f'{S}.hangar.load({S}.presets.find((d) => d.name === {json.dumps(name)})); {S}.startFlight()')
                 await cdp.wait_for(f'{S}.F && {S}.F.ac && {S}.F.t > 0', 90, 'the flight to start')
                 await cdp.js(f'{S}.controls.setThrottle(1)')
+                bike = await cdp.js(f'!!{S}.F.ac.isBike')
+                if bike:  # a motorbike rides off on the gas (W) and must still be on its wheels at the end
+                    await cdp.js(f"{S}.controls.keys.add('w')")
                 t0, w0 = await cdp.js(f'{S}.F.t'), time.time()
                 await asyncio.sleep(FLIGHT_SECONDS)
                 if shoot:
@@ -295,7 +298,9 @@ async def run(args, url, ws_url, shots):
                 s = await cdp.js(f"""(() => {{ const F = {S}.F; if (!F) return null; const a = F.ac;
                     const n = (v) => [v.x, v.y, v.z].every(Number.isFinite);
                     return {{ t: F.t, pos: n(a.x), vel: n(a.v), alive: a.parts.filter((p) => p.alive).length,
-                             parts: a.parts.length, speed: a.v.length(), alt: a.x.y, thr: {S}.controls.throttle }}; }})()""")
+                             parts: a.parts.length, speed: a.v.length(), alt: a.x.y, thr: {S}.controls.throttle, up: a.up.y }}; }})()""")
+                if bike:
+                    await cdp.js(f"{S}.controls.keys.delete('w')")
                 wall = time.time() - w0
                 if s is None:
                     raise AssertionError('the flight ended on its own')
@@ -304,6 +309,10 @@ async def run(args, url, ws_url, shots):
                 if not s['parts']:
                     raise AssertionError('the plane has no parts')
                 ran = s['t'] - t0
+                if bike and s['up'] < 0.7:
+                    raise AssertionError(f"the bike fell over (up {s['up']:.2f})")
+                if bike and s['speed'] < 3 and ran > 2:
+                    raise AssertionError(f"the bike didn't ride off ({s['speed']:.1f} m/s)")
                 if ran <= 0 or ran < wall * args.min_realtime:
                     raise AssertionError(f'frame loop stalled: flight clock moved {ran:.2f} s in {wall:.1f} s')
                 await cdp.js(f'{S}.endFlight()')

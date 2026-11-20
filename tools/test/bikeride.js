@@ -8,6 +8,7 @@
 //   jump:    launched off the ground at speed with the bike level: it lands upright and rides on.
 import * as THREE from 'three';
 import { Aircraft, REALISM } from '../../src/aircraft.js';
+import { bikeBuilds } from './meshcheck.js';
 
 const flat = (h = 0) => ({ groundAt: () => ({ h, n: new THREE.Vector3(0, 1, 0), type: 'runway' }), maxGround: () => h, windAt: () => new THREE.Vector3(), night: false, groundHeightAtSpawn: h });
 const C = (o = {}) => ({ pitch: 0, roll: 0, yaw: 0, throttle: 0, rev: 0, hand: 0, ...o });
@@ -39,8 +40,8 @@ export function run(design, mode, script, { T = 20, spawn = {}, dt = 1 / 60 } = 
 const sample = (r, t) => r.samples.reduce((a, s) => (Math.abs(s.t - t) < Math.abs(a.t - t) ? s : a));
 const unwrapYaw = (r, t0, t1) => { let tot = 0, prev = sample(r, t0).yaw; for (const s of r.samples) if (s.t > t0 && s.t <= t1) { let d = s.yaw - prev; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI; tot += d; prev = s.yaw; } return tot; };
 
-// The test plan. Returns [{ name, ok, why, ...numbers }]
-export function plan(presets) {
+// The test plan: presets = the stock bikes, others = every other stock vehicle. Returns [{ name, ok, why, ...numbers }]
+export function plan(presets, others = []) {
   const out = [], check = (name, r, conds) => { const bad = conds.filter(([ok]) => !ok).map(([, why]) => why); out.push({ name, ok: !bad.length, why: bad.join('; '), maxLean: +r.maxLean.toFixed(2), minUp: +r.minUp.toFixed(2), maxSpeed: +r.maxSpeed.toFixed(1), maxPitch: +r.maxPitch.toFixed(2), minPitch: +r.minPitch.toFixed(2), flips: r.flips, final: r.final, events: r.events.slice(0, 6) }); return r; };
   for (const d of presets) for (const mode of ['arcade', 'pilot', 'sim']) {
     // the ride: 0-4 s gas, 4-9 s left turn on part gas, 9-13 s right turn, 13-15 s straight, 15-23 s brake to a stop, then wait
@@ -67,5 +68,19 @@ export function plan(presets) {
     const landed = j.samples.filter((s) => s.t > 3);
     check(`${d.name} ${mode}: jump`, j, [[!j.dead, 'wrecked'], [landed.every((s) => s.up > 0.85 && s.fc && s.rc), 'did not land upright on both wheels'], [j.minUp > 0.6, 'tipped over'], [!j.flips, 'had to be picked up']]);
   }
+  // a kid's own bikes, parts dropped the way the hangar places them (meshcheck.js): any frame or body with two wheels in
+  // line on the centreline is a bike, whatever the wheels are (car wheels too), and whatever angle it sits at. They must be
+// detected and ride without falling over.
+  const kids = [...bikeBuilds(8, 91, { fit: true }), ...bikeBuilds(3, 93, { forks: ['c_wheel_steer'], rears: ['c_wheel'], engines: ['c_motor'], bodies: ['fus_pod', 'b_dirt', 'fus_buggy'], fit: true })];
+  for (const d of kids) {
+    // (a random build whose wheels don't both reach the ground, so it sits on its frame, isn't a bike anyone could ride)
+    const rest = run(d, 'arcade', () => ({}), { T: 1.5 });
+    if (!(rest.final.fc && rest.final.rc)) { out.push({ name: `kid ${d.name}: skipped`, ok: true, skip: true, why: 'its wheels don\'t both reach the ground' }); continue; }
+    const ride = run(d, 'arcade', (t, ac) => t < 3 ? { throttle: 0.6 } : t < 8 ? { throttle: 0.15, roll: -1 } : t < 10 ? { throttle: 0.3 } : t < 22 ? { rev: Math.abs(ac.groundSpeed) > 0.3 ? 0.9 : 0 } : {}, { T: 24 }); // (a short, tall bike can only brake gently before it tips onto its nose)
+    check(`kid ${d.name}: ride`, ride, [[ride.isBike, 'not detected as a bike'], [!ride.dead, 'wrecked'], [ride.maxLean < 0.95, `fell over (lean ${ride.maxLean.toFixed(2)})`], [!ride.flips, 'had to be picked up'],
+      [ride.maxSpeed > 8, `slow (${ride.maxSpeed.toFixed(1)} m/s)`], [unwrapYaw(ride, 3, 8) > 0.4, 'did not turn left'], [ride.final.spd < 0.5 && Math.abs(ride.final.lean) < 0.1, 'not stopped upright at the end']]);
+  }
+  // and everything else stays what it was
+  for (const d of others) { const ac = new Aircraft(d, REALISM.arcade); out.push({ name: `${d.name}: not a bike`, ok: !ac.isBike, why: ac.isBike ? 'detected as a bike' : '' }); }
   return out;
 }

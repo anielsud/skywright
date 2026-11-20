@@ -160,7 +160,7 @@ export function lightLayout(root, parts, kind) {
     const c = p.d?.cat;
     if (c === 'wing') points(p.obj, inv, wing, p.i);
     if (c === 'fuselage' || c === 'cockpit') points(p.obj, inv, body, p.i);
-    if (c === 'wing' || c === 'tail' || c === 'fuselage' || c === 'cockpit' || (c === 'extra' && !p.d.light)) points(p.obj, inv, all, p.i);
+    if (c === 'wing' || c === 'tail' || c === 'fuselage' || c === 'cockpit' || (c === 'extra' && !p.d.light) || (c === 'bike' && !p.d.gear && !p.d.engine)) points(p.obj, inv, all, p.i); // (bike frames: a bike's lamps)
     else if (c === 'engine') points(p.obj, inv, eng, p.i);
   }
   if (!all.length) return [];

@@ -5,8 +5,8 @@ in varied places, resized and mirrored) in headless Chrome, the way the hangar s
     tyre or cowl with no inside surface, a missing end cap), and
   - car exhausts whose path runs through glass, and
   - floating parts: every piece must touch (within 1 cm) the rest of the vehicle, at rest and with the wheels pushed up
-    their travel and steered, on every stock vehicle, the 20 random builds re-placed the way the hangar places parts and
-    16 seeded random car builds.
+    their travel and steered, on every stock vehicle, the 20 random builds re-placed the way the hangar places parts,
+    16 seeded random car builds and 10 bike builds.
 
 Run from anywhere:  python3 tools/test/meshcheck.py [--random 20] [--json out.json]
 Same requirements as smoke.py (Chrome + the websockets package). See tools/test/README.md.
@@ -32,7 +32,7 @@ async def main(a):
             await cdp.send('Runtime.enable')
             await cdp.send('Page.navigate', url=origin + '/')
             await cdp.wait_for('window.__sky && window.__sky.hangar', 60, 'the app to boot')
-            report = await cdp.js(f"import('/tools/test/meshcheck.js').then((m) => m.run({{ presets: __sky.presets, random: {a.random}, placed: {a.placed}, cars: {a.cars} }}))", timeout=1800)
+            report = await cdp.js(f"import('/tools/test/meshcheck.js').then((m) => m.run({{ presets: __sky.presets, random: {a.random}, placed: {a.placed}, cars: {a.cars}, bikes: {a.bikes} }}))", timeout=1800)
     finally:
         proc.kill(); proc.wait(); shutil.rmtree(profile, ignore_errors=True)
         if srv:
@@ -70,6 +70,7 @@ if __name__ == '__main__':
     ap.add_argument('--random', type=int, default=20, help='number of random player builds (default 20)')
     ap.add_argument('--placed', type=int, default=20, help='number of random builds re-placed the way the hangar places parts, checked for floating parts (default 20)')
     ap.add_argument('--cars', type=int, default=16, help='number of random car builds checked for floating parts (default 16)')
+    ap.add_argument('--bikes', type=int, default=10, help='number of random bike builds checked for floating parts (default 10)')
     ap.add_argument('--json', help='write the full report here')
     ap.add_argument('--url', help='check an already running server (e.g. http://127.0.0.1:8000) instead of serving the repo')
     ap.add_argument('--port', type=int), ap.add_argument('--cdp-port', type=int)
