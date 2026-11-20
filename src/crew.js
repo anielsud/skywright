@@ -39,6 +39,9 @@ export const OUTFITS = {
   heli: { head: 'helmet', mic: true, visor: 0x14191e, helmet: 0xf2f2ee, helmet2: 0xc8102e, suit: 0xd9531c, suit2: 0x3d3f44, trim: 0xd9dcdf, glove: 0x1d1e20, boot: 0x1a1a1a, stripes: true },
   medic: { head: 'helmet', mic: true, visor: 0x14191e, helmet: 0xf2f2ee, helmet2: 0x2e7d32, suit: 0x2e7d32, suit2: 0x2b2d31, trim: 0xd9dcdf, glove: 0x1d1e20, boot: 0x1a1a1a, stripes: true },
   driver: { head: 'fullface', visor: 0x101418, helmet: 0xe8601c, helmet2: 0x15161a, suit: 0xc8102e, suit2: 0x15161a, trim: 0xf2f2ee, glove: 0x15161a, boot: 0x15161a, harness: true, stripes: true },
+  // motorbike riders: a motocross kit (jersey, goggles under a peaked helmet, big boots) and road-racing leathers
+  mx: { head: 'fullface', peak: true, visor: 0xd9761c, helmet: 0xf2f2ee, helmet2: 0xe8601c, suit: 0xe8601c, suit2: 0x2b2d31, trim: 0xf2f2ee, glove: 0x15161a, boot: 0xf2f2ee, stripes: true, bigBoots: true },
+  sport: { head: 'fullface', visor: 0x1b2127, helmet: 0xf2f2ee, helmet2: 0x1d4e89, suit: 0x1d4e89, suit2: 0xf2f2ee, trim: 0xc8102e, glove: 0x15161a, boot: 0x15161a, stripes: true, hump: true },
   airline: { head: 'headset', shirt: true, suit: 0xf2f2f0, suit2: 0x1b2433, trim: 0x15161a, glove: null, boot: 0x111111, cups: 0x26282b, epaulettes: 0xd4a82a },
 };
 
@@ -105,6 +108,7 @@ const CTL = {
   },
   yoke: { colBase: V(0, -0.3, -0.62), colLen: 0.62, yokeR: 0.15 },
   wheel: { col: V(0, 0.28, -0.52), tilt: 0.42, wheelR: 0.19 },
+  bars: {}, // a motorbike: hands on the fork's grips (given every frame), feet on the pegs, the body leans and tucks
   none: {},
 };
 
@@ -116,8 +120,9 @@ function ikTwo(S, T, a, b, pole, outE) {
 }
 
 class Rig {
-  constructor(kind, ctl, outfit, seed) {
+  constructor(kind, ctl, outfit, seed, opts = {}) {
     this.kind = kind; this.ctl = ctl; this.o = outfit; this.seed = seed;
+    this.pegs = opts.pegs || [V(-0.24, -0.62, 0.0), V(0.24, -0.62, 0.0)]; this.groundY = opts.groundY ?? -1.1;
     const C = CTL[ctl] || CTL.none, D = DIM;
     this.C = C;
     // static joints
@@ -127,7 +132,7 @@ class Rig {
     this.neck = sp(0, D.spine, 0.0);
     this.shR = sp(D.shoulderW, D.shoulderUp, 0.02); this.shL = sp(-D.shoulderW, D.shoulderUp, 0.02);
     this.hipR = V(D.hipW, 0, 0); this.hipL = V(-D.hipW, 0, 0);
-    this.state = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0 };
+    this.state = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 };
     this.q = Array.from({ length: NB }, () => new THREE.Quaternion());
     this.p = Array.from({ length: NB }, () => V());
     this.pose(this.state);
@@ -160,6 +165,11 @@ class Rig {
       const tq = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), C.tilt); // wheel plane leans back towards the driver
       p[B.ctlA].copy(C.col); q[B.ctlA].copy(tq).multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), s.steer));
       for (const [k, a] of [['R', -1.15], ['L', 1.15]]) hands[k] = V(Math.sin(-a) * C.wheelR, Math.cos(a) * C.wheelR, 0.02).applyQuaternion(q[B.ctlA]).add(C.col);
+    } else if (this.ctl === 'bars') { // on the grips (rig space, from the fork), else resting on the tank
+      hands.L = s.hands?.[0] || V(-0.2, 0.05, -0.42); hands.R = s.hands?.[1] || V(0.2, 0.05, -0.42);
+      feet.L = this.pegs[0].clone().lerp(V(this.pegs[0].x - 0.1, this.groundY + 0.06, this.pegs[0].z - 0.12), s.foot || 0); // a foot down when stopped
+      feet.R = this.pegs[1].clone();
+      return { hands, feet };
     } else {
       hands.R = V(0.16, 0.0, -0.32); hands.L = V(-0.16, 0.0, -0.32); // resting on the thighs
     }
@@ -177,10 +187,22 @@ class Rig {
     return { hands, feet };
   }
   pose(s) {
-    const D = DIM, p = this.p, q = this.q, { hands, feet } = this.controls(s);
-    p[B.hips].set(0, 0, 0); q[B.hips].identity();
+    const D = DIM, p = this.p, q = this.q, { hands, feet } = this.controls(s), bars = this.ctl === 'bars';
+    if (bars) { // a rider: bent forward over the tank (more when tucked at speed), leaning further into a turn than the bike
+      const fwd = (this.o.hump ? 0.6 : 0.42) + (s.tuck || 0) * (this.o.hump ? 0.42 : 0.22), lean = s.lean || 0;
+      this.hipAt = V(lean * 0.12, -Math.abs(lean) * 0.03, (s.tuck || 0) * 0.04);
+      this.spineQ = new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), -lean).multiply(new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), -fwd));
+      this.spinePos = V(0, 0.03, 0).add(this.hipAt);
+      const sp = (x, y, z) => V(x, y, z).applyQuaternion(this.spineQ).add(this.spinePos);
+      this.neck = sp(0, D.spine, 0.0); this.shR = sp(D.shoulderW, D.shoulderUp, 0.02); this.shL = sp(-D.shoulderW, D.shoulderUp, 0.02);
+      this.hipR = V(D.hipW, 0, 0).add(this.hipAt); this.hipL = V(-D.hipW, 0, 0).add(this.hipAt);
+    }
+    if (bars) p[B.hips].copy(this.hipAt); else p[B.hips].set(0, 0, 0);
+    q[B.hips].identity();
     p[B.spine].copy(this.spinePos); q[B.spine].copy(this.spineQ);
-    p[B.head].copy(this.neck); q[B.head].setFromEuler(new THREE.Euler(-0.08 + s.pitch * 0.05, s.look, s.look * 0.15, 'YXZ'));
+    p[B.head].copy(this.neck);
+    if (bars) q[B.head].setFromEuler(new THREE.Euler(-0.1, s.look * 0.5, (s.bikeLean || 0) * 0.55 + (s.lean || 0) * 0.5, 'YXZ')); // eyes level, looking up the road
+    else q[B.head].setFromEuler(new THREE.Euler(-0.08 + s.pitch * 0.05, s.look, s.look * 0.15, 'YXZ'));
     const E = V();
     const limb = (S, T, a, b, pole, iu, iff, hint) => {
       ikTwo(S, T, a, b, pole, E);
@@ -188,10 +210,11 @@ class Rig {
       p[iff].copy(E); basis(T.clone().sub(E), hint, q[iff]);
     };
     const handL = D.fore + D.hand;
-    limb(this.shR, hands.R, D.upper, handL, V(0.55, -0.8, 0.25), B.uArmR, B.fArmR, V(0.2, 0, -1));
-    limb(this.shL, hands.L, D.upper, handL, V(-0.55, -0.8, 0.25), B.uArmL, B.fArmL, V(-0.2, 0, -1));
-    limb(this.hipR, feet.R, D.thigh, D.shin, V(0.1, 1, -0.4), B.thighR, B.shinR, FWD);
-    limb(this.hipL, feet.L, D.thigh, D.shin, V(-0.1, 1, -0.4), B.thighL, B.shinL, FWD);
+    const eR = bars ? V(0.9, -0.1, 0.3) : V(0.55, -0.8, 0.25), kR = bars ? V(0.5, 0.6, -1) : V(0.1, 1, -0.4); // riders: elbows out, knees forward against the tank
+    limb(this.shR, hands.R, D.upper, handL, eR, B.uArmR, B.fArmR, V(0.2, 0, -1));
+    limb(this.shL, hands.L, D.upper, handL, V(-eR.x, eR.y, eR.z), B.uArmL, B.fArmL, V(-0.2, 0, -1));
+    limb(this.hipR, feet.R, D.thigh, D.shin, kR, B.thighR, B.shinR, FWD);
+    limb(this.hipL, feet.L, D.thigh, D.shin, V(-kR.x, kR.y, kR.z), B.thighL, B.shinL, FWD);
   }
 }
 
@@ -212,6 +235,7 @@ function figureGeometry(rig) {
     at(B.hips, capAB(V(-0.17, 0.08, -0.1), V(0.17, 0.08, -0.1), 0.025, 0.025, { seg: 6 }), o.trim);
     at(B.spine, boxG(0.07, 0.07, 0.03, V(0, 0.13, -0.135)), 0x9aa0a6, true);
   }
+  if (o.hump) at(B.spine, ellipsoid(V(0, D.shoulderUp - 0.06, 0.12), 0.09, 0.12, 0.06, { w: 12 }), o.suit, true); // leathers' aero hump
   if (o.mask === true) { const vest = capsule(0.16, 0.15, 0.135, { sx: 1.25, sz: 0.88, seg: 14, ring: 2 }); vest.translate(0, 0.17, 0); at(B.spine, vest, o.suit2); } // survival vest
   if (o.stripes) for (const y of [0.2, 0.32]) { const r = 0.14 - (y - 0.06) * 0.067 + 0.004, st = new THREE.CylinderGeometry(r, r, 0.035, 16, 1, true); st.scale(1.25, 1, 0.85); st.translate(0, y, 0); at(B.spine, st, o.trim); }
   if (o.shirt) { // tie and epaulettes
@@ -235,6 +259,7 @@ function figureGeometry(rig) {
     at(s, ellipsoid(V(0, 0, 0), 0.062, 0.062, 0.062), o.suit2);
     at(s, capsule(D.shin - 0.04, 0.056, 0.046), o.suit2);
     const boot = ellipsoid(V(0, D.shin + 0.0, -0.06), 0.052, 0.05, 0.12); at(s, boot, o.boot);
+    if (o.bigBoots) at(s, capsule(0.24, 0.058, 0.062).translate(0, D.shin - 0.24, 0), o.boot); // motocross boots up the shin
   }
   // head: neck, then per outfit
   const hc = V(0, 0.135, -0.01);
@@ -271,6 +296,7 @@ function figureGeometry(rig) {
       at(B.head, capAB(V(0.02, hc.y - 0.08, hc.z - 0.12), V(0.06, hc.y - 0.17, hc.z - 0.1), 0.014, 0.014, { seg: 6 }), 0x2a2c2e);
       for (const sx of [-1, 1]) at(B.head, ellipsoid(V(sx * 0.1, hc.y - 0.02, hc.z - 0.04), 0.012, 0.012, 0.03), 0x9aa0a6); // bayonet fittings
     }
+    if (o.peak) { const pk = ellipsoid(V(0, hc.y + 0.095, hc.z - 0.12), 0.1, 0.014, 0.09, { w: 14, h: 5 }); pk.rotateX(-0.12); at(B.head, pk, o.helmet2, true); } // motocross peak
     if (o.mic) at(B.head, capAB(V(0.11, hc.y - 0.02, hc.z - 0.02), V(0.035, hc.y - 0.055, hc.z - 0.11), 0.008, 0.011, { seg: 5 }), 0x15161a);
     if (o.ring) at(B.head, torusAB(0.16, 0.022, Math.PI * 2, 24).rotateX(Math.PI / 2).translate(0, 0.02, 0), o.trim, true); // suit neck ring
   } else if (o.head === 'headset') {
@@ -322,7 +348,7 @@ function figureGeometry(rig) {
     at(B.ctlA, capAB(V(0, 0, -0.02), V(0, 0, -0.42), 0.025, 0.03, { seg: 8 }), 0x2b2d31); // column, forward into the dash
   }
   // pedals
-  for (const i of [B.pedR, B.pedL]) {
+  if (rig.ctl !== 'bars') for (const i of [B.pedR, B.pedL]) {
     at(i, boxG(0.085, 0.16, 0.018, V(0, 0.07, 0)), rig.ctl === 'wheel' && i === B.pedR ? 0x9aa0a6 : 0x2b2d31);
     at(i, capAB(V(0, 0.0, 0.02), V(0, 0.14, 0.1), 0.01, 0.01, { seg: 5 }), 0x2b2d31);
   }
@@ -331,10 +357,10 @@ function figureGeometry(rig) {
 
 const geoCache = new Map();
 // outfit: OUTFITS key or object; ctl: 'stick' | 'cyclic' | 'yoke' | 'wheel' | 'none'; seed picks skin/hair tones
-export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null } = {}) {
+export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, pegs = null, groundY } = {}) {
   const outfit = { ...(OUTFITS[outfitKey] || OUTFITS.light), ...(colors || {}) };
-  const rig = new Rig(outfitKey, ctl, outfit, seed);
-  const key = outfitKey + '|' + ctl + '|' + (seed % 4) + '|' + JSON.stringify(colors || 0);
+  const rig = new Rig(outfitKey, ctl, outfit, seed, { pegs, groundY });
+  const key = outfitKey + '|' + ctl + '|' + (seed % 4) + '|' + JSON.stringify(colors || 0) + (pegs ? '|' + JSON.stringify(pegs.map((v) => v.toArray().map((x) => +x.toFixed(3)))) : '');
   if (!geoCache.has(key)) geoCache.set(key, figureGeometry(rig));
   const geos = geoCache.get(key), mats = crewMaterials();
   const root = new THREE.Group(); root.name = 'crew';
@@ -347,14 +373,15 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null } 
     m.frustumCulled = false; // a few hundred triangles; skinned bounds would otherwise need a refresh as the pose changes
     root.add(m); m.bind(skel, new THREE.Matrix4());
   }
-  const smooth = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0 };
+  const smooth = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 };
   root.userData.crewRig = {
-    rig,
+    rig, root,
     // c: { pitch, roll, yaw, throttle, steer } (stick back = +pitch, right = +roll and +yaw); returns true while still moving
     update(c, dt) {
       const k = Math.min(1, (dt || 0.016) * 12), s = smooth;
       const tgt = { pitch: clamp(c.pitch || 0, -1, 1), roll: clamp(c.roll || 0, -1, 1), yaw: clamp(c.yaw || 0, -1, 1), thr: clamp(c.throttle ?? 0.4, 0, 1), steer: clamp(c.steer || 0, -1.7, 1.7) };
       tgt.look = clamp(-(tgt.roll * 0.35 + tgt.yaw * 0.25) + tgt.steer * 0.25, -0.6, 0.6);
+      if (rig.ctl === 'bars') { tgt.lean = clamp(c.lean || 0, -0.6, 0.6); tgt.tuck = clamp(c.tuck || 0, 0, 1); tgt.foot = clamp(c.foot || 0, 0, 1); tgt.bikeLean = clamp(c.bikeLean || 0, -1, 1); s.hands = c.hands || null; }
       let moving = false;
       for (const a in tgt) { const kk = a === 'look' ? k * 0.35 : k; const v = s[a] + (tgt[a] - s[a]) * kk; if (Math.abs(v - tgt[a]) > 1e-3) moving = true; s[a] = v; }
       rig.pose(s);
@@ -390,10 +417,15 @@ export function addCrew(design, objs) {
     let kind = crewKind(design, p.id);
     const list = [];
     seats.forEach((st, k) => {
-      let outfit = kind, ctl = st.ctl || CTL_OF[kind] || 'stick', colors = null;
+      let outfit = kind, ctl = st.ctl || CTL_OF[kind] || 'stick', colors = null, pegs = null, groundY;
       if (st.role === 'crew') { outfit = kind === 'heli' ? 'medic' : kind; ctl = 'none'; }
       if (kind === 'driver') colors = { helmet: p.color === 0x15161a || p.color == null ? 0xe8601c : 0xf2b705, helmet2: 0x15161a };
-      const c = buildCrew(outfit, ctl, { seed: i * 3 + k, colors });
+      if (ctl === 'bars') { // a rider in the bike's colours, feet on the frame's pegs (seat space -> rig space)
+        outfit = st.rider || 'mx'; colors = { suit: p.color ?? OUTFITS[outfit].suit, helmet2: p.color ?? OUTFITS[outfit].helmet2 };
+        const at = V(...st.p), sc = st.s || 1; pegs = (st.pegs || []).map((q) => V(...q).sub(at).divideScalar(sc)); if (pegs.length !== 2) pegs = null;
+        if (st.ground != null) groundY = (st.ground - st.p[1]) / sc;
+      }
+      const c = buildCrew(outfit, ctl, { seed: i * 3 + k, colors, pegs, groundY });
       c.position.set(...st.p); if (st.quat) c.quaternion.fromArray(st.quat); else if (st.yaw) c.rotation.y = st.yaw; c.scale.setScalar(st.s || 1);
       obj.add(c); list.push(c.userData.crewRig);
     });

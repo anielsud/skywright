@@ -7,6 +7,7 @@ import { clamp, lerp } from './noise.js';
 import { keepHeatPatch } from './sonic.js';
 import { assemble, updateDetail, mergeStatic } from './planeDetail.js';
 import { groundUnder, groundAtPoint } from './collide.js';
+import { detectBike, bikeSteer, bikeAssist } from './bike.js';
 
 // spaceRCS: every plane can turn in space (no RCS part needed). rocketHigh: rockets push up to 1 + rocketHigh times harder
 // in the thin air above ~10 km (a generous shove towards space). Nothing changes lower down.
@@ -179,7 +180,7 @@ export class Aircraft {
         const gi = d.gear, ls = linScale(p); // ls: resized gear (wheel/strut sizes are in metres, the mesh is in part-local units)
         const wheels = [];
         if (gi.float) for (const dz of [-gi.flen * 0.32, gi.flen * 0.32, 0]) wheels.push({ top: new THREE.Vector3(0, 0, dz).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: (gi.clen ?? 1.0) * ls, r: (gi.cr ?? 0.3) * ls, ls, steer: false, brake: false, float: true, comp: 0, contact: false });
-        else wheels.push({ top: new THREE.Vector3(0, 0, 0).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: gi.len * ls, r: gi.r * ls, ls, steer: gi.steer, brake: gi.brake, drive: !!gi.drive, comp: 0, contact: false, spin: 0 });
+        else wheels.push({ top: new THREE.Vector3(0, 0, 0).applyMatrix4(m), dir: new THREE.Vector3(0, -1, 0).transformDirection(m), len: gi.len * ls, r: gi.r * ls, ls, steer: gi.steer, brake: gi.brake, drive: !!gi.drive, comp: 0, contact: false, spin: 0, ...(gi.grip ? { grip: gi.grip } : {}) });
         part.gear = { ...gi, wheels, strut: obj.userData.strut, wheelObj: obj.userData.wheels };
       }
       if (d.smoke) part.smoke = { pos: new THREE.Vector3(0, 0, info.box.max.z).applyMatrix4(m), color: new THREE.Color(p.color) };
@@ -233,6 +234,7 @@ export class Aircraft {
     this.updateMass(true);
     this.initialMass = this.mass;
     this.steerGeometry();
+    this.bike = this.isCar ? detectBike(this) : null; this.isBike = !!this.bike; // two in-line wheels on the centreline: bike.js balances it
     let r = 1; for (const p of this.parts) for (const h of p.hull) r = Math.max(r, h.distanceTo(this.com)); for (const p of this.parts) if (p.gear) r = Math.max(r, p.gear.wheels[0].top.distanceTo(this.com) + p.gear.wheels[0].len + 0.5);
     this.radius = r;
   }
@@ -345,6 +347,7 @@ export class Aircraft {
       const tail = w && this.com && w.top.z > this.com.z ? -1 : 1;
       return -tail * this.ctl.yaw * 0.55 * clamp(1 - this.airspeed / 45, 0.15, 1);
     }
+    if (this.isBike) return bikeSteer(this, w);
     // cars: full lock (~34°) at walking pace, less as you speed up so corners stay under cornerG (it slides before it tips)
     const v = this.stuntUp ? this.v.length() : Math.hypot(this.v.x, this.v.z), L = this.wheelbase || 2.5; // (up a loop's side the speed is all vertical)
     // (on a banked ramp, bowl or loop the banking holds you in the turn too: more lock allowed)
@@ -373,10 +376,11 @@ export class Aircraft {
     this.cornerG = clamp(0.75 * G * half / Math.max(0.3, h), 3, 8);
   }
   // Arcade and Pilot: a car stuck on its roof or side for 2 s is set back on its wheels.
+  // A bike lying on its side is picked up in every mode, after 1.5 s.
   carRecover(dt) {
-    const stuck = this.R.assist > 0 && this.onGround && this.up.y < 0.3 && this.v.length() < 2 && !this.stuntUp; // (on its wheels up a steep ramp is not stuck)
+    const bike = this.isBike, stuck = (this.R.assist > 0 || bike) && this.onGround && this.up.y < (bike ? 0.5 : 0.3) && this.v.length() < (bike ? 3 : 2) && !this.stuntUp; // (on its wheels up a steep ramp is not stuck)
     this.flipT = stuck ? this.flipT + dt : 0;
-    if (this.flipT < 2) return;
+    if (this.flipT < (bike ? 1.5 : 2)) return;
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.q); fwd.y = 0;
     this.q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(-fwd.x, -fwd.z));
     this.x.y += 1.5; this.v.set(0, 0, 0); this.w.set(0, 0, 0); this.wW.set(0, 0, 0); this.flipT = 0;
@@ -663,7 +667,8 @@ export class Aircraft {
     F.add(_v2.set(0, -gravityAt(alt, this.v.x * this.v.x + this.v.z * this.v.z) * mass, 0).applyQuaternion(_qi));
     // ---- arcade/pilot assistance ----
     T.addScaledVector(Taero, R.aeroTorque);
-    if (this.isHeli) this.heliAssist(F, T, ctl, q, _qi, fwdSpeed);
+    if (this.isBike) bikeAssist(this, F, T, ctl, dt, env); // balance, counter-steering, wheelies, attitude in the air
+    else if (this.isHeli) this.heliAssist(F, T, ctl, q, _qi, fwdSpeed);
     else if (this.isCar && this.onGround && R.assist > 0) { // Arcade/Pilot: stability control keeps the wheels down
       const right = _v2.set(1, 0, 0).applyQuaternion(q), bank = Math.asin(clamp(this.stuntUp ? right.dot(this.stuntUp) : right.y, -1, 1)); // level with the ramp/loop/banking the wheels are on
       T.add(_v3.set(0, 0, -bank * 6 * R.assist - this.w.z * 3 * R.assist).applyMatrix3(this.I));
@@ -801,9 +806,9 @@ export class Aircraft {
         const DBG = globalThis.__dbg || {};
         const Ff = -clamp(vf / 0.4, -1, 1) * muRoll * N * (DBG.roll ?? 1);
         const Fl = -clamp(vl / 0.25, -1, 1) * muLat * N * (DBG.lat ?? 1);
-        const Fd = w.drive && nDrive ? clamp(this.driveF / nDrive, -0.8 * N, 0.8 * N) * (water ? 0.15 : 1) * (1 - hand) : 0; // engine through the tyre
+        const grip = w.grip || 0.8, Fd = w.drive && nDrive ? clamp(this.driveF / nDrive, -grip * N, grip * N) * (water ? 0.15 : 1) * (1 - hand) : 0; // engine through the tyre
         // one grip budget per tyre: pushing and cornering share it, so a spinning wheel slides instead of adding grip
-        let Fx = Ff + Fd, Fy = Fl; const cap = Math.max(muLat, muRoll) * N, tot = Math.hypot(Fx, Fy);
+        let Fx = Ff + Fd, Fy = Fl; const cap = Math.max(muLat, muRoll, w.grip || 0) * N, tot = Math.hypot(Fx, Fy);
         if ((Fd || hand) && tot > cap) { Fx *= cap / tot; Fy *= cap / tot; }
         const Fw = g.n.clone().multiplyScalar(N).addScaledVector(fwdW, Fx).addScaledVector(latW, Fy);
         // apply as impulse

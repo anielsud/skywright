@@ -23,6 +23,7 @@ import { addCrew } from './crew.js';
 import { routeGear, routeStruts } from './gearRoute.js';
 import { assembleCar } from './carDetail.js';
 import { fitOut } from './fitOut.js';
+import { bikeSync, wireRiders, riderInput } from './bikeParts.js';
 
 const BODY = new Set(['fuselage', 'cockpit']), BODY_X = new Set(['x_nosecone', 'x_tailcone']);
 const isBody = (id) => BODY.has(PARTS[id].cat) || BODY_X.has(id);
@@ -738,7 +739,7 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
     partner: (gp) => { const j = parts.findIndex((o, k) => valid(k) && o !== gp && o.id === gp.id && Math.abs(gp.pos[0]) > 0.05 && Math.abs(o.pos[0] + gp.pos[0]) < 0.02 && Math.abs(o.pos[1] - gp.pos[1]) < 0.02 && Math.abs(o.pos[2] - gp.pos[2]) < 0.02); return j >= 0 ? objs[j] : null; },
   };
   parts.forEach((p, i) => {
-    if (!valid(i) || !valid(p.parent) || !PARTS[p.id].gear || objs[i].userData.corner) return; // (car corners: carDetail.js)
+    if (!valid(i) || !valid(p.parent) || !PARTS[p.id].gear || objs[i].userData.corner || objs[i].userData.bikeWheel) return; // (car corners: carDetail.js; bike wheels: bikeParts.js)
     try { T('gear', () => gearJoint(p, objs[i], parts[p.parent], structure, out, gc)); } catch (e) { console.warn('planeDetail gear', p.id, e); }
   });
   parts.forEach((p, i) => {
@@ -759,7 +760,7 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
   // cars: rigged suspension, axles and drivetrain, mud flaps, feet carried to the surfaces they stand on (carDetail.js)
   try { out.rig = T('car', () => assembleCar(design, objs, root, { valid, isBody, cast, solidMeshes, addTo, structure, near, ids: parts.map((p) => p.id), rootW: root.matrixWorld.clone() })); } catch (e) { console.warn('carDetail', e); }
   for (const [obj, bag] of nearBags) ctx.flush(bag, obj, true);
-  if (near) try { T('crew', () => addCrew(design, objs)); } catch (e) { console.warn('crew', e); } // pilots and drivers on the declared seats (crew.js)
+  if (near) try { T('crew', () => { addCrew(design, objs); wireRiders(objs); }); } catch (e) { console.warn('crew', e); } // pilots and drivers on the declared seats (crew.js), riders' hands on the bars
   // near-only items: everything tagged near anywhere in the plane
   const items = [];
   for (const o of objs) if (o) o.traverse((m) => { if (m.isMesh && m.userData.near) { m.castShadow = false; if (near) items.push(m); else m.visible = false; } });
@@ -782,6 +783,7 @@ export function mergeStatic(objs, root) {
     for (const c of u.controls || obj.children[0]?.userData?.controls || []) rigid.add(c.obj);
     for (const s of [...(u.slats || []), ...(u.spoilers || [])]) rigid.add(s.obj);
     for (const k of ['fan', 'strut', 'wheelsFixed']) if (u[k]) rigid.add(u[k]);
+    for (const r of u.rigid || []) rigid.add(r); // a part's own moving pieces (bike forks, swingarms, shocks)
     if (u.wheels) { if (PARTS_BOGIE(u)) rigid.add(u.wheels); else for (const c of u.wheels.children) rigid.add(c); }
     for (const k of ['flame', 'flameCore', 'bulb', 'prop']) if (u[k]) skip.add(u[k]);
     for (const dd of D?.doors || []) if (dd.gobj === obj) { skip.add(dd.well); for (const d of dd.doors) rigid.add(d.piv); }
@@ -831,13 +833,14 @@ export function updateDetail(ac, dt) {
   for (const dd of D.doors) setDoors(dd, ac.gearT);
   const k = Math.min(1, dt * 4), spd = ac.v?.length?.() || 0;
   let crewMoving = false;
+  bikeSync(ac); // bike forks steer and slide, swingarms swing (before the riders reach for the bars)
   const ground = ac.onGround && (ac.ctl.throttle || 0) < 0.1 && spd > 6 ? 1 : 0;
   for (const p of ac.parts) {
     if (!p.alive) continue;
     const u = p.obj.userData;
     if (u.crew) {
       const c = ac.ctl, steer = ac.isCar && ac.steerAngle ? ac.steerAngle() * 2.6 : ac.crewSteer ?? 0;
-      for (const r of u.crew) if (r.update({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: c.throttle, steer }, dt)) crewMoving = true;
+      for (const r of u.crew) if (r.update({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: c.throttle, steer, ...(r.bars ? riderInput(ac, r) : null) }, dt)) crewMoving = true;
     }
     if (u.wheelsFixed && u.wheels) { u.wheelsFixed.position.copy(u.wheels.position); u.wheelsFixed.rotation.y = u.wheels.rotation.y; }
     if (u.slats) { const t = ac.flaps > 0 ? 1 : 0; for (const s of u.slats) { s.t = lerp(s.t || 0, t, k * 0.6); s.obj.position.set(0, -0.022 * s.chord * s.t, -0.05 * s.chord * s.t); } }

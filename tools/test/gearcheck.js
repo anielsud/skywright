@@ -72,7 +72,7 @@ function check(d, label) {
   };
   const routed = [];
   objs.forEach((o, i) => {
-    if (!o) return; const p = d.parts[i], def = PARTS[p.id]; if (!def.gear || def.cat === 'car') return;
+    if (!o) return; const p = d.parts[i], def = PARTS[p.id]; if (!def.gear || def.cat === 'car' || def.cat === 'bike') return; // (car and bike wheels: meshcheck's floating-parts check)
     const tag = `#${i} ${p.id}`, R = o.userData.gearRoute || legacyRoute(o, def.gear);
     if (!R) { bad.push(`${tag}: not routed`); return; }
     routed.push({ i, p, R });

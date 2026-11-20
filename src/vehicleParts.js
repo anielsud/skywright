@@ -26,7 +26,7 @@ function def(p) { const b = p.build; p.build = (c, o) => ensureUv1(b(c, o?.detai
 // ---------- a boxy body: rounded-rectangle (superellipse) sections lofted along Z ----------
 // secs: [{ z, hw, top, bot, n }] nose first; n = squareness (2 = ellipse, 4+ = boxy). Linear between sections (add
 // sections for soft transitions). uv: u along the length, v around; uv1 in metres for the panel skin.
-function superLoft(secs, segs = 40, capsOut = false) {
+export function superLoft(secs, segs = 40, capsOut = false) {
   const pos = [], uv = [], uv1 = [], idx = [], row = segs + 1, z0 = secs[0].z, z1 = secs.at(-1).z;
   const se = (t, n) => Math.sign(t) * Math.abs(t) ** (2 / n);
   for (const s of secs) {
@@ -66,7 +66,7 @@ function superLoft(secs, segs = 40, capsOut = false) {
   return g;
 }
 // soften a list of sections: insert midpoints blended with neighbours (cheap Chaikin pass on every parameter)
-function chaikin(secs, passes = 2) {
+export function chaikin(secs, passes = 2) {
   let s = secs;
   for (let k = 0; k < passes; k++) {
     const o = [s[0]];

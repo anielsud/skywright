@@ -151,7 +151,7 @@ function scan(pts, f) {
 }
 
 // Lamps for a vehicle built from parts. parts: [{ obj, d (the PARTS def), i (part index) }], all under root.
-// kind: 'plane' | 'heli' | 'car' (default: guessed from the parts). Returns [{ mode, pos, dir, color, size, power, part }].
+// kind: 'plane' | 'heli' | 'car' | 'bike' (default: guessed from the parts). Returns [{ mode, pos, dir, color, size, power, part }].
 export function lightLayout(root, parts, kind) {
   root.updateMatrixWorld(true);
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
@@ -160,7 +160,7 @@ export function lightLayout(root, parts, kind) {
     const c = p.d?.cat;
     if (c === 'wing') points(p.obj, inv, wing, p.i);
     if (c === 'fuselage' || c === 'cockpit') points(p.obj, inv, body, p.i);
-    if (c === 'wing' || c === 'tail' || c === 'fuselage' || c === 'cockpit' || (c === 'extra' && !p.d.light)) points(p.obj, inv, all, p.i);
+    if (c === 'wing' || c === 'tail' || c === 'fuselage' || c === 'cockpit' || (c === 'extra' && !p.d.light) || (c === 'bike' && !p.d.gear && !p.d.engine)) points(p.obj, inv, all, p.i); // (bike frames: a bike's lamps)
     else if (c === 'engine') points(p.obj, inv, eng, p.i);
   }
   if (!all.length) return [];
@@ -172,6 +172,13 @@ export function lightLayout(root, parts, kind) {
   const len = A.max[2] - A.min[2], add = (mode, pos, dir, color, size, power, part) => out.push({ mode, pos: new THREE.Vector3(...pos), dir: new THREE.Vector3(...dir).normalize(), color, size, power, part });
   const S = Math.max(1, Math.cbrt((A.max[0] - A.min[0]) * len * (A.max[1] - A.min[1]) / 30)); // ~1 for a light plane, ~3 for an airliner
 
+  if (kind === 'bike') { // a motorbike: one headlight at the front of its nose and a tail light at the back, on the centreline
+    const H = A.max[1] - A.min[1], mid = (x) => Math.abs(x - (A.max[0] + A.min[0]) / 2) < 0.12;
+    const F = scan(all, (x, y) => mid(x) && y > A.min[1] + H * 0.35), R = scan(all, (x) => mid(x));
+    if (F.n) { const p = F.at.min[2]; add(L.LAND, [p[0], p[1], p[2] - 0.03], [0, -0.03, -1], LAMP, 0.7, 6, p[3]); }
+    if (R.n) { const p = R.at.max[2]; add(L.NAV, [p[0], p[1], p[2] + 0.03], [0, 0, 1], TAIL, 0.5, 2, p[3]); }
+    return out;
+  }
   if (kind === 'car') { // head- and tail-lights at the corners of the body
     const hw = (A.max[0] - A.min[0]) / 2, xc = (A.max[0] + A.min[0]) / 2, y = A.min[1] + (A.max[1] - A.min[1]) * 0.45;
     for (const s of [-1, 1]) {
@@ -312,12 +319,12 @@ export class NavLights {
 // The lamps for an Aircraft (the player's, or another player's). spot: give it a real landing light (night flights).
 export function aircraftLights(ac, { spot = false, phase = 0 } = {}) {
   const parts = ac.parts.map((p) => ({ obj: p.obj, d: p.d, i: p.i }));
-  const kind = ac.isHeli ? 'heli' : ac.isCar && !parts.some((p) => p.d.cat === 'wing') ? 'car' : 'plane';
+  const kind = ac.isHeli ? 'heli' : ac.isBike ? 'bike' : ac.isCar && !parts.some((p) => p.d.cat === 'wing') ? 'car' : 'plane';
   const lights = lightLayout(ac.root, parts, kind);
   let sl = null;
   if (spot) sl = ac.landingLight || new THREE.SpotLight(0xfff0d8, 0);
   // (low lamps light the ground close by: a car's headlights and a helicopter's searchlight are much weaker than an airliner's)
-  const nl = new NavLights(ac.root, lights, { phase, spot: sl, spotPower: kind === 'car' ? 900 : kind === 'heli' ? 1500 : 12000 });
+  const nl = new NavLights(ac.root, lights, { phase, spot: sl, spotPower: kind === 'car' || kind === 'bike' ? 900 : kind === 'heli' ? 1500 : 12000 });
   nl.ac = ac; nl.kind = kind; nl.aglT = 0; nl.agl = 0; nl.byI = new Map(ac.parts.map((p) => [p.i, p]));
   return nl;
 }
@@ -329,6 +336,6 @@ export function updateAircraftLights(nl, dt, env) {
   nl.aglT -= dt;
   if (nl.aglT <= 0 && env?.groundAt) { nl.aglT = 0.3; nl.agl = ac.x.y - (env.groundAt(ac.x.x, ac.x.z)?.h ?? 0); }
   const low = nl.agl < 300, night = NAV_U.night.value;
-  const land = nl.kind === 'car' ? (night > 0.3 ? 1 : 0) : (ac.hasRetract && ac.gearDown) || low ? 1 : 0;
+  const land = nl.kind === 'car' || nl.kind === 'bike' ? (night > 0.3 ? 1 : 0) : (ac.hasRetract && ac.gearDown) || low ? 1 : 0;
   nl.update(dt, { land, dead: ac.dead, alive: (i) => nl.byI.get(i)?.alive !== false, night });
 }

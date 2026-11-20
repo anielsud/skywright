@@ -687,7 +687,8 @@ function buildFlight(cfg) {
   if (start === 'air') { ac.flaps = 0; }
   const touchUI = settings.touch === 'on' || (settings.touch === 'auto' && isTouch);
   controls.setVehicle(st.car && !st.heli ? 'car' : st.rocket ? 'rocket' : 'plane'); ac.viewQ = flightCam.quaternion; // rockets steer relative to the screen
-  if (st.car && !st.heli) setTimeout(() => ui.hint(touchUI ? 'Car: GAS to go, BRAKE to stop (keep holding it to reverse), stick to steer' : 'Car: W go · S brake, hold to reverse · A D steer · Space handbrake', 6000), 1500);
+  if (st.bike) setTimeout(() => ui.hint(touchUI ? 'Bike: GAS to go, BRAKE to stop, stick to lean into turns. Full GAS for a wheelie!' : 'Bike: W go · S brake · A D lean and turn · full W for a wheelie, hard S for a stoppie', 6000), 1500);
+  else if (st.car && !st.heli) setTimeout(() => ui.hint(touchUI ? 'Car: GAS to go, BRAKE to stop (keep holding it to reverse), stick to steer' : 'Car: W go · S brake, hold to reverse · A D steer · Space handbrake', 6000), 1500);
   else if (st.rocket) setTimeout(() => ui.hint(touchUI ? 'Rocket: full throttle to launch · the stick points the nose left/right/up/down on screen · the slider rolls' : 'Rocket: full throttle to launch · arrows / WASD point the nose left/right/up/down on screen · Q E roll', 6000), 1500);
   if (st.heli) setTimeout(() => ui.hint(cfg.realism === 'sim' ? 'Helicopter: throttle is the collective. Good luck!' : 'Helicopter: throttle to the middle to hover, more to climb'), 1500);
   let mission = null;
@@ -1028,7 +1029,8 @@ function stepFlight(dtReal) {
     if (!p.alive || !p.engine || !engSound(p.engine)) continue; const e = p.engine;
     const k = engSound(e); if (!engines[k]) engines[k] = { sound: k, rpm: 0, spoolT: 0, count: 0, blades: { e_turboprop: 4, e_radial: 3, e_electric: 6, r_main4: 4 }[p.p.id] || 2, ab: false, burning: false, pos: new THREE.Vector3(), fwd: ac.forward };
     if (k === 'rotor') { engines[k].load = ac.collective ?? 0.5; engines[k].tail = ac.parts.some((q) => q.alive && q.engine?.type === 'tailrotor'); }
-    const a = engines[k]; a.count++; a.rpm = Math.max(a.rpm, e.rpm || 0); a.spoolT = Math.max(a.spoolT, e.spoolT || 0); a.ab = a.ab || e.abOn; a.burning = a.burning || e.burning;
+    // (e.pitch: bike engines ask for a higher voice than a car's, 1.6-2x; the sound code doesn't use it yet: hook for the audio session)
+    const a = engines[k]; a.count++; a.rpm = Math.max(a.rpm, e.rpm || 0); if (e.pitch) a.pitch = Math.max(a.pitch || 0, e.pitch); a.spoolT = Math.max(a.spoolT, e.spoolT || 0); a.ab = a.ab || e.abOn; a.burning = a.burning || e.burning;
     a.pos.add(ac.worldPoint(e.pos)); a.dmg = Math.max(a.dmg || 0, p.dmg / p.hp); // damage: sputter and misfire (audio.engineDamage)
   }
   // damage audio: the worst burning engine (same > 70 % rule as the flames above), and damaged parts still attached (rattle)

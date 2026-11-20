@@ -72,7 +72,7 @@ export class CameraRig {
         flat.lerp(this.rocketFlat, rk);
       } else this.rocketFlat = null;
       if (flat.lengthSq() < 1e-4) flat.set(0, 0, -1); flat.normalize();
-      const d = (R * 2.2 + 8) * this.look.dist;
+      const d = (ac.isBike ? 6 : R * 2.2 + 8) * this.look.dist; // (a motorbike is small: ride closer behind it)
       const off = flat.clone().multiplyScalar(-d).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.look.yaw);
       off.y = d * 0.28 + this.look.pitch * d * 0.6 - dir.y * d * 0.5;
       const want = _want.copy(target).add(off);

@@ -5,7 +5,7 @@
 1. the page boots (WebGL context, `window.__sky`, splash gone)
 2. audio initialises and every clip in `assets/sfx/index.json` decodes
 3. the Settings and Help modals open and close
-4. every preset in the hangar flies for 4 s at full throttle: the plane exists, its position and velocity are finite, the frame loop keeps running, and the flight ends cleanly back in the hangar
+4. every preset in the hangar flies for 4 s at full throttle: the plane exists, its position and velocity are finite, the frame loop keeps running, and the flight ends cleanly back in the hangar (a motorbike rides off on the gas and must still be on its wheels)
 5. screenshots of the hangar and of the first flight
 
 Any console error, uncaught exception, or failed/404 request for a file of ours fails the step it happened in.
@@ -65,13 +65,15 @@ assembly pass), and fails on:
 - **floating parts**: every connected piece of every mesh (each instance of an instanced suspension link) must touch
   another piece, to within 1 cm, and all of them must hang together as one vehicle. Checked on every stock vehicle, on
   the 20 random builds re-placed the way the hangar places parts (`randomBuilds(n, seed, { placed: true })`: each part
-  dropped onto the vehicle along a ray the way `Hangar.placement` seats a tapped part, mirrored copies on the partner)
-  and on 16 seeded random car builds (`carBuilds`: wheels dropped from below, an engine, cage, light bar and wing from
-  above; some resized, resized as a whole or mirrored). Checked at rest and again with every wheel pushed 60 % up its
-  travel and the steered wheels turned, so the moving suspension (carRig.js) has to follow. Crew (posed at runtime),
-  prop discs, glows and registration decals are left out; a piece may opt out with `userData.floatOk = 'why'` (a
-  deliberate gap). Each floating piece is reported with how far it is from the vehicle. `--placed N`, `--cars N` for
-  more.
+  dropped onto the vehicle along a ray the way `Hangar.placement` seats a tapped part, mirrored copies on the partner),
+  on 16 seeded random car builds (`carBuilds`: wheels dropped from below, an engine, cage, light bar and wing from
+  above; some resized, resized as a whole or mirrored) and on 10 random bike builds (`bikeBuilds`: a bike frame, pod or
+  buggy body, a fork wheel and a swingarm wheel of either kind dropped from below on the centreline, an engine dropped
+  from above or below; some resized). Checked at rest and again with every wheel pushed 60 % up its travel and the
+  steered wheels turned, so the moving suspension (carRig.js) has to follow, and the bike forks steer and slide and the
+  swingarms swing. Crew (posed at runtime), prop discs, glows and registration decals are left out; a piece may opt out
+  with `userData.floatOk = 'why'` (a deliberate gap). Each floating piece is reported with how far it is from the
+  vehicle. `--placed N`, `--cars N`, `--bikes N` for more.
 
 ```sh
 python3 tools/test/meshcheck.py                 # serves the repo itself
@@ -117,3 +119,27 @@ python3 tools/test/stunts.py --shots DIR          # also screenshots of the park
 ```
 
 Run it when you change ground contact (`collide.js`, the contact code in `aircraft.js`), car physics or the park.
+
+## Bike ride test
+
+`bikeride.py` rides every stock motorbike through the game's own physics (flat ground, 60 Hz, no rendering) in Arcade,
+Pilot and Sim, with the controls a player would use:
+
+- **ride**: gas, a left turn, a right turn, a hard stop, a wait. It must stay upright (never picked up by the auto-flip),
+  turn the way it is steered, lean, reach a decent speed, stop, and stand still and upright at the end.
+- **wheelie** (Arcade, Pilot): full gas from a roll lifts the front, it stays below the loop-out limit, and comes back
+  down onto both wheels when the gas is eased; holding full gas from a stop (the keyboard's W) launches on the back
+  wheel, then puts the front down and gets going.
+- **stoppie** (Arcade, Pilot): a full stop from 18 m/s lifts the back wheel, the nose stays within limits, it lands.
+- **jump** (every mode): launched at 2.5 m and 15 m/s with a little nose-up, it lands upright on both wheels.
+- **a kid's own bikes**: hangar-placed random bike builds (`meshcheck.js` `bikeBuilds`, some on car wheels and a car
+  engine, the wheels moved down until they are the lowest things on it) must be detected as bikes and ride without
+  falling over; a build whose wheels don't both reach the ground is reported as SKIP.
+- every other stock vehicle must not be detected as a bike.
+
+```sh
+python3 tools/test/bikeride.py                  # serves the repo itself, ~30 s
+python3 tools/test/bikeride.py --json out.json  # full report, with samples
+```
+
+Run it when you change `src/bike.js`, the bike parts (`src/bikeParts.js`) or ground contact in `src/aircraft.js`.

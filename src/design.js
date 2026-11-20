@@ -2,6 +2,8 @@
 import * as THREE from 'three';
 import { PARTS, partInfo } from './parts.js';
 import './vehicleParts.js';
+import { DIRT_AT, SPORT_AT } from './bikeParts.js';
+import { bikeLayout } from './bike.js';
 import './stockLiveries.js';
 import { LIVERIES } from './liveries.js';
 
@@ -141,7 +143,7 @@ export const launchesVertical = (design) => !!design.vertical || (isRocketDesign
 
 export function analyze(design) {
   const m = new THREE.Matrix4(), com = new THREE.Vector3();
-  let drivePower = 0, motors = 0, driveWheels = 0, wheels = 0;
+  let drivePower = 0, motors = 0, driveWheels = 0, wheels = 0; const wheelAt = [];
   let rotorLift = 0, rotors = 0, tailRotors = 0, twist = 0, rotorOff = 0; const rotorAt = new THREE.Vector3();
   let mass = 0, thrust = 0, wingArea = 0, finArea = 0, engines = 0, props = 0, jets = 0, rockets = 0, gear = 0, floats = 0, smoke = 0;
   const lift = new THREE.Vector3(); let liftW = 0; let latLift = 0, latThrust = 0;
@@ -157,7 +159,7 @@ export function analyze(design) {
   if (mass > 0) com.divideScalar(mass);
   const n = new THREE.Vector3(), pos = new THREE.Vector3();
   for (const { p, d, info, m: mm } of items) {
-    if (d.gear && !d.gear.float) { wheels++; if (d.gear.drive) driveWheels++; }
+    if (d.gear && !d.gear.float) { wheels++; if (d.gear.drive) driveWheels++; wheelAt.push({ x: mm.elements[12], z: mm.elements[14], d: d.gear }); }
     if (d.engine?.type === 'drive') { motors++; engines++; drivePower += d.engine.thrust * thrustScale(p) * partPower(p); }
     else if (d.engine?.type === 'tailrotor') tailRotors++;
     else if (d.engine?.type === 'rotor') {
@@ -186,6 +188,7 @@ export function analyze(design) {
   if (rotorLift > 0) { rotorAt.divideScalar(rotorLift); rotorOff = Math.hypot(rotorAt.x - com.x, rotorAt.z - com.z); }
   const hover = mass > 0 ? rotorLift / (mass * G) : 0, heli = rotors > 0, car = motors > 0 && !heli;
   const grip = mass > 0 ? drivePower / (mass * G) : 0;
+  const bike = car && bikeLayout(wheelAt); // two in-line wheels on the centreline: it rides like a motorbike (bike.js)
   const col = liftW > 0 ? lift.divideScalar(liftW) : com.clone();
   const mac = wingArea > 0 ? Math.sqrt(wingArea / 7) : 1;
   const margin = (col.z - com.z) / mac; // + = stable (lift centre behind CoM)
@@ -203,6 +206,12 @@ export function analyze(design) {
       if (rotorOff > 0.4) warnings.push(['warn', 'The rotor isn’t over the middle, so it will tip. Move it over the yellow dot.']);
       if (!gear) warnings.push(['info', 'No skids: it will sit on its belly. Add Helicopter Skids from Gear.']);
       if (hover >= 1.05 && rotorAt.y >= com.y && rotorOff <= 0.4 && (tailRotors || Math.abs(twist) <= rotorLift * 0.2)) warnings.push(['good', 'Ready to hover! Throttle to the middle to hold height.']);
+    }
+    else if (bike) {
+      if (!driveWheels) warnings.push(['bad', 'The engine needs a wheel to push on. Use a Swingarm Wheel at the back.']);
+      if (!bike.front.d.steer) warnings.push(['warn', 'The front wheel doesn’t steer. Use a Fork Wheel at the front.']);
+      if (grip < 0.25 && driveWheels) warnings.push(['warn', 'Heavy for its engine: it will be slow. Add Power or a bigger engine.']);
+      if (driveWheels && bike.front.d.steer) warnings.push(['good', 'Ready to ride! Gas to go, brake to stop, steer to lean into the turns. Full gas for a wheelie!']);
     }
     else if (car) {
       if (!driveWheels) warnings.push(['bad', 'The Car Engine needs Car Wheels to push on. Add some from the Car tab.']);
@@ -225,7 +234,7 @@ export function analyze(design) {
     if (plane && (Math.abs(latLift) > wingArea * 0.4 || Math.abs(latThrust) > thrust * 0.3)) warnings.push(['warn', 'Lopsided! It will roll or yaw in Sim mode (Arcade forgives this).']);
     if (plane && stall < 40 && tw > 0.2 && margin >= -0.02 && margin <= 0.6 && finArea >= 0.4) warnings.push(['good', 'Looks flyable. Have fun!']);
   }
-  return { car, rocket, vertical, grip, motors, driveWheels, wheels, heli, hover, rotors, tailRotors, mass, com, col, margin, stall, thrust, tw, wingArea, finArea, engines, props, jets, rockets, gear, floats, smoke, ctrl, warnings };
+  return { ...(bike ? { bike: true } : {}), car, rocket, vertical, grip, motors, driveWheels, wheels, heli, hover, rotors, tailRotors, mass, com, col, margin, stall, thrust, tw, wingArea, finArea, engines, props, jets, rockets, gear, floats, smoke, ctrl, warnings };
 }
 
 // ---------- presets ----------
@@ -476,6 +485,24 @@ export function makePresets() {
       b.d.parts[i].scale = [1.4, 1.4, 1.4];
     }
     b.add('x_rcs', [0, 0, -5.0], { parent: f, color: 0xf2f2ee });
+    P.push(b.d);
+  }
+  { // Dirt Bike — motocross: it balances itself, leans into turns and pulls wheelies
+    const b = new PB('Dirt Bike', 'Motocross bike with knobby tyres and long bouncy forks. Gas to go, steer to lean into turns, full gas for a wheelie!');
+    b.d.livery = 'dirtbike';
+    const f = b.add('b_dirt', [0, 0, 0], { color: 0xe8601c });
+    b.add('b_fork_dirt', DIRT_AT.fork, { parent: f, color: 0xe8601c });
+    b.add('b_swing_dirt', DIRT_AT.rear, { parent: f });
+    b.add('b_single', DIRT_AT.engine, { parent: f });
+    P.push(b.d);
+  }
+  { // Sport Bike — a road racer: full fairing, clip-ons, a fat slick, very fast
+    const b = new PB('Sport Bike', 'Racing motorbike with a full fairing and a fat slick tyre. Tuck in and go very fast. Brake hard for a stoppie!');
+    b.d.livery = 'sportbike';
+    const f = b.add('b_sport', [0, 0, 0], { color: 0x1d4e89 });
+    b.add('b_fork_road', SPORT_AT.fork, { parent: f, color: 0x15161a });
+    b.add('b_swing_road', SPORT_AT.rear, { parent: f });
+    b.add('b_four', SPORT_AT.engine, { parent: f });
     P.push(b.d);
   }
   return P;
