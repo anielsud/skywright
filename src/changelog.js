@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.98.0', items: [
+    "Driving is way more fun: cars steer much better, the button says DRIVE (or SAIL for boats), and there are new driving modes: Easy, Racer (try handbrake drifts!) and Pro. Cars no longer drive through buildings, and the bike rider sits properly.",
+  ] },
   { v: '1.97.0', items: [
     "Boats are here! Take the Speedboat, Jet Ski, Fireboat or Pontoon out from the marina in New York, Bora Bora, the Swiss lake or the Colorado River, or build your own from the Boat parts. The Fireboat sprays water with the smoke button!",
   ] },
