@@ -25,7 +25,7 @@ export class HUD {
         <div class="hud-row" id="h-skinrow" style="display:none"><label>SKIN</label><span id="h-skin">0</span><small id="h-skinu">°C</small></div>
         <canvas id="h-adi" width="120" height="120"></canvas>
       </div>
-      <div class="hud-tc"><div id="h-mission"></div><div id="h-toasts"></div></div>
+      <div class="hud-tc"><div id="h-mission"></div><div id="h-station"></div><div id="h-toasts"></div></div>
       <div class="hud-tr">
         <div class="hud-btns"><button id="h-cam" title="Camera (C)">🎥</button><button id="h-pause" title="Pause (Esc)">❚❚</button></div>
         <canvas id="h-map" width="180" height="180"></canvas>
@@ -53,6 +53,11 @@ export class HUD {
     this.toasts.prepend(d);
     while (this.toasts.children.length > 3) this.toasts.lastChild.remove();
     setTimeout(() => d.classList.add('fade'), 2600); setTimeout(() => d.remove(), 3400);
+  }
+  // the cockpit seat just switched to ("Captain", "Nose gunner"): a small label for a moment
+  station(name) {
+    const e = this.$('h-station'); if (!name) { e.classList.remove('show'); return; }
+    e.textContent = '🎥 ' + name; e.classList.add('show'); clearTimeout(this.stT); this.stT = setTimeout(() => e.classList.remove('show'), 1800);
   }
   // Touch layout: the status lamps sit at the top (the bottom belongs to the touch controls). Put them in the same
   // top-centre column as the mission line and toasts, so toasts stack below the lamps instead of on top of them.

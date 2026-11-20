@@ -8,6 +8,7 @@ import { keepHeatPatch } from './sonic.js';
 import { assemble, updateDetail, mergeStatic } from './planeDetail.js';
 import { groundUnder, groundAtPoint } from './collide.js';
 import { detectBike, bikeSteer, bikeAssist } from './bike.js';
+import { buildStations, showStation } from './stations.js';
 
 // spaceRCS: every plane can turn in space (no RCS part needed). rocketHigh: rockets push up to 1 + rocketHigh times harder
 // in the thin air above ~10 km (a generous shove towards space). Nothing changes lower down.
@@ -1077,17 +1078,12 @@ export class Aircraft {
     g.clip.setFromNormalAndCoplanarPoint(n, o);
     if (this.gearT > 0.999) g.clip.constant = 1e6; // fully down: no clipping
   }
-  setCockpitView(on) {
-    const ck = this.parts.find((p) => p.alive && p.eye);
-    if (ck) ck.obj.visible = !on;
-  }
+  // Cockpit views (stations.js): one per seat, built from the assembled meshes the first time they are asked for.
+  get stations() { return this._stations || (this._stations = buildStations(this)); }
+  // first person at station st (null = outside): that seat's figure loses its head and torso, the rest stays
+  setCockpitView(st) { if (this._stations || st) showStation(this.stations, st || null); }
   // things the camera / audio / HUD want
   get forward() { return new THREE.Vector3(0, 0, -1).applyQuaternion(this.q); }
   get up() { return new THREE.Vector3(0, 1, 0).applyQuaternion(this.q); }
-  eyePoint() {
-    const ck = this.parts.find((p) => p.alive && p.eye);
-    if (ck) return ck.eye.clone();
-    const f = this.parts[0]; const b = f.info.box;
-    return new THREE.Vector3(0, b.max.y * 0.6, b.min.z * 0.45).applyMatrix4(f.m);
-  }
+  eyePoint() { const st = this.stations.find((s) => !s.part || s.part.alive) || this.stations[0]; return st ? st.eye.clone() : this.com.clone(); }
 }

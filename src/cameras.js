@@ -1,9 +1,19 @@
-// Camera modes: chase, cockpit, orbit, tower, flyby.
+// Camera modes: chase, cockpit (one view per seat, see stations.js), orbit, tower, flyby.
 import * as THREE from 'three';
 import { clamp } from './noise.js';
+import { stationEye } from './stations.js';
 
 export const CAM_MODES = ['chase', 'cockpit', 'orbit', 'tower', 'flyby'];
 const _want = new THREE.Vector3(), _mv = new THREE.Vector3(), _off = new THREE.Vector3(), _yAxis = new THREE.Vector3(0, 1, 0);
+const _lq = new THREE.Quaternion(), _le = new THREE.Euler(), _fw = new THREE.Vector3(), _se = new THREE.Vector3();
+const liveStations = (ac) => ac.stations.filter((s) => !s.part || s.part.alive);
+// the station chosen per vehicle, for this session (kept over the app's own reloads too, e.g. after an update)
+const stationKey = (ac) => (ac.design?.name || 'custom') + ':' + (ac.design?.parts?.map((p) => p.id).join(',') || '');
+const chosen = {
+  get(k) { try { return sessionStorage.getItem('skywright.station.' + k) ?? mem.get(k); } catch { return mem.get(k); } },
+  set(k, v) { if (mem.get(k) === v) return; mem.set(k, v); try { sessionStorage.setItem('skywright.station.' + k, v); } catch { /* private mode: memory only */ } },
+};
+const mem = new Map();
 const CAM_NAMES = { chase: 'Chase cam', cockpit: 'Cockpit', orbit: 'Orbit (drag to look)', tower: 'Tower cam', flyby: 'Fly-by' };
 
 export class CameraRig {
@@ -31,8 +41,35 @@ export class CameraRig {
     dom.addEventListener('pointerup', up); dom.addEventListener('pointercancel', up);
     dom.addEventListener('wheel', (e) => { this.look.dist = clamp(this.look.dist * (1 + e.deltaY * 0.001), 0.35, 6); e.preventDefault(); }, { passive: false });
   }
-  next() { this.mode = CAM_MODES[(CAM_MODES.indexOf(this.mode) + 1) % CAM_MODES.length]; this.look.yaw = 0; this.look.pitch = 0; this.flyPos = null; return CAM_NAMES[this.mode]; }
-  set(mode) { this.mode = mode; this.flyPos = null; }
+  // The camera button: chase → cockpit (every station in turn, starting from the one last chosen) → orbit → …
+  next(ac) {
+    const st = ac && !ac.dead ? liveStations(ac) : [];
+    if (this.mode === 'cockpit' && this.stVisited < st.length - 1) {
+      const k = st.indexOf(this.curStation(ac));
+      this.station = ac.stations.indexOf(st[(k + 1) % st.length]); this.stVisited++; this.stDwell = 0;
+      this.look.yaw = 0; this.look.pitch = 0;
+      return CAM_NAMES.cockpit;
+    }
+    if (this.mode === 'cockpit') this.look.dist = 1; // (the cockpit's zoom is not the chase distance)
+    this.mode = CAM_MODES[(CAM_MODES.indexOf(this.mode) + 1) % CAM_MODES.length]; this.look.yaw = 0; this.look.pitch = 0; this.flyPos = null;
+    if (this.mode === 'cockpit') this.enterCockpit(ac);
+    return CAM_NAMES[this.mode];
+  }
+  set(mode, ac) { this.mode = mode; this.flyPos = null; if (mode === 'cockpit') this.enterCockpit(ac); }
+  // into the cockpit view: at the station chosen last time for this vehicle (this session), else the pilot's seat
+  enterCockpit(ac) {
+    this.stVisited = 0; this.stDwell = 0; this.station = 0; this.look.dist = 1;
+    if (!ac) return;
+    const want = chosen.get(stationKey(ac)), list = ac.stations, k = list.findIndex((s) => s.name === want && (!s.part || s.part.alive));
+    this.station = k >= 0 ? k : Math.max(0, list.indexOf(liveStations(ac)[0]));
+  }
+  // the station in use (skipping seats whose part has broken off)
+  curStation(ac) {
+    const list = ac.stations; let st = list[this.station];
+    if (!st || (st.part && !st.part.alive)) { st = liveStations(ac)[0] || null; this.station = Math.max(0, list.indexOf(st)); }
+    return st;
+  }
+  stationName(ac) { return ac && !ac.dead ? this.curStation(ac)?.name || '' : ''; }
   shake(a) { this.shakeAmt = Math.min(2, this.shakeAmt + a); }
 
   update(dt, ac, world, focusOverride) {
@@ -90,11 +127,22 @@ export class CameraRig {
       cam.up.set(0, 1, 0).lerp(ac.up, 0.15 * (1 - rk)).normalize();
       fov = 60 + clamp((ac.v.length() - 60) / 6, 0, 18);
     } else if (mode === 'cockpit') {
-      const eye = ac.worldPoint(ac.capsuleEye || ac.eyePoint()); // (a crew capsule in a body: capsule.js)
+      // from the seated figure's eyes (stations.js), turned by head look about the seat's own up and right axes
+      const st = this.curStation(ac);
+      const eye = st ? ac.worldPoint(stationEye(st, _se)) : ac.worldPoint(ac.com);
       this.pos.copy(eye);
-      const q = ac.q.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(-this.look.pitch * 0.8, this.look.yaw, 0, 'YXZ')));
+      const q = ac.q.clone(); if (st) q.multiply(st.q);
+      q.multiply(_lq.setFromEuler(_le.set(-this.look.pitch * 0.8, this.look.yaw, 0, 'YXZ')));
       cam.position.copy(eye); cam.quaternion.copy(q); cam.userData.cockpit = true;
-      cam.fov = 70; cam.updateProjectionMatrix();
+      // about 90 degrees across whatever the screen's shape (a tall screen keeps a sensible height); pinch / wheel zooms
+      const vf = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(45)) / Math.max(0.5, cam.aspect)));
+      cam.fov = clamp(clamp(vf, 55, 78) * clamp(this.look.dist, 0.4, 1.25), 22, 80); cam.updateProjectionMatrix();
+      this.near = st ? st.near : 0.2; // main.js fitNearPlane: small enough for the panel and the canopy frame round the head
+      this.lookAt.copy(eye).addScaledVector(_fw.set(0, 0, -1).applyQuaternion(q), 10);
+      if (st) { // remember the seat for this vehicle once it has been used for a few seconds
+        this.stDwell = (this.stDwell || 0) + dt;
+        if (this.stDwell > 3) chosen.set(stationKey(ac), st.name);
+      }
       this.finish(dt, world, true); return;
     } else if (mode === 'orbit') {
       if (!this.dragging && focusOverride) this.look.yaw += dt * 0.15;

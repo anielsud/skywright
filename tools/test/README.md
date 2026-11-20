@@ -197,3 +197,26 @@ python3 tools/test/helipadcheck.py --ref http://127.0.0.1:9000   # ~6 min
 ```
 
 Run it when you change the helipads, the city's building pipeline (`realCity.js`), ground contact or the spawn code.
+
+## Cockpit check
+
+`cockpitcheck.py` builds every stock vehicle (as is, resized, mirrored), multi-station builds (a bomber with a glass
+nose, top, tail and belly gunners; twin cockpits; resized and turned canopies; an airliner nose on a cargo body; a heli
+cabin; a mirrored capsule; a build with no cockpit) and seeded random player builds as flight `Aircraft`, and checks
+every cockpit view (`Aircraft.stations`, `src/stations.js`, one per seat) the way it is drawn from that seat:
+
+- **inside its cockpit**: the eye is within the box of its seat's part and figure. Only a canopy sunk into a body may
+  put the eye above it, and the check confirms there really was no seat inside it that sees out (reported as a note),
+- **not in solid geometry**: nothing within 3 cm, and not looking out through the backs of one-sided surfaces
+  (10 of 14 directions),
+- **clear forward view**: 3 of 5 rays ahead meet glass (with no wall right behind it) or nothing solid within 1.2 m.
+
+It prints the stations of each vehicle ("Captain, First officer", "Pilot, Bomb aimer, Top gunner, ...").
+
+```sh
+python3 tools/test/cockpitcheck.py                       # ~2 min
+python3 tools/test/cockpitcheck.py --random 60 --seed 9  # more random builds
+```
+
+Run it when you change cockpit, seat or crew builders, or the camera's cockpit view. Smoke also visits every cockpit
+view of every preset through the camera button's path.
