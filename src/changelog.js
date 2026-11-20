@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.92.0', items: [
+    'Helicopters in New York now start on a rooftop helipad high above the city, looking out at the Statue of Liberty! There are two more rooftop pads to land on, too.',
+  ] },
   { v: '1.91.0', items: [
     'New Wind Tunnel! Press the blue Wind Tunnel button in the hangar to test your design: watch smoke flow over the wings, see the lift and drag, make it stall, and find out if your plane is stable.',
   ] },
