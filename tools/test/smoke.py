@@ -320,7 +320,95 @@ async def run(args, url, ws_url, shots):
                 return (f"{s['speed']:.0f} m/s, alt {s['alt']:.0f} m, {s['alive']}/{s['parts']} parts, "
                         f"{ran / wall * 100:.0f}% realtime")
             await r.step(f'fly: {name}', fly, timeout=150)
+
+        if SR71 in names:  # (also with --only 'SR-71 Blackbird')
+            await r.step('SR-71: Mach 2.5+ above 60k ft', lambda: sr71_climb(cdp, shots), timeout=420)
+            await r.step('SR-71: land from the approach', lambda: sr71_land(cdp, shots), timeout=300)
         return r.results
+
+
+# ---------- the SR-71's scripted flights (tools/test/sr71flight.js) ----------
+# The game starts the flight as a player would (runway or approach start, Pilot mode, the real world), then the game loop
+# is paused and an autopilot flies the aircraft headless through Aircraft.step, much faster than real time.
+SR71 = 'SR-71 Blackbird'
+MACH_MIN, ALT_MIN_FT = 2.5, 60000
+
+
+async def sr71_start(cdp, cfg):
+    S = 'window.__sky'
+    if await cdp.js(f'!!{S}.F'):
+        await cdp.js(f'{S}.endFlight()')
+    await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 30, 'the hangar')
+    await cdp.js(f'{S}.hangar.load({S}.presets.find((d) => d.name === {json.dumps(SR71)})); {S}.startFlight({json.dumps(cfg)})')
+    await cdp.wait_for(f'{S}.F && {S}.F.ac && {S}.F.t > 0.5', 90, 'the flight to start')
+    await cdp.js(f'(async () => {{ {S}.F.paused = true; {S}.F.eng.on = true; {S}.F.ac.engineRunning = true; window.__srMod = await import("/tools/test/sr71flight.js"); return 1; }})()')
+
+
+async def sr71_run(cdp, start_gen, limit_s):
+    """Drive a generator from sr71flight.js to its end (each next() flies a chunk), return the states."""
+    await cdp.js(start_gen)
+    states, t0 = [], time.time()
+    while time.time() - t0 < limit_s:
+        st = await cdp.js('(() => { const r = window.__srGen.next(); return r.done ? null : r.value; })()', timeout=120)
+        if st is None:
+            break
+        states.append(st)
+        if st.get('dead') or st.get('wrecked'):
+            break
+    return states
+
+
+async def sr71_show(cdp, path, seconds):
+    """Let the real game loop run (rendering, sonic effects) for a moment at full throttle and take a picture."""
+    S = 'window.__sky'
+    await cdp.js(f'{S}.controls.setThrottle(1); {S}.F.eng.on = true; {S}.F.paused = false; {S}.rig.set("chase"); 1')
+    await asyncio.sleep(seconds)
+    await cdp.screenshot(path)
+    await cdp.js(f'{S}.F.paused = true; 1')
+
+
+async def sr71_climb(cdp, shots):
+    S = 'window.__sky'
+    await sr71_start(cdp, {'realism': 'pilot', 'start': 'runway', 'mode': 'free'})
+    states = await sr71_run(cdp, f'window.__srGen = window.__srMod.climb({S}.F.ac, {S}.F.env, {{ ground: {S}.F.world.loc.rwyH, chunk: 60, maxTime: 1200 }}); 1', 300)
+    if not states:
+        raise AssertionError('the scripted flight did not run')
+    last = states[-1]
+    for st in states:
+        for m in st.get('msgs', []):
+            if 'broke' in m or 'snapped' in m or 'collapsed' in m:
+                raise AssertionError(f'something broke: {m}')
+    if last['dead'] or last['wrecked'] or last['alive'] < last['parts']:
+        raise AssertionError(f"it broke up: {last['alive']}/{last['parts']} parts at {last['altFt']} ft, Mach {last['mach']}")
+    if last['best60'] < MACH_MIN:
+        raise AssertionError(f"only Mach {last['best60']:.2f} above {ALT_MIN_FT} ft (best Mach {last['best']['mach']:.2f} at {last['best']['alt'] / 0.3048:.0f} ft)")
+    await sr71_show(cdp, os.path.join(shots, 'sr71-mach3.png'), 2.5)
+    lo = last['liftoff'] or {}
+    return (f"lift-off {lo.get('V')} m/s after a {last['roll']} m roll; Mach {last['best60']:.2f} above {ALT_MIN_FT} ft "
+            f"(now Mach {last['mach']:.2f} at {last['altFt']} ft, {last['t']:.0f} s), skin {last['skinC']} C, {last['alive']}/{last['parts']} parts")
+
+
+async def sr71_land(cdp, shots):
+    S = 'window.__sky'
+    await sr71_start(cdp, {'realism': 'pilot', 'mode': 'landing'})
+    rwy = f'''(() => {{ const F = {S}.F, m = F.mission, w = F.world, L = w.runway.len; return {{ x: m.rwyX, h: w.loc.rwyH, s: m.side, aimZ: m.side * (L / 2 - 380), len: L, width: w.runway.width }}; }})()'''
+    v_app = f'Math.min(110, Math.max(32, {S}.analyze({S}.F.ac.design).stall * 1.45))'
+    states = await sr71_run(cdp, f'window.__srGen = window.__srMod.land({S}.F.ac, {S}.F.env, {rwy}, {{ chunk: 4, vApp: {v_app} }}); 1', 200)
+    if not states:
+        raise AssertionError('the scripted landing did not run')
+    last, td = states[-1], states[-1].get('td')
+    if last['dead'] or last['wrecked'] or last['alive'] < last['parts']:
+        msgs = [m for st in states for m in st.get('msgs', [])]
+        raise AssertionError(f"it broke: {last['alive']}/{last['parts']} parts, touchdown {td}; {'; '.join(msgs[-6:])}; track {[(st['t'], st['alt'], st['V'], st['vs'], st['phase']) for st in states]}")
+    if not td:
+        raise AssertionError(f"never touched down ({last['altFt']} ft, {last['V']} m/s)")
+    if not last.get('stopped') or not last.get('onRwy'):
+        raise AssertionError(f"did not stop on the runway: touchdown {td}, now at x {last['x']} z {last['z']}, {last['V']} m/s")
+    await cdp.screenshot(os.path.join(shots, 'sr71-landed.png'))
+    return f"touchdown {td['vs']} m/s down at {td['V']} m/s, {td['x']} m off the centreline; stopped on the runway"
+
+
+
 
 
 def main():

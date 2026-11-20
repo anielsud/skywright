@@ -89,7 +89,7 @@ function bodyField(obj) {
 }
 // tapered capsule along local z from z0 to z1 (engines, tanks, boosters), kept just inside the real cowl so skin that
 // runs into it is hidden by the cowl; rear radius as a fraction of the front one per pod
-const POD_TAPER = { e_radial: 0.7, e_piston: 0.92, e_turboprop: 0.92, e_jet_small: 0.8, e_jet_ab: 0.8, e_turbofan: 0.62, e_electric: 0.82, x_tank: 0.6, x_smoke: 0.6 };
+const POD_TAPER = { e_radial: 0.7, e_piston: 0.92, e_turboprop: 0.92, e_jet_small: 0.8, e_jet_ab: 0.8, e_turbofan: 0.62, e_electric: 0.82, e_ramjet: 1, x_tank: 0.6, x_smoke: 0.6 };
 function podField(obj, P, id) {
   const W = obj.matrixWorld, inv = W.clone().invert(), s = Math.min(...axisScales(W)), r0 = P.r * 0.9, r1 = r0 * (POD_TAPER[id] ?? 1), za = P.z0 + r0 * 0.4, zb = P.z1 - r1 * 0.4;
   const f = (p) => { _l.copy(p).applyMatrix4(inv); const zc = clamp(_l.z, za, zb), r = r0 + (r1 - r0) * ((zc - za) / (zb - za || 1)); return (Math.hypot(_l.x, _l.y, _l.z - zc) - r) * s; };

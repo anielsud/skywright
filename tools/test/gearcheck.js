@@ -123,18 +123,18 @@ function rng(a) { return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.
 const BODIES = ['fus_light', 'fus_sport', 'fus_fighter', 'fus_airliner', 'fus_cargo', 'fus_glider', 'fus_pod', 'fus_heli'];
 const WINGS = ['w_trainer', 'w_taper', 'w_ellipse', 'w_swept', 'w_delta', 'w_glider', 'w_airliner', 'w_stub'];
 const GEAR = ['g_nose', 'g_main', 'g_tail', 'g_bush', 'g_retract', 'g_retract_nose', 'g_bogie', 'g_float', 'g_skid'];
-function randomBuild(rand, k) {
+function randomBuild(rand, k, { bodies = BODIES, wings = WINGS, pods = ['x_tank', 'e_jet_small', 'e_piston'], tag = 'random' } = {}) {
   const pick = (a) => a[Math.floor(rand() * a.length)];
   // (like the hangar with Mirror on: the copy hangs off the mirror image of the parent, when there is one)
   const parts = [], add = (p) => (parts.push(p), parts.length - 1), partner = (j) => { const q = parts[j]; const k = q ? parts.findIndex((o) => o !== q && o.id === q.id && o.mirror !== q.mirror && Math.abs(o.pos[0] + q.pos[0]) < 1e-6 && Math.abs(o.pos[2] - q.pos[2]) < 1e-6) : -1; return k >= 0 ? k : j; };
   const pair = (p) => { const i = add(p); if (Math.abs(p.pos[0]) > 0.12 || p.id.startsWith('w_')) add({ ...mirroredOf(p), parent: p.id.startsWith('w_') ? p.parent : partner(p.parent) }); return i; };
-  const fus = pick(BODIES), f = add(newPart(fus, [0, 0, 0]));
+  const fus = pick(bodies), f = add(newPart(fus, [0, 0, 0]));
   const tmp = new THREE.Group(); buildDesign({ parts }, tmp); const fb = new THREE.Box3().setFromObject(tmp);
-  const wid = pick(WINGS), wy = fb.min.y + (fb.max.y - fb.min.y) * (0.2 + rand() * 0.6), wz = fb.min.z + (fb.max.z - fb.min.z) * (0.35 + rand() * 0.25);
+  const wid = pick(wings), wy = fb.min.y + (fb.max.y - fb.min.y) * (0.2 + rand() * 0.6), wz = fb.min.z + (fb.max.z - fb.min.z) * (0.35 + rand() * 0.25);
   const w = pair(newPart(wid, [0, +wy.toFixed(2), +wz.toFixed(2)], { parent: f }));
   if (rand() < 0.6) { // pods under the wing
     const tb = new THREE.Group(); buildDesign({ parts }, tb); const bb = new THREE.Box3().setFromObject(tb);
-    pair(newPart(pick(['x_tank', 'e_jet_small', 'e_piston']), [+(bb.max.x * (0.35 + rand() * 0.3)).toFixed(2), +(wy - 0.45).toFixed(2), +wz.toFixed(2)], { parent: w }));
+    pair(newPart(pick(pods), [+(bb.max.x * (0.35 + rand() * 0.3)).toFixed(2), +(wy - 0.45).toFixed(2), +wz.toFixed(2)], { parent: w }));
   }
   // drop gear the way the hangar does: a ray from below at a target, 5 cm into the surface it hits, snapped to 5 cm
   const root = new THREE.Group(); const det = buildDesign({ parts }, root); root.updateMatrixWorld(true);
@@ -160,7 +160,7 @@ function randomBuild(rand, k) {
     pair(p); placed.push(`${id}@${kind}`); n++;
   }
   root.traverse((o) => o.geometry?.dispose()); tmp.traverse((o) => o.geometry?.dispose());
-  return { name: `random ${k} (${fus}, ${wid}: ${placed.join(', ')})`, parts };
+  return { name: `${tag} ${k} (${fus}, ${wid}: ${placed.join(', ')})`, parts };
 }
 
 const results = [], only = ARG?.only;
@@ -171,6 +171,13 @@ if (!only) {
   const rand = rng(seed);
   for (let k = 0; k < nRandom; k++) {
     const d = randomBuild(rand, k);
+    results.push(check(d, d.name), check(mirrored(d), d.name + ' mirrored'));
+  }
+  // and gear dropped on the speed parts (a Chined Body with a thin wing, Spike Ramjets hung under it): their own seeded
+  // stream, so the builds above stay the same
+  const rs = rng(seed + 7100);
+  for (let k = 0; k < (ARG?.speed ?? 6); k++) {
+    const d = randomBuild(rs, k, { bodies: ['fus_chine'], wings: ['w_delta', 'w_swept'], pods: ['e_ramjet', 'x_tank'], tag: 'speed' });
     results.push(check(d, d.name), check(mirrored(d), d.name + ' mirrored'));
   }
 }

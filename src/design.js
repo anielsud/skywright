@@ -4,6 +4,7 @@ import { PARTS, partInfo } from './parts.js';
 import './vehicleParts.js';
 import { DIRT_AT, SPORT_AT } from './bikeParts.js';
 import { bikeLayout } from './bike.js';
+import './supersonicParts.js';
 import './stockLiveries.js';
 import { LIVERIES } from './liveries.js';
 
@@ -503,6 +504,20 @@ export function makePresets() {
     b.add('b_fork_road', SPORT_AT.fork, { parent: f, color: 0x15161a });
     b.add('b_swing_road', SPORT_AT.rear, { parent: f });
     b.add('b_four', SPORT_AT.engine, { parent: f });
+    P.push(b.d);
+  }
+  { // SR-71 Blackbird: chined body, thin delta wing, spike-inlet ramjets mid-wing, canted all-moving fins on the nacelles
+    const b = new PB('SR-71 Blackbird', 'Mach 3 spy plane. It needs the whole runway! Full throttle lights the afterburners: climb above 60,000 ft and it keeps getting faster.');
+    b.d.livery = 'blackbird';
+    const K = 0x15171d;
+    const f = b.add('fus_chine', [0, 0, 0], { color: K });
+    b.add('ck_tandem', [0, 0.72, -10.6], { parent: f, color: K });
+    const wp = [1.1, 0, 2.65], w = b.pair('w_delta', wp, { parent: f, color: K, rot: [2, 0, 0] });
+    for (const i of w) b.d.parts[i].scale = [1.6, 1, 1.72];
+    const e = b.pair('e_ramjet', [3.7, 0, -2.6], { parent: w[0], color: K });
+    for (const i of b.pair('t_allmove', [3.7, 1.12, 9.9], { parent: e[0], color: K, rot: [0, 0, 15] })) b.d.parts[i].scale = [1.3, 1.05, 1.3];
+    b.d.parts[b.add('g_retract_nose', [0, -0.45, -10.2], { parent: f })].scale = [1.3, 1.3, 1.3];
+    for (const i of b.pair('g_retract', [2.2, -0.3, 5.2], { parent: w[0] })) b.d.parts[i].scale = [1.35, 1.35, 1.35];
     P.push(b.d);
   }
   return P;

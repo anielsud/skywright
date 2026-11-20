@@ -63,6 +63,11 @@ export function waveDrag(M) {
   return 1.2 * (0.35 + 0.65 * Math.exp(-(M - 1.02) * 2.5));
 }
 
+// Turbo-ramjet thrust (engine.ram) as a multiple of its low-speed thrust: ram air like a fighter's intakes up to Mach 2,
+// then the inlet spike's shocks squeeze the air harder the faster it comes in, so the push is ~5x by Mach 3; past about
+// Mach 3.3 the air arrives too hot to use and the thrust falls away (the top speed).
+export const ramThrust = (M) => (1 + 0.9 * clamp((M - 0.8) / 1.2, 0, 1) + 3.2 * smooth(1, 3, M)) * (1 - smooth(3.1, 3.65, M));
+
 // ---- shared impulse contact solver (world frame) ----
 // body: { x (com world), v, wW (world ang vel), invMass, invIW (Matrix3 world) }
 function applyImpulse(body, r, J) {
@@ -205,7 +210,7 @@ export class Aircraft {
       const sz = size;
       if (!d.wing) {
         const cd = d.cat === 'gear' ? [0.6, 0.6, 0.7] : d.cat === 'fuselage' || d.cat === 'cockpit' ? [0.5, 0.6, 0.06] : [0.5, 0.5, 0.18];
-        const ax = sz.y * sz.z * 0.75, ay = sz.x * sz.z * 0.75, az = sz.x * sz.y * 0.785;
+        const ax = sz.y * sz.z * 0.75, ay = sz.x * sz.z * 0.75, az = sz.x * sz.y * 0.785 * (d.frontal ?? 1); // frontal: the share of the box's front a part really shows the air (an open inlet swallows the rest)
         // rotate area box into body frame roughly (use abs of rotation matrix)
         const e = rot.elements;
         const A = [ax * cd[0], ay * cd[1], az * cd[2]];
@@ -667,9 +672,11 @@ export class Aircraft {
         thrust = e.thrust * (0.04 + 0.96 * e.spoolT) * (1 + 0.25 * Math.min(1, fwdSpeed / 300));
         e.abOn = !!e.ab && ctl.throttle > 0.95 && e.spoolT > 0.9;
         if (e.abOn) thrust += (e.ab - e.thrust);
-        if (e.ab) thrust *= 1 + 0.9 * clamp((mach - 0.8) / 1.2, 0, 1); // fighter intakes: ram air adds thrust at supersonic speed
-        // too little air to burn the fuel: jets fade above ~18 km and flame out by ~25 km (they relight lower down)
-        const lit = smooth(0.04, 0.11, rho); thrust *= lit;
+        if (e.ram) thrust *= ramThrust(mach); // turbo-ramjet (inlet spike + bypass): most of the push comes from ram air at Mach 3
+        else if (e.ab) thrust *= 1 + 0.9 * clamp((mach - 0.8) / 1.2, 0, 1); // fighter intakes: ram air adds thrust at supersonic speed
+        // too little air to burn the fuel: jets fade above ~18 km and flame out by ~25 km (they relight lower down);
+        // a turbo-ramjet keeps burning to ~26 km and fades out by ~29 km
+        const lit = e.ram ? smooth(0.016, 0.04, rho) : smooth(0.04, 0.11, rho); thrust *= lit;
         if (lit < 0.05 && e.spoolT > 0.3 && !e.flamedOut) { e.flamedOut = true; this.emit('msg', { text: 'Flameout! The air is too thin for jet engines', bad: true }); }
         else if (lit > 0.6) e.flamedOut = false;
         if (lit < 0.5) e.abOn = false;

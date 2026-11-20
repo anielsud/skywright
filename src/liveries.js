@@ -19,6 +19,7 @@
 //             (side: [z, y], top: [x, z], front: [x, y]), size = [w, h] in metres; text: true reads correctly
 //             from both sides; glow: k makes the drawing self-lit (k × its colour, by its alpha): stars that shine.
 // `finish` rules change the paint itself: { on, kind: 'matte' | 'satin' | 'deep' | 'metal' | 'chrome' }.
+// `roundels: false` hides the wings' stock roundels (a scheme with markings of its own).
 import * as THREE from 'three';
 import { PARTS } from './parts.js';
 import { PM } from './planeMaterials.js';
@@ -189,6 +190,7 @@ export function applyLivery(design, objs, root) {
     const obj = objs[i]; if (!obj || !PARTS[p.id]) return;
     let mask = 0; L.layers.forEach((l, k) => { if (matches(l.on, p, i)) mask |= 1 << k; });
     const fin = (def.finish || []).find((f) => matches(f.on, p, i))?.kind || 'gloss';
+    if (def.roundels === false) obj.traverse((o) => { if (o.isMesh && o.material === PM.roundel()) o.visible = false; }); // a scheme with its own markings
     if (!mask && fin === 'gloss') return;
     obj.traverse((o) => {
       if (!o.isMesh || !isSkin(o.material)) return;

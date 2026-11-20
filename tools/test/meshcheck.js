@@ -201,6 +201,61 @@ export function bikeBuilds(n = 10, seed = 71, { forks = ['b_fork_dirt', 'b_fork_
   return out;
 }
 
+// ---------- random speed builds (the SR-71's parts dropped anywhere) ----------
+// A Chined Body (or another body) with a thin wing through it, Spike Ramjets either mid-wing (through the wing, like the
+// SR-71) or dropped under a wing or onto the body the way the hangar places them, All-Moving Fins dropped onto the
+// engines or the tail at a random cant, a Tandem Canopy dropped onto the top, retractable gear
+// dropped from below. Some parts resized; some whole builds resized or mirrored. Checked for open shells and floating parts.
+const SPEED_BODIES = ['fus_chine', 'fus_fighter', 'fus_chine', 'fus_airliner', 'fus_chine', 'fus_pod'];
+export const isSpeedDesign = (d) => d.parts.some((p) => ['fus_chine', 'e_ramjet', 't_allmove', 'ck_tandem'].includes(p.id));
+export function speedBuilds(n = 10, seed = 71) {
+  const R = rng(seed), pick = (a) => a[Math.floor(R() * a.length)], out = [], snap = (v) => Math.round(v * 20) / 20;
+  for (let k = 0; k < n; k++) {
+    const parts = [], add = (p) => (parts.push(p), parts.length - 1);
+    const body = SPEED_BODIES[k % SPEED_BODIES.length], f = add(newPart(body, [0, 0, 0]));
+    if (R() < 0.3) { const d = 0.8 + R() * 0.4, l = 0.7 + R() * 0.5; parts[f].scale = [d, d, l]; }
+    const built = () => { const root = new THREE.Group(), det = buildDesign({ parts }, root, { quick: true, near: false }); root.updateMatrixWorld(true); const all = []; det.parts.forEach((o, i) => o?.traverse((m) => { if (m.isMesh && !m.material.transparent && !m.userData.isDisc && !m.isInstancedMesh && m.material.blending !== THREE.AdditiveBlending) { m.userData._pi = i; all.push(m); } })); return { root, all, box: new THREE.Box3().setFromObject(root) }; };
+    // drop a part onto the build along dir (from far away), the way the hangar seats it; only onto parts in `onto` (indices) if given
+    const drop = (id, x, z, dir, o = {}) => {
+      const { root, all, box } = built(), rc = new THREE.Raycaster(), from = dir === 'down' ? box.max.y + 3 : box.min.y - 3, ray = new THREE.Vector3(0, dir === 'down' ? -1 : 1, 0);
+      const cand = o.onto ? all.filter((m) => o.onto.includes(m.userData._pi)) : all; let h = null;
+      for (const kx of [1, 0.8, 0.6, 0.4, 0]) for (const kz of [1, 0.85, 0.7]) { if (h) break; rc.set(new THREE.Vector3(x * kx, from, z * kz), ray); h = rc.intersectObjects(cand, false)[0]; }
+      root.traverse((m) => m.geometry?.dispose?.()); if (!h) return -1;
+      const nrm = h.face.normal.clone().transformDirection(h.object.matrixWorld).normalize(), info = partInfo(id), pos = h.point.clone();
+      if (PARTS[id].attach === 'gear') pos.addScaledVector(nrm, -0.05);
+      else { const c = info.center, hh = info.size.clone().multiplyScalar(0.5); pos.addScaledVector(nrm, (Math.abs(nrm.x) * hh.x + Math.abs(nrm.y) * hh.y + Math.abs(nrm.z) * hh.z) * (o.sink ?? 0.9)).sub(c); }
+      pos.set(Math.abs(pos.x) < 0.15 ? 0 : snap(pos.x), snap(pos.y), snap(pos.z));
+      const p = newPart(id, pos.toArray(), { parent: h.object.userData._pi, rot: o.rot }); if (o.scale) p.scale = o.scale; // (placed upright, then turned about its origin, as in the hangar)
+      const i = add(p); if (Math.abs(p.pos[0]) > 0.12) add({ ...mirroredOf(p), parent: o.mirrorParent ? o.mirrorParent(p.parent) : p.parent }); return i;
+    };
+    const chine = body === 'fus_chine', bb = built().box, L = bb.max.z - bb.min.z;
+    // a thin wing pair through the body (root at the centreline side of the body)
+    const wid = 'w_delta', wz = bb.min.z + L * (0.62 + R() * 0.08), wy = chine ? 0 : (R() - 0.5) * 0.4;
+    const w = add(newPart(wid, [chine ? 1.1 : 0.5, wy, wz], { parent: f })); if (R() < 0.7) parts[w].scale = [1 + R() * 0.6, 1, 1 + R() * 0.7];
+    add(mirroredOf(parts[w])); const wpair = [w, w + 1], mirrorW = (pi) => (pi === w ? w + 1 : pi);
+    // engines: through the wing (mid-wing), under it, or on top of the body
+    const where = pick(['mid', 'mid', 'under', 'top']);
+    let eng = -1; const es = R() < 0.4 ? (() => { const s = +(0.7 + R() * 0.6).toFixed(2); return [s, s, s]; })() : undefined;
+    if (where === 'mid') { const sc = parts[w].scale || [1, 1, 1], wd = PARTS[wid].wing, sp = 0.3 + R() * 0.25, x = parts[w].pos[0] + wd.span * sc[0] * sp, zle = wz + (-wd.root / 2 + wd.sweep * sp) * sc[2];
+      eng = add(newPart('e_ramjet', [snap(x), wy, snap(zle - 2.5 - R() * 2)], { parent: w })); if (es) parts[eng].scale = es; add({ ...mirroredOf(parts[eng]), parent: w + 1 }); }
+    else if (where === 'under') eng = drop('e_ramjet', bb.max.x * (1.2 + R()), wz - 3, 'up', { onto: wpair, mirrorParent: mirrorW, scale: es });
+    else eng = drop('e_ramjet', 0, bb.min.z + L * 0.45, 'down', { onto: [f], scale: es });
+    // fins: on the engines (canted in) or on the tail of the body
+    const cant = Math.round(R() * 25), onEng = eng >= 0 && parts[eng].pos[0] > 0.5 && R() < 0.7;
+    if (onEng) { const e = parts[eng]; drop('t_allmove', e.pos[0], e.pos[2] + 11, 'down', { onto: [eng], rot: [0, 0, cant], mirrorParent: (pi) => pi + 1 }); }
+    else drop('t_allmove', R() < 0.5 ? 0 : bb.max.x * 0.3, bb.max.z - L * 0.1, 'down', { onto: [f], rot: [0, 0, cant] });
+    // a canopy on top, towards the front
+    drop('ck_tandem', 0, bb.min.z + L * (0.2 + R() * 0.15), 'down', { onto: [f], sink: 0.55 });
+    // gear: a nose leg and a pair of mains
+    drop('g_retract_nose', 0, bb.min.z + L * 0.22, 'up', { onto: [f] });
+    drop('g_retract', bb.max.x * (0.5 + R() * 0.4), wz + 1, 'up', { onto: [f, ...wpair], mirrorParent: mirrorW });
+    if (k % 3 === 1) parts.forEach((p) => { p.scale = (p.scale || [1, 1, 1]).map((v) => v * 1.25); p.pos = p.pos.map((v) => v * 1.25); });
+    if (k % 3 === 2) parts.forEach((p) => { p.pos[0] = -p.pos[0]; p.mirror = !p.mirror; p.quat = [p.quat[0], -p.quat[1], -p.quat[2], p.quat[3]]; });
+    out.push({ name: `speed ${k} (${body}, ${where} engines, ${onEng ? 'fins on engines' : 'fin on body'})`, parts });
+  }
+  return out;
+}
+
 // ---------- floating parts ----------
 // Every piece of a car (each connected piece of every mesh: a merged mesh holds many, an instanced link is one per
 // instance) must touch, or come within `tol` of, another piece, and all of them must hang together as one vehicle:
@@ -401,12 +456,12 @@ function exhaustHits(root) {
   return { paths: paths.length, hits };
 }
 
-export async function run({ presets = [], random = 20, placed = 20, fittings = 12, cars = 16, bikes = 10, floatOnly = false } = {}) {
-  const cb = [...carBuilds(cars), ...bikeBuilds(bikes)], pb = randomBuilds(placed, 7, { placed: true }), designs = [...presets, ...randomBuilds(random), ...pb, ...fittingBuilds(fittings), ...cb], report = [];
-  // floating parts: every stock vehicle, the random builds re-placed the way the hangar places parts and the car and
-  // bike builds (the plain random and fitting builds put parts at fixed spots, which can be in mid-air: the hangar never
-  // does that)
-  const floatCheck = new Set([...presets, ...pb, ...cb]);
+export async function run({ presets = [], random = 20, placed = 20, fittings = 12, cars = 16, bikes = 10, speed = 10, floatOnly = false } = {}) {
+  const cb = [...carBuilds(cars), ...bikeBuilds(bikes)], pb = randomBuilds(placed, 7, { placed: true }), sb = speedBuilds(speed), designs = [...presets, ...randomBuilds(random), ...pb, ...fittingBuilds(fittings), ...cb, ...sb], report = [];
+  // floating parts: every stock vehicle, the random builds re-placed the way the hangar places parts, the car and bike
+  // builds and the speed builds (the plain random and fitting builds put parts at fixed spots, which can be in mid-air:
+  // the hangar never does that)
+  const floatCheck = new Set([...presets, ...pb, ...cb, ...sb]);
   for (const d of designs) {
     if (floatOnly && !floatCheck.has(d)) continue;
     const root = new THREE.Group(); let res;
