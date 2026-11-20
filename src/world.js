@@ -24,6 +24,7 @@ import { LaunchPad } from './launchpad.js';
 import { Helipads } from './helipad.js';
 import { StuntParks, planStunts, padsHeight } from './stuntPark.js';
 import { roadStart } from './landStart.js';
+import { Marina } from './marina.js';
 import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
 
 export const RWY = { len: 1800, width: 45 };
@@ -128,6 +129,13 @@ export class World {
     if (this.helipads?.start) { const P = this.helipads.start; this.sites.push({ kind: 'helipad', name: P.name, fits: (st) => st.heli, pos: P.W(0, 0, 0), y: P.y, heading: P.heading, r: P.D }); }
     this.destruct = new Destruction(this); // buildings you can knock down
     this.pad = new LaunchPad(this); // the launch complex rockets start from (after the scenery: it keeps clear of it)
+    this.marina = this.loc.marina ? Marina.create(this, this.loc.marina) : null; // where boats start (marina.js), clear of the scenery too
+    if (this.marina) this.surfs.push(this.marina.cm); // (its docks and piers are solid)
+    if (this.marina) { // boats start afloat at the marina's channel mouth, facing open water (startSite: a boat that picks 'At the marina')
+      const M = this.marina, S = M.start, right = new THREE.Vector3(Math.cos(S.heading), 0, -Math.sin(S.heading));
+      this.sites.push({ kind: 'marina', name: M.river ? 'the river landing' : 'the marina', fits: (st) => !!st.boat, afloat: true, pos: S.pos, heading: S.heading, y: M.wl, r: 30,
+        at: (slot = 0) => S.pos.clone().addScaledVector(right, slot ? (slot % 2 ? -14 : 14) * Math.ceil(slot / 2) : 0) }); // online: side by side, 14 m apart
+    }
     this.buildClouds();
     this.buildPrecip();
     this.setWeather(this.weatherId);
@@ -438,7 +446,7 @@ export class World {
   heightAt(x, z) { return this.sampleGrid(x, z); }
   maxGround(x, z) {
     const S = this.roadSurf, deck = S && S.q(x, z, true) ? S.y : -Infinity; // bridge decks count
-    return Math.max(this.sampleGrid(x, z), this.waterLevel, deck, this.pad ? this.pad.maxAt(x, z) : -Infinity, this.stunts ? this.stunts.topAt(x, z) : -Infinity, this.helipads ? this.helipads.topAt(x, z) : -Infinity) + (this.inAirportBox(x, z) ? 25 : 0); // (the launch pad, the stunt park's ramps and loop, rooftop helipads)
+    return Math.max(this.sampleGrid(x, z), this.waterLevel, deck, this.pad ? this.pad.maxAt(x, z) : -Infinity, this.stunts ? this.stunts.topAt(x, z) : -Infinity, this.helipads ? this.helipads.topAt(x, z) : -Infinity, this.marina ? this.marina.topAt(x, z) : -Infinity) + (this.inAirportBox(x, z) ? 25 : 0); // (the launch pad, the stunt park's ramps and loop, rooftop helipads)
   }
   // the nearest front-face hit on a structure's collision mesh along o + d*t, t <= len (collide.js), or null
   surfRay(o, d, len) { let best = null; for (const cm of this.surfs) { const r = cm.ray(o, d, best ? best.t : len); if (r) best = r; } return best; }
@@ -965,7 +973,7 @@ export class World {
     }
     return false;
   }
-  treeHit(p) { return this.flora.hit(p) || this.towns.hit(p) || this.tiles?.treeHit(p) || this.pad?.hit(p) || this.helipads?.hit(p); }
+  treeHit(p) { return this.flora.hit(p) || this.towns.hit(p) || this.tiles?.treeHit(p) || this.pad?.hit(p) || this.helipads?.hit(p) || this.marina?.hit(p); }
   // ---------------- clouds ----------------
   buildClouds() {
     this.clouds = new CloudField(this.q.clouds >= 1 ? 3200 : 1800);

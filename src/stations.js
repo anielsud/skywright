@@ -271,7 +271,7 @@ function nameStations(list, ac) {
   if (P.kind === 'airline' && sameCk.length > 1) P = sameCk.reduce((a, b) => (b.eye.x < a.eye.x ? b : a)); // the captain sits on the left
   const box = new THREE.Box3(); for (const p of ac.parts) if (p.alive) box.expandByObject(p.obj);
   const len = box.max.z - box.min.z;
-  const first = { airline: 'Captain', driver: 'Driver', space: 'Astronaut', heli: 'Pilot' };
+  const first = { airline: 'Captain', driver: 'Driver', space: 'Astronaut', heli: 'Pilot', boat: 'Helm' }; // (a boat's skipper is at the helm)
   for (const s of list) {
     if (s === P) { s.name = s.bike ? 'Rider' : first[s.kind] || (s.noSeat && !s.part ? 'Nose camera' : 'Pilot'); continue; }
     const d = s.eye.clone().sub(P.eye), id = s.part ? s.part.p.id : '';

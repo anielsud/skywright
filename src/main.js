@@ -27,6 +27,7 @@ import { loadReal } from './realworld.js';
 import { aircraftLights, updateAircraftLights } from './navLights.js';
 import { Streaks } from './streaks.js';
 import { WindTunnel } from './windTunnel.js';
+import { BoatFX } from './boatFX.js';
 import { initThumbs, renderThumb, designKey, presetSlug, savedThumbs, storeThumb, stockThumbs, STOCK_SIZE } from './thumbs.js';
 installFog();
 
@@ -398,6 +399,12 @@ const MOONS = [['real', 'Tonight’s real moon', null], ['full', 'Full', 14.77],
 if (LOCATIONS[flightCfg.location]?.hidden || !LOCATIONS[flightCfg.location]) flightCfg.location = 'islands'; // hidden/removed places move to Bora Bora
 // the ground start's name in the flight setup: where this vehicle will really start (see buildFlight)
 function groundStartLabel(s, loc) { return s.vertical ? 'On the launch pad' : s.heli && LOCATIONS[loc]?.city?.helipads?.some((h) => h.start) ? 'On the rooftop helipad' : 'On the runway'; }
+const BOAT_STARTS = ['marina', 'water', 'runway']; // boats' start choices (flightCfg.boatStart): afloat at the marina (the default), out on open water, or sat on the runway
+function boatChips() {
+  const cur = BOAT_STARTS.includes(flightCfg.boatStart) ? flightCfg.boatStart : 'marina';
+  const chip = (id, label) => `<button data-bs="${id}" class="${cur === id ? 'on' : ''}">${label}</button>`;
+  return chip('marina', 'At the marina') + chip('water', 'Out on the water') + chip('runway', 'On the runway');
+}
 const LAND_STARTS = ['park', 'road', 'evel']; // cars' and bikes' start choices besides the runway (flightCfg.landStart; World.landStart)
 // cars' and bikes' start choices (data-ls: flightCfg.landStart): the stunt park (the default), a street, the runway, and
 // the canyon jump where there is one (shown for the picked location)
@@ -428,12 +435,12 @@ function flightModal() {
     <label class="lbl">Mode</label>
     <div class="choice-row">${Object.entries(MODES).map(([k, mo]) => `<button class="opt-card${flightCfg.mode === k ? ' on' : ''}" data-m="${k}"><b>${mo.name}</b><small>${mo.desc}</small></button>`).join('')}</div>
     <label class="lbl">Start</label>
-    <div class="start-row"><div class="chips">${s.car && !s.heli ? landChips() : `<button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">${groundStartLabel(s, flightCfg.location)}</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}`}</div>
+    <div class="start-row"><div class="chips">${s.car && !s.heli ? landChips() : s.boat ? boatChips() : `<button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">${groundStartLabel(s, flightCfg.location)}</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}`}</div>
     <div class="start-go"><button data-close>Back</button><button class="primary big" id="go">FLY ▶</button></div></div>`, 'wide');
   const el = m.el;
   const pick = (attr, key) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { flightCfg[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); audio.play('click'); }));
   el.querySelectorAll('[data-loc]').forEach((b) => b.addEventListener('click', () => { const e = el.querySelector('[data-evel]'); if (e) e.hidden = !LOCATIONS[b.dataset.loc]?.stunts?.evel; })); // the canyon jump: only where there is one
-  pick('loc', 'location'); pick('w', 'weather'); pick('r', 'realism'); pick('m', 'mode'); pick('s', 'start'); pick('ls', 'landStart'); pick('moon', 'moon');
+  pick('loc', 'location'); pick('w', 'weather'); pick('r', 'realism'); pick('m', 'mode'); pick('s', 'start'); pick('ls', 'landStart'); pick('bs', 'boatStart'); pick('moon', 'moon');
   el.querySelectorAll('[data-loc]').forEach((b) => b.addEventListener('click', () => { const r = el.querySelector('[data-s="runway"]'); if (r) r.textContent = groundStartLabel(s, flightCfg.location); })); // (a helicopter in New York: the rooftop helipad)
   el.querySelector('#time').addEventListener('input', (e) => { flightCfg.time = +e.target.value; el.querySelector('#tlab').textContent = timeLabel(flightCfg.time); });
   // ----- online sessions: everyone at a location flies together unless they pick "Alone" -----
@@ -664,16 +671,18 @@ function buildFlight(cfg) {
   const env = {
     groundAt: (x, z, y) => world.groundAt(x, z, y), maxGround: (x, z) => world.maxGround(x, z), windAt: (p) => world.windAt(p),
     get night() { return world.night || world.W.dark > 0.6; }, groundHeightAtSpawn: world.loc.rwyH,
-    // built structures (the canyon's stunt park, rooftop helipads): wheel rays and hull points hit their collision meshes (collide.js)
+    // built structures (the canyon's stunt park, rooftop helipads, a marina's docks and piers): wheel rays and hull points hit their collision meshes (collide.js)
     ...(world.surfs.length ? { surfRay: (o, d, len) => world.surfRay(o, d, len), surfPoint: (p) => world.surfPoint(p) } : {}),
+    waveAmp: world.loc.marina?.waves ?? 0.06, // the swell boats ride (boat.js)
     onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40, p.clone()); },
   };
   const land = st.car && !st.heli; // cars and bikes have their own start choices (LAND_STARTS), the stunt park by default
-  let start = land ? (LAND_STARTS.includes(cfg.landStart) ? cfg.landStart : 'park') : cfg.start; let F_approach = null;
+  let start = land ? (LAND_STARTS.includes(cfg.landStart) ? cfg.landStart : 'park') : st.boat ? (BOAT_STARTS.includes(cfg.boatStart) ? cfg.boatStart : 'marina') : cfg.start; let F_approach = null; // (boats: BOAT_STARTS, the marina by default)
   const gearOK = ac.parts.some((p) => p.gear && (!p.gear.float || p.gear.skid)); // skids can sit on a runway
-  if (cfg.mode === 'landing') start = 'approach';
+  if (cfg.mode === 'landing' && !st.boat) start = 'approach';
   else if (start === 'water' || (start === 'runway' && st.floats && !gearOK)) start = 'water';
-  if (start === 'runway' && (!ac.hasEngine)) start = 'air';
+  if (start === 'runway' && !ac.hasEngine && !st.boat) start = 'air';
+  if (st.boat && (start === 'water' || (start === 'marina' && !world.startSite(st))) && !findWater(world)) start = 'runway'; // no water here at all: it sits on the runway
   if (st.car && st.wingArea < 0.5 && (start === 'air' || start === 'approach')) start = 'runway'; // cars without wings start on the ground
   // the launch pad's stand is fitted to a rocket that is about to fly (anything else: to the stock Rocket, so it's never bare)
   const padStand = world.pad?.setStand(st.vertical ? design : stockRocket());
@@ -684,8 +693,10 @@ function buildFlight(cfg) {
   const park = land && start !== 'runway' && cfg.mode !== 'landing' ? world.landStart(start) : null; // cars and bikes: the stunt park's arch, a street or the canyon jump (World.landStart)
   if (!park && LAND_STARTS.includes(start)) start = 'runway'; // (none here: the runway)
   // a place's own start for this kind of vehicle (world.sites: New York's helicopters on a rooftop helipad), if nobody is on it
-  const site = !park && start === 'runway' && cfg.mode !== 'landing' ? world.startSite(st) : null;
-  if (site && !siteBusy(site.pos.x, site.pos.z, site.y, site.r)) { // standing on it (just touching: no first airborne frame to spin a rotor up), engines off
+  const site = !park && cfg.mode !== 'landing' && ((start === 'runway' && !st.boat) || start === 'marina') ? world.startSite(st) : null; // (boats: the marina, when they pick it)
+  if (start === 'marina' && !site) start = 'water'; // (no marina here: any open water)
+  if (site?.afloat) { start = site.kind; ac.spawn(env, site.at(slot), site.heading); } // a boat floats at its waterline (Aircraft.spawn), side by side online
+  else if (site && !siteBusy(site.pos.x, site.pos.z, site.y, site.r)) { // standing on it (just touching: no first airborne frame to spin a rotor up), engines off
     start = site.kind; ac.spawn(env, site.pos, site.heading); ac.x.y += site.y - env.groundAt(site.pos.x, site.pos.z).h - 0.031; ac.syncVisual();
   } else if (park) { // facing the way to go; online, the others line up behind
     ac.spawn(env, park.at(slot), park.heading); if (park.msg) setTimeout(() => F?.ac === ac && hud.center(park.msg, 3500), 3800);
@@ -706,8 +717,9 @@ function buildFlight(cfg) {
   } else controls.setThrottle(0);
   if (start === 'air') { ac.flaps = 0; }
   const touchUI = settings.touch === 'on' || (settings.touch === 'auto' && isTouch);
-  controls.setVehicle(st.car && !st.heli ? 'car' : st.rocket ? 'rocket' : 'plane'); ac.viewQ = flightCam.quaternion; // rockets steer relative to the screen
+  controls.setVehicle((st.car || st.boat) && !st.heli ? 'car' : st.rocket ? 'rocket' : 'plane'); ac.viewQ = flightCam.quaternion; // rockets steer relative to the screen
   if (st.bike) setTimeout(() => ui.hint(touchUI ? 'Bike: GAS to go, BRAKE to stop, stick to lean into turns. Full GAS for a wheelie!' : 'Bike: W go · S brake · A D lean and turn · full W for a wheelie, hard S for a stoppie', 6000), 1500);
+  else if (st.boat) setTimeout(() => ui.hint(touchUI ? 'Boat: GAS to go, BRAKE to slow down (keep holding it to reverse), stick to steer. Full GAS to get up on the plane!' : 'Boat: W go · S slow down, hold to reverse · A D steer', 6000), 1500);
   else if (st.car && !st.heli) setTimeout(() => ui.hint(touchUI ? 'Car: GAS to go, BRAKE to stop (keep holding it to reverse), stick to steer' : 'Car: W go · S brake, hold to reverse · A D steer · Space handbrake', 6000), 1500);
   else if (st.rocket) setTimeout(() => ui.hint(touchUI ? 'Rocket: full throttle to launch · the stick points the nose left/right/up/down on screen · the slider rolls' : 'Rocket: full throttle to launch · arrows / WASD point the nose left/right/up/down on screen · Q E roll', 6000), 1500);
   if (st.heli) setTimeout(() => ui.hint(cfg.realism === 'sim' ? 'Helicopter: throttle is the collective. Good luck!' : 'Helicopter: throttle to the middle to hover, more to climb'), 1500);
@@ -723,6 +735,7 @@ function buildFlight(cfg) {
   sonic.onMilestone = (n) => { hud.center(`MACH ${n}!`, 1800); audio.play('ring'); };
   F = { scene, world, ac, nav, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
   if (ac.isRocket) F.streaks = new Streaks(scene); // rockets: air rushing past (a climbing rocket sees only sky)
+  if (ac.isBoat) F.boatFx = new BoatFX(scene, ac); // spray and wake (before the shaders compile)
   if (start === 'pad') F.clamp = { x: ac.x.clone(), q: ac.q.clone() }; // held down on the stand until the engines lift it
   applyQuality(); // the tier may have changed since the last flight (post effects, shadow cascades)
   F.callouts = new Callouts(audio, ac);
@@ -732,7 +745,7 @@ function buildFlight(cfg) {
   F.eng = { on: start === 'air' || start === 'approach', hold: 0, idleT: 0 }; ac.engineRunning = F.eng.on; audio.engineReset(F.eng.on);
   net.attach(F);
   rig.init = false; rig.set('chase'); rig.look.dist = 1;
-  hud.setUnits(settings.units, ac.isCar); hud.show(true);
+  hud.setUnits(settings.units, ac.isCar || ac.isBoat); hud.show(true);
   flightUI.style.display = ''; $('#hangar-ui').style.display = 'none';
   const showTouch = settings.touch === 'on' || (settings.touch === 'auto' && isTouch);
   controls.showTouch(showTouch); controls.enabled = true;
@@ -758,7 +771,7 @@ function buildFlight(cfg) {
   seats();
   renderer.setRenderTarget(null);
   onResize();
-  const msg = { pad: `Launch pad · ${world.loc.name}. Full throttle to launch!`, helipad: `Rooftop helipad · ${site?.name}. Throttle to the middle to lift off!`, runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.', park: `Stunt park · ${world.loc.name}. Gas to go!`, road: `On the road · ${world.loc.name}. Gas to go!`, evel: 'Daredevil canyon jump. Full gas!' }[start];
+  const msg = { pad: `Launch pad · ${world.loc.name}. Full throttle to launch!`, marina: `At ${site?.name} · ${world.loc.name}. Full gas to get up on the plane!`, helipad: `Rooftop helipad · ${site?.name}. Throttle to the middle to lift off!`, runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.', park: `Stunt park · ${world.loc.name}. Gas to go!`, road: `On the road · ${world.loc.name}. Gas to go!`, evel: 'Daredevil canyon jump. Full gas!' }[start];
   hud.center(msg, 3500);
   if (world.loc.credit) setTimeout(() => { if (F?.world === world) hud.toast(world.loc.credit); }, 4000); // real places: data attribution
   if (!ac.hasEngine) hud.toast('Glider: look for rising air under clouds and over sunny ridges.');
@@ -804,7 +817,7 @@ function endFlight(restarting = false) {
   // used to be skipped, and materials/textures were never freed: ~64 geometries + ~18 textures leaked per flight, #80).
   const res = collectGpu(f.scene);
   f.world.dispose(); f.effects.dispose(); f.sonic.dispose(); post.shimmer(null); f.traffic.dispose(); f.mission?.dispose?.();
-  f.worldSound?.dispose();
+  f.worldSound?.dispose(); f.boatFx?.dispose();
   // free geometry and textures (the GPU memory), except what the hangar also uses. Materials stay: their compiled shader
   // programs are shared by key and reused by the next flight, so keeping them avoids recompiling ~100 shaders per flight.
   const keep = collectGpu(hangar.scene);
@@ -876,7 +889,7 @@ function togglePause(force) {
 }
 function restartFlight() { const c = F.cfg; endFlight(true); startFlight(c); }
 function statsHTML(ac) {
-  const U = settings.units === 'metric' ? { s: 3.6, su: 'km/h', a: 1, au: 'm' } : ac.isCar ? { s: 2.237, su: 'mph', a: 3.28, au: 'ft' } : { s: 1.944, su: 'kt', a: 3.28, au: 'ft' };
+  const U = settings.units === 'metric' ? { s: 3.6, su: 'km/h', a: 1, au: 'm' } : ac.isCar || ac.isBoat ? { s: 2.237, su: 'mph', a: 3.28, au: 'ft' } : { s: 1.944, su: 'kt', a: 3.28, au: 'ft' };
   const t = ac.stats;
   return `<div class="stat-grid">
     <div><label>Flight time</label><b>${Math.floor(t.time / 60)}:${String(Math.floor(t.time % 60)).padStart(2, '0')}</b></div>
@@ -972,7 +985,7 @@ function stepFlight(dtReal) {
   if (f.slowmo > 0) { f.slowmo -= dtReal; f.timeScale = 0.3; } else f.timeScale = Math.min(1, f.timeScale + dtReal * 2);
   const dt = Math.min(dtReal, 1 / 20) * f.timeScale;
   const c = controls.update(dtReal);
-  if (ac.isCar) { // pedals: the engine starts on the first press of either (it drives you backwards too)
+  if (ac.isCar || ac.isBoat) { // pedals: the engine starts on the first press of either (it drives you backwards too)
     const want = Math.max(c.gas, c.rev), go = want > 0 ? engineSwitch(f, ac, want, dtReal) / want : (engineSwitch(f, ac, 0, dtReal), 1);
     ac.setControls({ pitch: 0, roll: c.roll, yaw: 0, throttle: c.gas * go, rev: c.rev * (go || (ac.groundSpeed > 0.6 ? 1 : 0)), hand: c.hand });
     ac.brake = want < 0.03 && ac.onGround && ac.v.length() < 1.5 ? 1 : 0; // parked: hold still (even on a slope)
@@ -1042,12 +1055,13 @@ function stepFlight(dtReal) {
     if (p.engine && p.dmg > p.hp * 0.3 && Math.random() < 0.6) effects.engineSmoke(ac.worldPoint(p.engine.pos), ac.v, p.dmg > p.hp * 0.6 ? 0.08 : 0.35);
     if (p.engine && p.dmg > p.hp * 0.7 && Math.random() < 0.5) effects.flame(ac.worldPoint(p.engine.pos), ac.v, 0.6);
     if (p.engine?.burning) for (let k = 0; k < 2; k++) effects.engineSmoke(ac.worldPoint(p.center.clone().add(p.engine.dir.clone().multiplyScalar(-3.5))), ac.v, 0.85);
-    if (p.smoke && ac.smokeOn) effects.trail(ac.worldPoint(p.smoke.pos), p.smoke.color, 1);
+    if (p.smoke && ac.smokeOn) { if (p.d.cannon) f.boatFx?.cannon(p, effects); else effects.trail(ac.worldPoint(p.smoke.pos), p.smoke.color, 1); } // (a fireboat's monitors squirt water)
   }
   // wingtip contrails / vortices when pulling hard in humid air
   if (!ac.dead && Math.abs(ac.g) > 4 && ac.airspeed > 60) for (const p of ac.parts) if (p.alive && p.d.wing && p.d.cat === 'wing') { const tip = p.surfaces.at(-1); if (tip && Math.random() < 0.5) effects.puff(ac.worldPoint(tip.pos), ac.v.clone().multiplyScalar(0.8), { color: [1, 1, 1], s0: 0.3, s1: 1.5, life: 0.5, a: 0.4, drag: 2 }); }
   f.sonic.update(dt, { effects, world });
   traffic.update(dt, effects, flightCam.position);
+  f.boatFx?.update(dt, effects);
   const wind = world.windBase.clone().add(world.gust);
   effects.update(dt, wind);
   world.destruct.update(dt, effects, flightCam.position, f.events); // falling buildings, debris, dust, fires

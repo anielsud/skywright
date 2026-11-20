@@ -51,7 +51,7 @@ async def main(a):
                 r = {'name': name, 'problems': []}
                 t0 = time.time()
                 try:
-                    kind = await cdp.js(f"(() => {{ const s = __sky.analyze(__sky.presets[{i}]); return s.heli ? 'heli' : s.car && s.wingArea < 0.5 ? 'car' : s.vertical ? 'rocket' : 'plane'; }})()")
+                    kind = await cdp.js(f"(() => {{ const s = __sky.analyze(__sky.presets[{i}]); return s.heli ? 'heli' : s.boat ? 'boat' : s.car && s.wingArea < 0.5 ? 'car' : s.vertical ? 'rocket' : 'plane'; }})()")
                     r['kind'] = kind
                     await cdp.js(f"__sky.hangar.load(__sky.presets[{i}]); 1")
                     mem0 = await cdp.js(SETTLE, timeout=30)

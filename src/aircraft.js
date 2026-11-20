@@ -9,6 +9,7 @@ import { assemble, updateDetail, mergeStatic } from './planeDetail.js';
 import { groundUnder, groundAtPoint } from './collide.js';
 import { detectBike, bikeSteer, bikeAssist } from './bike.js';
 import { buildStations, showStation } from './stations.js';
+import { detectBoat, boatFrame, boatForces, boatRecover, settleBoat, boatVisuals } from './boat.js';
 
 // spaceRCS: every plane can turn in space (no RCS part needed). rocketHigh: rockets push up to 1 + rocketHigh times harder
 // in the thin air above ~10 km (a generous shove towards space). Nothing changes lower down.
@@ -243,6 +244,7 @@ export class Aircraft {
     this.initialMass = this.mass;
     this.steerGeometry();
     this.bike = this.isCar ? detectBike(this) : null; this.isBike = !!this.bike; // two in-line wheels on the centreline: bike.js balances it
+    this.boat = detectBoat(this); this.isBoat = !!this.boat; // a boat hull: boat.js floats and drives it
     let r = 1; for (const p of this.parts) for (const h of p.hull) r = Math.max(r, h.distanceTo(this.com)); for (const p of this.parts) if (p.gear) r = Math.max(r, p.gear.wheels[0].top.distanceTo(this.com) + p.gear.wheels[0].len + 0.5);
     this.radius = r;
   }
@@ -310,6 +312,7 @@ export class Aircraft {
       const deck = env.surfRay?.(new THREE.Vector3(pos.x, gh + 40, pos.z), new THREE.Vector3(0, -1, 0), 40); if (deck) gh = gh + 40 - deck.t; // (on a built deck or ramp: on top of it)
       this.x.set(pos.x, gh - minY + 0.03, pos.z);
       this.gearDown = true; this.gearT = 1;
+      if (this.isBoat) settleBoat(this, env); // afloat at its waterline (on land it stays where it was put)
     }
     this.syncVisual();
   }
@@ -335,12 +338,14 @@ export class Aircraft {
     const dt = dtFrame / n;
     const v0 = this.v.clone(), x0 = this.x.clone(), q0 = this.q.clone();
     if (this.isRocket) this.rocketControls(dtFrame); else this.ce = this.ctl;
+    if (this.isBoat) boatFrame(this, env, dtFrame);
     for (let i = 0; i < n; i++) this.substep(dt, env);
     if (!Number.isFinite(this.x.x + this.x.y + this.x.z + this.v.x + this.v.y + this.v.z + this.q.x + this.q.y + this.q.z + this.q.w + this.w.x + this.w.y + this.w.z)) {
       // numerical blow-up (absurd speeds): never let NaN reach the renderer (bloom turns it into a black frame)
       this.x.copy(x0); this.v.copy(v0).multiplyScalar(0.9); this.q.copy(q0); this.w.set(0, 0, 0); this.wW.set(0, 0, 0);
     }
     if (this.isCar) this.carRecover(dtFrame);
+    if (this.isBoat) boatRecover(this, dtFrame, env);
     if (dtFrame > 0) { const acc = this.v.clone().sub(v0).divideScalar(dtFrame); this.gSmooth = lerp(this.gSmooth ?? 1, (acc.dot(this.up) + G * this.up.y) / G, Math.min(1, dtFrame * 8)); this.g = this.gSmooth; }
     this.time += dtFrame; this.stats.time += dtFrame;
     this.updateVisuals(dtFrame, env);
@@ -645,7 +650,7 @@ export class Aircraft {
       this.groundSpeed = vg;
     }
     for (const p of this.parts) {
-      const e = p.engine; if (!e || !p.alive || e.type === 'rotor' || e.type === 'tailrotor') continue;
+      const e = p.engine; if (!e || !p.alive || e.type === 'rotor' || e.type === 'tailrotor' || e.type === 'marine') continue; // (boat motors: boat.js)
       if (e.type === 'drive') { // force goes through the driven wheels (see contacts)
         const rev = this.reversing ? ctl.rev : 0, gas = rev > 0 ? 0 : ctl.throttle, vg = this.groundSpeed;
         e.spoolT = (e.spoolT || 0) + (Math.max(gas, rev) - (e.spoolT || 0)) * Math.min(1, dt / 0.25);
@@ -700,6 +705,7 @@ export class Aircraft {
     // ---- arcade/pilot assistance ----
     T.addScaledVector(Taero, R.aeroTorque);
     if (this.isBike) bikeAssist(this, F, T, ctl, dt, env); // balance, counter-steering, wheelies, attitude in the air
+    else if (this.isBoat) boatForces(this, F, T, ctl, dt, env); // floating, planing, motors, steering (boat.js)
     else if (this.isHeli) this.heliAssist(F, T, ctl, q, _qi, fwdSpeed);
     else if (this.isCar && this.onGround && R.assist > 0) { // Arcade/Pilot: stability control keeps the wheels down
       const right = _v2.set(1, 0, 0).applyQuaternion(q), bank = Math.asin(clamp(this.stuntUp ? right.dot(this.stuntUp) : right.y, -1, 1)); // level with the ramp/loop/banking the wheels are on
@@ -752,6 +758,7 @@ export class Aircraft {
     this.invIW.multiplyMatrices(Rm, this.Iinv).multiply(Rm.clone().transpose());
     this.invMass = 1 / mass;
     this.contacts(dt, env);
+    if (this.isBoat && this.boat.wet > 0.01) this.onGround = true; // afloat
     this.w.copy(this.wW).applyQuaternion(_qi.copy(q).invert());
     // ---- integrate position / orientation ----
     this.x.addScaledVector(this.v, dt);
@@ -863,6 +870,7 @@ export class Aircraft {
         const g = groundAtPoint(env, hp); // (terrain, or a stunt ramp the point is inside)
         if (hp.y > g.h) continue;
         const water = g.type === 'water';
+        if (water && this.isBoat) continue; // (a boat's hull floats: boat.js)
         const res = contactPoint(this, hp, g, { e: water ? 0 : 0.12, mu: water ? 0.12 : g.type === 'runway' ? 0.4 : 0.55 });
         if (!res) continue;
         if (g.stunt) { if (res.pen > stuntPen) { stuntPen = res.pen; stuntPush.copy(g.n); } } // pushed out along the face, not up
@@ -1054,6 +1062,7 @@ export class Aircraft {
     }
     if (this.landingLight) this.landingLight.intensity = env.night ? 4000 : 0;
     updateDetail(this, dt); // gear doors, slats, spoilers
+    if (this.isBoat) boatVisuals(this);
     if (this.normalsDirty) {
       this.normalsDirty = false;
       this.root.traverse((o) => { if (o.isMesh && o.userData.dirtyNormals) { o.geometry.computeVertexNormals(); o.userData.dirtyNormals = false; } });
