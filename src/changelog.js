@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.100.0', items: [
+    "Cars, motorbikes and boats sound like themselves now! The Dirt Bike goes brap-brap, the Sport Bike screams, the car rumbles like a V8 and you can hear it change gear. Tyres squeal when you slide, and dirt sprays on grass.",
+  ] },
   { v: '1.99.0', items: [
     "Boats have their own modes now: Easy, Skipper and Pro. And a boat parked on the runway knows it's on dry land!",
   ] },
