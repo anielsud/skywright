@@ -31,6 +31,9 @@ small { color: var(--dim); }
 #plane-name { width: 190px; font-weight: 600; }
 .tb-actions { margin-left: auto; display: flex; gap: 6px; }
 .fly { padding: 9px 22px; font-size: 1.05em; letter-spacing: .05em; }
+.tunnel { padding: 9px 16px; font-size: 1.05em; font-weight: 700; background: var(--accent2); color: #001a2b; border-color: transparent; }
+.tunnel:hover { background: #63c2ff; }
+.tunnel:disabled { opacity: .4; }
 .palette, .inspector { position: absolute; top: 64px; bottom: 64px; width: 290px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); display: flex; flex-direction: column; overflow: hidden; transition: transform .25s; }
 .palette { left: 8px; }
 .inspector { right: 8px; flex-direction: row; }
