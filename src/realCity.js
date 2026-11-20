@@ -195,6 +195,8 @@ export class CityScenery {
     const cfg = W.loc.city || {};
     this.masts = (cfg.masts || []).map((m) => { const [x, z] = toLocal(D.meta, m.lat, m.lon); return { ...m, x, z }; });
     this.hole = cfg.statue ? toLocal(D.meta, cfg.statue.lat, cfg.statue.lon) : null; // footprints there: drawn as a model
+    // rooftop helipads (helipad.js): the tallest flat roof at each point is found while the skyline is built (h.roof)
+    this.helipads = (cfg.helipads || []).map((h) => { const [x, z] = toLocal(D.meta, h.lat, h.lon), L = h.look && toLocal(D.meta, h.look.lat, h.look.lon); return { ...h, x, z, look: L ? { x: L[0], z: L[1] } : null, roof: null }; });
     const t0 = performance.now();
     this.stats = { tall: 0, low: 0, tris: 0 };
     this.buildTall();
@@ -308,6 +310,9 @@ export class CityScenery {
       rise = Math.min(rise, H - 1);
     }
     const eave = yTop - rise, n0 = M.n; let wt = false;
+    // a helipad's building (the tallest flat roof at its point): a bare roof for the deck, and it can't be knocked down
+    const pad = tall && roof === 'flat' ? this.helipads.find((h) => inside(P, h.x, h.z)) : null;
+    if (pad && !(pad.roof && pad.roof.y >= eave)) pad.roof = { y: eave, box: box || obb(P), P, g: gm };
     M.seed = (hseed * 255) | 0; M.yg = yFloor; M.color(st.col);
     // ---- walls: an optional ground floor band (shops / lobby), then the floors
     const gTop = this.detail && st.ground != null && eave - yFloor > 8 ? yFloor + 4.2 : null;
@@ -331,7 +336,7 @@ export class CityScenery {
       M.color(st.glass ? 0x6e7074 : pick([0x6a6660, 0x5c5a56, 0x76706a, 0x54524f, 0x4a4846], h3)); // tar, gravel, concrete
       M.roof(P, holes, eave, flatCell);
       // roof furniture: a plant room on the towers, water tanks on the pre-war and walk-up roofs
-      if (this.detail && !part && A > 250) {
+      if (this.detail && !part && A > 250 && !pad) {
         const b = box || obb(P);
         if (b && A / b.ar > 0.6) {
           if (tall && top > 35 && hash(R.o, 17) < 0.7) {
@@ -370,6 +375,7 @@ export class CityScenery {
     const b = box || obb(P);
     if (!b) return;
     const t = this.addBox({ cx: b.cx, cz: b.cz, ux: b.ux, uz: b.uz, hl: b.hl * (A / b.ar > 0.7 ? 1 : 0.85), hw: b.hw * (A / b.ar > 0.7 ? 1 : 0.85) }, part && R.mh > 0.5 ? yBase : R.g0 - 1, yTop, this.curTile);
+    if (pad) { t.fixed = true; return; } // (no damage key: destruction.js leaves it standing, whatever falls around it)
     // destructible (destruction.js): its vertices, what it's made of; damage done earlier this flight comes back with it
     t.dk = 'c' + R.o; t.rng = [[M, n0, M.n - n0]]; t.look = { cell: st.cell, col: st.col, rcol: 0x5c5a56, glass: !!st.glass }; if (wt) t.type = 'waterTower';
     W.destruct?.restore(t);

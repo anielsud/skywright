@@ -396,6 +396,8 @@ function timeLabel(t) { const h = Math.floor(t), mm = Math.round((t - h) * 60); 
 // Moon phase choices for the flight: [id, label, moon age in days (null = today's real phase)]
 const MOONS = [['real', 'Tonight’s real moon', null], ['full', 'Full', 14.77], ['half', 'Half', 7.38], ['crescent', 'Crescent', 3.5], ['new', 'No moon', 0]];
 if (LOCATIONS[flightCfg.location]?.hidden || !LOCATIONS[flightCfg.location]) flightCfg.location = 'islands'; // hidden/removed places move to Bora Bora
+// the ground start's name in the flight setup: where this vehicle will really start (see buildFlight)
+function groundStartLabel(s, loc) { return s.vertical ? 'On the launch pad' : s.heli && LOCATIONS[loc]?.city?.helipads?.some((h) => h.start) ? 'On the rooftop helipad' : 'On the runway'; }
 function flightModal() {
   const s = analyze(hangar.design);
   const m = ui.modal(`
@@ -418,11 +420,12 @@ function flightModal() {
     <label class="lbl">Mode</label>
     <div class="choice-row">${Object.entries(MODES).map(([k, mo]) => `<button class="opt-card${flightCfg.mode === k ? ' on' : ''}" data-m="${k}"><b>${mo.name}</b><small>${mo.desc}</small></button>`).join('')}</div>
     <label class="lbl">Start</label>
-    <div class="start-row"><div class="chips"><button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">${s.vertical ? 'On the launch pad' : 'On the runway'}</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}</div>
+    <div class="start-row"><div class="chips"><button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">${groundStartLabel(s, flightCfg.location)}</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}</div>
     <div class="start-go"><button data-close>Back</button><button class="primary big" id="go">FLY ▶</button></div></div>`, 'wide');
   const el = m.el;
   const pick = (attr, key) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { flightCfg[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); audio.play('click'); }));
   pick('loc', 'location'); pick('w', 'weather'); pick('r', 'realism'); pick('m', 'mode'); pick('s', 'start'); pick('moon', 'moon');
+  el.querySelectorAll('[data-loc]').forEach((b) => b.addEventListener('click', () => { el.querySelector('[data-s="runway"]').textContent = groundStartLabel(s, flightCfg.location); })); // (a helicopter in New York: the rooftop helipad)
   el.querySelector('#time').addEventListener('input', (e) => { flightCfg.time = +e.target.value; el.querySelector('#tlab').textContent = timeLabel(flightCfg.time); });
   // ----- online sessions: everyone at a location flies together unless they pick "Alone" -----
   const list = el.querySelector('#mp-list');
@@ -651,8 +654,8 @@ function buildFlight(cfg) {
   const env = {
     groundAt: (x, z, y) => world.groundAt(x, z, y), maxGround: (x, z) => world.maxGround(x, z), windAt: (p) => world.windAt(p),
     get night() { return world.night || world.W.dark > 0.6; }, groundHeightAtSpawn: world.loc.rwyH,
-    // built structures (the canyon's stunt park): wheel rays and hull points hit their collision mesh (collide.js)
-    ...(world.stunts ? { surfRay: (o, d, len) => world.stunts.cm.ray(o, d, len), surfPoint: (p) => world.stunts.cm.point(p) } : {}),
+    // built structures (the canyon's stunt park, rooftop helipads): wheel rays and hull points hit their collision meshes (collide.js)
+    ...(world.surfs.length ? { surfRay: (o, d, len) => world.surfRay(o, d, len), surfPoint: (p) => world.surfPoint(p) } : {}),
     onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40, p.clone()); },
   };
   let start = cfg.start; let F_approach = null;
@@ -668,7 +671,11 @@ function buildFlight(cfg) {
   const vApp = clamp(Number.isFinite(st.stall) ? st.stall * 1.45 : 45, 32, 110);
   const rwy = world.runways[net.active ? net.freeRunway(world) : cfg.rwy || 0] || world.runway; // online: a runway nobody is on
   const park = ac.isCar && world.stunts && start !== 'water' && cfg.mode !== 'landing' ? world.stunts.start : null; // cars at the Grand Canyon start in the stunt park
-  if (park) { // at the start arch, facing the first kicker; online, the others line up behind in alternate lanes
+  // a place's own start for this kind of vehicle (world.sites: New York's helicopters on a rooftop helipad), if nobody is on it
+  const site = !park && start === 'runway' && cfg.mode !== 'landing' ? world.startSite(st) : null;
+  if (site && !siteBusy(site.pos.x, site.pos.z, site.y, site.r)) { // standing on it (just touching: no first airborne frame to spin a rotor up), engines off
+    start = site.kind; ac.spawn(env, site.pos, site.heading); ac.x.y += site.y - env.groundAt(site.pos.x, site.pos.z).h - 0.031; ac.syncVisual();
+  } else if (park) { // at the start arch, facing the first kicker; online, the others line up behind in alternate lanes
     start = 'runway';
     ac.spawn(env, park.pos.clone().add(new THREE.Vector3(-9 * slot, 0, slot % 2 ? -2 * park.lane : 0)), park.heading);
   } else if (start === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0, st.vertical ? { pitch: Math.PI / 2 } : {}); }
@@ -739,7 +746,7 @@ function buildFlight(cfg) {
   renderer.compileAsync(scene, flightCam).catch(() => {}).then(compiled);
   renderer.setRenderTarget(null);
   onResize();
-  const msg = { pad: `Launch pad · ${world.loc.name}. Full throttle to launch!`, runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.' }[start];
+  const msg = { pad: `Launch pad · ${world.loc.name}. Full throttle to launch!`, helipad: `Rooftop helipad · ${site?.name}. Throttle to the middle to lift off!`, runway: `Runway ${rwy.name} · ${world.loc.name}. Throttle up and pull back gently at ${Math.round(st.stall * (settings.units === 'metric' ? 3.6 : 1.944))} ${settings.units === 'metric' ? 'km/h' : 'kt'}!`, air: 'Airborne! Fly safe.', water: 'On the water. Full throttle and lift off!', approach: 'On final approach. Follow the PAPI lights: two white, two red.' }[start];
   hud.center(msg, 3500);
   if (world.loc.credit) setTimeout(() => { if (F?.world === world) hud.toast(world.loc.credit); }, 4000); // real places: data attribution
   if (!ac.hasEngine) hud.toast('Glider: look for rising air under clouds and over sunny ridges.');
@@ -1175,6 +1182,12 @@ function holdDown(f, ac, pad) {
   if (!ac.dead && !ac.wrecked) for (const p of ac.parts) if (p.alive && p.engine) up += (p.engine.thrustNow || 0) * _v.copy(p.engine.dir).applyQuaternion(ac.q).y;
   if (ac.dead || ac.wrecked || (up > ac.mass * 9.81 && pad.armClear)) { f.clamp = null; return; }
   ac.x.copy(f.clamp.x); ac.q.copy(f.clamp.q); ac.v.set(0, 0, 0); ac.w.set(0, 0, 0); ac.wW.set(0, 0, 0); ac.syncVisual();
+}
+// online: someone is already on a start site (or just above it): start from the runway instead
+function siteBusy(x, z, y, r) {
+  if (!net.active) return false;
+  for (const p of net.players.values()) { const s = p.buf.snaps.at(-1); if (s && Math.hypot(s.x.x - x, s.x.z - z) < r + 10 && Math.abs(s.x.y - y) < 40) return true; }
+  return false;
 }
 // online: someone is already on the pad (or just above it): start from the runway instead
 function padBusy(pad) {

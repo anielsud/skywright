@@ -161,3 +161,23 @@ python3 tools/test/tunnelcheck.py --only Viper --shots /tmp/tunnel
 ```
 
 Run it when you change `aircraft.js` (the aero model), `windTunnel.js`, `tunnelFlow.js` or `tunnelScene.js`.
+
+## Rooftop helipad check
+
+`helipadcheck.py` checks New York's rooftop helipads (`src/helipad.js`). It starts the stock Dragonfly at NYC (Pilot and
+Arcade) and checks that it starts on the H of the 55 Water Street pad, level, facing the view, skids resting on the
+deck, engines off, and that the building under the pad has no damage key. In calm air it then checks that:
+
+- parked with the throttle closed, it settles onto its skids exactly as it does on the runway (same attitude and
+  sink), then for 5 s it moves no more than it does there, with the rotor stopped, no contact and no damage;
+- it lifts off to a steady hover 25 m up with no collision;
+- it lands back on the pad gently (no hard landing) and rests there stably on both skids.
+
+It then starts every other preset at NYC, and the Dragonfly at other locations, and checks that none starts on the
+helipad. With `--ref URL` (a server of main) their spawn poses must match main's exactly.
+
+```sh
+python3 tools/test/helipadcheck.py --ref http://127.0.0.1:9000   # ~6 min
+```
+
+Run it when you change the helipads, the city's building pipeline (`realCity.js`), ground contact or the spawn code.

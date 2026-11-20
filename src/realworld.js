@@ -81,6 +81,14 @@ export const REAL_LOCATIONS = {
       masts: [{ name: 'Empire State Building', lat: 40.748440, lon: -73.985664, top: 443 }, { name: 'One World Trade Center', lat: 40.712742, lon: -74.013382, top: 541 }],
       // the Statue of Liberty: a model (realLandmarks.js) instead of the footprints there; facing: compass bearing
       statue: { lat: 40.689247, lon: -74.044502, facing: 125 },
+      // rooftop helipads (src/helipad.js) on the tallest building at each point, picked from the footprint data for a
+      // big flat roof with nothing taller within 250 m. The first is where helicopters start: 55 Water Street (209 m,
+      // a 51 x 99 m roof by the harbour), facing the Statue of Liberty. Their buildings can't be knocked down.
+      helipads: [
+        { name: '55 Water Street', lat: 40.703070, lon: -74.009319, look: { lat: 40.689247, lon: -74.044502 }, start: true },
+        { name: 'One Penn Plaza', lat: 40.751361, lon: -73.992603 },
+        { name: 'Javits Federal Building', lat: 40.715477, lon: -74.004324 },
+      ],
     },
     height(n, x, z) { const D = cache.get(this.id); return D ? D.height(x, z) : this.rwyH; },
   },
