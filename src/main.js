@@ -991,6 +991,19 @@ function handleEvents(f, dt) {
 // play a start (the engines are running already), and with ac.engineRunning set, a prop idles at zero throttle instead of stopping.
 // which engine voice a part uses: main rotors get the helicopter rotor voice (tail rotors are part of it)
 const engSound = (e) => (e.type === 'rotor' ? 'rotor' : e.sound);
+// The driven wheels as the engine sound hears them (motorSound.js): their surface speed, faster than the car while they
+// spin (aircraft.js w.spinX), 0 while locked; spin: how much faster or slower than the road they turn (the tyre squeal).
+// null when no driven wheel touches the ground (in the air, or a wheelie with a front-drive bike): the engine revs freely.
+// (spinX is the last substep's, which jumps about as the springs work: smoothed over ~0.15 s here)
+function drivenWheels(ac, gs, dt) {
+  let n = 0, v = 0;
+  for (const p of ac.parts) if (p.alive && p.gear) for (const w of p.gear.wheels) if (w.drive) {
+    w.spinA = (w.spinA || 0) + ((w.contact ? w.spinX || 0 : 0) - (w.spinA || 0)) * Math.min(1, dt * 7);
+    if (w.contact) { n++; v += w.locked ? 0 : Math.abs(w.vf || 0) + 14 * Math.min(1, w.spinA); }
+  }
+  if (!n) return null;
+  v /= n; return { v, spin: Math.abs(v - gs) };
+}
 const engineKinds = (ac) => [...new Set(ac.parts.filter((p) => p.alive && p.engine && engSound(p.engine)).map((p) => engSound(p.engine)))];
 function engineSwitch(f, ac, thr, dt) {
   const E = f.eng; if (!E || ac.dead || !ac.hasEngine) return thr;
@@ -1114,7 +1127,7 @@ function stepFlight(dtReal) {
     if (!p.alive || !p.engine || !engSound(p.engine)) continue; const e = p.engine;
     const k = engSound(e); if (!engines[k]) engines[k] = { sound: k, rpm: 0, spoolT: 0, count: 0, blades: { e_turboprop: 4, e_radial: 3, e_electric: 6, r_main4: 4 }[p.p.id] || 2, ab: false, burning: false, pos: new THREE.Vector3(), fwd: ac.forward };
     if (k === 'rotor') { engines[k].load = ac.collective ?? 0.5; engines[k].tail = ac.parts.some((q) => q.alive && q.engine?.type === 'tailrotor'); }
-    const a = engines[k]; a.idleRpm = e.idleRpm; a.maxRpm = e.maxRpm; a.vmax = Math.max(a.vmax || 0, e.vmax || 0); a.count++; a.rpm = Math.max(a.rpm, e.rpm || 0); a.spoolT = Math.max(a.spoolT, e.spoolT || 0); a.ab = a.ab || e.abOn; a.burning = a.burning || e.burning;
+    const a = engines[k]; a.idleRpm = e.idleRpm; a.maxRpm = e.maxRpm; if (e.bite != null) a.bite = Math.max(a.bite ?? 0, e.bite); a.vmax = Math.max(a.vmax || 0, e.vmax || 0); a.count++; a.rpm = Math.max(a.rpm, e.rpm || 0); a.spoolT = Math.max(a.spoolT, e.spoolT || 0); a.ab = a.ab || e.abOn; a.burning = a.burning || e.burning;
     a.pos.add(ac.worldPoint(e.pos)); a.dmg = Math.max(a.dmg || 0, p.dmg / p.hp); // damage: sputter and misfire (audio.engineDamage)
   }
   // damage audio: the worst burning engine (same > 70 % rule as the flames above), and damaged parts still attached (rattle)
@@ -1136,9 +1149,10 @@ function stepFlight(dtReal) {
   const surf = world.groundAt(ac.x.x, ac.x.z).type;
   const camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(flightCam.quaternion), camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(flightCam.quaternion);
   const agl = flightCam.position.y - Math.max(world.heightAt(flightCam.position.x, flightCam.position.z), world.waterLevel);
+  const drive = ac.isCar && !ac.dead ? drivenWheels(ac, gs, dtReal) : null;
   audio.update({ engines: Object.values(engines), airspeed: ac.dead ? 0 : (ac.airspeed || 0), buffet: ac.dead || ac.onGround || !f.stallWarn ? 0 : Math.max(0, ac.alpha - 0.22) + (ac.stalled ? 0.15 : 0),
     onGround: ac.onGround && ac.parts.some((p) => p.alive && p.gear?.wheels.some((w) => w.contact)), groundSpeed: gs, surface: surf,
-    slip: ac.isCar && !ac.dead ? Math.abs(ac.v.dot(new THREE.Vector3(1, 0, 0).applyQuaternion(ac.q))) : null,
+    slip: ac.isCar && !ac.dead ? Math.hypot(ac.v.dot(new THREE.Vector3(1, 0, 0).applyQuaternion(ac.q)), drive?.spin ?? 0) : null, wheelV: drive?.v ?? null,
     gear: contactGear(ac), scrape: f.scrapeT > 0 ? f.scrape : 0, stall: ac.stalled && !ac.dead && f.stallWarn, cockpit, doppler, rain: world.rain.visible ? world.W.rain : 0,
     listener: { pos: flightCam.position, fwd: camFwd, up: camUp },
     amb: { loc: world.loc.id, night: world.night, day: !world.night && world.W.rain === 0, agl, waterNear: waterProximity(f, world, flightCam.position) },

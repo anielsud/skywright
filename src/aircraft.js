@@ -894,6 +894,13 @@ export class Aircraft {
         applyImpulse(this, rr, Fw.multiplyScalar(dt));
         w.spin = (w.spin || 0) + (vf / Math.max(0.1, w.r)) * dt;
         w.vf = vf; w.slip = Math.abs(vl);
+        // for the engine sound only (motorSound.js): how hard a driven wheel is spinning (the push it was asked for past what
+        // the tyre could take; traction control keeps it near zero) and whether the brakes or handbrake have locked it
+        if (w.drive) {
+          const want = nDrive ? this.driveF / nDrive * (water ? 0.15 : 1) : 0, used = Math.abs(Fx - Ff) + 1; // the engine's push asked for, and what the tyre passed on
+          w.spinX = want * vf >= -0.5 * Math.abs(want) && Math.abs(want) > used * 1.05 ? Math.min(3, Math.abs(want) / used - 1) * (D && D.tc ? 0.08 : 1) : 0;
+          w.locked = lock || (hand > 0.5 && !drift) ? 1 : 0;
+        }
         if (water && Math.abs(vf) > 3 && Math.random() < 0.3) this.emit('spray', { pos: pt.clone(), speed: Math.abs(vf) });
         else if (!water && g.type !== 'runway' && Math.abs(vf) > 8 && Math.random() < 0.06) this.emit('dust', { pos: pt.clone(), speed: Math.abs(vf), surf: g.type });
       }
