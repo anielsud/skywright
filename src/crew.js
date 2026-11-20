@@ -212,7 +212,9 @@ class Rig {
       p[iff].copy(E); basis(T.clone().sub(E), hint, q[iff]);
     };
     const handL = D.fore + D.hand;
-    const eR = bars ? V(0.9, -0.1, 0.3) : V(0.55, -0.8, 0.25), kR = bars ? V(0.5, 0.6, -1) : V(0.1, 1, -0.4); // riders: elbows out, knees forward against the tank
+    // riders: elbows bent back and a little out and down (not winged out sideways), knees forward against the tank
+    // (a sport rider's knees go out over the fairing's sides, gripping the tank, not through the fairing)
+    const eR = bars ? V(0.45, -0.45, 0.75) : V(0.55, -0.8, 0.25), kR = bars ? (this.o.hump ? V(0.5, 0.5, -0.9) : V(0.35, 0.6, -1)) : V(0.1, 1, -0.4);
     limb(this.shR, hands.R, D.upper, handL, eR, B.uArmR, B.fArmR, V(0.2, 0, -1));
     limb(this.shL, hands.L, D.upper, handL, V(-eR.x, eR.y, eR.z), B.uArmL, B.fArmL, V(-0.2, 0, -1));
     limb(this.hipR, feet.R, D.thigh, D.shin, kR, B.thighR, B.shinR, FWD);
@@ -447,14 +449,21 @@ export function addCrew(design, objs) {
       let outfit = kind, ctl = st.ctl || CTL_OF[kind] || 'stick', colors = null, pegs = null, groundY;
       if (st.role === 'crew') { outfit = kind === 'heli' ? 'medic' : kind; ctl = 'none'; }
       if (kind === 'driver') colors = { helmet: p.color === 0x15161a || p.color == null ? 0xe8601c : 0xf2b705, helmet2: 0x15161a };
+      // a rider sits on the frame part, which a kid may have resized, and not evenly (wider, longer, taller): the rider
+      // must not be stretched with it. It keeps its own proportions at the frame's average size (scaled back by the
+      // frame's own scale), and its pegs and the ground are measured in that unstretched space.
+      let fit = null;
       if (ctl === 'bars') { // a rider in the bike's colours, feet on the frame's pegs (seat space -> rig space)
         outfit = st.rider || 'mx'; colors = { suit: p.color ?? OUTFITS[outfit].suit, helmet2: p.color ?? OUTFITS[outfit].helmet2 };
-        const at = V(...st.p), sc = st.s || 1; pegs = (st.pegs || []).map((q) => V(...q).sub(at).divideScalar(sc)); if (pegs.length !== 2) pegs = null;
-        if (st.ground != null) groundY = (st.ground - st.p[1]) / sc;
+        const ps = V(Math.abs(obj.scale.x) || 1, Math.abs(obj.scale.y) || 1, Math.abs(obj.scale.z) || 1), sc = (st.s || 1) * Math.cbrt(ps.x * ps.y * ps.z);
+        fit = V(sc / ps.x, sc / ps.y, sc / ps.z);
+        const at = V(...st.p); pegs = (st.pegs || []).map((q) => V(...q).sub(at).multiply(ps).divideScalar(sc)); if (pegs.length !== 2) pegs = null;
+        if (st.ground != null) groundY = (st.ground - st.p[1]) * ps.y / sc;
       }
       const c = buildCrew(outfit, ctl, { seed: i * 3 + k, colors, pegs, groundY });
       Object.assign(c.userData.crewRig, { role: st.role || 'pilot', kind, ctl, part: i, seat: k }); // (stations.js names the cockpit views from these)
-      c.position.set(...st.p); if (st.quat) c.quaternion.fromArray(st.quat); else if (st.yaw) c.rotation.y = st.yaw; c.scale.setScalar(st.s || 1);
+      c.position.set(...st.p); if (st.quat) c.quaternion.fromArray(st.quat); else if (st.yaw) c.rotation.y = st.yaw;
+      if (fit) c.scale.copy(fit); else c.scale.setScalar(st.s || 1);
       obj.add(c); list.push(c.userData.crewRig);
     });
     obj.userData.crew = list; rigs.push(...list);

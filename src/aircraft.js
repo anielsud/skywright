@@ -10,6 +10,7 @@ import { groundUnder, groundAtPoint } from './collide.js';
 import { detectBike, bikeSteer, bikeAssist } from './bike.js';
 import { buildStations, showStation } from './stations.js';
 import { detectBoat, boatFrame, boatForces, boatRecover, settleBoat, boatVisuals } from './boat.js';
+import { driveMode } from './drive.js';
 
 // spaceRCS: every plane can turn in space (no RCS part needed). rocketHigh: rockets push up to 1 + rocketHigh times harder
 // in the thin air above ~10 km (a generous shove towards space). Nothing changes lower down.
@@ -245,6 +246,7 @@ export class Aircraft {
     this.steerGeometry();
     this.bike = this.isCar ? detectBike(this) : null; this.isBike = !!this.bike; // two in-line wheels on the centreline: bike.js balances it
     this.boat = detectBoat(this); this.isBoat = !!this.boat; // a boat hull: boat.js floats and drives it
+    this.D = this.isCar && !this.isBike ? driveMode(realism) : null; // a car's driving mode (drive.js): Easy, Racer or Pro
     let r = 1; for (const p of this.parts) for (const h of p.hull) r = Math.max(r, h.distanceTo(this.com)); for (const p of this.parts) if (p.gear) r = Math.max(r, p.gear.wheels[0].top.distanceTo(this.com) + p.gear.wheels[0].len + 0.5);
     this.radius = r;
   }
@@ -339,6 +341,7 @@ export class Aircraft {
     const v0 = this.v.clone(), x0 = this.x.clone(), q0 = this.q.clone();
     if (this.isRocket) this.rocketControls(dtFrame); else this.ce = this.ctl;
     if (this.isBoat) boatFrame(this, env, dtFrame);
+    if (this.isCar) this.walls = env.walls ? env.walls(this.x.x, this.x.z, this.radius + this.v.length() * dtFrame + 2, this.walls || []) : null; // buildings nearby
     for (let i = 0; i < n; i++) this.substep(dt, env);
     if (!Number.isFinite(this.x.x + this.x.y + this.x.z + this.v.x + this.v.y + this.v.z + this.q.x + this.q.y + this.q.z + this.q.w + this.w.x + this.w.y + this.w.z)) {
       // numerical blow-up (absurd speeds): never let NaN reach the renderer (bloom turns it into a black frame)
@@ -362,10 +365,14 @@ export class Aircraft {
       return -tail * this.ctl.yaw * 0.55 * clamp(1 - this.airspeed / 45, 0.15, 1);
     }
     if (this.isBike) return bikeSteer(this, w);
-    // cars: full lock (~34°) at walking pace, less as you speed up so corners stay under cornerG (it slides before it tips)
+    // cars: full lock (~34°) at walking pace, less as you speed up so full lock asks for the driving mode's cornering g
+    // (drive.js: Easy and Racer hold the car down so it can't tip; Pro stops at the car's own rollover limit, cornerG)
     const v = this.stuntUp ? this.v.length() : Math.hypot(this.v.x, this.v.z), L = this.wheelbase || 2.5; // (up a loop's side the speed is all vertical)
     // (on a banked ramp, bowl or loop the banking holds you in the turn too: more lock allowed)
-    const cg = (this.cornerG || 6) + (this.stuntUp ? G * Math.tan(Math.min(1.3, Math.acos(clamp(this.stuntUp.y, -1, 1)))) : 0);
+    // (the anti-roll hand raises the car's own rollover limit, rollG, by 1 / (1 - antiRoll): Easy can't tip at all;
+    // Pro asks for no more than 80 % of what tips it in a steady turn; a swerve, a kerb or a wobbly build can still roll it)
+    const D = this.D, turn = D ? (D.antiRoll >= 1 ? D.turnG * G : Math.min(D.turnG * G, (this.rollG || 8) / (1 - D.antiRoll) * 0.8)) : this.cornerG || 6;
+    const cg = turn + (this.stuntUp ? G * Math.tan(Math.min(1.3, Math.acos(clamp(this.stuntUp.y, -1, 1)))) : 0);
     const th = -this.steerCmd() * Math.min(0.6, Math.atan(L * cg / Math.max(1, v * v)));
     if (!w || w.L === undefined) return th;
     // Ackermann: every steered wheel points square to the radius from one turning centre beside the pivot axle, so the
@@ -388,6 +395,24 @@ export class Aircraft {
     const half = ws.reduce((a, w) => a + Math.abs(w.top.x - xc), 0) / ws.length;
     const h = this.com.y - ws.reduce((a, w) => a + w.top.y - w.len - w.r, 0) / ws.length;
     this.cornerG = clamp(0.75 * G * half / Math.max(0.3, h), 3, 8);
+    this.rollG = G * half / Math.max(0.3, h); // the static rollover limit (m/s²), unclamped: drive.js modes steer below it
+  }
+  // Easy and Racer (drive.js): the yaw helper turns the car at the rate its steering asks for, so it turns in crisply
+  // and never spins out. With the handbrake on, Racer lets it rotate further into a drift and holds the slide below
+  // driftMax (body slip angle); let go and the helper straightens it out.
+  carAssist(T) {
+    const D = this.D; if (!D.yawHelp) return;
+    let wheels = 0; for (const p of this.parts) if (p.alive && p.gear) for (const w of p.gear.wheels) if (w.contact) wheels++;
+    if (wheels < 2) return;
+    const vg = this.groundSpeed, L = this.wheelbase || 2.5, vB = _rv.copy(this.v).applyQuaternion(_qi.copy(this.q).invert());
+    let want = (vg * Math.tan(this.steerAngle())) / L; // + = left
+    const beta = Math.atan2(vB.x, Math.max(1, Math.abs(vB.z))) * Math.sign(vg || 1); // + = nose left of where it is going
+    let k = 6 * D.yawHelp;
+    if (this.ctl.hand > 0 && D.drift > 0 && Math.abs(vg) > 5) { want *= 1.8; k *= 0.35; } // drifting: rotate more, hold less
+    let acc = clamp(want - this.w.y, -3, 3) * k;
+    const over = Math.abs(beta) - D.driftMax; // sliding further than the mode allows: catch it (and stop the spin)
+    if (over > 0 && D.driftMax > 0 && Math.abs(vg) > 3) acc += -Math.sign(beta) * Math.min(1, over * 5) * (12 + 4 * Math.max(0, Math.sign(beta) * this.w.y));
+    T.add(_rv.set(0, acc, 0).applyMatrix3(this.I)); // (through the whole inertia: a lopsided build's products of inertia would turn a bare yaw torque into a roll)
   }
   // Arcade and Pilot: a car stuck on its roof or side for 2 s is set back on its wheels.
   // A bike lying on its side is picked up in every mode, after 1.5 s.
@@ -656,7 +681,7 @@ export class Aircraft {
         e.spoolT = (e.spoolT || 0) + (Math.max(gas, rev) - (e.spoolT || 0)) * Math.min(1, dt / 0.25);
         const dmgF = (1 - clamp(p.dmg / p.hp, 0, 1) * 0.7) * (p.dmg > p.hp * 0.75 ? 0.2 : 1);
         this.driveF += rev > 0 ? -e.thrust * 0.5 * e.spoolT * Math.max(0, 1 - (Math.max(0, -vg) / 10) ** 2) * dmgF
-          : e.thrust * e.spoolT * Math.max(0, 1 - (Math.max(0, vg) / e.vmax) ** 2) * dmgF;
+          : e.thrust * e.spoolT * Math.max(0, 1 - (Math.max(0, vg) / (e.vmax * (this.D?.top ?? 1))) ** 2) * dmgF; // (Easy: a gentler top speed)
         // off the pedals the engine holds you back (engine braking): the car slows to a stop instead of coasting for ever
         if (gas < 0.05 && rev < 0.05) this.driveF -= clamp(vg / 1.5, -1, 1) * mass * G * 0.14 * (1 - Math.max(gas, rev) * 20) / Math.max(1, this.motorCount);
         e.thrustNow = 0;
@@ -709,7 +734,9 @@ export class Aircraft {
     else if (this.isHeli) this.heliAssist(F, T, ctl, q, _qi, fwdSpeed);
     else if (this.isCar && this.onGround && R.assist > 0) { // Arcade/Pilot: stability control keeps the wheels down
       const right = _v2.set(1, 0, 0).applyQuaternion(q), bank = Math.asin(clamp(this.stuntUp ? right.dot(this.stuntUp) : right.y, -1, 1)); // level with the ramp/loop/banking the wheels are on
-      T.add(_v3.set(0, 0, -bank * 6 * R.assist - this.w.z * 3 * R.assist).applyMatrix3(this.I));
+      const lv = this.D ? this.D.level : R.assist; // (a car's driving mode sets how firmly: a tall narrow build on soft springs falls over without it)
+      T.add(_v3.set(0, 0, -bank * 6 * lv - this.w.z * 3 * lv).applyMatrix3(this.I));
+      if (this.D) this.carAssist(T);
     }
     else if (R.assist > 0 && !(this.isCar && this.onGround) && this.rocketK < 0.999) {
       const sf = clamp((V - 6) / 22, 0, 1) * (1 - this.rocketK); // (a rocket plane fades this out as it goes rocket-style)
@@ -759,6 +786,7 @@ export class Aircraft {
     this.invMass = 1 / mass;
     this.contacts(dt, env);
     if (this.isBoat && this.boat.wet > 0.01) this.onGround = true; // afloat
+    if (this.walls?.length) this.wallContacts(env);
     this.w.copy(this.wW).applyQuaternion(_qi.copy(q).invert());
     // ---- integrate position / orientation ----
     this.x.addScaledVector(this.v, dt);
@@ -800,6 +828,7 @@ export class Aircraft {
     const cBase = 2 * Math.sqrt(kBase * this.mass / Math.max(2, nW)) * 0.6;
     const top = new THREE.Vector3(), pt = new THREE.Vector3(), rr = new THREE.Vector3(), vpt = new THREE.Vector3();
     const stuntN = new THREE.Vector3(); let nStunt = 0, stuntPen = 0; const stuntPush = new THREE.Vector3();
+    let rollM = 0; const fwdCar = this.D ? _rf.set(0, 0, -1).applyQuaternion(q) : null;
     for (const p of this.parts) {
       if (!p.alive || !p.gear) continue;
       const usable = !p.gear.retract || this.gearT > 0.95;
@@ -839,16 +868,27 @@ export class Aircraft {
         if (g.type === 'grass') muRoll = 0.05;
         if (w.brake) muRoll += Math.max(this.brake, this.svcBrake) * 0.65;
         const hand = this.isCar && this.ctl.hand > 0 && w.top.z > this.com.z ? this.ctl.hand : 0; // handbrake locks the back wheels: slide!
-        if (hand) { muRoll += hand * 0.6; muLat *= 1 - 0.5 * hand; }
+        // a car's driving mode (drive.js): its tyres' side grip; Easy and Racer's handbrake drift lets the tail out but
+        // keeps the gas pushing; with no ABS (Pro) a hard brake locks the wheel and it slides instead of steering
+        const D = this.D, drift = D && hand && D.drift > 0 && Math.abs(vf) > 5 ? D.drift : 0;
+        if (D && !w.float && !water) muLat = D.latMu * (g.type === 'grass' || g.type === 'sand' ? 0.85 : 1);
+        if (drift) { muRoll += hand * 0.1; muLat *= 1 - 0.7 * hand * drift; }
+        else if (hand) { muRoll += hand * 0.6; muLat *= 1 - 0.5 * hand; }
+        const lock = D && !D.abs && w.brake && Math.max(this.brake, this.svcBrake) > 0.75 && Math.abs(vf) > 2 ? 1 : 0;
+        if (lock) muLat *= 0.35;
         if (w.float) { muRoll = water ? 0.03 + Math.min(0.12, Math.abs(vf) * 0.004) : 0.35; muLat = water ? 0.35 : 0.5; }
         else if (water) { muRoll = 0.6; muLat = 0.6; }
         const DBG = globalThis.__dbg || {};
         const Ff = -clamp(vf / 0.4, -1, 1) * muRoll * N * (DBG.roll ?? 1);
         const Fl = -clamp(vl / 0.25, -1, 1) * muLat * N * (DBG.lat ?? 1);
-        const grip = w.grip || 0.8, Fd = w.drive && nDrive ? clamp(this.driveF / nDrive, -grip * N, grip * N) * (water ? 0.15 : 1) * (1 - hand) : 0; // engine through the tyre
+        const grip = w.grip || 0.8, Fd = w.drive && nDrive ? clamp(this.driveF / nDrive, -grip * N, grip * N) * (water ? 0.15 : 1) * (1 - (drift ? 0.3 : 1) * hand) : 0; // engine through the tyre
         // one grip budget per tyre: pushing and cornering share it, so a spinning wheel slides instead of adding grip
         let Fx = Ff + Fd, Fy = Fl; const cap = Math.max(muLat, muRoll, w.grip || 0) * N, tot = Math.hypot(Fx, Fy);
-        if ((Fd || hand) && tot > cap) { Fx *= cap / tot; Fy *= cap / tot; }
+        if (D && D.tc && tot > cap) { // traction control and ABS: steering keeps its grip, the gas and brakes get what is left (at least a third)
+          const room = Math.max(Math.sqrt(Math.max(0, cap * cap - Fy * Fy)), cap * 0.35);
+          Fx = clamp(Fx, -room, room); const t2 = Math.hypot(Fx, Fy); if (t2 > cap) Fy *= Math.sqrt(Math.max(0, cap * cap - Fx * Fx)) / Math.abs(Fy);
+        } else if ((Fd || hand || (D && Ff)) && tot > cap) { Fx *= cap / tot; Fy *= cap / tot; }
+        if (D && D.antiRoll) rollM += _rv.copy(rr).cross(_rb.copy(fwdW).multiplyScalar(Fx).addScaledVector(latW, Fy)).dot(fwdCar); // the tyre's push along the road (sideways, and a turned wheel's drive) rolls the car: summed to cancel below
         const Fw = g.n.clone().multiplyScalar(N).addScaledVector(fwdW, Fx).addScaledVector(latW, Fy);
         // apply as impulse
         applyImpulse(this, rr, Fw.multiplyScalar(dt));
@@ -859,6 +899,9 @@ export class Aircraft {
       }
       for (const w of p.gear.wheels) w.wasContact = w.contact;
     }
+    // Easy and Racer: an invisible hand cancels (part of) the roll the tyres' cornering push puts on the car, so it
+    // corners flat and can't tip over in a turn (drive.js antiRoll)
+    if (rollM) this.wW.add(_rv.copy(fwdCar).multiplyScalar(-this.D.antiRoll * rollM * dt).applyMatrix3(this.invIW));
     // hull points
     const hp = new THREE.Vector3();
     const hits = new Map(), slide = new Map(); let inWater = false;
@@ -908,6 +951,59 @@ export class Aircraft {
       this.emit('landing', { vs, onWheels: true });
     }
     if (this.onGround) this.airTimeNow = 0;
+  }
+
+  // ---- buildings (cars and bikes) ----
+  // Every substep (240 Hz or more: a car moves under half a metre between tests even at 100 m/s, so it can't tunnel
+  // through a wall), the vehicle's whole box (every hull point and wheel, body frame) is tested against each building's
+  // box nearby (env.walls: world.wallBoxes) by separating axes in plan view and by height. Overlapping, it is pushed out
+  // along the shallowest axis and the push is an impulse at its deepest corners (a glancing blow turns it along the
+  // wall, a corner spins it). A hole knocked in a building lets it through (env.wallPass).
+  bodyBox() {
+    const lo = new THREE.Vector3(Infinity, Infinity, Infinity), hi = lo.clone().negate(), _p = new THREE.Vector3();
+    for (const p of this.parts) {
+      if (!p.alive) continue;
+      for (const h of p.hull) { lo.min(h); hi.max(h); }
+      if (p.gear) for (const w of p.gear.wheels) for (const s of [-1, 1]) { _p.copy(w.top).addScaledVector(w.dir, w.len).add(_v.set(0, s * w.r, s * w.r)); lo.min(_p); hi.max(_p); _p.copy(w.top); lo.min(_p); hi.max(_p); }
+    }
+    const pts = []; for (let i = 0; i < 8; i++) pts.push(new THREE.Vector3(i & 1 ? hi.x : lo.x, i & 2 ? hi.y : lo.y, i & 4 ? hi.z : lo.z));
+    return { pts, n: this.alive().length, world: pts.map(() => new THREE.Vector3()) };
+  }
+  wallContacts(env) {
+    let bb = this.wallBox; if (!bb || bb.n !== this.alive().length) bb = this.wallBox = this.bodyBox();
+    const C = bb.world; let ymin = Infinity, ymax = -Infinity, cx = 0, cz = 0;
+    for (let i = 0; i < 8; i++) { this.worldPoint(bb.pts[i], C[i]); ymin = Math.min(ymin, C[i].y); ymax = Math.max(ymax, C[i].y); cx += C[i].x / 8; cz += C[i].z / 8; }
+    const f = _rf.set(0, 0, -1).applyQuaternion(this.q); f.y = 0; if (f.lengthSq() < 1e-4) f.set(1, 0, 0).applyQuaternion(this.q).setY(0); f.normalize();
+    const axes = [[0, 0], [0, 0], [f.x, f.z], [-f.z, f.x]], n = _ra, r = _rb;
+    for (const B of this.walls) {
+      if (B.y1 < ymin + 0.25 || (B.y0 > ymax && B.y0 > ymin + 3)) continue; // over it (on rubble, a kerb) or well under it (a box less than 3 m up still reaches the street: New York's sit on their footprint's base height)
+      axes[0][0] = B.ux; axes[0][1] = B.uz; axes[1][0] = -B.uz; axes[1][1] = B.ux;
+      let best = Infinity, nx = 0, nz = 0;
+      for (const [ax, az] of axes) {
+        let lo = Infinity, hi = -Infinity;
+        for (let i = 0; i < 8; i++) { const d = C[i].x * ax + C[i].z * az; lo = Math.min(lo, d); hi = Math.max(hi, d); }
+        const bc = B.x * ax + B.z * az, be = B.hl * Math.abs(ax * B.ux + az * B.uz) + B.hw * Math.abs(-ax * B.uz + az * B.ux);
+        const o = Math.min(hi - (bc - be), bc + be - lo); if (o <= 0) { best = -1; break; }
+        if (o < best) { best = o; const s = cx * ax + cz * az > bc ? 1 : -1; nx = ax * s; nz = az * s; }
+      }
+      if (best <= 0) continue;
+      // the deepest corners (one for a corner-on hit, a whole face head-on), at a height inside the building
+      let dmin = Infinity; for (let i = 0; i < 8; i++) dmin = Math.min(dmin, C[i].x * nx + C[i].z * nz);
+      r.set(0, 0, 0); let k = 0;
+      for (let i = 0; i < 8; i++) if (C[i].x * nx + C[i].z * nz < dmin + 0.15) { r.add(C[i]); k++; }
+      r.divideScalar(k); r.y = clamp(this.x.y, B.y0 + 0.1, B.y1 - 0.1);
+      if (env.wallPass?.(B.e, r)) continue; // through a hole knocked in it
+      n.set(nx, 0, nz);
+      this.x.addScaledVector(n, Math.min(best, 1.5) + 0.002);
+      r.sub(this.x);
+      const vn = pointVel(this, r, _rc).dot(n);
+      if (vn < 0) {
+        const j = (-1.25 * vn) / effMass(this, r, n); applyImpulse(this, r, _rd.copy(n).multiplyScalar(j));
+        const vt = pointVel(this, r, _rc).addScaledVector(n, -pointVel(this, r, _v2).dot(n)), vtl = vt.length();
+        if (vtl > 1e-3) { vt.divideScalar(vtl); applyImpulse(this, r, vt.multiplyScalar(-Math.min(0.35 * j, vtl / effMass(this, r, vt)))); }
+        const wt = this.wallT || (this.wallT = new WeakMap()); if (-vn > 1.5 && this.time - (wt.get(B.e) ?? -1) > 0.3) { wt.set(B.e, this.time); this.emit('wall', { e: B.e, pos: r.clone().add(this.x), speed: -vn, n: n.clone() }); }
+      }
+    }
   }
 
   damage(p, amount, at) {
