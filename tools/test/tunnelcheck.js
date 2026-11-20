@@ -47,7 +47,7 @@ function flightAero(design, s) {
   }
   const F = Fw.applyQuaternion(q.clone().invert()).sub(thr);
   const T = ac.w.clone().divideScalar(dt).applyMatrix3(I).sub(Tthr); // dw = I⁻¹ T (w was 0, so no gyroscopic term)
-  return { F, T, rotor: ac.isHeli, snapped: ac.stats.partsLost };
+  return { F, T, rotor: ac.isHeli, bike: ac.isBike, snapped: ac.stats.partsLost };
 }
 
 export function forceMatch(t) {
@@ -58,6 +58,7 @@ export function forceMatch(t) {
     const Ft = t.F.clone(), Tt = t.T.clone();
     const f = flightAero(t.design, s);
     if (f.rotor) { out.push({ state: s, skipped: 'helicopter rotor forces' }); continue; }
+    if (f.bike) { out.push({ state: s, skipped: 'bike balance assist (bike.js) adds its own torques in flight' }); continue; }
     const scaleF = Math.max(1, Ft.length()), scaleT = Math.max(1, Tt.length());
     out.push({ state: s, tunnel: Ft.toArray().map((x) => +x.toFixed(3)), flight: f.F.toArray().map((x) => +x.toFixed(3)),
       errF: f.F.distanceTo(Ft) / scaleF, errT: f.T.distanceTo(Tt) / scaleT });
