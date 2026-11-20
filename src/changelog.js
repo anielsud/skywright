@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.87.0', items: [
+    "In the hangar, tap a part and then pick Mirror, 3 or 4 to change its symmetry. The 3 and 4 buttons only show up when you're building a rocket. The rocket's sky ladder now only shows in the chase and cockpit views.",
+  ] },
   { v: '1.86.0', items: [
     'Nothing floats any more! Seats, dashboards, rotor masts and engines are all properly bolted on, even when you put a cockpit on a car. Jet engines now land right where you tap them.',
   ] },
