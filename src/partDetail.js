@@ -944,8 +944,10 @@ export function airlinerNoseBuild(color, skinMat) {
   const loop = [], TH = WSIDE - 0.004;
   for (let i = 0; i <= 30; i++) { const th = -TH + 2 * TH * (i / 30); loop.push(lift(nosePt(edgeZ(th), th), th)); }
   for (let i = 0; i <= 30; i++) { const th = TH - 2 * TH * (i / 30), z = WTOP(th); loop.push(lift(nosePt(z, th), th)); }
-  b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(loop, true, 'centripetal'), 220, 0.032, 6, true), black);
-  for (const th of [0, -0.38, 0.38, -0.76, 0.76]) { const z0 = edgeZ(th), z1 = WTOP(th), pts = []; for (let k = 0; k <= 8; k++) { const z = z0 + (z1 - z0) * (k / 8); pts.push(lift(nosePt(z, th), th)); } b.add(pipe(pts, th ? 0.03 : 0.04, 6, 24), black); }
+  const fb = new Bag(); // (the window frames: their own mesh, so the seam check can tell them from the skin)
+  fb.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(loop, true, 'centripetal'), 220, 0.032, 6, true), black);
+  for (const th of [0, -0.38, 0.38, -0.76, 0.76]) { const z0 = edgeZ(th), z1 = WTOP(th), pts = []; for (let k = 0; k <= 8; k++) { const z = z0 + (z1 - z0) * (k / 8); pts.push(lift(nosePt(z, th), th)); } fb.add(pipe(pts, th ? 0.03 : 0.04, 6, 24), black); }
+  { const n0 = g.children.length; fb.to(g); for (const m of g.children.slice(n0)) m.userData.trim = 'window frames round the flight-deck glazing'; }
   // wipers parked along the bottom of the two front panes
   for (const sx of [-1, 1]) { const a = sx * 0.06, c = sx * 0.34; nb.add(tube([lift(nosePt(edgeZ(a) - 0.03, a), a, 0.006), lift(nosePt(edgeZ(a) + 0.05, a), a, 0.02), lift(nosePt(edgeZ(c) + 0.08, c), c, 0.02)], 0.012, 4, 8), black); } // (from a pivot on the skin below the glass: they lay on the glass)
   // radome seam, pitot probes, static ports
@@ -977,6 +979,7 @@ export function airlinerNoseBuild(color, skinMat) {
   }
   b.to(g); nb.to(g, true);
   g.userData.seats = [{ p: [0.55, 0.22, -2.54], s: 1 }, { p: [-0.55, 0.22, -2.54], s: 1 }];
+  g.userData.tube = { z0: -4.6, z1: 0, sec: (z) => { const T = nT(z), B = nB(z); return [(T + B) / 2, nW(z), (T - B) / 2]; } }; // its section, for skinBlend's seam with the tube behind
   return g;
 }
 // Helicopter rotor head: grips, pitch links, swashplate.

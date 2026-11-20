@@ -399,8 +399,11 @@ function heliCabin(c, lv) {
 // and at the back a tapered fairing with a bolted collar where a tail boom plugs in. The whole nose (userData.noseCap)
 // is put away by the assembly pass when another part covers the front (a Bubble Nose): then that is the cabin's nose.
 function heliCabinDetail(g, prof, c) {
-  const sx = 0.92, sy = 1.12, front = prof.findIndex(([, r]) => r > 0.5), z0 = prof[front][0], r0 = prof[front][1];
-  const geo = revolve(prof.slice(front), { sy, sx, yOff: heliYOff, segs: 48, cap: false });
+  const sx = 0.92, sy = 1.12, front = prof.findIndex(([, r]) => r > 0.5), z0 = prof[front][0], r0 = prof[front][1], [zt, rt] = prof.at(-1), yt = heliYOff(zt);
+  // the skin runs on into the tail-boom fairing (one surface: it used to be a separate cone, whose first ring's normals
+  // were bent along the axis by its end disc, so the joint shaded as a groove); uv as before over the cabin itself
+  const geo = revolve([...prof.slice(front), [zt + 0.12, rt * 0.94], [zt + 0.3, rt * 0.8], [zt + 0.31, 0]], { sy, sx, yOff: (z) => heliYOff(Math.min(z, zt)), segs: 48, cap: false });
+  { const P = geo.attributes.position, U = geo.attributes.uv; for (let i = 0; i < P.count; i++) U.setX(i, (P.getZ(i) - z0) / (zt - z0)); }
   const sk = new THREE.Mesh(geo, PM.skin(c)); sk.userData.openOk = 'glazed nose in front, boom fairing behind'; g.add(sk);
   const inner = new THREE.Mesh(geo, mat('heliIn', () => new THREE.MeshStandardMaterial({ color: 0x4a4e55, roughness: 0.9, side: THREE.BackSide }))); inner.castShadow = false; g.add(inner);
   // nose: half an ellipsoid on the front ring, glass above a chin line, paint below (with a wall)
@@ -431,21 +434,21 @@ function heliCabinDetail(g, prof, c) {
   g.userData.noseCap = { obj: nose, front: [0, 0, z0 - L * 0.6] };
   g.userData.seats = [{ p: [0.3, -0.45, z0 + 0.77], s: 0.8 }, { p: [-0.3, -0.45, z0 + 0.77], s: 0.8, role: 'crew' }]; // pilot right
   // tail-boom joint: the cabin's tail tapers on into a short fairing with a bolted collar (closed if nothing plugs in)
-  const [zt, rt] = prof.at(-1), yt = heliYOff(zt), tb = new Bag();
-  const cone = revolve([[zt - 0.011, 0], [zt - 0.01, rt * 1.02], [zt + 0.12, rt * 0.94], [zt + 0.3, rt * 0.8], [zt + 0.31, 0]], { segs: 32, sx, sy }); cone.translate(0, yt, 0); tb.add(cone, PM.skin(c));
-  const col = new THREE.TorusGeometry(rt * 0.84, 0.022, 6, 32); col.scale(sx, sy, 1); col.translate(0, yt, zt + 0.24); tb.add(col, M.darkMetal());
-  for (let k = 0; k < 10; k++) { const a = (k / 10) * Math.PI * 2, bolt = new THREE.SphereGeometry(0.012, 6, 4); bolt.translate(Math.cos(a) * rt * 0.86 * sx, yt + Math.sin(a) * rt * 0.86 * sy, zt + 0.24); tb.add(bolt, M.steel()); }
-  tb.to(g);
+  const cb = new Bag(), col = new THREE.TorusGeometry(rt * 0.84, 0.022, 6, 32); col.scale(sx, sy, 1); col.translate(0, yt, zt + 0.24); cb.add(col, M.darkMetal());
+  for (let k = 0; k < 10; k++) { const a = (k / 10) * Math.PI * 2, bolt = new THREE.SphereGeometry(0.012, 6, 4); bolt.translate(Math.cos(a) * rt * 0.86 * sx, yt + Math.sin(a) * rt * 0.86 * sy, zt + 0.24); cb.add(bolt, M.steel()); }
+  const n0 = g.children.length; cb.to(g); for (const m of g.children.slice(n0)) { m.userData.trim = 'boom collar: a bolted flange standing proud of the skin, not part of it'; m.userData.keepShape = true; }
+  g.userData.tube = { prof: [...prof, [zt + 0.12, rt * 0.94], [zt + 0.3, rt * 0.8]], sx, sy, yOff: (z) => heliYOff(Math.min(z, zt)) }; // the cabin with its boom fairing (skinBlend fairs a boom into it)
 }
 // Bubble nose: glass dome forward of the cabin bulkhead, painted chin, two seats, pilots, instrument console.
 function heliNose(c, lv) {
   const g = new THREE.Group(), R = 0.86;
+  g.userData.tube = { z0: -R * 1.45, z1: 0, sec: (z) => { const r = R * Math.sqrt(Math.max(0, 1 - (z / (R * 1.45)) ** 2)); return [0, r * 0.95, r * 1.08]; } }; // the bubble's section up to the cabin bulkhead (skinBlend's seam)
   const glass = new THREE.SphereGeometry(R, 32, 20, 0, Math.PI * 2, 0, Math.PI * 0.62); // dome around +Y, opening downwards
   glass.rotateX(-Math.PI / 2); glass.scale(0.95, 1.08, 1.45); // now opens towards +Z (the cabin)
   g.add(new THREE.Mesh(glass, PM.canopy(0x1d2a33)));
   const chin = new THREE.SphereGeometry(R * 1.015, 32, 10, Math.PI, Math.PI, Math.PI * 0.6, Math.PI * 0.4); // lower front quarter
   chin.scale(0.95, 1.08, 1.45); g.add(new THREE.Mesh(lv ? shell(chin, 0.02) : chin, PM.skin(c))); // detail: a wall thickness (seen from inside the bubble)
-  const frame = new THREE.TorusGeometry(R * 0.97, 0.035, 8, 40); frame.scale(0.95, 1.08, 1); g.add(new THREE.Mesh(frame, PM.skin(c)));
+  const frame = new THREE.TorusGeometry(R * 0.97, 0.035, 8, 40); frame.scale(0.95, 1.08, 1); const fm = new THREE.Mesh(frame, PM.skin(c)); fm.userData.trim = 'the bubble\'s frame: a ring standing proud round the glass edge'; fm.userData.keepShape = true; g.add(fm);
   const b = new Bag();
   if (lv) { // detail: the crew sit forward in the bubble (the cabin's front bulkhead is at z = 0), a low console ahead of them
     const con = new THREE.BoxGeometry(0.86, 0.12, 0.3); con.rotateX(-0.55); con.translate(0, -0.2, -0.92); b.add(con, M.black());
@@ -554,7 +557,7 @@ def({ id: 'fus_rocket', cat: 'fuselage', name: 'Rocket Stage', desc: 'Tall fuel 
     for (const z of [-4.4, -1.2, 2.2]) { const r = new THREE.TorusGeometry(0.905, 0.025, 6, 40); r.translate(0, 0, z); b.add(r, M.darkMetal()); }
     if (!lv) { g.add(new THREE.Mesh(revolve(ROCKET_PROF, { segs: 40, cap: true }), PM.skin(c))); b.to(g); return g; }
     // detail: a crew porthole in the capsule section with an astronaut looking out (the Rocket had no crew at all)
-    const W = { z: -3.75, r: 0.3 }, skin = revolve([...ROCKET_PROF.filter((q) => q[0] <= -4.4), ...Array.from({ length: 16 }, (_, k) => [-4.3 + k * 0.1, 0.9]), ...ROCKET_PROF.filter((q) => q[0] > -2.8)], { segs: 64, cap: true }); // denser rings round the porthole
+    const W = { z: -3.75, r: 0.3 }, skin = revolve([...ROCKET_PROF.filter((q) => q[0] <= -4.4), ...Array.from({ length: 16 }, (_, k) => [-4.3 + k * 0.1, 0.9]), ...Array.from({ length: 6 }, (_, k) => [-2.8 + k, 0.9]), ...Array.from({ length: 9 }, (_, k) => [3.0 + k * 0.1, 0.9]), ...ROCKET_PROF.filter((q) => q[0] >= 3.9)], { segs: 64, cap: true }); // denser rings round the porthole, and towards the tail (a stage stacked on it is faired in)
     const P = skin.attributes.position, d = new Float32Array(P.count), v = new THREE.Vector3();
     for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i); d[i] = v.x > 0 ? Math.hypot(Math.atan2(v.y, v.x) * 0.9, v.z - W.z) - W.r : 1; }
     const cut = clipGeometry(skin, d) || skin, sk = new THREE.Mesh(cut, PM.skin(c)); sk.userData.openOk = 'porthole: glazed'; g.add(sk);

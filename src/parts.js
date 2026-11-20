@@ -571,7 +571,8 @@ def({ id: 'ck_airliner', cat: 'cockpit', name: 'Airliner Nose', desc: 'Flight de
   build: (c, lv) => {
     if (lv) return airlinerNoseBuild(c, PM.skin(c)); // detail: windscreen cut into the skin, flight deck and crew seats
     const g = new THREE.Group();
-    g.add(new THREE.Mesh(revolve(smoothProfile([[-4.6, 0], [-4.4, 0.7], [-3.4, 1.4], [-1.8, 1.82], [0, 1.9]], 24), { segs: 40, yOff: (z) => (z + 0) * -0.04, cap: true }), PM.skin(c)));
+    const prof = smoothProfile([[-4.6, 0], [-4.4, 0.7], [-3.4, 1.4], [-1.8, 1.82], [0, 1.9]], 24), yOff = (z) => (z + 0) * -0.04;
+    g.add(new THREE.Mesh(revolve(prof, { segs: 40, yOff, cap: true }), PM.skin(c))); g.userData.tube = { prof, yOff };
     const ws = new THREE.Mesh(new THREE.SphereGeometry(1.86, 24, 8, Math.PI * 0.3, Math.PI * 0.4, Math.PI * 0.3, Math.PI * 0.12), PM.windscreen());
     ws.position.set(0, 0.0, -1.7); ws.scale.set(1, 1, 1.25); ws.rotation.y = Math.PI / 2 + Math.PI; g.add(ws);
     const radome = new THREE.Mesh(new THREE.SphereGeometry(0.72, 16, 12), PM.skin(0x30343a)); radome.position.z = -4.25; radome.scale.z = 0.5; g.add(radome);
@@ -697,9 +698,11 @@ carWheel('c_monster', 'Monster Wheel', 'Huge bouncy monster-truck wheel. Drives 
 
 // --- Extras ---
 def({ id: 'x_nosecone', cat: 'extra', name: 'Nose Cone', desc: 'Pointy aerodynamic nose cap.', mass: 30, hp: 300, color: C.darkgray,
-  build: (c) => { const g = new THREE.Group(); g.add(new THREE.Mesh(revolve(smoothProfile([[-1.6, 0], [-1.2, 0.18], [-0.5, 0.38], [0, 0.45]], 16).concat([[0.001, 0]]), { segs: 28 }), PM.skin(c))); return g; } });
+  build: (c, lv) => { const g = new THREE.Group(), prof = smoothProfile([[-1.6, 0], [-1.2, 0.18], [-0.5, 0.38], [0, 0.45]], lv ? 40 : 16); g.add(new THREE.Mesh(revolve(prof.concat([[0.001, 0]]), { segs: lv ? 48 : 28 }), PM.skin(c))); g.userData.tube = { prof }; return g; } }); // (tube: skinBlend fairs it into a body it is bolted to; detail: rings close enough for that)
 def({ id: 'x_tailcone', cat: 'extra', name: 'Tail Cone', desc: 'Tapered tail end.', mass: 40, hp: 300, color: C.white,
-  build: (c) => { const g = new THREE.Group(); g.add(new THREE.Mesh(revolve([[0, 0], [0.001, 0.5], [1.0, 0.38], [2.2, 0.12], [2.4, 0]], { segs: 28 }), PM.skin(c))); return g; } });
+  build: (c, lv) => { // (detail: the same lines cut into short rings, so the end it is bolted on by can be faired)
+    const g = new THREE.Group(), base = [[0, 0], [0.001, 0.5], [1.0, 0.38], [2.2, 0.12], [2.4, 0]], prof = lv ? base.flatMap((q, k) => (k < 2 ? [q] : Array.from({ length: 8 }, (_, j) => { const a = base[k - 1], f = (j + 1) / 8; return [a[0] + (q[0] - a[0]) * f, a[1] + (q[1] - a[1]) * f]; }))) : base;
+    g.add(new THREE.Mesh(revolve(prof, { segs: lv ? 48 : 28 }), PM.skin(c))); g.userData.tube = { prof }; return g; } });
 def({ id: 'x_tank', cat: 'extra', name: 'Drop Tank', desc: 'Streamlined pod. Adds weight down low.', mass: 160, hp: 300, color: C.gray,
   build: (c) => { const g = new THREE.Group(); g.add(new THREE.Mesh(revolve(smoothProfile([[-1.3, 0], [-1.0, 0.2], [0, 0.3], [1.0, 0.2], [1.5, 0]], 20), { segs: 20 }), PM.skin(c)));
     for (let i = 0; i < 3; i++) { const f = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.22, 0.3), PM.skin(c)); const p = new THREE.Object3D(); p.rotation.z = i * 2.09; f.position.set(0, 0.2, 1.2); p.add(f); g.add(p); } return g; } });

@@ -456,8 +456,164 @@ function exhaustHits(root) {
   return { paths: paths.length, hits };
 }
 
-export async function run({ presets = [], random = 20, placed = 20, fittings = 12, cars = 16, bikes = 10, speed = 10, floatOnly = false } = {}) {
-  const cb = [...carBuilds(cars), ...bikeBuilds(bikes)], pb = randomBuilds(placed, 7, { placed: true }), sb = speedBuilds(speed), designs = [...presets, ...randomBuilds(random), ...pb, ...fittingBuilds(fittings), ...cb, ...sb], report = [];
+// ---------- tube seams ----------
+// Where two tubes meet along each other (a nose, cone, boom or another body against a body's end, or plugged into its
+// tapering end; straight or up to 50 deg apart) the skin must run on smoothly: no inward dip across the seam and no
+// crease in the shading. Each join is sampled along the axis of one of the two tubes, across the seam (0.9 of its radius
+// either side), at 32 angles round it: a ray from outside towards the axis finds the visible skin; its distance from
+// the axis is the surface radius, the interpolated vertex normal is what the shading sees. Rays that pass through glass
+// or first hit another part are dropped (that skin is not part of this seam), and so are hits on trim (userData.trim:
+// window frames, a bubble's frame, a bolted flange: rings meant to stand proud). Fails where the skin sits below the
+// chord between its neighbours 5 % or 10 % of the radius away on either side by more than DIP_TOL of the radius (at
+// least DIP_MIN metres: a groove, a step, a dent), or where the shading normal turns by more than NRM_TOL degrees
+// between neighbouring samples (2.5 % of the radius apart: a crease).
+const DIP_TOL = 0.006, DIP_MIN = 0.006, NRM_TOL = 10; // (6 mm: below that it is facets and ring spacing, not a groove)
+// tube-shaped parts that are not bodies: their profile along local z ([z, r], r scaled by sx, sy)
+const TUBE_PARTS = {
+  x_nosecone: { prof: [[-1.6, 0], [-1.2, 0.18], [-0.5, 0.38], [0, 0.45]] },
+  x_tailcone: { prof: [[0, 0.5], [1.0, 0.38], [2.2, 0.12], [2.4, 0]] },
+  ck_airliner: { prof: [[-4.6, 0], [-4.4, 0.7], [-3.4, 1.4], [-1.8, 1.82], [0, 1.9]] },
+  ck_heli: { prof: Array.from({ length: 13 }, (_, k) => { const z = -1.247 + 1.247 * (k / 12); return [z, 0.86 * Math.sqrt(Math.max(0, 1 - (z / 1.247) ** 2))]; }), sx: 0.95, sy: 1.08 },
+};
+function tubeOf(obj, id) {
+  const b = obj?.userData.body, t = b ? { prof: b.prof, sx: b.sx ?? 1, sy: b.sy ?? 1, yOff: b.yOff } : TUBE_PARTS[id] ? { sx: 1, sy: 1, ...TUBE_PARTS[id] } : null;
+  if (!t) return null;
+  const W = (b?.skin || obj).matrixWorld, inv = W.clone().invert(), e = W.elements, sc = Math.cbrt(Math.abs(W.determinant()));
+  const z0 = t.prof[0][0], z1 = t.prof.at(-1)[0], rMax = Math.max(...t.prof.map((q) => q[1]));
+  const rAt = (z) => { // the widest the profile is at z (a flat end is a vertical step in it)
+    let best = 0; z = Math.min(z1, Math.max(z0, z));
+    for (let i = 1; i < t.prof.length; i++) { const a = t.prof[i - 1], c = t.prof[i], lo = Math.min(a[0], c[0]), hi = Math.max(a[0], c[0]); if (z < lo - 1e-9 || z > hi + 1e-9) continue; best = Math.max(best, hi - lo < 1e-9 ? Math.max(a[1], c[1]) : a[1] + (c[1] - a[1]) * ((z - a[0]) / (c[0] - a[0]))); }
+    return best;
+  };
+  const yo = (z) => (t.yOff ? t.yOff(z) : 0), l = new THREE.Vector3();
+  const f = (p) => { l.copy(p).applyMatrix4(inv); if (l.z < z0 || l.z > z1) return Math.max(z0 - l.z, l.z - z1) * sc; return (Math.hypot(l.x / t.sx, (l.y - yo(l.z)) / t.sy) - rAt(l.z)) * Math.min(t.sx, t.sy) * sc; };
+  const axis = new THREE.Vector3(e[8], e[9], e[10]).normalize(), L = z1 - z0;
+  const ends = [];
+  for (const [z, inward] of [[z0, 1], [z1, -1]]) { // an end with some width (a pointed tip is not a joint)
+    let r = 0; for (let k = 0; k <= 6; k++) r = Math.max(r, rAt(z + inward * L * 0.03 * (k / 6)));
+    if (r * sc > 0.02) ends.push({ z, wide: r > 0.3 * rMax, r: r * (t.sx + t.sy) / 2 * sc, c: new THREE.Vector3(0, yo(z), z).applyMatrix4(W), inward: axis.clone().multiplyScalar(inward) });
+  }
+  return { f, axis, ends, rMax: rMax * Math.max(t.sx, t.sy) * sc, rAtW: (p) => { l.copy(p).applyMatrix4(inv); return rAt(l.z) * (t.sx + t.sy) / 2 * sc; } };
+}
+export function tubeJoins(design, det) {
+  const T = det.parts.map((o, i) => (o ? tubeOf(o, design.parts[i].id) : null)), joins = [];
+  T.forEach((A, i) => {
+    if (!A) return;
+    T.forEach((B, j) => {
+      if (!B || j === i) return;
+      for (const e of A.ends) {
+        // tube to tube along each other (end to end, or plugged into B's end, up to 50 deg apart): this end against B's
+        // end, or inside B with B's end round it (a boom poking out through the side of a body is skinBlend's neck)
+        const like = (g) => Math.min(e.r, g.r) >= 0.3 * Math.max(e.r, g.r); // (a pointed tip against a wide end is not a joint)
+        const near = B.ends.some((g) => like(g) && g.c.distanceTo(e.c) < 0.3 * Math.max(e.r, g.r));
+        const plugged = B.f(e.c) <= 0.05 * B.rMax && B.rAtW(e.c) >= e.r && B.ends.some((g) => { const d = g.c.clone().sub(e.c), al = d.dot(e.inward); return like(g) && al > -0.05 && d.addScaledVector(e.inward, -al).length() <= Math.max(0.6 * e.r, 0.3 * g.r) + 0.02; });
+        if (!near && !plugged) continue;
+        if (Math.abs(e.inward.dot(B.axis)) < Math.cos(50 * Math.PI / 180)) continue;
+        // the seam: where A's axis leaves B, going from this end into A
+        const C = e.c.clone(), step = e.r / 20;
+        for (let k = 0; k < 400 && B.f(C) < 0; k++) C.addScaledVector(e.inward, step);
+        if (joins.some((J) => J.C.distanceTo(C) < 0.3 * Math.min(J.R, e.r) && ((J.i === i && J.j === j) || (J.i === j && J.j === i)))) continue;
+        joins.push({ i, j, C, axis: e.inward.clone(), R: Math.max(e.r, A.rAtW(C)) });
+      }
+    });
+  });
+  return joins;
+}
+export function tubeSeams(design, det, root, { cols = 32, rows = 72, trace = null } = {}) {
+  root.updateMatrixWorld(true);
+  const owner = new Map(), all = [];
+  det.parts.forEach((o, i) => o?.traverse((m) => owner.set(m, i)));
+  const shown = (o) => { for (let x = o; x; x = x.parent) if (!x.visible) return false; return true; };
+  root.traverse((m) => {
+    if (!m.isMesh || m.isSkinnedMesh || m.userData.isDisc || m.userData.decal || m.userData.near || !shown(m)) return;
+    const mt = m.material; if (!mt || Array.isArray(mt) || mt.blending === THREE.AdditiveBlending || mt.colorWrite === false || mt.side === THREE.BackSide) return;
+    all.push(m);
+  });
+  const rc = new THREE.Raycaster(), out = [], nm = new THREE.Matrix3();
+  for (const J of tubeJoins(design, det)) {
+    const A = J.axis, u0 = Math.abs(A.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0), e1 = u0.clone().addScaledVector(A, -u0.dot(A)).normalize(), e2 = A.clone().cross(e1);
+    const W = Math.min(0.9 * J.R + 0.1, 1.6), far = 3 * J.R + 1, ds = (2 * W) / rows;
+    let worst = 0, worstN = 0, at = null, atN = null, valid = 0;
+    for (let c = 0; c < cols; c++) {
+      const th = ((c + 0.37) / cols) * Math.PI * 2, u = e1.clone().multiplyScalar(Math.cos(th)).addScaledVector(e2, Math.sin(th));
+      const col = [];
+      for (let k = 0; k < rows; k++) { // (an even count: never exactly on the seam plane, where a ray runs along the end caps)
+        const s = -W + (2 * W * (k + 0.5)) / rows, base = J.C.clone().addScaledVector(A, s);
+        rc.set(base.clone().addScaledVector(u, far), u.clone().negate()); rc.far = far;
+        const hits = rc.intersectObjects(all, false); let h = null;
+        for (const x of hits) { if (x.object.material.transparent) break; if (x.object.userData.trim) continue; h = x; break; }
+        const pi = h ? owner.get(h.object) : -1;
+        if (!h || (pi !== J.i && pi !== J.j)) { col.push(null); continue; }
+        const d = h.point.clone().sub(J.C), r = d.addScaledVector(A, -d.dot(A)).length();
+        const n = (h.normal ? h.normal.clone() : h.face.normal.clone()).applyMatrix3(nm.getNormalMatrix(h.object.matrixWorld)).normalize();
+        col.push({ s, r, n, pi, mesh: h.object });
+      }
+      if (trace && trace.j === out.length && Math.abs(c - trace.c) < 0.5) trace.rows = col.map((q, k) => (q ? [+q.s.toFixed(3), +q.r.toFixed(4), q.pi, q.mesh.material.type + ":" + (q.mesh.material.color?.getHexString?.() || "") + ":" + q.mesh.geometry.attributes.position.count, k ? +(Math.acos(Math.min(1, Math.max(-1, col[k - 1]?.n.dot(q.n) ?? 1))) * 180 / Math.PI).toFixed(1) : 0] : null));
+      // dip: below the radius on both sides (within the window); normal jump between neighbours
+      for (let k = 0; k < col.length; k++) {
+        const q = col[k]; if (!q) continue; valid++;
+        // how far below the chord between its neighbours either side (5 % and 10 % of the radius away) the skin sits:
+        // a seam groove or step shows; a long gentle waist between two parts of different sizes does not
+        let dip = 0;
+        for (const f of [0.05, 0.1]) { const h = Math.max(1, Math.round((f * J.R) / ds)), a = col[k - h], b = col[k + h]; if (a && b) dip = Math.max(dip, (a.r + b.r) / 2 - q.r); }
+        if (dip > worst) { worst = dip; at = { th: +(th * 180 / Math.PI).toFixed(0), s: +q.s.toFixed(3) }; }
+        const p = col[k - 1];
+        // (not right at the edge of a glazed stretch, where the rays graze the glass's frame or edge)
+        if (p && col[k - 2] !== null && col[k + 1] !== null) { const ang = Math.acos(Math.min(1, Math.max(-1, p.n.dot(q.n)))) * 180 / Math.PI; if (ang > worstN) { worstN = ang; atN = { th: +(th * 180 / Math.PI).toFixed(0), s: +q.s.toFixed(3) }; } }
+      }
+    }
+    const tol = Math.max(DIP_MIN, DIP_TOL * J.R);
+    out.push({ a: `#${J.i} ${design.parts[J.i].id}`, b: `#${J.j} ${design.parts[J.j].id}`, R: +J.R.toFixed(3), C: J.C.toArray().map((x) => +x.toFixed(2)), dip: +worst.toFixed(4), dipAt: at, tol: +tol.toFixed(4), nrm: +worstN.toFixed(1), nrmAt: atN, cover: +(valid / (cols * rows)).toFixed(2), bad: worst > tol || worstN > NRM_TOL });
+  }
+  return out;
+}
+
+// Tubes joined to tubes (seam check): a body with a nose, cone, cockpit section, boom or another body bolted to its
+// front or back end, end to end, sometimes at an angle, with a gap or overlap of a few cm, sized to match or not, some
+// rolled; a boom plugged into a body's tail. Whole builds resized or mirrored.
+const SEAM_BODIES = ['fus_light', 'fus_sport', 'fus_airliner', 'fus_pod', 'fus_glider', 'fus_cargo', 'fus_heli', 'fus_rocket', 'fus_boom', 'fus_fighter'];
+const SEAM_FRONT = ['x_nosecone', 'ck_airliner', 'x_nosecone', 'ck_heli', 'fus_pod', 'fus_boom', 'fus_rocket'];
+const SEAM_BACK = ['x_tailcone', 'fus_boom', 'x_tailcone', 'fus_rocket', 'fus_light'];
+const _ends = new Map();
+function partEnds(id) { // the part's ends with real width, in part space (z, r, y, facing: -1 front, +1 back)
+  if (_ends.has(id)) return _ends.get(id);
+  const o = PARTS[id].build(PARTS[id].color, { detail: 2 }); o.updateMatrixWorld(true);
+  const t = tubeOf(o, id), out = t ? t.ends.filter((e) => e.wide).map((e) => ({ z: e.c.z, y: e.c.y, r: e.r, facing: e.inward.z > 0 ? -1 : 1 })) : [];
+  o.traverse((m) => m.geometry?.dispose?.()); _ends.set(id, out); return out;
+}
+export function seamBuilds(n = 16, seed = 71) {
+  const R = rng(seed), pick = (a) => a[Math.floor(R() * a.length)], out = [];
+  for (let k = 0; k < n; k++) {
+    const body = SEAM_BODIES[k % SEAM_BODIES.length], parts = [], add = (p) => (parts.push(p), parts.length - 1);
+    const f = add(newPart(body, [0, 0, 0]));
+    if (R() < 0.3) { const d = 0.8 + R() * 0.5; parts[f].scale = [d, d, 0.8 + R() * 0.5]; }
+    const ps = parts[f].scale || [1, 1, 1];
+    for (const side of [-1, 1]) {
+      const pe = partEnds(body).find((e) => e.facing === side); if (!pe) continue;
+      const id = pick(side < 0 ? SEAM_FRONT : SEAM_BACK), ends = partEnds(id);
+      // the child's end that meets the parent: its own back end on a front join (or its front end, turned round)
+      let ce = ends.find((e) => e.facing === -side), yaw = 0;
+      if (!ce) { ce = ends.find((e) => e.facing === side); yaw = 180; } if (!ce) continue;
+      const match = (pe.r * (ps[0] + ps[1]) / 2) / ce.r, s = R() < 0.5 ? match : match * (0.7 + R() * 0.6), sc = R() < 0.3 ? [s, s, s * (0.7 + R() * 0.6)] : [s, s, s];
+      const pitch = R() < 0.35 ? (R() < 0.5 ? -1 : 1) * (6 + R() * 12) : 0, roll = R() < 0.25 ? 90 : 0;
+      const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(pitch), THREE.MathUtils.degToRad(yaw), THREE.MathUtils.degToRad(roll)));
+      const gap = (R() - 0.5) * 0.04 * pe.r * side; // a few cm apart or into each other
+      const P = new THREE.Vector3(0, pe.y * ps[1], pe.z * ps[2] + gap), cl = new THREE.Vector3(0, ce.y * sc[1], ce.z * sc[2]).applyQuaternion(q);
+      const pos = P.sub(cl).toArray().map((v) => +v.toFixed(3));
+      const p = newPart(id, pos, { parent: f }); p.quat = q.toArray(); p.scale = sc; add(p);
+    }
+    if (R() < 0.35 && body !== 'fus_boom' && !parts.some((p) => p.pos[2] > 0)) { // a boom pushed into the body's tail (into the tail cone, or out through its side), if nothing is on that end already
+      const p = newPart('fus_boom', [0, 0.1 * ps[1], (body === 'fus_airliner' ? 13 : body === 'fus_cargo' ? 10 : 5) * ps[2] * 0.85], { parent: f }); add(p);
+    }
+    if (k % 3 === 1) parts.forEach((p) => { p.scale = (p.scale || [1, 1, 1]).map((v) => v * 1.3); p.pos = p.pos.map((v) => v * 1.3); });
+    if (k % 3 === 2) parts.forEach((p) => { p.pos[0] = -p.pos[0]; p.mirror = !p.mirror; p.quat = [p.quat[0], -p.quat[1], -p.quat[2], p.quat[3]]; });
+    out.push({ name: `seams ${k} (${body}: ${parts.slice(1).map((p) => p.id).join(', ')})`, parts });
+  }
+  return out;
+}
+
+export async function run({ presets = [], random = 20, placed = 20, fittings = 12, cars = 16, bikes = 10, speed = 10, seams = 16, floatOnly = false } = {}) {
+  const cb = [...carBuilds(cars), ...bikeBuilds(bikes)], pb = randomBuilds(placed, 7, { placed: true }), sb = speedBuilds(speed), designs = [...presets, ...randomBuilds(random), ...pb, ...fittingBuilds(fittings), ...cb, ...sb, ...seamBuilds(seams)], report = [];
   // floating parts: every stock vehicle, the random builds re-placed the way the hangar places parts, the car and bike
   // builds and the speed builds (the plain random and fitting builds put parts at fixed spots, which can be in mid-air:
   // the hangar never does that)
@@ -469,7 +625,7 @@ export async function run({ presets = [], random = 20, placed = 20, fittings = 1
       const det = buildDesign(d, root, { quick: false, near: true }); root.updateMatrixWorld(true);
       const open = [];
       det.parts.forEach((o, i) => { if (!o || SKIP_CATS.has(PARTS[d.parts[i].id]?.cat)) return; o.traverse((m) => { if (skipMesh(m)) return; for (const s of openShells(m)) open.push({ part: d.parts[i].id, mat: m.material.name || m.material.type, ...s }); }); });
-      res = { name: d.name, open, exhaust: exhaustHits(root), nav: navLightIssues(d, det, root) };
+      res = { name: d.name, open, exhaust: exhaustHits(root), nav: navLightIssues(d, det, root), seams: tubeSeams(d, det, root) };
       if (floatCheck.has(d)) { // no floating parts: at rest, and with the wheels pushed up and steered (the rig must follow)
         const rest = floatingParts(root, det, d), moves = det.parts.some((o) => o?.userData.corner); // (nothing moves without car corners)
         poseCar(det, 0.6, 0.45); const moved = moves ? floatingParts(root, det, d) : rest; poseCar(det, 0, 0);

@@ -6,7 +6,9 @@ in varied places, resized and mirrored) in headless Chrome, the way the hangar s
   - car exhausts whose path runs through glass, and
   - floating parts: every piece must touch (within 1 cm) the rest of the vehicle, at rest and with the wheels pushed up
     their travel and steered, on every stock vehicle, the 20 random builds re-placed the way the hangar places parts,
-    16 seeded random car builds and 10 bike builds.
+    16 seeded random car builds and 10 bike builds, and
+  - tube seams (every vehicle, plus 16 seeded random tube-to-tube builds): where two tubes meet end to end, the skin
+    across the seam has no inward dip and no crease in the shading.
 
 Run from anywhere:  python3 tools/test/meshcheck.py [--random 20] [--json out.json]
 Same requirements as smoke.py (Chrome + the websockets package). See tools/test/README.md.
@@ -32,7 +34,7 @@ async def main(a):
             await cdp.send('Runtime.enable')
             await cdp.send('Page.navigate', url=origin + '/')
             await cdp.wait_for('window.__sky && window.__sky.hangar', 60, 'the app to boot')
-            report = await cdp.js(f"import('/tools/test/meshcheck.js').then((m) => m.run({{ presets: __sky.presets, random: {a.random}, placed: {a.placed}, cars: {a.cars}, bikes: {a.bikes}, speed: {a.speed} }}))", timeout=1800)
+            report = await cdp.js(f"import('/tools/test/meshcheck.js').then((m) => m.run({{ presets: __sky.presets, random: {a.random}, placed: {a.placed}, cars: {a.cars}, bikes: {a.bikes}, speed: {a.speed}, seams: {a.seams} }}))", timeout=1800)
     finally:
         proc.kill(); proc.wait(); shutil.rmtree(profile, ignore_errors=True)
         if srv:
@@ -43,10 +45,14 @@ async def main(a):
     for r in report:
         ex = r.get('exhaust', {})
         fl, fm = r.get('floating', []), r.get('floatingMoved', [])
-        issues = len(r.get('open', [])) + len(ex.get('hits', [])) + len(r.get('nav', [])) + len(fl) + len(fm) + (1 if r.get('error') else 0)
+        sm = [j for j in r.get('seams', []) if j['bad']]
+        issues = len(r.get('open', [])) + len(ex.get('hits', [])) + len(r.get('nav', [])) + len(fl) + len(fm) + len(sm) + (1 if r.get('error') else 0)
         bad += issues
         car = f'  floating {len(fl)} at rest, {len(fm)} moved ({r["pieces"]} pieces)' if 'floating' in r else ''
-        print(f'{"FAIL" if issues else "PASS"}  {r["name"]:<44} open shells {len(r.get("open", []))}  exhaust paths {ex.get("paths", 0)}, through glass {len(ex.get("hits", []))}{car}')
+        sj = f'  tube seams {len(r["seams"]) - len(sm)}/{len(r["seams"])} smooth' if r.get('seams') else ''
+        print(f'{"FAIL" if issues else "PASS"}  {r["name"]:<44} open shells {len(r.get("open", []))}  exhaust paths {ex.get("paths", 0)}, through glass {len(ex.get("hits", []))}{car}{sj}')
+        for j in sm[:8]:
+            print(f'      tube seam {j["a"]} | {j["b"]} at {j["C"]}: dip {j["dip"] * 1000:.1f} mm (tol {j["tol"] * 1000:.1f}) at {j["dipAt"]}, normal jump {j["nrm"]} deg at {j["nrmAt"]}')
         for o in fl[:8]:
             print(f'      floating: {o["what"]:<60} {o["n"]} piece(s), biggest {o["size"]} m at {o["at"]}, {o.get("gap")} m off')
         for o in fm[:8]:
@@ -72,6 +78,7 @@ if __name__ == '__main__':
     ap.add_argument('--cars', type=int, default=16, help='number of random car builds checked for floating parts (default 16)')
     ap.add_argument('--bikes', type=int, default=10, help='number of random bike builds checked for floating parts (default 10)')
     ap.add_argument('--speed', type=int, default=10, help='number of random speed builds (SR-71 parts) checked for open shells and floating parts (default 10)')
+    ap.add_argument('--seams', type=int, default=16, help='number of random tube-to-tube builds (default 16)')
     ap.add_argument('--json', help='write the full report here')
     ap.add_argument('--url', help='check an already running server (e.g. http://127.0.0.1:8000) instead of serving the repo')
     ap.add_argument('--port', type=int), ap.add_argument('--cdp-port', type=int)
