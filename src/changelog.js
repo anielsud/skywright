@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.102.0', items: [
+    "Riders and pilots look like real people now: smooth arms and legs that bend at the elbows and knees, proper shoulders and hands, and no more twitchy, jagged arms on the motorbikes.",
+  ] },
   { v: '1.101.0', items: [
     "Engines rev like the real thing: spin the wheels and the engine screams, lock the brakes and the tyres squeal, and a boat's motor revs up when it jumps out of the water.",
   ] },
