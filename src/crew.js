@@ -304,6 +304,13 @@ class Rig {
     // the cushion and its rake), the body moves so its lowest point (plus clothing) rests on the cushion, sunk a
     // little, and its back (plus what's worn on it) meets the seat back. The controls stay where the vehicle put them.
     this.base = V();
+    // the torso as an obstacle for the arms: its cross-section at each height up the spine (an ellipse round the
+    // middle of the measured, posed torso), padded by what's worn over it
+    if (HM) { const T2 = torsoPoints(D, this.spine, this.body), wear = outfit.vest ? 0.04 : outfit.tee || outfit.shirt ? 0.006 : 0.012, ell = [];
+      for (let y = 0.05; y <= D.spine + 0.02; y += 0.025) { let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        for (const p of T2.spine) if (Math.abs(p.y - y) < 0.02) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); z0 = Math.min(z0, p.z); z1 = Math.max(z1, p.z); }
+        if (Number.isFinite(x0)) ell.push({ y, cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, rx: (x1 - x0) / 2 + wear, rz: (z1 - z0) / 2 + wear }); }
+      this.torsoEll = ell; }
     const TP = opts.seat && HM ? torsoPoints(D, this.spine, this.body) : null;
     if (TP) {
       const st = opts.seat, sM = new THREE.Matrix4().compose(V(0, 0.03, 0), spineQ, V(1, 1, 1)), pts = [...TP.hips, ...TP.spine.map((p) => p.clone().applyMatrix4(sM))];
@@ -467,6 +474,9 @@ class Rig {
       const Y0 = c.clone().sub(S); Y0.addScaledVector(X, -Y0.dot(X)).normalize(); const Z0 = V().crossVectors(X, Y0);
       const Yt = V(), Zt = V(), Wt = V(), d = V(), E = V(), u = V(), f = V(), pole = V(), u0 = V(), v0 = V(), th2 = V(), Nn = V(), M4 = new THREE.Matrix4();
       const AR = this.armRest?.[k], spInv = q[B.spine].clone().invert(), wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+      const ELL = this.torsoEll, spP = p[B.spine], ap = V();
+      // [from (0 shoulder / 1 elbow), to (1 elbow / 2 wrist), how far, the arm's radius there]
+      const SAMPLES = [[0, 1, 0.45, 0.05], [0, 1, 0.7, 0.048], [0, 1, 1.0, 0.045], [1, 2, 0.25, 0.042], [1, 2, 0.5, 0.038], [1, 2, 0.75, 0.033]];
       const score = (th, ph, out) => {
         Yt.copy(Y0).multiplyScalar(Math.cos(th)).addScaledVector(Z0, Math.sin(th)); Zt.crossVectors(X, Yt);
         Wt.copy(c).addScaledVector(X, -G.x).addScaledVector(Yt, -G.y).addScaledVector(Zt, -G.z);
@@ -484,9 +494,17 @@ class Rig {
         th2.copy(X).addScaledVector(f, -X.dot(f)).normalize(); const tau = wrapA(Math.atan2(V().crossVectors(fx, th2).dot(f), fx.dot(th2)) - (AR ? AR.twist0 : 0));
         // humeral rotation: the upper arm's frame in the spine's, against the rest pose's; its twist about the arm
         let hum = 0; if (AR) { const qU = new THREE.Quaternion().setFromRotationMatrix(M4.makeBasis(ux, u, uz)), rel = AR.uInSpine.clone().invert().multiply(spInv.clone().multiply(qU)); hum = wrapA(2 * Math.atan2(rel.y, rel.w)); }
-        let cost = (sh / 0.8) ** 2 + (flex / 1.05) ** 2 + (dev / 0.35) ** 2 + (tau / 1.2) ** 2 + (hum / 1.0) ** 2 + miss * 1e4;
+        // the arm stays outside the torso: points along the upper arm and forearm (each padded by the arm's radius)
+        // against the torso's cross-sections; the cost grows with how deep any goes in
+        let inside = 0;
+        if (ELL) for (const [a0, a1, t, rad] of SAMPLES) {
+          ap.copy(a0 === 0 ? S : E).lerp(a1 === 1 ? E : Wt, t).sub(spP).applyQuaternion(spInv);
+          const fy = (ap.y - ELL[0].y) / 0.025, i0 = Math.floor(fy); if (i0 < 0 || i0 >= ELL.length - 1) continue;
+          const e = ELL[i0], e1 = ELL[i0 + 1], w2 = fy - i0, cx = e.cx + (e1.cx - e.cx) * w2, cz = e.cz + (e1.cz - e.cz) * w2, rx = e.rx + (e1.rx - e.rx) * w2 + rad, rz = e.rz + (e1.rz - e.rz) * w2 + rad;
+          const q2 = Math.hypot((ap.x - cx) / rx, (ap.z - cz) / rz); if (q2 < 1) inside = Math.max(inside, (1 - q2) * Math.min(rx, rz)); }
+        let cost = (sh / 0.8) ** 2 + (flex / 1.05) ** 2 + (dev / 0.35) ** 2 + (tau / 1.2) ** 2 + (hum / 1.0) ** 2 + miss * 1e4 + (inside / 0.01) ** 2 * 4;
         if (Math.abs(tau) > 1.75 || Math.abs(hum) > 1.6 || Math.abs(flex) > 1.4 || Math.abs(dev) > 0.6) cost += 1e3; // (past the joints' range)
-        if (out) { out.W = Wt.clone(); out.Y = Yt.clone(); out.pole = pole.clone(); out.angles = { sh, hum, tau, flex, dev, cost }; }
+        if (out) { out.W = Wt.clone(); out.Y = Yt.clone(); out.pole = pole.clone(); out.angles = { sh, hum, tau, flex, dev, cost, inside }; }
 
         return cost;
       };
@@ -497,7 +515,7 @@ class Rig {
       else grid(0, 0, Math.PI, 49);
       for (const span of [0.12, 0.04, 0.012]) grid(best.th, best.ph, span, 7);
       this.armSol[k] = { th: best.th, ph: best.ph };
-      const out = {}; score(best.th, best.ph, out); (this.armAngles ||= {})[k] = Object.fromEntries(Object.entries(out.angles).map(([kk, v]) => [kk, +(kk === 'cost' ? v : v * 180 / Math.PI).toFixed(1)])); void hint; return out;
+      const out = {}; score(best.th, best.ph, out); (this.armAngles ||= {})[k] = Object.fromEntries(Object.entries(out.angles).map(([kk, v]) => [kk, +(kk === 'cost' || kk === 'inside' ? v : v * 180 / Math.PI).toFixed(3)])); void hint; return out;
     };
     const arm = (k, S, iu, iff, ih, hint) => {
       const c = hands[k], rest = this.restN?.[k], r = radii[k] ?? 0.03, G = this.hand.G(k, rest ? 0 : r), M = new THREE.Matrix4();
