@@ -5,8 +5,8 @@
 // segment (hips, spine, head, upper arm, forearm, hand, thigh, shin). A segment's frame in the source (origin at its
 // root joint, +Y along it, -Z to the front / the inside of the bend, as the rig's bones) is moved onto the rig bone's
 // rest transform, stretched along its length to the rig's limb length, so the rig's IK still puts the hands on the
-// grips and the feet on the pedals. The fingers are curled round a grip first (joint by joint about the knuckle line),
-// and the hand is turned so the palm faces the grip (the rig's hand: grip along local X, palm to -Z). Vertices blend
+// grips and the feet on the pedals. The hand goes to the rig's hand bone, which the rig places on its grip from this
+// hand's measured parameters (handModel); the fingers wrap the grip's bar (its radius from the rig). Vertices blend
 // the segment transforms with the source's own skin weights (linear blend skinning), then those weights are summed
 // per rig bone for the runtime skeleton. Everything is computed once per figure kind and cached by crew.js.
 import * as THREE from 'three';
@@ -52,12 +52,64 @@ function frame(o, dir, front) {
   return new THREE.Matrix4().makeBasis(x, y, z).setPosition(o);
 }
 
+// ---- the hand as parameters measured from the mesh, per side, in the hand's frame (origin at the wrist, +Y to the
+// middle knuckle, +Z the back of the hand, X along the knuckle line; the rig's hand bones use the same frame) ----
+//   gx, gy: where a gripped bar's axis crosses the palm (mid-knuckle line, across the distal palm crease 1.2 cm short
+//           of the knuckles); palm: skin depth of the palm below the bone line there; finger: the finger's palm-side
+//           flesh depth below its bone line;
+//   thumb: which way along X the thumb lies (+1 / -1); G(r): the bar's centre for a bar of radius r (palm on it).
+const handCache = new Map();
+export function handModel(scale = 1.07) {
+  if (!BODY) return null; if (handCache.has(scale)) return handCache.get(scale);
+  const { bones: SB, byName: N } = BODY, J = (n, end = 'h') => SB[N[n]][end].clone().multiplyScalar(scale), out = {};
+  for (const s of ['R', 'L']) {
+    const wr = J('wrist.' + s), k2 = J('finger2-1.' + s), k5 = J('finger5-1.' + s), fy = J('finger3-1.' + s).sub(wr).normalize();
+    const back = new THREE.Vector3().crossVectors(k5.clone().sub(k2), fy).normalize(); if (back.y < 0) back.negate(); // (the back of the hand is up in the rest pose)
+    const src = frame(wr, fy, back.clone().negate()), inv = src.clone().invert(), L = (p) => p.clone().applyMatrix4(inv);
+    const kn = [2, 3, 4, 5].map((f) => L(J(`finger${f}-1.${s}`)));
+    const gx = (kn[0].x + kn[3].x) / 2, gy = kn.reduce((a, p) => a + p.y, 0) / 4 - 0.012;
+    const thumb = Math.sign(L(J('finger1-2.' + s)).x - gx) || 1;
+    const isPalm = SB.map((b) => segmentOf(b.name) === 'hand' + s && !/^finger/.test(b.name)), f32 = N['finger3-2.' + s];
+    const a = J('finger3-2.' + s), ab = J('finger3-2.' + s, 't').sub(a), abl = ab.length(); ab.normalize();
+    let palm = 0, fr = 0, fn = 0; const v = V();
+    for (let i = 0; i < BODY.n; i++) {
+      let wh = 0, wf = 0;
+      for (let k = 0; k < 4; k++) { const w = BODY.bw[i * 4 + k] / 255, bi = BODY.bi[i * 4 + k]; if (isPalm[bi]) wh += w; if (bi === f32) wf += w; }
+      if (wh < 0.5 && wf < 0.6) continue;
+      v.set(BODY.pos[i * 3], BODY.pos[i * 3 + 1], BODY.pos[i * 3 + 2]).multiplyScalar(scale);
+      if (wh >= 0.5) { const l = L(v); if (Math.abs(l.y - gy) < 0.012 && Math.abs(l.x - gx) < 0.03) palm = Math.max(palm, -l.z); }
+      if (wf >= 0.6) { const d = v.clone().sub(a), t = d.dot(ab); if (t > 0.2 * abl && t < 0.8 * abl) { const off = d.addScaledVector(ab, -t); if (off.dot(back) < 0) { fr = Math.max(fr, -off.dot(back)); fn = 1; } } } // (the palm-side flesh: what touches the bar)
+    }
+    out[s] = { src, inv, gx, gy, palm, finger: fn ? fr : 0.009, thumb, G: (r) => V(gx, gy, -(palm + r)) };
+  }
+  handCache.set(scale, out); return out;
+}
+
+// The torso's surface in its rig bones' local frames (as poseBody places it): { hips: [Vector3], spine: [Vector3] }.
+// The rig uses it to sit the body in a seat: the buttocks on the cushion, the back against the seat back.
+const torsoCache = new Map();
+export function torsoPoints(DIM, scale = 1.07) {
+  if (!BODY) return null; const key = scale + '|' + DIM.spine; if (torsoCache.has(key)) return torsoCache.get(key);
+  const { bones: SB, byName: N } = BODY, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), FRONT = V(0, 0, -1);
+  const hipC = J('upperleg01.L').add(J('upperleg01.R')).multiplyScalar(0.5), neckB = J('neck01'), up = neckB.clone().sub(hipC);
+  const Lh = frame(hipC, up, FRONT).invert();
+  const Ls = new THREE.Matrix4().makeScale(1, DIM.spine / (up.length() - 0.03), 1).multiply(frame(hipC.clone().add(V(0, 0.03, 0)), up, FRONT).invert());
+  const segOf = SB.map((b) => segmentOf(b.name)), out = { hips: [], spine: [] };
+  for (let i = 0; i < BODY.n; i++) {
+    let wh = 0, ws = 0; for (let k = 0; k < 4; k++) { const w = BODY.bw[i * 4 + k], g = segOf[BODY.bi[i * 4 + k]]; if (g === 'hips') wh += w; else if (g === 'spine') ws += w; }
+    if (wh + ws < 200) continue; // (mostly torso)
+    const v = V(BODY.pos[i * 3], BODY.pos[i * 3 + 1], BODY.pos[i * 3 + 2]).multiplyScalar(scale);
+    if (wh >= ws) out.hips.push(v.applyMatrix4(Lh)); else out.spine.push(v.applyMatrix4(Ls));
+  }
+  torsoCache.set(key, out); return out;
+}
+
 // rig: { p: [Vector3], q: [Quaternion], B: bone ids, DIM }. Returns { pos, nrm, skinIndex, skinWeight, seg (per vertex
 // rig segment name), along (0..1 along its segment), eye, index, head: { centre, radii } (head-bone local) }.
 export function poseBody(rig, { grip = true, scale = 1.07, seat = { y: -0.09, back: 0.125 } } = {}) {
   const S = BODY; if (!S) return null;
   const { bones: SB, byName: N } = S, { B, DIM } = rig, J = (n, end = 'h') => SB[N[n]][end].clone().multiplyScalar(scale);
-  const FRONT = V(0, 0, -1), UP = V(0, 1, 0);
+  const FRONT = V(0, 0, -1), UP = V(0, 1, 0), HM = handModel(scale);
   const rigM = (i, at = null) => new THREE.Matrix4().compose(at || rig.p[i], rig.q[i], V(1, 1, 1));
   // segment frames in the source, the rig bone each goes to, and its length there
   const hipC = J('upperleg01.L').add(J('upperleg01.R')).multiplyScalar(0.5), neckB = J('neck01');
@@ -71,57 +123,93 @@ export function poseBody(rig, { grip = true, scale = 1.07, seat = { y: -0.09, ba
     const kk = s === 'R' ? '' : 'L';
     segs['uArm' + s] = { src: frame(sh, el.clone().sub(sh), FRONT), bone: B['uArm' + s], len: [el.distanceTo(sh), DIM.upper] };
     segs['fArm' + s] = { src: frame(el, wr.clone().sub(el), FRONT), bone: B['fArm' + s], len: [wr.distanceTo(el), DIM.fore] };
-    // the hand: +Y from the wrist to the middle knuckle, the back of the hand to +Z (palm to -Z, onto the grip)
-    const k2 = J('finger2-1.' + s), k5 = J('finger5-1.' + s), mid = J('finger3-1.' + s), fy = mid.clone().sub(wr).normalize();
-    let back = new THREE.Vector3().crossVectors(k5.clone().sub(k2), fy).normalize(); if (back.y < 0) back.negate(); // (the back of the hand faces up in the rest pose)
-    segs['hand' + s] = { src: frame(wr, fy, back.clone().negate()), bone: B['fArm' + s], at: 'wrist', len: null, knuckle: k5.clone().sub(k2).normalize(), back }; // ('front' = the palm: it goes to the rig's -Z, onto the grip)
+    segs['hand' + s] = { src: HM[s].src, bone: B['hand' + s], len: null }; // (the rig's hand bone: placed on its grip by the rig)
     segs['thigh' + s] = { src: frame(hp, kn.clone().sub(hp), FRONT), bone: B['thigh' + s], len: [kn.distanceTo(hp), DIM.thigh] };
     segs['shin' + s] = { src: frame(kn, an.clone().sub(kn), FRONT), bone: B['shin' + s], len: [an.distanceTo(kn), DIM.shin] };
     void kk;
   }
-  // finger curl (source space): each finger bone's transform = rotations about its joints, knuckle to tip
+  // fingers round the grip (hand-local, then back to source space). The bar lies along the hand's X at (gy, -(palm+r)).
+  // The fingers are made parallel (their spread closed about the palm normal), so each lies in a plane across the bar;
+  // then each phalanx in turn rotates about the bar's direction, towards the bar, until its far joint touches the
+  // bar's surface offset by the finger's radius (two circles intersecting), within the joint's range. The thumb is
+  // first opposed under the palm (swung about the hand's axis till it lies across the bar), then wraps the same way
+  // from the other side.
   const boneM = SB.map(() => null);
-  if (grip) for (const s of ['R', 'L']) {
-    const h = segs['hand' + s], ax = h.knuckle.clone(), palm = h.back.clone().negate(), wr = J('wrist.' + s), fy = J('finger3-1.' + s).sub(wr).normalize();
-    const rotAt = (jt, axis, ang) => new THREE.Matrix4().makeTranslation(jt.x, jt.y, jt.z).multiply(new THREE.Matrix4().makeRotationAxis(axis, ang)).multiply(new THREE.Matrix4().makeTranslation(-jt.x, -jt.y, -jt.z));
-    const towardPalm = (axis, ang, dir) => (dir.clone().applyAxisAngle(axis, ang).dot(palm) > dir.dot(palm) ? ang : -ang);
-    for (let f = 2; f <= 5; f++) { // the four fingers curl round the grip, joint by joint about the knuckle line
-      const ang = [1.3, 1.6, 1.1]; let M = new THREE.Matrix4();
-      for (let k = 1; k <= 3; k++) { const nm = `finger${f}-${k}.${s}`, jt = J(nm), dir = J(nm, 't').sub(jt); M = M.clone().multiply(rotAt(jt, ax, towardPalm(ax, ang[k - 1], dir))); boneM[N[nm]] = M.clone(); }
+  if (grip && rig.grips) for (const s of ['R', 'L']) {
+    const gp = rig.grips[s]; if (!gp) continue;
+    const H = HM[s], Hs = H.src, Hi = H.inv, Lp = (p) => p.clone().applyMatrix4(Hi), cy = H.gy, cz = -(H.palm + gp.r);
+    const X = V(1, 0, 0), Y = V(0, 1, 0), Z = V(0, 0, 1), wrapA = (x) => Math.atan2(Math.sin(x), Math.cos(x));
+    const rotL = (P, axis, a) => new THREE.Matrix4().makeTranslation(P.x, P.y, P.z).multiply(new THREE.Matrix4().makeRotationAxis(axis, a)).multiply(new THREE.Matrix4().makeTranslation(-P.x, -P.y, -P.z));
+    // Each joint lands on the bar's offset circle further round it, in the direction the finger already travels round
+    // the bar (so a phalanx is a chord of the wrap, never a cut across the bar); if the circle is out of reach, the
+    // phalanx points at the bar.
+    const wrap = (names, R, M0, lims) => {
+      let M = M0.clone(), dir = 0;
+      names.forEach((nm, k) => {
+        const P = Lp(J(nm)).applyMatrix4(M), T = Lp(J(nm, 't')).applyMatrix4(M), uy = T.y - P.y, uz = T.z - P.z, l = Math.hypot(uy, uz);
+        if (l > 1e-4) {
+          const qy = P.y - cy, qz = P.z - cz, qd = Math.hypot(qy, qz), b0 = Math.atan2(uz, uy), th0 = Math.atan2(qz, qy);
+          if (!dir) dir = Math.sign(qy * uz - qz * uy) || 1; // the way round the bar the finger goes
+          const ratio = (R * R - qd * qd - l * l) / (2 * l * qd);
+          let a;
+          if (Math.abs(ratio) <= 1) {
+            const dA = Math.acos(ratio); let best = null;
+            for (const bb of [th0 + dA, th0 - dA]) { // the segment's direction for each intersection
+              const ey = qy + l * Math.cos(bb), ez = qz + l * Math.sin(bb), adv = wrapA(Math.atan2(ez, ey) - th0) * dir;
+              if (adv > 1e-4 && (best === null || adv < best.adv)) best = { adv, bb };
+            }
+            a = best ? wrapA(best.bb - b0) : wrapA(Math.atan2(-qz, -qy) - b0);
+          } else a = qd > R ? wrapA(Math.atan2(-qz, -qy) - b0) : 0;
+          M = rotL(P, X, THREE.MathUtils.clamp(a, -lims[k], lims[k])).multiply(M);
+        }
+        boneM[N[nm]] = Hs.clone().multiply(M).multiply(Hi);
+      });
+    };
+    for (let f = 2; f <= 5; f++) {
+      const n1 = `finger${f}-1.${s}`, P = Lp(J(n1)), u = Lp(J(n1, 't')).sub(P);
+      wrap([n1, `finger${f}-2.${s}`, `finger${f}-3.${s}`], gp.r + H.finger, rotL(P, Z, Math.atan2(u.x, u.y)), [1.6, 1.9, 1.4]);
     }
-    { // the thumb: swung across the palm (opposition), then flexed over the fingers
-      const j1 = J('finger1-1.' + s), d1 = J('finger1-1.' + s, 't').sub(j1), opp = rotAt(j1, fy, towardPalm(fy, 1.0, d1));
-      let M = opp.clone();
-      for (let k = 1; k <= 3; k++) { const nm = `finger1-${k}.${s}`, jt = J(nm).applyMatrix4(opp), dir = J(nm, 't').applyMatrix4(opp).sub(jt), fx = new THREE.Vector3().crossVectors(dir, palm).normalize();
-        M = M.clone(); M.premultiply(new THREE.Matrix4()); const R = rotAt(jt, fx, towardPalm(fx, [0.25, 0.45, 0.5][k - 1], dir)); M = R.clone().multiply(M); boneM[N[nm]] = M.clone(); }
+    {
+      const c = Lp(J('finger1-1.' + s)), P2 = Lp(J('finger1-2.' + s)), u = Lp(J('finger1-2.' + s, 't')).sub(P2);
+      const pre = rotL(c, Y, wrapA(Math.PI - Math.atan2(u.x, u.z)));
+      boneM[N['finger1-1.' + s]] = Hs.clone().multiply(pre).multiply(Hi);
+      wrap(['finger1-2.' + s, 'finger1-3.' + s], gp.r + H.finger * 1.15, pre, [1.2, 1.4]);
     }
-    // where the fist's hole is (between the curled middle finger and the palm): the rig's grip goes through it
-    const mid2 = J('finger3-2.' + s).applyMatrix4(boneM[N['finger3-2.' + s]]), palmC = J('finger3-1.' + s).clone().lerp(wr, 0.35);
-    h.hole = mid2.clone().lerp(palmC, 0.5);
   }
   // segment transform: rig bone rest transform * stretch along Y * inverse(source frame)
   for (const [k, g] of Object.entries(segs)) {
-    let tgt;
-    if (g.at === 'wrist') { const q = rig.q[g.bone], w = V(0, DIM.fore, 0).applyQuaternion(q).add(rig.p[g.bone]); tgt = rigM(g.bone, w); g.wristAt = w; }
-    else tgt = rigM(g.bone);
     const st = g.len ? g.len[1] / g.len[0] : 1;
-    g.M = tgt.clone().multiply(new THREE.Matrix4().makeScale(1, st, 1)).multiply(g.src.clone().invert());
+    g.M = rigM(g.bone).multiply(new THREE.Matrix4().makeScale(1, st, 1)).multiply(g.src.clone().invert());
     g.key = k;
   }
-  // the hand: shift it so the fist's hole lands on the grip point (DIM.hand past the wrist, on the forearm's axis)
-  if (grip) for (const s2 of ['R', 'L']) { const h = segs['hand' + s2]; if (!h.hole) continue;
-    const at = h.hole.clone().applyMatrix4(h.M), want = V(0, DIM.fore + DIM.hand, 0).applyQuaternion(rig.q[h.bone]).add(rig.p[h.bone]);
-    h.M = new THREE.Matrix4().makeTranslation(want.x - at.x, want.y - at.y, want.z - at.z).multiply(h.M); }
   // blend
   const n = S.n, pos = new Float32Array(n * 3), seg = new Array(n), along = new Float32Array(n), skI = new Uint16Array(n * 4), skW = new Float32Array(n * 4);
   const segOfBone = SB.map((b) => segs[segmentOf(b.name)] || segs.spine), v = V(), acc = V(), tmp = V();
+  // The finger joints blend as dual quaternions (rigid transforms blended without the collapse linear blending gives
+  // at a strongly bent knuckle); the rig segments then blend linearly as before.
+  const dq = boneM.map((M) => { if (!M) return null; const q = new THREE.Quaternion(), t = V(); M.decompose(t, q, V());
+    return [q.x, q.y, q.z, q.w, 0.5 * (t.x * q.w + t.y * q.z - t.z * q.y), 0.5 * (-t.x * q.z + t.y * q.w + t.z * q.x), 0.5 * (t.x * q.y - t.y * q.x + t.z * q.w), -0.5 * (t.x * q.x + t.y * q.y + t.z * q.z)]; });
+  const ID = [0, 0, 0, 1, 0, 0, 0, 0], bl = new Float64Array(8);
+  const dqApply = (p) => { // p <- blended dual quaternion applied to p
+    const n2 = Math.hypot(bl[0], bl[1], bl[2], bl[3]); for (let k = 0; k < 8; k++) bl[k] /= n2;
+    const [x, y, z, w, dx, dy, dz, dw] = bl, q = new THREE.Quaternion(x, y, z, w);
+    const tx = 2 * (-dw * x + dx * w - dy * z + dz * y), ty = 2 * (-dw * y + dx * z + dy * w - dz * x), tz = 2 * (-dw * z - dx * y + dy * x + dz * w);
+    p.applyQuaternion(q).add(V(tx, ty, tz));
+  };
   for (let i = 0; i < n; i++) {
     v.set(S.pos[i * 3], S.pos[i * 3 + 1], S.pos[i * 3 + 2]).multiplyScalar(scale); acc.set(0, 0, 0);
+    let anyF = false; for (let k = 0; k < 4; k++) if (S.bw[i * 4 + k] && dq[S.bi[i * 4 + k]]) anyF = true;
+    if (anyF) {
+      bl.fill(0); let ref = null;
+      for (let k = 0; k < 4; k++) { const w = S.bw[i * 4 + k] / 255; if (w <= 0) continue; const d = dq[S.bi[i * 4 + k]] || ID;
+        if (!ref) ref = d; const sg = (d[0] * ref[0] + d[1] * ref[1] + d[2] * ref[2] + d[3] * ref[3]) < 0 ? -w : w; for (let j = 0; j < 8; j++) bl[j] += d[j] * sg; }
+      dqApply(v);
+    }
     const wsum = {}; let best = null, bw = -1;
     for (let k = 0; k < 4; k++) {
       const w = S.bw[i * 4 + k] / 255; if (w <= 0) continue;
       const b = S.bi[i * 4 + k], g = segOfBone[b];
-      tmp.copy(v); if (boneM[b]) tmp.applyMatrix4(boneM[b]); tmp.applyMatrix4(g.M); acc.addScaledVector(tmp, w);
+      tmp.copy(v).applyMatrix4(g.M); acc.addScaledVector(tmp, w);
       wsum[g.bone] = (wsum[g.bone] || 0) + w; const gw = (wsum[g.bone]); if (gw > bw) { bw = gw; best = g; }
     }
     pos[i * 3] = acc.x; pos[i * 3 + 1] = acc.y; pos[i * 3 + 2] = acc.z;

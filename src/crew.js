@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { PARTS } from './parts.js';
-import { bodyReady, body, poseBody } from './body.js';
+import { bodyReady, body, poseBody, handModel, torsoPoints } from './body.js';
 await bodyReady; // (the people's mesh: loaded once, before any figure is built; without it the procedural figure stands in)
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
@@ -120,7 +120,7 @@ function ellipsoid(c, rx, ry, rz, { w = 24, h = 16, phi = [0, Math.PI * 2], th =
 }
 // front-facing spherical patch (centre of the patch towards -Z): half-angle a around, theta band t0..t1 from the top
 const frontPatch = (r, a, t0, t1, w = 16, h = 6) => new THREE.SphereGeometry(r, w, h, Math.PI * 1.5 - a, a * 2, t0, t1 - t0);
-function torusAB(R, r, arc, seg = 24) { return new THREE.TorusGeometry(R, r, 6, seg, arc); }
+function torusAB(R, r, arc, seg = 24, rad = 6) { return new THREE.TorusGeometry(R, r, rad, seg, arc); }
 function boxG(sx, sy, sz, c) { const g = new THREE.BoxGeometry(sx, sy, sz); g.translate(c.x, c.y, c.z); return g; }
 // A smooth skinned tube through stations (rig space, rest pose): { c: centre, z: depth axis hint, rx, rz, col, b: [bone0, bone1],
 // w: weight of bone1 }. Each ring is a superellipse (n = 2 ellipse, larger = squarer); the ends are closed with a domed cap.
@@ -244,8 +244,8 @@ class Kit {
 
 // ---------- the rig ----------
 // Bones (flat, all children of the rig root; transforms in rig space)
-const B = { hips: 0, spine: 1, head: 2, uArmR: 3, fArmR: 4, uArmL: 5, fArmL: 6, thighR: 7, shinR: 8, thighL: 9, shinL: 10, ctlA: 11, ctlB: 12, pedR: 13, pedL: 14, ctlC: 15 };
-const NB = 16;
+const B = { hips: 0, spine: 1, head: 2, uArmR: 3, fArmR: 4, uArmL: 5, fArmL: 6, thighR: 7, shinR: 8, thighL: 9, shinL: 10, ctlA: 11, ctlB: 12, pedR: 13, pedL: 14, ctlC: 15, handR: 16, handL: 17 };
+const NB = 18;
 const DIM = { lean: 0.2, spine: 0.5, shoulderW: 0.19, shoulderUp: 0.44, upper: 0.29, fore: 0.27, hand: 0.05, hipW: 0.1, thigh: 0.45, shin: 0.43, ankle: 0.07 };
 
 // Where the controls are, per control kind (rig space, scale 1). Each returns the rest transforms of its bones and
@@ -277,13 +277,42 @@ class Rig {
     this.pegs = opts.pegs || [V(-0.24, -0.62, 0.0), V(0.24, -0.62, 0.0)]; this.groundY = opts.groundY ?? -1.1;
     const C = CTL[ctl] || CTL.none, D = DIM;
     this.C = C;
+    // the hand's grip geometry: the body mesh's measured hand, or the procedural fist (bar 6.2 cm past the wrist, 1.6 cm
+    // under the bone line, thumb on the inboard side)
+    const HM = outfit.head !== 'bubble' ? handModel() : null;
+    this.hand = HM ? { G: (k, r) => HM[k].G(r), thumb: { R: HM.R.thumb, L: HM.L.thumb } } : { G: () => V(0, 0.062, -0.016), thumb: { R: -1, L: 1 } };
     // static joints
     const spineQ = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), D.lean);
-    this.spineQ = spineQ; this.spinePos = V(0, 0.03, 0);
+    this.spineQ = spineQ;
+    // sitting in the seat: given the seat's surfaces (opts.seat, rig space: cushion top, the seat back's front face at
+    // the cushion and its rake), the body moves so its lowest point (plus clothing) rests on the cushion, sunk a
+    // little, and its back (plus what's worn on it) meets the seat back. The controls stay where the vehicle put them.
+    this.base = V();
+    const TP = opts.seat && HM ? torsoPoints(D) : null;
+    if (TP) {
+      const st = opts.seat, sM = new THREE.Matrix4().compose(V(0, 0.03, 0), spineQ, V(1, 1, 1)), pts = [...TP.hips, ...TP.spine.map((p) => p.clone().applyMatrix4(sM))];
+      const seatT = outfit.shorts ? 0.008 : 0.012, backT = outfit.vest ? 0.045 : outfit.tee || outfit.shirt ? 0.006 : 0.012;
+      let minY = Infinity; for (const p of pts) minY = Math.min(minY, p.y - seatT);
+      const dy = st.panTop - 0.012 - minY, tk = Math.tan(st.tilt); let dz = Infinity;
+      for (const p of pts) { const y = p.y + dy; if (y < st.panTop + 0.06 || y > st.backTop) continue; dz = Math.min(dz, st.backZ + tk * (y - st.panTop) + 0.008 - (p.z + backT)); }
+      this.base.set(0, dy, Number.isFinite(dz) ? dz : 0);
+      this.seatY = st.panTop;
+    }
+    this.spinePos = V(0, 0.03, 0).add(this.base);
     const sp = (x, y, z) => V(x, y, z).applyQuaternion(spineQ).add(this.spinePos);
     this.neck = sp(0, D.spine, 0.0);
     this.shR = sp(D.shoulderW, D.shoulderUp, 0.02); this.shL = sp(-D.shoulderW, D.shoulderUp, 0.02);
-    this.hipR = V(D.hipW, 0, 0); this.hipL = V(-D.hipW, 0, 0);
+    this.hipR = V(D.hipW, 0, 0).add(this.base); this.hipL = V(-D.hipW, 0, 0).add(this.base);
+    // the wheel comes to the seated driver: its column slides (along the rig's z) until the hands' grips are a relaxed
+    // reach from the shoulders (the wrist at 85% of the arm's length, plus the hand), elbows bent as a driver's are
+    this.col = C.col ? C.col.clone() : null;
+    if (ctl === 'wheel') {
+      const tq = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), C.tilt), off = V(Math.sin(1.15) * C.wheelR, Math.cos(1.15) * C.wheelR, 0).applyQuaternion(tq);
+      const want = 0.85 * (D.upper + D.fore) + this.hand.G('R', 0.017).length(), dist = (dz) => C.col.clone().add(off).add(V(0, 0, dz)).distanceTo(this.shR);
+      let lo = -0.3, hi = 0.4; // dist falls as dz grows (the wheel nears the driver)
+      for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if (dist(m) > want) lo = m; else hi = m; }
+      this.col.z += (lo + hi) / 2;
+    }
     this.state = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 };
     this.q = Array.from({ length: NB }, () => new THREE.Quaternion());
     this.p = Array.from({ length: NB }, () => V());
@@ -291,20 +320,20 @@ class Rig {
   }
   // control bone transforms + hand/foot targets
   controls(s) {
-    const C = this.C, p = this.p, q = this.q, hands = {}, feet = {};
+    const C = this.C, p = this.p, q = this.q, hands = {}, feet = {}, axes = {}, radii = {}; // a grip: its bar's centre (hands), direction towards the thumb (axes) and radius
     const e = new THREE.Euler();
     if (this.ctl === 'stick' || this.ctl === 'cyclic') {
       // stick: pitch back (+) tilts the grip towards the pilot (+z), roll right (+) tilts it right
       p[B.ctlA].copy(C.stickBase); q[B.ctlA].setFromEuler(e.set(s.pitch * 0.32, 0, -s.roll * 0.3));
       const grip = V(0, C.stickLen, 0).applyQuaternion(q[B.ctlA]).add(C.stickBase);
-      hands.R = grip.clone().add(V(0.015, -0.015, 0.02));
+      hands.R = V(0, C.stickLen - 0.03, 0).applyQuaternion(q[B.ctlA]).add(C.stickBase); axes.R = V(0, 1, 0).applyQuaternion(q[B.ctlA]); radii.R = 0.024; void grip;
       if (this.ctl === 'stick') {
         p[B.ctlB].copy(C.thrBase); q[B.ctlB].setFromEuler(e.set(-0.55 + s.thr * 1.1, 0, 0)); // forward = more throttle
-        hands.L = V(0, C.thrLen, 0).applyQuaternion(q[B.ctlB]).add(C.thrBase).add(V(-0.01, 0.01, 0.0));
+        hands.L = V(0, C.thrLen, 0).applyQuaternion(q[B.ctlB]).add(C.thrBase); axes.L = V(0, 1, 0).applyQuaternion(q[B.ctlB]); radii.L = 0.028;
       } else {
         // collective: lever from a pivot behind, pointing forward; raised with the throttle
         p[B.ctlB].copy(C.collBase); q[B.ctlB].setFromEuler(e.set(-Math.PI / 2 + 0.18 + s.thr * 0.35, 0, 0));
-        hands.L = V(0, C.collLen, 0).applyQuaternion(q[B.ctlB]).add(C.collBase).add(V(0, 0.03, 0));
+        hands.L = V(0, C.collLen - 0.04, 0).applyQuaternion(q[B.ctlB]).add(C.collBase); axes.L = V(0, 1, 0).applyQuaternion(q[B.ctlB]); radii.L = 0.024;
       }
     } else if (this.ctl === 'yoke') {
       // column hinged at the floor: pull = back; the yoke turns about the column's top axis
@@ -312,18 +341,18 @@ class Rig {
       const top = V(0, C.colLen, 0).applyQuaternion(q[B.ctlA]).add(C.colBase);
       // the yoke stands nearly upright facing the pilot and turns about the axis towards the pilot (local Z)
       p[B.ctlB].copy(top); q[B.ctlB].setFromEuler(e.set(0.12, 0, 0)).multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), -s.roll * 0.7));
-      for (const [k, sx] of [['R', 1], ['L', -1]]) hands[k] = V(sx * C.yokeR, 0.02, 0.0).applyQuaternion(q[B.ctlB]).add(top);
+      for (const [k, sx] of [['R', 1], ['L', -1]]) { hands[k] = V(sx * C.yokeR * 1.025, 0.03, 0.0).applyQuaternion(q[B.ctlB]).add(top); axes[k] = V(sx * 0.075, 1, 0).applyQuaternion(q[B.ctlB]); radii[k] = 0.022; } // (the horns)
     } else if (this.ctl === 'wheel') {
       const tq = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), C.tilt); // wheel plane leans back towards the driver
-      p[B.ctlA].copy(C.col); q[B.ctlA].copy(tq).multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), s.steer));
-      for (const [k, a] of [['R', -1.15], ['L', 1.15]]) hands[k] = V(Math.sin(-a) * C.wheelR, Math.cos(a) * C.wheelR, 0.02).applyQuaternion(q[B.ctlA]).add(C.col);
+      p[B.ctlA].copy(this.col); q[B.ctlA].copy(tq).multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), s.steer));
+      for (const [k, a] of [['R', -1.15], ['L', 1.15]]) { hands[k] = V(Math.sin(-a) * C.wheelR, Math.cos(a) * C.wheelR, 0).applyQuaternion(q[B.ctlA]).add(this.col); axes[k] = V(Math.cos(a), Math.sin(a), 0).multiplyScalar(Math.sign(a)).applyQuaternion(q[B.ctlA]); radii[k] = 0.017; } // (the rim's tangent, thumbs towards 12 o'clock)
     } else if (this.ctl === 'bars') { // on the grips (rig space, from the fork), else resting on the tank
-      hands.L = s.hands?.[0] || V(-0.2, 0.05, -0.42); hands.R = s.hands?.[1] || V(0.2, 0.05, -0.42);
+      hands.L = s.hands?.[0] || V(-0.2, 0.05, -0.42); hands.R = s.hands?.[1] || V(0.2, 0.05, -0.42); axes.L = V(1, 0, 0); axes.R = V(-1, 0, 0); radii.L = radii.R = 0.016; // (thumbs inboard)
       feet.L = this.pegs[0].clone().lerp(V(this.pegs[0].x - 0.1, this.groundY + 0.06, this.pegs[0].z - 0.12), s.foot || 0); // a foot down when stopped
       feet.R = this.pegs[1].clone();
-      return { hands, feet };
+      return { hands, feet, axes, radii };
     } else {
-      hands.R = V(0.16, 0.0, -0.32); hands.L = V(-0.16, 0.0, -0.32); // resting on the thighs
+      hands.R = V(0.13, -0.04, -0.3); hands.L = V(-0.13, -0.04, -0.3); axes.R = V(-1, 0, 0); axes.L = V(1, 0, 0); radii.R = radii.L = 0.06; // resting on the thighs (a hand draped over a thigh is a grip on a thick bar)
     }
     // pedals: rudder pedals swing fore and aft; a car has a throttle pedal under the right foot
     const pz = -0.86, py = -0.34;
@@ -336,10 +365,11 @@ class Rig {
     }
     feet.R = V(0, 0.1, 0.05).applyQuaternion(q[B.pedR]).add(p[B.pedR]);
     feet.L = V(0, 0.1, 0.05).applyQuaternion(q[B.pedL]).add(p[B.pedL]);
-    return { hands, feet };
+    return { hands, feet, axes, radii };
   }
   pose(s) {
-    const D = DIM, p = this.p, q = this.q, { hands, feet } = this.controls(s), bars = this.ctl === 'bars';
+    const D = DIM, p = this.p, q = this.q, { hands, feet, axes, radii } = this.controls(s), bars = this.ctl === 'bars';
+    this.grips = { R: { r: radii.R ?? 0.03, c: hands.R, axis: axes.R }, L: { r: radii.L ?? 0.03, c: hands.L, axis: axes.L } };
     if (bars) { // a rider: bent forward over the tank (more when tucked at speed), leaning further into a turn than the bike
       const fwd = (this.o.hump ? 0.6 : 0.42) + (s.tuck || 0) * (this.o.hump ? 0.42 : 0.22), lean = s.lean || 0;
       this.hipAt = V(lean * 0.12, -Math.abs(lean) * 0.03, (s.tuck || 0) * 0.04);
@@ -349,7 +379,7 @@ class Rig {
       this.neck = sp(0, D.spine, 0.0); this.shR = sp(D.shoulderW, D.shoulderUp, 0.02); this.shL = sp(-D.shoulderW, D.shoulderUp, 0.02);
       this.hipR = V(D.hipW, 0, 0).add(this.hipAt); this.hipL = V(-D.hipW, 0, 0).add(this.hipAt);
     }
-    if (bars) p[B.hips].copy(this.hipAt); else p[B.hips].set(0, 0, 0);
+    if (bars) p[B.hips].copy(this.hipAt); else p[B.hips].copy(this.base);
     q[B.hips].identity();
     p[B.spine].copy(this.spinePos); q[B.spine].copy(this.spineQ);
     p[B.head].copy(this.neck);
@@ -369,12 +399,42 @@ class Rig {
       p[iu].copy(S); frame(E.clone().sub(S), q[iu]);
       p[iff].copy(E); frame(T.clone().sub(E), q[iff]);
     };
-    const handL = D.fore + D.hand;
     // riders: elbows bent back and a little out and down (not winged out sideways), knees forward against the tank
     // (a sport rider's knees go out over the fairing's sides, gripping the tank, not through the fairing)
     const eR = bars ? V(0.45, -0.45, 0.75) : V(0.55, -0.8, 0.25), kR = bars ? (this.o.hump ? V(0.5, 0.5, -0.9) : V(0.35, 0.6, -1)) : V(0.1, 1, -0.4);
-    limb(this.shR, hands.R, D.upper, handL, eR, B.uArmR, B.fArmR, -1);
-    limb(this.shL, hands.L, D.upper, handL, V(-eR.x, eR.y, eR.z), B.uArmL, B.fArmL, -1);
+    // the elbow settles where the forearm crosses its bar square, on whichever side is nearer the usual elbow direction
+    const gripPole = (S, T, a, b, hint, t) => {
+      const d = T.clone().sub(S), L = clamp(d.length(), Math.abs(a - b) + 1e-3, a + b - 1e-3); d.normalize();
+      const x = (a * a - b * b + L * L) / (2 * L), y = Math.sqrt(Math.max(1e-6, a * a - x * x)), tn = t.clone().normalize();
+      const u = tn.clone().addScaledVector(d, -tn.dot(d)), tp = u.length(); if (tp < 1e-3) return hint; u.divideScalar(tp);
+      const v = V().crossVectors(d, u), c = clamp((L - x) * tn.dot(d) / (y * tp), -1, 1), sn = Math.sqrt(1 - c * c);
+      const p1 = u.clone().multiplyScalar(c).addScaledVector(v, sn), p2 = u.clone().multiplyScalar(c).addScaledVector(v, -sn);
+      const h = hint.clone().addScaledVector(d, -hint.dot(d)).normalize();
+      return p1.dot(h) >= p2.dot(h) ? p1 : p2;
+    };
+    // Each hand is placed on its grip first and the arm follows. The hand's frame: X along the bar (the thumb's side
+    // from the hand's measurements), Y (wrist to knuckles) square to the bar and in line with the forearm (a straight
+    // wrist), Z = X x Y; the wrist is where the bar's centre sits in that frame (this.hand.G(r)) away from the bar.
+    // The forearm's direction depends on where the wrist is, so hand and arm are solved together (a few rounds).
+    const arm = (k, S, iu, iff, ih, hint) => {
+      const c = hands[k], r = radii[k] ?? 0.03, G = this.hand.G(k, r), M = new THREE.Matrix4();
+      const X = (axes[k] || V(k === 'R' ? -1 : 1, 0, 0)).clone().normalize().multiplyScalar(this.hand.thumb[k]);
+      const Y = c.clone().sub(S); Y.addScaledVector(X, -Y.dot(X)).normalize();
+      const Z = V(), W = V();
+      for (let it = 0; it < 4; it++) {
+        Z.crossVectors(X, Y); W.copy(c).addScaledVector(X, -G.x).addScaledVector(Y, -G.y).addScaledVector(Z, -G.z);
+        limb(S, W, D.upper, D.fore, gripPole(S, W, D.upper, D.fore, hint, X), iu, iff, -1);
+        const f = W.clone().sub(p[iff]).normalize(); f.addScaledVector(X, -f.dot(X)); if (f.lengthSq() > 1e-6) Y.copy(f.normalize());
+      }
+      Z.crossVectors(X, Y); W.copy(c).addScaledVector(X, -G.x).addScaledVector(Y, -G.y).addScaledVector(Z, -G.z);
+      limb(S, W, D.upper, D.fore, gripPole(S, W, D.upper, D.fore, hint, X), iu, iff, -1);
+      p[ih].copy(W); q[ih].setFromRotationMatrix(M.makeBasis(X, Y, Z));
+      // the forearm takes half the twist between elbow and hand (the radius rolls over the ulna along its length)
+      const Yf = V(0, 1, 0).applyQuaternion(q[iff]), Xf = V(1, 0, 0).applyQuaternion(q[iff]), Xh = X.clone().addScaledVector(Yf, -X.dot(Yf));
+      if (Xh.lengthSq() > 1e-6) { const tw = Math.atan2(V().crossVectors(Xf, Xh).dot(Yf), Xf.dot(Xh.normalize())); q[iff].premultiply(new THREE.Quaternion().setFromAxisAngle(Yf, tw / 2)); }
+    };
+    arm('R', this.shR, B.uArmR, B.fArmR, B.handR, eR);
+    arm('L', this.shL, B.uArmL, B.fArmL, B.handL, V(-eR.x, eR.y, eR.z));
     limb(this.hipR, feet.R, D.thigh, D.shin, kR, B.thighR, B.shinR, 1);
     limb(this.hipL, feet.L, D.thigh, D.shin, V(-kR.x, kR.y, kR.z), B.thighL, B.shinL, 1);
   }
@@ -388,7 +448,7 @@ function figureGeometry(rig) {
   const route = (hex, gloss) => (typeof gloss === 'string' ? gloss : gloss ? (hex === o.visor ? 'glass' : 'paint') : hex === skin ? 'skin' : hex === hair ? 'hair' : (hex === o.glove || hex === o.boot || hex === 0x1d1d1f || hex === 0x15161a) ? 'rubber' : 'fabric');
   const at = (i, geo, hex, gloss = false) => k.add(geo, hex, i, route(hex, gloss), geo.attributes.skinIndex ? null : R(i)); // (a loft is built in rig space)
   // ---- the body: the skinned human mesh posed onto this rig (body.js), coloured by what the outfit covers ----
-  const BP = o.head !== 'bubble' && body() ? poseBody({ p: rig.p, q: rig.q, B, DIM }, { seat: rig.ctl === 'bars' ? { y: -0.08, back: null } : { y: -0.09, back: 0.125 } }) : null;
+  const BP = o.head !== 'bubble' && body() ? poseBody({ p: rig.p, q: rig.q, B, DIM, grips: rig.grips }, { seat: rig.ctl === 'bars' ? { y: -0.08, back: null } : rig.seatY != null ? { y: rig.seatY - 0.012, back: null } : { y: -0.09, back: 0.125 } }) : null;
   if (BP) {
     const n = BP.pos.length / 3, cols = new Float32Array(n * 3), slotOf = new Array(n), c = new THREE.Color();
     const neckSkin = o.head === 'headset' || o.head === 'leather' || o.head === 'cap';
@@ -449,6 +509,7 @@ function figureGeometry(rig) {
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(Q, 3)); g.setAttribute('color', new THREE.BufferAttribute(C, 3));
     g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4)); g.setIndex(ix); g.computeVertexNormals();
     k.add(g, 0, B.spine, slot);
+    return { Q, ix, rimV, ecount }; // (the shell as built: what's attached to it follows its real edge)
   };
   const wOf = (i, bone) => { let w = 0; for (let q = 0; q < 4; q++) if (BP.skinIndex[i * 4 + q] === bone) w += BP.skinWeight[i * 4 + q]; return w; };
   const seg = (i) => BP.seg[i], tt = (i) => BP.along[i];
@@ -562,16 +623,16 @@ function figureGeometry(rig) {
     // a gloved (or bare) hand gripping a bar along local X: palm, four curled fingers in three phalanges, a thumb wrapped
     // over them, and (gloves) a hard knuckle guard on the back
     if (BP) continue; // (the body mesh has its own hands)
-    const hs = o.glove ? 'rubber' : 'skin', hy = D.fore;
-    at(f, ellipsoid(V(0, hy + 0.035, 0.002), 0.042, 0.05, 0.026), hand, hs); // palm / back of the hand
+    const hs = o.glove ? 'rubber' : 'skin', hy = 0, hb = f === B.fArmR ? B.handR : B.handL; // (on the hand bone: origin at the wrist)
+    at(hb, ellipsoid(V(0, hy + 0.035, 0.002), 0.042, 0.05, 0.026), hand, hs); // palm / back of the hand
     const ctr = V(0, hy + 0.062, -0.016), rad = 0.021;
     [[-0.027, 0.0088, 0.95], [-0.009, 0.0096, 1.05], [0.009, 0.0094, 1.0], [0.026, 0.0082, 0.85]].forEach(([x, r, l]) => {
       const xs = x * sx, pts = []; for (let k2 = 0; k2 <= 6; k2++) { const th = (k2 / 6) * Math.PI * 1.15 * l; pts.push(V(xs, ctr.y + Math.cos(th) * rad, ctr.z + 0.006 - Math.sin(th) * rad)); }
-      for (let k2 = 0; k2 < pts.length - 1; k2++) at(f, capAB(pts[k2], pts[k2 + 1], r * (1 - k2 * 0.04), r * (1 - (k2 + 1) * 0.04), { seg: 12, ring: 3 }), hand, hs);
+      for (let k2 = 0; k2 < pts.length - 1; k2++) at(hb, capAB(pts[k2], pts[k2 + 1], r * (1 - k2 * 0.04), r * (1 - (k2 + 1) * 0.04), { seg: 12, ring: 3 }), hand, hs);
     });
-    at(f, capAB(V(sx * -0.034, hy + 0.018, -0.012), V(sx * -0.03, hy + 0.05, -0.034), 0.012, 0.011, { seg: 12 }), hand, hs); // thumb
-    at(f, capAB(V(sx * -0.03, hy + 0.05, -0.034), V(sx * -0.008, hy + 0.068, -0.042), 0.011, 0.0095, { seg: 12 }), hand, hs);
-    if (o.glove) at(f, ellipsoid(V(0, hy + 0.06, 0.016), 0.04, 0.012, 0.014), 0x2a2c30, 'rubber'); // knuckle guard
+    at(hb, capAB(V(sx * -0.034, hy + 0.018, -0.012), V(sx * -0.03, hy + 0.05, -0.034), 0.012, 0.011, { seg: 12 }), hand, hs); // thumb
+    at(hb, capAB(V(sx * -0.03, hy + 0.05, -0.034), V(sx * -0.008, hy + 0.068, -0.042), 0.011, 0.0095, { seg: 12 }), hand, hs);
+    if (o.glove) at(hb, ellipsoid(V(0, hy + 0.06, 0.016), 0.04, 0.012, 0.014), 0x2a2c30, 'rubber'); // knuckle guard
   }
   // legs and boots
   const L2 = o.suit2;
@@ -698,24 +759,53 @@ function figureGeometry(rig) {
   } else if (o.head === 'cap') {
     face();
     // a baseball cap: six-panel crown down to just above the ears, a button on top, the brim forward, curved and tipped down
-    const capR = [HR[0] + 0.024, HR[1] + 0.022, HR[2] + 0.026]; // clear of the hair under it
-    if (BP) { const hinv2 = R(B.head).invert(), capLine = (u) => (Math.abs(u) < 0.9 ? 0.3 : 0.3 - 0.2 * Math.min(1, (Math.abs(u) - 0.9) / 0.9));
-      bodyShell((i) => { if (seg(i) !== 'head') return -1; const p = V(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(hinv2), u = Math.atan2(p.x - hc.x, -(p.z - hc.z)), v = Math.asin(clamp((p.y - hc.y) / HR[1], -1, 1)); return v - capLine(u); }, 0.022, o.cap, 'fabric', { hem: 1.1 }); }
-    else at(B.head, dsphere(hc, ...capR, (u, v) => 0.004 * gs(u, v - 0.6, 0.6, 0.4), { w: 64, h: 40, hole: (u, v) => v < (Math.abs(u) < 0.9 ? 0.3 : 0.3 - 0.2 * Math.min(1, (Math.abs(u) - 0.9) / 0.9)) }), o.cap, 'fabric');
-    at(B.head, ellipsoid(V(hc.x, hc.y + capR[1] + 0.002, hc.z), 0.01, 0.006, 0.01), o.cap, 'fabric'); // button
-    const pk = new THREE.Shape(); pk.moveTo(-0.085, 0); pk.quadraticCurveTo(-0.095, 0.07, -0.04, 0.095); pk.quadraticCurveTo(0, 0.102, 0.04, 0.095); pk.quadraticCurveTo(0.095, 0.07, 0.085, 0); pk.quadraticCurveTo(0, 0.02, -0.085, 0); pk.closePath();
-    const pg = new THREE.ExtrudeGeometry(pk, { depth: 0.006, bevelEnabled: true, bevelThickness: 0.0015, bevelSize: 0.0015, bevelSegments: 2, curveSegments: 16 });
-    pg.rotateX(-Math.PI / 2); // shape +Y -> forward (-Z)
-    { const pp = pg.attributes.position; for (let k2 = 0; k2 < pp.count; k2++) { const x = pp.getX(k2); pp.setY(k2, pp.getY(k2) - 2.2 * x * x); } pg.computeVertexNormals(); } // curved down at the sides
-    pg.rotateX(-0.14);
-    let an = dsPoint(hc, ...capR, null, 0, 0.3, 0).add(V(0, -0.004, 0.012));
-    if (BP) { // on the mesh head: the crown's front edge (the scalp at the cap line, straight ahead, plus the crown's thickness)
-      const hinv3 = R(B.head).invert(), nm3 = new THREE.Matrix3().getNormalMatrix(hinv3); let best = null;
-      for (let i = 0; i < BP.seg.length; i++) { if (BP.seg[i] !== 'head' || BP.eye[i]) continue; const p = V(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(hinv3);
-        const u = Math.atan2(p.x - hc.x, -(p.z - hc.z)), v = Math.asin(clamp((p.y - hc.y) / HR[1], -1, 1)), sc = Math.abs(u) * 2 + Math.abs(v - 0.3); if (!best || sc < best.sc) best = { sc, i, p }; }
-      if (best) { const nn = V(BP.nrm[best.i * 3], BP.nrm[best.i * 3 + 1], BP.nrm[best.i * 3 + 2]).applyMatrix3(nm3).normalize(); an = best.p.clone().addScaledVector(nn, 0.022).add(V(0, -0.006, 0.02)); }
+    const capLine = (u) => (Math.abs(u) < 0.9 ? 0.3 : 0.3 - 0.2 * Math.min(1, (Math.abs(u) - 0.9) / 0.9));
+    if (BP) {
+      // the crown grows from the scalp above the cap line; the brim grows from the crown's own front edge and the button
+      // sits on the crown's top, so both follow whatever head the cap is on
+      const hinv2 = R(B.head).invert(), uv = (p) => [Math.atan2(p.x - hc.x, -(p.z - hc.z)), Math.asin(clamp((p.y - hc.y) / HR[1], -1, 1))];
+      const crown = bodyShell((i) => { if (seg(i) !== 'head') return -1; const [u, v] = uv(V(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(hinv2)); return v - capLine(u); }, 0.022, o.cap, 'fabric', { hem: 1.1 });
+      if (crown) {
+        const nv = crown.Q.length / 3, P = (v) => V(crown.Q[v * 3], crown.Q[v * 3 + 1], crown.Q[v * 3 + 2]).applyMatrix4(hinv2);
+        let top = null; for (let v = 0; v < nv; v++) { const p = P(v); if (!top || p.y > top.y) top = p; }
+        at(B.head, ellipsoid(top.clone().add(V(0, 0.002, 0)), 0.01, 0.006, 0.01), o.cap, 'fabric'); // button
+        // the crown's open edge (edges used by one triangle), its front arc ordered round the head and resampled
+        const UM = 1.15, edge = [], seen = new Set();
+        for (const [key, c] of crown.ecount) if (c === 1) for (const v of [Math.floor(key / 1e6), key % 1e6]) { if (seen.has(v)) continue; seen.add(v); const p = P(v), [u] = uv(p); if (Math.abs(u) < UM + 0.15) edge.push({ u, p }); }
+        edge.sort((a, b) => a.u - b.u);
+        if (edge.length > 8) {
+          const NS = 48, at2 = (u) => { let k2 = edge.findIndex((e) => e.u >= u); if (k2 <= 0) k2 = 1; if (k2 < 0 || k2 >= edge.length) k2 = edge.length - 1; const a = edge[k2 - 1], b = edge[k2]; return a.p.clone().lerp(b.p, clamp((u - a.u) / (b.u - a.u || 1), 0, 1)); };
+          let rim = Array.from({ length: NS + 1 }, (_, k2) => at2(-UM + (2 * UM * k2) / NS));
+          for (let it = 0; it < 4; it++) rim = rim.map((p, k2) => (k2 === 0 || k2 === NS ? p : p.clone().multiplyScalar(0.5).addScaledVector(rim[k2 - 1], 0.25).addScaledVector(rim[k2 + 1], 0.25))); // (the mesh edge is jagged)
+          // the brim: from each point of that edge outward and forward, longest at the front and nothing at the ends,
+          // tipped down, more so towards the sides (the brim's curve); 6 mm thick
+          const LM = 0.075, TH = 0.006, NL = 8, pos = [], idx = [];
+          const ptAt = (k2, j2) => { const u = -UM + (2 * UM * k2) / NS, t = u / UM, p = rim[k2], L = LM * Math.pow(Math.max(0, 1 - t * t), 0.55) * (j2 / NL);
+            const rad = V(p.x - hc.x, 0, p.z - hc.z).normalize(), d = rad.lerp(V(0, 0, -1), 0.45).normalize(), tip = 0.16 + 0.35 * t * t;
+            return p.clone().addScaledVector(d, L * Math.cos(tip)).add(V(0, -L * Math.sin(tip), 0)); };
+          const g2 = (k2, j2, side) => { const p = ptAt(k2, j2); p.y += side * TH / 2 * (j2 === 0 ? 0.6 : 1); pos.push(p.x, p.y, p.z); return pos.length / 3 - 1; };
+          const grid = [-1, 1].map((sd) => Array.from({ length: NS + 1 }, (_, k2) => Array.from({ length: NL + 1 }, (_, j2) => g2(k2, j2, sd))));
+          for (let k2 = 0; k2 < NS; k2++) for (let j2 = 0; j2 < NL; j2++) { const [B0, T0] = grid;
+            idx.push(T0[k2][j2], T0[k2 + 1][j2], T0[k2 + 1][j2 + 1], T0[k2][j2], T0[k2 + 1][j2 + 1], T0[k2][j2 + 1]);
+            idx.push(B0[k2][j2], B0[k2 + 1][j2 + 1], B0[k2 + 1][j2], B0[k2][j2], B0[k2][j2 + 1], B0[k2 + 1][j2 + 1]); }
+          for (let k2 = 0; k2 < NS; k2++) { const [B0, T0] = grid; // the outer edge, closed
+            idx.push(T0[k2][NL], T0[k2 + 1][NL], B0[k2 + 1][NL], T0[k2][NL], B0[k2 + 1][NL], B0[k2][NL]); }
+          const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); bg.setIndex(idx);
+          // winding: the top must face up
+          bg.computeVertexNormals(); const nTop = V().fromBufferAttribute(bg.attributes.normal, grid[1][NS / 2][NL / 2]); if (nTop.y < 0) { const ia = bg.index.array; for (let f = 0; f < ia.length; f += 3) { const t2 = ia[f + 1]; ia[f + 1] = ia[f + 2]; ia[f + 2] = t2; } bg.computeVertexNormals(); }
+          at(B.head, bg, o.cap, 'fabric');
+        }
+      }
+    } else {
+      const capR = [HR[0] + 0.024, HR[1] + 0.022, HR[2] + 0.026]; // clear of the hair under it
+      at(B.head, dsphere(hc, ...capR, (u, v) => 0.004 * gs(u, v - 0.6, 0.6, 0.4), { w: 64, h: 40, hole: (u, v) => v < capLine(u) }), o.cap, 'fabric');
+      at(B.head, ellipsoid(V(hc.x, hc.y + capR[1] + 0.002, hc.z), 0.01, 0.006, 0.01), o.cap, 'fabric'); // button
+      const pk = new THREE.Shape(); pk.moveTo(-0.085, 0); pk.quadraticCurveTo(-0.095, 0.07, -0.04, 0.095); pk.quadraticCurveTo(0, 0.102, 0.04, 0.095); pk.quadraticCurveTo(0.095, 0.07, 0.085, 0); pk.quadraticCurveTo(0, 0.02, -0.085, 0); pk.closePath();
+      const pg = new THREE.ExtrudeGeometry(pk, { depth: 0.006, bevelEnabled: true, bevelThickness: 0.0015, bevelSize: 0.0015, bevelSegments: 2, curveSegments: 16 });
+      pg.rotateX(-Math.PI / 2);
+      { const pp = pg.attributes.position; for (let k2 = 0; k2 < pp.count; k2++) { const x = pp.getX(k2); pp.setY(k2, pp.getY(k2) - 2.2 * x * x); } pg.computeVertexNormals(); }
+      pg.rotateX(-0.14); const an = dsPoint(hc, ...capR, null, 0, 0.3, 0).add(V(0, -0.004, 0.012)); pg.translate(an.x, an.y, an.z); at(B.head, pg, o.cap, 'fabric');
     }
-    pg.translate(an.x, an.y, an.z); at(B.head, pg, o.cap, 'fabric');
     aviators(true);
   } else if (o.head === 'leather') {
     face(false);
@@ -768,11 +858,11 @@ function figureGeometry(rig) {
     for (const sx of [-1, 1]) at(B.ctlB, capAB(V(sx * C.yokeR, -0.02, 0), V(sx * C.yokeR * 1.05, 0.08, 0), 0.022, 0.022, { seg: 8 }), blk);
     at(B.ctlB, boxG(0.08, 0.05, 0.04, V(0, 0.0, 0.01)), 0x3a3d42);
   } else if (rig.ctl === 'wheel') {
-    const rim = torusAB(C.wheelR, 0.017, Math.PI * 2, 28); at(B.ctlA, rim, blk);
+    const rim = torusAB(C.wheelR, 0.017, Math.PI * 2, 72, 16); at(B.ctlA, rim, blk);
     for (const a of [Math.PI / 2, Math.PI * 1.18, Math.PI * 1.82]) at(B.ctlA, capAB(V(0, 0, 0), V(Math.cos(a) * C.wheelR, Math.sin(a) * C.wheelR, 0), 0.012, 0.012, { seg: 6 }), 0x8a8f96, true);
     at(B.ctlA, new THREE.CylinderGeometry(0.045, 0.05, 0.04, 14).rotateX(Math.PI / 2), 0x2b2d31);
     at(B.ctlA, ellipsoid(V(0, C.wheelR, 0.0), 0.02, 0.012, 0.02), 0xe8601c); // top-centre marker
-    at(B.ctlA, capAB(V(0, 0, -0.02), V(0, 0, -0.42), 0.025, 0.03, { seg: 8 }), 0x2b2d31); // column, forward into the dash
+    at(B.ctlA, capAB(V(0, 0, -0.02), V(0, 0, -0.42 - (rig.col.z - C.col.z) / Math.cos(C.tilt)), 0.025, 0.03, { seg: 8 }), 0x2b2d31); // column, forward into the dash (as far again as the wheel came towards the driver)
   }
   // pedals
   if (rig.ctl !== 'bars') for (const i of [B.pedR, B.pedL]) {
@@ -791,10 +881,10 @@ function eyePoint(rig) {
 
 const geoCache = new Map();
 // outfit: OUTFITS key or object; ctl: 'stick' | 'cyclic' | 'yoke' | 'wheel' | 'none'; seed picks skin/hair tones
-export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, pegs = null, groundY } = {}) {
+export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, pegs = null, groundY, seat = null } = {}) {
   const outfit = { ...(OUTFITS[outfitKey] || OUTFITS.light), ...(colors || {}) };
-  const rig = new Rig(outfitKey, ctl, outfit, seed, { pegs, groundY });
-  const key = outfitKey + '|' + ctl + '|' + (seed % 4) + '|' + JSON.stringify(colors || 0) + (pegs ? '|' + JSON.stringify(pegs.map((v) => v.toArray().map((x) => +x.toFixed(3)))) : '');
+  const rig = new Rig(outfitKey, ctl, outfit, seed, { pegs, groundY, seat });
+  const key = outfitKey + '|' + ctl + '|' + (seed % 4) + '|' + JSON.stringify(colors || 0) + (pegs ? '|' + JSON.stringify(pegs.map((v) => v.toArray().map((x) => +x.toFixed(3)))) : '') + (seat ? '|' + JSON.stringify(seat) : '');
   if (!geoCache.has(key)) geoCache.set(key, figureGeometry(rig));
   const geos = geoCache.get(key), mats = crewMaterials();
   const root = new THREE.Group(); root.name = 'crew';
@@ -851,6 +941,12 @@ const CTL_OF = { airline: 'yoke', heli: 'cyclic', driver: 'wheel', boat: 'wheel'
 
 // Add a figure to every declared seat (obj.userData.seats: [{ p: [x,y,z], s, ctl?, yaw? | quat?, role? }]).
 // role 'crew' = a passenger / second crew member with no controls. Returns the rigs (also on obj.userData.crew).
+// seatGeo's surfaces (partDetail.js: pan top 0.02 + 0.126 x width; the back's front face 2 cm behind the origin, raked
+// back by tilt, up to backH along the rake) in a figure's rig space (seat point p, figure scale s)
+function seatSurfaces(fit, p, s) {
+  const [w, backH, , tilt] = fit.dims, [ax, ay, az] = fit.at;
+  return { panTop: (ay + 0.02 + 0.126 * w - p[1]) / s, backZ: (az + 0.02 - p[2]) / s, tilt, backTop: (ay + backH * Math.cos(tilt) - p[1]) / s };
+}
 export function addCrew(design, objs) {
   const rigs = [];
   design.parts.forEach((p, i) => {
@@ -872,7 +968,10 @@ export function addCrew(design, objs) {
         const at = V(...st.p); pegs = (st.pegs || []).map((q) => V(...q).sub(at).multiply(ps).divideScalar(sc)); if (pegs.length !== 2) pegs = null;
         if (st.ground != null) groundY = (st.ground - st.p[1]) * ps.y / sc;
       }
-      const c = buildCrew(outfit, ctl, { seed: i * 3 + k, colors, pegs, groundY });
+      // a seat built with seatGeo declares it (fit: { at: where its geometry was placed, dims: seatGeo's arguments }), so
+      // the figure can sit on its actual surfaces
+      const seat = st.fit && ctl !== 'bars' ? seatSurfaces(st.fit, st.p, st.s || 1) : null;
+      const c = buildCrew(outfit, ctl, { seed: i * 3 + k, colors, pegs, groundY, seat });
       Object.assign(c.userData.crewRig, { role: st.role || 'pilot', kind, ctl, part: i, seat: k }); // (stations.js names the cockpit views from these)
       c.position.set(...st.p); if (st.quat) c.quaternion.fromArray(st.quat); else if (st.yaw) c.rotation.y = st.yaw;
       if (fit) c.scale.copy(fit); else c.scale.setScalar(st.s || 1);
