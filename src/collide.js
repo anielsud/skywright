@@ -172,7 +172,10 @@ export function groundUnder(env, top, down, reach) {
     const lim = Math.min(g.d, reach) + LIFT;
     if (lim > 0) {
       const s = env.surfRay(_o.copy(top).addScaledVector(down, -LIFT), down, lim);
-      if (s) { g.d = s.t - LIFT; g.n = s.n.clone(); g.type = s.type; g.stunt = true; }
+      // (a face nearly side-on to the strut, the riser of a step or a ramp's side, is no ground to stand on: a wheel ray
+      // clipping it read as a landing at the full closing speed and snapped the gear (a bike at a 24 cm step onto the
+      // canyon jump's run-up, at 33 m/s). The body's hull points meet such faces as a hit instead.)
+      if (s && -down.dot(s.n) > 0.35) { g.d = s.t - LIFT; g.n = s.n.clone(); g.type = s.type; g.stunt = true; }
     }
   }
   return g;
