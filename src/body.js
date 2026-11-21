@@ -162,6 +162,26 @@ export function spinePose(DIM, flex = 0, protract = 0, S = BODY, scale = 1.07) {
   spineCache.set(key, out); return out;
 }
 
+// The arm's rest relationships (the body's own rest pose, where nothing is twisted), per side: the upper arm's
+// orientation in the spine's frame (uInSpine), and the hand's turn about the forearm's axis (twist0: the angle from
+// the forearm frame's X to the hand frame's X, about the forearm's Y). A posed arm's real twists are measured against
+// these: the humerus turning about its own axis, and the forearm (radius over ulna) between elbow and hand.
+const restCache = new Map();
+export function armRest(S = BODY, scale = 1.07) {
+  if (!S) return null; const key = S.id + '|' + scale; if (restCache.has(key)) return restCache.get(key);
+  const { bones: SB, byName: N } = S, J = (n, end = 'h') => SB[N[n]][end].clone().multiplyScalar(scale), FRONT = V(0, 0, -1), HM = handModel(S, scale);
+  const hipC = J('upperleg01.L').add(J('upperleg01.R')).multiplyScalar(0.5), up = J('neck01').sub(hipC);
+  const qOf = (M) => new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(M));
+  const spineQ = qOf(frame(hipC.clone().add(V(0, 0.03, 0)), up, FRONT)), out = {};
+  for (const s of ['R', 'L']) {
+    const sh = J('upperarm01.' + s), el = J('lowerarm01.' + s), wr = J('wrist.' + s);
+    const uQ = qOf(frame(sh, el.clone().sub(sh), FRONT)), fQ = qOf(frame(el, wr.clone().sub(el), FRONT)), hQ = qOf(HM[s].src);
+    const hx = V(1, 0, 0).applyQuaternion(fQ.clone().invert().multiply(hQ));
+    out[s] = { uInSpine: spineQ.clone().invert().multiply(uQ), twist0: Math.atan2(-hx.z, hx.x) };
+  }
+  restCache.set(key, out); return out;
+}
+
 // The torso's surface in its rig bones' local frames (as poseBody places it): { hips: [Vector3], spine: [Vector3] }.
 // The rig uses it to sit the body in a seat: the buttocks on the cushion, the back against the seat back.
 const torsoCache = new Map();

@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { PARTS } from './parts.js';
-import { bodyReady, body, person, poseBody, handModel, torsoPoints, bodyDims, spinePose } from './body.js';
+import { bodyReady, body, person, poseBody, handModel, torsoPoints, bodyDims, spinePose, armRest } from './body.js';
 const LIP_BONES = /^oris/; // the mouth's ring muscle in the body mesh's skeleton: its skin is the lips
 await bodyReady; // (the people's mesh: loaded once, before any figure is built; without it the procedural figure stands in)
 
@@ -285,7 +285,7 @@ class Rig {
     this.kind = kind; this.ctl = ctl; this.o = outfit; this.seed = seed;
     this.pegs = opts.pegs || [V(-0.24, -0.62, 0.0), V(0.24, -0.62, 0.0)]; this.groundY = opts.groundY ?? -1.1;
     const C = CTL[ctl] || CTL.none; this.body = outfit.head !== 'bubble' && body() ? person(PEOPLE[seed % PEOPLE.length]) : null;
-    const HM = this.body ? handModel(this.body) : null;
+    const HM = this.body ? handModel(this.body) : null; this.armRest = this.body ? armRest(this.body) : null;
     // proportions: the body mesh's own (measured from its joints, so its limbs aren't stretched), else the procedural set
     const D = this.D = HM ? { ...DIM, ...bodyDims(this.body) } : DIM;
     this.C = C;
@@ -323,11 +323,11 @@ class Rig {
     this.shinLean = 0.21;
     if (opts.seat?.floor != null) { const ay = opts.seat.floor + (D.ankleH ?? 0.07), c = (this.hipR.y + 0.06 - (D.thighTop ?? 0.075) - ay) / D.shin; this.shinLean = clamp(Math.acos(clamp(c, -1, 1)), 0.21, 1.0); }
     // the wheel comes to the seated driver: its column slides (along the rig's z) until the hands' grips are a relaxed
-    // reach from the shoulders (the wrist at 78% of the arm's length, plus the hand), elbows bent about 120 degrees as a relaxed driver's are
+    // reach from the shoulders (the wrist at about 72% of the arm's length), elbows bent about 105 degrees as a relaxed driver's are
     this.col = C.col ? C.col.clone() : null;
     if (ctl === 'wheel') {
       const tq = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), -C.tilt), off = V(Math.sin(1.15) * C.wheelR, Math.cos(1.15) * C.wheelR, 0).applyQuaternion(tq);
-      const want = 0.78 * (D.upper + D.fore) + this.hand.G('R', 0.017).length(), dist = (dz) => V(C.col.x, this.col.y, C.col.z + dz).add(off).distanceTo(this.shR);
+      const want = 0.72 * (D.upper + D.fore) + 0.8 * this.hand.G('R', 0.017).length(), dist = (dz) => V(C.col.x, this.col.y, C.col.z + dz).add(off).distanceTo(this.shR);
       // and clear of the thighs: every point of the rim that is over a thigh (each thigh a line from its hip to its knee,
       // feet on the floor; its top the measured thigh surface) stays 3 cm above it. The rim's bottom, between the
       // knees, needn't.
@@ -455,16 +455,18 @@ class Rig {
     // A hand at rest on a surface (restN: its normal) instead lies flat on it: the back of the hand along the normal,
     // the fingers along the forearm's direction in the surface's plane, the palm's centre on the contact point.
     // Holding a bar leaves two things free: how far the hand rolls round the bar (th) and how the elbow swings round
-    // the shoulder-wrist line (ph). Each candidate is scored against the arm's neutral, relaxed angles: the upper arm
-    // hanging mostly down (a little forward and out), the forearm near its mid twist (thumb up, as in a handshake,
-    // pronation and supination each comfortable to about 70 degrees), the wrist near straight (flexion/extension to
-    // about 60, sideways deviation to about 20). Cost rises with the square of each departure; out of reach is
-    // ruled out. The first solve searches everything; after that (every frame, steering) it refines round the
-    // previous answer, so the arm moves smoothly.
+    // the shoulder-wrist line (ph). Each candidate is built exactly as the rig will build it (the upper arm and forearm
+    // frames from the bend plane, as limb() does) and scored by the twists the body really goes through, measured
+    // against its own rest pose (armRest): the humerus turning about its axis in the shoulder, and the forearm turning
+    // between elbow and hand (comfortable to about +-60 and +-70 degrees; beyond about 90 and 100 they're ruled out).
+    // Also the upper arm's direction (hanging a little forward and out is best) and the wrist's bend (flexion and
+    // extension to about 60, sideways to about 20, ruled out past 80 and 35). The first solve searches everything; then
+    // each frame refines round the previous answer, so steering moves the arm smoothly.
     const comfortArm = (k, S, c, X, G, hint) => {
       const L1 = D.upper, L2 = D.fore, sx = k === 'R' ? 1 : -1, relaxed = V(sx * 0.18, -1, -0.32).normalize();
       const Y0 = c.clone().sub(S); Y0.addScaledVector(X, -Y0.dot(X)).normalize(); const Z0 = V().crossVectors(X, Y0);
-      const Yt = V(), Zt = V(), Wt = V(), d = V(), E = V(), u = V(), f = V(), pole = V(), u0 = V(), v0 = V(), tr = V(), th2 = V();
+      const Yt = V(), Zt = V(), Wt = V(), d = V(), E = V(), u = V(), f = V(), pole = V(), u0 = V(), v0 = V(), th2 = V(), Nn = V(), M4 = new THREE.Matrix4();
+      const AR = this.armRest?.[k], spInv = q[B.spine].clone().invert(), wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
       const score = (th, ph, out) => {
         Yt.copy(Y0).multiplyScalar(Math.cos(th)).addScaledVector(Z0, Math.sin(th)); Zt.crossVectors(X, Yt);
         Wt.copy(c).addScaledVector(X, -G.x).addScaledVector(Yt, -G.y).addScaledVector(Zt, -G.z);
@@ -475,10 +477,17 @@ class Rig {
         E.copy(S).addScaledVector(d, x).addScaledVector(pole, y); u.copy(E).sub(S).divideScalar(L1); f.copy(Wt).sub(E).normalize();
         const sh = Math.acos(clamp(u.dot(relaxed), -1, 1));
         const flex = Math.atan2(f.dot(Zt), f.dot(Yt)), dev = Math.asin(clamp(f.dot(X), -1, 1));
-        tr.copy(u).negate().addScaledVector(f, u.dot(f)); th2.copy(X).addScaledVector(f, -X.dot(f)); // (thumb-up reference, the thumb's actual direction, both across the forearm)
-        const tw = tr.lengthSq() > 1e-6 && th2.lengthSq() > 1e-6 ? Math.acos(clamp(tr.normalize().dot(th2.normalize()), -1, 1)) : 0;
-        const cost = (sh / 0.8) ** 2 + (flex / 1.05) ** 2 + (dev / 0.35) ** 2 + (tw / 1.2) ** 2 + miss * 1e4;
-        if (out) { out.W = Wt.clone(); out.Y = Yt.clone(); out.pole = pole.clone(); }
+        // the bones' frames as limb() makes them: N the bend plane's normal (side -1 for arms), z = N x y, x = y x z
+        Nn.crossVectors(pole, d).multiplyScalar(-1).normalize();
+        const uz = V().crossVectors(Nn, u).normalize(), ux = V().crossVectors(u, uz), fz = V().crossVectors(Nn, f).normalize(), fx = V().crossVectors(f, fz);
+        // forearm twist: the hand's X about the forearm's axis, against the rest pose's
+        th2.copy(X).addScaledVector(f, -X.dot(f)).normalize(); const tau = wrapA(Math.atan2(V().crossVectors(fx, th2).dot(f), fx.dot(th2)) - (AR ? AR.twist0 : 0));
+        // humeral rotation: the upper arm's frame in the spine's, against the rest pose's; its twist about the arm
+        let hum = 0; if (AR) { const qU = new THREE.Quaternion().setFromRotationMatrix(M4.makeBasis(ux, u, uz)), rel = AR.uInSpine.clone().invert().multiply(spInv.clone().multiply(qU)); hum = wrapA(2 * Math.atan2(rel.y, rel.w)); }
+        let cost = (sh / 0.8) ** 2 + (flex / 1.05) ** 2 + (dev / 0.35) ** 2 + (tau / 1.2) ** 2 + (hum / 1.0) ** 2 + miss * 1e4;
+        if (Math.abs(tau) > 1.75 || Math.abs(hum) > 1.6 || Math.abs(flex) > 1.4 || Math.abs(dev) > 0.6) cost += 1e3; // (past the joints' range)
+        if (out) { out.W = Wt.clone(); out.Y = Yt.clone(); out.pole = pole.clone(); out.angles = { sh, hum, tau, flex, dev, cost }; }
+
         return cost;
       };
       const prev = (this.armSol ||= {})[k];
@@ -488,7 +497,7 @@ class Rig {
       else grid(0, 0, Math.PI, 49);
       for (const span of [0.12, 0.04, 0.012]) grid(best.th, best.ph, span, 7);
       this.armSol[k] = { th: best.th, ph: best.ph };
-      const out = {}; score(best.th, best.ph, out); void hint; return out;
+      const out = {}; score(best.th, best.ph, out); (this.armAngles ||= {})[k] = Object.fromEntries(Object.entries(out.angles).map(([kk, v]) => [kk, +(kk === 'cost' ? v : v * 180 / Math.PI).toFixed(1)])); void hint; return out;
     };
     const arm = (k, S, iu, iff, ih, hint) => {
       const c = hands[k], rest = this.restN?.[k], r = radii[k] ?? 0.03, G = this.hand.G(k, rest ? 0 : r), M = new THREE.Matrix4();
