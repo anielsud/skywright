@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { PARTS } from './parts.js';
 import { bodyReady, body, poseBody, handModel, torsoPoints, bodyDims, spinePose } from './body.js';
+const LIP_BONES = /^oris/; // the mouth's ring muscle in the body mesh's skeleton: its skin is the lips
 await bodyReady; // (the people's mesh: loaded once, before any figure is built; without it the procedural figure stands in)
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
@@ -89,7 +90,7 @@ export const OUTFITS = {
   mx: { head: 'fullface', peak: true, visor: 0xd9761c, helmet: 0xf2f2ee, helmet2: 0xe8601c, suit: 0xe8601c, suit2: 0x2b2d31, trim: 0xf2f2ee, glove: 0x15161a, boot: 0xf2f2ee, stripes: true, bigBoots: true },
   sport: { head: 'fullface', visor: 0x1b2127, helmet: 0xf2f2ee, helmet2: 0x1d4e89, suit: 0x1d4e89, suit2: 0xf2f2ee, trim: 0xc8102e, glove: 0x15161a, boot: 0x15161a, stripes: true, hump: true },
   // boats: a cap, sunglasses and an orange life jacket over a T-shirt and shorts-coloured trousers
-  boat: { head: 'cap', glasses: true, vest: 0xf26a1b, suit: 0x2f5d8a, suit2: 0x6f7f8f, trim: 0x15161a, glove: null, boot: 0xe8e8e2, cap: 0xf2f2ee, tee: true, shorts: true }, // T-shirt and shorts under the life jacket
+  boat: { head: 'cap', glasses: true, vest: 0xf26a1b, suit: 0x2f5d8a, suit2: 0x6f7f8f, trim: 0x15161a, glove: null, boot: 0x7a4a2c, cap: 0xf2f2ee, tee: true, shorts: true }, // T-shirt and shorts under the life jacket
   airline: { head: 'headset', shirt: true, suit: 0xf2f2f0, suit2: 0x1b2433, trim: 0x15161a, glove: null, boot: 0x111111, cups: 0x26282b, epaulettes: 0xd4a82a },
 };
 
@@ -312,7 +313,7 @@ class Rig {
     // reach from the shoulders (the wrist at 85% of the arm's length, plus the hand), elbows bent as a driver's are
     this.col = C.col ? C.col.clone() : null;
     if (ctl === 'wheel') {
-      const tq = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), C.tilt), off = V(Math.sin(1.15) * C.wheelR, Math.cos(1.15) * C.wheelR, 0).applyQuaternion(tq);
+      const tq = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), -C.tilt), off = V(Math.sin(1.15) * C.wheelR, Math.cos(1.15) * C.wheelR, 0).applyQuaternion(tq);
       const want = 0.85 * (D.upper + D.fore) + this.hand.G('R', 0.017).length(), dist = (dz) => V(C.col.x, this.col.y, C.col.z + dz).add(off).distanceTo(this.shR);
       // and clear of the thighs: the rim's lowest point 5 cm above the knees' tops (feet on a floor: the knee's height
       // from the ankle and shin)
@@ -360,7 +361,7 @@ class Rig {
       p[B.ctlB].copy(top); q[B.ctlB].setFromEuler(e.set(0.12, 0, 0)).multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), -s.roll * 0.7));
       for (const [k, sx] of [['R', 1], ['L', -1]]) { hands[k] = V(sx * C.yokeR * 1.025, 0.03, 0.0).applyQuaternion(q[B.ctlB]).add(top); axes[k] = V(sx * 0.075, 1, 0).applyQuaternion(q[B.ctlB]); radii[k] = 0.022; } // (the horns)
     } else if (this.ctl === 'wheel') {
-      const tq = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), C.tilt); // wheel plane leans back towards the driver
+      const tq = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), -C.tilt); // the wheel's face looks up and back at the driver; its column runs forward and down into the dash
       p[B.ctlA].copy(this.col); q[B.ctlA].copy(tq).multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), s.steer));
       for (const [k, a] of [['R', -1.15], ['L', 1.15]]) { hands[k] = V(Math.sin(-a) * C.wheelR, Math.cos(a) * C.wheelR, 0).applyQuaternion(q[B.ctlA]).add(this.col); axes[k] = V(Math.cos(a), Math.sin(a), 0).multiplyScalar(Math.sign(a)).applyQuaternion(q[B.ctlA]); radii[k] = 0.017; } // (the rim's tangent, thumbs towards 12 o'clock)
     } else if (this.ctl === 'bars') { // on the grips (rig space, from the fork), else resting on the tank
@@ -489,18 +490,25 @@ function figureGeometry(rig) {
   const at = (i, geo, hex, gloss = false) => k.add(geo, hex, i, route(hex, gloss), geo.attributes.skinIndex ? null : R(i)); // (a loft is built in rig space)
   // ---- the body: the skinned human mesh posed onto this rig (body.js), coloured by what the outfit covers ----
   const BP = o.head !== 'bubble' && body() ? poseBody({ p: rig.p, q: rig.q, B, DIM: rig.D, grips: rig.grips, spine: rig.spine }, { seat: rig.ctl === 'bars' ? { y: -0.08, back: null } : rig.seatY != null ? { y: rig.seatY - 0.012, back: null } : { y: -0.09, back: 0.125 } }) : null;
+  // a crew neckline round the base of the neck (spine-local, by where each point is, so it's smooth across the mesh's
+  // bones): 5.5 cm under the neck joint in front, 3 at the sides, 2 behind. > 0 below it (inside the shirt), metres.
+  const neckF = BP ? (() => { const sinv = R(B.spine).invert(), nk = rig.spine ? rig.spine.neck : V(0, D.spine, 0), v = V();
+    return (i) => { v.set(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(sinv); const c2 = Math.cos(Math.atan2(v.x - nk.x, -(v.z - nk.z))); return (nk.y - (0.03 + 0.025 * c2 * (c2 > 0 ? 1 : 0.4))) - v.y; }; })() : null;
+  // lips: the skin the mouth's ring muscle carries (by the mesh's own weights), shading from the skin to a lip tone
+  const SRC = body(), lipBone = SRC ? SRC.bones.map((b) => LIP_BONES.test(b.name)) : [], LIP = new THREE.Color(0x9a4f4a);
+  const lipW = (i) => { let w = 0; for (let k2 = 0; k2 < 4; k2++) if (lipBone[SRC.bi[i * 4 + k2]]) w += SRC.bw[i * 4 + k2] / 255; return w; };
   if (BP) {
     const n = BP.pos.length / 3, cols = new Float32Array(n * 3), slotOf = new Array(n), c = new THREE.Color();
     const neckSkin = o.head === 'headset' || o.head === 'leather' || o.head === 'cap';
     for (let i = 0; i < n; i++) {
       const sg = BP.seg[i], t = BP.along[i]; let hex = o.suit, sl = 'fabric';
       if (BP.eye[i] === 3) { hex = 0x8a5a52; sl = 'skin'; } else if (BP.eye[i]) { hex = 0xf1ece4; sl = 'paint'; }
-      else if (sg === 'head') { hex = skin; sl = 'skin'; }
+      else if (sg === 'head') { hex = skin; sl = 'skin'; const lw = lipW(i); if (lw > 0.35) { c.set(skin).lerp(LIP, Math.min(1, (lw - 0.35) / 0.35) * 0.55); cols[i * 3] = c.r; cols[i * 3 + 1] = c.g; cols[i * 3 + 2] = c.b; slotOf[i] = sl; continue; } }
       else if (sg.startsWith('hand')) { hex = o.glove ?? skin; sl = o.glove ? 'rubber' : 'skin'; }
       else if (sg.startsWith('fArm')) { if (o.tee || o.shirt) { hex = skin; sl = 'skin'; } else if (o.glove && t > 0.82) { hex = o.glove; sl = 'rubber'; } }
-      else if (sg.startsWith('uArm')) { if ((o.tee && t > 0.42) || (o.shirt && t > 0.85)) { hex = skin; sl = 'skin'; } }
+      else if (sg.startsWith('uArm')) { if ((o.tee && t > 0.42) || (o.shirt && t > 0.85) || ((o.tee || o.shirt) && neckF(i) < 0)) { hex = skin; sl = 'skin'; } }
       else if (sg === 'hips') hex = o.suit2;
-      else if (sg === 'spine') { if (t < 0.12) hex = o.suit2; if (neckSkin && t > 1.02) { hex = skin; sl = 'skin'; } }
+      else if (sg === 'spine') { if (t < 0.12) hex = o.suit2; if ((neckSkin && t > 1.02) || ((o.tee || o.shirt) && neckF(i) < 0)) { hex = skin; sl = 'skin'; } }
       else if (sg.startsWith('thigh')) { hex = o.suit2; if (o.shorts && t > 0.62) { hex = skin; sl = 'skin'; } }
       else if (sg.startsWith('shin')) { hex = o.shorts ? skin : o.suit2; sl = o.shorts ? 'skin' : 'fabric'; }
       c.set(hex); cols[i * 3] = c.r; cols[i * 3 + 1] = c.g; cols[i * 3 + 2] = c.b; slotOf[i] = sl;
@@ -637,6 +645,7 @@ function figureGeometry(rig) {
       for (const p of pts) if (Math.abs(p.y - y) < 0.025) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); z0 = Math.min(z0, p.z); z1 = Math.max(z1, p.z); }
       cx[yi] = Number.isFinite(x0) ? (x0 + x1) / 2 : 0; cz[yi] = Number.isFinite(z0) ? (z0 + z1) / 2 : -0.08; }
     for (let it = 0; it < 4; it++) for (let yi = 1; yi < NY - 1; yi++) { cx[yi] = (cx[yi - 1] + 2 * cx[yi] + cx[yi + 1]) / 4; cz[yi] = (cz[yi - 1] + 2 * cz[yi] + cz[yi + 1]) / 4; }
+    const nTorso = pts.length; // (the torso's own points: the straps rest on these)
     for (const p of armPts) { const yi = clamp(Math.round((p.y - YB) / H), 0, NY - 1), a = Math.abs(Math.atan2(p.x - cx[yi], -(p.z - cz[yi]))); if (p.y > shY - 0.13 && (a < 1.05 || a > 2.1)) pts.push(p); }
     const cAt = (y) => { const f = clamp((y - YB) / H, 0, NY - 1.001), i0 = Math.floor(f), t = f - i0; return [cx[i0] + (cx[i0 + 1] - cx[i0]) * t, cz[i0] + (cz[i0 + 1] - cz[i0]) * t]; };
     // radius grid: max radius per cell, gaps filled from neighbours, then smoothed
@@ -677,19 +686,28 @@ function figureGeometry(rig) {
       const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3)); bg.setIndex(bi); bg.computeVertexNormals(); at(B.spine, bg, 0x15161a, 'rubber');
       const rf = rAt(0, yb) + gap + thickAt(0) + 0.004, [ox, oz] = cAt(yb); at(B.spine, boxG(0.06, 0.036, 0.012, V(ox, yb, oz - rf)), 0x222326, 'rubber'); at(B.spine, boxG(0.02, 0.028, 0.014, V(ox, yb, oz - rf - 0.002)), 0x3a3c40, 'rubber'); // buckle
     }
-    // padded straps over the shoulders: from the front panel's top to the back's, over the shoulder's measured top
+    // padded straps over the shoulders, sewn onto the panels: each end lies on its panel's outer face, 5 cm down from
+    // its top edge, and the strap runs up off it, over the shoulder's measured top and down onto the other panel. Its
+    // thickness direction turns from the front panel's surface normal, through straight up, to the back panel's.
+    const uOf = (th) => ((th > 0 ? th : 2 * Math.PI + th) - ZG) / (2 * Math.PI - 2 * ZG);
+    const onPanel = (th, below) => { const y1 = topAt(th), v = clamp(1 - below / (y1 - yB), 0, 1); return surf(uOf(th), v, true); };
+    const nrm = (th, y) => { const [ox, oz] = cAt(y), p = V(ox + Math.sin(th), y, oz - Math.cos(th)); return p.sub(V(ox, y, oz)).normalize(); };
     for (const sx of [-1, 1]) {
-      const tf = sx * 0.8, tb = sx * 2.3, yf = topAt(tf), ybk = topAt(tb);
-      const F = surf(((tf > 0 ? tf : 2 * Math.PI + tf) - ZG) / (2 * Math.PI - 2 * ZG), 0.97, false), Bk = surf(((tb > 0 ? tb : 2 * Math.PI + tb) - ZG) / (2 * Math.PI - 2 * ZG), 0.97, false);
-      const topY = (x, z) => { let m = -Infinity; for (const p of pts) if (Math.abs(p.x - x) < 0.025 && Math.abs(p.z - z) < 0.025) m = Math.max(m, p.y); return Number.isFinite(m) ? m : shY + 0.05; };
-      const path = [F]; for (const t of [0.25, 0.5, 0.75]) { const m = F.clone().lerp(Bk, t); m.y = Math.max(m.y, topY(m.x, m.z) + gap); path.push(m); } path.push(Bk);
-      const cur = new THREE.CatmullRomCurve3(path), NS = 24, sp2 = [], si2 = [], WS = 0.035, TS = 0.018;
-      for (let k2 = 0; k2 <= NS; k2++) { const t = k2 / NS, p = cur.getPoint(t), tg = cur.getTangent(t), wd = V(1, 0, 0).addScaledVector(tg, -tg.x).normalize(), out = V().crossVectors(wd, tg).normalize(); // (lying flat: its width across the shoulder)
-        { const [ox, oz] = cAt(p.y); if (out.dot(V(p.x - ox, p.y - (shY - 0.12), p.z - oz)) < 0) out.negate(); }
-        for (const [w, d] of [[-WS, 0], [WS, 0], [WS * 0.85, TS], [-WS * 0.85, TS]]) { const q = p.clone().addScaledVector(wd, w).addScaledVector(out, d); sp2.push(q.x, q.y, q.z); } }
-      for (let k2 = 0; k2 < NS; k2++) for (let q2 = 0; q2 < 4; q2++) { const a0 = k2 * 4 + q2, a1 = k2 * 4 + ((q2 + 1) % 4), b0 = a0 + 4, b1 = a1 + 4; si2.push(a0, b1, b0, a0, a1, b1); }
-      const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.Float32BufferAttribute(sp2, 3)); sg.setIndex(si2); sg.computeVertexNormals(); at(B.spine, sg, hex, 'fabric');
-      void yf; void ybk;
+      const tf = sx * 0.8, tb = sx * 2.3, F = onPanel(tf, 0.05), Bk = onPanel(tb, 0.05), Ft = onPanel(tf, 0.0), Bt = onPanel(tb, 0.0);
+      const topY = (x, z) => { let m = -Infinity; for (let q = 0; q < nTorso; q++) { const p = pts[q]; if (Math.abs(p.x - x) < 0.02 && Math.abs(p.z - z) < 0.02 && p.y < shY + 0.12) m = Math.max(m, p.y); } return Number.isFinite(m) ? m : shY + 0.05; };
+      const path = [F, Ft.clone().add(V(0, 0.01, 0))];
+      for (const t of [0.25, 0.4, 0.55, 0.7]) { const m = Ft.clone().lerp(Bt, t); m.y = topY(m.x, m.z) + gap; path.push(m); } // (snug: on the body between the panels)
+      path.push(Bt.clone().add(V(0, 0.01, 0)), Bk);
+      const cur = new THREE.CatmullRomCurve3(path), NS = 32, sp2 = [], si2 = [], WS = 0.032, TS = 0.016, nF = nrm(tf, F.y), nB = nrm(tb, Bk.y), UP = V(0, 1, 0);
+      for (let k2 = 0; k2 <= NS; k2++) { const t = k2 / NS, p = cur.getPoint(t), tg = cur.getTangent(t);
+        const hint = t < 0.5 ? nF.clone().lerp(UP, Math.min(1, t / 0.35)) : UP.clone().lerp(nB, Math.min(1, (t - 0.65) / 0.35 > 0 ? (t - 0.65) / 0.35 : 0));
+        const out = hint.addScaledVector(tg, -hint.dot(tg)).normalize(), wd = V().crossVectors(tg, out).normalize();
+        for (const [w, d] of [[-WS, 0], [WS, 0], [WS * 0.85, TS], [-WS * 0.85, TS]]) { const q = p.clone().addScaledVector(wd, w).addScaledVector(out, d - 0.004); sp2.push(q.x, q.y, q.z); } }
+      for (let k2 = 0; k2 < NS; k2++) for (let q2 = 0; q2 < 4; q2++) { const a0 = k2 * 4 + q2, a1 = k2 * 4 + ((q2 + 1) % 4), b0 = a0 + 4, b1 = a1 + 4; si2.push(a0, b0, b1, a0, b1, a1); }
+      for (const [k2, f] of [[0, 1], [NS, 0]]) { const b = k2 * 4; if (f) si2.push(b, b + 2, b + 1, b, b + 3, b + 2); else si2.push(b, b + 1, b + 2, b, b + 2, b + 3); }
+      const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.Float32BufferAttribute(sp2, 3)); sg.setIndex(si2); sg.computeVertexNormals();
+      { const k0 = (NS >> 1) * 4 + 2, nn = V().fromBufferAttribute(sg.attributes.normal, k0); if (nn.y < 0) { const ia = sg.index.array; for (let f = 0; f < ia.length; f += 3) { const t2 = ia[f + 1]; ia[f + 1] = ia[f + 2]; ia[f + 2] = t2; } sg.computeVertexNormals(); } } // (the top of the strap faces up over the shoulder)
+      at(B.spine, sg, hex, 'fabric');
     }
   }
   if (!BP && o.vest) { // a life jacket: chunky foam front and back, a collar, two buckles
@@ -708,7 +726,13 @@ function figureGeometry(rig) {
     bodyShell((i) => seg(i) === 'hips' ? 1 : seg(i) === 'spine' ? 0.15 - tt(i) : seg(i).startsWith('thigh') ? 1 : seg(i).startsWith('shin') ? 0.9 - tt(i) : -1, 0.007, o.suit2, 'fabric', { hem: 1.4, smooth: 4 });
     if (o.stripes) for (const y of [0.42, 0.64]) bodyShell((i) => Math.min(top(i), seg(i) === 'spine' ? 0.025 - Math.abs(tt(i) - y) : -1), 0.0085, o.trim, 'fabric', { hem: 1, smooth: 10 });
   }
-  if (BP && o.tee) bodyShell((i) => seg(i) === 'spine' || seg(i) === 'hips' ? 0.985 - tt(i) : seg(i).startsWith('uArm') ? 0.42 - tt(i) : -1, 0.005, o.suit, 'fabric'); // the T-shirt
+  if (BP && o.tee) { // the T-shirt: a crew neck cut round the base of the neck (by where each point is, so the line is
+    // smooth across the mesh's bones: 5.5 cm under the neck joint in front, 3 at the sides, 2 behind), sleeves to
+    // just above the elbow, and a ribbed collar band along the neckline
+    const teeF = (i) => { const g = seg(i), nf = neckF(i) * 20; return g === 'spine' || g === 'hips' ? Math.min(nf, 1) : g.startsWith('uArm') ? Math.min(nf, 0.42 - tt(i)) : -1; };
+    bodyShell(teeF, 0.005, o.suit, 'fabric');
+    bodyShell((i) => { const f = teeF(i); return seg(i).startsWith('uArm') ? -1 : Math.min(f, 0.3 - f); }, 0.0075, o.suit, 'fabric', { hem: 1.2 }); // collar rib (1.5 cm wide)
+  }
   if (BP && o.shorts) bodyShell((i) => seg(i) === 'hips' ? 1 : seg(i) === 'spine' ? 0.17 - tt(i) : seg(i).startsWith('thigh') ? 0.62 - tt(i) : -1, 0.008, o.suit2, 'fabric'); // the shorts
   if (!BP && o.tee) { // crew-neck collar and a rolled hem round the waist
     at(B.spine, torusAB(0.06, 0.007, Math.PI * 2, 32).rotateX(Math.PI / 2).translate(0, D.shoulderUp + 0.005, 0.005), o.suit, 'fabric');
@@ -758,7 +782,7 @@ function figureGeometry(rig) {
     if (bareL) sleeve(t, s, D.thigh, TH, 0.3, 1.05, 0.006, L2); } // shorts: loose legs ending above the knee
     // a boot: shaft round the ankle, foot and toe box on a sole with a heel block; motocross boots go up the shin with
     // a shin plate and three buckle straps
-    if (BP) { const sd = s === B.shinR ? 'shinR' : 'shinL'; bodyShell((i) => seg(i) === sd ? tt(i) - (o.bigBoots ? 0.5 : 0.93) : -1, o.bigBoots ? 0.014 : 0.016, o.boot, 'rubber', { hem: 1.2, smooth: 24 }); continue; }
+    if (BP) { shoe(s, o.boot, o.bigBoots ? 0.26 : o.tee ? 0 : 0.09); continue; }
     at(s, capsule(0.11, 0.047, 0.051).translate(0, D.shin - 0.09, 0.0), o.boot, 'rubber');
     at(s, ellipsoid(V(0, D.shin + 0.006, -0.056), 0.049, 0.042, 0.112), o.boot, 'rubber');
     at(s, ellipsoid(V(0, D.shin + 0.0, -0.13), 0.043, 0.033, 0.045), o.boot, 'rubber'); // toe box
@@ -785,6 +809,21 @@ function figureGeometry(rig) {
       if (!pts.length) continue; const c0 = pts.reduce((a, p) => a.add(p), V()).multiplyScalar(1 / pts.length), rr = pts.reduce((m, p) => Math.max(m, p.distanceTo(c0)), 0); eyesAt.push({ c: c0, r: rr });
       at(B.head, ellipsoid(c0.clone().add(V(0, 0, -rr * 0.93)), rr * 0.48, rr * 0.5, rr * 0.12), 0x4a3524, 'paint'); // iris
       at(B.head, ellipsoid(c0.clone().add(V(0, 0, -rr * 1.0)), rr * 0.22, rr * 0.23, rr * 0.06), 0x050505, 'paint'); // pupil
+    }
+    // brows: a strip of hair on the brow ridge in an arch over each eye (from its measured centre and size), laid on
+    // the forehead's measured surface 1 mm out, fullest at the inner end and tapering outward
+    const headPts = []; for (let i = 0; i < BP.seg.length; i++) if (BP.seg[i] === 'head' && !BP.eye[i]) headPts.push(P3(i));
+    const front = (x, y) => { let zs = 0, ws = 0; for (const p of headPts) { const d2 = (p.x - x) ** 2 + (p.y - y) ** 2; if (d2 < 0.009 ** 2 && p.z < hc.z) { const w = 1 / (d2 + 1e-6); zs += p.z * w; ws += w; } } return ws ? V(x, y, zs / ws) : null; }; // (the surface's depth there, weighted to the nearest points)
+    for (const e of eyesAt) {
+      const sx = Math.sign(e.c.x - hc.x) || 1, pts2 = [], NB2 = 10;
+      for (let k2 = 0; k2 <= NB2; k2++) { const sP = k2 / NB2, x = e.c.x + sx * e.r * (-1.05 + 2.2 * sP), y = e.c.y + e.r * (1.55 + 0.35 * Math.sin(Math.PI * Math.min(1, sP * 1.3)) - 0.25 * sP), f = front(x, y); if (f) pts2.push({ p: f, w: e.r * (0.42 - 0.26 * sP) }); }
+      if (pts2.length < 4) continue;
+      const bp = [], bi = []; pts2.forEach(({ p, w }, k2) => { const nx = pts2[Math.min(k2 + 1, pts2.length - 1)].p.clone().sub(pts2[Math.max(k2 - 1, 0)].p).normalize(), up2 = V(0, 1, 0).addScaledVector(nx, -nx.y).normalize();
+        const out2 = p.clone().sub(hc).normalize(); for (const sgn of [-1, 1]) { const q = p.clone().addScaledVector(up2, sgn * w / 2).addScaledVector(out2, 0.0015); bp.push(q.x, q.y, q.z); } }); // (1.5 mm out along the head's outward direction)
+      for (let k2 = 0; k2 < pts2.length - 1; k2++) { const a0 = k2 * 2; bi.push(a0, a0 + 1, a0 + 3, a0, a0 + 3, a0 + 2); }
+      const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3)); bg.setIndex(bi); bg.computeVertexNormals();
+      { const nn = V().fromBufferAttribute(bg.attributes.normal, 0); if (nn.z > 0) { const ia = bg.index.array; for (let f = 0; f < ia.length; f += 3) { const t2 = ia[f + 1]; ia[f + 1] = ia[f + 2]; ia[f + 2] = t2; } bg.computeVertexNormals(); } } // (facing forward, -Z)
+      at(B.head, bg, hair, 'hair');
     }
     if (!withHair) return;
     // hair: grown from the scalp above the hairline (clean edge, thinning to nothing at it)
@@ -930,6 +969,56 @@ function figureGeometry(rig) {
     }
     at(B.head, capAB(V(-0.06, hc.y + 0.083, hc.z - 0.05), V(0.06, hc.y + 0.083, hc.z - 0.05), 0.007, 0.007), 0x3a2618, 'rubber');
   }
+  // A shoe (or boot, with a shaft up the leg) made for the foot it's on, in the shin bone's frame: the foot is sliced
+  // heel to toe and each slice's width and height measured from the body mesh; the upper is lofted round those slices
+  // 5 mm off the foot (rounded cross-sections, closed at heel and toe), on a flat sole slab 22 mm thick with the toe
+  // sprung up a little. A boot's shaft is lofted round the measured leg.
+  function shoe(sb, hex, shaftH) {
+    const sinv = R(sb).invert(), sd = sb === B.shinR ? 'shinR' : 'shinL', fp = [], lp = [];
+    for (let i = 0; i < BP.seg.length; i++) { if (seg(i) !== sd) continue; const p = V(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(sinv); if (p.y > D.shin - 0.035) fp.push(p); else if (p.y > D.shin - shaftH - 0.03) lp.push(p); }
+    if (fp.length < 20) return;
+    let z0 = Infinity, z1 = -Infinity, ys = -Infinity; for (const p of fp) { z0 = Math.min(z0, p.z); z1 = Math.max(z1, p.z); ys = Math.max(ys, p.y); }
+    const N = 18, OFF = 0.005, slices = [];
+    for (let k2 = 0; k2 <= N; k2++) { const z = z1 + (z0 - z1) * (k2 / N), w = Math.max(0.006, (z1 - z0) / N * 0.9) * (k2 === 0 || k2 === N ? 2 : 1); let x0 = Infinity, x1 = -Infinity, yt = Infinity;
+      for (const p of fp) if (Math.abs(p.z - z) < w) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); yt = Math.min(yt, p.y); }
+      if (Number.isFinite(x0)) slices.push({ z, x0, x1, yt }); }
+    if (slices.length > 2) { const h = slices[0], tt2 = slices[slices.length - 1]; slices.unshift({ ...h, z: h.z + 0.01 }); slices.push({ ...tt2, z: tt2.z - 0.012 }); } // (past the heel and the toes, so the closing ends are clear of the foot)
+    const raw = slices.map((sl) => ({ ...sl }));
+    for (let it = 0; it < 2; it++) for (let k2 = 1; k2 < slices.length - 1; k2++) for (const f of ['x0', 'x1', 'yt']) slices[k2][f] = (slices[k2 - 1][f] + 2 * slices[k2][f] + slices[k2 + 1][f]) / 4;
+    slices.forEach((sl, k2) => { sl.x0 = Math.min(sl.x0, raw[k2].x0); sl.x1 = Math.max(sl.x1, raw[k2].x1); sl.yt = Math.min(sl.yt, raw[k2].yt); }); // (smoothed, but never inside the foot)
+    const sole = ys + OFF, M = slices.length, RG = 20, up = [], ui = [];
+    // upper: each slice an ellipse over the foot's width, from the sole to the slice's top; the ends taper shut
+    slices.forEach((sl, k2) => { const t = k2 / (M - 1), end = k2 === 0 || k2 === M - 1 ? 0 : 1, cx = (sl.x0 + sl.x1) / 2, rx = ((sl.x1 - sl.x0) / 2 + OFF) * (0.6 + 0.4 * end);
+      const top = sl.yt - OFF - 0.003 * Math.max(0, (t - 0.6) / 0.4), ry = (sole - top) / 2 * (0.6 + 0.4 * end), cy = sole - ry, spring = 0.004 * Math.pow(Math.max(0, t - 0.8) / 0.2, 2);
+      // over the heel the upper is cut level at the collar (1.2 cm under the ankle joint), so it meets the leg cleanly;
+      // in front of the ankle it closes over the instep and the toes
+      const collar = t < 0.3 ? D.shin + 0.012 - Math.max(0, (t - 0.2) / 0.1) * 0.12 : -Infinity; // (the heel cup, rising into the throat)
+      for (let r2 = 0; r2 < RG; r2++) { const a = (r2 / RG) * Math.PI * 2, sy = Math.sin(a), yy = sy > 0 ? cy + ry * Math.pow(sy, 0.5) : cy + ry * sy; up.push(cx + Math.cos(a) * rx, Math.max(collar, Math.min(sole, yy)) - spring, sl.z); } });
+    for (let k2 = 0; k2 < M - 1; k2++) for (let r2 = 0; r2 < RG; r2++) { const a0 = k2 * RG + r2, a1 = k2 * RG + ((r2 + 1) % RG), b0 = a0 + RG, b1 = a1 + RG; ui.push(a0, b0, b1, a0, b1, a1); }
+    const cap = (k2, flip) => { const c = up.length / 3; let x = 0, y = 0, z = 0; for (let r2 = 0; r2 < RG; r2++) { x += up[(k2 * RG + r2) * 3]; y += up[(k2 * RG + r2) * 3 + 1]; z += up[(k2 * RG + r2) * 3 + 2]; } up.push(x / RG, y / RG, z / RG);
+      for (let r2 = 0; r2 < RG; r2++) { const a0 = k2 * RG + r2, a1 = k2 * RG + ((r2 + 1) % RG); if (flip) ui.push(c, a1, a0); else ui.push(c, a0, a1); } };
+    cap(0, true); cap(M - 1, false);
+    const ug = new THREE.BufferGeometry(); ug.setAttribute('position', new THREE.Float32BufferAttribute(up, 3)); ug.setIndex(ui); ug.computeVertexNormals();
+    { const k0 = Math.floor(M / 2) * RG + Math.floor(RG / 4), n2 = V().fromBufferAttribute(ug.attributes.normal, k0); if (n2.y < 0) { const ia = ug.index.array; for (let f = 0; f < ia.length; f += 3) { const t2 = ia[f + 1]; ia[f + 1] = ia[f + 2]; ia[f + 2] = t2; } ug.computeVertexNormals(); } } // (that sample is on the underside: it must face +Y, down, in the shin's frame)
+    at(sb, ug, hex, 'rubber'); // (smooth leather)
+    // sole: a slab under the upper's outline, its toe sprung like the upper's
+    const sp = [], si = [], TH = 0.022;
+    slices.forEach((sl, k2) => { const t = k2 / (M - 1), end = k2 === 0 || k2 === M - 1 ? 0 : 1, cx = (sl.x0 + sl.x1) / 2, rx = ((sl.x1 - sl.x0) / 2 + OFF + 0.003) * (0.65 + 0.35 * end), spring = 0.004 * Math.pow(Math.max(0, t - 0.8) / 0.2, 2);
+      for (const [x, y] of [[-rx, -0.004], [rx, -0.004], [rx, TH], [-rx, TH]]) sp.push(cx + x, sole + y - spring * (1 - y / TH * 0.3), sl.z); });
+    for (let k2 = 0; k2 < M - 1; k2++) for (let q = 0; q < 4; q++) { const a0 = k2 * 4 + q, a1 = k2 * 4 + ((q + 1) % 4), b0 = a0 + 4, b1 = a1 + 4; si.push(a0, b1, b0, a0, a1, b1); }
+    for (const [k2, f] of [[0, 1], [M - 1, 0]]) { const b = k2 * 4; if (f) si.push(b, b + 2, b + 1, b, b + 3, b + 2); else si.push(b, b + 1, b + 2, b, b + 2, b + 3); }
+    const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3)); sg.setIndex(si); sg.computeVertexNormals();
+    at(sb, sg, 0xf2f0ea, 'rubber');
+    // boot shaft: the leg's measured section at each height, 6 mm off it, up to shaftH above the ankle
+    if (shaftH > 0 && lp.length > 20) {
+      const NS2 = 8, rr = [], ri = [], RG2 = 20;
+      for (let k2 = 0; k2 <= NS2; k2++) { const y = D.shin - 0.02 - shaftH * (k2 / NS2); let x0 = Infinity, x1 = -Infinity, q0 = Infinity, q1 = -Infinity;
+        for (const p of lp) if (Math.abs(p.y - y) < 0.015) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); q0 = Math.min(q0, p.z); q1 = Math.max(q1, p.z); }
+        if (!Number.isFinite(x0)) continue; for (let r2 = 0; r2 < RG2; r2++) { const a = (r2 / RG2) * Math.PI * 2; rr.push((x0 + x1) / 2 + Math.cos(a) * ((x1 - x0) / 2 + 0.006), y, (q0 + q1) / 2 + Math.sin(a) * ((q1 - q0) / 2 + 0.006)); } }
+      const NR = rr.length / 3 / RG2; for (let k2 = 0; k2 < NR - 1; k2++) for (let r2 = 0; r2 < RG2; r2++) { const a0 = k2 * RG2 + r2, a1 = k2 * RG2 + ((r2 + 1) % RG2), b0 = a0 + RG2, b1 = a1 + RG2; ri.push(a0, a1, b1, a0, b1, b0); }
+      const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.Float32BufferAttribute(rr, 3)); bg.setIndex(ri); bg.computeVertexNormals(); at(sb, bg, hex, 'rubber');
+    }
+  }
   // A glasses arm from its hinge back along the side of the head, over the top of the ear where it meets the skull,
   // then down behind it. The ear is found on the mesh head: where the side of the head stands out from the temple in
   // front of it by more than 8 mm. The arm hugs the measured surface 3.5 mm out.
@@ -998,7 +1087,7 @@ function figureGeometry(rig) {
     for (const a of [Math.PI / 2, Math.PI * 1.18, Math.PI * 1.82]) at(B.ctlA, capAB(V(0, 0, 0), V(Math.cos(a) * C.wheelR, Math.sin(a) * C.wheelR, 0), 0.012, 0.012, { seg: 6 }), 0x8a8f96, true);
     at(B.ctlA, new THREE.CylinderGeometry(0.045, 0.05, 0.04, 14).rotateX(Math.PI / 2), 0x2b2d31);
     at(B.ctlA, ellipsoid(V(0, C.wheelR, 0.0), 0.02, 0.012, 0.02), 0xe8601c); // top-centre marker
-    at(B.ctlA, capAB(V(0, 0, -0.02), V(0, 0, -0.42 - (rig.col.z - C.col.z) / Math.cos(C.tilt)), 0.025, 0.03, { seg: 8 }), 0x2b2d31); // column, forward into the dash (as far again as the wheel came towards the driver)
+    at(B.ctlA, capAB(V(0, 0, -0.02), V(0, 0, -(0.42 + (rig.col.z - C.col.z) / Math.cos(C.tilt))), 0.025, 0.03, { seg: 8 }), 0x2b2d31); // column, forward and down into the dash (reaching as deep as it did before the wheel came towards the driver)
   }
   // pedals
   if (rig.ctl !== 'bars' && rig.floorY == null) for (const i of [B.pedR, B.pedL]) {
