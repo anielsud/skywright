@@ -22,14 +22,44 @@ export const bodyReady = (async () => {
     const idx = new Uint16Array(bin, o, t); o += t * 2;
     const bi = new Uint8Array(bin, o, n * 4); o += n * 4;
     const bw = new Uint8Array(bin, o, n * 4); o += n * 4;
-    const eye = new Uint8Array(bin, o, n);
+    const eye = new Uint8Array(bin, o, n); o += n; o += (4 - (o % 4)) % 4;
+    const jn = meta.jointVerts || 0, jpos = jn ? new Float32Array(bin, o, jn * 3) : null;
     const bones = meta.bones, byName = Object.fromEntries(bones.map((b, i) => [b.name, i]));
     for (const b of bones) { b.h = V(...b.head); b.t = V(...b.tail); }
-    BODY = { n, pos, idx, bi, bw, eye, bones, byName };
+    let targets = null;
+    if (meta.targets?.length) try {
+      const tb = await fetch(new URL('targets.bin', base)).then((r) => r.arrayBuffer()), per = (n + jn) * 3;
+      targets = Object.fromEntries(meta.targets.map((t, k) => [t.name, { d: new Int8Array(tb, k * per, per), s: t.scale }]));
+    } catch (e) { console.warn('body targets unavailable: one body shape for everyone', e); }
+    BODY = { id: 'base', n, pos, idx, bi, bw, eye, bones, byName, jn, jpos, joints: meta.joints, targets };
   } catch (e) { console.warn('body mesh unavailable, procedural crew instead', e); }
   return BODY;
 })();
 export const body = () => BODY;
+
+// A person: the base body morphed by MakeHuman's macro targets, the way MakeHuman mixes them. p: { anc: [african,
+// asian, caucasian] (weights, summing to 1), male (0..1), age (0 young .. 1 old), muscle, weight, height (-1..1) }.
+// The skeleton's joints are re-derived from the morphed joint helpers, so the bones fit the new body. Cached by its
+// parameters; without targets everyone is the base body.
+const people = new Map();
+export function person(p) {
+  if (!BODY) return null; if (!BODY.targets || !p) return BODY;
+  const key = JSON.stringify(p); if (people.has(key)) return people.get(key);
+  const T = BODY.targets, n = BODY.n, jn = BODY.jn, w = [], add = (name, k) => { if (k > 1e-4 && T[name]) w.push([T[name], k]); };
+  const m = p.male ?? 0.5, sexes = [['male', m], ['female', 1 - m]], age = p.age ?? 0;
+  ['african', 'asian', 'caucasian'].forEach((r, k) => { for (const [sx, ws] of sexes) { add(`${r}-${sx}-young`, p.anc[k] * ws * (1 - age)); add(`${r}-${sx}-old`, p.anc[k] * ws * age); } });
+  for (const [sx, ws] of sexes) {
+    add(`universal-${sx}-young-averagemuscle-maxweight`, ws * Math.max(0, p.weight || 0));
+    add(`universal-${sx}-young-minmuscle-minweight`, ws * Math.max(0, -(p.weight || 0)));
+    add(`universal-${sx}-young-maxmuscle-averageweight`, ws * Math.max(0, p.muscle || 0));
+    add(`height-${sx}-maxheight`, ws * Math.max(0, p.height || 0)); add(`height-${sx}-minheight`, ws * Math.max(0, -(p.height || 0)));
+  }
+  const pos = new Float32Array(BODY.pos), jp = new Float32Array(BODY.jpos);
+  for (const [t, k] of w) { const f = t.s * k, d = t.d; for (let i = 0; i < n * 3; i++) pos[i] += d[i] * f; for (let i = 0; i < jn * 3; i++) jp[i] += d[n * 3 + i] * f; }
+  const J = {}; for (const [name, ix] of Object.entries(BODY.joints)) { const c = V(); for (const i of ix) c.add(V(jp[i * 3], jp[i * 3 + 1], jp[i * 3 + 2])); J[name] = c.multiplyScalar(1 / ix.length); }
+  const bones = BODY.bones.map((b) => ({ ...b, h: J[b.hj].clone(), t: J[b.tj].clone() }));
+  const out = { ...BODY, id: key, pos, bones }; people.set(key, out); return out;
+}
 
 // source bone -> rig segment
 function segmentOf(name) {
@@ -59,9 +89,9 @@ function frame(o, dir, front) {
 //           flesh depth below its bone line;
 //   thumb: which way along X the thumb lies (+1 / -1); G(r): the bar's centre for a bar of radius r (palm on it).
 const handCache = new Map();
-export function handModel(scale = 1.07) {
-  if (!BODY) return null; if (handCache.has(scale)) return handCache.get(scale);
-  const { bones: SB, byName: N } = BODY, J = (n, end = 'h') => SB[N[n]][end].clone().multiplyScalar(scale), out = {};
+export function handModel(S = BODY, scale = 1.07) {
+  if (!S) return null; const key = S.id + '|' + scale; if (handCache.has(key)) return handCache.get(key);
+  const { bones: SB, byName: N } = S, J = (n, end = 'h') => SB[N[n]][end].clone().multiplyScalar(scale), out = {};
   for (const s of ['R', 'L']) {
     const wr = J('wrist.' + s), k2 = J('finger2-1.' + s), k5 = J('finger5-1.' + s), fy = J('finger3-1.' + s).sub(wr).normalize();
     const back = new THREE.Vector3().crossVectors(k5.clone().sub(k2), fy).normalize(); if (back.y < 0) back.negate(); // (the back of the hand is up in the rest pose)
@@ -72,40 +102,40 @@ export function handModel(scale = 1.07) {
     const isPalm = SB.map((b) => segmentOf(b.name) === 'hand' + s && !/^finger/.test(b.name)), f32 = N['finger3-2.' + s];
     const a = J('finger3-2.' + s), ab = J('finger3-2.' + s, 't').sub(a), abl = ab.length(); ab.normalize();
     let palm = 0, fr = 0, fn = 0; const v = V();
-    for (let i = 0; i < BODY.n; i++) {
+    for (let i = 0; i < S.n; i++) {
       let wh = 0, wf = 0;
-      for (let k = 0; k < 4; k++) { const w = BODY.bw[i * 4 + k] / 255, bi = BODY.bi[i * 4 + k]; if (isPalm[bi]) wh += w; if (bi === f32) wf += w; }
+      for (let k = 0; k < 4; k++) { const w = S.bw[i * 4 + k] / 255, bi = S.bi[i * 4 + k]; if (isPalm[bi]) wh += w; if (bi === f32) wf += w; }
       if (wh < 0.5 && wf < 0.6) continue;
-      v.set(BODY.pos[i * 3], BODY.pos[i * 3 + 1], BODY.pos[i * 3 + 2]).multiplyScalar(scale);
+      v.set(S.pos[i * 3], S.pos[i * 3 + 1], S.pos[i * 3 + 2]).multiplyScalar(scale);
       if (wh >= 0.5) { const l = L(v); if (Math.abs(l.y - gy) < 0.012 && Math.abs(l.x - gx) < 0.03) palm = Math.max(palm, -l.z); }
       if (wf >= 0.6) { const d = v.clone().sub(a), t = d.dot(ab); if (t > 0.2 * abl && t < 0.8 * abl) { const off = d.addScaledVector(ab, -t); if (off.dot(back) < 0) { fr = Math.max(fr, -off.dot(back)); fn = 1; } } } // (the palm-side flesh: what touches the bar)
     }
     out[s] = { src, inv, gx, gy, palm, finger: fn ? fr : 0.009, thumb, G: (r) => V(gx, gy, -(palm + r)) };
   }
-  handCache.set(scale, out); return out;
+  handCache.set(key, out); return out;
 }
 
 // The body's own proportions, measured from its joints (the rig takes them, so nothing is stretched): limb lengths,
 // the shoulder and hip joints in the spine / hips frames, the thigh's top surface (above its bone, two thirds down)
 // and the ankle's height above the sole.
 const dimCache = new Map();
-export function bodyDims(scale = 1.07) {
-  if (!BODY) return null; if (dimCache.has(scale)) return dimCache.get(scale);
-  const { bones: SB, byName: N } = BODY, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), FRONT = V(0, 0, -1);
+export function bodyDims(S = BODY, scale = 1.07) {
+  if (!S) return null; const key = S.id + '|' + scale; if (dimCache.has(key)) return dimCache.get(key);
+  const { bones: SB, byName: N } = S, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), FRONT = V(0, 0, -1);
   const hipC = J('upperleg01.L').add(J('upperleg01.R')).multiplyScalar(0.5), neckB = J('neck01'), up = neckB.clone().sub(hipC);
   const sh = J('upperarm01.R'), el = J('lowerarm01.R'), wr = J('wrist.R'), hp = J('upperleg01.R'), kn = J('lowerleg01.R'), an = J('foot.R');
   const spine = up.length() - 0.03, shL = sh.clone().applyMatrix4(frame(hipC.clone().add(V(0, 0.03, 0)), up, FRONT).invert());
   const thF = frame(hp, kn.clone().sub(hp), FRONT).invert(), thigh = kn.distanceTo(hp), segOf = SB.map((b) => segmentOf(b.name));
   let thighTop = 0, sole = Infinity;
-  for (let i = 0; i < BODY.n; i++) {
-    const b = BODY.bi[i * 4], g = segOf[b]; if (g !== 'thighR' && g !== 'shinR') continue;
-    const v = V(BODY.pos[i * 3], BODY.pos[i * 3 + 1], BODY.pos[i * 3 + 2]).multiplyScalar(scale);
+  for (let i = 0; i < S.n; i++) {
+    const b = S.bi[i * 4], g = segOf[b]; if (g !== 'thighR' && g !== 'shinR') continue;
+    const v = V(S.pos[i * 3], S.pos[i * 3 + 1], S.pos[i * 3 + 2]).multiplyScalar(scale);
     if (g === 'thighR') { const l = v.clone().applyMatrix4(thF); if (l.y > 0.55 * thigh && l.y < 0.72 * thigh) thighTop = Math.max(thighTop, -l.z); }
     else sole = Math.min(sole, v.y);
   }
   const d = { upper: el.distanceTo(sh), fore: wr.distanceTo(el), thigh, shin: an.distanceTo(kn), spine, shoulderW: Math.abs(shL.x), shoulderUp: shL.y, shoulderZ: shL.z,
     hipW: Math.abs(hp.x - hipC.x), thighTop, ankleH: an.y - sole };
-  dimCache.set(scale, d); return d;
+  dimCache.set(key, d); return d;
 }
 
 // A seated spine: the bend spread evenly over the four vertebra joints (spine04..spine01) about the body's side axis
@@ -113,9 +143,9 @@ export function bodyDims(scale = 1.07) {
 // blades come round when reaching. Returns per-bone source-space transforms (for the spine segment's bones) and where
 // that leaves the shoulder joints and the neck, in the spine segment's frame (the rig puts its joints there).
 const spineCache = new Map();
-export function spinePose(DIM, flex = 0, protract = 0, scale = 1.07) {
-  if (!BODY) return null; const key = [DIM.spine, flex, protract, scale].join('|'); if (spineCache.has(key)) return spineCache.get(key);
-  const { bones: SB, byName: N } = BODY, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), FRONT = V(0, 0, -1);
+export function spinePose(DIM, flex = 0, protract = 0, S = BODY, scale = 1.07) {
+  if (!S) return null; const key = [S.id, DIM.spine, flex, protract, scale].join('|'); if (spineCache.has(key)) return spineCache.get(key);
+  const { bones: SB, byName: N } = S, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), FRONT = V(0, 0, -1);
   const rotAt = (P, axis, a) => new THREE.Matrix4().makeTranslation(P.x, P.y, P.z).multiply(new THREE.Matrix4().makeRotationAxis(axis, a)).multiply(new THREE.Matrix4().makeTranslation(-P.x, -P.y, -P.z));
   const local = SB.map((b) => { // the rotation each bone itself contributes at its head
     if (/^spine0[1-4]$/.test(b.name)) return rotAt(b.h.clone().multiplyScalar(scale), V(1, 0, 0), -flex / 4);
@@ -135,18 +165,18 @@ export function spinePose(DIM, flex = 0, protract = 0, scale = 1.07) {
 // The torso's surface in its rig bones' local frames (as poseBody places it): { hips: [Vector3], spine: [Vector3] }.
 // The rig uses it to sit the body in a seat: the buttocks on the cushion, the back against the seat back.
 const torsoCache = new Map();
-export function torsoPoints(DIM, SP = null, scale = 1.07) {
-  if (!BODY) return null; const key = scale + '|' + DIM.spine + '|' + (SP ? SP.key : ''); if (torsoCache.has(key)) return torsoCache.get(key);
-  const { bones: SB, byName: N } = BODY, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), FRONT = V(0, 0, -1);
+export function torsoPoints(DIM, SP = null, S = BODY, scale = 1.07) {
+  if (!S) return null; const key = S.id + '|' + scale + '|' + DIM.spine + '|' + (SP ? SP.key : ''); if (torsoCache.has(key)) return torsoCache.get(key);
+  const { bones: SB, byName: N } = S, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), FRONT = V(0, 0, -1);
   const hipC = J('upperleg01.L').add(J('upperleg01.R')).multiplyScalar(0.5), neckB = J('neck01'), up = neckB.clone().sub(hipC);
   const Lh = frame(hipC, up, FRONT).invert();
   const Ls = new THREE.Matrix4().makeScale(1, DIM.spine / (up.length() - 0.03), 1).multiply(frame(hipC.clone().add(V(0, 0.03, 0)), up, FRONT).invert());
   const segOf = SB.map((b) => segmentOf(b.name)), out = { hips: [], spine: [] };
-  for (let i = 0; i < BODY.n; i++) {
-    let wh = 0, ws = 0; for (let k = 0; k < 4; k++) { const w = BODY.bw[i * 4 + k], g = segOf[BODY.bi[i * 4 + k]]; if (g === 'hips') wh += w; else if (g === 'spine') ws += w; }
+  for (let i = 0; i < S.n; i++) {
+    let wh = 0, ws = 0; for (let k = 0; k < 4; k++) { const w = S.bw[i * 4 + k], g = segOf[S.bi[i * 4 + k]]; if (g === 'hips') wh += w; else if (g === 'spine') ws += w; }
     if (wh + ws < 200) continue; // (mostly torso)
-    const v = V(BODY.pos[i * 3], BODY.pos[i * 3 + 1], BODY.pos[i * 3 + 2]).multiplyScalar(scale);
-    if (wh >= ws) out.hips.push(v.applyMatrix4(Lh)); else { const bm = SP && SP.boneM[BODY.bi[i * 4]]; if (bm) v.applyMatrix4(bm); out.spine.push(v.applyMatrix4(Ls)); }
+    const v = V(S.pos[i * 3], S.pos[i * 3 + 1], S.pos[i * 3 + 2]).multiplyScalar(scale);
+    if (wh >= ws) out.hips.push(v.applyMatrix4(Lh)); else { const bm = SP && SP.boneM[S.bi[i * 4]]; if (bm) v.applyMatrix4(bm); out.spine.push(v.applyMatrix4(Ls)); }
   }
   torsoCache.set(key, out); return out;
 }
@@ -154,9 +184,9 @@ export function torsoPoints(DIM, SP = null, scale = 1.07) {
 // rig: { p: [Vector3], q: [Quaternion], B: bone ids, DIM }. Returns { pos, nrm, skinIndex, skinWeight, seg (per vertex
 // rig segment name), along (0..1 along its segment), eye, index, head: { centre, radii } (head-bone local) }.
 export function poseBody(rig, { grip = true, scale = 1.07, seat = { y: -0.09, back: 0.125 } } = {}) {
-  const S = BODY; if (!S) return null;
+  const S = rig.body || BODY; if (!S) return null;
   const { bones: SB, byName: N } = S, { B, DIM } = rig, J = (n, end = 'h') => SB[N[n]][end].clone().multiplyScalar(scale);
-  const FRONT = V(0, 0, -1), UP = V(0, 1, 0), HM = handModel(scale);
+  const FRONT = V(0, 0, -1), UP = V(0, 1, 0), HM = handModel(S, scale);
   const rigM = (i, at = null) => new THREE.Matrix4().compose(at || rig.p[i], rig.q[i], V(1, 1, 1));
   // segment frames in the source, the rig bone each goes to, and its length there
   const hipC = J('upperleg01.L').add(J('upperleg01.R')).multiplyScalar(0.5), neckB = J('neck01');

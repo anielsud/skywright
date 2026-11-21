@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { PARTS } from './parts.js';
-import { bodyReady, body, poseBody, handModel, torsoPoints, bodyDims, spinePose } from './body.js';
+import { bodyReady, body, person, poseBody, handModel, torsoPoints, bodyDims, spinePose } from './body.js';
 const LIP_BONES = /^oris/; // the mouth's ring muscle in the body mesh's skeleton: its skin is the lips
 await bodyReady; // (the people's mesh: loaded once, before any figure is built; without it the procedural figure stands in)
 
@@ -76,6 +76,14 @@ export function crewMaterials() {
 // ---------- outfits ----------
 // colours: suit, suit2 (vest / trousers), trim (stripes, harness), glove, boot, skin, hair, helmet, helmet2, visor
 const SKIN = [0xe0ac8a, 0xb07a55, 0x7a4b32, 0xf0c8a8];
+// who each seed is (the body mesh's macro targets, body.js person()): ancestry loosely matching the skin tone, sex,
+// age, build and height, so two crew side by side are two different people
+const PEOPLE = [
+  { anc: [0.1, 0.2, 0.7], male: 0.95, age: 0.12, muscle: 0.25, weight: 0.15, height: 0.25 },
+  { anc: [0.15, 0.55, 0.3], male: 0.04, age: 0.05, muscle: 0.0, weight: -0.25, height: -0.45 },
+  { anc: [0.85, 0.05, 0.1], male: 0.92, age: 0.28, muscle: 0.4, weight: 0.45, height: 0.45 },
+  { anc: [0.0, 0.1, 0.9], male: 0.06, age: 0.18, muscle: 0.1, weight: 0.1, height: -0.1 },
+];
 const HAIR = [0x2b1d14, 0x4a3020, 0x111111, 0x8a6a3a];
 export const OUTFITS = {
   jet: { head: 'helmet', mask: true, visor: 0x8a6a1e, helmet: 0xdfe2e4, helmet2: 0x4d5560, suit: 0x56603f, suit2: 0x3e4531, trim: 0x2a2c2e, glove: 0x3b2e25, boot: 0x1a1a1a, harness: true },
@@ -276,9 +284,10 @@ class Rig {
   constructor(kind, ctl, outfit, seed, opts = {}) {
     this.kind = kind; this.ctl = ctl; this.o = outfit; this.seed = seed;
     this.pegs = opts.pegs || [V(-0.24, -0.62, 0.0), V(0.24, -0.62, 0.0)]; this.groundY = opts.groundY ?? -1.1;
-    const C = CTL[ctl] || CTL.none, HM = outfit.head !== 'bubble' ? handModel() : null;
+    const C = CTL[ctl] || CTL.none; this.body = outfit.head !== 'bubble' && body() ? person(PEOPLE[seed % PEOPLE.length]) : null;
+    const HM = this.body ? handModel(this.body) : null;
     // proportions: the body mesh's own (measured from its joints, so its limbs aren't stretched), else the procedural set
-    const D = this.D = HM ? { ...DIM, ...bodyDims() } : DIM;
+    const D = this.D = HM ? { ...DIM, ...bodyDims(this.body) } : DIM;
     this.C = C;
     // the hand's grip geometry: the body mesh's measured hand, or the procedural fist (bar 6.2 cm past the wrist, 1.6 cm
     // under the bone line, thumb on the inboard side)
@@ -286,7 +295,7 @@ class Rig {
     // the seated spine (body mesh): the pelvis rolls back (lean), the back bends forward over four vertebrae (flex) and
     // the shoulders come forward towards the hands (protract); the rig's shoulders and neck are where that leaves them
     const reach = ctl === 'wheel' || ctl === 'stick' || ctl === 'cyclic' || ctl === 'yoke';
-    this.spine = HM ? spinePose(D, ctl === 'bars' ? 0.15 : 0.5, ctl === 'bars' ? 0.15 : reach ? 0.22 : 0.08) : null;
+    this.spine = HM ? spinePose(D, ctl === 'bars' ? 0.15 : 0.5, ctl === 'bars' ? 0.15 : reach ? 0.22 : 0.08, this.body) : null;
     const lean = HM && ctl !== 'bars' ? 0.3 : D.lean;
     // static joints
     const spineQ = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), lean);
@@ -295,7 +304,7 @@ class Rig {
     // the cushion and its rake), the body moves so its lowest point (plus clothing) rests on the cushion, sunk a
     // little, and its back (plus what's worn on it) meets the seat back. The controls stay where the vehicle put them.
     this.base = V();
-    const TP = opts.seat && HM ? torsoPoints(D, this.spine) : null;
+    const TP = opts.seat && HM ? torsoPoints(D, this.spine, this.body) : null;
     if (TP) {
       const st = opts.seat, sM = new THREE.Matrix4().compose(V(0, 0.03, 0), spineQ, V(1, 1, 1)), pts = [...TP.hips, ...TP.spine.map((p) => p.clone().applyMatrix4(sM))];
       const seatT = outfit.shorts ? 0.008 : 0.012, backT = outfit.vest ? 0.034 : outfit.tee || outfit.shirt ? 0.006 : 0.012;
@@ -309,20 +318,30 @@ class Rig {
     const sp = (x, y, z) => V(x, y, z).applyQuaternion(spineQ).add(this.spinePos);
     this.joints(sp);
     this.hipR = V(D.hipW, 0, 0).add(this.base); this.hipL = V(-D.hipW, 0, 0).add(this.base);
+    // a seated person's shins lean forward 12 degrees, or further if the seat is low for their legs: as far as keeps the
+    // knees' tops within 6 cm of the hips (tall people sit with their feet further out)
+    this.shinLean = 0.21;
+    if (opts.seat?.floor != null) { const ay = opts.seat.floor + (D.ankleH ?? 0.07), c = (this.hipR.y + 0.06 - (D.thighTop ?? 0.075) - ay) / D.shin; this.shinLean = clamp(Math.acos(clamp(c, -1, 1)), 0.21, 1.0); }
     // the wheel comes to the seated driver: its column slides (along the rig's z) until the hands' grips are a relaxed
-    // reach from the shoulders (the wrist at 85% of the arm's length, plus the hand), elbows bent as a driver's are
+    // reach from the shoulders (the wrist at 78% of the arm's length, plus the hand), elbows bent about 120 degrees as a relaxed driver's are
     this.col = C.col ? C.col.clone() : null;
     if (ctl === 'wheel') {
       const tq = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), -C.tilt), off = V(Math.sin(1.15) * C.wheelR, Math.cos(1.15) * C.wheelR, 0).applyQuaternion(tq);
-      const want = 0.85 * (D.upper + D.fore) + this.hand.G('R', 0.017).length(), dist = (dz) => V(C.col.x, this.col.y, C.col.z + dz).add(off).distanceTo(this.shR);
-      // and clear of the thighs: the rim's lowest point 5 cm above the knees' tops (feet on a floor: the knee's height
-      // from the ankle and shin)
-      const low = V(0, -C.wheelR, 0).applyQuaternion(tq), kneeTop = opts.seat?.floor != null ? opts.seat.floor + (D.ankleH ?? 0.07) + D.shin * Math.cos(0.21) + (D.thighTop ?? 0.075) : -Infinity;
-      for (let pass = 0; pass < 3; pass++) {
+      const want = 0.78 * (D.upper + D.fore) + this.hand.G('R', 0.017).length(), dist = (dz) => V(C.col.x, this.col.y, C.col.z + dz).add(off).distanceTo(this.shR);
+      // and clear of the thighs: every point of the rim that is over a thigh (each thigh a line from its hip to its knee,
+      // feet on the floor; its top the measured thigh surface) stays 3 cm above it. The rim's bottom, between the
+      // knees, needn't.
+      const fl = opts.seat?.floor, thighs = fl == null ? [] : [this.hipR, this.hipL].map((hip) => {
+        const ky = fl + (D.ankleH ?? 0.07) + D.shin * Math.cos(this.shinLean), dy = hip.y - ky, kz = hip.z - Math.sqrt(Math.max(0, D.thigh * D.thigh - dy * dy)) * 0.995;
+        return { a: hip.clone(), b: V(hip.x * 1.25, ky, kz) }; });
+      const rimNeed = () => { let need = -Infinity; for (let k = 0; k < 48; k++) { const a = (k / 48) * Math.PI * 2, p = V(Math.cos(a) * C.wheelR, Math.sin(a) * C.wheelR, 0).applyQuaternion(tq).add(this.col);
+        for (const t of thighs) { if ((p.z - t.a.z) * (p.z - t.b.z) > 0) continue; const c = t.a.clone().lerp(t.b, (p.z - t.a.z) / (t.b.z - t.a.z));
+          if (Math.abs(p.x - c.x) < 0.08) need = Math.max(need, c.y + (D.thighTop ?? 0.075) + 0.03 - p.y); } } return need; };
+      for (let pass = 0; pass < 4; pass++) {
         let lo = -0.3, hi = 0.4; // dist falls as dz grows (the wheel nears the driver)
         for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if (dist(m) > want) lo = m; else hi = m; }
         this.col.z = C.col.z + (lo + hi) / 2;
-        const need = kneeTop + 0.05 - (this.col.y + low.y); if (need > 0) this.col.y += need; else break; // (raised: the reach is solved again)
+        const need = rimNeed(); if (need > 0.002) this.col.y += need; else break; // (raised: the reach is solved again)
       }
     }
     this.state = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 };
@@ -457,7 +476,7 @@ class Rig {
     // the shin leaning 12 degrees forward of vertical and the thigh reaching it from the hip; the feet a little wider
     // than the hips
     if (this.floorY != null && !bars) for (const [k, hip] of [['R', this.hipR], ['L', this.hipL]]) {
-      const ph = 0.21, ay = this.floorY + (D.ankleH ?? 0.07), ky = ay + D.shin * Math.cos(ph), dy = hip.y - ky;
+      const ph = this.shinLean, ay = this.floorY + (D.ankleH ?? 0.07), ky = ay + D.shin * Math.cos(ph), dy = hip.y - ky;
       const dz = Math.sqrt(Math.max(0, D.thigh * D.thigh - dy * dy)) * 0.995, kz = hip.z - dz;
       feet[k] = V(hip.x * 1.25, ay, kz - D.shin * Math.sin(ph));
     }
@@ -489,13 +508,13 @@ function figureGeometry(rig) {
   const route = (hex, gloss) => (typeof gloss === 'string' ? gloss : gloss ? (hex === o.visor ? 'glass' : 'paint') : hex === skin ? 'skin' : hex === hair ? 'hair' : (hex === o.glove || hex === o.boot || hex === 0x1d1d1f || hex === 0x15161a) ? 'rubber' : 'fabric');
   const at = (i, geo, hex, gloss = false) => k.add(geo, hex, i, route(hex, gloss), geo.attributes.skinIndex ? null : R(i)); // (a loft is built in rig space)
   // ---- the body: the skinned human mesh posed onto this rig (body.js), coloured by what the outfit covers ----
-  const BP = o.head !== 'bubble' && body() ? poseBody({ p: rig.p, q: rig.q, B, DIM: rig.D, grips: rig.grips, spine: rig.spine }, { seat: rig.ctl === 'bars' ? { y: -0.08, back: null } : rig.seatY != null ? { y: rig.seatY - 0.012, back: null } : { y: -0.09, back: 0.125 } }) : null;
+  const BP = rig.body ? poseBody({ p: rig.p, q: rig.q, B, DIM: rig.D, grips: rig.grips, spine: rig.spine, body: rig.body }, { seat: rig.ctl === 'bars' ? { y: -0.08, back: null } : rig.seatY != null ? { y: rig.seatY - 0.012, back: null } : { y: -0.09, back: 0.125 } }) : null;
   // a crew neckline round the base of the neck (spine-local, by where each point is, so it's smooth across the mesh's
   // bones): 5.5 cm under the neck joint in front, 3 at the sides, 2 behind. > 0 below it (inside the shirt), metres.
   const neckF = BP ? (() => { const sinv = R(B.spine).invert(), nk = rig.spine ? rig.spine.neck : V(0, D.spine, 0), v = V();
     return (i) => { v.set(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(sinv); const c2 = Math.cos(Math.atan2(v.x - nk.x, -(v.z - nk.z))); return (nk.y - (0.03 + 0.025 * c2 * (c2 > 0 ? 1 : 0.4))) - v.y; }; })() : null;
   // lips: the skin the mouth's ring muscle carries (by the mesh's own weights), shading from the skin to a lip tone
-  const SRC = body(), lipBone = SRC ? SRC.bones.map((b) => LIP_BONES.test(b.name)) : [], LIP = new THREE.Color(0x9a4f4a);
+  const SRC = rig.body, lipBone = SRC ? SRC.bones.map((b) => LIP_BONES.test(b.name)) : [], LIP = new THREE.Color(0x9a4f4a);
   const lipW = (i) => { let w = 0; for (let k2 = 0; k2 < 4; k2++) if (lipBone[SRC.bi[i * 4 + k2]]) w += SRC.bw[i * 4 + k2] / 255; return w; };
   if (BP) {
     const n = BP.pos.length / 3, cols = new Float32Array(n * 3), slotOf = new Array(n), c = new THREE.Color();
