@@ -281,6 +281,7 @@ function ikTwo(S, T, a, b, pole, outE, outP = null) {
 }
 
 const POSTURES = new Map(); // (solved postures: person, seat and controls -> v)
+const ADJ_KEYS = ['pedZ', 'pedY', 'seatZ', 'seatY']; // (what a vehicle may declare adjustable: Rig.adjustVars)
 class Rig {
   constructor(kind, ctl, outfit, seed, opts = {}) {
     this.kind = kind; this.ctl = ctl; this.o = outfit; this.seed = seed;
@@ -313,7 +314,7 @@ class Rig {
   // shins' forward lean, feet on the floor), splay (knees and feet apart), colZ / colY (a wheel's helm adjusted towards
   // the driver / up) }. The seat fit, shoulders, hips and the torso obstacle all follow from it.
   configure(v) {
-    const D = this.D, o = this.o, ctl = this.ctl, HM = !!this.body, st = this.opts.seat, C = this.C;
+    const D = this.D, o = this.o, ctl = this.ctl, HM = !!this.body, st = this.railSeat(v), C = this.C;
     this.v = v;
     this.spine = HM ? spinePose(D, v.flex, v.prot, this.body) : null;
     const spineQ = this.spineQ = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), HM && ctl !== 'bars' ? v.lean : D.lean);
@@ -361,6 +362,7 @@ class Rig {
     parts.legs = c - parts.arms;
     const st = this.opts.seat, leanTo = st ? clamp(st.tilt + 0.05, 0.15, 0.5) : 0.25; // (lying back into a raked seat is relaxed)
     const c0 = c; c += ((v.lean - leanTo) / 0.15) ** 2 + ((v.flex - 0.4) / 0.3) ** 2 + (v.prot / 0.3) ** 2 + (v.slide / 0.06) ** 2 + (v.splay / 0.1) ** 2; parts.posture = c - c0; // (knees wide apart is no way to sit)
+    if (this.C.adjust) { parts.adjust = this.adjustCost(v); c += parts.adjust; }
     if (this.ctl === 'wheel') {
       c += ((v.colZ || 0) / 0.08) ** 2 + ((v.colY || 0) / 0.08) ** 2; // (a tilt helm adjusts: some cost)
       const rimR = 0.017, spInv = q[B.spine].clone().invert(), ELL = this.torsoEll, P = V();
@@ -380,9 +382,10 @@ class Rig {
   // each variable stepped both ways while it helps, the steps halving each pass. Cached per person, seat and controls.
   solvePosture() {
     const key = [this.kind, this.ctl, this.seed % PEOPLE.length, JSON.stringify(this.opts.seat), JSON.stringify(this.opts.helm || null)].join('|');
-    if (POSTURES.has(key)) { const r = POSTURES.get(key); this.gripA = r.gripA && { ...r.gripA }; return { ...r.v }; }
+    if (POSTURES.has(key)) { const r = POSTURES.get(key); this.gripA = r.gripA && { ...r.gripA }; this.postureScore = r.score; return { ...r.v }; }
     const VARS = [['lean', 0.05, 0.5, 0.08], ['flex', 0, 0.9, 0.12], ['prot', 0, 0.35, 0.06], ['slide', 0, 0.14, 0.03], ['shin', 0.05, 1.1, 0.12], ['splay', 0, 0.35, 0.08]];
     if (this.ctl === 'wheel') VARS.push(['colZ', -0.05, 0.05, 0.025], ['colY', -0.05, 0.05, 0.025]); // (a tilt helm's few centimetres; where the helm is, is the vehicle's)
+    VARS.push(...this.adjustVars()); // (pedals, a seat on rails: whatever the vehicle declared adjustable, within its travel)
     this.solving = true;
     const cost = (vv) => { this.configure(vv); return this.postureCost(); };
     const descend = (v, best) => {
@@ -397,16 +400,42 @@ class Rig {
     };
     // several starts (for a wheel, a coarse grid of helm positions; the descent alone gets stuck, e.g. knees spread
     // round a low wheel when raising it would be better), the best two descended, the better kept
-    const v0 = this.defaultPosture(), starts = [];
+    const v0 = { ...this.defaultPosture(), ...this.adjustStart() }, starts = [];
     if (this.ctl === 'wheel') for (const colZ of [-0.05, 0, 0.05]) for (const colY of [-0.05, 0, 0.05]) { const t = { ...v0, colZ, colY }; delete this.armSol; starts.push({ v: t, c: cost(t), gripA: this.gripA && { ...this.gripA } }); } // (the rim grip is searched fully once, then refined locally)
-    else { delete this.armSol; starts.push({ v: v0, c: cost(v0) }); }
+    else for (const t of this.adjustStarts(v0)) { delete this.armSol; starts.push({ v: t, c: cost(t) }); } // (with adjustable pedals or seat, a coarse grid of their settings)
     starts.sort((a, b) => a.c - b.c);
     let win = null;
     for (const st0 of starts.slice(0, 2)) { this.gripA = st0.gripA && { ...st0.gripA }; delete this.armSol; cost(st0.v); const r = descend(st0.v, cost(st0.v)); r.gripA = this.gripA && { ...this.gripA }; if (!win || r.c < win.c) win = r; }
     let v = win.v, best = win.c; this.gripA = win.gripA; delete this.armSol;
     this.solving = false; this.postureScore = best;
-    POSTURES.set(key, { v: { ...v }, gripA: this.gripA && { ...this.gripA } });
+    POSTURES.set(key, { v: { ...v }, gripA: this.gripA && { ...this.gripA }, score: best });
     return v;
+  }
+  // ---- adjustable controls and seat ----
+  // A vehicle may declare what adjusts and how far (C.adjust, rig space, offsets from where it put things: pedZ / pedY
+  // the rudder pedals aft / up, seatZ / seatY the seat on its rails aft / up; [lo, hi] each). The posture solve
+  // chooses them once, as extra variables, like a wheel's tilt helm; the pedals are drawn where they were set (they're
+  // the rig's), the seat's own mesh is moved by addCrew (railSeatMesh).
+  adjustVars() {
+    const A = this.C.adjust; if (!A) return [];
+    return ADJ_KEYS.filter((k) => A[k]).map((k) => [k, A[k][0], A[k][1], Math.max(0.01, (A[k][1] - A[k][0]) / 4)]);
+  }
+  // the solve starts from where the vehicle put things (or the nearest end of the travel)
+  adjustStart() { const out = {}; for (const [k, lo, hi] of this.adjustVars()) out[k] = clamp(0, lo, hi); return out; }
+  // starts for the solve over the adjustments' coarse grid (each at either end of its travel and where it was put):
+  // the descent alone stops short, e.g. a short pilot sliding off the seat back rather than bringing the seat forward
+  adjustStarts(v0) {
+    let out = [v0];
+    for (const [k, lo, hi] of this.adjustVars()) out = out.flatMap((v) => [...new Set([lo, clamp(0, lo, hi), hi])].map((x) => ({ ...v, [k]: x })));
+    return out;
+  }
+  // an adjustment is cheap (a lever and a slide): a little cost, for a definite answer near where things were put
+  adjustCost(v) { let c = 0; for (const [k] of this.adjustVars()) c += 0.5 * ((v[k] || 0) / 0.15) ** 2; return c; }
+  // the seat's surfaces moved along its rails by v.seatZ / v.seatY (the floor stays)
+  railSeat(v) {
+    const st = this.opts.seat; if (!st || !(v.seatZ || v.seatY)) return st;
+    const dz = v.seatZ || 0, dy = v.seatY || 0;
+    return { ...st, panTop: st.panTop + dy, backTop: st.backTop + dy, backZ: st.backZ + dz };
   }
   // neck and shoulders on the spine (sp: spine-local -> rig space): the posed spine's, else the procedural proportions
   joints(sp) {
@@ -455,7 +484,7 @@ class Rig {
       this.restHands = true; // resting on the thighs: placed on them once the legs are posed (pose)
     }
     // pedals: rudder pedals swing fore and aft; a car has a throttle pedal under the right foot
-    const pz = C.pedZ ?? -0.86, py = C.pedY ?? -0.34; // (pedals: the vehicle may say where)
+    const pz = (C.pedZ ?? -0.86) + (this.v?.pedZ || 0), py = (C.pedY ?? -0.34) + (this.v?.pedY || 0); // (pedals: the vehicle may say where, and how far they adjust)
     if (this.ctl === 'wheel') {
       p[B.pedR].set(0.12, py, pz); q[B.pedR].setFromEuler(e.set(-0.5 - s.thr * 0.35, 0, 0));
       p[B.pedL].set(-0.14, py, pz + 0.02); q[B.pedL].setFromEuler(e.set(-0.5, 0, 0));
@@ -1356,6 +1385,26 @@ function seatControls(st, s) {
   for (const [k, v] of Object.entries(src)) { if (v == null) continue; out[k] = Array.isArray(v) ? V(...v).divideScalar(s) : /(tilt|Ang)$/.test(k) ? v : v / s; }
   return Object.keys(out).length ? out : null;
 }
+// A seat's adjustable controls and seat (seat.adjust, part units: { pedZ, pedY, seatZ, seatY: [lo, hi] }, offsets
+// from where the seat declares them, + = aft / up) into the figure's rig space, alongside its control placement.
+// Only a seat with crew controls adjusts its pedals; a seat's rails adjust for anyone.
+function seatAdjust(st, s, ctlSet) {
+  const A = st.adjust; if (!A) return ctlSet;
+  const adj = {}; for (const [k, r] of Object.entries(A)) if (Array.isArray(r) && r.length === 2 && (st.role !== 'crew' || k.startsWith('seat'))) adj[k] = [r[0] / s, r[1] / s];
+  return Object.keys(adj).length ? { ...(ctlSet || {}), adjust: adj } : ctlSet;
+}
+// The seat on its rails: the vehicle built it before anyone sat in it, as its own mesh(es) tagged
+// userData.seatRail = the seat's index; once the figure's posture (and with it the seat's travel) is solved, they move
+// by that much (rig space -> the part's space, then into each mesh's parent's).
+function railSeatMesh(obj, st, k, rig) {
+  const dz = rig?.v?.seatZ || 0, dy = rig?.v?.seatY || 0; if (!dz && !dy) return;
+  const s = st.s || 1, d = V(0, dy * s, dz * s); obj.updateMatrixWorld(true);
+  obj.traverse((m) => {
+    if (m.userData.seatRail !== k || !m.parent) return;
+    const a = m.parent.worldToLocal(obj.localToWorld(V())), b = m.parent.worldToLocal(obj.localToWorld(d.clone()));
+    m.position.add(b.sub(a)); m.updateMatrix();
+  });
+}
 export function addCrew(design, objs) {
   const rigs = [];
   design.parts.forEach((p, i) => {
@@ -1379,11 +1428,12 @@ export function addCrew(design, objs) {
       }
       // a seat built with seatGeo declares it (fit: { at: where its geometry was placed, dims: seatGeo's arguments }), so
       // the figure can sit on its actual surfaces
-      const seat = st.fit && ctl !== 'bars' ? seatSurfaces(st.fit, st.p, st.s || 1) : null, ctlSet = seatControls(st, st.s || 1);
+      const seat = st.fit && ctl !== 'bars' ? seatSurfaces(st.fit, st.p, st.s || 1) : null, ctlSet = seatAdjust(st, st.s || 1, seatControls(st, st.s || 1));
       const c = buildCrew(outfit, ctl, { seed: i * 3 + k, colors, pegs, groundY, seat, helm: ctlSet });
       Object.assign(c.userData.crewRig, { role: st.role || 'pilot', kind, ctl, part: i, seat: k }); // (stations.js names the cockpit views from these)
       c.position.set(...st.p); if (st.quat) c.quaternion.fromArray(st.quat); else if (st.yaw) c.rotation.y = st.yaw;
       if (fit) c.scale.copy(fit); else c.scale.setScalar(st.s || 1);
+      railSeatMesh(obj, st, k, c.userData.crewRig.rig);
       obj.add(c); list.push(c.userData.crewRig);
     });
     obj.userData.crew = list; rigs.push(...list);

@@ -774,19 +774,23 @@ export function cockpitBuild(id, color) {
     // windscreen bow and the rear hoop of the sliding hood (they follow the glass)
     for (const [z, rad] of [[-0.6, 0.018], [0.42, 0.014]]) { const k = Math.sqrt(1 - (z / bb) ** 2); b.add(bowGeo(a * k + 0.006, c * k + 0.006, z, rad), paint); }
     // tub fittings: seat, pilot, glare shield with the instrument panel under it, stick
-    const st = seatGeo(0.36, 0.72, 0.34, 0.32); st.translate(0, -0.54, 0.42); b.add(st, seatM); // (low in a deep tub: a seated adult's head clears the glass)
-    const hrest = new THREE.CapsuleGeometry(0.06, 0.12, 4, 10); hrest.rotateZ(Math.PI / 2); hrest.scale(1, 1, 0.6); hrest.translate(0, 0.2, 0.64); b.add(hrest, seatM);
+    // the seat slides on floor rails (its own mesh, userData.seatRail: crew.js moves it to where the pilot set it)
+    const sb = new Bag(), st = seatGeo(0.36, 0.72, 0.34, 0.32); st.translate(0, -0.54, 0.42); sb.add(st, seatM); // (low in a deep tub: a seated adult's head clears the glass)
+    const hrest = new THREE.CapsuleGeometry(0.06, 0.12, 4, 10); hrest.rotateZ(Math.PI / 2); hrest.scale(1, 1, 0.6); hrest.translate(0, 0.2, 0.64); sb.add(hrest, seatM);
+    { const n0 = g.children.length; sb.to(g); for (const m of g.children.slice(n0)) m.userData.seatRail = 0; }
     // the pilot (crew.js) on that seat; the seat point is where the hips settle. The controls where this cockpit has
     // them (part coordinates): the stick standing on the tub floor between the knees, the throttle lever on the left
     // wall beside the hip, the rudder pedals on the floor
     { const P = [0, -0.392, 0.367], S = 0.8, at = (x, y, z) => [x - P[0], y - P[1], z - P[2]]; // (controls: part units from the seat point)
       g.userData.seats = [{ p: P, s: S, fit: { at: [0, -0.54, 0.42], dims: [0.36, 0.72, 0.34, 0.32], floor: -0.66, feet: 'pedals' },
-        controls: { stickBase: at(0, -0.655, -0.12), stickLen: 0.42, thrBase: at(-0.355, -0.38, 0.1), pedY: at(0, -0.66, 0)[1], pedZ: at(0, 0, -0.28)[2] } }]; }
+        controls: { stickBase: at(0, -0.655, -0.12), stickLen: 0.42, thrBase: at(-0.355, -0.38, 0.1), pedY: at(0, -0.66, 0)[1], pedZ: at(0, 0, -0.28)[2] },
+        adjust: { pedZ: [-0.04, 0.08], seatZ: [-0.12, 0.04], seatY: [-0.04, 0.02] } }]; } // (the rudder pedals adjust 4 cm forward to 8 cm aft, the seat runs on rails 12 cm forward to 4 cm back and 4 cm down to 2 cm up: set once for whoever flies it)
     const gl = new THREE.CylinderGeometry(0.26, 0.26, 0.16, 18, 1, true, -1.25, 2.5); gl.scale(1, 1, 0.55); gl.rotateY(Math.PI); gl.translate(0, 0.08, -0.55); b.add(shell(gl, 0.008), black);
     const glTop = new THREE.CylinderGeometry(0.26, 0.26, 0.012, 18, 1, false, -1.25, 2.5); glTop.scale(1, 1, 0.55); glTop.rotateY(Math.PI); glTop.translate(0, 0.16, -0.55); b.add(capHoles(glTop), black);
     const pf = mx([0, 0.06, -0.54], [-0.25, 0, 0]), pnl = new THREE.BoxGeometry(0.46, 0.2, 0.012); pnl.applyMatrix4(pf); b.add(pnl, black); // (its top edge up under the glare shield's lid: the shield hung ahead of it)
     for (let i = 0; i < 5; i++) { const d = new THREE.CircleGeometry(0.032, 12); d.applyMatrix4(pf.clone().multiply(mx([-0.18 + i * 0.09, 0.02 - (i % 2) * 0.06, 0.0065]))); nb.add(d, PM.dial()); } // on the panel face (they hung in front of it, or behind)
-    g.userData.fit = [{ kind: 'seat', p: [0, -0.573, 0.29], w: 0.2, d: 0.2 }, { kind: 'panel', p: V(0, -0.1, 0).applyMatrix4(pf).toArray(), w: 0.4, d: 0.05, tilt: -0.25 }];
+    g.userData.fit = [{ kind: 'seat', p: [0, -0.573, 0.25], w: 0.2, d: 0.28 }, // (the seat's rails: the riser runs under its whole travel)
+       { kind: 'panel', p: V(0, -0.1, 0).applyMatrix4(pf).toArray(), w: 0.4, d: 0.05, tilt: -0.25 }];
   } else if (id === 'ck_fighter') {
     const glass = revolveZ(smoothPts(FIGHTER_GLASS, 40), 48, 1.15);
     g.add(new THREE.Mesh(glass, PM.canopy(0x6b5524)));
@@ -1009,7 +1013,11 @@ export function airlinerNoseBuild(color, skinMat) {
   // crew seats: cushion 42 cm over the floor (an airliner seat's height), on a pedestal down to the floor
   const FLOOR = -0.095, SY = 0.24, SZ = -2.3, SEAT = [0.5, 0.75, 0.48, 0.2]; // (floor top; seatGeo's origin height, z; its dims)
   for (const sx of [-1, 1]) {
-    const st = seatGeo(...SEAT); st.translate(sx * 0.55, SY, SZ); b.add(st, PM.seat());
+    // the seat on its rails and a post telescoping into the pedestal: its own meshes (userData.seatRail: crew.js moves them
+    // to where the pilot set the seat, fore and aft and up and down)
+    const sb = new Bag(), st = seatGeo(...SEAT); st.translate(sx * 0.55, SY, SZ); sb.add(st, PM.seat());
+    const post = new THREE.BoxGeometry(0.1, 0.12, 0.1); post.translate(sx * 0.55, SY - 0.06, SZ - 0.22); sb.add(post, M.darkMetal());
+    { const n0 = g.children.length; sb.to(g); for (const m of g.children.slice(n0)) m.userData.seatRail = sx === 1 ? 0 : 1; } // (the seats' order below)
     const bh = SY - 0.04 - FLOOR, rs = new THREE.BoxGeometry(0.3, bh, 0.3); rs.translate(sx * 0.55, FLOOR + bh / 2, SZ - 0.22); b.add(rs, M.darkMetal());
   }
   b.to(g); nb.to(g, true);
@@ -1019,7 +1027,7 @@ export function airlinerNoseBuild(color, skinMat) {
     return { p, s: 1, fit: { at: [sx * 0.55, SY, SZ], dims: SEAT, floor: FLOOR, feet: 'pedals' }, controls: {
       pedY: FLOOR - p[1], pedZ: -3.03 - p[2], // rudder pedals under the panel, hinged at the floor
       colBase: [0, FLOOR - p[1], -0.62], colLen: 0.75, // the column pivots in the floor (the generic one stopped 7 cm over it), the yoke clear of the knees
-    } }; });
+    }, adjust: { pedZ: [-0.06, 0.08], seatZ: [-0.08, 0.08], seatY: [-0.03, 0.05] } }; }); // (an airliner's pedals adjust, and its seats run on rails, fore and aft and up and down; the yoke doesn't)
   g.userData.tube = { z0: -4.6, z1: 0, sec: (z) => { const T = nT(z), B = nB(z); return [(T + B) / 2, nW(z), (T - B) / 2]; } }; // its section, for skinBlend's seam with the tube behind
   return g;
 }
