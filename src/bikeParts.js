@@ -139,7 +139,7 @@ function forkWheel(o, color, lv) {
   const steer = new THREE.Group(); steer.position.copy(T); steer.quaternion.copy(rakeQ); g.add(steer);
   const slide = new THREE.Group(); slide.position.y = -o.Lf; steer.add(slide);
   const spin = new THREE.Group(); slide.add(spin);
-  const sB = new Bag(), lB = new Bag(), dark = anod(0x2b2d31), alu = M.aluminum(), paint = PM.carPaint(color);
+  const sB = new Bag(), lB = new Bag(), dark = anod(0x2b2d31), alu = M.aluminum(), paint = PM.carPaint(color, 'satin');
   const fx = o.fx, Hc = o.Hc, cl = anod(o.clampC ?? 0xd0d3d8);
   // clamps, steerer, outer tubes with their caps (all steer)
   sB.add(stadium(-fx, fx, o.ro + 0.014, 0.028, -0.014), cl);
@@ -369,7 +369,7 @@ function headTube(b, T, a, Hc, m) {
   return [p0, p1];
 }
 function dirtFrame(c, lv) {
-  const g = new THREE.Group(), b = new Bag(), fr = framePaint(0xe8601c), paint = PM.carPaint(c), blk = plastic(BLACK), dark = anod(0x2b2d31);
+  const g = new THREE.Group(), b = new Bag(), fr = framePaint(0xe8601c), paint = PM.carPaint(c, 'satin'), blk = plastic(BLACK), dark = anod(0x2b2d31);
   const tb = lv ? pipe : tube, rake = DIRT_F.rake, a = V(0, Math.cos(rake), Math.sin(rake)), T = DIRT_T;
   const [h0, h1] = headTube(b, T, a, DIRT_F.Hc, fr);
   // twin spars to the pivot plates, a down tube splitting into the cradle under the engine, the subframe
@@ -405,7 +405,7 @@ function dirtFrame(c, lv) {
   return g;
 }
 function sportFrame(c, lv) {
-  const g = new THREE.Group(), b = new Bag(), alu = M.aluminum(), paint = PM.carPaint(c), blk = plastic(BLACK), dark = anod(0x2b2d31);
+  const g = new THREE.Group(), b = new Bag(), alu = M.aluminum(), paint = PM.carPaint(c, 'satin'), blk = plastic(BLACK), dark = anod(0x2b2d31);
   const rake = SPORT_F.rake, a = V(0, Math.cos(rake), Math.sin(rake)), T = SPORT_T;
   const [h0, h1] = headTube(b, T, a, SPORT_F.Hc, alu);
   for (const sx of [-1, 1]) { // twin aluminium spars round the engine to the pivot

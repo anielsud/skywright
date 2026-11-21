@@ -377,8 +377,12 @@ export class StuntPark extends Site {
   palms() {
     const L = this.L, XS = this.XS, [PX, PZ] = L.pad, r = this.rnd;
     const busy = (x, z) => L.stands.some(([sx, f, len]) => Math.sign(z) === f && Math.abs(x - sx) < len / 2 + 4) || L.towers.some(([tx, tz]) => Math.hypot(x - tx, z - tz) < 8);
-    for (let x = -XS; x <= XS; x += 15) for (const z of [RT + 17, -RT - 17]) { const px = x + (r() - 0.5) * 5; if (!busy(px, z)) this.palm(V(px, 0, z + (r() - 0.5) * 3), 8 + r() * 4); }
-    for (let k = 0; k < 26; k++) { const a = r() * Math.PI * 2, x = Math.cos(a) * (PX - 6), z = Math.sin(a) * (PZ - 6); if (!busy(x, z) && Math.abs(Math.abs(z) - RT) > 16) this.palm(V(x, 0, z), 8 + r() * 5); }
+    // the island's own palms (flora.js: textured fronds, ringed trunks, wind sway, LODs, impostors far away), placed as
+    // fixed trees round the park: they match the forest behind and cost one instance each instead of park geometry
+    const list = [], put = (x, z, h) => { const wx = this.O.x + x * this.cs + z * this.sn, wz = this.O.z - x * this.sn + z * this.cs; list.push({ x: wx, z: wz, kind: 'palm', scale: h / 12 }); };
+    for (let x = -XS; x <= XS; x += 15) for (const z of [RT + 17, -RT - 17]) { const px = x + (r() - 0.5) * 5; if (!busy(px, z)) put(px, z + (r() - 0.5) * 3, 8 + r() * 4); }
+    for (let k = 0; k < 26; k++) { const a = r() * Math.PI * 2, x = Math.cos(a) * (PX - 6), z = Math.sin(a) * (PZ - 6); if (!busy(x, z) && Math.abs(Math.abs(z) - RT) > 16) put(x, z, 8 + r() * 5); }
+    if (this.w.flora?.kinds?.palm) this.w.flora.addTrees(list); else for (const t of list) this.palm(V((t.x - this.O.x) * this.cs - (t.z - this.O.z) * this.sn, 0, (t.x - this.O.x) * this.sn + (t.z - this.O.z) * this.cs), t.scale * 12);
   }
 
   // ---- per frame ----

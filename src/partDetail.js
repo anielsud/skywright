@@ -242,11 +242,23 @@ export function bladeGeometry(R, { chord = 1, pitch = 1.25, r0 = 0.15, band = 0.
 }
 
 // Rotor blade (same frame as the plain box: span +X from the hub, thickness Y, chord Z): symmetric section, swept tip.
-export function rotorBlade(R, chord) {
-  const rings = [], N = 10, S = 12, th = Math.max(0.025, chord * 0.12);
+export function rotorBlade(R, chord, { from = 0, to = 1, grow = 0 } = {}) {
+  // A real rotor blade: NACA 0012 section (leading edge forward = -Z, 25 % chord on the feathering axis), washout twist
+  // of 8 degrees root to tip, a round root cuff blending into the airfoil, and a tapered, swept tip. from/to cut a span
+  // range (the painted tip cap), grow puffs it out a little so it sits over the blade.
+  const rings = [], N = 28, S = 28, naca = (x) => 5 * 0.12 * (0.2969 * Math.sqrt(x) - 0.126 * x - 0.3516 * x * x + 0.2843 * x ** 3 - 0.1036 * x ** 4);
   for (let k = 0; k <= N; k++) {
-    const t = k / N, x = R * (0.04 + 0.93 * t), c = chord * (t > 0.92 ? 1 - (t - 0.92) * 6 : 1), sweep = t > 0.92 ? (t - 0.92) * chord * 2.5 : 0, ring = [];
-    for (let i = 0; i < S; i++) { const a = (i / S) * Math.PI * 2; ring.push(V(x, Math.sin(a) * th * 0.5, -Math.cos(a) * c * 0.5 + c * 0.1 + sweep)); }
+    const t = from + (to - from) * (k / N), x = R * (0.05 + 0.945 * t);
+    const tipT = Math.max(0, (t - 0.93) / 0.07), c = chord * (1 - 0.55 * tipT ** 1.3), sweep = chord * 0.35 * tipT ** 1.6;
+    const cuff = 1 - THREE.MathUtils.smoothstep(t, 0.06, 0.16), tw = THREE.MathUtils.degToRad(8) * (0.75 - t);
+    const ct = Math.cos(tw), st = Math.sin(tw), ring = [];
+    for (let i = 0; i < S; i++) {
+      const sA = i / S, xc = 0.5 * (1 - Math.cos(sA * Math.PI * 2)), up = sA < 0.5 ? 1 : -1; // 0 = leading edge, 1 = trailing edge
+      let y = up * naca(Math.max(1e-4, xc)) * c * (1 + grow), z = (xc - 0.25) * c * (1 + grow) + sweep;
+      const a = (i / S) * Math.PI * 2, rc = chord * 0.17; // root cuff: a round section
+      y = y * (1 - cuff) + Math.sin(a) * rc * cuff; z = z * (1 - cuff) + -Math.cos(a) * rc * cuff;
+      ring.push(V(x, y * ct - z * st, y * st + z * ct));
+    }
     rings.push(ring);
   }
   return ringLoft(rings, true, true);
