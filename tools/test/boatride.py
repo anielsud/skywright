@@ -39,10 +39,18 @@ async def main(a):
             await cdp.wait_for('window.__sky && window.__sky.hangar', 60, 'the app to boot')
             if not a.only:
                 report += await cdp.js(f"import('/tools/test/boatride.js').then((m) => {{ const b = {BOATS}; return m.flat(b, __sky.presets.filter((d) => !b.includes(d))).map(({{ ac, ...r }}) => r); }})", timeout=900)
+                report += await cdp.js("import('/tools/test/boatride.js').then((m) => m.amphibRides(__sky.presets).map(({ ac, ...r }) => r))", timeout=900)
+            # every marina at Low (the tablet's setting: the coarsest terrain tiles), the river landing at High too
             for loc in ([a.only] if a.only else LOCS):
-                await cdp.js(f"(() => {{ const S = __sky; if (S.F) S.endFlight(); S.flightCfg.location = '{loc}'; S.flightCfg.mode = 'free'; S.hangar.load({BOATS}[0]); S.startFlight(); return 1; }})()")
+              for q in (['low', 'high'] if loc == 'canyon' else ['low']):
+                await cdp.js(f"(() => {{ const S = __sky; if (S.F) S.endFlight(); S.settings.quality = '{q}'; S.applyQuality(); S.flightCfg.location = '{loc}'; S.flightCfg.mode = 'free'; S.hangar.load({BOATS}[0]); S.startFlight(); return 1; }})()")
                 await cdp.wait_for('__sky.F && __sky.F.ac && __sky.F.t > 0.5', 180, f'a flight at {loc}')
-                report += await cdp.js(f"import('/tools/test/boatride.js').then((m) => {{ __sky.F.paused = true; const r = m.marina(__sky.F, {BOATS}, __sky.presets); __sky.F.paused = false; return r.map(({{ ac, ...x }}) => x); }})", timeout=900)
+                # the terrain tiles around the start stream in over the first seconds: test on the ground the player gets
+                await cdp.wait_for('(() => { const t = __sky.F.world.tiles; return !t || (!t.queue.length && !t.job); })()', 120, f'the terrain tiles at {loc}')
+                rows = await cdp.js(f"import('/tools/test/boatride.js').then((m) => {{ __sky.F.paused = true; const r = m.marina(__sky.F, {BOATS}, __sky.presets); __sky.F.paused = false; return r.map(({{ ac, ...x }}) => x); }})", timeout=900)
+                for r in rows:
+                    r['name'] = f"[{q}] {r['name']}"
+                report += rows
     finally:
         proc.kill(); proc.wait(); shutil.rmtree(profile, ignore_errors=True)
         if srv:

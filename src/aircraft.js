@@ -1,7 +1,7 @@
 // Runtime aircraft: rigid-body flight model built from parts, ground contact, damage & break-up.
 import * as THREE from 'three';
 import { PARTS, partInfo } from './parts.js';
-import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale, partPower, partBurn, isRocketDesign, coastsOnWheels } from './design.js';
+import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale, partPower, partBurn, isRocketDesign, onRoadWheels } from './design.js';
 import { M } from './materials.js';
 import { clamp, lerp } from './noise.js';
 import { keepHeatPatch } from './sonic.js';
@@ -234,7 +234,7 @@ export class Aircraft {
     this.hasSmoke = this.parts.some((p) => p.smoke);
     this.hasAB = this.parts.some((p) => p.engine?.ab);
     this.isHeli = this.parts.some((p) => p.engine?.type === 'rotor');
-    this.isCar = this.parts.some((p) => p.engine?.type === 'drive') || coastsOnWheels(design); // (an engineless car or bike still rolls: design.js)
+    this.isCar = this.parts.some((p) => p.engine?.type === 'drive') || onRoadWheels(design); // (car/bike wheels and no wings: a land vehicle whatever drives it, design.js)
     this.driveF = 0; this.flipT = 0; this.svcBrake = 0; this.reversing = false; this.groundSpeed = 0;
     this.motorCount = this.parts.filter((p) => p.engine?.type === 'drive').length;
     // Rockets (any build with a rocket body) steer like rockets: see rocketControls(). A mixed build (rocket body + main
@@ -734,8 +734,12 @@ export class Aircraft {
     F.add(_v2.set(0, -gravityAt(alt, this.v.x * this.v.x + this.v.z * this.v.z) * mass, 0).applyQuaternion(_qi));
     // ---- arcade/pilot assistance ----
     T.addScaledVector(Taero, R.aeroTorque);
-    if (this.isBike) bikeAssist(this, F, T, ctl, dt, env); // balance, counter-steering, wheelies, attitude in the air
-    else if (this.isBoat) boatForces(this, F, T, ctl, dt, env); // floating, planing, motors, steering (boat.js)
+    // An amphibian (a car or bike with a boat hull) is both: the hull floats it and the wheels drive it. Afloat (wet and
+    // no wheel on land) the boat's help steers and steadies it; on land the car's or bike's does.
+    const afloat = this.isBoat && this.boat.wet > 0.05 && !this.landWheels;
+    if (this.isBoat) boatForces(this, F, T, ctl, dt, env); // floating, planing, motors, steering (boat.js)
+    if (this.isBike) { if (!afloat) bikeAssist(this, F, T, ctl, dt, env); } // balance, counter-steering, wheelies, attitude in the air
+    else if (this.isBoat && (afloat || !this.isCar)) { /* the hull's help (boatForces) */ }
     else if (this.isHeli) this.heliAssist(F, T, ctl, q, _qi, fwdSpeed);
     else if (this.isCar && this.onGround && R.assist > 0) { // Arcade/Pilot: stability control keeps the wheels down
       const right = _v2.set(1, 0, 0).applyQuaternion(q), bank = Math.asin(clamp(this.stuntUp ? right.dot(this.stuntUp) : right.y, -1, 1)); // level with the ramp/loop/banking the wheels are on
@@ -833,7 +837,7 @@ export class Aircraft {
     const cBase = 2 * Math.sqrt(kBase * this.mass / Math.max(2, nW)) * 0.6;
     const top = new THREE.Vector3(), pt = new THREE.Vector3(), rr = new THREE.Vector3(), vpt = new THREE.Vector3();
     const stuntN = new THREE.Vector3(); let nStunt = 0, stuntPen = 0; const stuntPush = new THREE.Vector3();
-    let rollM = 0; const fwdCar = this.D ? _rf.set(0, 0, -1).applyQuaternion(q) : null;
+    let rollM = 0, landWheel = false; const fwdCar = this.D ? _rf.set(0, 0, -1).applyQuaternion(q) : null;
     for (const p of this.parts) {
       if (!p.alive || !p.gear) continue;
       const usable = !p.gear.retract || this.gearT > 0.95;
@@ -844,11 +848,12 @@ export class Aircraft {
         const L = w.len + w.r;
         down.copy(w.dir).applyQuaternion(q);
         const g = groundUnder(env, top, down, L); // the terrain, or a stunt ramp/loop the strut points at (collide.js)
+        if (g.type === 'water' && this.isBoat && !w.float) continue; // an amphibian's hull floats it: the wheels hang in the water (and paddle: boat.js)
         const d = g.d;
         const comp = L - d;
         w.comp = clamp(comp, 0, w.len * 0.6);
         if (comp <= 0) continue;
-        w.contact = true; anyWheel = true;
+        w.contact = true; anyWheel = true; if (g.type !== 'water') landWheel = true;
         if (g.stunt) { stuntN.add(g.n); nStunt++; }
         pt.copy(top).addScaledVector(down, d);
         rr.copy(pt).sub(this.x);
@@ -911,6 +916,7 @@ export class Aircraft {
       }
       for (const w of p.gear.wheels) w.wasContact = w.contact;
     }
+    this.landWheels = landWheel; // (an amphibian with a wheel on land drives; with none, afloat, the hull carries it)
     // Easy and Racer: an invisible hand cancels (part of) the roll the tyres' cornering push puts on the car, so it
     // corners flat and can't tip over in a turn (drive.js antiRoll)
     if (rollM) this.wW.add(_rv.copy(fwdCar).multiplyScalar(-this.D.antiRoll * rollM * dt).applyMatrix3(this.invIW));
