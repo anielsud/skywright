@@ -246,7 +246,7 @@ function speedHull(c, lv) {
     }
   }
   b.to(g); nb.to(g, true);
-  g.userData.seats = [{ p: [0.5, 0.74, 0.3], s: 1, fit: { at: [0.5, 0.69, 0.42], dims: [0.5, 0.55, 0.46, 0.2] } }, { p: [-0.5, 0.74, 0.3], s: 1, role: 'crew', fit: { at: [-0.5, 0.69, 0.42], dims: [0.5, 0.55, 0.46, 0.2] } }]; // driver to starboard (fit: the bucket seats' seatGeo, so the crew sit on them)
+  g.userData.seats = [{ p: [0.5, 0.74, 0.3], s: 1, fit: { at: [0.5, 0.69, 0.42], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.433 } }, { p: [-0.5, 0.74, 0.3], s: 1, role: 'crew', fit: { at: [-0.5, 0.69, 0.42], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.433 } }]; // driver to starboard (fit: the bucket seats' seatGeo and the carpet's top, so the crew sit on them, feet on the floor)
   return g;
 }
 

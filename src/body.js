@@ -85,11 +85,58 @@ export function handModel(scale = 1.07) {
   handCache.set(scale, out); return out;
 }
 
+// The body's own proportions, measured from its joints (the rig takes them, so nothing is stretched): limb lengths,
+// the shoulder and hip joints in the spine / hips frames, the thigh's top surface (above its bone, two thirds down)
+// and the ankle's height above the sole.
+const dimCache = new Map();
+export function bodyDims(scale = 1.07) {
+  if (!BODY) return null; if (dimCache.has(scale)) return dimCache.get(scale);
+  const { bones: SB, byName: N } = BODY, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), FRONT = V(0, 0, -1);
+  const hipC = J('upperleg01.L').add(J('upperleg01.R')).multiplyScalar(0.5), neckB = J('neck01'), up = neckB.clone().sub(hipC);
+  const sh = J('upperarm01.R'), el = J('lowerarm01.R'), wr = J('wrist.R'), hp = J('upperleg01.R'), kn = J('lowerleg01.R'), an = J('foot.R');
+  const spine = up.length() - 0.03, shL = sh.clone().applyMatrix4(frame(hipC.clone().add(V(0, 0.03, 0)), up, FRONT).invert());
+  const thF = frame(hp, kn.clone().sub(hp), FRONT).invert(), thigh = kn.distanceTo(hp), segOf = SB.map((b) => segmentOf(b.name));
+  let thighTop = 0, sole = Infinity;
+  for (let i = 0; i < BODY.n; i++) {
+    const b = BODY.bi[i * 4], g = segOf[b]; if (g !== 'thighR' && g !== 'shinR') continue;
+    const v = V(BODY.pos[i * 3], BODY.pos[i * 3 + 1], BODY.pos[i * 3 + 2]).multiplyScalar(scale);
+    if (g === 'thighR') { const l = v.clone().applyMatrix4(thF); if (l.y > 0.55 * thigh && l.y < 0.72 * thigh) thighTop = Math.max(thighTop, -l.z); }
+    else sole = Math.min(sole, v.y);
+  }
+  const d = { upper: el.distanceTo(sh), fore: wr.distanceTo(el), thigh, shin: an.distanceTo(kn), spine, shoulderW: Math.abs(shL.x), shoulderUp: shL.y, shoulderZ: shL.z,
+    hipW: Math.abs(hp.x - hipC.x), thighTop, ankleH: an.y - sole };
+  dimCache.set(scale, d); return d;
+}
+
+// A seated spine: the bend spread evenly over the four vertebra joints (spine04..spine01) about the body's side axis
+// (flex, radians in all, forward), and the collarbones swung forward about the vertical (protract) as the shoulder
+// blades come round when reaching. Returns per-bone source-space transforms (for the spine segment's bones) and where
+// that leaves the shoulder joints and the neck, in the spine segment's frame (the rig puts its joints there).
+const spineCache = new Map();
+export function spinePose(DIM, flex = 0, protract = 0, scale = 1.07) {
+  if (!BODY) return null; const key = [DIM.spine, flex, protract, scale].join('|'); if (spineCache.has(key)) return spineCache.get(key);
+  const { bones: SB, byName: N } = BODY, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), FRONT = V(0, 0, -1);
+  const rotAt = (P, axis, a) => new THREE.Matrix4().makeTranslation(P.x, P.y, P.z).multiply(new THREE.Matrix4().makeRotationAxis(axis, a)).multiply(new THREE.Matrix4().makeTranslation(-P.x, -P.y, -P.z));
+  const local = SB.map((b) => { // the rotation each bone itself contributes at its head
+    if (/^spine0[1-4]$/.test(b.name)) return rotAt(b.h.clone().multiplyScalar(scale), V(1, 0, 0), -flex / 4);
+    if (/^clavicle\./.test(b.name)) return rotAt(b.h.clone().multiplyScalar(scale), V(0, 1, 0), protract * Math.sign(b.t.x));
+    return null; });
+  const M = SB.map(() => null), world = (i) => { // the product down the chain (rest-pose pivots: root-most applied last)
+    if (M[i]) return M[i]; const b = SB[i], par = b.parent != null && N[b.parent] != null ? world(N[b.parent]) : new THREE.Matrix4();
+    return (M[i] = local[i] ? par.clone().multiply(local[i]) : par.clone()); };
+  const boneM = SB.map((b, i) => (segmentOf(b.name) === 'spine' ? world(i) : null));
+  const hipC = J('upperleg01.L').add(J('upperleg01.R')).multiplyScalar(0.5), up = J('neck01').sub(hipC);
+  const Ls = new THREE.Matrix4().makeScale(1, DIM.spine / (up.length() - 0.03), 1).multiply(frame(hipC.clone().add(V(0, 0.03, 0)), up, FRONT).invert());
+  const at = (joint, via) => J(joint).applyMatrix4(world(N[via])).applyMatrix4(Ls);
+  const out = { boneM, sh: { R: at('upperarm01.R', 'shoulder01.R'), L: at('upperarm01.L', 'shoulder01.L') }, neck: at('neck01', 'neck01'), key };
+  spineCache.set(key, out); return out;
+}
+
 // The torso's surface in its rig bones' local frames (as poseBody places it): { hips: [Vector3], spine: [Vector3] }.
 // The rig uses it to sit the body in a seat: the buttocks on the cushion, the back against the seat back.
 const torsoCache = new Map();
-export function torsoPoints(DIM, scale = 1.07) {
-  if (!BODY) return null; const key = scale + '|' + DIM.spine; if (torsoCache.has(key)) return torsoCache.get(key);
+export function torsoPoints(DIM, SP = null, scale = 1.07) {
+  if (!BODY) return null; const key = scale + '|' + DIM.spine + '|' + (SP ? SP.key : ''); if (torsoCache.has(key)) return torsoCache.get(key);
   const { bones: SB, byName: N } = BODY, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), FRONT = V(0, 0, -1);
   const hipC = J('upperleg01.L').add(J('upperleg01.R')).multiplyScalar(0.5), neckB = J('neck01'), up = neckB.clone().sub(hipC);
   const Lh = frame(hipC, up, FRONT).invert();
@@ -99,7 +146,7 @@ export function torsoPoints(DIM, scale = 1.07) {
     let wh = 0, ws = 0; for (let k = 0; k < 4; k++) { const w = BODY.bw[i * 4 + k], g = segOf[BODY.bi[i * 4 + k]]; if (g === 'hips') wh += w; else if (g === 'spine') ws += w; }
     if (wh + ws < 200) continue; // (mostly torso)
     const v = V(BODY.pos[i * 3], BODY.pos[i * 3 + 1], BODY.pos[i * 3 + 2]).multiplyScalar(scale);
-    if (wh >= ws) out.hips.push(v.applyMatrix4(Lh)); else out.spine.push(v.applyMatrix4(Ls));
+    if (wh >= ws) out.hips.push(v.applyMatrix4(Lh)); else { const bm = SP && SP.boneM[BODY.bi[i * 4]]; if (bm) v.applyMatrix4(bm); out.spine.push(v.applyMatrix4(Ls)); }
   }
   torsoCache.set(key, out); return out;
 }
@@ -134,7 +181,7 @@ export function poseBody(rig, { grip = true, scale = 1.07, seat = { y: -0.09, ba
   // bar's surface offset by the finger's radius (two circles intersecting), within the joint's range. The thumb is
   // first opposed under the palm (swung about the hand's axis till it lies across the bar), then wraps the same way
   // from the other side.
-  const boneM = SB.map(() => null);
+  const boneM = SB.map((b, i) => (rig.spine ? rig.spine.boneM[i] : null)); // (the seated spine's bend, if any)
   if (grip && rig.grips) for (const s of ['R', 'L']) {
     const gp = rig.grips[s]; if (!gp) continue;
     const H = HM[s], Hs = H.src, Hi = H.inv, Lp = (p) => p.clone().applyMatrix4(Hi), cy = H.gy, cz = -(H.palm + gp.r);
@@ -187,8 +234,13 @@ export function poseBody(rig, { grip = true, scale = 1.07, seat = { y: -0.09, ba
   const segOfBone = SB.map((b) => segs[segmentOf(b.name)] || segs.spine), v = V(), acc = V(), tmp = V();
   // The finger joints blend as dual quaternions (rigid transforms blended without the collapse linear blending gives
   // at a strongly bent knuckle); the rig segments then blend linearly as before.
-  const dq = boneM.map((M) => { if (!M) return null; const q = new THREE.Quaternion(), t = V(); M.decompose(t, q, V());
-    return [q.x, q.y, q.z, q.w, 0.5 * (t.x * q.w + t.y * q.z - t.z * q.y), 0.5 * (-t.x * q.z + t.y * q.w + t.z * q.x), 0.5 * (t.x * q.y - t.y * q.x + t.z * q.w), -0.5 * (t.x * q.x + t.y * q.y + t.z * q.z)]; });
+  const toDQ = (M) => { const q = new THREE.Quaternion(), t = V(); M.decompose(t, q, V());
+    return [q.x, q.y, q.z, q.w, 0.5 * (t.x * q.w + t.y * q.z - t.z * q.y), 0.5 * (-t.x * q.z + t.y * q.w + t.z * q.x), 0.5 * (t.x * q.y - t.y * q.x + t.z * q.w), -0.5 * (t.x * q.x + t.y * q.y + t.z * q.z)]; };
+  const dq = boneM.map((M) => (M ? toDQ(M) : null));
+  // with the rig in the body's own proportions every segment's transform is rigid, so the segments blend as dual
+  // quaternions too (elbows and knees keep their volume instead of folding in); a stretched segment falls back to linear
+  const rigid = Object.values(segs).every((g) => !g.len || Math.abs(g.len[1] / g.len[0] - 1) < 1e-3);
+  for (const g of Object.values(segs)) g.dq = toDQ(g.M);
   const ID = [0, 0, 0, 1, 0, 0, 0, 0], bl = new Float64Array(8);
   const dqApply = (p) => { // p <- blended dual quaternion applied to p
     const n2 = Math.hypot(bl[0], bl[1], bl[2], bl[3]); for (let k = 0; k < 8; k++) bl[k] /= n2;
@@ -204,6 +256,18 @@ export function poseBody(rig, { grip = true, scale = 1.07, seat = { y: -0.09, ba
       for (let k = 0; k < 4; k++) { const w = S.bw[i * 4 + k] / 255; if (w <= 0) continue; const d = dq[S.bi[i * 4 + k]] || ID;
         if (!ref) ref = d; const sg = (d[0] * ref[0] + d[1] * ref[1] + d[2] * ref[2] + d[3] * ref[3]) < 0 ? -w : w; for (let j = 0; j < 8; j++) bl[j] += d[j] * sg; }
       dqApply(v);
+    }
+    if (rigid) {
+      bl.fill(0); let ref = null; const wsum2 = {}; let best2 = null, bw2 = -1;
+      for (let k = 0; k < 4; k++) { const w = S.bw[i * 4 + k] / 255; if (w <= 0) continue; const g = segOfBone[S.bi[i * 4 + k]], d = g.dq;
+        if (!ref) ref = d; const sg = (d[0] * ref[0] + d[1] * ref[1] + d[2] * ref[2] + d[3] * ref[3]) < 0 ? -w : w; for (let j = 0; j < 8; j++) bl[j] += d[j] * sg;
+        wsum2[g.bone] = (wsum2[g.bone] || 0) + w; if (wsum2[g.bone] > bw2) { bw2 = wsum2[g.bone]; best2 = g; } }
+      const pv = v.clone(); dqApply(pv); acc.copy(pv);
+      pos[i * 3] = acc.x; pos[i * 3 + 1] = acc.y; pos[i * 3 + 2] = acc.z;
+      seg[i] = best2 ? best2.key : 'spine'; if (best2 && best2.len) { const local = v.clone().applyMatrix4(best2.src.clone().invert()); along[i] = local.y / best2.len[0]; }
+      const ent = Object.entries(wsum2).sort((a, b) => b[1] - a[1]).slice(0, 4), tot = ent.reduce((s2, e) => s2 + e[1], 0) || 1;
+      ent.forEach(([bn, w], k) => { skI[i * 4 + k] = +bn; skW[i * 4 + k] = w / tot; });
+      continue;
     }
     const wsum = {}; let best = null, bw = -1;
     for (let k = 0; k < 4; k++) {
