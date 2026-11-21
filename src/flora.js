@@ -213,23 +213,23 @@ const SPECIES = {
     // frond boots and a coconut cluster where they meet
     const b = new GB(), H = 8 + r() * 9, bend = (r() - 0.5) * 4, segs = Math.round(H / 0.36);
     let prev = new V3();
-    const trunkCol = (c, x, y) => c.setRGB(0.78, 0.72, 0.62).multiplyScalar(0.62 + 0.25 * Math.sin(y * 5.3) ** 2 + 0.13 * Math.min(1, y / 2));
+    const trunkCol = (c, x, y) => c.setRGB(0.92, 0.85, 0.74).multiplyScalar(0.72 + 0.22 * Math.sin(y * 5.3) ** 2 + 0.12 * Math.min(1, y / 2));
     for (let k = 1; k <= segs; k++) {
-      const t = k / segs, p = new V3(bend * t * t, H * t, bend * 0.3 * t * t), rad = 0.24 - 0.08 * t + 0.16 * Math.max(0, 1 - t * 9) ** 2;
+      const t = k / segs, p = new V3(bend * t * t, H * t, bend * 0.3 * t * t), rad = 0.3 - 0.09 * t + 0.18 * Math.max(0, 1 - t * 9) ** 2;
       b.geo(limb(prev, p, rad + 0.025, rad - 0.01, 10), trunkCol, 'bark', 1, t * 0.3); prev = p; // each segment wider at its foot: a ring
     }
     const crown = prev, tint = lin(0.66, 0.74, 0.46), col = new THREE.Color(), up = new V3(0, 1, 0);
-    for (let k = 0; k < 7; k++) { const a = k * 0.9; b.geo(new THREE.SphereGeometry(0.28, 8, 6).scale(1, 1.6, 1).translate(crown.x + Math.cos(a) * 0.18, crown.y - 0.25 - k * 0.04, crown.z + Math.sin(a) * 0.18), (c) => c.setRGB(0.42, 0.33, 0.2)); } // frond boots
+    for (let k = 0; k < 6; k++) { const a = k * 1.05; b.geo(new THREE.SphereGeometry(0.17, 7, 5).scale(0.8, 1.7, 0.8).translate(crown.x + Math.cos(a) * 0.2, crown.y - 0.35 - k * 0.05, crown.z + Math.sin(a) * 0.2), (c) => c.setRGB(0.24, 0.2, 0.12)); } // frond boots (dark, tucked under the crown)
     const nF = 18;
     for (let f = 0; f < nF; f++) {
-      const old = f >= 14, a = (f / nF) * Math.PI * 2 * 1.618 + r() * 0.3, len = (old ? 3.6 : 4.6) + r() * 2.2, dk = old ? 1.4 + r() * 0.5 : 0.5 + r() * 0.6, rise = old ? 0 : 0.3 + r() * 0.35;
+      const old = f >= 15, a = (f / nF) * Math.PI * 2 * 1.618 + r() * 0.3, len = (old ? 3.8 : 4.8) + r() * 2.2, dk = old ? 1.3 + r() * 0.5 : 0.4 + r() * 0.5, rise = old ? 0 : 0.35 + r() * 0.35;
       const dir = new V3(Math.cos(a), 0, Math.sin(a)), side = new V3(-dir.z, 0, dir.x), uv = UV.frond, n = 10, twist = (r() - 0.5) * 0.5;
       let row = null;
       for (let k = 0; k <= n; k++) {
-        const t = k / n, c = crown.clone().addScaledVector(dir, len * t).addScaledVector(up, len * (rise * t - dk * t * t)), w = 1.3 * Math.sin(Math.PI * Math.min(1, 0.15 + t * 0.95)) + 0.08;
+        const t = k / n, c = crown.clone().addScaledVector(dir, len * t).addScaledVector(up, len * (rise * t - dk * t * t)), w = 1.45 * Math.sin(Math.PI * Math.min(1, 0.12 + t * 0.95)) + 0.1;
         const sd = side.clone().applyAxisAngle(dir, twist * t), nr = dir.clone().multiplyScalar(0.4).add(up).normalize(), u = uv[0] + (uv[2] - uv[0]) * t;
         col.copy(tint).multiplyScalar((old ? 0.45 : 0.6) + 0.42 * t); if (old) col.lerp(lin(0.52, 0.42, 0.24), 0.55); // the lowest fronds are dying back
-        const fold = 0.42 * w; // the leaflets hang down either side of the rachis (a V section)
+        const fold = 0.22 * w; // the leaflets hang down a little either side of the rachis (a shallow V)
         const L = c.clone().addScaledVector(sd, -w).addScaledVector(up, -fold), M = c.clone().addScaledVector(up, 0.05), R = c.clone().addScaledVector(sd, w).addScaledVector(up, -fold);
         const ids = [b.v(L, nr, u, uv[1], col, t), b.v(M, nr, u, (uv[1] + uv[3]) / 2, col.clone().multiplyScalar(0.8), t * 0.8), b.v(R, nr, u, uv[3], col, t)];
         if (row) b.i.push(row[0], ids[0], row[1], row[1], ids[0], ids[1], row[1], ids[1], row[2], row[2], ids[1], ids[2]);

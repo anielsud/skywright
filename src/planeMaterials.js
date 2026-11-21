@@ -102,10 +102,10 @@ function skinCompile(sh) {
     diffuseColor.rgb *= mix(1.0, skinT.r, 0.4);
     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.58, 0.6, 0.62), skinT.b * 0.55); // chipped paint: bare aluminium
     vec3 gWN = normalize(transpose(mat3(viewMatrix)) * normalize(vNormal));
-    float streak = gN(vec3(vGrimeW.x * 9.0, vGrimeW.y * 0.7, vGrimeW.z * 9.0)) * gN(vGrimeW * 2.3);
-    float grime = clamp(smoothstep(0.15, -0.75, gWN.y) * 0.75 + smoothstep(0.35, 0.85, streak) * 0.45 * (1.0 - abs(gWN.y)) + (1.0 - skinT.r) * 1.6 + (gN(vGrimeW * 0.9) - 0.5) * 0.3, 0.0, 1.0) * uGrime;
+    float streak = gN(vec3(vGrimeW.x * 26.0, vGrimeW.y * 1.1, vGrimeW.z * 26.0)) * (0.6 + 0.4 * gN(vGrimeW * 7.0)); // thin vertical runs
+    float grime = clamp(smoothstep(0.1, -0.8, gWN.y) * 0.65 + smoothstep(0.55, 0.9, streak) * 0.3 * (1.0 - abs(gWN.y)) + (1.0 - skinT.r) * 1.6, 0.0, 1.0) * uGrime;
     diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.62, 0.55, 0.46) + vec3(0.035, 0.028, 0.02), grime);
-    float dust = smoothstep(0.45, 0.95, gWN.y) * smoothstep(0.3, 0.75, gN(vGrimeW * 3.1) * 0.6 + gN(vGrimeW * 17.0) * 0.4) * uGrime * 0.55; // settled dust on top surfaces
+    float dust = smoothstep(0.45, 0.95, gWN.y) * (0.35 + 0.65 * smoothstep(0.35, 0.8, gN(vGrimeW * 45.0))) * uGrime * 0.32; // a fine film of settled dust on top surfaces
     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.6, 0.54, 0.45), dust); grime = max(grime, dust);`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n    roughnessFactor = mix(roughnessFactor, 0.82, grime);')
       .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\n    material.clearcoat *= 1.0 - grime * 0.85;');
