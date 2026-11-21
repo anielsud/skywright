@@ -225,6 +225,20 @@ function speedHull(c, lv) {
       for (const k of [0, 4, 8]) { const p = pts[k], s = stationAt(SPEED, p.z); b.add(bar(V(p.x, s.ys - 0.01, p.z), p, 0.03, 0.03, true, 6), chrome); }
     }
     for (const [sx, z] of [[1, -2.5], [-1, -2.5], [1, 2.9], [-1, 2.9]]) { const s = stationAt(SPEED, z), cl = new THREE.BoxGeometry(0.05, 0.05, 0.2); cl.translate(sx * (s.hg - 0.06), s.ys + 0.02, z); nb.add(cl, chrome); }
+    // the cockpit's furniture: upholstered side bolsters along both inner gunwales, a snap-in carpet, cup holders in the
+    // gunwale tops, speaker grilles low on the side panels and a grab handle for the passenger
+    const carpet = mat('carpet', () => relief(new THREE.MeshStandardMaterial({ color: 0x3b3e43, metalness: 0, roughness: 0.96 }), 'float h = (rN(vRelP * 700.0) - 0.5) * 0.8 + (rN(vRelP * 90.0) - 0.5) * 0.3; float k = 0.0007;', 'carpet'));
+    { const m = new THREE.Shape(), hw = 0.82, z0 = -0.52, z1 = 1.74, rr = 0.12; m.moveTo(-hw + rr, z0); m.lineTo(hw - rr, z0); m.quadraticCurveTo(hw, z0, hw, z0 + rr); m.lineTo(hw, z1 - rr); m.quadraticCurveTo(hw, z1, hw - rr, z1); m.lineTo(-hw + rr, z1); m.quadraticCurveTo(-hw, z1, -hw, z1 - rr); m.lineTo(-hw, z0 + rr); m.quadraticCurveTo(-hw, z0, -hw + rr, z0);
+      const mg = new THREE.ExtrudeGeometry(m, { depth: 0.012, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.006, bevelSegments: 2, curveSegments: 6 }); mg.rotateX(Math.PI / 2); mg.translate(0, 0.418, 0); b.add(mg, carpet); }
+    for (const sx of [1, -1]) {
+      const bl = cushion(0.09, 0.2, 2.25, 0.04, 0.012); bl.translate(sx * 0.975, 0.74, 0.63); b.add(bl, seatM);
+      b.add(piping(0.09, 2.25, 0.04, 0.84).translate(sx * 0.975, 0, 0.63), seatM2);
+      for (const z of [0.25, 1.45]) { const ring = new THREE.TorusGeometry(0.045, 0.008, 8, 24); ring.rotateX(Math.PI / 2); ring.translate(sx * 1.05, 0.905, z); nb.add(ring, chrome);
+        const cup = new THREE.CylinderGeometry(0.042, 0.04, 0.012, 20); cup.translate(sx * 1.05, 0.9, z); nb.add(cup, M.black()); }
+      for (const z of [0.55, 1.45]) { const g2 = new THREE.CylinderGeometry(0.075, 0.075, 0.01, 28); g2.rotateZ(Math.PI / 2); g2.translate(sx * 0.985, 0.54, z); nb.add(g2, M.black());
+        const r2 = new THREE.TorusGeometry(0.078, 0.008, 6, 28); r2.rotateY(Math.PI / 2); r2.translate(sx * 0.98, 0.54, z); nb.add(r2, chrome); }
+    }
+    { const hpts = []; for (let k = 0; k <= 10; k++) { const t = k / 10; hpts.push(V(-1.02, 0.905 + Math.sin(t * Math.PI) * 0.07, -0.55 + t * 0.32)); } b.add(pipe(hpts, 0.013, 8, 30), chrome); } // grab handle
     // spray strakes along the bottom (each half sunk into the skin)
     for (const f of [0.35, 0.68]) for (const sx of [1, -1]) {
       const pts = []; for (let k = 0; k <= 20; k++) { const z = -2.4 + 5.4 * (k / 20), s = stationAt(SPEED, z); pts.push(V(sx * s.hc * f, s.yk + (s.yc - s.yk) * f - 0.004, z)); }

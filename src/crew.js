@@ -85,7 +85,7 @@ export const OUTFITS = {
   mx: { head: 'fullface', peak: true, visor: 0xd9761c, helmet: 0xf2f2ee, helmet2: 0xe8601c, suit: 0xe8601c, suit2: 0x2b2d31, trim: 0xf2f2ee, glove: 0x15161a, boot: 0xf2f2ee, stripes: true, bigBoots: true },
   sport: { head: 'fullface', visor: 0x1b2127, helmet: 0xf2f2ee, helmet2: 0x1d4e89, suit: 0x1d4e89, suit2: 0xf2f2ee, trim: 0xc8102e, glove: 0x15161a, boot: 0x15161a, stripes: true, hump: true },
   // boats: a cap, sunglasses and an orange life jacket over a T-shirt and shorts-coloured trousers
-  boat: { head: 'cap', glasses: true, vest: 0xf26a1b, suit: 0x2f5d8a, suit2: 0x3a4250, trim: 0x15161a, glove: null, boot: 0xe8e8e2, cap: 0xf2f2ee },
+  boat: { head: 'cap', glasses: true, vest: 0xf26a1b, suit: 0x2f5d8a, suit2: 0x6f7f8f, trim: 0x15161a, glove: null, boot: 0xe8e8e2, cap: 0xf2f2ee, tee: true, shorts: true }, // T-shirt and shorts under the life jacket
   airline: { head: 'headset', shirt: true, suit: 0xf2f2f0, suit2: 0x1b2433, trim: 0x15161a, glove: null, boot: 0x111111, cups: 0x26282b, epaulettes: 0xd4a82a },
 };
 
@@ -432,7 +432,11 @@ function figureGeometry(rig) {
   if (o.vest) { // a life jacket: chunky foam front and back, a collar, two buckles
     at(B.spine, shell(0.075, 0.39, 1.16, o.vest), o.vest);
     at(B.spine, torusAB(0.085, 0.03, Math.PI * 2, 14).rotateX(Math.PI / 2).translate(0, D.shoulderUp + 0.02, 0.0), o.vest);
-    for (const y of [0.12, 0.24]) at(B.spine, boxG(0.06, 0.03, 0.02, V(0, y, -0.15)), 0x15161a, true);
+    // straps round the jacket with side-release buckles, a front zip, and the foam panels' seams
+    for (const [y0, y1] of [[0.18, 0.2], [0.3, 0.32]]) at(B.spine, shell(y0, y1, 1.19, 0x15161a), 0x15161a, 'fabric');
+    for (const y of [0.19, 0.31]) { const bp = front(0.03, y, 0.03); at(B.spine, boxG(0.05, 0.028, 0.016, bp), 0x15161a, 'rubber'); at(B.spine, boxG(0.012, 0.022, 0.017, bp.clone().add(V(-0.01, 0, -0.002))), 0x9aa0a6, 'metal'); }
+    { const z0 = front(0, 0.38, 0.026), z1 = front(0, 0.09, 0.03); at(B.spine, capAB(z0, z1, 0.0035, 0.0035, { sz: 0.6 }), 0x2a2c30, 'rubber'); } // zip
+    for (const sx of [-1, 1]) { const a0 = front(sx * 0.09, 0.39, 0.024), a1 = front(sx * 0.11, 0.08, 0.026); at(B.spine, capAB(a0, a1, 0.0025, 0.0025, { sz: 0.5 }), 0xc4561a, 'fabric'); } // panel seams
   }
   if (o.mask === true) at(B.spine, shell(0.14, 0.39, 1.07, o.suit2), o.suit2); // survival vest
   if (o.shirt) { // tie and epaulettes
@@ -441,12 +445,13 @@ function figureGeometry(rig) {
   }
   // arms: sleeve, elbow, forearm and a gloved (or bare) fist
   const hand = o.glove ?? skin;
-  const fore = o.shirt ? skin : o.suit, cuff = o.glove ? o.glove : fore;
+  const fore = o.shirt || o.tee ? skin : o.suit, cuff = o.glove ? o.glove : fore;
   for (const [u, f, sx] of [[B.uArmR, B.fArmR, 1], [B.uArmL, B.fArmL, -1]]) {
     at(u, ellipsoid(V(0, 0.02, 0.004), 0.058, 0.064, 0.06, { w: 14, h: 9 }), o.suit); // shoulder cap (deltoid), over the torso's edge
+    const sl = o.tee ? skin : o.suit, fa = o.tee ? skin : fore; // a T-shirt: sleeves end above the elbow, bare arms below
     at(u, limbLoft(u, f, D.upper,
-      [[-0.01, 0.056, 0.058, o.suit], [0.05, 0.058, 0.057, o.suit], [0.13, 0.05, 0.053, o.suit], [0.21, 0.044, 0.045, o.suit], [0.255, 0.041, 0.041, o.shirt ? o.suit : o.suit]],
-      [[0.04, 0.043, 0.042, o.shirt ? o.suit : fore], ...(o.shirt ? [[0.05, 0.043, 0.041, skin]] : []), [0.08, 0.046, 0.042, fore], [0.15, 0.041, 0.036, fore],
+      [[-0.01, 0.06, 0.062, o.suit], [0.05, 0.062, 0.061, o.suit], [0.12, 0.056, 0.058, o.suit], ...(o.tee ? [[0.125, 0.05, 0.052, skin]] : []), [0.21, 0.047, 0.048, sl], [0.255, 0.044, 0.044, sl]],
+      [[0.04, 0.046, 0.045, o.shirt ? o.suit : fa], ...(o.shirt ? [[0.05, 0.043, 0.041, skin]] : []), [0.08, 0.049, 0.045, fa], [0.15, 0.043, 0.038, fa],
         ...(o.glove ? [[D.fore - 0.07, 0.036, 0.031, fore], [D.fore - 0.065, 0.043, 0.04, cuff]] : []), [D.fore - 0.01, o.glove ? 0.044 : 0.032, o.glove ? 0.04 : 0.028, cuff]]), o.suit);
     // a gloved (or bare) hand gripping a bar along local X: palm, four curled fingers in three phalanges, a thumb wrapped
     // over them, and (gloves) a hard knuckle guard on the back
@@ -465,8 +470,8 @@ function figureGeometry(rig) {
   const L2 = o.suit2;
   for (const [t, s] of [[B.thighR, B.shinR], [B.thighL, B.shinL]]) {
     at(t, limbLoft(t, s, D.thigh,
-      [[-0.03, 0.084, 0.084, L2], [0.04, 0.088, 0.086, L2], [0.16, 0.08, 0.077, L2], [0.3, 0.068, 0.064, L2], [0.4, 0.058, 0.056, L2]],
-      [[0.04, 0.055, 0.056, L2], [0.12, 0.056, 0.06, L2], [0.24, 0.046, 0.048, L2], [D.shin - 0.07, 0.038, 0.038, L2], [D.shin - 0.02, 0.036, 0.036, L2]],
+      [[-0.03, 0.084, 0.084, L2], [0.04, 0.088, 0.086, L2], [0.16, 0.08, 0.077, L2], [0.3, 0.068, 0.064, L2], ...(o.shorts ? [[0.305, 0.06, 0.058, skin]] : []), [0.4, 0.058, 0.056, o.shorts ? skin : L2]],
+      [[0.04, 0.055, 0.056, o.shorts ? skin : L2], [0.12, 0.056, 0.06, o.shorts ? skin : L2], [0.24, 0.046, 0.048, o.shorts ? skin : L2], [D.shin - 0.07, 0.038, 0.038, o.shorts ? skin : L2], [D.shin - 0.02, 0.036, 0.036, o.shorts ? skin : L2]],
       0.07, [[B.hips, 0.45], [B.hips, 0.85]]), L2);
     // a boot: shaft round the ankle, foot and toe box on a sole with a heel block; motocross boots go up the shin with
     // a shin plate and three buckle straps

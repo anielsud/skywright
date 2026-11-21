@@ -1382,7 +1382,7 @@ function frame(now) {
       post.ambientOcclusion({ radiusK: 0.04, rMin: 0.25, rMax: 8, maxDist: 1200, strength: 1.5 }); // (a small floor so close-ups get crisp contact shadows, not metre-wide smudges)
       post.shafts(new THREE.Vector2(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5), sp.z < 1 && w.sunDir.y > -0.03 ? (1 - w.W.dark) * smoothstep(1.8, 1.0, Math.max(Math.abs(sp.x), Math.abs(sp.y))) : 0, w.sun.color);
       const golden = Math.max(0, 1 - Math.abs(w.sunElev - 0.08) / 0.3);
-      post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: 1.1 + golden * 0.1 - w.W.dark * 0.25, vignette: 0.3 });
+      post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: 0.97 + golden * 0.12 - w.W.dark * 0.25, contrast: 1.12, vignette: 0.3 }); // near-neutral colour, a little more contrast: photographic rather than candy
       fitNearPlane(F);
       const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene) : null;
       post.render(F.scene, flightCam, dt);

@@ -292,11 +292,19 @@ export function waterMaterial(o) {
         float dist = length(cameraPosition - vW);
         vec2 p = vW.xz;
         vec3 n = nmap(p / 61.0 + vec2(uTime * 0.011, uTime * 0.007)) + nmap(p / 23.0 - vec2(uTime * 0.016, -uTime * 0.009)) * 0.7 + nmap(p / 260.0 + uTime * 0.002) * 0.8;
-        n = normalize(vec3(n.x, 2.6 + dist * 0.0035, n.z));
+        n *= mix(1.0, 0.3, exp(-dist / 120.0)); // the long swells barely tilt the surface right under you
+        // wind ripples at boat scale (4 m, 1.7 m, 0.7 m), fading out with distance before they could shimmer
+        float f1 = exp(-dist / 160.0), f2 = exp(-dist / 60.0), f3 = exp(-dist / 25.0);
+        n += (nmap(p / 4.1 + vec2(uTime * 0.05, uTime * 0.031)) * 0.55 * f1 + nmap(p / 1.7 - vec2(uTime * 0.072, -uTime * 0.043)) * 0.38 * f2 + nmap(p / 0.73 + vec2(uTime * 0.11, uTime * 0.093)) * 0.25 * f3);
+        n = normalize(vec3(n.x, 2.6 + dist * 0.0035 - 0.5 * f1, n.z));
         vec3 v = normalize(cameraPosition - vW);
         float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
         vec3 r = reflect(-v, n);
         vec3 sky = mix(mix(skyHor, skyZen, 0.45), skyZen, pow(clamp(r.y, 0.0, 1.0), 0.45)) * 0.85;
+        if (fogSkyMix > 0.001) { vec3 rs = normalize(vec3(r.x, max(r.y, 0.02), r.z)); vec3 ls = skyLook(skyLUT, rs); sky = mix(sky, ls / (1.0 + max(max(ls.r, ls.g), ls.b) * 0.45), 0.6); } // the real sky (atmosphere LUT) in the reflection
+        { vec2 cq = r.xz / max(r.y, 0.06) * 2.2 + uTime * 0.003; // fair-weather clouds in the reflection
+          float cl = smoothstep(0.55, 0.85, vnoise(cq) * 0.6 + vnoise(cq * 2.7) * 0.3 + vnoise(cq * 7.0) * 0.1) * smoothstep(0.02, 0.25, r.y);
+          sky = mix(sky, sky * 1.35 + vec3(0.04), cl * 0.35); }
         float sd = max(dot(r, sunDir), 0.0);
         vec3 spec = sunCol * (pow(sd, 900.0) * 30.0 + pow(sd, 90.0) * 0.6) * (1.0 - rough * 0.5);
         // body colour: shallow -> deep, seabed showing through in the shallows
@@ -310,7 +318,10 @@ export function waterMaterial(o) {
           coral = smoothstep(0.5, 0.6, rn) * smoothstep(16.0, 5.0, depth) * smoothstep(0.2, 1.0, depth) * reef;
           seabed = mix(seabed * (0.92 + 0.16 * vnoise(p / 2.1)), vec3(0.19, 0.16, 0.11) + vec3(0.05, 0.08, 0.02) * vnoise(p / 5.0), coral * 0.8);
         }
-        body = mix(seabed, body, smoothstep(0.0, 7.0 + coral * 5.0, depth));
+        // light reaching the seabed and coming back is absorbed per colour (red fastest, then green, blue least): white
+        // sand under a few metres of clear water turns turquoise by itself, deeper it fades into the in-scattered colour
+        { float path = depth * (1.0 + 1.0 / max(v.y, 0.25)); vec3 T = exp(-vec3(0.38, 0.072, 0.05) * path * (1.0 + coral * 0.3));
+          body = seabed * T + mix(shallowCol * 0.55, body, dk) * (1.0 - T); }
         float lit = clamp(dot(vec3(0.0, 1.0, 0.0), sunDir) * 0.8 + 0.2, 0.0, 1.0);
         body *= (amb * 0.55 + lit * length(sunCol) * 0.45);
         vec3 col = mix(body, sky, fres) + spec;

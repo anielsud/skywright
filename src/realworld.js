@@ -48,7 +48,7 @@ export const REAL_LOCATIONS = {
     stunts: { theme: 'tropical', layout: 'compact', near: [0, 0], r: 5000, maxForest: 1, minAbove: 1.0, forestW: 0, seed: 117 },
     townScale: 0.45, // small villages strung along the coast road: keep the palms between the houses
     osmStyle: 'tropical', // realBuildings.js: painted houses under metal roofs, thatched resorts, overwater bungalows
-    waterColors: { deep: 0x0b3474, shallow: 0x12bcc8, sand: 0x9ae8dc }, waterReef: 0.15, // sapphire ocean, turquoise lagoon over pale sand
+    waterColors: { deep: 0x0b3474, shallow: 0x1aa6b8, sand: 0xece4cc }, waterReef: 0.15, // sapphire ocean, turquoise lagoon over pale sand
     colors: { grass: [0x3f7a2c, 0x56913a, 0x2f6125], rock: 0x5a524a, snow: 0x5a524a, sand: 0xe3d3a3, dirt: 0x7a6040 },
     height(n, x, z) { const D = cache.get(this.id); return D ? D.height(x, z) : this.rwyH; },
   },
