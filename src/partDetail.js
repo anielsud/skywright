@@ -985,12 +985,20 @@ export function airlinerNoseBuild(color, skinMat) {
   const pf = mx([0, 0.46, -3.3], [-0.3, 0, 0]), pnl = new THREE.BoxGeometry(1.5, 0.42, 0.06); pnl.applyMatrix4(pf); b.add(pnl, M.paint(0x2b2d31, 'matte'));
   for (let i = 0; i < 5; i++) { const d = new THREE.PlaneGeometry(0.2, 0.16); d.applyMatrix4(pf.clone().multiply(mx([-0.56 + i * 0.28, 0.04, 0.0305]))); nb.add(d, PM.dial()); } // (on the panel face)
   const ped = new THREE.BoxGeometry(0.34, 0.42, 0.8); ped.translate(0, 0.1, -2.85); b.add(ped, M.paint(0x2b2d31, 'matte'));
+  // crew seats: cushion 42 cm over the floor (an airliner seat's height), on a pedestal down to the floor
+  const FLOOR = -0.095, SY = 0.24, SZ = -2.3, SEAT = [0.5, 0.75, 0.48, 0.2]; // (floor top; seatGeo's origin height, z; its dims)
   for (const sx of [-1, 1]) {
-    const st = seatGeo(0.5, 0.75, 0.48, 0.2); st.translate(sx * 0.55, 0.18, -2.3); b.add(st, PM.seat());
-    const rs = new THREE.BoxGeometry(0.3, 0.27, 0.3); rs.translate(sx * 0.55, 0.03, -2.52); b.add(rs, M.darkMetal()); // seat base down to the floor (the seats hung 24 cm over it)
+    const st = seatGeo(...SEAT); st.translate(sx * 0.55, SY, SZ); b.add(st, PM.seat());
+    const bh = SY - 0.04 - FLOOR, rs = new THREE.BoxGeometry(0.3, bh, 0.3); rs.translate(sx * 0.55, FLOOR + bh / 2, SZ - 0.22); b.add(rs, M.darkMetal());
   }
   b.to(g); nb.to(g, true);
-  g.userData.seats = [{ p: [0.55, 0.22, -2.54], s: 1 }, { p: [-0.55, 0.22, -2.54], s: 1 }];
+  // each seat declares its cushion and back (seatGeo's, as placed above), the floor, and the feet on the rudder pedals
+  // (drawn by crew.js, hinged on the floor under the panel)
+  g.userData.seats = [1, -1].map((sx) => { const p = [sx * 0.55, SY + 0.04, SZ - 0.24];
+    return { p, s: 1, fit: { at: [sx * 0.55, SY, SZ], dims: SEAT, floor: FLOOR, feet: 'pedals' }, controls: {
+      pedY: FLOOR - p[1], pedZ: -3.03 - p[2], // rudder pedals under the panel, hinged at the floor
+      colBase: [0, FLOOR - p[1], -0.62], colLen: 0.75, // the column pivots in the floor (the generic one stopped 7 cm over it), the yoke clear of the knees
+    } }; });
   g.userData.tube = { z0: -4.6, z1: 0, sec: (z) => { const T = nT(z), B = nB(z); return [(T + B) / 2, nW(z), (T - B) / 2]; } }; // its section, for skinBlend's seam with the tube behind
   return g;
 }

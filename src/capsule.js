@@ -35,6 +35,15 @@ export function capsuleLayout(prof, seat) {
   return { R, eye, wins, zAft, zNose };
 }
 
+// The crew's launch couch in that layout (body frame): a seatGeo seat under the eye, its back behind the head, on a
+// deck. The crew lie in it on their backs, facing the nose (with the body standing on its tail for launch, that's
+// facing the sky, pressed into the couch by the climb), and the first-person interior has the same couch.
+// (Its back 18 cm behind the eye at the cushion, about 30 at the eye's height: a seated person's eye. It was 10 cm
+// further back, which put the eye well ahead of where the head lies.)
+export function capsuleCouch(L) {
+  return { at: [0, -0.62 * L.R, L.eye.z + 0.18], dims: [0.56, 0.8, 0.5, 0.18], floor: -0.66 * L.R };
+}
+
 // signed distance (m, along the skin of radius rr) from a point (x, y, z) to the edge of a window: < 0 inside it
 const winD = (w, x, y, z, rr) => { let da = Math.atan2(y, x) - w.az; da = Math.atan2(Math.sin(da), Math.cos(da)); return Math.hypot(da * rr, z - w.z) - w.r; };
 // a point on the surface of revolution (radius from the profile, plus off) at arc length s round from the window centre
@@ -171,13 +180,14 @@ function buildInterior(prof, L) {
     if (L.wins.some((w) => Math.abs(z - w.z) < w.r + 0.08)) continue;
     const rr = profileR(prof, z) - 0.065, ring = new THREE.TorusGeometry(rr, 0.025, 6, 48); ring.translate(0, 0, z); b.add(ring, ribMat());
   }
-  { const fy = -0.66 * R, z0 = eye.z - 0.85, z1 = L.zAft, rows = [];
+  const couch = capsuleCouch(L);
+  { const fy = couch.floor, z0 = eye.z - 0.85, z1 = L.zAft, rows = [];
     for (let z = z0; z <= z1 + 1e-6; z += 0.05) { const r = profileR(prof, z) - 0.055, hw = Math.sqrt(Math.max(0, r * r - fy * fy)); rows.push([z, hw]); }
     const pos = [], idx = []; rows.forEach(([z, hw], k) => { pos.push(-hw, fy, z, hw, fy, z); if (k) { const a = (k - 1) * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); } });
     const deck = new THREE.BufferGeometry(); deck.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); deck.setIndex(idx); deck.computeVertexNormals();
     deck.setAttribute('uv', new THREE.Float32BufferAttribute(pos.filter((_, n) => n % 3 !== 1), 2)); b.add(deck, floorMat()); }
   // seat under the eye, its back behind the head
-  const st = seatGeo(0.56, 0.8, 0.5, 0.18); st.translate(0, -0.62 * R, eye.z + 0.28); b.add(st, seatMat());
+  const st = seatGeo(...couch.dims); st.translate(...couch.at); b.add(st, seatMat());
   // instrument panel ahead and below the line of sight, tilted up to face the crew, standing on the floor of the cabin
   const pz = eye.z - 0.58, py = eye.y - 0.44 * R, tilt = -0.6, pw = Math.min(0.85, 0.95 * R), ph = 0.3;
   const face = new THREE.Matrix4().makeRotationX(tilt).setPosition(0, py, pz);
