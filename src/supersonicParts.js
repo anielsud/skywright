@@ -225,7 +225,8 @@ function tandemCanopy(c, lv) {
   const g = new THREE.Group(), paint = PM.skin(c), { z0, z1, split } = TC, b = new Bag(), nb = new Bag();
   // pilot's glass and the second crew member's hatch (closed underneath, below the base)
   g.add(new THREE.Mesh(tcSurface(z0, split, lv ? 22 : 10, lv ? 24 : 12), PM.canopy(0x2a3440)));
-  const hatch = capHoles(tcSurface(split, z1, lv ? 18 : 8, lv ? 24 : 12)); g.add(new THREE.Mesh(hatch, paint));
+  // (a shell, not capped at the base: a lid there cut through the second crew member at the chest)
+  const hatch = lv ? shell(tcSurface(split, z1, 18, 24), 0.02) : capHoles(tcSurface(split, z1, 8, 12)); g.add(new THREE.Mesh(hatch, paint));
   // frames: windscreen bow, the arch between the two, a sill round the base
   const bow = (z, rad) => { const pts = []; for (let i = 0; i <= 18; i++) pts.push(tcPt(z, -Math.PI / 2 + Math.PI * (i / 18), 1.012)); return pipe(pts, rad, 6, 48); };
   b.add(bow(-1.62, 0.03), paint); b.add(bow(split, 0.04), paint);
@@ -242,18 +243,31 @@ function tandemCanopy(c, lv) {
       const fr = new THREE.TorusGeometry(0.13, 0.014, 4, 24); fr.scale(1.4, 1, 1); fr.applyMatrix4(m); b.add(fr, paint);
     }
     // the cockpit tub under the glass and the hatch (it sinks into the body it sits on): the seats and panel stand on its floor
-    { const rings = [-0.06, -0.45].map((y) => { const r = []; for (let i = 0; i < 32; i++) { const a = (i / 32) * Math.PI * 2, z = -1.95 * Math.cos(a); r.push(V(Math.sin(a) * TC.w(z) * 0.9, y, z)); } return r; });
-      b.add(ringLoft(rings, true, true), PM.seat()); }
+    { const rings = [-0.06, -0.72].map((y) => { const r = []; for (let i = 0; i < 32; i++) { const a = (i / 32) * Math.PI * 2, z = -1.95 * Math.cos(a); r.push(V(Math.sin(a) * TC.w(z) * 0.9, y, z)); } return r; });
+      const tub = new THREE.Mesh(ringLoft(rings, true, true), PM.seat()); tub.userData.ownTub = true; g.add(tub); } // (planeDetail swaps it for one from the skin's opening when seated on a body)
     // inside the pilot's glass: ejection seat with its head box, the instrument panel and glare shield
-    const st = seatGeo(0.42, 0.66, 0.4, 0.26); st.translate(0, -0.42, -0.62); b.add(st, PM.seat());
-    const hb = new THREE.CapsuleGeometry(0.09, 0.14, 4, 10); hb.rotateZ(Math.PI / 2); hb.translate(0, 0.3, -0.42); b.add(hb, PM.seat());
+    // (the tub floor at -0.72 and both seats on risers: the seats sat on a floor 10 cm under the cushion, no room for legs)
+    const st = seatGeo(0.42, 0.66, 0.4, 0.26); st.translate(0, -0.48, -0.62); b.add(st, PM.seat());
+    const hb = new THREE.CapsuleGeometry(0.09, 0.14, 4, 10); hb.rotateZ(Math.PI / 2); hb.translate(0, 0.24, -0.42); b.add(hb, PM.seat());
+    for (const [y, z] of [[-0.48, -0.78], [-0.53, 1.02]]) { const h = y - 0.03 + 0.72, rs = new THREE.BoxGeometry(0.3, h, 0.28); rs.translate(0, -0.72 + h / 2, z); b.add(rs, M.darkMetal()); }
+    // the rudder pedals' mounts on the floor (crew.js draws the pedals at the pilot's controls.pedZ / pedY)
+    for (const sx of [-1, 1]) { const pm = new THREE.BoxGeometry(0.07, 0.07, 0.1); pm.translate(sx * 0.112, -0.685, -1.2); b.add(pm, M.darkMetal()); }
+    // the bulkhead between the two cockpits, under the arch
+    { const sh = new THREE.Shape(); sh.moveTo(-TC.w(split) * 0.9, -0.72); for (let i = 0; i <= 16; i++) { const p = tcPt(split, -Math.PI / 2 + Math.PI * (i / 16), 0.985); sh.lineTo(p.x, p.y); } sh.lineTo(TC.w(split) * 0.9, -0.72); sh.closePath();
+      const bh = new THREE.ExtrudeGeometry(sh, { depth: 0.03, bevelEnabled: false }); bh.translate(0, 0, split + 0.03); b.add(bh, PM.seat()); }
+    // side consoles beside the pilot (the throttles on the left one), a centre pedestal under the panel between the legs
+    for (const sx of [-1, 1]) { const con = new THREE.BoxGeometry(0.15, 0.42, 0.78); con.translate(sx * 0.31, -0.51, -0.88); b.add(con, M.black()); }
+    { const ped = new THREE.BoxGeometry(0.12, 0.28, 0.16); ped.translate(0, -0.59, -1.5); b.add(ped, M.black()); }
     const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.16, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.55); gl.rotateY(Math.PI); gl.translate(0, 0.02, -1.5); b.add(shell(gl, 0.008), M.black());
     const glTop = new THREE.CylinderGeometry(0.3, 0.3, 0.012, 18, 1, false, -1.3, 2.6); glTop.scale(1, 1, 0.55); glTop.rotateY(Math.PI); glTop.translate(0, 0.1, -1.5); b.add(capHoles(glTop), M.black());
     const pnl = new THREE.BoxGeometry(0.5, 0.52, 0.22); pnl.translate(0, -0.2, -1.52); b.add(pnl, M.black()); // the panel stands on the cockpit floor (inside the body) and carries the glare shield
     for (let i = 0; i < 4; i++) { const d = new THREE.CircleGeometry(0.035, 12); d.translate(-0.16 + i * 0.105, -0.06 + (i % 2) * 0.06, -1.408); nb.add(d, PM.dial()); }
     // the back seat (seen through the side windows)
-    const st2 = seatGeo(0.42, 0.62, 0.4, 0.26); st2.translate(0, -0.42, 1.18); b.add(st2, PM.seat());
-    g.userData.seats = [{ p: [0, -0.5, -0.76], s: 0.86 }, { p: [0, -0.5, 1.04], s: 0.86, role: 'crew' }];
+    const st2 = seatGeo(0.42, 0.62, 0.4, 0.26); st2.translate(0, -0.53, 1.18); b.add(st2, PM.seat());
+    // the pilot: centre stick from the floor between the knees, throttles on the left console, feet on the rudder pedals
+    g.userData.seats = [{ p: [0, -0.35, -0.74], s: 0.86, fit: { at: [0, -0.48, -0.62], dims: [0.42, 0.66, 0.4, 0.26], floor: -0.72, feet: 'pedals' },
+      controls: { stickBase: [0, -0.3, -0.34], stickLen: 0.61, thrBase: [-0.27, 0.04, -0.3], thrLen: 0.12, pedZ: -0.48, pedY: -0.3 } },
+    { p: [0, -0.4, 1.06], s: 0.86, role: 'crew', fit: { at: [0, -0.53, 1.18], dims: [0.42, 0.62, 0.4, 0.26], floor: -0.72 } }];
   } else {
     const seat = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.6, 0.14), PM.seat()); seat.position.set(0, -0.12, -0.48); g.add(seat);
   }
@@ -264,4 +278,11 @@ def({ id: 'ck_tandem', cat: 'cockpit', name: 'Tandem Canopy', desc: 'Small raked
   eye: [0, 0.36, -0.95], build: tandemCanopy });
 // for planeDetail's canopy seat (the skirt down to the body when it sits on a body): th runs round the base from the
 // front, ph from the base (0) over the top (pi/2)
+// Signed distance-like value of a point (part coordinates) to the glass and hatch volume (< 0 inside): planeDetail cuts
+// the opening in the body skin the canopy sinks into with it
+export const TANDEM_VOL = (x, y, z) => {
+  if (z < TC.z0 || z > TC.z1) return Math.max(TC.z0 - z, z - TC.z1) + 0.01;
+  const w = TC.w(z), H = TC.h(z) + 0.06, yy = y + 0.06; if (yy <= 0) return Math.abs(x) - w;
+  return (Math.hypot(x / w, (yy / H) ** (4 / 3)) - 1) * Math.min(w, H); // (the section: x = w sin a, y + 0.06 = H cos^0.75 a)
+};
 export const TANDEM_SHAPE = (th, ph) => tcPt(-(TC.z1 - 0.04) * Math.cos(th), (Math.sin(th) >= 0 ? 1 : -1) * (Math.PI / 2 - ph));
