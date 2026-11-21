@@ -280,6 +280,38 @@ function ikTwo(S, T, a, b, pole, outE, outP = null) {
   return outE.copy(S).addScaledVector(d, x).addScaledVector(p, y);
 }
 
+// ---------- riders ('bars' seats): the vehicle's geometry round the rider (rig space; see rideGeometry) ----------
+// Bodywork is given as superLoft sections { z, hw, top, bot, n, cx? } (z ascending, linear between sections), the way
+// the vehicle lofts it. loftAt: the section at z (null outside the loft).
+function loftAt(secs, z) {
+  if (!secs?.length || z < secs[0].z || z > secs.at(-1).z) return null;
+  let i = 0; while (i < secs.length - 2 && z > secs[i + 1].z) i++;
+  const a = secs[i], b = secs[i + 1] || a, t = b.z > a.z ? (z - a.z) / (b.z - a.z) : 0, L = (k, d = 0) => (a[k] ?? d) + ((b[k] ?? d) - (a[k] ?? d)) * t;
+  return { hw: L('hw'), top: L('top'), bot: L('bot'), n: L('n', 3), cx: L('cx') };
+}
+// how deep a ball (centre P, radius r) is inside a loft (0: outside)
+function loftDepth(secs, P, r) {
+  const s = loftAt(secs, P.z); if (!s) return 0;
+  const hw = s.hw + r, hh = (s.top - s.bot) / 2 + r, mid = (s.top + s.bot) / 2;
+  const qd = Math.abs(P.x - s.cx) / hw, qy = Math.abs(P.y - mid) / hh; if (qd >= 1 || qy >= 1) return 0;
+  const m = (qd ** s.n + qy ** s.n) ** (1 / s.n); return m < 1 ? (1 - m) * Math.min(hw, hh) : 0;
+}
+// the gap between a ball (a knee) and a loft's side (negative: pressed in), and the loft's half-width there; beside the
+// loft's side (within its height) the gap is horizontal, above or below it the distance to its top or bottom edge
+function loftGap(secs, P, r) {
+  const s = loftAt(secs, P.z); if (!s) return null;
+  const hh = (s.top - s.bot) / 2, mid = (s.top + s.bot) / 2, dy = Math.abs(P.y - mid), dx = Math.abs(P.x - s.cx);
+  if (dy < hh) { const w = s.hw * Math.max(0, 1 - (dy / hh) ** s.n) ** (1 / s.n); return { gap: dx - r - w, w }; }
+  return { gap: Math.hypot(Math.max(0, dx - s.hw * 0.7), dy - hh) - r, w: 0 };
+}
+// the cushion's top at z, a little off its centre line (where the seat bones bear)
+function saddleTop(secs, z, x0 = 0.06) {
+  const s = loftAt(secs, clamp(z, secs[0].z, secs.at(-1).z)), hh = (s.top - s.bot) / 2, mid = (s.top + s.bot) / 2;
+  return mid + hh * Math.max(0, 1 - Math.min(1, x0 / s.hw) ** s.n) ** (1 / s.n);
+}
+const rideHitsCost = (h) => Object.values(h).reduce((c, d) => c + (d / 0.01) ** 2 * 4, 0); // (a centimetre into the bodywork costs as much as a joint well off its comfort)
+const RIDES = new Map(); // (solved rider postures: person, vehicle geometry -> v)
+
 const POSTURES = new Map(); // (solved postures: person, seat and controls -> v)
 class Rig {
   constructor(kind, ctl, outfit, seed, opts = {}) {
@@ -301,7 +333,8 @@ class Rig {
     this.p = Array.from({ length: NB }, () => V());
     // posture: solved once for this person in this seat at these controls (cached), then only the arms follow the
     // controls each frame
-    this.configure(HM && opts.seat ? this.solvePosture() : this.defaultPosture());
+    if (ctl === 'bars' && opts.ride) this.configureRide(this.solveRide()); // (a rider: solved on the vehicle's declared geometry)
+    else this.configure(HM && opts.seat ? this.solvePosture() : this.defaultPosture());
     this.pose(this.state);
   }
   defaultPosture() {
@@ -408,6 +441,120 @@ class Rig {
     POSTURES.set(key, { v: { ...v }, gripA: this.gripA && { ...this.gripA } });
     return v;
   }
+  // ---- riders ('bars' with opts.ride: rideGeometry) ----
+  // A rider's posture v: { hz (the pelvis's place along the saddle, rig z), fwd (the torso's forward lean from the
+  // hips), flex (the back's bend), prot (the shoulders forward), kOut (the knees' swing out round the hip-peg line) }.
+  // The pelvis sits on the saddle's top at hz (the body's lowest point on the cushion, sunk a little); hands on the
+  // grips and feet on the pegs are the vehicle's, so the rest follows.
+  configureRide(v) {
+    this.configure({ ...v, lean: 0, slide: 0, shin: 0.21, splay: 0 }); this.v = v;
+    const R = this.opts.ride, D = this.D, T2 = this.body ? torsoPoints(D, this.spine, this.body) : null;
+    if (this.rideGrips === undefined) this.rideGrips = R.grips?.length === 2 ? R.grips.map((g) => V(...g)) : null;
+    let minY = -0.08; if (T2) { minY = Infinity; for (const p of T2.hips) minY = Math.min(minY, p.y - 0.012); } // (plus leathers)
+    const top = saddleTop(R.saddle, v.hz);
+    this.base.set(R.saddle[0].cx || 0, top - 0.012 - minY, v.hz); this.rideSeatY = top - 0.012;
+  }
+  // per frame: the solved posture, bent further forward when tucked at speed (as far as the bodywork lets the chest
+  // go), leaning further into a turn than the bike
+  rideFrame(s) {
+    const D = this.D, v = this.v, lean = s.lean || 0, tuck = s.tuck || 0, fwd = v.fwd + tuck * ((this.fwdTuck ?? v.fwd) - v.fwd);
+    this.hipAt = this.base.clone().add(V(lean * 0.12, -Math.abs(lean) * 0.03, tuck * 0.04));
+    this.spineQ = new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), -lean).multiply(new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), -fwd));
+    this.spinePos = V(0, 0.03, 0).add(this.hipAt);
+    const sp = (x, y, z) => V(x, y, z).applyQuaternion(this.spineQ).add(this.spinePos);
+    this.joints(sp);
+    this.hipR = V(D.hipW, 0, 0).add(this.hipAt); this.hipL = V(-D.hipW, 0, 0).add(this.hipAt);
+  }
+  // the knee's pole (the direction it bends towards): forward and up, swung out by kOut; each frame, a knee that the
+  // hips' lean would push into the bodywork swings out until it clears
+  rideKnee(k, foot) {
+    const sx = k === 'R' ? 1 : -1, hip = k === 'R' ? this.hipR : this.hipL, R = this.opts.ride, D = this.D, E = V();
+    const pole = (a) => V(sx * Math.sin(a), 0.55 * Math.cos(a), -Math.cos(a));
+    let a = this.v.kOut; if (this.solving) return pole(a);
+    for (let n = 0; n < 8; n++) {
+      ikTwo(hip, foot, D.thigh, D.shin, pole(a), E);
+      const g = Math.min(...R.around.map((L) => loftGap(L, E, 0.055)?.gap ?? 1)); if (g > -0.01) break; a += 0.06;
+    }
+    return pole(a);
+  }
+  // obstacles: how deep the legs, torso, arms and head go into the bodywork (each part's deepest, summed)
+  rideHits() {
+    const p = this.p, q = this.q, R = this.opts.ride, P = V(), deep = (pt, r) => Math.max(0, ...R.around.map((L) => loftDepth(L, pt, r)));
+    const seg = (a, b, list) => { let h = 0; for (const [t, r] of list) h = Math.max(h, deep(P.copy(a).lerp(b, t), r)); return h; };
+    const hit = { legs: 0, torso: 0, arms: 0, head: 0 };
+    for (const [th, sh] of [[B.thighR, B.shinR], [B.thighL, B.shinL]]) {
+      const ank = V(0, this.D.shin, 0).applyQuaternion(q[sh]).add(p[sh]);
+      hit.legs += seg(p[th], p[sh], [[0.45, 0.07], [0.7, 0.062], [0.9, 0.055]]) + seg(p[sh], ank, [[0.15, 0.05], [0.4, 0.045], [0.7, 0.04]]);
+    }
+    for (const [u, f, h] of [[B.uArmR, B.fArmR, B.handR], [B.uArmL, B.fArmL, B.handL]]) hit.arms += seg(p[u], p[f], [[0.3, 0.05], [0.7, 0.047], [1, 0.045]]) + seg(p[f], p[h], [[0.3, 0.04], [0.6, 0.036]]);
+    if (this.torsoEll) for (const e of this.torsoEll) for (let k = 0; k < 8; k++) { const a = (k / 8) * Math.PI * 2;
+      P.set(e.cx + e.rx * Math.cos(a), e.y, e.cz + e.rz * Math.sin(a)).applyQuaternion(q[B.spine]).add(p[B.spine]); hit.torso = Math.max(hit.torso, deep(P, -0.015)); } // (the chest may rest on the tank: a centimetre and a half of leathers and belly gives)
+    hit.head = deep(V(0, 0.12, -0.02).applyQuaternion(q[B.head]).add(p[B.head]), 0.13);
+    return hit;
+  }
+  // How good a rider's posture is, once posed: the arms' comfort on the grips (comfortArm's cost), the hips and knees
+  // (flexion near a seated person's, knees not spread wide), the knees against the bodywork (pressed to it for a 'grip'
+  // seat, else close to it), the back near its relaxed lean and bend, the neck not craned too far back to see the road,
+  // and nothing through the bodywork.
+  rideCost() {
+    this.pose(this.state);
+    const p = this.p, q = this.q, v = this.v, R = this.opts.ride, parts = this.costParts = {}; let c = 0;
+    for (const k of ['R', 'L']) c += this.armAngles?.[k]?.cost ?? 0; parts.arms = c;
+    const up = V(0, 1, 0).applyQuaternion(q[B.spine]), fit = this.riderFit = { knees: R.knees || 'near' };
+    let legs = 0, knees = 0;
+    for (const [k, th, sh] of [['R', B.thighR, B.shinR], ['L', B.thighL, B.shinL]]) {
+      const td = V(0, 1, 0).applyQuaternion(q[th]), sd = V(0, 1, 0).applyQuaternion(q[sh]);
+      const hip = Math.acos(clamp(up.dot(td), -1, 1)), knee = Math.PI - Math.acos(clamp(td.dot(sd), -1, 1)), abd = Math.atan2(Math.abs(td.x), Math.hypot(td.y, td.z));
+      legs += ((hip - 1.66) / 0.6) ** 2 + ((knee - 1.85) / 0.6) ** 2 + (Math.max(0, abd - 0.12) / 0.25) ** 2;
+      if (hip < 0.7 || knee < 0.75) legs += 1e3; // (past the joints' range)
+      let g = null; for (const L of R.around) { const r = loftGap(L, p[sh], 0.055); if (r && (!g || r.gap < g.gap)) g = r; }
+      const gap = g ? g.gap : 0.3;
+      knees += R.knees === 'grip' ? ((gap + 0.005) / 0.015) ** 2 : (Math.max(0, gap - 0.03) / 0.05) ** 2;
+      fit[k] = { kneeAt: p[sh].toArray().map((x) => +x.toFixed(3)), gap: +gap.toFixed(3), halfWidth: g ? +g.w.toFixed(3) : null, hip: +(hip * 57.3).toFixed(0), knee: +(knee * 57.3).toFixed(0), abd: +(abd * 57.3).toFixed(0) };
+    }
+    parts.legs = legs; parts.knees = knees; c += legs + knees;
+    // elbows bent, not locked straight (the arms steer; they don't prop the rider up), nor folded tight
+    let elb = 0; for (const [u, f, h] of [[B.uArmR, B.fArmR, B.handR], [B.uArmL, B.fArmL, B.handL]]) { const a = p[f].clone().sub(p[u]).normalize(), b2 = p[h].clone().sub(p[f]).normalize(), bend = Math.acos(clamp(a.dot(b2), -1, 1)); elb += (Math.max(0, 0.6 - bend) / 0.2) ** 2 + (Math.max(0, bend - 1.6) / 0.3) ** 2; fit['elbow' + (u === B.uArmR ? 'R' : 'L')] = +(bend * 57.3).toFixed(0); }
+    parts.elbows = elb; c += elb;
+    const neck = v.fwd + v.flex * 0.5; // (the head is held level: the neck extends as the back goes down)
+    parts.posture = ((v.fwd - (R.lean ?? 0.35)) / 0.2) ** 2 + ((v.flex - 0.3) / 0.3) ** 2 + (v.prot / 0.3) ** 2 + ((v.hz - (R.hz0 ?? 0)) / 0.06) ** 2 + (Math.max(0, neck - 0.9) / 0.3) ** 2; c += parts.posture;
+    const hit = rideHitsCost(this.lastHits = this.rideHits()); parts.hit = hit; this.riderFit.hits = this.lastHits; c += hit;
+    return c;
+  }
+  // The rider's posture on this vehicle: coordinate descent over v from several starts (upright to tucked, knees in
+  // and out), the best two descended, the better kept; then how far a tuck may bend the back before the chest meets the
+  // bodywork. Cached per person and vehicle geometry.
+  solveRide() {
+    const R = this.opts.ride, key = [this.kind, this.seed % PEOPLE.length, JSON.stringify(R), JSON.stringify(this.pegs)].join('|');
+    if (RIDES.has(key)) { const r = RIDES.get(key); this.fwdTuck = r.fwdTuck; this.postureScore = r.score; this.riderFit = r.fit; return { ...r.v }; }
+    const z0 = R.saddle[0].z, z1 = R.saddle.at(-1).z, hz0 = R.hz0 ?? 0;
+    const VARS = [['hz', Math.max(z0 + 0.08, hz0 - 0.2), Math.min(z1 - 0.12, hz0 + 0.2), 0.04], ['fwd', 0, 1.35, 0.12], ['flex', 0, 0.9, 0.12], ['prot', 0, 0.35, 0.06], ['kOut', -0.3, 1.4, 0.15]];
+    this.solving = true;
+    const cost = (vv) => { this.configureRide(vv); return this.rideCost(); };
+    const descend = (v, best) => {
+      for (let pass = 0; pass < 4; pass++) for (const [k, lo, hi, step0] of VARS) {
+        const step = step0 / 2 ** pass;
+        for (const dir of [1, -1]) for (let n = 0; n < 5; n++) {
+          const t = { ...v, [k]: clamp(v[k] + dir * step, lo, hi) }; if (t[k] === v[k]) break;
+          const c = cost(t); if (c < best - 1e-4) { best = c; v = t; } else break;
+        }
+      }
+      return { v, c: best };
+    };
+    const starts = [];
+    for (const fwd of [0.3, 0.7, 1.05, R.lean]) for (const kOut of [0.15, 0.6]) { const t = { hz: clamp(hz0, VARS[0][1], VARS[0][2]), fwd, flex: 0.3, prot: 0.1, kOut }; delete this.armSol; starts.push({ v: t, c: cost(t) }); }
+    starts.sort((a, b) => a.c - b.c);
+    let win = null;
+    for (const s0 of starts.slice(0, 2)) { delete this.armSol; const r = descend(s0.v, cost(s0.v)); if (!win || r.c < win.c) win = r; }
+    const v = win.v; delete this.armSol;
+    // the tuck: as far as the outfit's (a road racer's further), short of the chest or head meeting the bodywork
+    let fwdTuck = v.fwd; const gain = this.o.hump ? 0.42 : 0.22;
+    for (let f = v.fwd + 0.03; f <= v.fwd + gain + 1e-6; f += 0.03) { this.configureRide({ ...v, fwd: f }); this.pose(this.state); const h = this.rideHits(); if (h.torso + h.head > 0.004) break; fwdTuck = f; }
+    delete this.armSol; this.configureRide(v); this.postureScore = this.rideCost(); delete this.armSol;
+    this.solving = false; this.fwdTuck = fwdTuck; this.riderFit.fwdTuck = +fwdTuck.toFixed(3);
+    RIDES.set(key, { v: { ...v }, fwdTuck, score: this.postureScore, fit: this.riderFit });
+    return { ...v };
+  }
   // neck and shoulders on the spine (sp: spine-local -> rig space): the posed spine's, else the procedural proportions
   joints(sp) {
     const D = this.D, S = this.spine;
@@ -447,7 +594,7 @@ class Rig {
       this.rimAt = (k, a0) => { const a = k === 'R' ? -a0 : a0; return { c: V(Math.sin(-a) * C.wheelR, Math.cos(a) * C.wheelR, 0).applyQuaternion(q[B.ctlA]).add(this.col), axis: V(Math.cos(a), Math.sin(a), 0).multiplyScalar(Math.sign(a)).applyQuaternion(q[B.ctlA]) }; };
       for (const k of ['R', 'L']) { const g = this.rimAt(k, this.gripA?.[k] ?? 1.15); hands[k] = g.c; axes[k] = g.axis; radii[k] = 0.017; }
     } else if (this.ctl === 'bars') { // on the grips (rig space, from the fork), else resting on the tank
-      hands.L = s.hands?.[0] || V(-0.2, 0.05, -0.42); hands.R = s.hands?.[1] || V(0.2, 0.05, -0.42); axes.L = V(1, 0, 0); axes.R = V(-1, 0, 0); radii.L = radii.R = 0.016; // (thumbs inboard)
+      hands.L = s.hands?.[0] || this.rideGrips?.[0] || V(-0.2, 0.05, -0.42); hands.R = s.hands?.[1] || this.rideGrips?.[1] || V(0.2, 0.05, -0.42); axes.L = V(1, 0, 0); axes.R = V(-1, 0, 0); radii.L = radii.R = 0.016; // (thumbs inboard)
       feet.L = this.pegs[0].clone().lerp(V(this.pegs[0].x - 0.1, this.groundY + 0.06, this.pegs[0].z - 0.12), s.foot || 0); // a foot down when stopped
       feet.R = this.pegs[1].clone();
       return { hands, feet, axes, radii };
@@ -469,7 +616,8 @@ class Rig {
   }
   pose(s) {
     const D = this.D, p = this.p, q = this.q, { hands, feet, axes, radii } = this.controls(s), bars = this.ctl === 'bars';
-    if (bars) { // a rider: bent forward over the tank (more when tucked at speed), leaning further into a turn than the bike
+    if (bars && this.opts.ride) this.rideFrame(s);
+    else if (bars) { // a rider: bent forward over the tank (more when tucked at speed), leaning further into a turn than the bike
       const fwd = (this.o.hump ? 0.6 : 0.42) + (s.tuck || 0) * (this.o.hump ? 0.42 : 0.22), lean = s.lean || 0;
       this.hipAt = V(lean * 0.12, -Math.abs(lean) * 0.03, (s.tuck || 0) * 0.04);
       this.spineQ = new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), -lean).multiply(new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), -fwd));
@@ -627,8 +775,8 @@ class Rig {
       feet[k] = V(hip.x * (1.25 + (this.splay || 0) * 1.5), ay, kz - D.shin * Math.sin(ph));
     }
     const kS = kR.clone(); kS.x += this.splay || 0; // (knees apart)
-    limb(this.hipR, feet.R, D.thigh, D.shin, kS, B.thighR, B.shinR, 1);
-    limb(this.hipL, feet.L, D.thigh, D.shin, V(-kS.x, kS.y, kS.z), B.thighL, B.shinL, 1);
+    limb(this.hipR, feet.R, D.thigh, D.shin, bars && this.opts.ride ? this.rideKnee('R', feet.R) : kS, B.thighR, B.shinR, 1);
+    limb(this.hipL, feet.L, D.thigh, D.shin, bars && this.opts.ride ? this.rideKnee('L', feet.L) : V(-kS.x, kS.y, kS.z), B.thighL, B.shinL, 1);
     // hands at rest lie on the thighs' top surface two thirds of the way to the knee, a hand on a gently curved surface
     // (a grip on a broad bar across the thigh, thumbs inboard)
     if (this.restHands) for (const [k, it] of [['R', B.thighR], ['L', B.thighL]]) {
@@ -655,7 +803,7 @@ function figureGeometry(rig) {
   const route = (hex, gloss) => (typeof gloss === 'string' ? gloss : gloss ? (hex === o.visor ? 'glass' : 'paint') : hex === skin ? 'skin' : hex === hair ? 'hair' : (hex === o.glove || hex === o.boot || hex === 0x1d1d1f || hex === 0x15161a) ? 'rubber' : 'fabric');
   const at = (i, geo, hex, gloss = false) => k.add(geo, hex, i, route(hex, gloss), geo.attributes.skinIndex ? null : R(i)); // (a loft is built in rig space)
   // ---- the body: the skinned human mesh posed onto this rig (body.js), coloured by what the outfit covers ----
-  const BP = rig.body ? poseBody({ p: rig.p, q: rig.q, B, DIM: rig.D, grips: rig.grips, spine: rig.spine, body: rig.body, footFlat: rig.floorY != null }, { seat: rig.ctl === 'bars' ? { y: -0.08, back: null } : rig.seatY != null ? { y: rig.seatY - 0.012, back: null } : { y: -0.09, back: 0.125 } }) : null;
+  const BP = rig.body ? poseBody({ p: rig.p, q: rig.q, B, DIM: rig.D, grips: rig.grips, spine: rig.spine, body: rig.body, footFlat: rig.floorY != null }, { seat: rig.ctl === 'bars' ? { y: rig.rideSeatY ?? -0.08, back: null } : rig.seatY != null ? { y: rig.seatY - 0.012, back: null } : { y: -0.09, back: 0.125 } }) : null;
   // a crew neckline round the base of the neck (spine-local, by where each point is, so it's smooth across the mesh's
   // bones): 5.5 cm under the neck joint in front, 3 at the sides, 2 behind. > 0 below it (inside the shirt), metres.
   const neckF = BP ? (() => { const sinv = R(B.spine).invert(), nk = rig.spine ? rig.spine.neck : V(0, D.spine, 0), v = V();
@@ -1266,17 +1414,17 @@ function figureGeometry(rig) {
 
 // Where the figure looks from (rig space, rest pose, head straight): just behind the eyes on the head bone.
 function eyePoint(rig) {
-  const r = new Rig(rig.kind, rig.ctl, rig.o, rig.seed, { pegs: rig.pegs, groundY: rig.groundY }); // (posed at rest)
+  const r = new Rig(rig.kind, rig.ctl, rig.o, rig.seed, { pegs: rig.pegs, groundY: rig.groundY, ride: rig.opts.ride }); // (posed at rest)
   const k = rig.o.head === 'bubble' ? 1.18 : 1;
   return V(0, 0.155, -0.075 * k).applyQuaternion(r.q[B.head]).add(r.p[B.head]);
 }
 
 const geoCache = new Map();
 // outfit: OUTFITS key or object; ctl: 'stick' | 'cyclic' | 'yoke' | 'wheel' | 'none'; seed picks skin/hair tones
-export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, pegs = null, groundY, seat = null, helm = null } = {}) {
+export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, pegs = null, groundY, seat = null, helm = null, ride = null } = {}) {
   const outfit = { ...(OUTFITS[outfitKey] || OUTFITS.light), ...(colors || {}) };
-  const rig = new Rig(outfitKey, ctl, outfit, seed, { pegs, groundY, seat, helm });
-  const key = outfitKey + '|' + ctl + '|' + (seed % 4) + '|' + JSON.stringify(colors || 0) + (pegs ? '|' + JSON.stringify(pegs.map((v) => v.toArray().map((x) => +x.toFixed(3)))) : '') + (seat ? '|' + JSON.stringify(seat) : '') + (helm ? '|' + JSON.stringify(helm) : '');
+  const rig = new Rig(outfitKey, ctl, outfit, seed, { pegs, groundY, seat, helm, ride });
+  const key = outfitKey + '|' + ctl + '|' + (seed % 4) + '|' + JSON.stringify(colors || 0) + (pegs ? '|' + JSON.stringify(pegs.map((v) => v.toArray().map((x) => +x.toFixed(3)))) : '') + (seat ? '|' + JSON.stringify(seat) : '') + (helm ? '|' + JSON.stringify(helm) : '') + (ride ? '|' + JSON.stringify(ride) : '');
   if (!geoCache.has(key)) geoCache.set(key, figureGeometry(rig));
   const geos = geoCache.get(key), mats = crewMaterials();
   const root = new THREE.Group(); root.name = 'crew';
@@ -1356,6 +1504,28 @@ function seatControls(st, s) {
   for (const [k, v] of Object.entries(src)) { if (v == null) continue; out[k] = Array.isArray(v) ? V(...v).divideScalar(s) : /(tilt|Ang)$/.test(k) ? v : v / s; }
   return Object.keys(out).length ? out : null;
 }
+// A rider's seat ('bars') may declare the vehicle's geometry round the rider, in the part's coordinates:
+//   saddle: the cushion's superLoft sections ({ z, hw, top, bot, n }, z ascending): the rider sits on its top,
+//           wherever along it is most comfortable
+//   around: [sections, ...] the bodywork the rider straddles and reaches over (tank, fairing panels, shrouds, a jet
+//           ski's hood): legs, torso and arms stay outside it, the knees just outside it
+//   knees: 'grip' (pressed against it, as a road racer or a motocross rider grips the tank) or 'near' (the default)
+//   lean: the torso's forward lean (radians from upright) the riding position is built round: a road racer's crouch,
+//         a motocross attack stance, a jet ski's upright seat (the default 0.35); the solve balances it against the rest
+// and the grips are those of whichever part carries userData.grips nearest the seat (a fork, a jet ski's own bars), at
+// rest. All of it into the rider's rig space (seat point at, the part's scale ps, the rider's scale sc). Null without
+// a saddle (the rider then poses by the old fixed rules).
+function rideGeometry(st, obj, objs, ps, sc) {
+  if (!st.saddle?.length) return null;
+  const at = V(...st.p), r3 = (x) => +x.toFixed(4);
+  const secs = (L) => L.map((s) => ({ z: r3((s.z - at.z) * ps.z / sc), hw: r3(s.hw * ps.x / sc), top: r3((s.top - at.y) * ps.y / sc), bot: r3((s.bot - at.y) * ps.y / sc), n: s.n || 3, cx: r3(((s.cx || 0) - at.x) * ps.x / sc) }));
+  let grips = null; const root = obj.parent, toR = (o, p) => { const out = p.clone(); for (let x = o; x && x !== root; x = x.parent) { x.updateMatrix(); out.applyMatrix4(x.matrix); } return out; };
+  obj.updateMatrix(); const inv = obj.matrix.clone().invert(), here = toR(obj, at);
+  let best = null, bd = Infinity; for (const o of objs) { if (!o?.userData.grips) continue; const d = toR(o, V()).distanceTo(here); if (d < bd) { bd = d; best = o; } }
+  if (best) grips = best.userData.grips.map((g) => toR(g.o, g.p).applyMatrix4(inv).sub(at).multiply(ps).divideScalar(sc).toArray().map(r3)).sort((a, b) => a[0] - b[0]);
+  else if (st.grips?.length === 2) grips = st.grips.map((g) => V(...g).sub(at).multiply(ps).divideScalar(sc).toArray().map(r3));
+  return { saddle: secs(st.saddle), around: (st.around || []).map(secs), knees: st.knees || 'near', lean: st.lean ?? 0.35, grips };
+}
 export function addCrew(design, objs) {
   const rigs = [];
   design.parts.forEach((p, i) => {
@@ -1369,18 +1539,19 @@ export function addCrew(design, objs) {
       // a rider sits on the frame part, which a kid may have resized, and not evenly (wider, longer, taller): the rider
       // must not be stretched with it. It keeps its own proportions at the frame's average size (scaled back by the
       // frame's own scale), and its pegs and the ground are measured in that unstretched space.
-      let fit = null;
+      let fit = null, ride = null;
       if (ctl === 'bars') { // a rider in the bike's colours, feet on the frame's pegs (seat space -> rig space)
         outfit = st.rider || 'mx'; colors = { suit: p.color ?? OUTFITS[outfit].suit, helmet2: p.color ?? OUTFITS[outfit].helmet2 };
         const ps = V(Math.abs(obj.scale.x) || 1, Math.abs(obj.scale.y) || 1, Math.abs(obj.scale.z) || 1), sc = (st.s || 1) * Math.cbrt(ps.x * ps.y * ps.z);
         fit = V(sc / ps.x, sc / ps.y, sc / ps.z);
         const at = V(...st.p); pegs = (st.pegs || []).map((q) => V(...q).sub(at).multiply(ps).divideScalar(sc)); if (pegs.length !== 2) pegs = null;
         if (st.ground != null) groundY = (st.ground - st.p[1]) * ps.y / sc;
+        ride = rideGeometry(st, obj, objs, ps, sc);
       }
       // a seat built with seatGeo declares it (fit: { at: where its geometry was placed, dims: seatGeo's arguments }), so
       // the figure can sit on its actual surfaces
       const seat = st.fit && ctl !== 'bars' ? seatSurfaces(st.fit, st.p, st.s || 1) : null, ctlSet = seatControls(st, st.s || 1);
-      const c = buildCrew(outfit, ctl, { seed: i * 3 + k, colors, pegs, groundY, seat, helm: ctlSet });
+      const c = buildCrew(outfit, ctl, { seed: i * 3 + k, colors, pegs, groundY, seat, helm: ctlSet, ride });
       Object.assign(c.userData.crewRig, { role: st.role || 'pilot', kind, ctl, part: i, seat: k }); // (stations.js names the cockpit views from these)
       c.position.set(...st.p); if (st.quat) c.quaternion.fromArray(st.quat); else if (st.yaw) c.rotation.y = st.yaw;
       if (fit) c.scale.copy(fit); else c.scale.setScalar(st.s || 1);

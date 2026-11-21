@@ -278,7 +278,12 @@ function jetSkiHull(c, lv) {
   }
   b.to(g);
   // ridden like a motorbike (crew.js 'bars'): feet in the footwells, hands on the handlebar grips
-  g.userData.seats = [{ p: [0, 0.82, 0.32], s: 1, ctl: 'bars', rider: 'boat', pegs: [[-0.36, 0.33, 0.04], [0.36, 0.33, 0.04]], ground: 0.3 }];
+  // the rider (crew.js rideGeometry): astride the saddle (the capsule's sections), knees beside the hood (the half
+  // ellipsoid's sections) and the saddle's spine
+  const ell = (zs, c, a, rx, ry, y) => zs.map((z) => { const f = Math.sqrt(Math.max(0.01, 1 - ((z - c) / a) ** 2)); return { z, hw: rx * f, top: y + ry * f, bot: y - ry * f, n: 2 }; });
+  const saddle = [...ell([-0.3, -0.25, -0.18, -0.1], -0.1, 0.2, 0.2, 0.11, 0.74), ...ell([1.1, 1.18, 1.25, 1.3], 1.1, 0.2, 0.2, 0.11, 0.74)];
+  const hood = ell([-1.36, -1.25, -1.1, -0.9, -0.62, -0.4, -0.2, -0.05, 0.12], -0.62, 0.75, 0.42, 0.3, 0.56), spine = [{ z: -0.295, hw: 0.21, top: 0.71, bot: 0.29, n: 10 }, { z: 1.255, hw: 0.21, top: 0.71, bot: 0.29, n: 10 }];
+  g.userData.seats = [{ p: [0, 0.82, 0.32], s: 1, ctl: 'bars', rider: 'boat', pegs: [[-0.36, 0.33, 0.04], [0.36, 0.33, 0.04]], ground: 0.3, saddle, around: [hood, spine] }];
   g.userData.grips = [{ o: g, p: V(-0.33, 1.0, -0.24) }, { o: g, p: V(0.33, 1.0, -0.24) }];
   return g;
 }
