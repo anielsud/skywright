@@ -279,6 +279,15 @@ export function poseBody(rig, { grip = true, scale = 1.07, seat = { y: -0.09, ba
     g.M = rigM(g.bone).multiply(new THREE.Matrix4().makeScale(1, st, 1)).multiply(g.src.clone().invert());
     g.key = k;
   }
+  // feet flat on a floor (rig.footFlat): each foot turns at the ankle until its sole is level again (the shin leans;
+  // the foot, standing, was square to it), so the sole rests on the floor instead of the heel digging in
+  if (rig.footFlat) for (const s of ['R', 'L']) {
+    const g = segs['shin' + s], an = J('foot.' + s).applyMatrix4(g.M), upP = V(0, 1, 0).applyMatrix4(new THREE.Matrix4().extractRotation(g.M)).normalize();
+    const rot = new THREE.Matrix4().makeRotationFromQuaternion(new THREE.Quaternion().setFromUnitVectors(upP, V(0, 1, 0)));
+    const W = new THREE.Matrix4().makeTranslation(an.x, an.y, an.z).multiply(rot).multiply(new THREE.Matrix4().makeTranslation(-an.x, -an.y, -an.z));
+    const Ms = g.M.clone().invert().multiply(W).multiply(g.M);
+    SB.forEach((b, i) => { if (b.name.endsWith('.' + s) && /^(foot|toe)/.test(b.name)) boneM[i] = boneM[i] ? Ms.clone().multiply(boneM[i]) : Ms.clone(); });
+  }
   // blend
   const n = S.n, pos = new Float32Array(n * 3), seg = new Array(n), along = new Float32Array(n), skI = new Uint16Array(n * 4), skW = new Float32Array(n * 4);
   const segOfBone = SB.map((b) => segs[segmentOf(b.name)] || segs.spine), v = V(), acc = V(), tmp = V();

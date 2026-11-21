@@ -359,7 +359,8 @@ class Rig {
       c += ((hip - 1.66) / 0.45) ** 2 + ((knee - 1.85) / 0.5) ** 2;
     }
     parts.legs = c - parts.arms;
-    const c0 = c; c += ((v.lean - 0.25) / 0.15) ** 2 + ((v.flex - 0.4) / 0.3) ** 2 + (v.prot / 0.3) ** 2 + (v.slide / 0.06) ** 2 + (v.splay / 0.1) ** 2; parts.posture = c - c0; // (knees wide apart is no way to sit)
+    const st = this.opts.seat, leanTo = st ? clamp(st.tilt + 0.05, 0.15, 0.5) : 0.25; // (lying back into a raked seat is relaxed)
+    const c0 = c; c += ((v.lean - leanTo) / 0.15) ** 2 + ((v.flex - 0.4) / 0.3) ** 2 + (v.prot / 0.3) ** 2 + (v.slide / 0.06) ** 2 + (v.splay / 0.1) ** 2; parts.posture = c - c0; // (knees wide apart is no way to sit)
     if (this.ctl === 'wheel') {
       c += ((v.colZ || 0) / 0.08) ** 2 + ((v.colY || 0) / 0.08) ** 2; // (a tilt helm adjusts: some cost)
       const rimR = 0.017, spInv = q[B.spine].clone().invert(), ELL = this.torsoEll, P = V();
@@ -566,7 +567,8 @@ class Rig {
       const prev = (this.armSol ||= {})[k];
       let best = { c: Infinity, th: 0, ph: 0 };
       const grid = (th0, ph0, span, n) => { for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const th = th0 + span * (i / (n - 1) - 0.5) * 2, ph = ph0 + span * (j / (n - 1) - 0.5) * 2, cc = score(th, ph); if (cc < best.c) best = { c: cc, th, ph }; } };
-      if (prev) { best = { c: score(prev.th, prev.ph), th: prev.th, ph: prev.ph }; grid(prev.th, prev.ph, 0.25, 9); }
+      const prevC = prev ? score(prev.th, prev.ph) : Infinity;
+      if (prev && prevC < 500) { best = { c: prevC, th: prev.th, ph: prev.ph }; grid(prev.th, prev.ph, 0.25, 9); } // (an answer from out of reach or past a joint's range is no place to refine from: search afresh)
       else grid(0, 0, Math.PI, 49);
       for (const span of [0.12, 0.04, 0.012]) grid(best.th, best.ph, span, 7);
       this.armSol[k] = { th: best.th, ph: best.ph };
@@ -653,7 +655,7 @@ function figureGeometry(rig) {
   const route = (hex, gloss) => (typeof gloss === 'string' ? gloss : gloss ? (hex === o.visor ? 'glass' : 'paint') : hex === skin ? 'skin' : hex === hair ? 'hair' : (hex === o.glove || hex === o.boot || hex === 0x1d1d1f || hex === 0x15161a) ? 'rubber' : 'fabric');
   const at = (i, geo, hex, gloss = false) => k.add(geo, hex, i, route(hex, gloss), geo.attributes.skinIndex ? null : R(i)); // (a loft is built in rig space)
   // ---- the body: the skinned human mesh posed onto this rig (body.js), coloured by what the outfit covers ----
-  const BP = rig.body ? poseBody({ p: rig.p, q: rig.q, B, DIM: rig.D, grips: rig.grips, spine: rig.spine, body: rig.body }, { seat: rig.ctl === 'bars' ? { y: -0.08, back: null } : rig.seatY != null ? { y: rig.seatY - 0.012, back: null } : { y: -0.09, back: 0.125 } }) : null;
+  const BP = rig.body ? poseBody({ p: rig.p, q: rig.q, B, DIM: rig.D, grips: rig.grips, spine: rig.spine, body: rig.body, footFlat: rig.floorY != null }, { seat: rig.ctl === 'bars' ? { y: -0.08, back: null } : rig.seatY != null ? { y: rig.seatY - 0.012, back: null } : { y: -0.09, back: 0.125 } }) : null;
   // a crew neckline round the base of the neck (spine-local, by where each point is, so it's smooth across the mesh's
   // bones): 5.5 cm under the neck joint in front, 3 at the sides, 2 behind. > 0 below it (inside the shirt), metres.
   const neckF = BP ? (() => { const sinv = R(B.spine).invert(), nk = rig.spine ? rig.spine.neck : V(0, D.spine, 0), v = V();
@@ -904,7 +906,8 @@ function figureGeometry(rig) {
   }
   if (o.shirt) { // tie and epaulettes
     at(B.spine, capAB(V(0, D.shoulderUp - 0.02, -0.115), V(0, 0.16, -0.122), 0.022, 0.03, { sz: 0.25, seg: 6 }), o.trim);
-    for (const sx of [-1, 1]) at(B.spine, boxG(0.09, 0.012, 0.045, V(sx * 0.15, D.shoulderUp + 0.03, 0.01)), 0x15161a), at(B.spine, boxG(0.092, 0.014, 0.008, V(sx * 0.15, D.shoulderUp + 0.032, 0.01)), o.epaulettes, true);
+    for (const sx of [-1, 1]) { const sh = rig.spine ? rig.spine.sh[sx > 0 ? 'R' : 'L'] : V(sx * 0.19, D.shoulderUp, 0.02), ex = sh.x * 0.78, ey = sh.y + (rig.spine ? 0.055 : 0.03), ez = sh.z; // (on the solved shoulders)
+      at(B.spine, boxG(0.09, 0.012, 0.045, V(ex, ey, ez)), 0x15161a); at(B.spine, boxG(0.092, 0.014, 0.008, V(ex, ey + 0.002, ez)), o.epaulettes, true); }
   }
   // arms: sleeve, elbow, forearm and a gloved (or bare) fist
   const hand = o.glove ?? skin;
@@ -1233,7 +1236,7 @@ function figureGeometry(rig) {
     at(B.ctlA, capsule(0.1, 0.022, 0.026, { seg: 8 }).translate(0, C.stickLen - 0.06, 0), blk); // grip
     at(B.ctlA, ellipsoid(V(0, C.stickLen + 0.04, -0.012), 0.008, 0.008, 0.008), 0xc8102e, true); // trigger / button
     if (rig.ctl === 'stick') {
-      at(B.hips, boxG(0.1, 0.06, 0.34, V(C.thrBase.x, C.thrBase.y - 0.02, C.thrBase.z - 0.02)), 0x2b2d31); // throttle quadrant
+      at(B.ctlC, boxG(0.1, 0.06, 0.34, V(C.thrBase.x, C.thrBase.y - 0.02, C.thrBase.z - 0.02)), 0x2b2d31); // throttle quadrant (on the rig's fixed frame, where the vehicle put it: not on the hips, which move with the seat fit)
       at(B.ctlB, capsule(C.thrLen, 0.01, 0.01, { seg: 6 }), metal, true);
       at(B.ctlB, ellipsoid(V(0, C.thrLen, 0), 0.026, 0.03, 0.04), blk);
     } else {
