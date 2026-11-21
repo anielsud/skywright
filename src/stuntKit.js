@@ -231,10 +231,12 @@ export class Site {
       }
     }
   }
-  // an invisible barrier wall (collision only) along a path at lateral offset `a`
+  // an invisible barrier wall (collision only) along a path at lateral offset `a`, from height y0 (or y0(s): along a
+  // rising berm's top)
   wallLine(pth, s0, s1, a, h, y0 = 0) {
+    const yb = typeof y0 === 'function' ? y0 : () => y0;
     for (let s = s0; s < s1; s += 2) {
-      const f0 = pth(s), f1 = pth(Math.min(s1, s + 2)), p0 = this.W(f0.p.clone().addScaledVector(f0.r, a).setY(y0)), p1 = this.W(f1.p.clone().addScaledVector(f1.r, a).setY(y0));
+      const sb = Math.min(s1, s + 2), f0 = pth(s), f1 = pth(sb), p0 = this.W(f0.p.clone().addScaledVector(f0.r, a).setY(yb(s))), p1 = this.W(f1.p.clone().addScaledVector(f1.r, a).setY(yb(sb)));
       const A = p0, B = p1, C = p1.clone().add(V(0, h, 0)), D = p0.clone().add(V(0, h, 0)), out = this.Wd(f0.r.clone().negate());
       const fn = faceN(A, B, C); if (fn.dot(out) < 0) { this.cm.tri(A, C, B, PAINT, 0.6); this.cm.tri(A, D, C, PAINT, 0.6); } else { this.cm.tri(A, B, C, PAINT, 0.6); this.cm.tri(A, C, D, PAINT, 0.6); }
     }

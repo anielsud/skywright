@@ -24,6 +24,7 @@ import { findSite } from './stuntSite.js';
 import { EvelJump, planEvel } from './evelJump.js';
 
 const RT = 30, TW = 7, LANE = 3.5; // turn radius, track half width, lane offset
+const BANK = 26; // the east turn's banking (degrees)
 const LINK = 70; // where the park feeds the canyon jump: the link lane from the end of straight 1 to the run-up
 
 // s: metres along a straight from its start. pad: the dirt pad's half size; flat: ground levelled this far beyond it,
@@ -270,14 +271,17 @@ export class StuntPark extends Site {
     this.sign(V(cx, tp + 2.2, base.p.z), 'loop', 4, 0, true);
   }
 
-  // the east turn: a berm banked at up to 20 degrees, red and white kerbs, a barrier outside
+  // the east turn: a dirt berm banked at up to 26 degrees, red and white kerbs, tyres and a barrier along its top (on the
+  // berm, not at its foot: a car that rides up the bank meets them there, not 5 m below as it flies over). Arcade and
+  // Pilot steer you round it (bankGuide: kids come off the loop flat out and hardly steer); bankCatch keeps everything in.
   bankedTurn(pth) {
     const E = this.G.earth, T = this.T, B = T.bank.map(col), L = Math.PI * RT, f0 = this.link ? 30 : 0; // (a fork: the banking starts after it)
-    const bank = (s) => (20 * Math.PI / 180) * smoothstep(f0, f0 + 16, s) * (1 - smoothstep(L - 16, L, s));
-    const y = (s, a) => (a + TW) * Math.tan(bank(s));
+    const bank = (s) => (BANK * Math.PI / 180) * smoothstep(f0, f0 + 32, s) * (1 - smoothstep(L - 40, L, s)); // (banked up and down gently: a quick twist is a kicker, or drops away under you)
+    const y = (s, a) => (a + TW) * Math.tan(bank(s)), top = (s) => y(s, TW);
     this.sweep(E, { s0: 0, s1: L, n: 60, path: pth, cross: (s) => [[-TW, 0], [-TW + 0.6, y(s, -TW + 0.6)], [TW - 0.6, y(s, TW - 0.6)], [TW, y(s, TW)], [TW + 1.5, y(s, TW)]], color: (s, k) => (k === 0 || k === 2 ? (Math.floor(s / 2.5) % 2 ? B[0] : B[1]) : k === 3 ? B[3] : B[2]), type: (s, k) => (k === 0 || k === 2 ? PAINT : DIRT), depth: 1.5, wallColor: () => B[4], wallType: DIRT });
-    for (let s = f0 + 2; s < L; s += 1.6) { const f = pth(s); this.tyres(f.p.clone().addScaledVector(f.r, TW + 3.3), 2); }
-    this.wallLine(pth, f0, L, TW + 3.3, 1.0);
+    for (let s = f0 + 2; s < L; s += 1.6) { const f = pth(s); this.tyres(f.p.clone().addScaledVector(f.r, TW + 0.9).setY(top(s)), 2); }
+    this.wallLine(pth, f0, L, TW + 0.6, 1.2, top);
+    this.bankInfo = { L, f0, bank, top };
     if (this.link) this.fork();
     this.sign(pth(L / 2).p.addScaledVector(pth(L / 2).r, TW + 6), 'banked', 4, 0, false, pth(L / 2).r);
   }
@@ -395,10 +399,10 @@ export class StuntPark extends Site {
     if (!ac.isCar || ac.dead || !this.inside(ac.x.x, ac.x.z, 20)) { this.st.air = 0; return null; }
     const st = this.st, msgs = [], up = ac.up || Y;
     const fwd = V(0, 0, -1).applyQuaternion(ac.q);
-    this.rimCatch(ac, dt);
+    this.rimCatch(ac, dt); this.bankCatch(ac, dt);
     if (ac.onGround) {
       this.boostPads(ac, dt, fwd, msgs);
-      this.guide(ac, dt); this.bowlGuide(ac, dt);
+      this.guide(ac, dt); this.bowlGuide(ac, dt); this.bankGuide(ac, dt);
       if (st.air > 1.0) msgs.push({ toast: `BIG AIR! ${st.air.toFixed(1)} s`, good: true });
       st.air = 0;
       if (up.y < -0.6 && ac.stuntUp) st.upside = true; // on the wheels, upside down: in the loop
@@ -502,6 +506,74 @@ export class StuntPark extends Site {
     if (vr > back) ac.v.addScaledVector(rad, (back - vr) * f);
     if (ac.v.y > 0 && lp.y > lip + 0.5 && d > B.rimA - 0.4) ac.v.y *= 1 - f; // (no climbing up the barrier, or on over the lowered lip)
     if (d > B.rimA) ac.x.addScaledVector(rad, B.rimA - d); // (held at the fence)
+  }
+  // Where a car is on the east turn (park x, z): along it (s, from the end of straight 1), out from the lane's middle (d),
+  // the outward and the forward directions (site frame)
+  bankAt(x, z) {
+    const cx = x - this.XS, r = Math.hypot(cx, z), psi = Math.atan2(z, cx);
+    return { cx, r, d: r - RT, s: (Math.PI / 2 - psi) * RT, rad: V(cx / r, 0, z / r), t: V(z / r, 0, -cx / r) };
+  }
+  // The barrier on top of the east turn's berm, as a catch fence (every mode): what comes up the bank too fast loses its
+  // speed outwards and upwards at the top instead of flying over it. Only for what is riding the turn (not the link lane
+  // to the canyon jump, which runs on straight from its start).
+  bankCatch(ac, dt) {
+    const B = this.bankInfo, lp = this.Lp(ac.x), k0 = this.bankAt(lp.x, lp.z), { d, s } = k0;
+    if (k0.cx < -1 || s > B.L + 2 || d < -TW - 3 || d > TW + 6) { ac.bankIn = false; return; }
+    if (s >= B.f0 && d < TW - 2) ac.bankIn = true;
+    if (!ac.bankIn || s < B.f0) return;
+    const top = B.top(clamp(s, 0, B.L)), edge = TW - 0.3; // (the vehicle's middle stops short of the barrier)
+    if (lp.y > top + 5) return; // (over it: too late)
+    const k = smoothstep(edge - 1.5, edge, d); if (k <= 0) return;
+    const rad = this.Wd(k0.rad), vr = ac.v.dot(rad), f = k >= 1 ? 1 : Math.min(1, k * 12 * dt);
+    if (vr > 0) ac.v.addScaledVector(rad, -vr * f);
+    if (ac.v.y > 0 && lp.y > top - 0.5) ac.v.y *= 1 - f; // (no riding up off the top)
+    if (d > edge) ac.x.addScaledVector(rad, edge - d);
+  }
+  // Arcade and Pilot: round the east turn for you. Off the loop flat out with little steering, nothing gets round a 30 m
+  // bend by steering alone (the tyres' grip, the steering's speed limit), so like the bowl: the car is turned to run
+  // round it, at a line up the bank that suits its speed, no faster than the bank and the tyres could carry it (eased off
+  // like a rider braking for the bend). Where the track forks to the canyon jump, holding the steering towards the jump
+  // (right) takes the link lane instead.
+  bankGuide(ac, dt) {
+    if (!(ac.R.assist > 0)) return;
+    const B = this.bankInfo, lp = this.Lp(ac.x), k0 = this.bankAt(lp.x, lp.z), { d, s, r } = k0;
+    const fwd = this.Ld(V(0, 0, -1).applyQuaternion(ac.q));
+    if (this.link) { // the fork: a held steer towards the jump (from the end of the straight on) picks the link lane
+      const fork = k0.cx > -12 && s < B.f0 && Math.abs(lp.z - RT) < TW + 2 && fwd.x > 0.5;
+      if (!fork) { if (k0.cx < -12 || s >= B.f0 + 8) ac.forkJump = false; ac.forkHold = 0; }
+      else { ac.forkHold = ac.ctl.roll > 0.3 ? (ac.forkHold || 0) + dt : 0; if (ac.forkHold > 0.2) ac.forkJump = true; }
+      if (ac.forkJump) return;
+    }
+    if (k0.cx < 0 || s > B.L || d < -TW - 2 || d > TW + 2) return;
+    const nW = ac.stuntUp || Y, n = this.Ld(nW), t = k0.t.clone();
+    if (fwd.dot(t) < 0.3) return; // (not going round it, or the wrong way)
+    const v = ac.v.length(), bank = B.bank(s), mu = 1.0;
+    // no faster than the bank and the tyres can carry you round
+    const tb = Math.tan(bank), vmax = Math.sqrt(r * 9.81 * (tb + mu) / Math.max(0.2, 1 - mu * tb));
+    if (v > vmax) ac.v.multiplyScalar(Math.max(vmax, v - 14 * dt) / v);
+    // aim along the bend, towards a line up the bank that suits the speed (slow: low down, fast: higher up), and come
+    // back down to the middle for the exit
+    // (the bend goes on to the very end: easing off the turn early sends you straight up the bank as it flattens out)
+    const late = smoothstep(B.L - 50, B.L - 30, s), dT = clamp((v - 14) / 4, -2, 3) * (1 - late), end = 1 - smoothstep(B.L - 3, B.L, s);
+    t.addScaledVector(k0.rad, -clamp((d - dT) * 0.12, -0.3, 0.3));
+    t.addScaledVector(n, -t.dot(n)).normalize();
+    // (a bike also gets the bend's own turn rate here: bike.js keeps its yaw rate to its steering, and nobody steers)
+    const ff = ac.isBike ? (v / r) * end * dt : 0;
+    const err = Math.asin(clamp(fwd.clone().cross(t).dot(n), -1, 1)), turn = new THREE.Quaternion().setFromAxisAngle(nW, err * Math.min(1, 4 * dt * ac.R.assist / 0.45) + ff);
+    ac.q.premultiply(turn).normalize(); ac.v.applyQuaternion(turn);
+    // held on the bank as it rises under you (no taking off from it like a kicker)
+    const vn = ac.v.dot(nW); if (vn > 0) ac.v.addScaledVector(nW, -vn * Math.min(1, 10 * dt));
+    // the velocity too: turned to run along the car (no sliding wide off the bank)
+    const fw = V(0, 0, -1).applyQuaternion(ac.q), vf = ac.v.dot(fw), side = ac.v.clone().addScaledVector(fw, -vf).addScaledVector(nW, -ac.v.dot(nW));
+    ac.v.addScaledVector(side, -Math.min(1, 6 * dt));
+    // and turning at the rate the bend needs (cars: bike.js keeps its own yaw rate)
+    if (!ac.isBike) {
+      const qi = ac.q.clone().invert(), wn = ac.w.clone().applyQuaternion(ac.q).dot(nW), want = (vf / r) * end; ac.w.add(nW.clone().multiplyScalar((want - wn) * Math.min(1, 6 * dt)).applyQuaternion(qi));
+      // and kept flat on the bank (no rolling over sideways, tall trucks!)
+      const up = V(0, 1, 0).applyQuaternion(ac.q), rollErr = Math.asin(clamp(up.clone().cross(nW).dot(fw), -1, 1));
+      ac.q.premultiply(new THREE.Quaternion().setFromAxisAngle(fw, rollErr * Math.min(1, 5 * dt))).normalize();
+      ac.w.z *= Math.max(0, 1 - 5 * dt);
+    }
   }
   // Arcade and Pilot: on the bowl's wall the car is turned to run round it (the bowl is a 180-degree turn you'd have
   // to steer hard into at full speed; kids hit it flat out). How high you ride is still your speed.

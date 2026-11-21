@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.111.0', items: [
+    "Bikes and cars now zoom round the dirt banked turn after the loop instead of flying over the top, even flat out without steering.",
+    "At the Grand Canyon the turn is the way to go: hold right at the end of the straight if you want the canyon jump instead.",
+  ] },
   { v: '1.110.0', items: [
     "Flights start smoother: no more little freeze a second after take-off while the forest loads.",
   ] },
