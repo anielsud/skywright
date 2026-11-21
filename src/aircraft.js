@@ -1,7 +1,7 @@
 // Runtime aircraft: rigid-body flight model built from parts, ground contact, damage & break-up.
 import * as THREE from 'three';
 import { PARTS, partInfo } from './parts.js';
-import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale, partPower, partBurn, isRocketDesign } from './design.js';
+import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale, partPower, partBurn, isRocketDesign, coastsOnWheels } from './design.js';
 import { M } from './materials.js';
 import { clamp, lerp } from './noise.js';
 import { keepHeatPatch } from './sonic.js';
@@ -230,7 +230,7 @@ export class Aircraft {
     this.hasSmoke = this.parts.some((p) => p.smoke);
     this.hasAB = this.parts.some((p) => p.engine?.ab);
     this.isHeli = this.parts.some((p) => p.engine?.type === 'rotor');
-    this.isCar = this.parts.some((p) => p.engine?.type === 'drive');
+    this.isCar = this.parts.some((p) => p.engine?.type === 'drive') || coastsOnWheels(design); // (an engineless car or bike still rolls: design.js)
     this.driveF = 0; this.flipT = 0; this.svcBrake = 0; this.reversing = false; this.groundSpeed = 0;
     this.motorCount = this.parts.filter((p) => p.engine?.type === 'drive').length;
     // Rockets (any build with a rocket body) steer like rockets: see rocketControls(). A mixed build (rocket body + main

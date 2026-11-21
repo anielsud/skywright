@@ -142,6 +142,11 @@ const RHO = 1.225, G = 9.81;
 // rolls) and, without main wings, launches standing up.
 const ROCKET_BODIES = new Set(['fus_rocket']);
 export const isRocketDesign = (design) => design.parts.some((p) => ROCKET_BODIES.has(p.id));
+// A land vehicle with no engine at all (a kid took the motor out): car or bike wheels, no wings, no boat hull, no rocket
+// body. It is still a car or bike (aircraft.js isCar, analyze().car): it starts on the ground and rolls (downhill, or
+// off a ramp) instead of turning into a glider dropped from the sky.
+export const coastsOnWheels = (design) => { const ds = design.parts.map((p) => PARTS[p.id]).filter(Boolean);
+  return ds.some((d) => d.gear && !d.gear.float && (d.cat === 'car' || d.cat === 'bike')) && !ds.some((d) => d.engine || d.cat === 'wing' || d.boatHull) && !isRocketDesign(design); };
 export const launchesVertical = (design) => !!design.vertical || (isRocketDesign(design) && !design.parts.some((p) => PARTS[p.id]?.cat === 'wing'));
 
 export function analyze(design) {
@@ -190,7 +195,7 @@ export function analyze(design) {
     }
   }
   if (rotorLift > 0) { rotorAt.divideScalar(rotorLift); rotorOff = Math.hypot(rotorAt.x - com.x, rotorAt.z - com.z); }
-  const hover = mass > 0 ? rotorLift / (mass * G) : 0, heli = rotors > 0, car = motors > 0 && !heli;
+  const hover = mass > 0 ? rotorLift / (mass * G) : 0, heli = rotors > 0, car = (motors > 0 || coastsOnWheels(design)) && !heli;
   const grip = mass > 0 ? drivePower / (mass * G) : 0;
   const bike = car && bikeLayout(wheelAt); // two in-line wheels on the centreline: it rides like a motorbike (bike.js)
   const boat = !heli && design.parts.some((p) => PARTS[p.id]?.boatHull) ? boatLayout(design, mass, partMatrix) : null; // a boat hull: it floats (boat.js)
@@ -213,10 +218,11 @@ export function analyze(design) {
       if (hover >= 1.05 && rotorAt.y >= com.y && rotorOff <= 0.4 && (tailRotors || Math.abs(twist) <= rotorLift * 0.2)) warnings.push(['good', 'Ready to hover! Throttle to the middle to hold height.']);
     }
     else if (bike) {
-      if (!driveWheels) warnings.push(['bad', 'The engine needs a wheel to push on. Use a Swingarm Wheel at the back.']);
+      if (!motors) warnings.push(['warn', 'No engine: it can only roll downhill. Add an engine from the Bike tab.']);
+      else if (!driveWheels) warnings.push(['bad', 'The engine needs a wheel to push on. Use a Swingarm Wheel at the back.']);
       if (!bike.front.d.steer) warnings.push(['warn', 'The front wheel doesn’t steer. Use a Fork Wheel at the front.']);
-      if (grip < 0.25 && driveWheels) warnings.push(['warn', 'Heavy for its engine: it will be slow. Add Power or a bigger engine.']);
-      if (driveWheels && bike.front.d.steer) warnings.push(['good', 'Ready to ride! Gas to go, brake to stop, steer to lean into the turns. Full gas for a wheelie!']);
+      if (motors && grip < 0.25 && driveWheels) warnings.push(['warn', 'Heavy for its engine: it will be slow. Add Power or a bigger engine.']);
+      if (motors && driveWheels && bike.front.d.steer) warnings.push(['good', 'Ready to ride! Gas to go, brake to stop, steer to lean into the turns. Full gas for a wheelie!']);
     }
     else if (boat) {
       if (boat.sinks) warnings.push(['bad', 'Too heavy for its hull: it will sink! Use a bigger hull or fewer heavy parts.']);
@@ -225,11 +231,12 @@ export function analyze(design) {
       if (marine && !boat.sinks && boat.motors.some((m) => m.wet)) warnings.push(['good', 'Ready to go boating! Gas to go, brake to slow down (keep holding it to reverse), stick to steer.']);
     }
     else if (car) {
-      if (!driveWheels) warnings.push(['bad', 'The Car Engine needs Car Wheels to push on. Add some from the Car tab.']);
+      if (!motors) warnings.push(['warn', 'No engine: it can only roll downhill. Add a Car Engine from the Car tab.']);
+      else if (!driveWheels) warnings.push(['bad', 'The Car Engine needs Car Wheels to push on. Add some from the Car tab.']);
       else if (wheels < 3) warnings.push(['warn', 'Fewer than 3 wheels: it will tip over. Use 4.']);
       if (driveWheels && !design.parts.some((q) => PARTS[q.id]?.gear?.steer)) warnings.push(['warn', 'Nothing steers. Use Steering Wheels at the front.']);
-      if (grip < 0.25 && driveWheels) warnings.push(['warn', 'Heavy for its engine: it will be slow. Add Power or another engine.']);
-      if (driveWheels && wheels >= 3) warnings.push(['good', 'Ready to drive! Gas to go, brake to stop (keep holding it to reverse), stick to steer.']);
+      if (motors && grip < 0.25 && driveWheels) warnings.push(['warn', 'Heavy for its engine: it will be slow. Add Power or another engine.']);
+      if (motors && driveWheels && wheels >= 3) warnings.push(['good', 'Ready to drive! Gas to go, brake to stop (keep holding it to reverse), stick to steer.']);
     }
     else if (!engines) warnings.push(['info', 'No engines: it’s a glider. It will start in the air.']);
     if (rocket && !vertical) warnings.push(['info', 'Rocket plane: it steers like a rocket when the nose is up or the rockets are burning, and like a plane when the wings carry it.']);

@@ -9,6 +9,8 @@
 import * as THREE from 'three';
 import { Aircraft, REALISM } from '../../src/aircraft.js';
 import { bikeBuilds } from './meshcheck.js';
+import { PARTS } from '../../src/parts.js';
+import { analyze } from '../../src/design.js';
 
 const flat = (h = 0) => ({ groundAt: () => ({ h, n: new THREE.Vector3(0, 1, 0), type: 'runway' }), maxGround: () => h, windAt: () => new THREE.Vector3(), night: false, groundHeightAtSpawn: h });
 const C = (o = {}) => ({ pitch: 0, roll: 0, yaw: 0, throttle: 0, rev: 0, hand: 0, ...o });
@@ -34,7 +36,7 @@ export function run(design, mode, script, { T = 20, spawn = {}, dt = 1 / 60 } = 
     if (f % 6 === 0) out.samples.push({ t: +t.toFixed(2), spd: +spd.toFixed(2), lean: +(b.lean || 0).toFixed(3), leanT: +(b.leanT || 0).toFixed(3), steer: +(b.steer || 0).toFixed(3), pitch: +(b.pitch || 0).toFixed(3), yaw: +(yaw - yaw0).toFixed(3), y: +ac.x.y.toFixed(3), up: +ac.up.y.toFixed(3), fc: !!b.front?.contact, rc: !!b.rear?.contact, ground: ac.onGround, dead: !!ac.dead, ...(globalThis.__rideDbg ? { wy: +ac.w.y.toFixed(3), wz: +ac.w.z.toFixed(3), fs: +(b.front?.slip || 0).toFixed(2), rs: +(b.rear?.slip || 0).toFixed(2), fcomp: +(b.front?.comp || 0).toFixed(3), rcomp: +(b.rear?.comp || 0).toFixed(3), vg: +ac.groundSpeed.toFixed(2), rev: ac.reversing, sb: +ac.svcBrake.toFixed(2) } : {}) });
     if (ac.dead) { out.dead = true; break; }
   }
-  out.final = out.samples.at(-1); out.isBike = ac.isBike; out.mass = +ac.mass.toFixed(1);
+  out.final = out.samples.at(-1); out.isBike = ac.isBike; out.isCar = ac.isCar; out.mass = +ac.mass.toFixed(1);
   return out;
 }
 const sample = (r, t) => r.samples.reduce((a, s) => (Math.abs(s.t - t) < Math.abs(a.t - t) ? s : a));
@@ -84,6 +86,15 @@ export function plan(presets, others = []) {
     const ride = run(d, 'arcade', (t, ac) => t < 3 ? { throttle: 0.6 } : t < 8 ? { throttle: 0.15, roll: -1 } : t < 10 ? { throttle: 0.3 } : t < 22 ? { rev: Math.abs(ac.groundSpeed) > 0.3 ? 0.9 : 0 } : {}, { T: 24 }); // (a short, tall bike can only brake gently before it tips onto its nose)
     check(`kid ${d.name}: ride`, ride, [[ride.isBike, 'not detected as a bike'], [!ride.dead, 'wrecked'], [ride.maxLean < 0.95, `fell over (lean ${ride.maxLean.toFixed(2)})`], [!ride.flips, 'had to be picked up'],
       [ride.maxSpeed > 8, `slow (${ride.maxSpeed.toFixed(1)} m/s)`], [ride.minPitch > -0.6, `nose dived (${ride.minPitch.toFixed(2)})`], [unwrapYaw(ride, 3, 8) > 0.4, 'did not turn left'], [ride.final.spd < 0.5 && Math.abs(ride.final.lean) < 0.1, 'not stopped upright at the end']]);
+  }
+  // a bike or car with its engine taken out is still a land vehicle (not a glider dropped from the sky): it rolls
+  // off at a push and stays upright (Niam's Dirt Bike without its engine, 2026-11-21)
+  for (const d of [...presets, ...others.filter((o) => o.parts.some((p) => p.id.startsWith('c_')))]) {
+    const bare = { ...d, name: `${d.name} without engine`, parts: d.parts.filter((p) => !PARTS[p.id]?.engine) };
+    if (bare.parts.length === d.parts.length || bare.parts.some((p) => PARTS[p.id]?.cat === 'wing')) continue;
+    const st = analyze(bare), r = run(bare, 'pilot', () => ({ throttle: 1 }), { T: 4, spawn: { speed: 5 } });
+    check(`${bare.name}: still rolls`, r, [[st.car, 'analyze() says it is not a land vehicle'], [!st.warnings.some(([, t]) => /glider/.test(t)), 'called a glider'],
+      [r.isCar, 'Aircraft is not a car'], [!r.dead, 'wrecked'], [r.minUp > 0.55, `fell over (up ${r.minUp.toFixed(2)})`], [r.final.spd < 5, `sped up with no engine (${r.final.spd} m/s)`]]);
   }
   // and everything else stays what it was
   for (const d of others) { const ac = new Aircraft(d, REALISM.arcade); out.push({ name: `${d.name}: not a bike`, ok: !ac.isBike, why: ac.isBike ? 'detected as a bike' : '' }); }
