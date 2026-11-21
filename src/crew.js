@@ -73,6 +73,25 @@ export function crewMaterials() {
   return _mats;
 }
 
+// The astronaut's bubble helmet: clear glass like a canopy's (faint where you look straight through, mirror-like at
+// grazing angles; premultiplied, so reflections add on top instead of fading with the low opacity). Added to the shared
+// materials as the 'clear' slot the first time a bubble is built.
+function clearMaterial() {
+  const mats = crewMaterials(); if (mats.clear) return mats.clear;
+  const m = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.02, metalness: 0, transparent: true, opacity: 0.06, clearcoat: 1, clearcoatRoughness: 0.02,
+    envMapIntensity: 1.5, depthWrite: false, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor });
+  m.onBeforeCompile = (sh) => {
+    THREE.Material.prototype.onBeforeCompile.call(m, sh); // (the shared fog uniforms)
+    sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', `
+      float fres = pow(1.0 - clamp(abs(dot(normalize(vViewPosition), normal)), 0.0, 1.0), 4.0);
+      float ga = mix(diffuseColor.a, 0.85, fres);
+      gl_FragColor = vec4(totalDiffuse * ga + max(outgoingLight - totalDiffuse, 0.0), ga);`)
+      .replace('#include <fog_fragment>', 'vec3 preFog = gl_FragColor.rgb;\n#include <fog_fragment>\ngl_FragColor.rgb = mix(preFog, gl_FragColor.rgb, gl_FragColor.a);');
+  };
+  m.customProgramCacheKey = () => 'crew-clear'; m.name = 'crew_clear';
+  return (mats.clear = m);
+}
+
 // ---------- outfits ----------
 // colours: suit, suit2 (vest / trousers), trim (stripes, harness), glove, boot, skin, hair, helmet, helmet2, visor
 const SKIN = [0xe0ac8a, 0xb07a55, 0x7a4b32, 0xf0c8a8];
@@ -87,7 +106,7 @@ const PEOPLE = [
 const HAIR = [0x2b1d14, 0x4a3020, 0x111111, 0x8a6a3a];
 export const OUTFITS = {
   jet: { head: 'helmet', mask: true, visor: 0x8a6a1e, helmet: 0xdfe2e4, helmet2: 0x4d5560, suit: 0x56603f, suit2: 0x3e4531, trim: 0x2a2c2e, glove: 0x3b2e25, boot: 0x1a1a1a, harness: true },
-  space: { head: 'bubble', visor: 0xb08a2a, helmet: 0xf2f2ee, helmet2: 0xc8102e, suit: 0xe9e9e4, suit2: 0xd4d4ce, trim: 0x8a9099, glove: 0xf0f0ea, boot: 0xe2e2dc, harness: false, ring: true },
+  space: { head: 'bubble', visor: 0xb08a2a, helmet: 0xf2f2ee, helmet2: 0xc8102e, suit: 0xe9e9e4, suit2: 0xd4d4ce, trim: 0x8a9099, glove: 0xf0f0ea, boot: 0xe2e2dc, harness: false, ring: true, bulk: 0.024, gloveT: 0.004 }, // (bulk: the pressure suit's stand-off from the body; gloveT: the glove's thickness)
   light: { head: 'headset', glasses: true, suit: 0x2f5d8a, suit2: 0xb9a57d, trim: 0x2a2c2e, glove: null, boot: 0x3b2a1e, cups: 0x26282b },
   warbird: { head: 'leather', suit: 0x6b4a2e, suit2: 0x5a5f45, trim: 0xd8d2c2, glove: 0x4a3322, boot: 0x2a1d14, harness: true },
   racer: { head: 'helmet', mask: false, visor: 0x1b2127, helmet: 0xf2b705, helmet2: 0x15161a, suit: 0xf2f2ee, suit2: 0xc8102e, trim: 0x15161a, glove: 0x15161a, boot: 0x15161a, harness: true },
@@ -501,6 +520,12 @@ function saddleTop(secs, z, x0 = 0.06) {
 const rideHitsCost = (h) => Object.values(h).reduce((c, d) => c + (d / 0.01) ** 2 * 4, 0); // (a centimetre into the bodywork costs as much as a joint well off its comfort)
 const RIDES = new Map(); // (solved rider postures: person, vehicle geometry -> v)
 
+// A gloved hand grips as a hand whose palm and fingers are thicker by the glove (t, metres): the bar sits that much
+// further off the palm (the rig places the hand by G), and the fingers wrap a bar that much thicker (body.js curls them
+// round rig.grips), so the glove's surface, not the skin under it, is what meets the bar.
+function gloved(HM, t) { if (!HM || !t) return HM; const o = {}; for (const s of ['R', 'L']) o[s] = { ...HM[s], G: (r) => HM[s].G(r + t) }; return o; }
+function glovedGrips(rig) { const t = rig.o.gloveT, g = rig.grips; if (!t || !g) return g; const o = {}; for (const s of ['R', 'L']) o[s] = g[s] && { ...g[s], r: g[s].r + t }; return o; }
+
 const POSTURES = new Map(); // (solved postures: person, seat and controls -> v)
 const ADJ_KEYS = ['pedZ', 'pedY', 'seatZ', 'seatY']; // (what a vehicle may declare adjustable: Rig.adjustVars)
 class Rig {
@@ -509,8 +534,8 @@ class Rig {
     this.pegs = opts.pegs || [V(-0.24, -0.62, 0.0), V(0.24, -0.62, 0.0)]; this.groundY = opts.groundY ?? -1.1;
     // a vehicle may declare its own control placement (opts.helm: seatControls(), e.g. a wheel's centre and tilt, a
     // stick's base); otherwise the generic set for these controls
-    const C = opts.helm ? { ...(CTL[ctl] || CTL.none), ...Object.fromEntries(Object.entries(opts.helm).map(([k, v]) => [k, v?.isVector3 ? v.clone() : v])) } : CTL[ctl] || CTL.none; this.body = outfit.head !== 'bubble' && body() ? person(PEOPLE[seed % PEOPLE.length]) : null;
-    const HM = this.body ? handModel(this.body) : null; this.armRest = this.body ? armRest(this.body) : null;
+    const C = opts.helm ? { ...(CTL[ctl] || CTL.none), ...Object.fromEntries(Object.entries(opts.helm).map(([k, v]) => [k, v?.isVector3 ? v.clone() : v])) } : CTL[ctl] || CTL.none; this.body = (outfit.head !== 'bubble' || outfit.bulk) && body() ? person(PEOPLE[seed % PEOPLE.length]) : null;
+    const HM = this.body ? gloved(handModel(this.body), outfit.gloveT) : null; this.armRest = this.body ? armRest(this.body) : null;
     // proportions: the body mesh's own (measured from its joints, so its limbs aren't stretched), else the procedural set
     const D = this.D = HM ? { ...DIM, ...bodyDims(this.body) } : DIM;
     this.C = C;
@@ -544,7 +569,7 @@ class Rig {
     // the torso as an obstacle for the arms: its cross-section at each height up the spine (an ellipse round the
     // middle of the measured, posed torso), padded by what's worn over it
     const T2 = HM ? torsoPoints(D, this.spine, this.body) : null;
-    if (T2) { const wear = o.vest ? 0.04 : o.tee || o.shirt ? 0.006 : 0.012, ell = [];
+    if (T2) { const wear = o.bulk ? o.bulk + 0.006 : o.vest ? 0.04 : o.tee || o.shirt ? 0.006 : 0.012, ell = [];
       for (let y = 0.05; y <= D.spine + 0.02; y += 0.025) { let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
         for (const p of T2.spine) if (Math.abs(p.y - y) < 0.02) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); z0 = Math.min(z0, p.z); z1 = Math.max(z1, p.z); }
         if (Number.isFinite(x0)) ell.push({ y, cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, rx: (x1 - x0) / 2 + wear, rz: (z1 - z0) / 2 + wear }); }
@@ -553,7 +578,7 @@ class Rig {
     // what's worn on it) against the seat back, then slid forward by v.slide
     if (T2 && st) {
       const sM = new THREE.Matrix4().compose(V(0, 0.03, 0), spineQ, V(1, 1, 1)), pts = [...T2.hips, ...T2.spine.map((p) => p.clone().applyMatrix4(sM))];
-      const seatT = o.shorts ? 0.008 : 0.012, backT = o.vest ? 0.034 : o.tee || o.shirt ? 0.006 : 0.012;
+      const seatT = o.bulk ? o.bulk * 0.6 : o.shorts ? 0.008 : 0.012, backT = o.bulk ? o.bulk * 0.8 : o.vest ? 0.034 : o.tee || o.shirt ? 0.006 : 0.012;
       let minY = Infinity; for (const p of pts) minY = Math.min(minY, p.y - seatT);
       const dy = st.panTop - 0.012 - minY, tk = Math.tan(st.tilt); let dz = Infinity;
       for (const p of pts) { const y = p.y + dy; if (y < st.panTop + 0.06 || y > st.backTop) continue; dz = Math.min(dz, st.backZ + tk * (y - st.panTop) + 0.008 - (p.z + backT)); }
@@ -924,7 +949,7 @@ class Rig {
         if (ELL) for (const [a0, a1, t, rad] of SAMPLES) {
           ap.copy(a0 === 0 ? S : E).lerp(a1 === 1 ? E : Wt, t).sub(spP).applyQuaternion(spInv);
           const fy = (ap.y - ELL[0].y) / 0.025, i0 = Math.floor(fy); if (i0 < 0 || i0 >= ELL.length - 1) continue;
-          const e = ELL[i0], e1 = ELL[i0 + 1], w2 = fy - i0, cx = e.cx + (e1.cx - e.cx) * w2, cz = e.cz + (e1.cz - e.cz) * w2, rx = e.rx + (e1.rx - e.rx) * w2 + rad, rz = e.rz + (e1.rz - e.rz) * w2 + rad;
+          const e = ELL[i0], e1 = ELL[i0 + 1], w2 = fy - i0, cx = e.cx + (e1.cx - e.cx) * w2, cz = e.cz + (e1.cz - e.cz) * w2, rx = e.rx + (e1.rx - e.rx) * w2 + rad + (this.o.bulk || 0), rz = e.rz + (e1.rz - e.rz) * w2 + rad + (this.o.bulk || 0); // (a suit's sleeve is as thick as its body)
           const q2 = Math.hypot((ap.x - cx) / rx, (ap.z - cz) / rz); if (q2 < 1) inside = Math.max(inside, (1 - q2) * Math.min(rx, rz)); }
         let cost = (sh / 0.8) ** 2 + (flex / 1.05) ** 2 + (dev / 0.35) ** 2 + (tau / 1.2) ** 2 + (hum / 1.0) ** 2 + miss * 1e4 + (inside / 0.01) ** 2 * 4;
         cost += armObstacleCost(OB, S, E, Wt);
@@ -1005,7 +1030,7 @@ class Rig {
       // a hand at rest lies on a surface: the palm on the thigh's top, two thirds of the way to the knee at most, at
       // the point where the wrist is a relaxed reach from the shoulder (85% of the arm), so the elbow stays bent
       const sh = k === 'R' ? this.shR : this.shL, G0 = this.hand.G(k, 0), n = V(0, 0, -1).applyQuaternion(q[it]), along = V(0, 1, 0).applyQuaternion(q[it]);
-      const surf = (t) => V(0, t * D.thigh, -(D.thighTop ?? 0.075)).applyQuaternion(q[it]).add(p[it]), wrist = (t) => surf(t).addScaledVector(along, -G0.y).addScaledVector(n, -G0.z);
+      const surf = (t) => V(0, t * D.thigh, -((D.thighTop ?? 0.075) + (this.o.bulk || 0) * 1.5)).applyQuaternion(q[it]).add(p[it]), wrist = (t) => surf(t).addScaledVector(along, -G0.y).addScaledVector(n, -G0.z);
       const want = 0.85 * (D.upper + D.fore); let lo = 0.05, hi = 0.7;
       for (let m2 = 0; m2 < 24; m2++) { const m = (lo + hi) / 2; if (wrist(m).distanceTo(sh) < want) lo = m; else hi = m; }
       hands[k] = surf((lo + hi) / 2); (this.restN ||= {})[k] = n; // (radius 0.2: only how the fingers relax over the curve)
@@ -1024,7 +1049,7 @@ function figureGeometry(rig) {
   const route = (hex, gloss) => (typeof gloss === 'string' ? gloss : gloss ? (hex === o.visor ? 'glass' : 'paint') : hex === skin ? 'skin' : hex === hair ? 'hair' : (hex === o.glove || hex === o.boot || hex === 0x1d1d1f || hex === 0x15161a) ? 'rubber' : 'fabric');
   const at = (i, geo, hex, gloss = false) => k.add(geo, hex, i, route(hex, gloss), geo.attributes.skinIndex ? null : R(i)); // (a loft is built in rig space)
   // ---- the body: the skinned human mesh posed onto this rig (body.js), coloured by what the outfit covers ----
-  const BP = rig.body ? poseBody({ p: rig.p, q: rig.q, B, DIM: rig.D, grips: rig.grips, spine: rig.spine, body: rig.body, footFlat: rig.floorY != null }, { seat: rig.ctl === 'bars' ? { y: rig.rideSeatY ?? -0.08, back: null } : rig.seatY != null ? { y: rig.seatY - 0.012, back: null } : { y: -0.09, back: 0.125 } }) : null;
+  const BP = rig.body ? poseBody({ p: rig.p, q: rig.q, B, DIM: rig.D, grips: glovedGrips(rig), spine: rig.spine, body: rig.body, footFlat: rig.floorY != null }, { seat: rig.ctl === 'bars' ? { y: rig.rideSeatY ?? -0.08, back: null } : rig.seatY != null ? { y: rig.seatY - 0.012, back: null } : { y: -0.09, back: 0.125 } }) : null;
   // a crew neckline round the base of the neck (spine-local, by where each point is, so it's smooth across the mesh's
   // bones): 5.5 cm under the neck joint in front, 3 at the sides, 2 behind. > 0 below it (inside the shirt), metres.
   const neckF = BP ? (() => { const sinv = R(B.spine).invert(), nk = rig.spine ? rig.spine.neck : V(0, D.spine, 0), v = V();
@@ -1157,6 +1182,7 @@ function figureGeometry(rig) {
   }
   if (o.hump) at(B.spine, ellipsoid(V(0, D.shoulderUp - 0.06, 0.12), 0.09, 0.12, 0.06, { w: 12 }), o.suit, true); // leathers' aero hump
   if (BP && o.vest) lifeJacket(o.vest);
+  if (BP && o.bulk) spaceSuit(); // (a pressure suit, gloves, boots, neck ring and bubble helmet)
   // A life jacket made as one: foam panels round the torso on a grid about the spine's axis (angle round it, height up
   // it), so its edges are the curves it's cut to (a V neck, armholes down to the armpits, a scooped back neck) and not
   // the body mesh's triangles. The torso's radius from the axis is measured from the posed body in each (angle, height)
@@ -1255,7 +1281,7 @@ function figureGeometry(rig) {
     for (const sx of [-1, 1]) { const a0 = front(sx * 0.09, 0.39, 0.024), a1 = front(sx * 0.11, 0.08, 0.026); at(B.spine, capAB(a0, a1, 0.0025, 0.0025, { sz: 0.5 }), 0xc4561a, 'fabric'); } // panel seams
   }
   if (o.mask === true) at(B.spine, shell(0.14, 0.39, 1.07, o.suit2), o.suit2); // survival vest
-  if (BP && !o.tee) { // full suits / jerseys and trousers, grown from the body and relaxed so it reads as cloth over a body
+  if (BP && !o.tee && !o.bulk) { // full suits / jerseys and trousers, grown from the body and relaxed so it reads as cloth over a body
     const top = (i) => seg(i) === 'spine' ? 0.985 - tt(i) : seg(i) === 'hips' ? 0.2 - (1 - wOf(i, B.spine)) : seg(i).startsWith('uArm') ? 1 : seg(i).startsWith('fArm') ? (o.glove ? 0.86 : 0.97) - tt(i) : -1;
     bodyShell(top, 0.007, o.suit, 'fabric', { hem: 1.4, smooth: 10 });
     bodyShell((i) => seg(i) === 'hips' ? 1 : seg(i) === 'spine' ? 0.15 - tt(i) : seg(i).startsWith('thigh') ? 1 : seg(i).startsWith('shin') ? 0.9 - tt(i) : -1, 0.007, o.suit2, 'fabric', { hem: 1.4, smooth: 4 });
@@ -1318,7 +1344,7 @@ function figureGeometry(rig) {
     if (bareL) sleeve(t, s, D.thigh, TH, 0.3, 1.05, 0.006, L2); } // shorts: loose legs ending above the knee
     // a boot: shaft round the ankle, foot and toe box on a sole with a heel block; motocross boots go up the shin with
     // a shin plate and three buckle straps
-    if (BP) { shoe(s, o.boot, o.bigBoots ? 0.26 : o.tee ? 0 : 0.09); continue; }
+    if (BP) { if (!o.bulk) shoe(s, o.boot, o.bigBoots ? 0.26 : o.tee ? 0 : 0.09); continue; }
     at(s, capsule(0.11, 0.047, 0.051).translate(0, D.shin - 0.09, 0.0), o.boot, 'rubber');
     at(s, ellipsoid(V(0, D.shin + 0.006, -0.056), 0.049, 0.042, 0.112), o.boot, 'rubber');
     at(s, ellipsoid(V(0, D.shin + 0.0, -0.13), 0.043, 0.033, 0.045), o.boot, 'rubber'); // toe box
@@ -1405,7 +1431,7 @@ function figureGeometry(rig) {
       const d = V(Math.cos(vv) * Math.sin(uu), Math.sin(vv), -Math.cos(vv) * Math.cos(uu)); pts.push(V(hc.x + d.x * (0.128 * big + out), hc.y + d.y * (0.136 * big + out), hc.z + d.z * (0.143 * big + out))); }
     return pts;
   };
-  if (o.head === 'helmet' || o.head === 'fullface' || o.head === 'bubble') {
+  if (BP && o.bulk) spaceHelmet(); else if (o.head === 'helmet' || o.head === 'fullface' || o.head === 'bubble') {
     const big = o.head === 'bubble' ? 1.18 : 1, kind = o.head === 'bubble' ? 'bubble' : o.peak ? 'mx' : o.head === 'fullface' ? 'road' : 'jet';
     if (kind !== 'bubble') face(false);
     if (kind === 'bubble') at(B.head, ellipsoid(hc, 0.128 * big, 0.135 * big, 0.142 * big, { w: 48, h: 32, th: [0, Math.PI * 0.66] }), o.helmet, 'paint');
@@ -1555,6 +1581,172 @@ function figureGeometry(rig) {
       const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.Float32BufferAttribute(rr, 3)); bg.setIndex(ri); bg.computeVertexNormals(); at(sb, bg, hex, 'rubber');
     }
   }
+  // ---- the astronaut (outfit.bulk): a pressure suit, gloves and boots made for the body they're on, a neck ring and a
+  // clear bubble helmet sized from the measured head ----
+  // A garment that stands well off the body (an inflated suit, a glove): like bodyShell (a region of the body's
+  // triangles, clipped clean along field's zero line, keeping the body's skin weights), but the stand-off varies over
+  // the body (off(i), metres, per body vertex) and the shell is relaxed after it's pushed out, so it bridges the body's
+  // hollows like a pressurised layer instead of showing them. subdiv splits each triangle in four (fine surface
+  // detail); detail(src, along, p) then adds metres along the relaxed shell's normals (folds, bellows); seatY squashes
+  // what hangs below the cushion onto it.
+  function growShell(field, off, hex, slot, { smooth = 0, subdiv = 0, detail = null, seatY = null, back = null, fill = null } = {}) {
+    const n = BP.pos.length / 3, F = new Float32Array(n); for (let i = 0; i < n; i++) F[i] = BP.eye[i] ? -1 : field(i);
+    const P = [], NN = [], SK = [], OF = [], SRC = [], AL = [], vmap = new Map(), emap = new Map();
+    const bp = (i) => V(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]), bn = (i) => V(BP.nrm[i * 3], BP.nrm[i * 3 + 1], BP.nrm[i * 3 + 2]);
+    const skinOf = (i) => { const m = new Map(); for (let q = 0; q < 4; q++) { const w = BP.skinWeight[i * 4 + q]; if (w > 0) m.set(BP.skinIndex[i * 4 + q], (m.get(BP.skinIndex[i * 4 + q]) || 0) + w); } return m; };
+    const mixS = (a, b, t) => { const m = new Map(); for (const [k2, w] of a) m.set(k2, w * (1 - t)); for (const [k2, w] of b) m.set(k2, (m.get(k2) || 0) + w * t); return m; };
+    const add = (p, nn, sk, of, src, al) => { P.push(p); NN.push(nn); SK.push(sk); OF.push(of); SRC.push(src); AL.push(al); return P.length - 1; };
+    const orig = (i) => { if (!vmap.has(i)) vmap.set(i, add(bp(i), bn(i), skinOf(i), off(i), i, BP.along[i])); return vmap.get(i); };
+    const cut = (a, b) => { const key = a < b ? a * 65536 + b : b * 65536 + a; if (emap.has(key)) return emap.get(key); const t = F[a] / (F[a] - F[b]);
+      const id = add(bp(a).lerp(bp(b), t), bn(a).lerp(bn(b), t).normalize(), mixS(skinOf(a), skinOf(b), t), off(a) * (1 - t) + off(b) * t, F[a] >= 0 ? a : b, BP.along[a] * (1 - t) + BP.along[b] * t); emap.set(key, id); return id; };
+    let ix = [];
+    for (let f = 0; f < BP.index.length; f += 3) {
+      const tri = [BP.index[f], BP.index[f + 1], BP.index[f + 2]], nIn = tri.filter((i) => F[i] >= 0).length; if (!nIn) continue;
+      if (nIn === 3) { ix.push(orig(tri[0]), orig(tri[1]), orig(tri[2])); continue; }
+      const poly = []; for (let e = 0; e < 3; e++) { const a = tri[e], b = tri[(e + 1) % 3]; if (F[a] >= 0) poly.push(orig(a)); if ((F[a] >= 0) !== (F[b] >= 0)) poly.push(cut(a, b)); }
+      for (let q = 1; q < poly.length - 1; q++) ix.push(poly[0], poly[q], poly[q + 1]);
+    }
+    if (!ix.length) return null;
+    // relax: each vertex (not on an open edge) towards its neighbours' mean and back a little past where it was, its
+    // times (Taubin's smoothing: it evens out bumps without shrinking the whole the way plain averaging does)
+    const relax = (Q, ix, its) => { const nv = Q.length / 3, rim = new Uint8Array(nv), ec = new Map(), nb = Array.from({ length: nv }, () => new Set());
+      for (let f = 0; f < ix.length; f += 3) for (let e = 0; e < 3; e++) { const a = ix[f + e], b = ix[f + (e + 1) % 3], key = a < b ? a * 1e6 + b : b * 1e6 + a; ec.set(key, (ec.get(key) || 0) + 1); nb[a].add(b); nb[b].add(a); }
+      for (const [key, c] of ec) if (c === 1) { rim[Math.floor(key / 1e6)] = 1; rim[key % 1e6] = 1; }
+      for (let it = 0; it < its * 2; it++) { const T = Q.slice(), lam = it % 2 ? -0.63 : 0.6; for (let v = 0; v < nv; v++) { if (rim[v] || !nb[v].size) continue; let x = 0, y = 0, z = 0; for (const u of nb[v]) { x += T[u * 3]; y += T[u * 3 + 1]; z += T[u * 3 + 2]; } const m = nb[v].size; Q[v * 3] += (x / m - T[v * 3]) * lam; Q[v * 3 + 1] += (y / m - T[v * 3 + 1]) * lam; Q[v * 3 + 2] += (z / m - T[v * 3 + 2]) * lam; } } };
+    { // pushed out and relaxed at the body's own resolution (so the relaxing reaches across the body's forms), then split
+      const n0 = P.length, Q0 = new Float32Array(n0 * 3); for (let v = 0; v < n0; v++) { const p = P[v].clone().addScaledVector(NN[v], OF[v]); Q0[v * 3] = p.x; Q0[v * 3 + 1] = p.y; Q0[v * 3 + 2] = p.z; }
+      relax(Q0, ix, smooth); for (let v = 0; v < n0; v++) { P[v].set(Q0[v * 3], Q0[v * 3 + 1], Q0[v * 3 + 2]); OF[v] = 0; }
+      if (fill) { fill(P, SRC); for (let v = 0; v < n0; v++) { Q0[v * 3] = P[v].x; Q0[v * 3 + 1] = P[v].y; Q0[v * 3 + 2] = P[v].z; } relax(Q0, ix, 4); for (let v = 0; v < n0; v++) P[v].set(Q0[v * 3], Q0[v * 3 + 1], Q0[v * 3 + 2]); } } // (fill: filling hollows, then relaxed again)
+    for (let sd = 0; sd < subdiv; sd++) { // each triangle into four, through its edges' midpoints
+      const mid = new Map(), m = (a, b) => { const key = a < b ? a * 1e6 + b : b * 1e6 + a; if (!mid.has(key)) mid.set(key, add(P[a].clone().lerp(P[b], 0.5), NN[a].clone().add(NN[b]).normalize(), mixS(SK[a], SK[b], 0.5), 0, SRC[a], (AL[a] + AL[b]) / 2)); return mid.get(key); };
+      const out = []; for (let f = 0; f < ix.length; f += 3) { const [a, b, c] = [ix[f], ix[f + 1], ix[f + 2]], ab = m(a, b), bc = m(b, c), ca = m(c, a); out.push(a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca); } ix = out;
+    }
+    const nv = P.length, Q = new Float32Array(nv * 3); for (let v = 0; v < nv; v++) { Q[v * 3] = P[v].x; Q[v * 3 + 1] = P[v].y; Q[v * 3 + 2] = P[v].z; }
+    if (subdiv) relax(Q, ix, 2 * subdiv); // (rounds off the split facets)
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(Q, 3)); g.setIndex(ix);
+    if (detail) { g.computeVertexNormals(); const nr = g.attributes.normal, p = V(); for (let v = 0; v < nv; v++) { p.set(Q[v * 3], Q[v * 3 + 1], Q[v * 3 + 2]); const d = detail(SRC[v], AL[v], p); Q[v * 3] += nr.getX(v) * d; Q[v * 3 + 1] += nr.getY(v) * d; Q[v * 3 + 2] += nr.getZ(v) * d; } }
+    if (back) for (let v = 0; v < nv; v++) { // (back: a seat back's surfaces, rig space: the torso behind it squashes onto it)
+      const y = Q[v * 3 + 1], sg = seg(SRC[v]); if ((sg !== 'spine' && sg !== 'hips') || y < back.panTop + 0.03 || y > back.backTop) continue; const zb = back.backZ + Math.tan(back.tilt) * (y - back.panTop) - 0.003;
+      if (Q[v * 3 + 2] > zb) Q[v * 3 + 2] = zb + (Q[v * 3 + 2] - zb) * 0.1; }
+    if (seatY != null) for (let v = 0; v < nv; v++) { const sg = seg(SRC[v]); if ((sg === 'hips' || sg.startsWith('thigh')) && Q[v * 3 + 1] < seatY) Q[v * 3 + 1] = seatY - (seatY - Q[v * 3 + 1]) * 0.15; }
+    const C = new Float32Array(nv * 3), SI = new Uint16Array(nv * 4), SW = new Float32Array(nv * 4), c3 = new THREE.Color(hex);
+    for (let v = 0; v < nv; v++) { C[v * 3] = c3.r; C[v * 3 + 1] = c3.g; C[v * 3 + 2] = c3.b; const ent = [...SK[v]].sort((a, b) => b[1] - a[1]).slice(0, 4), tot = ent.reduce((s2, e) => s2 + e[1], 0) || 1; ent.forEach(([bn2, w], q) => { SI[v * 4 + q] = bn2; SW[v * 4 + q] = w / tot; }); }
+    g.setAttribute('color', new THREE.BufferAttribute(C, 3)); g.setAttribute('skinIndex', new THREE.BufferAttribute(SI, 4)); g.setAttribute('skinWeight', new THREE.BufferAttribute(SW, 4));
+    g.computeVertexNormals(); k.add(g, 0, B.spine, slot);
+    return { g, Q, SRC, AL };
+  }
+  // a body region's cross-section at height y along a bone (bone-local: its centre and half-widths across and deep)
+  function section(bone, sg, y, band = 0.012) {
+    const inv = R(bone).invert(), v = V(); let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let i = 0; i < BP.seg.length; i++) { if (BP.seg[i] !== sg) continue; v.set(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(inv); if (Math.abs(v.y - y) > band) continue; x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x); z0 = Math.min(z0, v.z); z1 = Math.max(z1, v.z); }
+    return Number.isFinite(x0) ? { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, rx: (x1 - x0) / 2, rz: (z1 - z0) / 2 } : null;
+  }
+  // a closed tube round an ellipse (bone-local, square to the bone at height y)
+  function ellipseTube(s, y, rad, n = 40) { return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(Array.from({ length: n }, (_, k2) => { const a = (k2 / n) * Math.PI * 2; return V(s.cx + Math.cos(a) * s.rx, y, s.cz + Math.sin(a) * s.rz); }), true), n * 2, rad, 10, true); }
+  // Where the neck ring and the bubble go, from the measured head (spine-local: the bubble is fixed to the suit's neck
+  // ring and the head turns inside it). The ring is centred on the neck joint, square to the line from there to the
+  // middle of the head; the bubble is a sphere centred on that line, the smallest that clears the head by 2.2 cm in
+  // every turn the rig gives it (looking round 0.6 rad either way, nodding with the stick), its bottom cut where it
+  // meets the ring. The ring is at least wide enough to clear the suit round the neck.
+  function bubbleFit() {
+    if (bubbleFit.v) return bubbleFit.v;
+    const sInv = R(B.spine).invert(), hInv = R(B.head).invert(), hp = [], pts = [], v = V(), q = new THREE.Quaternion(), e = new THREE.Euler();
+    for (let i = 0; i < BP.seg.length; i += 2) if (BP.seg[i] === 'head') { v.set(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(hInv); if (v.y > 0.03) hp.push(v.clone()); }
+    for (const look of [-0.6, -0.3, 0, 0.3, 0.6]) for (const pitch of [-1, 0, 1]) { q.setFromEuler(e.set(-0.08 + pitch * 0.05, look, look * 0.15, 'YXZ')); for (const p of hp) pts.push(p.clone().applyQuaternion(q).add(rig.p[B.head]).applyMatrix4(sInv)); }
+    const Rc = rig.spine ? rig.spine.neck.clone() : V(0, D.spine, 0), A = pts.reduce((a, p) => a.add(p), V()).multiplyScalar(1 / pts.length).sub(Rc).normalize();
+    let best = null;
+    for (let t = 0; t <= 0.3; t += 0.004) { const Cc = Rc.clone().addScaledVector(A, t); let m = 0; for (const p of pts) m = Math.max(m, p.distanceToSquared(Cc)); const Rb = Math.sqrt(m) + 0.022; if (Rb > t + 0.04 && (!best || Rb < best.Rb)) best = { t, Rb }; }
+    let nr = 0; for (let i = 0; i < BP.seg.length; i++) { const sg = BP.seg[i]; if (sg !== 'spine' && sg !== 'head') continue; v.set(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(sInv).sub(Rc); const d = v.dot(A), r = v.addScaledVector(A, -d).length(); if (Math.abs(d) < 0.012 && r < 0.1) nr = Math.max(nr, r); }
+    const need = nr + o.bulk + 0.015; if (best.Rb * best.Rb - best.t * best.t < need * need) best.Rb = Math.sqrt(need * need + best.t * best.t);
+    const rr = Math.sqrt(best.Rb * best.Rb - best.t * best.t);
+    const Fw = V(0, 0, -1).applyQuaternion(rig.q[B.head]).applyQuaternion(rig.q[B.spine].clone().invert()); Fw.addScaledVector(A, -Fw.dot(A)).normalize();
+    const Z = Fw.clone().negate(), X = V().crossVectors(A, Z).normalize(), M = new THREE.Matrix4().makeBasis(X, A, Z).setPosition(Rc);
+    return (bubbleFit.v = { Rc, A, M, t: best.t, Rb: best.Rb, rr, nr });
+  }
+  // The suit: the body below the neck ring and above the wrists and boots, 2.4 cm out (more round the torso, less down
+  // the forearms and shins), relaxed so it's smooth and full, with soft creases round the limbs and convolute bellows at
+  // the elbows and knees (rings 2.4 cm apart, fading out 7 cm from the joint); the suit's own joint, wrist and neck
+  // rings in trim. The gloves are the hands' own surface 4 mm out, with gauntlets flaring from the wrist rings; the
+  // boots are shoes made for the feet (shoe()) with bulky shafts round the measured lower leg over the suit's legs.
+  function spaceSuit() {
+    const bulk = o.bulk, gt = o.gloveT || 0, bf = bubbleFit(), sInv = R(B.spine).invert(), v = V();
+    const neckCut = (i) => { v.set(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(sInv).sub(bf.Rc); const d = v.dot(bf.A), r = v.addScaledVector(bf.A, -d).length(); return Math.max(-(d + 0.012), r - (bf.rr + 0.01)); };
+    const WR = 0.9, AK = 0.75; // (the wrist rings and the boot tops, along the forearm / shin)
+    const field = (i) => { const sg = seg(i), t = tt(i); return sg === 'spine' || sg === 'head' ? neckCut(i) : sg === 'hips' || sg.startsWith('uArm') || sg.startsWith('thigh') ? 1 : sg.startsWith('fArm') ? WR - t : sg.startsWith('shin') ? AK - t : -1; };
+    const off = (i) => { const sg = seg(i); return sg === 'spine' || sg === 'hips' ? bulk * 1.15 : sg.startsWith('fArm') ? bulk * 0.85 : sg.startsWith('shin') ? bulk * 0.9 : bulk; };
+    const len = { uArm: D.upper, fArm: D.fore, thigh: D.thigh, shin: D.shin };
+    const detail = (src, al, p) => {
+      const sg = seg(src), base = sg.replace(/[RL]$/, ''), L = len[base];
+      if (!L) return 0.0011 * Math.sin(p.y * 90 + 2.2 * Math.sin(p.x * 31 + p.z * 17)) * (sg === 'hips' || tt(src) < 0.35 ? 1 : 0.4); // (creases round the waist, fainter up the chest)
+      const s = (base === 'uArm' || base === 'thigh' ? 1 - al : al) * L; // metres from the elbow / knee
+      if (s < 0.075) return 0.008 * (0.5 + 0.5 * Math.cos(2 * Math.PI * s / 0.024)) * sstep(0.075, 0.045, s); // bellows
+      return 0.0022 * Math.sin(2 * Math.PI * s / 0.065 + 1.6 * Math.sin(p.x * 47 + p.z * 39 + p.y * 11)); // soft creases round the limb
+    };
+    // An inflated torso hides the body's forms: about the torso's axis (the middle of its section at each height), each
+    // point of the suit's torso goes out to the largest radius found near it (round the body within 15 degrees, up and
+    // down within 4.5 cm), blurred, so the chest is one smooth curve and the hollows under and between forms are bridged.
+    const shY = rig.spine ? (rig.spine.sh.R.y + rig.spine.sh.L.y) / 2 : D.shoulderUp;
+    const fillHollows = (P, SRC) => {
+      const inv = R(B.spine).invert(), Mw = R(B.spine), H = 0.015, NA = 48, ids = [], L = [];
+      for (let v = 0; v < P.length; v++) { const sg = seg(SRC[v]); if (sg === 'spine' || sg === 'hips') { ids.push(v); L.push(P[v].clone().applyMatrix4(inv)); } }
+      if (!L.length) return;
+      let y0 = Infinity, y1 = -Infinity; for (const p of L) { y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+      const NY = Math.ceil((y1 - y0) / H) + 1, cx = new Float32Array(NY), cz = new Float32Array(NY), lo = Array.from({ length: NY }, () => [Infinity, -Infinity, Infinity, -Infinity]);
+      for (const p of L) { const b = lo[Math.round((p.y - y0) / H)]; b[0] = Math.min(b[0], p.x); b[1] = Math.max(b[1], p.x); b[2] = Math.min(b[2], p.z); b[3] = Math.max(b[3], p.z); }
+      for (let yi = 0; yi < NY; yi++) { const b = lo[yi]; cx[yi] = Number.isFinite(b[0]) ? (b[0] + b[1]) / 2 : NaN; cz[yi] = Number.isFinite(b[2]) ? (b[2] + b[3]) / 2 : NaN; }
+      for (let yi = 0; yi < NY; yi++) if (Number.isNaN(cx[yi])) { cx[yi] = yi ? cx[yi - 1] : 0; cz[yi] = yi ? cz[yi - 1] : 0; }
+      for (let it = 0; it < 4; it++) for (let yi = 1; yi < NY - 1; yi++) { cx[yi] = (cx[yi - 1] + 2 * cx[yi] + cx[yi + 1]) / 4; cz[yi] = (cz[yi - 1] + 2 * cz[yi] + cz[yi + 1]) / 4; }
+      const A = (x, z, yi) => ((Math.round((Math.atan2(x - cx[yi], -(z - cz[yi])) / (2 * Math.PI)) * NA) % NA) + NA) % NA;
+      let g = new Float32Array(NA * NY).fill(-1);
+      for (const p of L) { const yi = Math.round((p.y - y0) / H), k2 = A(p.x, p.z, yi) + yi * NA, r = Math.hypot(p.x - cx[yi], p.z - cz[yi]); if (r > g[k2]) g[k2] = r; }
+      const d = new Float32Array(NA * NY).fill(-1); // dilate
+      for (let yi = 0; yi < NY; yi++) for (let ai = 0; ai < NA; ai++) { let m = -1; for (let dy = -3; dy <= 3; dy++) { const y2 = yi + dy; if (y2 < 0 || y2 >= NY) continue; for (let da = -2; da <= 2; da++) m = Math.max(m, g[((ai + da + NA) % NA) + y2 * NA]); } d[ai + yi * NA] = m; }
+      for (let it = 0; it < 4; it++) { g = d.slice(); for (let yi = 0; yi < NY; yi++) for (let ai = 0; ai < NA; ai++) { let sm = 0, n2 = 0; for (let dy = -1; dy <= 1; dy++) { const y2 = yi + dy; if (y2 < 0 || y2 >= NY) continue; for (let da = -1; da <= 1; da++) { const w = g[((ai + da + NA) % NA) + y2 * NA]; if (w >= 0) { sm += w; n2++; } } } if (n2) d[ai + yi * NA] = sm / n2; } }
+      L.forEach((p, j) => { const yi = Math.round((p.y - y0) / H), r = Math.hypot(p.x - cx[yi], p.z - cz[yi]), gr = d[A(p.x, p.z, yi) + yi * NA];
+        const w = sstep(shY + 0.02, shY - 0.06, p.y); if (!(gr > r) || r < 1e-4 || w <= 0) return; // (up to the shoulders: the yoke and neck keep their shape)
+        const k2 = 1 + (gr / r - 1) * w; p.x = cx[yi] + (p.x - cx[yi]) * k2; p.z = cz[yi] + (p.z - cz[yi]) * k2; P[ids[j]].copy(p.applyMatrix4(Mw)); });
+    };
+    const suit = growShell(field, off, o.suit, 'fabric', { smooth: 30, subdiv: 2, detail, seatY: rig.seatY ?? null, back: rig.ctl !== 'bars' ? rig.opts.seat : null, fill: fillHollows });
+    // gloves: the hand 4 mm out; a gauntlet flaring from under the wrist ring
+    growShell((i) => { const sg = seg(i); return sg.startsWith('hand') ? 1 : sg.startsWith('fArm') ? tt(i) - (WR - 0.03) : -1; },
+      (i) => (seg(i).startsWith('fArm') ? gt + bulk * 0.75 * sstep(WR + 0.1, WR - 0.01, tt(i)) : gt), o.glove, 'rubber', { smooth: 1 });
+    for (const [fa, sg] of [[B.fArmR, 'fArmR'], [B.fArmL, 'fArmL']]) { // wrist rings: round the sleeve's end as built
+      const inv = R(fa).invert(), p = V(); let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (let q = 0; q < suit.SRC.length; q++) { if (seg(suit.SRC[q]) !== sg || suit.AL[q] < WR - 0.03) continue; p.set(suit.Q[q * 3], suit.Q[q * 3 + 1], suit.Q[q * 3 + 2]).applyMatrix4(inv); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); z0 = Math.min(z0, p.z); z1 = Math.max(z1, p.z); }
+      if (!Number.isFinite(x0)) continue; const r = { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, rx: (x1 - x0) / 2 + 0.003, rz: (z1 - z0) / 2 + 0.003 };
+      at(fa, ellipseTube(r, WR * D.fore, 0.008), o.trim, 'metal'); at(fa, ellipseTube({ ...r, rx: r.rx + 0.002, rz: r.rz + 0.002 }, WR * D.fore - 0.012, 0.005), o.helmet2, 'paint'); }
+    for (const sb of [B.shinR, B.shinL]) spaceBoot(sb, bulk);
+  }
+  // a moon boot: the shoe made for the foot, and a bulky shaft grown from the lower leg (the shin above the ankle up
+  // to 58 % of the way from the knee) over the suit's leg: snug where it meets the shoe, standing off as far as the suit
+  // above it, relaxed smooth; a rolled top round its measured upper edge
+  function spaceBoot(sb, bulk) {
+    shoe(sb, o.boot, 0);
+    const sg = sb === B.shinR ? 'shinR' : 'shinL', T0 = 0.58, T1 = 1 - 0.012 / D.shin; // (along the shin: the shaft's top, and 1.2 cm above the ankle)
+    const sh = growShell((i) => (seg(i) === sg ? Math.min(tt(i) - T0, T1 - tt(i)) : -1), (i) => 0.012 + (bulk * 0.9 + 0.007 - 0.012) * sstep(T1, T1 - 0.15, tt(i)), o.boot, 'rubber', { smooth: 10 });
+    if (!sh) return;
+    const inv = R(sb).invert(), p = V(), y = T0 * D.shin; let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let q = 0; q < sh.SRC.length; q++) { if (sh.AL[q] > T0 + 0.03) continue; p.set(sh.Q[q * 3], sh.Q[q * 3 + 1], sh.Q[q * 3 + 2]).applyMatrix4(inv); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); z0 = Math.min(z0, p.z); z1 = Math.max(z1, p.z); }
+    if (Number.isFinite(x0)) at(sb, ellipseTube({ cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, rx: (x1 - x0) / 2 + 0.002, rz: (z1 - z0) / 2 + 0.002 }, y, 0.008), o.boot, 'rubber'); // rolled top
+  }
+  // The helmet: the face (the body mesh's, eyes and hair) inside a clear bubble on the neck ring (bubbleFit), a suit
+  // collar flaring from round the neck up under the ring, the ring itself (trim, a red band), and over the back and top
+  // of the bubble a white shell with the gold sun visor raised on it, clear of the face.
+  function spaceHelmet() {
+    meshFace(true);
+    const bf = bubbleFit(), { t, Rb, rr, nr, M } = bf, put = (g, hex, slot) => { g.applyMatrix4(M); at(B.spine, g, hex, slot); };
+    const lathe = (pts, n = 64) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), n);
+    put(lathe([[nr + o.bulk * 0.9, -0.05], [rr - 0.012, -0.03], [rr - 0.002, -0.022]]), o.suit, 'fabric'); // collar
+    put(lathe([[rr - 0.006, 0.006], [rr - 0.006, -0.03], [rr + 0.004, -0.034], [rr + 0.013, -0.028], [rr + 0.015, -0.004], [rr + 0.01, 0.006], [rr - 0.006, 0.006]].reverse()), o.trim, 'metal'); // neck ring
+    put(lathe([[rr + 0.0165, -0.02], [rr + 0.0165, -0.011]]), o.helmet2, 'paint'); // its red band
+    if (!k.p.clear) k.p.clear = []; clearMaterial();
+    const v0 = -Math.asin(clamp(t / Rb, 0, 0.99)), Cc = V(0, t, 0);
+    put(dsphere(Cc, Rb, Rb, Rb, null, { w: 64, h: 40, v0 }), 0xdde6ee, 'clear'); // the bubble
+    const Rs = Rb + 0.007, open = (u, v) => Math.abs(u) < 1.35 && v < 0.85; // (the face window: 77 degrees either side, up to 49 above the middle)
+    put(dsphere(Cc, Rs, Rs, Rs, null, { w: 64, h: 40, v0: v0 + 0.06, hole: open }), o.helmet, 'paint'); // shell
+    put(dsphere(Cc, Rs + 0.0008, Rs + 0.0008, Rs + 0.0008, null, { w: 96, h: 40, v0: 0.2, hole: (u, v) => Math.abs(wrapU(u - Math.PI)) > 0.08 }), o.helmet2, 'paint'); // centre stripe down the back
+    put(dsphere(Cc, Rs + 0.006, Rs + 0.006, Rs + 0.006, null, { w: 64, h: 40, hole: (u, v) => !(Math.abs(u) < 1.2 && v > 0.8 && v < 1.22) }), o.visor, 'glass'); // the sun visor, raised
+  }
   // A glasses arm from its hinge back along the side of the head, over the top of the ear where it meets the skull,
   // then down behind it. The ear is found on the mesh head: where the side of the head stands out from the temple in
   // front of it by more than 8 mm. The arm hugs the measured surface 3.5 mm out.
@@ -1636,7 +1828,7 @@ function figureGeometry(rig) {
 // Where the figure looks from (rig space, rest pose, head straight): just behind the eyes on the head bone.
 function eyePoint(rig) {
   const r = new Rig(rig.kind, rig.ctl, rig.o, rig.seed, { pegs: rig.pegs, groundY: rig.groundY, ride: rig.opts.ride }); // (posed at rest)
-  const k = rig.o.head === 'bubble' ? 1.18 : 1;
+  const k = rig.o.head === 'bubble' && !r.body ? 1.18 : 1; // (the old procedural bubble's big head; the mesh body's head is its own)
   return V(0, 0.155, -0.075 * k).applyQuaternion(r.q[B.head]).add(r.p[B.head]);
 }
 
@@ -1654,7 +1846,7 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
   const skel = new THREE.Skeleton(bones);
   for (const [k, g] of Object.entries(geos)) {
     if (!g) continue;
-    const m = new THREE.SkinnedMesh(g, mats[k] || mats.fabric); m.userData.near = true; m.userData.crew = true; m.userData.cosmetic = true; m.castShadow = true; m.receiveShadow = true;
+    const m = new THREE.SkinnedMesh(g, mats[k] || mats.fabric); m.userData.near = true; m.userData.crew = true; m.userData.cosmetic = true; m.castShadow = k !== 'clear'; m.receiveShadow = true; // (clear glass casts no shadow)
     m.frustumCulled = false; // a few hundred triangles; skinned bounds would otherwise need a refresh as the pose changes
     root.add(m); m.bind(skel, new THREE.Matrix4());
   }
@@ -1663,7 +1855,7 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
     rig, root,
     eye: eyePoint(rig), // rig space: between the eyes, head straight (cockpit view, stations.js)
     // where the eyes are now (rig space): a motorbike rider bends over the tank and leans into turns (stations.js)
-    eyeNow(out = V()) { return out.set(0, 0.155, -0.075 * (outfit.head === 'bubble' ? 1.18 : 1)).applyQuaternion(rig.q[B.head]).add(rig.p[B.head]); },
+    eyeNow(out = V()) { return out.set(0, 0.155, -0.075 * (outfit.head === 'bubble' && !rig.body ? 1.18 : 1)).applyQuaternion(rig.q[B.head]).add(rig.p[B.head]); },
     // first person: the head and torso (with whatever they wear) shrink to nothing so the camera in the head sees out;
     // hands, arms, legs and the controls stay
     firstPerson(on) { const k = on ? 1e-4 : 1; for (const i of [B.head, B.spine]) bones[i].scale.setScalar(k); },
