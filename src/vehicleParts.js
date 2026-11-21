@@ -9,7 +9,7 @@ import { PM, lightGeometry } from './planeMaterials.js';
 import { V, bar, tube, pipe, Bag, seatGeo, flightDeckGlass, shell, capHoles, ringLoft } from './partDetail.js';
 import { clipGeometry } from './skinBlend.js';
 import { Rig, cornerLinks, cornerGeometry } from './carRig.js';
-import { capsuleWindows } from './capsule.js';
+import { capsuleWindows, capsuleCouch } from './capsule.js';
 
 const cached = new Map();
 const mat = (k, make) => { if (!cached.has(k)) cached.set(k, make()); return cached.get(k); };
@@ -572,9 +572,16 @@ def({ id: 'fus_rocket', cat: 'fuselage', name: 'Rocket Stage', desc: 'Tall fuel 
     b.add(pipe(loop(W.r + 0.02, 40), 0.035, 8, 80), M.darkMetal());
     for (let k = 0; k < 10; k++) { const a = (k / 10) * Math.PI * 2, bolt = new THREE.SphereGeometry(0.014, 6, 4), p = onSkin(Math.sin(a) * (W.r + 0.075), Math.cos(a) * (W.r + 0.075), Rs + 0.004); bolt.translate(p.x, p.y, p.z); b.add(bolt, M.steel()); }
     b.to(g);
-    // the astronaut lies with the head towards the nose, facing the porthole (+x): rig up = -z, rig forward = +x
-    const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(V(0, 1, 0), V(0, 0, -1), V(-1, 0, 0)));
-    g.userData.seats = [{ p: [-0.14, 0, -3.1], s: 0.85, quat: q.toArray(), ctl: 'none' }]; // (no stick in front of the face)
-    capsuleWindows(g, ROCKET_PROF, g.userData.seats[0].p); // more windows for the crew to look out of (capsule.js: also the first-person cabin)
+    // more windows for the crew to look out of (capsule.js: also the first-person cabin, laid out from this seat z)
+    const L = capsuleWindows(g, ROCKET_PROF, [0, 0, -3.1]);
+    // the astronaut lies on their back in the launch couch (the first-person cabin's: capsuleCouch), head aft of the
+    // porthole and facing the nose: with the rocket on its tail that is facing the sky, pressed into the couch by the
+    // climb (they sat upright before, back to the wall, in mid-air). Couch and deck are drawn here too; the feet rest
+    // in the foot restraints (crew.js's pedals) on the deck.
+    const b2 = new Bag(), cc = capsuleCouch(L), st = seatGeo(...cc.dims); st.translate(...cc.at); b2.add(st, PM.seat());
+    const deck = new THREE.BoxGeometry(0.7, 0.03, 1.0); deck.translate(0, cc.floor - 0.015, cc.at[2] - 0.4); b2.add(deck, M.paint(0x3a3e45, 'matte'));
+    b2.to(g);
+    const p = [0, cc.at[1] + 0.108, cc.at[2] - 0.05]; // (the hips on the cushion, against the back: the figure in this helmet has no posture solve)
+    g.userData.seats = [{ p, s: 0.85, ctl: 'none', fit: { at: cc.at, dims: cc.dims, floor: cc.floor, feet: 'pedals' }, controls: { pedY: cc.floor - p[1], pedZ: -0.56 } }];
     return g;
   } });
