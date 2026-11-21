@@ -401,7 +401,7 @@ function dirtFrame(c, lv) {
   if (lv) { const tl = new THREE.BoxGeometry(0.06, 0.03, 0.02); tl.translate(0, 0.31, 1.0); b.add(tl, M.light(0xff2010)); }
   if (lv) { const cap = new THREE.CylinderGeometry(0.03, 0.03, 0.015, 14); cap.translate(0, 0.315, -0.18); b.add(cap, dark); } // fuel cap
   b.to(g);
-  g.userData.seats = [{ p: [0, 0.335, 0.12], s: 1, ctl: 'bars', rider: 'mx', pegs: [[-0.235, -0.335, 0.085], [0.235, -0.335, 0.085]], ground: -0.8 }];
+  g.userData.seats = [{ p: [0, 0.33, 0.2], s: 1, ctl: 'bars', rider: 'mx', pegs: [[-0.235, -0.335, 0.085], [0.235, -0.335, 0.085]], ground: -0.8 }];
   return g;
 }
 function sportFrame(c, lv) {
