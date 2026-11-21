@@ -52,13 +52,13 @@ export function modeChoice(k, R) { // -> { label, name, desc } for realism level
 
 // What the game says as you start: keyed by the vehicle kind and the start id (main.js: 'runway', 'air', 'water',
 // 'approach', 'pad', 'helipad'; cars' and bikes' 'park' (the stunt park), 'road' and 'evel' (the daredevil canyon
-// jump); boats' 'marina', 'water' and 'runway'), with the kind's own fallback named for where it starts, then the
+// jump); boats' 'marina', 'waterpark', 'water' and 'runway'), with the kind's own fallback named for where it starts, then the
 // plane's. c: { loc, rwy, site (a helipad's or marina's name), stall (the take-off speed, in the player's units), touch }
 export function startMessage(k, start, c) {
   const go = c.touch ? 'GAS to go' : 'W to go', steer = c.touch ? 'steer with the stick' : 'A D to steer', lean = c.touch ? 'lean into the turns with the stick' : 'A D to lean into the turns';
   const afloat = `Afloat! ${go}, ${steer}. Drive up onto land to ride!`; // (an amphibious car or bike: boat.js)
   const at = { runway: `Runway ${c.rwy} · ${c.loc}.`, park: `Stunt park · ${c.loc}.`, road: `On the road · ${c.loc}.`, evel: 'Daredevil canyon jump.',
-    helipad: `Rooftop helipad · ${c.site || c.loc}.`, marina: `At ${c.site || 'the marina'} · ${c.loc}.`, water: `On the water · ${c.loc}.` }[start] || `${c.loc}.`;
+    helipad: `Rooftop helipad · ${c.site || c.loc}.`, marina: `At ${c.site || 'the marina'} · ${c.loc}.`, waterpark: `Water park · ${c.loc}.`, water: `On the water · ${c.loc}.` }[start] || `${c.loc}.`;
   const M = {
     car: { park: `${at} ${go}: hit the ramps, loop the loop!`, evel: `${at} Full gas, hit the ramp and fly the canyon!`, marina: `${at} ${afloat}`, water: `${at} ${afloat}`, '*': `${at} ${go}, ${steer}!` },
     bike: { park: `${at} ${go}, lean into the turns, full gas for a wheelie!`, evel: `${at} Full gas, hit the ramp and fly the canyon!`, marina: `${at} ${afloat}`, water: `${at} ${afloat}`, '*': `${at} ${go}, ${lean}!` },
@@ -71,6 +71,7 @@ export function startMessage(k, start, c) {
     rocket: { pad: `Launch pad · ${c.loc}. Full throttle to launch!`, '*': `${at} Full throttle and point the nose at the sky!` },
     boat: {
       marina: `${at} Full gas and it lifts up to skim across the water!`,
+      waterpark: `${at} Full gas: hit the boost and fly the MEGA JUMP!`,
       runway: `${at} A boat on dry land! Its motor needs water, so bolt on a jet engine to get moving, or start at the marina.`,
       '*': `${at} ${go}, ${steer}. Full gas and it lifts up to skim across the water!`,
     },

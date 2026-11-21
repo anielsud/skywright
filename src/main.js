@@ -402,11 +402,11 @@ const MOONS = [['real', 'Tonight’s real moon', null], ['full', 'Full', 14.77],
 if (LOCATIONS[flightCfg.location]?.hidden || !LOCATIONS[flightCfg.location]) flightCfg.location = 'islands'; // hidden/removed places move to Bora Bora
 // the ground start's name in the flight setup: where this vehicle will really start (see buildFlight)
 function groundStartLabel(s, loc) { return s.vertical ? 'On the launch pad' : s.heli && LOCATIONS[loc]?.city?.helipads?.some((h) => h.start) ? 'On the rooftop helipad' : 'On the runway'; }
-const BOAT_STARTS = ['marina', 'water', 'runway']; // boats' start choices (flightCfg.boatStart): afloat at the marina (the default), out on open water, or sat on the runway
+const BOAT_STARTS = ['marina', 'waterpark', 'water', 'runway']; // boats' start choices (flightCfg.boatStart): afloat at the marina (the default), at the water park's start arch (where there is one: waterPark.js), out on open water, or sat on the runway
 function boatChips() {
   const cur = BOAT_STARTS.includes(flightCfg.boatStart) ? flightCfg.boatStart : 'marina';
-  const chip = (id, label) => `<button data-bs="${id}" class="${cur === id ? 'on' : ''}">${label}</button>`;
-  return chip('marina', 'At the marina') + chip('water', 'Out on the water') + chip('runway', 'On the runway');
+  const chip = (id, label, extra = '') => `<button data-bs="${id}" class="${cur === id ? 'on' : ''}"${extra}>${label}</button>`;
+  return chip('marina', 'At the marina') + chip('waterpark', 'At the water park', ` data-wpark${LOCATIONS[flightCfg.location]?.waterPark ? '' : ' hidden'}`) + chip('water', 'Out on the water') + chip('runway', 'On the runway');
 }
 const LAND_STARTS = ['park', 'road', 'evel']; // cars' and bikes' start choices besides the runway (flightCfg.landStart; World.landStart)
 // cars' and bikes' start choices (data-ls: flightCfg.landStart): the stunt park (the default), a street, the runway, and
@@ -445,7 +445,7 @@ function flightModal() {
     <div class="start-go"><button data-close>Back</button><button class="primary big" id="go">${W.go} ▶</button></div></div>`, 'wide');
   const el = m.el;
   const pick = (attr, key) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { flightCfg[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); audio.play('click'); }));
-  el.querySelectorAll('[data-loc]').forEach((b) => b.addEventListener('click', () => { const e = el.querySelector('[data-evel]'); if (e) e.hidden = !LOCATIONS[b.dataset.loc]?.stunts?.evel; })); // the canyon jump: only where there is one
+  el.querySelectorAll('[data-loc]').forEach((b) => b.addEventListener('click', () => { const e = el.querySelector('[data-evel]'); if (e) e.hidden = !LOCATIONS[b.dataset.loc]?.stunts?.evel; const p = el.querySelector('[data-wpark]'); if (p) p.hidden = !LOCATIONS[b.dataset.loc]?.waterPark; })); // the canyon jump and the water park: only where there is one
   pick('loc', 'location'); pick('w', 'weather'); pick('r', 'realism'); pick('m', 'mode'); pick('s', 'start'); pick('ls', 'landStart'); pick('bs', 'boatStart'); pick('moon', 'moon');
   el.querySelectorAll('[data-loc]').forEach((b) => b.addEventListener('click', () => { const r = el.querySelector('[data-s="runway"]'); if (r) r.textContent = groundStartLabel(s, flightCfg.location); })); // (a helicopter in New York: the rooftop helipad)
   el.querySelector('#time').addEventListener('input', (e) => { flightCfg.time = +e.target.value; el.querySelector('#tlab').textContent = timeLabel(flightCfg.time); });
@@ -710,7 +710,11 @@ function buildFlight(cfg) {
   // a place's own start for this kind of vehicle (world.sites: New York's helicopters on a rooftop helipad), if nobody is on it
   const site = !park && cfg.mode !== 'landing' && ((start === 'runway' && !st.boat) || start === 'marina') ? world.startSite(st) : null; // (boats: the marina, when they pick it)
   if (start === 'marina' && !site) start = 'water'; // (no marina here: any open water)
-  if (site?.afloat) { start = site.kind; ac.spawn(env, site.at(slot), site.heading); } // a boat floats at its waterline (Aircraft.spawn), side by side online
+  const wpark = start === 'waterpark' ? world.waterParks?.start : null; // boats: the water park's start arch (waterPark.js)
+  if (start === 'waterpark' && !wpark) start = world.startSite(st) ? 'marina' : 'water'; // (none here: the marina)
+  if (wpark) ac.spawn(env, wpark.at(slot), wpark.heading); // afloat at the arch, facing the boost strip and the MEGA JUMP
+  else if (start === 'marina' && !site) { const s2 = world.startSite(st); if (s2) { start = s2.kind; ac.spawn(env, s2.at(slot), s2.heading); } else start = 'water'; } // (no water park here: the marina)
+  else if (site?.afloat) { start = site.kind; ac.spawn(env, site.at(slot), site.heading); } // a boat floats at its waterline (Aircraft.spawn), side by side online
   else if (site && !siteBusy(site.pos.x, site.pos.z, site.y, site.r)) { // standing on it (just touching: no first airborne frame to spin a rotor up), engines off
     start = site.kind; ac.spawn(env, site.pos, site.heading); ac.x.y += site.y - env.groundAt(site.pos.x, site.pos.z).h - 0.031; ac.syncVisual();
   } else if (park) { // facing the way to go; online, the others line up behind
@@ -975,7 +979,7 @@ function handleEvents(f, dt) {
       case 'strain': audio.strain(ac.x, rig.mode === 'cockpit'); break;
       case 'impact': {
         const p = Math.min(2, e.speed / 18);
-        if (e.surf === 'water') effects.splash(e.pos, e.speed);
+        if (e.surf === 'water' || e.surf === 'slick') effects.splash(e.pos, e.speed); // (slick: a wet water-park ramp)
         else { effects.sparks(e.pos, ac.v, 12); effects.dust(e.pos, ac.v, e.surf, 4); }
         if (!f.lastImpact || f.t - f.lastImpact > 0.15) { audio.play(e.surf === 'water' ? 'splash' : 'impact', p, e.pos); f.lastImpact = f.t; }
         rig.shake(p); if (p > 0.6) post.shock(p * 0.6);
@@ -1076,11 +1080,11 @@ function stepFlight(dtReal) {
   ac.step(dt, f.env);
   if (f.clamp) holdDown(f, ac, world.pad);
   if (f.cfgStart === 'pad') world.pad.update(dtReal, f.eng.on && !ac.dead ? f.thr || 0 : 0, ac.x.y - world.pad.deckY, effects, f.eng.hold > 0 || f.eng.on);
-  const stunt = world.stunts?.drive(ac, dt); // boost pads, big air, loops
+  const s1 = world.stunts?.drive(ac, dt), s2 = world.waterParks?.drive(ac, dt), stunt = s1 && s2 ? s1.concat(s2) : s1 || s2; // boost pads, big air, loops; the water park's ramps
   if (ac.diag.deepPens !== (f.pens ?? 0)) { // pushed out from deep inside a ramp/loop this frame (aircraft.js diag): which feature, for flight_end
     f.pens = ac.diag.deepPens; const w = world.stunts?.where?.(ac), k = w?.feature || 'other', P = (f.penAt ||= {}); if (Object.keys(P).length < 12 || P[k]) P[k] = (P[k] || 0) + 1;
   }
-  if (stunt) for (const m of stunt) { if (m.track) trackStunt(f, m.track); if (m.center) hud.center(m.center, 1200); if (m.toast) hud.toast(m.toast, m.good ? 'good' : ''); if (m.slowmo && f.t - f.lastSlowmo > 4) { f.slowmo = m.slowmo; f.lastSlowmo = f.t; } }
+  if (stunt) for (const m of stunt) { if (m.track) trackStunt(f, m.track); if (m.center) hud.center(m.center, 1200); if (m.toast) hud.toast(m.toast, m.good ? 'good' : ''); if (m.slowmo && f.t - f.lastSlowmo > 4) { f.slowmo = m.slowmo; f.lastSlowmo = f.t; } if (m.splash) effects.splash(m.splash, m.power || 6); }
   // trees
   if (!ac.dead && (ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), 0) < 30 || world.towns.tall)) { // (a city's towers reach far higher)
     for (const p of ac.parts) {

@@ -11,7 +11,7 @@
 // exactly what env.groundAt did, so physics away from structures is unchanged.
 import * as THREE from 'three';
 
-export const SURFACES = ['runway', 'sand', 'rock', 'grass']; // surface types a triangle can have (ids index this)
+export const SURFACES = ['runway', 'sand', 'rock', 'grass', 'slick']; // surface types a triangle can have (ids index this; 'slick': a wet ramp a hull slides up (waterPark.js))
 
 export class CollisionMesh {
   constructor(cell = 4) { this.cell = cell; this.raw = []; this.n = 0; }
@@ -182,9 +182,10 @@ export function groundUnder(env, top, down, reach) {
 }
 // The ground for a hull point p: env.groundAt's result, or, where p is inside a structure, a stand-in whose h puts the
 // penetration (h - p.y) right and whose n is the face's normal (g.stunt = true; push p out along n, not up).
+// Under water a structure still counts: the foot of a floating ramp (waterPark.js) or a slipway is solid below the surface.
 export function groundAtPoint(env, p) {
   const g = env.groundAt(p.x, p.z, p.y);
-  if (p.y <= g.h || !env.surfPoint) return g;
+  if ((p.y <= g.h && g.type !== 'water') || !env.surfPoint) return g;
   const s = env.surfPoint(p);
   return s ? { h: p.y + s.pen, n: s.n.clone(), type: s.type, stunt: true } : g;
 }
