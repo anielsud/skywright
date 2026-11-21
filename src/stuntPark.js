@@ -113,6 +113,8 @@ export class StuntParks {
     for (const s of this.sites) s.update(night, cam, dt);
   }
   drive(ac, dt) { let out = null; for (const s of this.sites) { const m = s.drive(ac, dt); if (m) out = out ? out.concat(m) : m; } return out; }
+  // which feature a vehicle is at, for analytics (main.js part_lost): { feature, x, z } in the site's own frame, or null
+  where(ac) { for (const s of this.sites) { const w = s.where?.(ac); if (w) return w; } return null; }
   dispose() {
     for (const s of this.sites) s.dispose();
     for (const m of Object.values(this.mats)) { if (m.map && m.map !== this.mats.pool.map) m.map.dispose(); m.dispose(); }
@@ -255,6 +257,7 @@ export class StuntPark extends Site {
     this.loopInfo.exitXpark = this.loopInfo.entryX + this.loopInfo.exitX;
     // the frame: two lattice towers either side and a beam over the top
     const tp = this.loopInfo.top, mid = pts.reduce((a, p) => (p.y > a.y ? p : a), pts[0]);
+    this.loopInfo.topI = this.loopInfo.lead + pts.indexOf(mid); // (the guide frame at the top: loop_attempt's top speed)
     const cx = base.p.x + mid.x;
     for (const side of [-1, 1]) {
       const z = base.p.z + side * (LANE + w + 2.2);
@@ -401,7 +404,44 @@ export class StuntPark extends Site {
       if (up.y < -0.6 && ac.stuntUp) st.upside = true; // on the wheels, upside down: in the loop
       if (st.upside && up.y > 0.8) { st.upside = false; msgs.push({ center: 'LOOP THE LOOP!' }); }
     } else { st.air += dt; if (st.air > 3) st.upside = false; this.jumpGuide(ac, dt); if (ac.isBike) this.bikeAir(ac, dt); }
+    this.loopTrack(ac, dt, msgs);
     return msgs.length ? msgs : null;
+  }
+  // ---- analytics ----
+  // One loop_attempt per go at the loop (main.js sends { track } messages to PostHog): how far round it got (progress
+  // 0-1 along the deck), the speeds in, over the top and at the slowest, the g, time off the deck, and how it ended:
+  // made (reached the exit), fell_off (wheels off the deck for 0.5 s: too slow over the top, or bounced off), rolled_back,
+  // left_deck (off the side), destroyed, timeout
+  loopTrack(ac, dt, msgs) {
+    const L = this.loopInfo, n = L.guide.length, on = ac.onGround && L.i != null && L.i >= L.lead, spd = ac.v.length();
+    let A = this.la;
+    if (!A) {
+      if (on && L.i < L.topI - 30 && this.Ld(ac.v).dot(L.guide[L.i].t) > 2) this.la = { t: 0, entry: spd, maxI: L.i, top: null, min: spd, maxG: Math.abs(ac.g), air: 0, airT: 0, lost: ac.stats.partsLost, pen: ac.diag.deepPens, ups: 0 };
+      return;
+    }
+    A.t += dt; A.maxG = Math.max(A.maxG, Math.abs(ac.g));
+    if (on) { A.maxI = Math.max(A.maxI, L.i); A.min = Math.min(A.min, spd); if (A.top == null && L.i >= L.topI) A.top = spd; }
+    if (!ac.onGround) { A.air += dt; A.airT += dt; } else A.air = 0;
+    const out = ac.dead ? 'destroyed' : A.maxI >= n - 4 ? 'made' : A.air > 0.5 ? 'fell_off' : on && L.i < A.maxI - 10 ? 'rolled_back'
+      : ac.onGround && L.i == null ? 'left_deck' : A.t > 12 ? 'timeout' : null;
+    if (!out) return;
+    this.la = null;
+    const kmh = (v) => (v == null ? null : Math.round(v * 3.6));
+    msgs.push({ track: { event: 'loop_attempt', props: {
+      outcome: out, progress: +((A.maxI - L.lead) / (n - 1 - L.lead)).toFixed(2), entry_kmh: kmh(A.entry), top_kmh: kmh(A.top), min_kmh: kmh(A.min), exit_kmh: kmh(spd),
+      max_g: +A.maxG.toFixed(1), air_s: +A.airT.toFixed(2), seconds: +A.t.toFixed(1), parts_lost: ac.stats.partsLost - A.lost, deep_pens: ac.diag.deepPens - A.pen,
+      up_y: +(ac.up?.y ?? 1).toFixed(2),
+    } } });
+  }
+  where(ac) {
+    if (!this.inside(ac.x.x, ac.x.z, 20)) return null;
+    const lp = this.Lp(ac.x), L = this.loopInfo, at = { x: Math.round(lp.x), z: Math.round(lp.z), site: 'park' };
+    let bi = -1, bd = 64; for (let i = 0; i < L.guide.length; i++) { const p = L.guide[i].p, d = (p.x - lp.x) ** 2 + (p.y - lp.y) ** 2 + (p.z - lp.z) ** 2; if (d < bd) { bd = d; bi = i; } }
+    if (bi >= L.lead) return { ...at, feature: 'loop', loop_progress: +((bi - L.lead) / (L.guide.length - 1 - L.lead)).toFixed(2) };
+    if (bi >= 0) return { ...at, feature: 'loop_entry' };
+    const J = this.jumpAim; if (J && lp.x <= J.x0 + 10 && lp.x >= J.x1 - 10 && Math.abs(lp.z + RT) < 14) return { ...at, feature: 'mesa_jump' };
+    const bx = lp.x + this.XS, r = Math.hypot(bx, lp.z); if (bx < 0 && r > RT - 2 && r < RT + 18) return { ...at, feature: 'bowl' };
+    return { ...at, feature: lp.y > 0.6 ? 'ramp' : 'track' };
   }
   // Over the mesa jump's gap: the flight is nudged (a little: 6 m/s^2) to come down on the middle of the landing ramp,
   // whatever came off the lip (a light, quick bike flies higher and further than a buggy)
