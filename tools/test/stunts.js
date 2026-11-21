@@ -16,12 +16,13 @@ function place(S, name, realism, x, z, dir, v = 0, site = park(S)) {
   return ac;
 }
 // step with gas on, steering to hold lane z (site frame) along heading dir; trace every frame
-function drive(S, ac, { z, dir, T, until = () => false, gas = 1, speed = null, steer = true, site = park(S), msgs = null }) { // speed(x): a speed cap (m/s) at site x, or null
+function drive(S, ac, { z, dir, T, until = () => false, gas = 1, speed = null, steer = true, site = park(S), msgs = null, rollAt = null }) { // speed(x): a speed cap (m/s) at site x, or null; rollAt(lp, fl): the steering (overrides the lane keeping), or null
   const P = S.F.world.stunts, tr = [], fwd = new S.THREE.Vector3();
   for (let i = 0; i < T / DT; i++) {
     fwd.set(0, 0, -1).applyQuaternion(ac.q);
     const lp = site.Lp(ac.x), fl = site.Ld(fwd), err = (z - lp.z) * dir, ang = Math.atan2(fl.z * dir, fl.x * dir);
-    const roll = steer && ac.up.y > 0.5 && ac.onGround ? Math.max(-1, Math.min(1, 0.12 * err - 1.6 * ang)) : 0; // (no steering upside down)
+    const own = rollAt ? rollAt(lp, fl) : null;
+    const roll = own != null ? own : steer && ac.up.y > 0.5 && ac.onGround ? Math.max(-1, Math.min(1, 0.12 * err - 1.6 * ang)) : 0; // (no steering upside down)
     const cap = typeof speed === 'function' ? speed(lp.x) : speed, g = cap != null ? (ac.v.dot(fwd) < cap ? 1 : 0) : gas;
     ac.setControls({ pitch: 0, roll, yaw: 0, throttle: g, rev: 0, hand: 0 });
     ac.brake = 0;
@@ -96,6 +97,30 @@ export function bowlRun(S, name, realism, speed = 18) {
   return { name, realism, speed, parts, alive: ac.parts.filter((p) => p.alive).length, dead: !!ac.dead, maxY: r2(maxY), maxD: r2(Math.max(...tr.filter((p) => p.x < -XS).map((p) => p.d))), rimA: r2(P.bowlInfo.rimA), maxBank: r2(maxBank), out: r2(tr.at(-1).x), onWall: tr.filter((p) => p.st).length,
     after: { x: r2(after.at(-1).x), z: r2(after.at(-1).z), minUp: r2(minUp(after)), up: r2(Math.min(...settled.map((p) => p.up))), wheels: Math.min(...settled.map((p) => p.w)), of: after[0].nw } };
 }
+// The east turn, as a kid rides it: from the start arch, full gas all the way, steering down the lane to the loop, then
+// hands off: through the loop, over the rumble strip, round the banked turn (Arcade and Pilot steer you round it), and
+// on down straight 2 (steering again, to the mesa jump's boost). Never over the barrier on the berm's top; at the Grand
+// Canyon, not off down the link lane to the canyon jump either.
+export function turnRun(S, name, realism) {
+  const P = park(S), XS = P.XS, s0 = P.Lp(P.start.pos), ac = place(S, name, realism, s0.x, s0.z, 1), parts = ac.parts.length;
+  const keep = (lp, fl, z, dir) => Math.max(-1, Math.min(1, 0.12 * (z - lp.z) * dir - 1.6 * Math.atan2(fl.z * dir, fl.x * dir)));
+  const rollAt = (lp, fl) => (!ac.onGround || ac.up.y < 0.5 ? 0 : lp.z > 0 ? (lp.x < P.loopInfo.entryX ? keep(lp, fl, s0.z, 1) : 0) : lp.x < XS ? keep(lp, fl, -30, -1) : 0);
+  const tr = drive(S, ac, { z: s0.z, dir: 1, T: 40, rollAt, until: (a, t) => { const p = t.at(-1); return (p.z < 0 && p.x < XS - 40) || p.x > XS + 60; } });
+  const turn = tr.filter((p) => p.x > XS - 2), d = (p) => Math.hypot(p.x - XS, p.z) - 30, end = tr.at(-1);
+  return { name, realism, parts, alive: end.alive, dead: end.dead, entry: r2(turn[0]?.v ?? 0), maxV: r2(Math.max(...turn.map((p) => p.v))), maxD: r2(Math.max(...turn.map(d))), maxY: r2(Math.max(...turn.map((p) => p.y))),
+    minUp: r2(minUp(turn)), end: { x: r2(end.x), z: r2(end.z), up: r2(end.up), v: r2(end.v) }, edge: 7, round: end.z < 0 && end.x < XS - 40 };
+}
+// At the Grand Canyon: steering towards the jump at the fork (held right for a moment at the end of straight 1, as a kid
+// picks it) takes the link lane, and on onto the canyon jump's run-up.
+export function forkRun(S, name, realism) {
+  const P = park(S), E = S.F.world.stunts.evel, XS = P.XS, s0 = P.Lp(P.start.pos), e0 = E.Lp(E.start.pos), ac = place(S, name, realism, s0.x, s0.z, 1);
+  const keep = (lp, fl, z) => Math.max(-1, Math.min(1, 0.12 * (z - lp.z) - 1.6 * Math.atan2(fl.z, fl.x)));
+  const rollAt = (lp, fl) => (!ac.onGround || ac.up.y < 0.5 ? 0 : lp.x < P.loopInfo.entryX ? keep(lp, fl, s0.z) : lp.x < XS - 10 ? 0 : lp.x < XS + 8 ? 0.6 : keep(lp, fl, 30));
+  E.st.phase = 'idle';
+  const tr = drive(S, ac, { z: s0.z, dir: 1, T: 30, rollAt, until: (a) => E.Lp(a.x).x > e0.x + 15 || P.Lp(a.x).z < 0 });
+  const e = E.Lp(ac.x), end = tr.at(-1);
+  return { name, realism, onRunUp: e.x > e0.x + 15 && Math.abs(e.z) < 8, runUp: { x: r2(e.x - e0.x), z: r2(e.z) }, park: { x: r2(end.x), z: r2(end.z) }, up: r2(ac.up.y), dead: !!ac.dead };
+}
 function longestAir(tr) {
   let best = { t: 0, landUp: 1 }, t0 = null;
   for (let i = 0; i < tr.length; i++) {
@@ -165,10 +190,10 @@ export function evelShort(S, name = 'Dune Buggy') {
 export function run(opts = {}) {
   const S = window.__sky, F = S.F; F.paused = true;
   F.world.gust.set(0, 0, 0); F.world.gustT.set(0, 0, 0); // (the same wind every run: gusts are random)
-  const P = park(S), out = { stats: F.world.stunts.stats, site: F.world.stuntPlan.site, loop: [], speeds: [], jump: [], bowl: [], planes: null, evel: [], evelShort: null };
+  const P = park(S), out = { stats: F.world.stunts.stats, site: F.world.stuntPlan.site, loop: [], speeds: [], jump: [], bowl: [], turn: [], fork: [], planes: null, evel: [], evelShort: null };
   for (const name of opts.cars || ['Dune Buggy', 'Chomper']) for (const rl of opts.realism || ['pilot']) {
     out.loop.push(loopRun(S, name, rl));
-    if (opts.full !== false) { out.speeds.push(loopSpeeds(S, name, rl)); out.jump.push(jumpRun(S, name, rl)); for (const v of opts.bowlSpeeds || [14, 20, 26, 34]) out.bowl.push(bowlRun(S, name, rl, v)); }
+    if (opts.full !== false) { out.speeds.push(loopSpeeds(S, name, rl)); out.jump.push(jumpRun(S, name, rl)); for (const v of opts.bowlSpeeds || [14, 20, 26, 34]) out.bowl.push(bowlRun(S, name, rl, v)); out.turn.push(turnRun(S, name, rl)); if (P.link && F.world.stunts.evel) out.fork.push(forkRun(S, name, rl)); }
     if (F.world.stunts.evel && opts.evel !== false) out.evel.push(evelRun(S, name, rl));
   }
   if (opts.planes !== false && P.L.tabletop != null) out.planes = planeRuns(S);

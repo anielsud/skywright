@@ -11,6 +11,9 @@ steer), and checks, at each location, that
   - coasting into the loop at the boost pad's speed still makes it round; far too slow, it rolls back down;
   - the mesa jump (boost -> mesa -> boost -> lip -> gap -> landing ramp): it clears the gap and lands upright;
   - the bowl (wall ride) at several speeds, up to flat out: round it on the wall, never over the lip, back out upright;
+  - from the start, full gas, hands off after the loop: round the banked east turn, never over its barrier, out
+    upright onto straight 2 (at the Grand Canyon: not down the link lane); and steered towards the jump at the fork,
+    down the link lane onto the canyon jump's run-up;
   - at the Grand Canyon: planes on the mesas (one set down stands on it, one flown into a cliff hits it); the canyon
     jump's start is at its run-up, and a scripted run (full gas, no steering) clears the real gap, lands upright on the
     far ramp and is stopped by the parachute; a car too slow for it is lowered into the canyon by the rescue parachute.
@@ -57,6 +60,13 @@ def checks(r, loc):
         # (flat out, a motorbike rides right up to the lip: the catch fence holds it there; it must not go over the top)
         add(f'{n}', b['onWall'] > 60 and b['maxBank'] > 25 and b['maxY'] < (9 if b['speed'] > 28 else 8) and b['maxD'] <= b['rimA'] + 0.05 and a['up'] > 0.9 and a['wheels'] >= min(3, a['of']) and b['alive'] == b['parts'],
             f"bank up to {b['maxBank']} deg, {b['maxY']} m up the wall, {b['maxD']} m out (lip {b['rimA']}), out: up {a['up']}, {a['wheels']}/{a['of']} wheels down")
+    for t in r.get('turn', []):
+        n = f"{t['name']} ({t['realism']}) loop -> banked turn, hands off"
+        e = t['end']
+        add(f'{n}: round it, never over the barrier', t['round'] and t['maxD'] <= t['edge'] and t['minUp'] > 0.7 and abs(e['z'] + 30) < 4 and e['up'] > 0.9 and t['alive'] == t['parts'] and not t['dead'],
+            f"in at {t['entry']} m/s (up to {t['maxV']}), {t['maxD']} m out (kerb {t['edge']}), up to {t['maxY']} m, lowest up {t['minUp']}; out at x {e['x']}, z {e['z']}, up {e['up']}, {t['alive']}/{t['parts']} parts")
+    for f in r.get('fork', []):
+        add(f"{f['name']} ({f['realism']}) steered onto the link lane at the fork reaches the canyon jump's run-up", f['onRunUp'] and f['up'] > 0.8 and not f['dead'], f"{f['runUp']['x']} m along the run-up, {f['runUp']['z']} m off its line (park x {f['park']['x']}, z {f['park']['z']})")
     p = r['planes']
     if p:
         la, cr = p['land'], p['crash']

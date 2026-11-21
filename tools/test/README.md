@@ -138,6 +138,10 @@ location it fails unless:
 - coasting into the loop at the boost pad's speed still makes it round, and far too slow it rolls back down;
 - the mesa jump clears the gap and lands upright;
 - the bowl is ridden at 14, 20 and 26 m/s, up the wall and back out upright on its wheels;
+- from the start arch at full gas, hands off after the loop (as a kid rides it), every car and bike gets round the
+  banked east turn, never over the barrier on its berm, and out upright onto straight 2; at the Grand Canyon that
+  hands-off run takes the turn, not the link lane to the canyon jump, and one steered right at the fork goes down the
+  link lane onto the canyon jump's run-up;
 - at the Grand Canyon: a Kestrel set down on a mesa stands on it and one flown into a cliff hits it; the canyon jump's
   start is at its run-up; a scripted run (full gas, no steering) clears the real gap, lands upright on the far ramp and
   is stopped by the parachute; and a car too slow for it is lowered into the canyon by the rescue parachute.
