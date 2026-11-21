@@ -155,6 +155,8 @@ export class EvelJump extends Site {
   }
 
   // ---- per frame ----
+  // for analytics (StuntSites.where): which part of the jump a vehicle is at
+  where(ac) { if (!this.inside(ac.x.x, ac.x.z)) return null; const lp = this.Lp(ac.x); return { site: 'evel', feature: `evel_${this.st.phase}`, x: Math.round(lp.x), z: Math.round(lp.z) }; }
   reset() { const st = this.st; if (st.phase !== 'idle') { st.phase = 'idle'; st.chute = null; } }
   // A car at the jump: the rocket strip, the lane, the flight, the landing, the parachutes. Messages for the HUD.
   drive(ac, dt) {

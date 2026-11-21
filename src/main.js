@@ -798,7 +798,40 @@ function trackFlightEnd(f, exit) {
     distance_km: +(s.distance / 1000).toFixed(1), landings: s.landings, best_landing_ms: s.bestLanding == null ? null : +s.bestLanding.toFixed(2), parts_lost: s.partsLost,
     fps_avg: f.activeT > 1 ? Math.round(f.frames / f.activeT) : null, fps_low: Number.isFinite(f.fpsLow) ? Math.round(f.fpsLow) : null,
     quality_level: f.maxLevel, res_scale: +perf.scale.toFixed(2), players_max: f.playersMax,
+    end_title: f.endTitle ? f.endTitle.replace(/[^\w !:.-]/g, '').trim().slice(0, 40) : null, // (outcome 'crashed' covers "Crashed!" and "Crash landing!")
+    // physics health: numeric blow-ups reset, spin clamped (substeps), deep pushes out of a ramp/loop (tunnelling), deepest
+    // penetration (m), bikes/cars set back on their wheels, gear/wheels collapsed; frames under 20 fps (the game runs slow
+    // there) and the worst frame
+    diag: { ...f.ac.diag, maxPen: +f.ac.diag.maxPen.toFixed(2), slow_frames: f.slowFrames || 0, worst_frame_ms: Math.round(f.worstMs || 0) },
+    deep_pen_at: f.penAt || null, // (frames with a deep push-out, by stunt feature: where the "glitch" jolts happen)
+    loops_tried: f.loops?.tried || 0, loops_made: f.loops?.made || 0, parts_lost_events: f.partEvents || 0,
   });
+}
+// A part came off (aircraft.js detach -> 'debris'): why (the hit, scrape, hard landing, over-G, wall... that broke it), where
+// (the stunt park feature or the canyon jump phase, StuntSites.where), and the vehicle's state at that moment. A wreck
+// (the core destroyed) sends one event, not one per part; at most 15 a flight.
+function trackPartLost(f, e) {
+  try { partLost(f, e); } catch (err) { console.warn('part_lost', err); } // (analytics never breaks a flight)
+}
+function partLost(f, e) {
+  if (e.why === 'wreck') { if (f.wreckSent) return; f.wreckSent = true; }
+  f.partEvents = (f.partEvents || 0) + 1; if (f.partEvents > 15) return;
+  const ac = f.ac, c = e.cause || {}, w = f.world.stunts?.where?.(ac) || null, kmh = (v) => (v == null ? null : Math.round(v * 3.6));
+  analytics.capture('part_lost', {
+    ...f.track, why: e.why, cause: c.why || 'unknown', part_ids: (e.ids || []).slice(0, 8), part_names: e.names.slice(0, 8),
+    impact_kmh: kmh(c.impact), limit_kmh: kmh(c.limit ?? c.thr), surf: c.surf ?? null, on_structure: c.stunt ?? null,
+    site: w?.site ?? null, feature: w?.feature ?? null, loop_progress: w?.loop_progress ?? null, site_x: w?.x ?? null, site_z: w?.z ?? null,
+    t: +(f.t || 0).toFixed(1), speed_kmh: kmh(ac.v.length()), g: +(ac.g || 0).toFixed(1), up_y: +(ac.up?.y ?? 1).toFixed(2), on_ground: !!ac.onGround,
+    on_ramp: !!ac.stuntUp, parts_left: ac.alive().length, fps: Math.round(perf.fps), frame_ms: Math.round((f.dtReal || 0) * 1000), slowmo: (f.timeScale ?? 1) < 1,
+  });
+}
+// stunt-site analytics (stuntPark.js loopTrack: loop_attempt), counted for flight_end
+function trackStunt(f, t) {
+  try { stuntEvent(f, t); } catch (err) { console.warn('stunt analytics', err); }
+}
+function stuntEvent(f, t) {
+  if (t.event === 'loop_attempt') { const L = (f.loops ||= { tried: 0, made: 0 }); L.tried++; if (t.props.outcome === 'made') L.made++; if (L.tried > 30) return; }
+  analytics.capture(t.event, { ...f.track, ...t.props, fps: Math.round(perf.fps) });
 }
 analytics.onLeave = () => { trackFlightEnd(F, 'closed'); tunnel?.track('closed'); };
 // Geometries, materials and textures reachable from a scene (including material uniforms such as custom shader maps).
@@ -915,7 +948,7 @@ function statsHTML(ac, W = words(F?.kind)) {
 }
 function showEnd(title, extra = '') {
   if (!F || F.shownEnd) return;
-  F.shownEnd = true;
+  F.shownEnd = true; F.endTitle = title;
   F.outcome = /Kaboom/.test(title) ? 'destroyed' : /Splash/.test(title) ? 'splashdown' : /Course/.test(title) ? 'race_done' : /Landing score/.test(title) ? 'landing_done' : 'crashed';
   const m = ui.modal(`<h2>${title}</h2>${extra}<div class="pause-stats">${statsHTML(F.ac)}</div>
     <div class="col-buttons"><button class="primary big" data-a="restart">${words(F.kind).again}</button><button data-a="watch">Keep watching</button><button data-a="hangar">Back to hangar (repair)${net.active ? ' · leaves the game' : ''}</button></div>`, 'sticky');
@@ -957,7 +990,7 @@ function handleEvents(f, dt) {
         if (part && e.speed > thr * 0.6) {
           const give = e.e.dk ? world.destruct.impact(e.e, e.pos, ac, part) : 1;
           ac.deform(part, e.pos, e.n, Math.min(0.5, (e.speed - thr * 0.4) * 0.025));
-          if (e.speed > thr) ac.damage(part, ((e.speed - thr) ** 2 * 22 * give) / (part.i === 0 ? 3 : 1), e.pos);
+          if (e.speed > thr) { ac.cause = { why: 'wall', impact: e.speed, thr }; ac.damage(part, ((e.speed - thr) ** 2 * 22 * give) / (part.i === 0 ? 3 : 1), e.pos); ac.cause = null; }
         }
         break;
       }
@@ -966,6 +999,7 @@ function handleEvents(f, dt) {
       case 'gear': audio.play('gear'); hud.toast(e.down ? 'Gear down' : 'Gear up'); break;
       case 'rocket': audio.play('rocket'); break;
       case 'debris': {
+        trackPartLost(f, e);
         f.debris.push(e.debris); f.scene.add(e.debris.group);
         audio.play('crack', 1, e.pos); if (e.names.some((n) => /Canopy|Cockpit|Nose/.test(n))) audio.play('glass', 1, e.pos); rig.shake(1.2);
         effects.sparks(e.pos, ac.v, 25);
@@ -1021,6 +1055,8 @@ function stepFlight(dtReal) {
   f.t = (f.t || 0) + dtReal;
   if (f.slowmo > 0) { f.slowmo -= dtReal; f.timeScale = 0.3; } else f.timeScale = Math.min(1, f.timeScale + dtReal * 2);
   const dt = Math.min(dtReal, 1 / 20) * f.timeScale;
+  if (dtReal > 1 / 20) f.slowFrames = (f.slowFrames || 0) + 1; // (under 20 fps the game itself runs slow: physics gets at most 1/20 s a frame)
+  f.worstMs = Math.max(f.worstMs || 0, dtReal * 1000); f.dtReal = dtReal;
   const c = controls.update(dtReal);
   if (ac.isCar || ac.isBoat) { // pedals: the engine starts on the first press of either (it drives you backwards too)
     const want = Math.max(c.gas, c.rev), go = want > 0 ? engineSwitch(f, ac, want, dtReal) / want : (engineSwitch(f, ac, 0, dtReal), 1);
@@ -1035,7 +1071,10 @@ function stepFlight(dtReal) {
   if (f.clamp) holdDown(f, ac, world.pad);
   if (f.cfgStart === 'pad') world.pad.update(dtReal, f.eng.on && !ac.dead ? f.thr || 0 : 0, ac.x.y - world.pad.deckY, effects, f.eng.hold > 0 || f.eng.on);
   const stunt = world.stunts?.drive(ac, dt); // boost pads, big air, loops
-  if (stunt) for (const m of stunt) { if (m.center) hud.center(m.center, 1200); if (m.toast) hud.toast(m.toast, m.good ? 'good' : ''); if (m.slowmo && f.t - f.lastSlowmo > 4) { f.slowmo = m.slowmo; f.lastSlowmo = f.t; } }
+  if (ac.diag.deepPens !== (f.pens ?? 0)) { // pushed out from deep inside a ramp/loop this frame (aircraft.js diag): which feature, for flight_end
+    f.pens = ac.diag.deepPens; const w = world.stunts?.where?.(ac), k = w?.feature || 'other', P = (f.penAt ||= {}); if (Object.keys(P).length < 12 || P[k]) P[k] = (P[k] || 0) + 1;
+  }
+  if (stunt) for (const m of stunt) { if (m.track) trackStunt(f, m.track); if (m.center) hud.center(m.center, 1200); if (m.toast) hud.toast(m.toast, m.good ? 'good' : ''); if (m.slowmo && f.t - f.lastSlowmo > 4) { f.slowmo = m.slowmo; f.lastSlowmo = f.t; } }
   // trees
   if (!ac.dead && (ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), 0) < 30 || world.towns.tall)) { // (a city's towers reach far higher)
     for (const p of ac.parts) {
@@ -1048,7 +1087,7 @@ function stepFlight(dtReal) {
         const give = t.dk ? world.destruct.impact(t, wp, ac, p) : 1; // a building that gives way takes some of the blow (never more than a wall would)
         if (t.solid) effects.dust(wp, { x: 0, z: 0 }, 'rock', 6); else effects.leaves(wp);
         audio.play('impact', 0.5, wp.clone()); rig.shake(0.5);
-        ac.damage(p, ac.v.length() * 8 / ac.R.crashMult * give, wp);
+        ac.cause = { why: t.solid ? 'building' : 'tree', impact: ac.v.length() }; ac.damage(p, ac.v.length() * 8 / ac.R.crashMult * give, wp); ac.cause = null;
         ac.v.multiplyScalar(give < 1 ? 0.95 : 0.92);
         if (!t.solid) t[3] = 0; // flatten the tree so we don't hit it forever (walls stay)
       }
@@ -1060,7 +1099,7 @@ function stepFlight(dtReal) {
     for (const h of hits) {
       effects.feathers(h); audio.play('bird', 1, h);
       let best = null, bd = 1e9; for (const p of ac.parts) { if (!p.alive) continue; const d = ac.worldPoint(p.center).distanceTo(h); if (d < bd) { bd = d; best = p; } }
-      if (best) { ac.damage(best, best.engine ? best.hp * 0.35 : best.hp * 0.08, h); hud.toast(best.engine ? `Bird strike! ${best.name} damaged` : 'Bird strike!', 'bad'); }
+      if (best) { ac.cause = { why: 'bird' }; ac.damage(best, best.engine ? best.hp * 0.35 : best.hp * 0.08, h); hud.toast(best.engine ? `Bird strike! ${best.name} damaged` : 'Bird strike!', 'bad'); ac.cause = null; }
     }
   }
   handleEvents(f, dt);
