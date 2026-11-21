@@ -603,7 +603,7 @@ def({ id: 'fus_rocket', cat: 'fuselage', name: 'Rocket Stage', desc: 'Tall fuel 
     const b2 = new Bag(), cc = capsuleCouch(L), st = seatGeo(...cc.dims); st.translate(...cc.at); b2.add(st, PM.seat());
     const deck = new THREE.BoxGeometry(0.7, 0.03, 1.0); deck.translate(0, cc.floor - 0.015, cc.at[2] - 0.4); b2.add(deck, M.paint(0x3a3e45, 'matte'));
     b2.to(g);
-    const p = [0, cc.at[1] + 0.108, cc.at[2] - 0.05]; // (the hips on the cushion, against the back: the figure in this helmet has no posture solve)
+    const p = [0, cc.at[1] + 0.108, cc.at[2] - 0.05]; // (where the hips go: the couch's declared surfaces (fit) seat the suited astronaut on the cushion and against the back, and its posture is solved there, crew.js)
     g.userData.seats = [{ p, s: 0.85, ctl: 'none', fit: { at: cc.at, dims: cc.dims, floor: cc.floor, feet: 'pedals' }, controls: { pedY: cc.floor - p[1], pedZ: -0.56 } }];
     return g;
   } });
