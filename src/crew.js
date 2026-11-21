@@ -267,7 +267,7 @@ const CTL = {
     stickBase: V(0, -0.12, -0.42), stickLen: 0.42, collBase: V(-0.27, 0.02, 0.1), collLen: 0.42,
   },
   yoke: { colBase: V(0, -0.3, -0.62), colLen: 0.62, yokeR: 0.15 },
-  wheel: { col: V(0, 0.28, -0.52), tilt: 0.42, wheelR: 0.19 },
+  wheel: { col: V(0, 0.28, -0.52), tilt: 0.42, wheelR: 0.19, spokes: [Math.PI / 2, Math.PI * 1.18, Math.PI * 1.82] }, // (spoke angles from 3 o'clock, anticlockwise)
   bars: {}, // a motorbike: hands on the fork's grips (given every frame), feet on the pegs, the body leans and tucks
   none: {},
 };
@@ -389,7 +389,11 @@ class Rig {
     } else if (this.ctl === 'wheel') {
       const tq = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), -C.tilt); // the wheel's face looks up and back at the driver; its column runs forward and down into the dash
       p[B.ctlA].copy(this.col); q[B.ctlA].copy(tq).multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), s.steer));
-      for (const [k, a] of [['R', -1.15], ['L', 1.15]]) { hands[k] = V(Math.sin(-a) * C.wheelR, Math.cos(a) * C.wheelR, 0).applyQuaternion(q[B.ctlA]).add(this.col); axes[k] = V(Math.cos(a), Math.sin(a), 0).multiplyScalar(Math.sign(a)).applyQuaternion(q[B.ctlA]); radii[k] = 0.017; } // (the rim's tangent, thumbs towards 12 o'clock)
+      // a hand at angle a round the rim from 12 o'clock (the right hand at -a): its centre and the rim's tangent, the
+      // thumb towards 12 o'clock. Where on the rim each hand holds is chosen once, for comfort (pose), then kept, so
+      // the hands turn with the wheel
+      this.rimAt = (k, a0) => { const a = k === 'R' ? -a0 : a0; return { c: V(Math.sin(-a) * C.wheelR, Math.cos(a) * C.wheelR, 0).applyQuaternion(q[B.ctlA]).add(this.col), axis: V(Math.cos(a), Math.sin(a), 0).multiplyScalar(Math.sign(a)).applyQuaternion(q[B.ctlA]) }; };
+      for (const k of ['R', 'L']) { const g = this.rimAt(k, this.gripA?.[k] ?? 1.15); hands[k] = g.c; axes[k] = g.axis; radii[k] = 0.017; }
     } else if (this.ctl === 'bars') { // on the grips (rig space, from the fork), else resting on the tank
       hands.L = s.hands?.[0] || V(-0.2, 0.05, -0.42); hands.R = s.hands?.[1] || V(0.2, 0.05, -0.42); axes.L = V(1, 0, 0); axes.R = V(-1, 0, 0); radii.L = radii.R = 0.016; // (thumbs inboard)
       feet.L = this.pegs[0].clone().lerp(V(this.pegs[0].x - 0.1, this.groundY + 0.06, this.pegs[0].z - 0.12), s.foot || 0); // a foot down when stopped
@@ -515,7 +519,7 @@ class Rig {
       else grid(0, 0, Math.PI, 49);
       for (const span of [0.12, 0.04, 0.012]) grid(best.th, best.ph, span, 7);
       this.armSol[k] = { th: best.th, ph: best.ph };
-      const out = {}; score(best.th, best.ph, out); (this.armAngles ||= {})[k] = Object.fromEntries(Object.entries(out.angles).map(([kk, v]) => [kk, +(kk === 'cost' || kk === 'inside' ? v : v * 180 / Math.PI).toFixed(3)])); void hint; return out;
+      const out = {}; score(best.th, best.ph, out); (this.armAngles ||= {})[k] = { ...Object.fromEntries(Object.entries(out.angles).map(([kk, v]) => [kk, +(kk === 'cost' || kk === 'inside' ? v : v * 180 / Math.PI).toFixed(3)])), at: this.gripA?.[k] != null ? +(this.gripA[k] * 180 / Math.PI).toFixed(0) : null }; void hint; return out;
     };
     const arm = (k, S, iu, iff, ih, hint) => {
       const c = hands[k], rest = this.restN?.[k], r = radii[k] ?? 0.03, G = this.hand.G(k, rest ? 0 : r), M = new THREE.Matrix4();
@@ -523,6 +527,16 @@ class Rig {
       const Y = c.clone().sub(S); Y.addScaledVector(X, -Y.dot(X)).normalize();
       const Z = V(), W = V();
       if (!rest) { // a hand on a bar: the most comfortable arm that holds it (see comfortArm)
+        if (this.rimAt && this.gripA?.[k] == null) { // first solve on a wheel: also choose where round the rim to hold (1 to 4 o'clock)
+          let bestA = null;
+          // not where a spoke meets the rim: a hand (about 9 cm across) plus the spoke takes about 0.32 rad of a 19 cm rim
+          const clear = (a0) => { const at3 = k === 'R' ? Math.PI / 2 - a0 : Math.PI / 2 + a0; return this.C.spokes.every((sp) => Math.abs(Math.atan2(Math.sin(at3 - sp), Math.cos(at3 - sp))) > 0.32); };
+          for (let a0 = 0.55; a0 <= 2.1; a0 += 0.075) { if (!clear(a0)) continue; const g = this.rimAt(k, a0), Xa = g.axis.clone().normalize().multiplyScalar(this.hand.thumb[k]);
+            delete this.armSol?.[k]; const o2 = comfortArm(k, S, g.c, Xa, G, hint), cc = o2.angles.cost; if (!bestA || cc < bestA.c) bestA = { c: cc, a0, sol: { ...this.armSol[k] } }; }
+          (this.gripA ||= {})[k] = bestA.a0; this.armSol[k] = bestA.sol;
+          const g = this.rimAt(k, bestA.a0); c.copy(g.c); hands[k] = g.c; axes[k] = g.axis; X.copy(g.axis).normalize().multiplyScalar(this.hand.thumb[k]);
+          this.grips[k] = { r, c: g.c, axis: g.axis };
+        }
         const sol = comfortArm(k, S, c, X, G, hint);
         Y.copy(sol.Y); Z.crossVectors(X, Y); W.copy(sol.W);
         limb(S, W, D.upper, D.fore, sol.pole, iu, iff, -1);
@@ -1175,7 +1189,7 @@ function figureGeometry(rig) {
     at(B.ctlB, boxG(0.08, 0.05, 0.04, V(0, 0.0, 0.01)), 0x3a3d42);
   } else if (rig.ctl === 'wheel') {
     const rim = torusAB(C.wheelR, 0.017, Math.PI * 2, 72, 16); at(B.ctlA, rim, blk);
-    for (const a of [Math.PI / 2, Math.PI * 1.18, Math.PI * 1.82]) at(B.ctlA, capAB(V(0, 0, 0), V(Math.cos(a) * C.wheelR, Math.sin(a) * C.wheelR, 0), 0.012, 0.012, { seg: 6 }), 0x8a8f96, true);
+    for (const a of C.spokes) at(B.ctlA, capAB(V(0, 0, 0), V(Math.cos(a) * C.wheelR, Math.sin(a) * C.wheelR, 0), 0.012, 0.012, { seg: 6 }), 0x8a8f96, true);
     at(B.ctlA, new THREE.CylinderGeometry(0.045, 0.05, 0.04, 14).rotateX(Math.PI / 2), 0x2b2d31);
     at(B.ctlA, ellipsoid(V(0, C.wheelR, 0.0), 0.02, 0.012, 0.02), 0xe8601c); // top-centre marker
     at(B.ctlA, capAB(V(0, 0, -0.02), V(0, 0, -(0.42 + (rig.col.z - C.col.z) / Math.cos(C.tilt))), 0.025, 0.03, { seg: 8 }), 0x2b2d31); // column, forward and down into the dash (reaching as deep as it did before the wheel came towards the driver)
