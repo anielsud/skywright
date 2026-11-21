@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.113.0', items: [
+    "Boat water parks! Take a boat to the new water park in Bora Bora, New York or the Swiss lake: hit the boost and fly the MEGA JUMP over an island, a container barge or a log raft, jump through the hoop, weave the buoy slalom and zoom through the waterfall.",
+  ] },
   { v: '1.112.0', items: [
     "Bikes and cars don't snap their wheels any more when they ride over a step or the edge of a ramp.",
   ] },

@@ -428,7 +428,7 @@ const STYLE = {
 };
 function atlasTexture(theme) {
   const S = 1024, c = document.createElement('canvas'); c.width = c.height = S; const g = c.getContext('2d');
-  const st = STYLE[theme.signs.style] || STYLE.classic, words = { name: theme.signs.name, start: 'START', loop: 'LOOP', jump: theme.signs.jump, wall: theme.signs.wall, banked: 'BANKED TURN', tabletop: 'TABLETOP', whoops: 'WHOOPS!' };
+  const st = STYLE[theme.signs.style] || STYLE.classic, words = { name: theme.signs.name, start: 'START', loop: 'LOOP', jump: theme.signs.jump, wall: theme.signs.wall, banked: 'BANKED TURN', tabletop: 'TABLETOP', whoops: 'WHOOPS!', ...theme.signs.words }; // (signs.words: a park's own boards, e.g. the water park's)
   const rnd = mulberry32(17);
   const box = (r, bg, fg, text, size, edge = '#ffffff') => {
     const x = r[0] * S, y = (1 - r[3]) * S, w = (r[2] - r[0]) * S, h = (r[3] - r[1]) * S;

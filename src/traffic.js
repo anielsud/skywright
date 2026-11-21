@@ -161,7 +161,7 @@ export class Traffic {
     hull.scale(1, 0.25, 1); hull.rotateX(Math.PI / 2); hull.scale(1, 1, 1);
     for (let i = 0; i < 8; i++) {
       let x, z, tries = 0;
-      do { x = (this.r() - 0.5) * 12000; z = (this.r() - 0.5) * 12000; tries++; } while (this.world.heightAt(x, z) > -8 && tries < 200);
+      do { x = (this.r() - 0.5) * 12000; z = (this.r() - 0.5) * 12000; tries++; } while ((this.world.heightAt(x, z) > -8 || this.world.waterParks?.inside(x, z, 700)) && tries < 200); // (their circles keep clear of the water park)
       const b = new THREE.Group();
       const h = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.4, 10), M.paint(0xf2f2ee)); h.position.y = 0.4; b.add(h);
       const bow = new THREE.Mesh(new THREE.ConeGeometry(1.7, 3, 4), M.paint(0xf2f2ee)); bow.rotation.x = -Math.PI / 2; bow.rotation.y = Math.PI / 4; bow.position.set(0, 0.4, -6.4); bow.scale.set(1, 1, 0.45); b.add(bow);

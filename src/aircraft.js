@@ -930,20 +930,20 @@ export class Aircraft {
         if (hp.y > this.x.y + 50) continue;
         const g = groundAtPoint(env, hp); // (terrain, or a stunt ramp the point is inside)
         if (hp.y > g.h) continue;
-        const water = g.type === 'water';
+        const water = g.type === 'water', slick = g.type === 'slick'; // (slick: a wet ramp, waterPark.js: a hull slides up it, no scraping)
         if (water && this.isBoat) continue; // (a boat's hull floats: boat.js)
-        const res = contactPoint(this, hp, g, { e: water ? 0 : 0.12, mu: water ? 0.12 : g.type === 'runway' ? 0.4 : 0.55 });
+        const res = contactPoint(this, hp, g, { e: water ? 0 : 0.12, mu: water ? 0.12 : slick ? 0.04 : g.type === 'runway' ? 0.4 : 0.55 });
         if (!res) continue;
         if (g.stunt) { if (res.pen > stuntPen) { stuntPen = res.pen; stuntPush.copy(g.n); } } // pushed out along the face, not up
         else maxPen = Math.max(maxPen, res.pen);
         const impact = -res.vn;
         const thr = (water ? 9 : 4.5) * R.crashMult;
         if (impact > thr * 0.6 && (!hits.has(p) || hits.get(p).impact < impact)) hits.set(p, { impact, pt: hp.clone(), n: g.n.clone(), thr, surf: g.type, stunt: !!g.stunt });
-        if (res.vt > 4 && !water) {
+        if (res.vt > 4 && !water && !slick) {
           slide.set(p, Math.max(slide.get(p) || 0, res.vt));
           if (Math.random() < 0.08) this.emit('scrape', { pos: hp.clone(), speed: res.vt, surf: g.type });
         }
-        if (water && (res.vt > 3 || impact > 2) && Math.random() < 0.15) this.emit('spray', { pos: hp.clone(), speed: Math.max(res.vt, impact) });
+        if ((water || slick) && (res.vt > 3 || impact > 2) && Math.random() < 0.15) this.emit('spray', { pos: hp.clone(), speed: Math.max(res.vt, impact) });
         if (water) inWater = true;
       }
     }
