@@ -285,9 +285,9 @@ class Rig {
   constructor(kind, ctl, outfit, seed, opts = {}) {
     this.kind = kind; this.ctl = ctl; this.o = outfit; this.seed = seed;
     this.pegs = opts.pegs || [V(-0.24, -0.62, 0.0), V(0.24, -0.62, 0.0)]; this.groundY = opts.groundY ?? -1.1;
-    // a vehicle may declare its own helm (opts.helm: the wheel's centre from the seat point, and its tilt); otherwise
-    // the generic one for these controls
-    const C = opts.helm && CTL[ctl]?.col ? { ...CTL[ctl], col: V(...opts.helm.col), tilt: opts.helm.tilt ?? CTL[ctl].tilt } : CTL[ctl] || CTL.none; this.body = outfit.head !== 'bubble' && body() ? person(PEOPLE[seed % PEOPLE.length]) : null;
+    // a vehicle may declare its own control placement (opts.helm: seatControls(), e.g. a wheel's centre and tilt, a
+    // stick's base); otherwise the generic set for these controls
+    const C = opts.helm ? { ...(CTL[ctl] || CTL.none), ...Object.fromEntries(Object.entries(opts.helm).map(([k, v]) => [k, v?.isVector3 ? v.clone() : v])) } : CTL[ctl] || CTL.none; this.body = outfit.head !== 'bubble' && body() ? person(PEOPLE[seed % PEOPLE.length]) : null;
     const HM = this.body ? handModel(this.body) : null; this.armRest = this.body ? armRest(this.body) : null;
     // proportions: the body mesh's own (measured from its joints, so its limbs aren't stretched), else the procedural set
     const D = this.D = HM ? { ...DIM, ...bodyDims(this.body) } : DIM;
@@ -335,7 +335,7 @@ class Rig {
       const dy = st.panTop - 0.012 - minY, tk = Math.tan(st.tilt); let dz = Infinity;
       for (const p of pts) { const y = p.y + dy; if (y < st.panTop + 0.06 || y > st.backTop) continue; dz = Math.min(dz, st.backZ + tk * (y - st.panTop) + 0.008 - (p.z + backT)); }
       this.base.set(0, dy, (Number.isFinite(dz) ? dz : 0) - v.slide);
-      this.seatY = st.panTop; if (st.floor != null) this.floorY = st.floor;
+      this.seatY = st.panTop; this.floorY = st.floor != null && st.feet !== 'pedals' ? st.floor : null;
     }
     this.spinePos = V(0, 0.03, 0).add(this.base);
     const sp = (x, y, z) => V(x, y, z).applyQuaternion(spineQ).add(this.spinePos);
@@ -454,7 +454,7 @@ class Rig {
       this.restHands = true; // resting on the thighs: placed on them once the legs are posed (pose)
     }
     // pedals: rudder pedals swing fore and aft; a car has a throttle pedal under the right foot
-    const pz = -0.86, py = -0.34;
+    const pz = C.pedZ ?? -0.86, py = C.pedY ?? -0.34; // (pedals: the vehicle may say where)
     if (this.ctl === 'wheel') {
       p[B.pedR].set(0.12, py, pz); q[B.pedR].setFromEuler(e.set(-0.5 - s.thr * 0.35, 0, 0));
       p[B.pedL].set(-0.14, py, pz + 0.02); q[B.pedL].setFromEuler(e.set(-0.5, 0, 0));
@@ -1332,9 +1332,26 @@ const CTL_OF = { airline: 'yoke', heli: 'cyclic', driver: 'wheel', boat: 'wheel'
 // role 'crew' = a passenger / second crew member with no controls. Returns the rigs (also on obj.userData.crew).
 // seatGeo's surfaces (partDetail.js: pan top 0.02 + 0.126 x width; the back's front face 2 cm behind the origin, raked
 // back by tilt, up to backH along the rake) in a figure's rig space (seat point p, figure scale s)
+// A seat's surfaces in the figure's rig space (seat point p, figure scale s). fit is either
+//   { at, dims: seatGeo's [width, backH, panL, tilt], floor?, feet? } for a seat built with seatGeo, or
+//   { surf: { panTop, backZ, tilt, backTop }, floor?, feet? } declared directly (part coordinates: the cushion's top
+//      height, the seat back's front face where it meets the cushion (z), its rake back from vertical (radians), the
+//      back's top height);
+// floor: the floor's height under the feet; feet: 'floor' (the default when there's a floor) or 'pedals' (the feet
+// on the controls' pedals instead).
 function seatSurfaces(fit, p, s) {
-  const [w, backH, , tilt] = fit.dims, [ax, ay, az] = fit.at;
-  return { panTop: (ay + 0.02 + 0.126 * w - p[1]) / s, backZ: (az + 0.02 - p[2]) / s, tilt, backTop: (ay + backH * Math.cos(tilt) - p[1]) / s, floor: fit.floor != null ? (fit.floor - p[1]) / s : null };
+  const floor = fit.floor != null ? (fit.floor - p[1]) / s : null, feet = fit.feet || (floor != null ? 'floor' : 'pedals');
+  if (fit.surf) { const f = fit.surf; return { panTop: (f.panTop - p[1]) / s, backZ: (f.backZ - p[2]) / s, tilt: f.tilt ?? 0, backTop: (f.backTop - p[1]) / s, floor, feet }; }
+  const [w, backH, , tilt] = fit.dims, [ax, ay, az] = fit.at; void ax;
+  return { panTop: (ay + 0.02 + 0.126 * w - p[1]) / s, backZ: (az + 0.02 - p[2]) / s, tilt, backTop: (ay + backH * Math.cos(tilt) - p[1]) / s, floor, feet };
+}
+// A seat's own control placement (seat.controls, part units relative to the seat point; seat.helm is the wheel's
+// shorthand { col, tilt }) over the generic CTL set: vectors and lengths scale into the figure's rig space, angles
+// (keys ending in 'tilt' or 'Ang') don't.
+function seatControls(st, s) {
+  const src = { ...(st.helm ? { col: st.helm.col, tilt: st.helm.tilt } : {}), ...(st.controls || {}) }, out = {};
+  for (const [k, v] of Object.entries(src)) { if (v == null) continue; out[k] = Array.isArray(v) ? V(...v).divideScalar(s) : /(tilt|Ang)$/.test(k) ? v : v / s; }
+  return Object.keys(out).length ? out : null;
 }
 export function addCrew(design, objs) {
   const rigs = [];
@@ -1359,8 +1376,8 @@ export function addCrew(design, objs) {
       }
       // a seat built with seatGeo declares it (fit: { at: where its geometry was placed, dims: seatGeo's arguments }), so
       // the figure can sit on its actual surfaces
-      const seat = st.fit && ctl !== 'bars' ? seatSurfaces(st.fit, st.p, st.s || 1) : null;
-      const c = buildCrew(outfit, ctl, { seed: i * 3 + k, colors, pegs, groundY, seat, helm: st.helm || null });
+      const seat = st.fit && ctl !== 'bars' ? seatSurfaces(st.fit, st.p, st.s || 1) : null, ctlSet = seatControls(st, st.s || 1);
+      const c = buildCrew(outfit, ctl, { seed: i * 3 + k, colors, pegs, groundY, seat, helm: ctlSet });
       Object.assign(c.userData.crewRig, { role: st.role || 'pilot', kind, ctl, part: i, seat: k }); // (stations.js names the cockpit views from these)
       c.position.set(...st.p); if (st.quat) c.quaternion.fromArray(st.quat); else if (st.yaw) c.rotation.y = st.yaw;
       if (fit) c.scale.copy(fit); else c.scale.setScalar(st.s || 1);
