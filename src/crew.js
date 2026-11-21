@@ -203,7 +203,7 @@ const wrapU = (u) => Math.atan2(Math.sin(u), Math.cos(u));
 // The face, sculpted (metres): eye sockets, brow, nose bridge and tip, nostril wings, cheekbones, lips, chin, jaw taper
 function faceDisp(u, v) {
   const au = Math.abs(u); let d = 0;
-  d -= 0.013 * sstep(-0.05, -0.75, v) * sstep(0.35, 1.3, au);            // jaw narrows below the cheeks
+  d -= 0.009 * sstep(-0.05, -0.75, v) * sstep(0.35, 1.3, au);            // jaw narrows below the cheeks
   d += 0.009 * gs(u, v + 0.52, 0.3, 0.13);                                 // chin
   d -= 0.0095 * gs(au - 0.37, v - 0.14, 0.16, 0.085);                       // eye sockets
   d += 0.0055 * gs(au - 0.3, v - 0.25, 0.32, 0.05);                         // brow ridge
@@ -211,7 +211,7 @@ function faceDisp(u, v) {
   d += nose * Math.exp(-((u / (0.075 + 0.035 * sstep(0.2, -0.05, v))) ** 2)); // bridge -> tip
   d += 0.0075 * gs(au - 0.13, v + 0.075, 0.06, 0.04);                       // nostril wings
   d += 0.0055 * gs(au - 0.52, v - 0.03, 0.26, 0.1);                         // cheekbones
-  d -= 0.0035 * gs(au - 0.6, v + 0.17, 0.2, 0.12);                          // below the cheekbones
+  d -= 0.0012 * gs(au - 0.6, v + 0.17, 0.2, 0.12);                          // below the cheekbones (soft: no gaunt faces)
   d += 0.0062 * gs(u, v + 0.175, 0.22, 0.035) + 0.0058 * gs(u, v + 0.245, 0.18, 0.03) - 0.0042 * gs(u, v + 0.21, 0.24, 0.011); // lips, mouth line
   d -= 0.004 * gs(au - 1.05, v - 0.22, 0.25, 0.2);                          // temples
   d += 0.008 * gs(au - Math.PI, v - 0.1, 0.9, 0.5);                         // back of the skull
@@ -487,7 +487,7 @@ function figureGeometry(rig) {
   // head: per outfit, all sculpted surfaces on the head bone
   const hc = V(0, 0.135, -0.01);
   if (o.head === 'leather') at(B.head, torusAB(0.062, 0.022, Math.PI * 2, 28).rotateX(Math.PI / 2).translate(0, 0.03, 0), 0xf2f2ee); // silk scarf
-  const HR = [0.081, 0.104, 0.097];
+  const HR = [0.087, 0.112, 0.104]; // a touch generous: heads must read at play distance, not just in close-up
   const face = (withHair = true) => {
     at(B.head, dsphere(hc, ...HR, faceDisp), skin, 'skin');
     for (const sx of [-1, 1]) {
@@ -569,10 +569,16 @@ function figureGeometry(rig) {
     if (o.glasses) aviators();
   } else if (o.head === 'cap') {
     face();
-    at(B.head, dsphere(hc, HR[0] + 0.011, HR[1] + 0.01, HR[2] + 0.012, null, { hole: (u, v) => v < 0.35 }), o.cap, 'fabric');
-    const pk = new THREE.Shape(); pk.moveTo(-0.07, 0); pk.quadraticCurveTo(-0.08, 0.08, 0, 0.1); pk.quadraticCurveTo(0.08, 0.08, 0.07, 0); pk.closePath();
-    const pg = new THREE.ExtrudeGeometry(pk, { depth: 0.005, bevelEnabled: false, curveSegments: 12 }); pg.rotateX(Math.PI / 2); pg.rotateX(-0.12); pg.translate(0, hc.y + 0.06, hc.z - 0.08); at(B.head, pg, o.cap, 'fabric');
-    aviators();
+    // a baseball cap: six-panel crown down to just above the ears, a button on top, the brim forward, curved and tipped down
+    const capR = [HR[0] + 0.012, HR[1] + 0.012, HR[2] + 0.013];
+    at(B.head, dsphere(hc, ...capR, (u, v) => 0.004 * gs(u, v - 0.6, 0.6, 0.4), { w: 64, h: 40, hole: (u, v) => v < (Math.abs(u) < 0.9 ? 0.3 : 0.3 - 0.2 * Math.min(1, (Math.abs(u) - 0.9) / 0.9)) }), o.cap, 'fabric');
+    at(B.head, ellipsoid(V(hc.x, hc.y + capR[1] + 0.002, hc.z), 0.01, 0.006, 0.01), o.cap, 'fabric'); // button
+    const pk = new THREE.Shape(); pk.moveTo(-0.085, 0); pk.quadraticCurveTo(-0.095, 0.07, -0.04, 0.095); pk.quadraticCurveTo(0, 0.102, 0.04, 0.095); pk.quadraticCurveTo(0.095, 0.07, 0.085, 0); pk.quadraticCurveTo(0, 0.02, -0.085, 0); pk.closePath();
+    const pg = new THREE.ExtrudeGeometry(pk, { depth: 0.006, bevelEnabled: true, bevelThickness: 0.0015, bevelSize: 0.0015, bevelSegments: 2, curveSegments: 16 });
+    pg.rotateX(-Math.PI / 2); // shape +Y -> forward (-Z)
+    { const pp = pg.attributes.position; for (let k2 = 0; k2 < pp.count; k2++) { const x = pp.getX(k2); pp.setY(k2, pp.getY(k2) - 2.2 * x * x); } pg.computeVertexNormals(); } // curved down at the sides
+    pg.rotateX(-0.14); const an = dsPoint(hc, ...capR, null, 0, 0.3, 0); pg.translate(an.x, an.y - 0.004, an.z + 0.012); at(B.head, pg, o.cap, 'fabric');
+    aviators(true);
   } else if (o.head === 'leather') {
     face(false);
     at(B.head, dsphere(hc, HR[0] + 0.01, HR[1] + 0.008, HR[2] + 0.01, (u, v) => 0.002 * Math.sin(v * 30), { hole: (u, v) => Math.abs(u) < 0.95 && v < 0.36 && v > -0.6 || v < -0.6 }), 0x5a3a22, 'rubber');
@@ -582,13 +588,14 @@ function figureGeometry(rig) {
     }
     at(B.head, capAB(V(-0.06, hc.y + 0.083, hc.z - 0.05), V(0.06, hc.y + 0.083, hc.z - 0.05), 0.007, 0.007), 0x3a2618, 'rubber');
   }
-  function aviators() { // two teardrop lenses, a bridge and arms back to the ears
+  function aviators(bold = false) { // two big lenses on the face, a bar across the top and arms back to the ears
+    const k = bold ? 1.2 : 1, fr = bold ? 0x15161a : 0xb9a77a;
     for (const sx of [-1, 1]) {
-      at(B.head, dsPatch(hc, ...HR, faceDisp, sx * 0.36, 0.12, 0.2, 0.13, 0.009, { tilt: sx * 0.12, drop: 0.35 }), 0x0e1114, 'glass'); // lens
-      at(B.head, (() => { const g = dsPatch(hc, ...HR, faceDisp, sx * 0.36, 0.12, 0.215, 0.142, 0.0095, { tilt: sx * 0.12, drop: 0.35, rings: 1 }); return g; })(), 0xb9a77a, 'metal'); // rim behind it
-      at(B.head, capAB(V(sx * 0.055, hc.y + 0.03, hc.z - 0.082), V(sx * 0.084, hc.y + 0.02, hc.z - 0.01), 0.0018, 0.0018), 0xb9a77a, 'metal');
+      at(B.head, dsPatch(hc, ...HR, faceDisp, sx * 0.37, 0.12, 0.22 * k, 0.135 * k, 0.01, { tilt: sx * 0.1, drop: 0.3 }), 0x0b0d10, 'glass'); // lens
+      at(B.head, dsPatch(hc, ...HR, faceDisp, sx * 0.37, 0.12, 0.235 * k, 0.15 * k, 0.0098, { tilt: sx * 0.1, drop: 0.3, rings: 1 }), fr, bold ? 'rubber' : 'metal'); // rim
+      at(B.head, capAB(dsPoint(hc, ...HR, faceDisp, sx * 0.62, 0.17, 0.01), V(sx * (HR[0] + 0.004), hc.y + 0.02, hc.z + 0.01), 0.0022 * k, 0.0022 * k), fr, bold ? 'rubber' : 'metal'); // arm
     }
-    at(B.head, capAB(V(-0.012, hc.y + 0.034, hc.z - 0.102), V(0.012, hc.y + 0.034, hc.z - 0.102), 0.0016, 0.0016), 0xb9a77a, 'metal');
+    at(B.head, capAB(dsPoint(hc, ...HR, faceDisp, -0.6, 0.23, 0.011), dsPoint(hc, ...HR, faceDisp, 0.6, 0.23, 0.011), 0.0024 * k, 0.0024 * k), fr, bold ? 'rubber' : 'metal'); // top bar
   }
   // ---- controls ----
   const C = rig.C, blk = 0x15161a, metal = 0x6b7077;

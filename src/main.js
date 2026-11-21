@@ -1379,7 +1379,7 @@ function frame(now) {
       const onScreen = sp.z < 1 && Math.abs(sp.x) < 1.4 && Math.abs(sp.y) < 1.4;
       post.flare(new THREE.Vector2(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5), onScreen ? F.sunVis * (1 - w.W.dark) : 0, w.sun.color, flightCam.aspect);
       // Ultra: sun shafts from the open sky around the sun (also when the sun itself is just behind a ridge or a cloud)
-      post.ambientOcclusion({ radiusK: 0.04, rMin: 1.5, rMax: 8, maxDist: 1200, strength: 1.8 });
+      post.ambientOcclusion({ radiusK: 0.04, rMin: 0.25, rMax: 8, maxDist: 1200, strength: 1.5 }); // (a small floor so close-ups get crisp contact shadows, not metre-wide smudges)
       post.shafts(new THREE.Vector2(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5), sp.z < 1 && w.sunDir.y > -0.03 ? (1 - w.W.dark) * smoothstep(1.8, 1.0, Math.max(Math.abs(sp.x), Math.abs(sp.y))) : 0, w.sun.color);
       const golden = Math.max(0, 1 - Math.abs(w.sunElev - 0.08) / 0.3);
       post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: 1.1 + golden * 0.1 - w.W.dark * 0.25, vignette: 0.3 });
