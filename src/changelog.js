@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.108.0', items: [
+    "The big floodlight poles moved out of the bowl and the dirt turn, so you won't crash into a lamp in the middle of the track.",
+  ] },
   { v: '1.107.0', items: [
     "No more strange jolts when you ride up the jumps in the stunt parks or the canyon jump run-up.",
   ] },
