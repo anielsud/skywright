@@ -74,7 +74,7 @@ export function jumpRun(S, name, realism) {
 }
 // The bowl: round the west turn at speed, riding up the wall.
 export function bowlRun(S, name, realism, speed = 18) {
-  const P = park(S), XS = P.XS, ac = place(S, name, realism, -XS + 60, -30, -1), parts = ac.parts.length;
+  const P = park(S), XS = P.XS, ac = place(S, name, realism, -XS + 60, -30, -1, speed > 28 ? speed : 0), parts = ac.parts.length; // (flat out: already at speed, as off the whoops)
   drive(S, ac, { z: -30, dir: -1, T: 8, speed, until: (a, t) => t.at(-1).x < -XS });
   // in the bowl: steer to hold the 36 m radius line round the centre (-XS, 0)
   const T = S.THREE, fwd = new T.Vector3(), tr = [];
@@ -86,14 +86,14 @@ export function bowlRun(S, name, realism, speed = 18) {
     ac.setControls({ pitch: 0, roll, yaw: 0, throttle: ac.v.dot(fwd) < speed ? 1 : 0, rev: 0, hand: 0 }); ac.brake = 0;
     ac.step(DT, S.F.env); S.F.world.stunts.drive(ac, DT);
     const q = P.Lp(ac.x), right = P.Ld(new T.Vector3(1, 0, 0).applyQuaternion(ac.q));
-    tr.push({ x: q.x, y: q.y, z: q.z, up: ac.up.y, bank: Math.asin(Math.max(-1, Math.min(1, right.y))) * 57.3, st: !!ac.stuntUp, v: ac.v.length() });
+    tr.push({ x: q.x, y: q.y, z: q.z, d: Math.hypot(q.x + XS, q.z) - 30, up: ac.up.y, bank: Math.asin(Math.max(-1, Math.min(1, right.y))) * 57.3, st: !!ac.stuntUp, v: ac.v.length() });
     if (ac.dead || (i > 60 && q.x > -XS && q.z > 0)) break;
   }
   const maxY = Math.max(...tr.map((p) => p.y)), maxBank = Math.max(...tr.map((p) => Math.abs(p.bank)));
   // then on along straight 1 for a moment: back on its wheels, upright
   const after = drive(S, ac, { z: 30, dir: 1, T: 1.5, gas: 0, steer: false }); // (coasting, short of the first kicker)
   const settled = after.slice(-20);
-  return { name, realism, speed, parts, alive: ac.parts.filter((p) => p.alive).length, dead: !!ac.dead, maxY: r2(maxY), maxBank: r2(maxBank), out: r2(tr.at(-1).x), onWall: tr.filter((p) => p.st).length,
+  return { name, realism, speed, parts, alive: ac.parts.filter((p) => p.alive).length, dead: !!ac.dead, maxY: r2(maxY), maxD: r2(Math.max(...tr.filter((p) => p.x < -XS).map((p) => p.d))), rimA: r2(P.bowlInfo.rimA), maxBank: r2(maxBank), out: r2(tr.at(-1).x), onWall: tr.filter((p) => p.st).length,
     after: { x: r2(after.at(-1).x), z: r2(after.at(-1).z), minUp: r2(minUp(after)), up: r2(Math.min(...settled.map((p) => p.up))), wheels: Math.min(...settled.map((p) => p.w)), of: after[0].nw } };
 }
 function longestAir(tr) {
@@ -168,7 +168,7 @@ export function run(opts = {}) {
   const P = park(S), out = { stats: F.world.stunts.stats, site: F.world.stuntPlan.site, loop: [], speeds: [], jump: [], bowl: [], planes: null, evel: [], evelShort: null };
   for (const name of opts.cars || ['Dune Buggy', 'Chomper']) for (const rl of opts.realism || ['pilot']) {
     out.loop.push(loopRun(S, name, rl));
-    if (opts.full !== false) { out.speeds.push(loopSpeeds(S, name, rl)); out.jump.push(jumpRun(S, name, rl)); for (const v of opts.bowlSpeeds || [14, 20, 26]) out.bowl.push(bowlRun(S, name, rl, v)); }
+    if (opts.full !== false) { out.speeds.push(loopSpeeds(S, name, rl)); out.jump.push(jumpRun(S, name, rl)); for (const v of opts.bowlSpeeds || [14, 20, 26, 34]) out.bowl.push(bowlRun(S, name, rl, v)); }
     if (F.world.stunts.evel && opts.evel !== false) out.evel.push(evelRun(S, name, rl));
   }
   if (opts.planes !== false && P.L.tabletop != null) out.planes = planeRuns(S);

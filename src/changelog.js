@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.104.0', items: [
+    "Motorbikes stay in the wall-ride bowl now, even flat out: a catch fence along the top holds you in instead of flinging you over the lip.",
+  ] },
   { v: '1.103.0', items: [
     "Took the engine off your motorbike or car? Now it stays on the ground and rolls down the ramps instead of turning into a glider in the sky.",
   ] },
