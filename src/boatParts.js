@@ -195,17 +195,18 @@ function speedHull(c, lv) {
     b.add(pipe(rows[1], 0.018, 6, 48), chrome); // top frame
     for (const k of [0, n]) b.add(bar(rows[0][k], rows[1][k], 0.03, 0.03, true, 6), chrome);
   }
-  // helm console (starboard) and the passenger's glovebox (port), on the cockpit floor
+  // helm console (starboard) and the passenger's glovebox (port), on the cockpit floor, 67 cm tall (the wheel is
+  // mounted on the helm console's back face: seats[0].helm)
   for (const sx of [1, -1]) {
-    const w = 0.62, x = sx * 0.5, z0 = -1.12, z1 = -0.55, y0 = 0.38, y1 = 0.92;
+    const w = 0.62, x = sx * 0.5, z0 = -1.12, z1 = -0.55, y0 = 0.38, y1 = 1.1;
     const geo = new THREE.BoxGeometry(w, y1 - y0, z1 - z0); geo.translate(x, (y0 + y1) / 2, (z0 + z1) / 2); b.add(geo, gel(WHITE));
     const dash = new THREE.BoxGeometry(w * 0.92, 0.04, 0.3); dash.rotateX(-0.35); dash.translate(x, y1 + 0.005, z1 - 0.14); b.add(dash, M.black());
   }
-  // bucket seats on pedestals, a bench across the back
+  // bucket seats on pedestals (cushion 42 cm above the deck, a helm seat's height), a bench across the back
   for (const sx of [1, -1]) {
-    const ped = new THREE.CylinderGeometry(0.08, 0.12, 0.3, 12); ped.translate(sx * 0.5, 0.54, 0.25); b.add(ped, chrome);
-    const s = seatGeo(0.5, 0.55, 0.46, 0.2); s.translate(sx * 0.5, 0.69, 0.42); b.add(s, sx > 0 ? seatM2 : seatM);
-    if (lv) { const pc = cushion(0.44, 0.1, 0.42, 0.045, 0.014); pc.translate(sx * 0.5, 0.72, 0.2); b.add(pc, sx > 0 ? seatM2 : seatM); b.add(piping(0.43, 0.41, 0.045, 0.765).translate(sx * 0.5, 0, 0.2), sx > 0 ? seatM : seatM2); }
+    const ped = new THREE.CylinderGeometry(0.08, 0.12, 0.38, 12); ped.translate(sx * 0.5, 0.58, 0.25); b.add(ped, chrome);
+    const s = seatGeo(0.5, 0.55, 0.46, 0.2); s.translate(sx * 0.5, 0.77, 0.42); b.add(s, sx > 0 ? seatM2 : seatM);
+    if (lv) { const pc = cushion(0.44, 0.1, 0.42, 0.045, 0.014); pc.translate(sx * 0.5, 0.8, 0.2); b.add(pc, sx > 0 ? seatM2 : seatM); b.add(piping(0.43, 0.41, 0.045, 0.845).translate(sx * 0.5, 0, 0.2), sx > 0 ? seatM : seatM2); }
   }
   { // the bench: a moulded gelcoat base, three upholstered seat cushions with piping, three pleated back cushions
     const base = new THREE.BoxGeometry(1.94, 0.26, 0.56); base.translate(0, 0.53, 2.06); b.add(base, gel(WHITE));
@@ -246,7 +247,7 @@ function speedHull(c, lv) {
     }
   }
   b.to(g); nb.to(g, true);
-  g.userData.seats = [{ p: [0.5, 0.74, 0.3], s: 1, fit: { at: [0.5, 0.69, 0.42], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.433 } }, { p: [-0.5, 0.74, 0.3], s: 1, role: 'crew', fit: { at: [-0.5, 0.69, 0.42], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.433 } }]; // driver to starboard (fit: the bucket seats' seatGeo and the carpet's top, so the crew sit on them, feet on the floor)
+  g.userData.seats = [{ p: [0.5, 0.82, 0.3], s: 1, fit: { at: [0.5, 0.77, 0.42], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.433 }, helm: { col: [0, 0.36, -0.5], tilt: 0.42 } }, { p: [-0.5, 0.82, 0.3], s: 1, role: 'crew', fit: { at: [-0.5, 0.77, 0.42], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.433 } }]; // driver to starboard (fit: the bucket seats' seatGeo and the carpet's top, so the crew sit on them, feet on the floor)
   return g;
 }
 

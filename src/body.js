@@ -144,7 +144,7 @@ export function bodyDims(S = BODY, scale = 1.07) {
 // that leaves the shoulder joints and the neck, in the spine segment's frame (the rig puts its joints there).
 const spineCache = new Map();
 export function spinePose(DIM, flex = 0, protract = 0, S = BODY, scale = 1.07) {
-  if (!S) return null; const key = [S.id, DIM.spine, flex, protract, scale].join('|'); if (spineCache.has(key)) return spineCache.get(key);
+  if (!S) return null; const key = [S.id, DIM.spine, flex, protract, scale].join('|'); if (spineCache.has(key)) return spineCache.get(key); if (spineCache.size > 200) spineCache.clear();
   const { bones: SB, byName: N } = S, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), FRONT = V(0, 0, -1);
   const rotAt = (P, axis, a) => new THREE.Matrix4().makeTranslation(P.x, P.y, P.z).multiply(new THREE.Matrix4().makeRotationAxis(axis, a)).multiply(new THREE.Matrix4().makeTranslation(-P.x, -P.y, -P.z));
   const local = SB.map((b) => { // the rotation each bone itself contributes at its head
@@ -186,7 +186,7 @@ export function armRest(S = BODY, scale = 1.07) {
 // The rig uses it to sit the body in a seat: the buttocks on the cushion, the back against the seat back.
 const torsoCache = new Map();
 export function torsoPoints(DIM, SP = null, S = BODY, scale = 1.07) {
-  if (!S) return null; const key = S.id + '|' + scale + '|' + DIM.spine + '|' + (SP ? SP.key : ''); if (torsoCache.has(key)) return torsoCache.get(key);
+  if (!S) return null; const key = S.id + '|' + scale + '|' + DIM.spine + '|' + (SP ? SP.key : ''); if (torsoCache.has(key)) return torsoCache.get(key); if (torsoCache.size > 60) torsoCache.clear();
   const { bones: SB, byName: N } = S, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), FRONT = V(0, 0, -1);
   const hipC = J('upperleg01.L').add(J('upperleg01.R')).multiplyScalar(0.5), neckB = J('neck01'), up = neckB.clone().sub(hipC);
   const Lh = frame(hipC, up, FRONT).invert();
