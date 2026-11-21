@@ -11,6 +11,8 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { PARTS } from './parts.js';
+import { bodyReady, body, poseBody } from './body.js';
+await bodyReady; // (the people's mesh: loaded once, before any figure is built; without it the procedural figure stands in)
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -385,6 +387,71 @@ function figureGeometry(rig) {
   const R = (i) => new THREE.Matrix4().compose(rig.p[i], rig.q[i], V(1, 1, 1));
   const route = (hex, gloss) => (typeof gloss === 'string' ? gloss : gloss ? (hex === o.visor ? 'glass' : 'paint') : hex === skin ? 'skin' : hex === hair ? 'hair' : (hex === o.glove || hex === o.boot || hex === 0x1d1d1f || hex === 0x15161a) ? 'rubber' : 'fabric');
   const at = (i, geo, hex, gloss = false) => k.add(geo, hex, i, route(hex, gloss), geo.attributes.skinIndex ? null : R(i)); // (a loft is built in rig space)
+  // ---- the body: the skinned human mesh posed onto this rig (body.js), coloured by what the outfit covers ----
+  const BP = o.head !== 'bubble' && body() ? poseBody({ p: rig.p, q: rig.q, B, DIM }) : null;
+  if (BP) {
+    const n = BP.pos.length / 3, cols = new Float32Array(n * 3), slotOf = new Array(n), c = new THREE.Color();
+    const neckSkin = o.head === 'headset' || o.head === 'leather' || o.head === 'cap';
+    for (let i = 0; i < n; i++) {
+      const sg = BP.seg[i], t = BP.along[i]; let hex = o.suit, sl = 'fabric';
+      if (BP.eye[i] === 3) { hex = 0x8a5a52; sl = 'skin'; } else if (BP.eye[i]) { hex = 0xf1ece4; sl = 'paint'; }
+      else if (sg === 'head') { hex = skin; sl = 'skin'; }
+      else if (sg.startsWith('hand')) { hex = o.glove ?? skin; sl = o.glove ? 'rubber' : 'skin'; }
+      else if (sg.startsWith('fArm')) { if (o.tee || o.shirt) { hex = skin; sl = 'skin'; } else if (o.glove && t > 0.82) { hex = o.glove; sl = 'rubber'; } }
+      else if (sg.startsWith('uArm')) { if ((o.tee && t > 0.42) || (o.shirt && t > 0.85)) { hex = skin; sl = 'skin'; } }
+      else if (sg === 'hips') hex = o.suit2;
+      else if (sg === 'spine') { if (t < 0.12) hex = o.suit2; if (neckSkin && t > 1.02) { hex = skin; sl = 'skin'; } }
+      else if (sg.startsWith('thigh')) { hex = o.suit2; if (o.shorts && t > 0.62) { hex = skin; sl = 'skin'; } }
+      else if (sg.startsWith('shin')) { hex = o.shorts ? skin : o.suit2; sl = o.shorts ? 'skin' : 'fabric'; }
+      c.set(hex); cols[i * 3] = c.r; cols[i * 3 + 1] = c.g; cols[i * 3 + 2] = c.b; slotOf[i] = sl;
+    }
+    const full = new THREE.BufferGeometry(); full.setAttribute('position', new THREE.BufferAttribute(BP.pos, 3)); full.setIndex(new THREE.BufferAttribute(new Uint32Array(BP.index), 1)); full.computeVertexNormals();
+    BP.nrm = full.attributes.normal.array;
+    const bySlot = {};
+    for (let f = 0; f < BP.index.length; f += 3) { const a0 = BP.index[f], a1 = BP.index[f + 1], a2 = BP.index[f + 2]; const sl = slotOf[a0] === slotOf[a1] ? slotOf[a0] : slotOf[a2]; (bySlot[sl] ||= []).push(a0, a1, a2); }
+    for (const [sl, ix] of Object.entries(bySlot)) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(BP.pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(BP.nrm, 3)); g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+      g.setAttribute('skinIndex', new THREE.BufferAttribute(BP.skinIndex, 4)); g.setAttribute('skinWeight', new THREE.BufferAttribute(BP.skinWeight, 4)); g.setIndex(ix);
+      k.add(g, 0, B.spine, sl);
+    }
+  }
+  // Clothing grown from the body: the triangles of a region, pushed out along the body's normals by the garment's
+  // thickness (a thicker roll at its open edges: the hem). It keeps the body's skin weights, so it moves with it.
+  // field(i) >= 0 inside the garment; triangles crossing its edge are clipped along the zero line, so hems are clean
+  // curves however the body is meshed. smooth > 0 relaxes the shell (foam, padding: no body detail through it).
+  const bodyShell = (field, off, hex, slot, { hem = 1.6, smooth = 0 } = {}) => {
+    if (!BP) return;
+    const n = BP.pos.length / 3, F = new Float32Array(n); for (let i = 0; i < n; i++) F[i] = BP.eye[i] ? -1 : field(i);
+    const P = [], N = [], SI = [], SW = [], rimV = [], ix = [], vmap = new Map(), col3 = new THREE.Color(hex);
+    const push = (p, nn, src, rim) => { P.push(p.x, p.y, p.z); N.push(nn.x, nn.y, nn.z); for (let q = 0; q < 4; q++) { SI.push(BP.skinIndex[src * 4 + q]); SW.push(BP.skinWeight[src * 4 + q]); } rimV.push(rim ? 1 : 0); return P.length / 3 - 1; };
+    const orig = (i) => { if (!vmap.has(i)) vmap.set(i, push(V(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]), V(BP.nrm[i * 3], BP.nrm[i * 3 + 1], BP.nrm[i * 3 + 2]), i, false)); return vmap.get(i); };
+    const emap = new Map(), cut = (a2, b2) => { const key = a2 < b2 ? a2 * 65536 + b2 : b2 * 65536 + a2; if (emap.has(key)) return emap.get(key);
+      const t2 = F[a2] / (F[a2] - F[b2]), A = V(BP.pos[a2 * 3], BP.pos[a2 * 3 + 1], BP.pos[a2 * 3 + 2]), Bv = V(BP.pos[b2 * 3], BP.pos[b2 * 3 + 1], BP.pos[b2 * 3 + 2]);
+      const nA = V(BP.nrm[a2 * 3], BP.nrm[a2 * 3 + 1], BP.nrm[a2 * 3 + 2]), nB = V(BP.nrm[b2 * 3], BP.nrm[b2 * 3 + 1], BP.nrm[b2 * 3 + 2]);
+      const id = push(A.lerp(Bv, t2), nA.lerp(nB, t2).normalize(), F[a2] >= 0 ? a2 : b2, true); emap.set(key, id); return id; };
+    for (let f = 0; f < BP.index.length; f += 3) {
+      const tri = [BP.index[f], BP.index[f + 1], BP.index[f + 2]], ins = tri.map((i) => F[i] >= 0), nIn = ins.filter(Boolean).length;
+      if (!nIn) continue;
+      if (nIn === 3) { ix.push(orig(tri[0]), orig(tri[1]), orig(tri[2])); continue; }
+      const poly = []; for (let e = 0; e < 3; e++) { const a2 = tri[e], b2 = tri[(e + 1) % 3]; if (F[a2] >= 0) poly.push(orig(a2)); if ((F[a2] >= 0) !== (F[b2] >= 0)) poly.push(cut(a2, b2)); }
+      for (let q = 1; q < poly.length - 1; q++) ix.push(poly[0], poly[q], poly[q + 1]);
+    }
+    if (!ix.length) return;
+    // open edges (cut or the mesh's own) roll into a hem
+    const ecount = new Map(); for (let f = 0; f < ix.length; f += 3) for (let e = 0; e < 3; e++) { const a2 = ix[f + e], b2 = ix[f + (e + 1) % 3], key = a2 < b2 ? a2 * 1e6 + b2 : b2 * 1e6 + a2; ecount.set(key, (ecount.get(key) || 0) + 1); }
+    for (const [key, c] of ecount) if (c === 1) { rimV[Math.floor(key / 1e6)] = 1; rimV[key % 1e6] = 1; }
+    const nv = P.length / 3, Q = new Float32Array(nv * 3);
+    for (let v = 0; v < nv; v++) { const d = (typeof off === 'function' ? off(v) : off) * (rimV[v] ? hem : 1); for (let c = 0; c < 3; c++) Q[v * 3 + c] = P[v * 3 + c] + N[v * 3 + c] * d; }
+    if (smooth) { const nb = Array.from({ length: nv }, () => new Set()); for (let f = 0; f < ix.length; f += 3) for (let e = 0; e < 3; e++) { nb[ix[f + e]].add(ix[f + (e + 1) % 3]); nb[ix[f + (e + 1) % 3]].add(ix[f + e]); }
+      for (let it = 0; it < smooth; it++) { const T = Q.slice(); for (let v = 0; v < nv; v++) { if (rimV[v] || !nb[v].size) continue; let x = 0, y = 0, z = 0; for (const u of nb[v]) { x += T[u * 3]; y += T[u * 3 + 1]; z += T[u * 3 + 2]; } const m = nb[v].size; Q[v * 3] = T[v * 3] * 0.4 + x / m * 0.6; Q[v * 3 + 1] = T[v * 3 + 1] * 0.4 + y / m * 0.6; Q[v * 3 + 2] = T[v * 3 + 2] * 0.4 + z / m * 0.6; } } }
+    const C = new Float32Array(nv * 3); for (let v = 0; v < nv; v++) { C[v * 3] = col3.r; C[v * 3 + 1] = col3.g; C[v * 3 + 2] = col3.b; }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(Q, 3)); g.setAttribute('color', new THREE.BufferAttribute(C, 3));
+    g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4)); g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4)); g.setIndex(ix); g.computeVertexNormals();
+    k.add(g, 0, B.spine, slot);
+  };
+  const wOf = (i, bone) => { let w = 0; for (let q = 0; q < 4; q++) if (BP.skinIndex[i * 4 + q] === bone) w += BP.skinWeight[i * 4 + q]; return w; };
+  const seg = (i) => BP.seg[i], tt = (i) => BP.along[i];
   // ---- body: one skinned surface per chain (torso, neck, each arm, each leg), shared across joints ----
   const P = (i, x, y, z) => V(x, y, z).applyMatrix4(R(i)); // bone-local point -> rig space (rest pose)
   const ax = (i, a) => a.clone().applyQuaternion(rig.q[i]); // bone-local axis -> rig space
@@ -402,7 +469,7 @@ function figureGeometry(rig) {
   const gg = (x, m, w2) => Math.exp(-(((x - m) / w2) ** 2));
   const tSt = tRows.map(([i, y, rx, rz, zo, c, w]) => ({ c: P(i, 0, y, zo), z: ax(i, ZF), rx, rz, col: band(y) ? o.trim : c, b: [B.hips, B.spine], w,
     fF: i === B.spine ? 1 + 0.08 * gg(y, 0.34, 0.05) - 0.03 * gg(y, 0.2, 0.05) : 1, fB: i === B.spine ? 1 + 0.06 * gg(y, 0.37, 0.06) - 0.02 * gg(y, 0.14, 0.05) : 1 + 0.1 * gg(y, -0.04, 0.04) }));
-  at(B.spine, loft(tSt, { seg: 36, n: 2.4, folds: 0.5 }), o.suit);
+  if (!BP) at(B.spine, loft(tSt, { seg: 36, n: 2.4, folds: 0.5 }), o.suit);
   // a layer worn over the chest (vest, life jacket): the torso's own shape, puffed out by k, between two heights
   const shell = (y0, y1, k, col) => loft(tRows.filter((r) => r[0] === B.spine && r[1] >= y0 && r[1] <= y1)
     .map(([i, y, rx, rz, zo]) => ({ c: P(i, 0, y, zo), z: ax(i, ZF), rx: rx * k, rz: rz * k, col, b: [B.spine, B.spine], w: 0 })), { seg: 36, n: 2.4, capA: false, capB: false });
@@ -414,7 +481,7 @@ function figureGeometry(rig) {
   };
   // neck: from the shoulders into the head (or the helmet)
   const neckCol = o.head === 'headset' || o.head === 'leather' || o.head === 'cap' ? skin : o.suit;
-  at(B.spine, loft([[B.spine, 0.42, 0, 0], [B.spine, 0.47, 0.3, 0.004], [B.head, 0.02, 0.75, 0], [B.head, 0.07, 1, -0.005]].map(([i, y, w, zo]) =>
+  if (!BP) at(B.spine, loft([[B.spine, 0.42, 0, 0], [B.spine, 0.47, 0.3, 0.004], [B.head, 0.02, 0.75, 0], [B.head, 0.07, 1, -0.005]].map(([i, y, w, zo]) =>
     ({ c: P(i, 0, y, zo), z: ax(i, ZF), rx: 0.058, rz: 0.06, col: neckCol, b: [B.spine, B.head], w, fF: 0.95, fB: 1.05 })), { seg: 24 }), neckCol, neckCol === skin ? 'skin' : 'fabric');
   // a limb from bone u through the joint into bone f: [s along the bone, rx (across the bend plane), rz, colour]
   const limbLoft = (u, f, lenU, up, fo, join = 0.055, root = null) => {
@@ -445,7 +512,12 @@ function figureGeometry(rig) {
     const bk = front(0, 0.14, 0.022); at(B.spine, boxG(0.07, 0.07, 0.025, bk), 0x9aa0a6, true);
   }
   if (o.hump) at(B.spine, ellipsoid(V(0, D.shoulderUp - 0.06, 0.12), 0.09, 0.12, 0.06, { w: 12 }), o.suit, true); // leathers' aero hump
-  if (o.vest) { // a life jacket: chunky foam front and back, a collar, two buckles
+  if (BP && o.vest) { // a life jacket grown from the torso: thick foam, two black straps round it
+    const torso = (i) => { const w = wOf(i, B.spine) - 0.62; return seg(i) === 'spine' ? Math.min(w, tt(i) - 0.16, 0.95 - tt(i)) : seg(i) === 'head' ? -1 : w; }; // (continuous: smooth armholes)
+    bodyShell(torso, 0.045, o.vest, 'fabric', { hem: 0.85, smooth: 14 }); // foam: bulky and smooth
+    for (const y of [0.42, 0.66]) bodyShell((i) => Math.min(torso(i), 0.028 - Math.abs(tt(i) - y)), 0.051, 0x15161a, 'fabric', { hem: 1, smooth: 14 });
+  }
+  if (!BP && o.vest) { // a life jacket: chunky foam front and back, a collar, two buckles
     at(B.spine, shell(0.075, 0.39, 1.16, o.vest), o.vest);
     at(B.spine, torusAB(0.085, 0.03, Math.PI * 2, 14).rotateX(Math.PI / 2).translate(0, D.shoulderUp + 0.02, 0.0), o.vest);
     // straps round the jacket with side-release buckles, a front zip, and the foam panels' seams
@@ -455,7 +527,15 @@ function figureGeometry(rig) {
     for (const sx of [-1, 1]) { const a0 = front(sx * 0.09, 0.39, 0.024), a1 = front(sx * 0.11, 0.08, 0.026); at(B.spine, capAB(a0, a1, 0.0025, 0.0025, { sz: 0.5 }), 0xc4561a, 'fabric'); } // panel seams
   }
   if (o.mask === true) at(B.spine, shell(0.14, 0.39, 1.07, o.suit2), o.suit2); // survival vest
-  if (o.tee) { // crew-neck collar and a rolled hem round the waist
+  if (BP && !o.tee) { // full suits / jerseys and trousers, grown from the body and relaxed so it reads as cloth over a body
+    const top = (i) => seg(i) === 'spine' ? 0.985 - tt(i) : seg(i) === 'hips' ? 0.2 - (1 - wOf(i, B.spine)) : seg(i).startsWith('uArm') ? 1 : seg(i).startsWith('fArm') ? (o.glove ? 0.86 : 0.97) - tt(i) : -1;
+    bodyShell(top, 0.007, o.suit, 'fabric', { hem: 1.4, smooth: 10 });
+    bodyShell((i) => seg(i) === 'hips' ? 1 : seg(i) === 'spine' ? 0.15 - tt(i) : seg(i).startsWith('thigh') ? 1 : seg(i).startsWith('shin') ? 0.9 - tt(i) : -1, 0.007, o.suit2, 'fabric', { hem: 1.4, smooth: 4 });
+    if (o.stripes) for (const y of [0.42, 0.64]) bodyShell((i) => Math.min(top(i), seg(i) === 'spine' ? 0.025 - Math.abs(tt(i) - y) : -1), 0.0085, o.trim, 'fabric', { hem: 1, smooth: 10 });
+  }
+  if (BP && o.tee) bodyShell((i) => seg(i) === 'spine' || seg(i) === 'hips' ? 0.985 - tt(i) : seg(i).startsWith('uArm') ? 0.42 - tt(i) : -1, 0.005, o.suit, 'fabric'); // the T-shirt
+  if (BP && o.shorts) bodyShell((i) => seg(i) === 'hips' ? 1 : seg(i) === 'spine' ? 0.17 - tt(i) : seg(i).startsWith('thigh') ? 0.62 - tt(i) : -1, 0.008, o.suit2, 'fabric'); // the shorts
+  if (!BP && o.tee) { // crew-neck collar and a rolled hem round the waist
     at(B.spine, torusAB(0.06, 0.007, Math.PI * 2, 32).rotateX(Math.PI / 2).translate(0, D.shoulderUp + 0.005, 0.005), o.suit, 'fabric');
     { const r0 = tRows.find((r) => r[0] === B.spine && r[1] >= 0.075); const h = torusAB(1, 0.006, Math.PI * 2, 40); h.scale(r0[2] * 1.03, r0[3] * 1.03, 1); h.rotateX(Math.PI / 2); h.translate(0, 0.075, r0[4]); at(B.spine, h, o.suit, 'fabric'); }
   }
@@ -475,12 +555,13 @@ function figureGeometry(rig) {
       [0.17, 0.047, 0.049, bc, { fF: 1.15, fB: 1.05 }], [0.235, 0.043, 0.042, bc], [0.268, 0.042, 0.04, bc]];
     const FO = [[0.03, 0.046, 0.043, fc, { fX: 1.06 }], [0.075, 0.049, 0.044, fc, { fX: 1.1, fF: 1.05 }], [0.14, 0.041, 0.036, fc], [0.2, 0.034, 0.028, fc],
       ...(o.glove ? [[D.fore - 0.07, 0.032, 0.025, fc], [D.fore - 0.065, 0.043, 0.04, cuff]] : []), [D.fore - 0.01, o.glove ? 0.044 : 0.031, o.glove ? 0.04 : 0.022, cuff, o.glove ? {} : { fX: 1.06 }]];
-    at(u, ellipsoid(V(0, 0.02, 0.004), 0.06, 0.066, 0.062), o.suit, 'fabric'); // shoulder (under the sleeve)
+    if (!BP) { at(u, ellipsoid(V(0, 0.02, 0.004), 0.06, 0.066, 0.062), o.suit, 'fabric'); // shoulder (under the sleeve)
     at(u, limbLoft(u, f, D.upper, UP, FO), bc, bare ? 'skin' : 'fabric');
     if (o.tee) sleeve(u, f, D.upper, UP, 0.13, 1.16, 0.006, o.suit);
-    else if (o.shirt) sleeve(u, f, D.upper, UP, 0.2, 1.12, 0.006, o.suit);
+    else if (o.shirt) sleeve(u, f, D.upper, UP, 0.2, 1.12, 0.006, o.suit); }
     // a gloved (or bare) hand gripping a bar along local X: palm, four curled fingers in three phalanges, a thumb wrapped
     // over them, and (gloves) a hard knuckle guard on the back
+    if (BP) continue; // (the body mesh has its own hands)
     const hs = o.glove ? 'rubber' : 'skin', hy = D.fore;
     at(f, ellipsoid(V(0, hy + 0.035, 0.002), 0.042, 0.05, 0.026), hand, hs); // palm / back of the hand
     const ctr = V(0, hy + 0.062, -0.016), rad = 0.021;
@@ -498,10 +579,11 @@ function figureGeometry(rig) {
     const bareL = !!o.shorts, lc = bareL ? skin : L2;
     const TH = [[-0.03, 0.084, 0.084, lc, { fB: 1.06 }], [0.04, 0.088, 0.086, lc, { fB: 1.08 }], [0.16, 0.08, 0.077, lc, { fF: 1.1, fX: 1.04 }], [0.3, 0.068, 0.064, lc, { fF: 1.06 }], [0.4, 0.058, 0.056, lc, { fF: 1.05 }]];
     const SH = [[0.04, 0.055, 0.056, lc, { fF: 1.06 }], [0.12, 0.054, 0.058, lc, { fB: 1.22, fX: 1.04 }], [0.22, 0.046, 0.048, lc, { fB: 1.12 }], [D.shin - 0.07, 0.036, 0.036, lc], [D.shin - 0.02, 0.034, 0.034, lc]];
-    at(t, limbLoft(t, s, D.thigh, TH, SH, 0.07, [[B.hips, 0.45], [B.hips, 0.85]]), lc, bareL ? 'skin' : 'fabric');
-    if (bareL) sleeve(t, s, D.thigh, TH, 0.3, 1.05, 0.006, L2); // shorts: loose legs ending above the knee
+    if (!BP) { at(t, limbLoft(t, s, D.thigh, TH, SH, 0.07, [[B.hips, 0.45], [B.hips, 0.85]]), lc, bareL ? 'skin' : 'fabric');
+    if (bareL) sleeve(t, s, D.thigh, TH, 0.3, 1.05, 0.006, L2); } // shorts: loose legs ending above the knee
     // a boot: shaft round the ankle, foot and toe box on a sole with a heel block; motocross boots go up the shin with
     // a shin plate and three buckle straps
+    if (BP) { const sd = s === B.shinR ? 'shinR' : 'shinL'; bodyShell((i) => seg(i) === sd ? tt(i) - (o.bigBoots ? 0.5 : 0.93) : -1, o.bigBoots ? 0.014 : 0.016, o.boot, 'rubber', { hem: 1.2, smooth: 24 }); continue; }
     at(s, capsule(0.11, 0.047, 0.051).translate(0, D.shin - 0.09, 0.0), o.boot, 'rubber');
     at(s, ellipsoid(V(0, D.shin + 0.006, -0.056), 0.049, 0.042, 0.112), o.boot, 'rubber');
     at(s, ellipsoid(V(0, D.shin + 0.0, -0.13), 0.043, 0.033, 0.045), o.boot, 'rubber'); // toe box
@@ -517,10 +599,24 @@ function figureGeometry(rig) {
     }
   }
   // head: per outfit, all sculpted surfaces on the head bone
-  const hc = V(0, 0.135, -0.01);
+  const hc = BP ? BP.head.centre.clone() : V(0, 0.135, -0.01);
   if (o.head === 'leather') at(B.head, torusAB(0.062, 0.022, Math.PI * 2, 28).rotateX(Math.PI / 2).translate(0, 0.03, 0), 0xf2f2ee); // silk scarf
-  const HR = [0.087, 0.112, 0.104]; // a touch generous: heads must read at play distance, not just in close-up
-  const face = (withHair = true) => {
+  const HR = BP ? [BP.head.radii.x, BP.head.radii.y, BP.head.radii.z] : [0.087, 0.112, 0.104]; // a touch generous: heads must read at play distance, not just in close-up
+  const eyesAt = [];
+  const meshFace = (withHair = true) => { // the body mesh's head: irises on its eyeballs, hair grown out of its scalp
+    const hinv = R(B.head).invert(), P3 = (i) => V(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(hinv);
+    for (const e of [1, 2]) {
+      const pts = []; for (let i = 0; i < BP.eye.length; i++) if (BP.eye[i] === e) pts.push(P3(i));
+      if (!pts.length) continue; const c0 = pts.reduce((a, p) => a.add(p), V()).multiplyScalar(1 / pts.length), rr = pts.reduce((m, p) => Math.max(m, p.distanceTo(c0)), 0); eyesAt.push({ c: c0, r: rr });
+      at(B.head, ellipsoid(c0.clone().add(V(0, 0, -rr * 0.93)), rr * 0.48, rr * 0.5, rr * 0.12), 0x4a3524, 'paint'); // iris
+      at(B.head, ellipsoid(c0.clone().add(V(0, 0, -rr * 1.0)), rr * 0.22, rr * 0.23, rr * 0.06), 0x050505, 'paint'); // pupil
+    }
+    if (!withHair) return;
+    // hair: grown from the scalp above the hairline (clean edge, thinning to nothing at it)
+    const edge = (u) => { const au = Math.abs(u); return (au < 0.8 ? 0.48 - 0.12 * (au / 0.8) ** 2 : au < 1.7 ? 0.36 - 0.34 * ((au - 0.8) / 0.9) : -0.02 - 0.4 * Math.min(1, (au - 1.7) / 1.2)) + 0.02 * Math.sin(u * 13); };
+    bodyShell((i) => { if (BP.seg[i] !== 'head') return -1; const p = P3(i), u = Math.atan2(p.x - hc.x, -(p.z - hc.z)), v = Math.asin(Math.max(-1, Math.min(1, (p.y - hc.y) / HR[1]))); return v - edge(u); }, 0.008, hair, 'hair', { hem: 0.2, smooth: 2 });
+  };
+  const face = (withHair = true) => { if (BP) return meshFace(withHair);
     at(B.head, dsphere(hc, ...HR, faceDisp), skin, 'skin');
     for (const sx of [-1, 1]) {
       const eu = sx * 0.37, ev = 0.14, ec = dsPoint(hc, ...HR, faceDisp, eu, ev, -0.0035), fw = V(0, 0, -1);
@@ -603,7 +699,9 @@ function figureGeometry(rig) {
     face();
     // a baseball cap: six-panel crown down to just above the ears, a button on top, the brim forward, curved and tipped down
     const capR = [HR[0] + 0.024, HR[1] + 0.022, HR[2] + 0.026]; // clear of the hair under it
-    at(B.head, dsphere(hc, ...capR, (u, v) => 0.004 * gs(u, v - 0.6, 0.6, 0.4), { w: 64, h: 40, hole: (u, v) => v < (Math.abs(u) < 0.9 ? 0.3 : 0.3 - 0.2 * Math.min(1, (Math.abs(u) - 0.9) / 0.9)) }), o.cap, 'fabric');
+    if (BP) { const hinv2 = R(B.head).invert(), capLine = (u) => (Math.abs(u) < 0.9 ? 0.3 : 0.3 - 0.2 * Math.min(1, (Math.abs(u) - 0.9) / 0.9));
+      bodyShell((i) => { if (seg(i) !== 'head') return -1; const p = V(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(hinv2), u = Math.atan2(p.x - hc.x, -(p.z - hc.z)), v = Math.asin(clamp((p.y - hc.y) / HR[1], -1, 1)); return v - capLine(u); }, 0.022, o.cap, 'fabric', { hem: 1.1 }); }
+    else at(B.head, dsphere(hc, ...capR, (u, v) => 0.004 * gs(u, v - 0.6, 0.6, 0.4), { w: 64, h: 40, hole: (u, v) => v < (Math.abs(u) < 0.9 ? 0.3 : 0.3 - 0.2 * Math.min(1, (Math.abs(u) - 0.9) / 0.9)) }), o.cap, 'fabric');
     at(B.head, ellipsoid(V(hc.x, hc.y + capR[1] + 0.002, hc.z), 0.01, 0.006, 0.01), o.cap, 'fabric'); // button
     const pk = new THREE.Shape(); pk.moveTo(-0.085, 0); pk.quadraticCurveTo(-0.095, 0.07, -0.04, 0.095); pk.quadraticCurveTo(0, 0.102, 0.04, 0.095); pk.quadraticCurveTo(0.095, 0.07, 0.085, 0); pk.quadraticCurveTo(0, 0.02, -0.085, 0); pk.closePath();
     const pg = new THREE.ExtrudeGeometry(pk, { depth: 0.006, bevelEnabled: true, bevelThickness: 0.0015, bevelSize: 0.0015, bevelSegments: 2, curveSegments: 16 });
@@ -622,6 +720,17 @@ function figureGeometry(rig) {
   }
   function aviators(bold = false) { // two big lenses on the face, a bar across the top and arms back to the ears
     const k = bold ? 1.2 : 1, fr = bold ? 0x15161a : 0xb9a77a;
+    if (BP && eyesAt.length === 2) { // on the mesh face: lenses in front of its eyes, a bridge, arms back over the ears
+      const fs = bold ? 'rubber' : 'metal';
+      for (const e of eyesAt) {
+        const lc = e.c.clone().add(V(0, -e.r * 0.15, -e.r * 1.75)), sx = Math.sign(e.c.x - hc.x) || 1;
+        const lens = new THREE.SphereGeometry(1, 32, 16); lens.scale(e.r * 2.0 * k, e.r * 1.55 * k, e.r * 0.35); lens.translate(lc.x, lc.y, lc.z); at(B.head, lens, 0x0b0d10, 'glass');
+        const rim = new THREE.TorusGeometry(1, 0.07, 8, 40); rim.scale(e.r * 2.05 * k, e.r * 1.6 * k, e.r); rim.translate(lc.x, lc.y, lc.z - e.r * 0.05); at(B.head, rim, fr, fs);
+        at(B.head, capAB(lc.clone().add(V(sx * e.r * 2.0 * k, e.r * 0.4, 0)), V(hc.x + sx * HR[0] * 0.98, lc.y + e.r * 0.3, hc.z + HR[2] * 0.15), 0.0022 * k, 0.0022 * k), fr, fs); // arm
+      }
+      const [a0, a1] = eyesAt.map((e) => e.c.clone().add(V(0, e.r * 0.55, -e.r * 1.8))); at(B.head, capAB(a0, a1, 0.0022 * k, 0.0022 * k), fr, fs); // bridge
+      return;
+    }
     for (const sx of [-1, 1]) {
       at(B.head, dsPatch(hc, ...HR, faceDisp, sx * 0.37, 0.12, 0.22 * k, 0.135 * k, 0.01, { tilt: sx * 0.1, drop: 0.3 }), 0x0b0d10, 'glass'); // lens
       at(B.head, dsPatch(hc, ...HR, faceDisp, sx * 0.37, 0.12, 0.235 * k, 0.15 * k, 0.0098, { tilt: sx * 0.1, drop: 0.3, rings: 1 }), fr, bold ? 'rubber' : 'metal'); // rim
