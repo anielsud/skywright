@@ -278,7 +278,7 @@ function jetSkiHull(c, lv) {
   }
   b.to(g);
   // ridden like a motorbike (crew.js 'bars'): feet in the footwells, hands on the handlebar grips
-  g.userData.seats = [{ p: [0, 0.82, 0.32], s: 1, ctl: 'bars', rider: 'boat', pegs: [[-0.36, 0.33, 0.28], [0.36, 0.33, 0.28]], ground: 0.3 }];
+  g.userData.seats = [{ p: [0, 0.82, 0.32], s: 1, ctl: 'bars', rider: 'boat', pegs: [[-0.36, 0.33, 0.04], [0.36, 0.33, 0.04]], ground: 0.3 }];
   g.userData.grips = [{ o: g, p: V(-0.33, 1.0, -0.24) }, { o: g, p: V(0.33, 1.0, -0.24) }];
   return g;
 }
@@ -310,16 +310,17 @@ function pontoonHull(c, lv) {
   }
   // couches along the sides and across the stern, the helm console and its seat
   const cush = vinyl(WHITE), trim = vinyl(0x1d4e89);
-  for (const sx of [1, -1]) { const s = new THREE.BoxGeometry(0.55, 0.38, 3.2); s.translate(sx * 0.92, 0.72, 0.9); b.add(s, cush); const bk = new THREE.BoxGeometry(0.14, 0.4, 3.2); bk.translate(sx * 1.16, 1.1, 0.9); b.add(bk, trim); }
+  // (the starboard couch starts behind the helm seat, which would otherwise stand in it)
+  for (const sx of [1, -1]) { const z0 = sx > 0 ? 0.05 : -0.7, L = 2.5 - z0; const s = new THREE.BoxGeometry(0.55, 0.38, L); s.translate(sx * 0.92, 0.72, z0 + L / 2); b.add(s, cush); const bk = new THREE.BoxGeometry(0.14, 0.4, L); bk.translate(sx * 1.16, 1.1, z0 + L / 2); b.add(bk, trim); }
   { const s = new THREE.BoxGeometry(1.3, 0.38, 0.55); s.translate(0, 0.72, 2.75); b.add(s, cush); }
-  { const con = new THREE.BoxGeometry(0.6, 0.62, 0.55); con.translate(0.85, 0.84, -1.4); b.add(con, gel(WHITE)); const dash = new THREE.BoxGeometry(0.56, 0.04, 0.3); dash.rotateX(-0.3); dash.translate(0.85, 1.16, -1.3); b.add(dash, M.black());
-    const ped = new THREE.CylinderGeometry(0.07, 0.1, 0.3, 12); ped.translate(0.85, 0.68, -0.4); b.add(ped, M.chrome()); const s = seatGeo(0.5, 0.55, 0.46, 0.2); s.translate(0.85, 0.83, -0.25); b.add(s, cush); }
+  { const con = new THREE.BoxGeometry(0.6, 0.72, 0.55); con.translate(0.85, 0.89, -1.4); b.add(con, gel(WHITE)); const dash = new THREE.BoxGeometry(0.56, 0.04, 0.3); dash.rotateX(-0.3); dash.translate(0.85, 1.26, -1.3); b.add(dash, M.black());
+    const ped = new THREE.CylinderGeometry(0.07, 0.1, 0.36, 12); ped.translate(0.85, 0.71, -0.3); b.add(ped, M.chrome()); const s = seatGeo(0.5, 0.55, 0.46, 0.2); s.translate(0.85, 0.89, -0.15); b.add(s, cush); }
   if (lv) { // bimini top on two hoops
     const top = new THREE.BoxGeometry(2.3, 0.03, 2.2); top.translate(0, 2.12, -0.6); b.add(top, vinyl(0x1d4e89));
     for (const z of [-1.6, 0.4]) b.add(pipe([V(-1.25, y1 - 0.02, z), V(-1.2, 1.9, z), V(-0.9, 2.11, z), V(0.9, 2.11, z), V(1.2, 1.9, z), V(1.25, y1 - 0.02, z)], 0.022, 6, 40), alu);
   }
   b.to(g);
-  g.userData.seats = [{ p: [0.85, 0.88, -0.38], s: 1 }];
+  g.userData.seats = [{ p: [0.85, 0.94, -0.28], s: 1, fit: { at: [0.85, 0.89, -0.15], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.53 }, helm: { col: [0, 0.4, -0.5], tilt: 0.45 } }]; // (fit: the helm seat's seatGeo, feet on the deck; the wheel on the console's back face)
   return g;
 }
 
@@ -446,7 +447,7 @@ function wheelhouse(c, lv) {
     const base = new THREE.CylinderGeometry(0.08, 0.1, 0.2, 10); base.translate(0, H1 + 0.16, -0.7); b.add(base, M.black());
     for (const [sx, col] of [[-1, 0xff2020], [1, 0x2050ff]]) { const l = new THREE.SphereGeometry(0.09, 10, 8); l.translate(sx * 0.55, H1 + 1.42, 0.5); b.add(l, PM.light(col)); } }
   b.to(g);
-  g.userData.seats = [{ p: [0.4, 0.47, -0.05], s: 1, ctl: 'wheel' }];
+  g.userData.seats = [{ p: [0.4, 0.47, -0.05], s: 1, ctl: 'wheel', fit: { at: [0.4, 0.42, 0.1], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.02 }, helm: { col: [0, 0.36, -0.5], tilt: 0.42 } }]; // (fit: the helm chair's seatGeo, feet on the deck; the wheel on the helm's back face)
   return g;
 }
 // Water cannon (a fire monitor): a pedestal, a swivel body and a nozzle aimed forward and up. The smoke button turns
