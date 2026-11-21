@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { PARTS } from './parts.js';
-import { bodyReady, body, person, poseBody, handModel, torsoPoints, bodyDims, spinePose, armRest } from './body.js';
+import { bodyReady, body, person, poseBody, handModel, torsoPoints, bodyDims, spinePose, armRest, headSize, limbRadii } from './body.js';
 const LIP_BONES = /^oris/; // the mouth's ring muscle in the body mesh's skeleton: its skin is the lips
 await bodyReady; // (the people's mesh: loaded once, before any figure is built; without it the procedural figure stands in)
 
@@ -280,6 +280,195 @@ function ikTwo(S, T, a, b, pole, outE, outP = null) {
   return outE.copy(S).addScaledVector(d, x).addScaledVector(p, y);
 }
 
+// ---------- cockpit obstacles ----------
+// A seat may declare what's round it (seat.obstacles, in part coordinates like the seat itself), and the posture solve
+// keeps the body clear of it (postureCost: head, torso, legs and feet; comfortArm: the arms, per candidate):
+//   { plane: [nx, ny, nz], at: [x, y, z] }   the body stays on the side the normal points to (a floor, a wall)
+//   { box: [cx, cy, cz], size: [sx, sy, sz], rot?: [rx, ry, rz] }   a solid box (a panel, a console; rot: Euler XYZ)
+//   { capsule: [[ax, ay, az], [bx, by, bz]], r }   a solid rod (a column, a frame tube)
+//   { inside: [[z, w, h, yc, n?, wb?], ...], ex?, ey?, below?, wBelow?, top? }   a space the body stays inside (a
+//      canopy, a cab, a bubble), centred on x = 0: its cross-section at z (rows in z order, interpolated; no constraint
+//      outside their range) is |x / w|^ex + |(y - yc) / h|^ey <= 1 (an ellipse by default; a row's n sets both
+//      exponents; w = 0 closes it there). Below yc it goes on down as vertical walls (below: 'walls', the default, wb
+//      apart or wBelow x as wide) or mirrors ('mirror': an ellipsoid); above `top` it is open (a well's walls stop at
+//      the coaming).
+//   { well: [ring, ring, ...] }   a well the body stays inside (a cockpit tub): rings of [x, y, z] points round its wall,
+//      the top ring first, each with as many points (point k of each ring on one line down the wall). Inside it, at a
+//      height, its section is the polygon through each line's point there (a line's top point above it: the wall goes
+//      on straight up, as the canopy's skirt does); above every ring's top and below its bottom it is open.
+// Each may also name the body parts it concerns (parts: any of head, torso, arms, hands, legs, feet; all by default), a
+// margin (the clearance wanted, rig metres; 2 cm for the head, 1 cm otherwise) and a name (for clearance reports).
+// A seat that declares obstacles also gets its own controls' levers as obstacles for the legs (stick, throttle, yoke
+// column), from where the controls put them.
+function prepObstacle(d) {
+  const o = { name: d.name || '', parts: d.parts || null, margin: d.margin };
+  if (d.plane) { o.k = 'plane'; o.n = V(...d.plane).normalize(); o.d = o.n.dot(V(...d.at)); }
+  else if (d.box) { o.k = 'box'; o.c = V(...d.box); o.h = V(...d.size).multiplyScalar(0.5); const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(...(d.rot || [0, 0, 0]))); o.ax = [V(1, 0, 0), V(0, 1, 0), V(0, 0, 1)].map((a) => a.applyQuaternion(q)); }
+  else if (d.capsule) { o.k = 'cap'; o.a = V(...d.capsule[0]); o.b = V(...d.capsule[1]); o.r = d.r || 0; }
+  else if (d.well) { o.k = 'well'; o.rings = d.well; o.y0 = Math.min(...d.well.at(-1).map((p) => p[1])); o.y1 = Math.max(...d.well[0].map((p) => p[1])); o.xz = new Float64Array(d.well[0].length * 2);
+    const R0 = d.well[0], n = R0.length; o.cx = R0.reduce((a, p) => a + p[0], 0) / n; o.cz = R0.reduce((a, p) => a + p[2], 0) / n; o.ang = R0.map((p) => Math.atan2(p[0] - o.cx, p[2] - o.cz)); }
+  else if (d.inside) { o.k = 'tube'; o.rows = d.inside; o.ex = d.ex ?? 2; o.ey = d.ey ?? 2; o.below = d.below || 'walls'; o.wBelow = d.wBelow ?? 1; o.top = d.top ?? Infinity; }
+  return o;
+}
+// a tube's cross-section at z: [w, h, yc, n, wb] (null outside its rows; one shared array, read it at once)
+const _sec = [0, 0, 0, null, null];
+function tubeSection(o, z) {
+  const R = o.rows, n = R.length; if (z < R[0][0] || z > R[n - 1][0]) return null;
+  let lo = 0, hi = n - 1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (R[m][0] < z) lo = m; else hi = m; } // (rows in z order)
+  const a = R[lo], b = R[hi], t = (z - a[0]) / (b[0] - a[0] || 1), f = (k) => (a[k] ?? 0) + ((b[k] ?? 0) - (a[k] ?? 0)) * t;
+  _sec[0] = f(1); _sec[1] = f(2); _sec[2] = f(3); _sec[3] = a[4] != null ? f(4) : null; _sec[4] = a[5] != null ? f(5) : null; return _sec;
+}
+// how far a point (x, y) is inside a section (negative: outside), to first order (exact for a circle, and near the edge)
+function sectionClear(o, sec, x, y) {
+  if (y > o.top) return Infinity;
+  let [w, h, yc, n, wb] = sec, yy = y - yc; const ex = n ?? o.ex, ey = n ?? o.ey;
+  if (yy < 0) { if (o.below === 'walls') { yy = 0; w = wb ?? w * o.wBelow; } else yy = -yy; }
+  if (w < 1e-4 || h < 1e-4) return -Math.hypot(x, yy); // (closed here)
+  const ax = Math.abs(x) / w, ay = yy / h, lim = Math.min(w, h);
+  if (ex === 2 && ey === 2) { const G = Math.hypot(ax, ay); return G < 1e-6 ? lim : Math.min(lim, (1 - G) / Math.max(Math.hypot(ax / w, ay / h) / G, 1e-6)); } // (an ellipse)
+  const F = ax ** ex + ay ** ey, m = (ex + ey) / 2;
+  if (F < 1e-12) return lim;
+  const k = F ** (1 / m - 1) / m, gx = (k * ex * ax ** (ex - 1)) / w, gy = (k * ey * ay ** (ey - 1)) / h;
+  return Math.min(lim, (1 - F ** (1 / m)) / Math.max(Math.hypot(gx, gy), 1e-6));
+}
+// A sphere (centre c, radius r, part space) against an obstacle: the gap between them (negative: how deep it is in).
+// A sphere inside a tube: its slices at z - r .. z + r, each a disc inside that z's section.
+const _ov = V();
+const SLICES = [0, -0.5, 0.5, -1, 1], SLICES3 = [0, -1, 1];
+function obstacleClear(o, c, r, coarse = false) {
+  if (o.k === 'plane') return o.n.dot(c) - o.d - r;
+  if (o.k === 'box') {
+    _ov.copy(c).sub(o.c); let out = 0, inn = -Infinity;
+    for (let i = 0; i < 3; i++) { const q = Math.abs(_ov.dot(o.ax[i])) - o.h.getComponent(i); if (q > 0) out += q * q; inn = Math.max(inn, q); }
+    return (out > 0 ? Math.sqrt(out) : inn) - r;
+  }
+  if (o.k === 'cap') {
+    const abx = o.b.x - o.a.x, aby = o.b.y - o.a.y, abz = o.b.z - o.a.z, L2 = abx * abx + aby * aby + abz * abz || 1;
+    const t = clamp(((c.x - o.a.x) * abx + (c.y - o.a.y) * aby + (c.z - o.a.z) * abz) / L2, 0, 1);
+    return Math.hypot(c.x - o.a.x - abx * t, c.y - o.a.y - aby * t, c.z - o.a.z - abz * t) - o.r - r;
+  }
+  if (o.k === 'well') return wellClear(o, c, r);
+  let best = Infinity;
+  for (const f of coarse ? SLICES3 : SLICES) { const sec = tubeSection(o, c.z + f * r); if (sec) best = Math.min(best, sectionClear(o, sec, c.x, c.y) - r * Math.sqrt(1 - f * f)); }
+  return best;
+}
+// A sphere in a well: its centre's height's section (each wall line's point there), the distance to the polygon's edges
+// (negative outside it) less the radius
+function wellClear(o, c, r) {
+  if (c.y > o.y1 || c.y < o.y0) return Infinity;
+  const R = o.rings, n = R[0].length, xz = o.xz, col = (k) => { // wall line k's point at the centre's height
+    let x = R[0][k][0], z = R[0][k][2];
+    if (c.y < R[0][k][1]) for (let j = 1; j < R.length; j++) { const a = R[j - 1][k], b = R[j][k]; if (c.y >= b[1] || j === R.length - 1) { const t = clamp((a[1] - c.y) / (a[1] - b[1] || 1), 0, 1); x = a[0] + (b[0] - a[0]) * t; z = a[2] + (b[2] - a[2]) * t; break; } }
+    xz[k * 2] = x; xz[k * 2 + 1] = z;
+  };
+  // only the wall near the point's bearing from the well's middle (the section is near enough star-shaped round it): the
+  // nearest edge is among them, and whether the point is inside is which side of the edge it crosses
+  const th = Math.atan2(c.x - o.cx, c.z - o.cz); let k0 = 0, best = Infinity;
+  for (let k = 0; k < n; k++) { const d = Math.abs(Math.atan2(Math.sin(o.ang[k] - th), Math.cos(o.ang[k] - th))); if (d < best) { best = d; k0 = k; } }
+  const W = Math.min(4, n >> 1), ks = []; for (let i = -W; i <= W; i++) { const k = (k0 + i + n) % n; ks.push(k); col(k); }
+  let d2 = Infinity, inside = true;
+  for (let i = 1; i < ks.length; i++) {
+    const ja = ks[i - 1], jb = ks[i], ax = xz[ja * 2], az = xz[ja * 2 + 1], ex = xz[jb * 2] - ax, ez = xz[jb * 2 + 1] - az;
+    const t = clamp(((c.x - ax) * ex + (c.z - az) * ez) / (ex * ex + ez * ez || 1), 0, 1), dx = c.x - ax - ex * t, dz = c.z - az - ez * t, dd = dx * dx + dz * dz;
+    if (dd < d2) { d2 = dd; inside = (ex * (c.z - az) - ez * (c.x - ax)) * (ex * (o.cz - az) - ez * (o.cx - ax)) >= 0; } // (on the middle's side of it)
+  }
+  return (inside ? 1 : -1) * Math.sqrt(d2) - r;
+}
+// The seat's obstacles, prepared once per rig: part space, with the rig -> part transform (seat point, figure scale,
+// the seat's turn) and the controls' levers added. null when the seat declares none.
+function seatObstaclesOf(rig) {
+  if (rig._obs !== undefined) return rig._obs;
+  const d = rig.opts.seat?.obstacles; if (!d?.list?.length) return (rig._obs = null);
+  const X = { p: V(...d.p), s: d.s, q: d.q ? new THREE.Quaternion().fromArray(d.q) : new THREE.Quaternion(), list: d.list.map(prepObstacle) };
+  X.toPart = (c, out = V()) => out.copy(c).multiplyScalar(X.s).applyQuaternion(X.q).add(X.p);
+  const C = rig.C, lever = (name, a, b, r) => X.list.push({ k: 'cap', name, parts: ['legs'], a: X.toPart(a), b: X.toPart(b), r: r * X.s });
+  if (C.stickBase && (rig.ctl === 'stick' || rig.ctl === 'cyclic')) lever('stick', C.stickBase, C.stickBase.clone().add(V(0, C.stickLen, 0)), 0.022);
+  if (C.thrBase && rig.ctl === 'stick') lever('throttle', C.thrBase, V(0, C.thrLen, 0).applyEuler(new THREE.Euler(-0.55 + 0.4 * 1.1, 0, 0)).add(C.thrBase), 0.02);
+  if (C.colBase && rig.ctl === 'yoke') lever('column', C.colBase, V(0, C.colLen, 0).applyEuler(new THREE.Euler(0.42, 0, 0)).add(C.colBase), 0.035);
+  // an obstacle the body (as first posed: the relaxed start, or a cached solve) is already deep in is one this person
+  // can't get clear of by sitting differently (a resized cockpit buried in its body): it is left out, rather than the
+  // posture contorting against it
+  const P = V(); for (const sp of bodySpheres(rig, rig.floorY != null ? POSE_OBST : POSE_OBST_PEDALS)) { X.toPart(sp.c, P); for (const o of X.list) if (!o.parts || o.parts.includes(sp.g)) if (obstacleClear(o, P, sp.r * X.s) / X.s < -DEEP_IN) o.skip = true; }
+  X.list = X.list.filter((o) => !o.skip);
+  return (rig._obs = X.list.length ? X : null);
+}
+// The posed body as spheres (rig space), by part: the head (measured, or the helmet's shell), the torso (its measured
+// cross-sections), each arm, hand, thigh, shin and foot as a capsule round its bone (measured thickness plus clothing).
+function bodySpheres(rig, groups) {
+  const p = rig.p, q = rig.q, D = rig.D, o = rig.o, out = [], want = (g) => !groups || groups.includes(g);
+  const M = (rig._bodyM ||= { head: rig.body ? headSize(rig.body) : null, limb: rig.body ? limbRadii(rig.body) : null });
+  const pad = o.vest ? 0.02 : o.tee || o.shirt ? 0.004 : 0.01, LR = M.limb || LIMB0;
+  const seg = (g, name, a, b, r) => { const n = Math.max(2, Math.ceil(a.distanceTo(b) / r) + 1); for (let i = 0; i < n; i++) out.push({ g, name, c: a.clone().lerp(b, i / (n - 1)), r }); };
+  const limb = (g, name, i, a, b, L) => { const d = V(L.off[0], 0, L.off[1]).applyQuaternion(q[i]); seg(g, name, a.clone().add(d), b.clone().add(d), L.r + pad); }; // (round the flesh's middle, off the bone)
+  if (want('head')) {
+    const helm = o.head === 'helmet' || o.head === 'fullface' || o.head === 'bubble', big = o.head === 'bubble' ? 1.18 : 1;
+    const hc = M.head ? M.head.centre : V(0, 0.135, -0.01), r = helm ? 0.14 * big : M.head ? (M.head.radii.y + M.head.radii.z) / 2 + 0.01 : 0.115;
+    out.push({ g: 'head', name: 'head', c: hc.clone().applyQuaternion(q[B.head]).add(p[B.head]), r });
+  }
+  if (want('torso') && rig.torsoEll) rig.torsoEll.forEach((e, i) => { if (i % 2) return;
+    const r = e.rz; for (const sx of [-1, 0, 1]) out.push({ g: 'torso', name: 'torso', c: V(e.cx + sx * Math.max(0, e.rx - r), e.y, e.cz).applyQuaternion(q[B.spine]).add(p[B.spine]), r }); });
+  for (const [k, uA, fA, hA, th, sh] of [['R', B.uArmR, B.fArmR, B.handR, B.thighR, B.shinR], ['L', B.uArmL, B.fArmL, B.handL, B.thighL, B.shinL]]) {
+    if (want('arms')) { limb('arms', 'uArm' + k, uA, p[uA], p[fA], LR.uArm); limb('arms', 'fArm' + k, fA, p[fA], p[hA], LR.fArm); }
+    if (want('hands')) seg('hands', 'hand' + k, p[hA], V(0, 0.09, 0).applyQuaternion(q[hA]).add(p[hA]), 0.032);
+    const ankle = V(0, D.shin, 0).applyQuaternion(q[sh]).add(p[sh]);
+    if (want('legs')) { limb('legs', 'thigh' + k, th, p[th], p[sh], LR.thigh); limb('legs', 'shin' + k, sh, p[sh], ankle, LR.shin); }
+    if (want('feet')) { // the measured foot (heel to toe, along the sole) in its shoe: flat on a floor (poseBody levels it), else square to the shin as it stands (the shin bone's frame: +Y down it, -Z forward)
+      const F = LR.foot || { toe: -0.19, heel: 0.05, sole: 0.07, r: 0.045 }, shoe = o.bigBoots ? 0.04 : 0.025, r = F.r + shoe, h = r - F.sole - shoe; // (a shoe's sole and toe box: a couple of centimetres round the foot)
+      const at = (z) => (rig.floorY == null ? V(0, D.shin - h, z).applyQuaternion(q[sh]).add(p[sh]) : ankle.clone().add(V(0, h, z)));
+      seg('feet', 'foot' + k, at(F.heel + shoe - r), at(F.toe - shoe + r), r); }
+  }
+  return out;
+}
+// The obstacles' cost for the posed body's parts in `groups`: each sphere closer than the margin to an obstacle, by the
+// square of how much closer (in centimetres, x4: the wheel rim's `hit` term's scale).
+const LIMB0 = { uArm: { r: 0.045, off: [0, 0] }, fArm: { r: 0.038, off: [0, 0] }, thigh: { r: 0.075, off: [0, 0] }, shin: { r: 0.05, off: [0, 0] } }; // (the procedural figure's)
+const DEEP_IN = 0.06; // (rig metres: deeper than this in an obstacle at the start, it's out of reach; see seatObstaclesOf)
+const HEAD_MARGIN = 0.02; // (the head: 2 cm, a helmet's or a head's own size is only near enough a sphere)
+// (the arms: comfortArm, per candidate; the feet only when they stand on a floor: on pedals they're where the pedals are)
+const POSE_OBST = ['head', 'torso', 'legs', 'feet'], POSE_OBST_PEDALS = ['head', 'torso', 'legs'];
+function obstacleCost(rig, groups = rig.floorY != null ? POSE_OBST : POSE_OBST_PEDALS) {
+  const X = seatObstaclesOf(rig); if (!X) return 0;
+  let c = 0; const P = V();
+  for (const sp of bodySpheres(rig, groups)) { X.toPart(sp.c, P);
+    for (const o of X.list) { if (o.parts && !o.parts.includes(sp.g)) continue; const m = o.margin ?? (sp.g === 'head' ? HEAD_MARGIN : 0.01), cl = obstacleClear(o, P, sp.r * X.s) / X.s; if (cl < m) c += ((m - cl) / 0.01) ** 2 * 4; } }
+  return c;
+}
+// For comfortArm: the obstacles an arm from shoulder S could reach (null if none), then each candidate's cost (the elbow,
+// the middle of the upper arm and of the forearm, as spheres of the measured arm's thickness). Refining round the last
+// answer (every frame, and through the posture solve) the elbow moves a few centimetres at most: only the obstacles
+// within 15 cm of where the arm was are tested.
+function armObstacles(rig, S, k) {
+  const X = seatObstaclesOf(rig); if (!X) return null;
+  const LR = (rig._bodyM ||= { head: rig.body ? headSize(rig.body) : null, limb: rig.body ? limbRadii(rig.body) : null }).limb || LIMB0, pad = rig.o.vest ? 0.02 : rig.o.tee || rig.o.shirt ? 0.004 : 0.01;
+  // (round the bones: the arms' flesh is near enough centred on them, and the candidate's bone frames aren't built yet)
+  const rU = LR.uArm.r + Math.hypot(...LR.uArm.off) + pad, rF = LR.fArm.r + Math.hypot(...LR.fArm.off) + pad;
+  const P = X.toPart(S), reach = (rig.D.upper + rig.D.fore + 0.1) * X.s, el = rig.armSol?.[k] && rig.p[k === 'R' ? B.fArmR : B.fArmL];
+  const E = el && X.toPart(el), F = el && X.toPart(el.clone().lerp(rig.p[k === 'R' ? B.handR : B.handL], 0.5));
+  const list = X.list.filter((o) => (!o.parts || o.parts.includes('arms')) && (el ? Math.min(obstacleClear(o, E, rU * X.s), obstacleClear(o, F, rF * X.s)) < 0.15 * X.s : o.k === 'tube' || o.k === 'well' || obstacleClear(o, P, 0) < reach));
+  // (the middle of the upper arm only where an obstacle is near the shoulder: the elbow and the forearm usually decide)
+  return list.length ? { X, list, rU: rU * X.s, rF: rF * X.s, P: V(), A: V(), to: 3, from: list.some((o) => obstacleClear(o, P, 0) < (rig.D.upper * 0.5 + rU + 0.05) * X.s) ? 0 : 1 } : null;
+}
+function armObstacleCost(OB, S, E, W) {
+  if (!OB) return 0;
+  const { X, list, P, A } = OB; let c = 0;
+  for (let i = OB.from; i < OB.to; i++) {
+    X.toPart(i === 0 ? A.copy(S).lerp(E, 0.5) : i === 1 ? A.copy(E) : A.copy(E).lerp(W, 0.5), P); const r = i === 2 ? OB.rF : OB.rU;
+    for (const o of list) { const m = o.margin ?? 0.01, cl = obstacleClear(o, P, r, true) / X.s; if (cl < m) c += ((m - cl) / 0.01) ** 2 * 4; }
+  }
+  return c;
+}
+// Clearances of the posed body (every part, the hands too) from the seat's obstacles: per body part, the smallest gap
+// (rig metres; negative: in it) and the obstacle it's to. For checking a cockpit's fit (tools, debug views).
+export function crewClearance(rig) {
+  const X = seatObstaclesOf(rig); if (!X) return null;
+  const out = {}, P = V();
+  for (const sp of bodySpheres(rig, null)) { X.toPart(sp.c, P);
+    for (const o of X.list) { if (o.parts && !o.parts.includes(sp.g)) continue; const cl = obstacleClear(o, P, sp.r * X.s) / X.s; if (!out[sp.name] || cl < out[sp.name].clear) out[sp.name] = { clear: +cl.toFixed(4), to: o.name || o.k }; } }
+  return out;
+}
+// The prepared obstacles and the body spheres (for drawing them: part space, and rig space)
+export function crewObstacles(rig) { const X = seatObstaclesOf(rig); return X && { ...X, spheres: bodySpheres(rig, null) }; }
+
 const POSTURES = new Map(); // (solved postures: person, seat and controls -> v)
 class Rig {
   constructor(kind, ctl, outfit, seed, opts = {}) {
@@ -374,6 +563,7 @@ class Rig {
             const qd = Math.hypot((L.x - (e.cx + (e1.cx - e.cx) * w)) / rx, (L.z - (e.cz + (e1.cz - e.cz) * w)) / rz); if (qd < 1) hit = Math.max(hit, (1 - qd) * Math.min(rx, rz)); } } }
       parts.helm = ((v.colZ || 0) / 0.08) ** 2 + ((v.colY || 0) / 0.08) ** 2; parts.hit = hit > 0 ? (hit / 0.01) ** 2 * 4 : 0; c += parts.hit;
     }
+    parts.obst = obstacleCost(this); c += parts.obst; // (the seat's declared obstacles: canopy, panel, walls; see obstacleCost)
     return c;
   }
   // The posture for this person in this seat at these controls: coordinate descent over v from a relaxed start,
@@ -533,6 +723,7 @@ class Rig {
       const ELL = this.torsoEll, spP = p[B.spine], ap = V();
       // [from (0 shoulder / 1 elbow), to (1 elbow / 2 wrist), how far, the arm's radius there]
       const SAMPLES = [[0, 1, 0.45, 0.05], [0, 1, 0.7, 0.048], [0, 1, 1.0, 0.045], [1, 2, 0.25, 0.042], [1, 2, 0.5, 0.038], [1, 2, 0.75, 0.033]];
+      const OB = armObstacles(this, S, k); // (the seat's obstacles within the arm's reach: walls, canopy, panel)
       const score = (th, ph, out) => {
         Yt.copy(Y0).multiplyScalar(Math.cos(th)).addScaledVector(Z0, Math.sin(th)); Zt.crossVectors(X, Yt);
         Wt.copy(c).addScaledVector(X, -G.x).addScaledVector(Yt, -G.y).addScaledVector(Zt, -G.z);
@@ -559,6 +750,7 @@ class Rig {
           const e = ELL[i0], e1 = ELL[i0 + 1], w2 = fy - i0, cx = e.cx + (e1.cx - e.cx) * w2, cz = e.cz + (e1.cz - e.cz) * w2, rx = e.rx + (e1.rx - e.rx) * w2 + rad, rz = e.rz + (e1.rz - e.rz) * w2 + rad;
           const q2 = Math.hypot((ap.x - cx) / rx, (ap.z - cz) / rz); if (q2 < 1) inside = Math.max(inside, (1 - q2) * Math.min(rx, rz)); }
         let cost = (sh / 0.8) ** 2 + (flex / 1.05) ** 2 + (dev / 0.35) ** 2 + (tau / 1.2) ** 2 + (hum / 1.0) ** 2 + miss * 1e4 + (inside / 0.01) ** 2 * 4;
+        cost += armObstacleCost(OB, S, E, Wt);
         if (Math.abs(tau) > 1.75 || Math.abs(hum) > 1.6 || Math.abs(flex) > 1.4 || Math.abs(dev) > 0.6) cost += 1e3; // (past the joints' range)
         if (out) { out.W = Wt.clone(); out.Y = Yt.clone(); out.pole = pole.clone(); out.angles = { sh, hum, tau, flex, dev, cost, inside }; }
 
@@ -569,7 +761,7 @@ class Rig {
       const grid = (th0, ph0, span, n) => { for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const th = th0 + span * (i / (n - 1) - 0.5) * 2, ph = ph0 + span * (j / (n - 1) - 0.5) * 2, cc = score(th, ph); if (cc < best.c) best = { c: cc, th, ph }; } };
       const prevC = prev ? score(prev.th, prev.ph) : Infinity;
       if (prev && prevC < 500) { best = { c: prevC, th: prev.th, ph: prev.ph }; grid(prev.th, prev.ph, 0.25, 9); } // (an answer from out of reach or past a joint's range is no place to refine from: search afresh)
-      else grid(0, 0, Math.PI, 49);
+      else { if (prev) grid(prev.th, prev.ph, 0.8, 13); if (!(best.c < 500)) { const f0 = OB?.from; if (OB) { OB.from = 1; OB.to = 2; } grid(0, 0, Math.PI, 49); if (OB) { OB.from = f0; OB.to = 3; best.c = score(best.th, best.ph); } } } // (first a wider look round the last answer: an arm kept off a wall can sit near a joint's limit; the full search tests only the elbow against obstacles)
       for (const span of [0.12, 0.04, 0.012]) grid(best.th, best.ph, span, 7);
       this.armSol[k] = { th: best.th, ph: best.ph };
       const out = {}; score(best.th, best.ph, out); (this.armAngles ||= {})[k] = { ...Object.fromEntries(Object.entries(out.angles).map(([kk, v]) => [kk, +(kk === 'cost' || kk === 'inside' ? v : v * 180 / Math.PI).toFixed(3)])), at: this.gripA?.[k] != null ? +(this.gripA[k] * 180 / Math.PI).toFixed(0) : null }; void hint; return out;
@@ -1356,6 +1548,12 @@ function seatControls(st, s) {
   for (const [k, v] of Object.entries(src)) { if (v == null) continue; out[k] = Array.isArray(v) ? V(...v).divideScalar(s) : /(tilt|Ang)$/.test(k) ? v : v / s; }
   return Object.keys(out).length ? out : null;
 }
+// A seat's obstacles (st.obstacles: see prepObstacle, part coordinates) with where the figure sits in the part (seat
+// point, scale, turn), so the rig can take its body into part space to test them. Plain data (it keys the posture cache).
+function seatObstacles(st) {
+  const q = st.quat ? [...st.quat] : st.yaw ? new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), st.yaw).toArray() : null;
+  return { p: [...st.p], s: st.s || 1, q, list: st.obstacles };
+}
 export function addCrew(design, objs) {
   const rigs = [];
   design.parts.forEach((p, i) => {
@@ -1380,6 +1578,7 @@ export function addCrew(design, objs) {
       // a seat built with seatGeo declares it (fit: { at: where its geometry was placed, dims: seatGeo's arguments }), so
       // the figure can sit on its actual surfaces
       const seat = st.fit && ctl !== 'bars' ? seatSurfaces(st.fit, st.p, st.s || 1) : null, ctlSet = seatControls(st, st.s || 1);
+      if (seat && st.obstacles) seat.obstacles = seatObstacles(st); // (what's round the seat: the posture keeps clear of it)
       const c = buildCrew(outfit, ctl, { seed: i * 3 + k, colors, pegs, groundY, seat, helm: ctlSet });
       Object.assign(c.userData.crewRig, { role: st.role || 'pilot', kind, ctl, part: i, seat: k }); // (stations.js names the cockpit views from these)
       c.position.set(...st.p); if (st.quat) c.quaternion.fromArray(st.quat); else if (st.yaw) c.rotation.y = st.yaw;

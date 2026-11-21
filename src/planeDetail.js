@@ -18,7 +18,7 @@ import { V, bar, tube, pipe, norm, ringLoft, Bag, kitMaterial, kitSlot, kitUV, E
 import { clamp, lerp } from './noise.js';
 import { applyLivery } from './liveries.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
-import { blendSkins } from './skinBlend.js';
+import { blendSkins, addTubObstacle } from './skinBlend.js';
 import { addCrew } from './crew.js';
 import { routeGear, routeStruts } from './gearRoute.js';
 import { assembleCar } from './carDetail.js';
@@ -357,7 +357,8 @@ function opening(C, cobj, structure, S, up) {
   }
   const W = cobj.matrixWorld, loc = S.map((p) => p.clone().applyMatrix4(inv));
   const ring = (k, sx, sz) => loc.map((p) => V(p.x * sx, p.y + (C.floor - p.y) * k, p.z * sz).applyMatrix4(W));
-  const tg = ringLoft([ring(0, 1, 1), ring(0.55, 0.95, 0.97), ring(1, 0.86, 0.9)], false, true), idx = tg.index.array;
+  const rings = [ring(0, 1, 1), ring(0.55, 0.95, 0.97), ring(1, 0.86, 0.9)], tg = ringLoft(rings, false, true), idx = tg.index.array;
+  addTubObstacle(cobj, rings, inv); // (the crew keep inside it)
   for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; } // (facing in)
   tg.computeVertexNormals();
   addTo(cobj, tg, PM.seat(), { shadow: false });

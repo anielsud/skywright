@@ -748,6 +748,13 @@ function bowGeo(w, h, z, rad, y0 = -0.06) {
   pts.push(V(w, y0, z));
   return pipe(pts, rad, 6, 60);
 }
+// Obstacles round a seat (crew.js prepObstacle: the posture keeps the body clear of them), from the geometry that is
+// built: a box placed by matrix m (a panel), the glare shield's hood (a part-cylinder of radius r squashed to k in depth,
+// an arc of +-arc about straight ahead, centred at (y, z), height hgt: the box round it), a canopy's sections sampled
+// from sec(z) -> [w, h, yc] over z0..z1.
+export function boxObstacle(name, m, size) { const p = V(), q = new THREE.Quaternion(), s = V(); m.decompose(p, q, s); return { name, box: p.toArray(), size, rot: new THREE.Euler().setFromQuaternion(q).toArray().slice(0, 3) }; }
+export function hoodObstacle(name, r, k, arc, y, z, hgt) { const d = r * k * (1 - Math.cos(arc)); return { name, box: [0, y, z - r * k + d / 2], size: [2 * r * Math.sin(arc), hgt, d] }; }
+export function insideRows(z0, z1, n, sec) { return Array.from({ length: n + 1 }, (_, i) => { const z = z0 + (z1 - z0) * (i / n); return [+z.toFixed(4), ...sec(z).map((v) => +v.toFixed(4))]; }); }
 // seat: a reclined, padded shell (back + pan) as a lofted section; headrest as a pillow
 export function seatGeo(width, backH, panL, tilt) {
   // back: section is a shallow U (wings at the sides), swept up the back line
@@ -781,12 +788,15 @@ export function cockpitBuild(id, color) {
     // wall beside the hip, the rudder pedals on the floor
     { const P = [0, -0.392, 0.367], S = 0.8, at = (x, y, z) => [x - P[0], y - P[1], z - P[2]]; // (controls: part units from the seat point)
       g.userData.seats = [{ p: P, s: S, fit: { at: [0, -0.54, 0.42], dims: [0.36, 0.72, 0.34, 0.32], floor: -0.66, feet: 'pedals' },
-        controls: { stickBase: at(0, -0.655, -0.12), stickLen: 0.42, thrBase: at(-0.355, -0.38, 0.1), pedY: at(0, -0.66, 0)[1], pedZ: at(0, 0, -0.28)[2] } }]; }
+        controls: { stickBase: at(0, -0.655, -0.12), stickLen: 0.42, thrBase: at(-0.325, -0.38, 0.1), pedY: at(0, -0.66, 0)[1], pedZ: at(0, 0, -0.28)[2] } }]; }
     const gl = new THREE.CylinderGeometry(0.26, 0.26, 0.16, 18, 1, true, -1.25, 2.5); gl.scale(1, 1, 0.55); gl.rotateY(Math.PI); gl.translate(0, 0.08, -0.55); b.add(shell(gl, 0.008), black);
     const glTop = new THREE.CylinderGeometry(0.26, 0.26, 0.012, 18, 1, false, -1.25, 2.5); glTop.scale(1, 1, 0.55); glTop.rotateY(Math.PI); glTop.translate(0, 0.16, -0.55); b.add(capHoles(glTop), black);
     const pf = mx([0, 0.06, -0.54], [-0.25, 0, 0]), pnl = new THREE.BoxGeometry(0.46, 0.2, 0.012); pnl.applyMatrix4(pf); b.add(pnl, black); // (its top edge up under the glare shield's lid: the shield hung ahead of it)
     for (let i = 0; i < 5; i++) { const d = new THREE.CircleGeometry(0.032, 12); d.applyMatrix4(pf.clone().multiply(mx([-0.18 + i * 0.09, 0.02 - (i % 2) * 0.06, 0.0065]))); nb.add(d, PM.dial()); } // on the panel face (they hung in front of it, or behind)
     g.userData.fit = [{ kind: 'seat', p: [0, -0.573, 0.29], w: 0.2, d: 0.2 }, { kind: 'panel', p: V(0, -0.1, 0).applyMatrix4(pf).toArray(), w: 0.4, d: 0.05, tilt: -0.25 }];
+    // what the pilot must keep clear of: inside the dome (and its skirt's walls down into the tub), the panel, the hood
+    g.userData.seats[0].obstacles = [{ name: 'canopy', inside: insideRows(-bb, bb, 40, (z) => { const k = Math.sqrt(Math.max(0, 1 - (z / bb) ** 2)); return [a * k, c * k, 0]; }) },
+      boxObstacle('panel', pf, [0.46, 0.2, 0.012]), hoodObstacle('glare shield', 0.26, 0.55, 1.25, 0.08, -0.55, 0.16)];
   } else if (id === 'ck_fighter') {
     const glass = revolveZ(smoothPts(FIGHTER_GLASS, 40), 48, 1.15);
     g.add(new THREE.Mesh(glass, PM.canopy(0x6b5524)));
@@ -811,6 +821,11 @@ export function cockpitBuild(id, color) {
     const hf = mx([0, 0.33, -0.62], [-0.35, 0, 0]), hud = new THREE.PlaneGeometry(0.15, 0.13); hud.applyMatrix4(hf); nb.add(hud, PM.canopy(0x3c6b52));
     for (const sx of [-1, 1]) { const top = V(sx * 0.068, -0.06, 0).applyMatrix4(hf); nb.add(bar(top, V(top.x, 0.226, top.z - 0.05), 0.012, 0.012, true, 6), black); }
     g.userData.fit = [{ kind: 'seat', p: [0, -0.435, 0.36], w: 0.24, d: 0.22 }, { kind: 'panel', p: V(0, -0.12, 0).applyMatrix4(pf).toArray(), w: 0.1, d: 0.05, tilt: -0.2 }]; // (the panel on a narrow centre pedestal: the legs go either side of it to the pedals)
+    // what the pilot must keep clear of: inside the glass (revolved, 1.15 x as tall as wide; walls below its base), the
+    // side consoles, the side-stick's armrest (the legs only: the forearm rests on it), the panel, its hood and the HUD
+    g.userData.seats[0].obstacles = [{ name: 'canopy', inside: insideRows(FIGHTER_GLASS[0][0], FIGHTER_GLASS.at(-1)[0], 72, (z) => [fighterGlassR(z), fighterGlassR(z) * 1.15, 0]) },
+      ...[-1, 1].map((sx) => ({ name: 'console', box: [sx * 0.315, -0.38, 0.02], size: [0.17, 0.4, 0.8] })), { name: 'armrest', box: [0.29, -0.155, 0.15], size: [0.13, 0.05, 0.34], parts: ['legs', 'torso'] },
+      boxObstacle('panel', pf, [0.52, 0.24, 0.012]), hoodObstacle('glare shield', 0.3, 0.6, 1.3, 0.14, -0.6, 0.18), boxObstacle('HUD', hf, [0.15, 0.13, 0.01])];
   }
   b.to(g); nb.to(g, true);
   return g;
@@ -845,6 +860,13 @@ export function openCockpitBuild(color) {
   { const P = [0, -0.219, 0.241], S = 0.84, at = (x, y, z) => [x - P[0], y - P[1], z - P[2]]; // (controls: part units from the seat point)
     g.userData.seats = [{ p: P, s: S, fit: { at: [0, -0.36, 0.32], dims: [0.4, 0.5, 0.36, 0.3], floor: OPEN_WELL.floor, feet: 'pedals' },
       controls: { pedY: at(0, OPEN_WELL.floor, 0)[1], pedZ: at(0, 0, -0.2)[2] } }]; }
+  // what the driver must keep clear of: the padded coaming (the rim torus's inside: 0.4 - 0.06 across, x1.4 long, 6 cm
+  // above and below its centre line; closed ahead of it, the deck), the well under it (OPEN_WELL's opening, and the
+  // footwell ahead of it) and the dash
+  { const { a, b, fw, foot } = OPEN_WELL, ze = -b * Math.sqrt(1 - (fw / a) ** 2), ri = 0.4 - 0.06, rl = (0.4 - 0.06) * 1.4;
+    const ell = (z, A, Bz) => (Math.abs(z) < Bz ? A * Math.sqrt(1 - (z / Bz) ** 2) : 0);
+    g.userData.seats[0].obstacles = [{ name: 'coaming / well', below: 'walls', top: 0.06, inside: insideRows(ze - foot, b, 48, (z) => [ell(z, ri, rl), 10, -0.06, 2, Math.max(ell(z, a, b), z <= ze ? fw : 0)]) },
+      boxObstacle('dash', pf, [0.47, 0.2, 0.025])]; }
   return g;
 }
 // small local copies of parts.js revolve helpers (parts.js imports this file)
@@ -1020,6 +1042,10 @@ export function airlinerNoseBuild(color, skinMat) {
       pedY: FLOOR - p[1], pedZ: -3.03 - p[2], // rudder pedals under the panel, hinged at the floor
       colBase: [0, FLOOR - p[1], -0.62], colLen: 0.75, // the column pivots in the floor (the generic one stopped 7 cm over it), the yoke clear of the knees
     } }; });
+  // what each pilot must keep clear of: inside the lining (the nose's sections at 0.97), the panel and its glare shield,
+  // the centre pedestal
+  for (const st of g.userData.seats) st.obstacles = [{ name: 'lining', below: 'mirror', inside: insideRows(-4.0, -1.5, 50, (z) => [nW(z) * 0.97, (nT(z) - nB(z)) / 2 * 0.97, (nT(z) + nB(z)) / 2]) },
+    boxObstacle('panel', pf, [1.5, 0.42, 0.06]), hoodObstacle('glare shield', 0.95, 0.42, 1.0, 0.69, -3.15, 0.07), { name: 'pedestal', box: [0, 0.1, -2.85], size: [0.34, 0.42, 0.8] }];
   g.userData.tube = { z0: -4.6, z1: 0, sec: (z) => { const T = nT(z), B = nB(z); return [(T + B) / 2, nW(z), (T - B) / 2]; } }; // its section, for skinBlend's seam with the tube behind
   return g;
 }

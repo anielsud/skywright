@@ -13,7 +13,7 @@ import { PARTS, revolve, smoothProfile, loft } from './parts.js';
 import { M } from './materials.js';
 import { PM, SKIN_TILE } from './planeMaterials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
-import { V, Bag, bar, pipe, shell, ringLoft, capHoles, seatGeo, norm } from './partDetail.js';
+import { V, Bag, bar, pipe, shell, ringLoft, capHoles, seatGeo, norm, insideRows, hoodObstacle } from './partDetail.js';
 
 function ensureUv1(obj) {
   obj.traverse((m) => { const g = m.geometry; if (m.isMesh && !g.attributes.uv1) g.setAttribute('uv1', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2)); });
@@ -268,6 +268,14 @@ function tandemCanopy(c, lv) {
     g.userData.seats = [{ p: [0, -0.35, -0.74], s: 0.86, fit: { at: [0, -0.48, -0.62], dims: [0.42, 0.66, 0.4, 0.26], floor: -0.72, feet: 'pedals' },
       controls: { stickBase: [0, -0.3, -0.34], stickLen: 0.61, thrBase: [-0.27, 0.04, -0.3], thrLen: 0.12, pedZ: -0.48, pedY: -0.3 } },
     { p: [0, -0.4, 1.06], s: 0.86, role: 'crew', fit: { at: [0, -0.53, 1.18], dims: [0.42, 0.62, 0.4, 0.26], floor: -0.72 } }];
+    // what the crew must keep clear of: inside the glass and the hatch (tcPt's sections: |x / w|^2 + |(y + 0.06) / (h +
+    // 0.06)|^(8/3) = 1; the tub's walls under them at 0.9 x), the bulkhead between the two; the pilot's consoles, panel,
+    // its hood and the pedestal under it
+    { const glass = { name: 'canopy', ey: 8 / 3, wBelow: 0.9, inside: insideRows(z0, z1, 92, (z) => [TC.w(z), TC.h(z) + 0.06, -0.06]) };
+      g.userData.seats[0].obstacles = [glass, { name: 'bulkhead', plane: [0, 0, -1], at: [0, 0, split + 0.03] },
+        ...[-1, 1].map((sx) => ({ name: 'console', box: [sx * 0.31, -0.51, -0.88], size: [0.15, 0.42, 0.78] })),
+        { name: 'panel', box: [0, -0.2, -1.52], size: [0.5, 0.52, 0.22] }, hoodObstacle('glare shield', 0.3, 0.55, 1.3, 0.02, -1.5, 0.16), { name: 'pedestal', box: [0, -0.59, -1.5], size: [0.12, 0.28, 0.16] }];
+      g.userData.seats[1].obstacles = [glass, { name: 'bulkhead', plane: [0, 0, 1], at: [0, 0, split + 0.06] }]; }
   } else {
     const seat = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.6, 0.14), PM.seat()); seat.position.set(0, -0.12, -0.48); g.add(seat);
   }
