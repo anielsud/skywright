@@ -217,6 +217,22 @@ export function boatForces(ac, F, T, ctl, dt, env) {
       add(_n.copy(_xb).multiplyScalar(fr), ac.worldPoint(mo.rudderAt, new THREE.Vector3()));
     }
   }
+  // An amphibian (car or bike wheels + a hull): afloat, its driven wheels paddle it along slowly (a real amphibious car
+  // swims at a few km/h on its wheels) and a steering wheel in the water works as a small rudder.
+  if (ac.isCar && wet > 0.05 && !ac.landWheels) {
+    const wk0 = Math.min(1, wet * 3), PADDLE = 0.22, VMAX = 3.5;
+    const fall = u >= 0 ? Math.max(0, 1 - (u / VMAX) ** 2) : Math.max(0, 1 - (-u / (VMAX * 0.6)) ** 2);
+    const push = clamp(ac.driveF * PADDLE * (ac.driveF >= 0 ? fall : 1), -mass * G * 0.1, mass * G * 0.1) * wk0;
+    Fw.addScaledVector(_zb, push);
+    for (const p of ac.parts) {
+      if (!p.alive || !p.gear?.steer) continue;
+      for (const w of p.gear.wheels) {
+        const at = ac.worldPoint(w.top, new THREE.Vector3()), wl = waterAt(b, at, t); if (wl == null || at.y - w.len > wl) continue;
+        const wash = Math.abs(push) / (RHO * 0.3), V2 = u * Math.abs(u) + wash;
+        add(_n.copy(_xb).multiplyScalar(0.5 * RHO * 0.25 * V2 * Math.sin(0.5 * s)), at); // (s: + = right; the bow is pushed the way you steer)
+      }
+    }
+  }
   // into the body frame. Arcade / Pilot: a motor low on the transom can't flip the boat over backwards (a blow-over):
   // its nose-up twist is capped at what the hull's bow-down trim can take (Sim: all of it)
   const Tb = Tt.applyQuaternion(_qi); if (R.assist > 0) Tb.x = Math.min(Tb.x, ac.I.elements[0] * (2.5 - 1.5 * R.assist));

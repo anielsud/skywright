@@ -84,6 +84,36 @@ export function kidBoats(n = 10, seed = 5) {
   return out;
 }
 
+// ---------- amphibians: a stock car or bike with a boat hull bolted underneath (just clear of the ground) ----------
+export function amphibians(all) {
+  const out = [];
+  for (const name of ['Dirt Bike', 'Sport Bike', 'Dune Buggy']) {
+    const base = all.find((d) => d.name === name); if (!base) continue;
+    for (const hid of ['h_speed', 'h_pontoon']) {
+      const d = JSON.parse(JSON.stringify(base)); d.name = `${name} + ${PARTS[hid].name}`; d.parts.push(newPart(hid, [0, 0, 0], { parent: 0 }));
+      const probe = new Aircraft(d, REALISM.arcade), hullP = probe.parts.at(-1); // put its keel 12 cm above the tyres' bottoms
+      const keel = Math.min(...hullP.hull.map((h) => h.y)), tyres = Math.min(...probe.parts.filter((p) => p.gear).flatMap((p) => p.gear.wheels.map((w) => w.top.y - w.len - w.r)));
+      d.parts.at(-1).pos[1] += tyres + 0.12 - keel;
+      out.push(d);
+    }
+  }
+  return out;
+}
+// afloat: it floats upright and level, its wheels paddle it along slowly and it turns; on land: it drives like the car or bike
+export function amphibRides(all) {
+  const out = [];
+  for (const d of amphibians(all)) {
+    const st = analyze(d);
+    const w = run(d, 'pilot', (t) => (t < 8 ? { throttle: 1 } : { throttle: 1, roll: 1 }), { T: 14 });
+    const floats = !w.dead && between(w, 2, 14).every((s) => s.wet > 0.02 && s.up > 0.9), turned = -(at(w, 14).turn - at(w, 8).turn);
+    out.push({ name: `${d.name}: afloat, paddles and turns`, ok: st.car && st.boat && w.ac.isCar && w.ac.isBoat && floats && w.maxSpeed > 1 && w.maxSpeed < 6 && turned > 0.25,
+      why: `analyze car ${st.car} boat ${!!st.boat}, isCar ${w.ac.isCar} isBoat ${w.ac.isBoat}, floats ${floats} (min up ${w.minUp.toFixed(2)}), top ${w.maxSpeed.toFixed(2)} m/s, turned right ${(turned * 57.3).toFixed(0)}°`, top: +w.maxSpeed.toFixed(1) });
+    const l = run(d, 'pilot', (t) => (t < 6 ? { throttle: 0.8 } : { rev: 1 }), { T: 10, env: land(5) });
+    out.push({ name: `${d.name}: on land, drives`, ok: !l.dead && !l.partsLost && l.maxSpeed > 6 && l.final.up > 0.9, why: `dead ${!!l.dead}, parts lost ${l.partsLost}, top ${l.maxSpeed.toFixed(1)} m/s, up ${l.final.up}`, top: +l.maxSpeed.toFixed(1) });
+  }
+  return out;
+}
+
 export function flat(presets, others = []) {
   const out = [];
   for (const d of presets) for (const mode of ['arcade', 'pilot', 'sim']) out.push(judge(`${d.name} ${mode}: plane, turn, stop`, d, run(d, mode, RIDE(), { T: 30 })));
@@ -121,6 +151,12 @@ export function marina(F, presets, all = []) {
     const r = run(d, mode, script, { T: 30, env: F.env, pos: s.pos, heading: s.heading });
     const fromDock = r.start.x.distanceTo(new THREE.Vector3(M.x, r.start.x.y, M.z));
     out.push(judge(`${loc} ${d.name} ${mode}`, d, r, [[fromDock < 120, `started ${fromDock.toFixed(0)} m from the marina`]], { river, sim: mode === 'sim' }));
+  }
+  // an amphibious bike starts afloat at the marina's start too and paddles off (it is a bike that floats)
+  const ab = amphibians(all).find((d) => /Dirt Bike \+ Speedboat/.test(d.name));
+  if (ab) {
+    const r = run(ab, 'pilot', (t) => ({ throttle: 1 }), { T: 8, env: F.env, pos: s.pos, heading: s.heading });
+    out.push({ name: `${loc}: an amphibious bike paddles off from the marina`, ok: !r.dead && r.final.up > 0.9 && r.final.wet > 0.02 && r.maxSpeed > 1, why: `dead ${!!r.dead}, up ${r.final.up}, wet ${r.final.wet}, top ${r.maxSpeed.toFixed(2)} m/s` });
   }
   // a car drives out along the pier (the docks are solid)
   const car = all.find((d) => d.name === "Dune Buggy");

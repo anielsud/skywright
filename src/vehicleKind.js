@@ -6,7 +6,7 @@
 import { DRIVE } from './drive.js';
 
 export function vehicleKind(st) { // st: analyze(design)
-  if (st.boat) return 'boat';
+  if (st.boat && !st.car) return 'boat'; // (a car or bike with a hull is an amphibian: a car or bike that floats)
   if (st.bike) return 'bike';
   if (st.heli) return 'heli';
   if (st.car && st.wingArea < 0.5) return 'car';
@@ -16,7 +16,7 @@ export function vehicleKind(st) { // st: analyze(design)
 // the same from a built Aircraft (callouts.js has one, not the design's analysis)
 export function acKind(ac, st) {
   if (st) return vehicleKind(st);
-  if (ac.isBoat) return 'boat';
+  if (ac.isBoat && !ac.isCar) return 'boat';
   if (ac.isBike) return 'bike';
   if (ac.isHeli) return 'heli';
   if (ac.isCar && !ac.parts.some((p) => p.d.cat === 'wing')) return 'car';
@@ -56,11 +56,12 @@ export function modeChoice(k, R) { // -> { label, name, desc } for realism level
 // plane's. c: { loc, rwy, site (a helipad's or marina's name), stall (the take-off speed, in the player's units), touch }
 export function startMessage(k, start, c) {
   const go = c.touch ? 'GAS to go' : 'W to go', steer = c.touch ? 'steer with the stick' : 'A D to steer', lean = c.touch ? 'lean into the turns with the stick' : 'A D to lean into the turns';
+  const afloat = `Afloat! ${go}, ${steer}. Drive up onto land to ride!`; // (an amphibious car or bike: boat.js)
   const at = { runway: `Runway ${c.rwy} · ${c.loc}.`, park: `Stunt park · ${c.loc}.`, road: `On the road · ${c.loc}.`, evel: 'Daredevil canyon jump.',
     helipad: `Rooftop helipad · ${c.site || c.loc}.`, marina: `At ${c.site || 'the marina'} · ${c.loc}.`, water: `On the water · ${c.loc}.` }[start] || `${c.loc}.`;
   const M = {
-    car: { park: `${at} ${go}: hit the ramps, loop the loop!`, evel: `${at} Full gas, hit the ramp and fly the canyon!`, '*': `${at} ${go}, ${steer}!` },
-    bike: { park: `${at} ${go}, lean into the turns, full gas for a wheelie!`, evel: `${at} Full gas, hit the ramp and fly the canyon!`, '*': `${at} ${go}, ${lean}!` },
+    car: { park: `${at} ${go}: hit the ramps, loop the loop!`, evel: `${at} Full gas, hit the ramp and fly the canyon!`, marina: `${at} ${afloat}`, water: `${at} ${afloat}`, '*': `${at} ${go}, ${steer}!` },
+    bike: { park: `${at} ${go}, lean into the turns, full gas for a wheelie!`, evel: `${at} Full gas, hit the ramp and fly the canyon!`, marina: `${at} ${afloat}`, water: `${at} ${afloat}`, '*': `${at} ${go}, ${lean}!` },
     heli: {
       air: 'Hovering! Push the stick to fly forwards.',
       approach: 'On final approach. Slow down and hover over the runway, then let down gently.',

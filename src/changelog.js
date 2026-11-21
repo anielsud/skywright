@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.109.0', items: [
+    "Put a boat hull on your car or motorbike and it becomes amphibious: drive into the water and it floats, the wheels paddle you along, and you can start it at the marina!",
+    "Boats at the Grand Canyon now float on the river instead of getting stuck on the bank.",
+  ] },
   { v: '1.108.0', items: [
     "The big floodlight poles moved out of the bowl and the dirt turn, so you won't crash into a lamp in the middle of the track.",
   ] },

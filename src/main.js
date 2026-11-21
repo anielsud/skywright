@@ -411,10 +411,13 @@ function boatChips() {
 const LAND_STARTS = ['park', 'road', 'evel']; // cars' and bikes' start choices besides the runway (flightCfg.landStart; World.landStart)
 // cars' and bikes' start choices (data-ls: flightCfg.landStart): the stunt park (the default), a street, the runway, and
 // the canyon jump where there is one (shown for the picked location)
-function landChips() {
-  const cur = LAND_STARTS.includes(flightCfg.landStart) || flightCfg.landStart === 'runway' ? flightCfg.landStart : 'park';
+// An amphibian (a car or bike with a boat hull) can also start afloat: at the marina or out on the water.
+const AFLOAT_STARTS = ['marina', 'water'];
+function landChips(amphib = false) {
+  const cur = LAND_STARTS.includes(flightCfg.landStart) || flightCfg.landStart === 'runway' || (amphib && AFLOAT_STARTS.includes(flightCfg.landStart)) ? flightCfg.landStart : 'park';
   const chip = (id, label, extra = '') => `<button data-ls="${id}" class="${cur === id ? 'on' : ''}"${extra}>${label}</button>`;
-  return chip('park', 'At the stunt park') + chip('road', 'On the road') + chip('runway', 'On the runway') + chip('evel', 'Daredevil canyon jump', ` data-evel${LOCATIONS[flightCfg.location]?.stunts?.evel ? '' : ' hidden'}`);
+  return chip('park', 'At the stunt park') + chip('road', 'On the road') + chip('runway', 'On the runway') + chip('evel', 'Daredevil canyon jump', ` data-evel${LOCATIONS[flightCfg.location]?.stunts?.evel ? '' : ' hidden'}`)
+    + (amphib ? chip('marina', 'At the marina') + chip('water', 'Out on the water') : '');
 }
 function flightModal() {
   const s = analyze(hangar.design), kind = vehicleKind(s), W = words(kind);
@@ -438,7 +441,7 @@ function flightModal() {
     <label class="lbl">Mode</label>
     <div class="choice-row">${Object.entries(MODES).map(([k, mo]) => `<button class="opt-card${flightCfg.mode === k ? ' on' : ''}" data-m="${k}"><b>${k === 'free' && isLand(kind) ? 'Free Drive' : mo.name}</b><small>${mo.desc}</small></button>`).join('')}</div>
     <label class="lbl">Start</label>
-    <div class="start-row"><div class="chips">${s.car && !s.heli ? landChips() : s.boat ? boatChips() : `<button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">${groundStartLabel(s, flightCfg.location)}</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}`}</div>
+    <div class="start-row"><div class="chips">${s.car && !s.heli ? landChips(!!s.boat) : s.boat ? boatChips() : `<button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">${groundStartLabel(s, flightCfg.location)}</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}`}</div>
     <div class="start-go"><button data-close>Back</button><button class="primary big" id="go">${W.go} ▶</button></div></div>`, 'wide');
   const el = m.el;
   const pick = (attr, key) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { flightCfg[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); audio.play('click'); }));
@@ -685,8 +688,11 @@ function buildFlight(cfg) {
     walls: (x, z, r, out) => world.wallBoxes(x, z, r, out), wallPass: (e, p) => !!e.dk && world.destruct.passes(e, p),
     onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40, p.clone()); },
   };
-  const land = st.car && !st.heli; // cars and bikes have their own start choices (LAND_STARTS), the stunt park by default
-  let start = land ? (LAND_STARTS.includes(cfg.landStart) ? cfg.landStart : 'park') : st.boat ? (BOAT_STARTS.includes(cfg.boatStart) ? cfg.boatStart : 'marina') : cfg.start; let F_approach = null; // (boats: BOAT_STARTS, the marina by default)
+  // cars and bikes have their own start choices (LAND_STARTS), the stunt park by default; an amphibian (with a boat
+  // hull) may pick a boat's start instead (AFLOAT_STARTS), and then starts as a boat does
+  const afloatStart = st.car && st.boat && !st.heli && AFLOAT_STARTS.includes(cfg.landStart);
+  const land = st.car && !st.heli && !afloatStart;
+  let start = land ? (LAND_STARTS.includes(cfg.landStart) ? cfg.landStart : 'park') : afloatStart ? cfg.landStart : st.boat ? (BOAT_STARTS.includes(cfg.boatStart) ? cfg.boatStart : 'marina') : cfg.start; let F_approach = null; // (boats: BOAT_STARTS, the marina by default)
   const gearOK = ac.parts.some((p) => p.gear && (!p.gear.float || p.gear.skid)); // skids can sit on a runway
   if (cfg.mode === 'landing' && !st.boat) start = 'approach';
   else if (start === 'water' || (start === 'runway' && st.floats && !gearOK)) start = 'water';
