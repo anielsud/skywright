@@ -388,7 +388,7 @@ function figureGeometry(rig) {
   const route = (hex, gloss) => (typeof gloss === 'string' ? gloss : gloss ? (hex === o.visor ? 'glass' : 'paint') : hex === skin ? 'skin' : hex === hair ? 'hair' : (hex === o.glove || hex === o.boot || hex === 0x1d1d1f || hex === 0x15161a) ? 'rubber' : 'fabric');
   const at = (i, geo, hex, gloss = false) => k.add(geo, hex, i, route(hex, gloss), geo.attributes.skinIndex ? null : R(i)); // (a loft is built in rig space)
   // ---- the body: the skinned human mesh posed onto this rig (body.js), coloured by what the outfit covers ----
-  const BP = o.head !== 'bubble' && body() ? poseBody({ p: rig.p, q: rig.q, B, DIM }) : null;
+  const BP = o.head !== 'bubble' && body() ? poseBody({ p: rig.p, q: rig.q, B, DIM }, { seat: rig.ctl === 'bars' ? { y: -0.08, back: null } : { y: -0.09, back: 0.125 } }) : null;
   if (BP) {
     const n = BP.pos.length / 3, cols = new Float32Array(n * 3), slotOf = new Array(n), c = new THREE.Color();
     const neckSkin = o.head === 'headset' || o.head === 'leather' || o.head === 'cap';
@@ -707,7 +707,15 @@ function figureGeometry(rig) {
     const pg = new THREE.ExtrudeGeometry(pk, { depth: 0.006, bevelEnabled: true, bevelThickness: 0.0015, bevelSize: 0.0015, bevelSegments: 2, curveSegments: 16 });
     pg.rotateX(-Math.PI / 2); // shape +Y -> forward (-Z)
     { const pp = pg.attributes.position; for (let k2 = 0; k2 < pp.count; k2++) { const x = pp.getX(k2); pp.setY(k2, pp.getY(k2) - 2.2 * x * x); } pg.computeVertexNormals(); } // curved down at the sides
-    pg.rotateX(-0.14); const an = dsPoint(hc, ...capR, null, 0, 0.3, 0); pg.translate(an.x, an.y - 0.004, an.z + 0.012); at(B.head, pg, o.cap, 'fabric');
+    pg.rotateX(-0.14);
+    let an = dsPoint(hc, ...capR, null, 0, 0.3, 0).add(V(0, -0.004, 0.012));
+    if (BP) { // on the mesh head: the crown's front edge (the scalp at the cap line, straight ahead, plus the crown's thickness)
+      const hinv3 = R(B.head).invert(), nm3 = new THREE.Matrix3().getNormalMatrix(hinv3); let best = null;
+      for (let i = 0; i < BP.seg.length; i++) { if (BP.seg[i] !== 'head' || BP.eye[i]) continue; const p = V(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(hinv3);
+        const u = Math.atan2(p.x - hc.x, -(p.z - hc.z)), v = Math.asin(clamp((p.y - hc.y) / HR[1], -1, 1)), sc = Math.abs(u) * 2 + Math.abs(v - 0.3); if (!best || sc < best.sc) best = { sc, i, p }; }
+      if (best) { const nn = V(BP.nrm[best.i * 3], BP.nrm[best.i * 3 + 1], BP.nrm[best.i * 3 + 2]).applyMatrix3(nm3).normalize(); an = best.p.clone().addScaledVector(nn, 0.022).add(V(0, -0.006, 0.02)); }
+    }
+    pg.translate(an.x, an.y, an.z); at(B.head, pg, o.cap, 'fabric');
     aviators(true);
   } else if (o.head === 'leather') {
     face(false);
@@ -724,9 +732,9 @@ function figureGeometry(rig) {
       const fs = bold ? 'rubber' : 'metal';
       for (const e of eyesAt) {
         const lc = e.c.clone().add(V(0, -e.r * 0.15, -e.r * 1.75)), sx = Math.sign(e.c.x - hc.x) || 1;
-        const lens = new THREE.SphereGeometry(1, 32, 16); lens.scale(e.r * 2.0 * k, e.r * 1.55 * k, e.r * 0.35); lens.translate(lc.x, lc.y, lc.z); at(B.head, lens, 0x0b0d10, 'glass');
-        const rim = new THREE.TorusGeometry(1, 0.07, 8, 40); rim.scale(e.r * 2.05 * k, e.r * 1.6 * k, e.r); rim.translate(lc.x, lc.y, lc.z - e.r * 0.05); at(B.head, rim, fr, fs);
-        at(B.head, capAB(lc.clone().add(V(sx * e.r * 2.0 * k, e.r * 0.4, 0)), V(hc.x + sx * HR[0] * 0.98, lc.y + e.r * 0.3, hc.z + HR[2] * 0.15), 0.0022 * k, 0.0022 * k), fr, fs); // arm
+        const lens = new THREE.SphereGeometry(1, 32, 16); lens.scale(e.r * 1.6 * k, e.r * 1.25 * k, e.r * 0.3); lens.translate(lc.x, lc.y, lc.z); at(B.head, lens, 0x0b0d10, 'glass');
+        const rim = new THREE.TorusGeometry(1, 0.07, 8, 40); rim.scale(e.r * 1.65 * k, e.r * 1.3 * k, e.r); rim.translate(lc.x, lc.y, lc.z - e.r * 0.05); at(B.head, rim, fr, fs);
+        at(B.head, capAB(lc.clone().add(V(sx * e.r * 1.6 * k, e.r * 0.3, 0)), V(hc.x + sx * HR[0] * 0.98, lc.y + e.r * 0.3, hc.z + HR[2] * 0.15), 0.0022 * k, 0.0022 * k), fr, fs); // arm
       }
       const [a0, a1] = eyesAt.map((e) => e.c.clone().add(V(0, e.r * 0.55, -e.r * 1.8))); at(B.head, capAB(a0, a1, 0.0022 * k, 0.0022 * k), fr, fs); // bridge
       return;
