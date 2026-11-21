@@ -139,6 +139,22 @@ export class CollisionMesh {
       best = -s; hit = i;
     });
     if (hit < 0) return null;
+    // Behind a face is not enough: p must be nearer to a face it is behind than to any face it is in front of. Riding up
+    // a kicker, the bike's belly is just above the sloped top but behind the lip's end face (within its depth): without
+    // this it counted as ~1 m inside the ramp and was shoved back along the lip's normal (the "glitch" jolts).
+    let outside = false;
+    this.cells(p.x - best, p.y - best, p.z - best, p.x + best, p.y + best, p.z + best, (i) => {
+      if (outside) return;
+      const i3 = i * 3, wx = p.x - A[i3], wy = p.y - A[i3 + 1], wz = p.z - A[i3 + 2];
+      const s = wx * N[i3] + wy * N[i3 + 1] + wz * N[i3 + 2];
+      if (s < 0 || s >= best) return;
+      const e1x = E1[i3], e1y = E1[i3 + 1], e1z = E1[i3 + 2], e2x = E2[i3], e2y = E2[i3 + 1], e2z = E2[i3 + 2];
+      const d00 = e1x * e1x + e1y * e1y + e1z * e1z, d01 = e1x * e2x + e1y * e2y + e1z * e2z, d11 = e2x * e2x + e2y * e2y + e2z * e2z;
+      const d20 = wx * e1x + wy * e1y + wz * e1z, d21 = wx * e2x + wy * e2y + wz * e2z, den = d00 * d11 - d01 * d01;
+      const v = (d11 * d20 - d01 * d21) / den, w = (d00 * d21 - d01 * d20) / den;
+      if (v >= 0 && w >= 0 && v + w <= 1) outside = true;
+    });
+    if (outside) return null;
     out.pen = best; out.n.set(N[hit * 3], N[hit * 3 + 1], N[hit * 3 + 2]); out.type = SURFACES[this.T[hit]] || 'runway';
     return out;
   }
