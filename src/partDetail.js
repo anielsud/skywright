@@ -788,10 +788,16 @@ export function cockpitBuild(id, color) {
     // windscreen bow (thick) and the canopy arch, following the glass section
     for (const [z, rad] of [[-0.62, 0.026], [0.78, 0.02]]) { const r = fighterGlassR(z); b.add(bowGeo(r + 0.006, r * 1.15 + 0.006, z, rad, -r * 0.35), paint); }
     // ejection seat: padded back, head box (inside the glass) with the yellow/black firing handle
-    const st = seatGeo(0.42, 0.62, 0.4, 0.28); st.translate(0, -0.32, 0.52); b.add(st, seatM);
-    const hb = new THREE.CapsuleGeometry(0.1, 0.16, 4, 10); hb.rotateZ(Math.PI / 2); hb.scale(1, 1.05, 0.8); hb.translate(0, 0.36, 0.72); b.add(hb, seatM);
-    const handle = new THREE.TorusGeometry(0.06, 0.011, 4, 10, Math.PI); handle.translate(0, 0.42, 0.66); nb.add(handle, M.propTip());
-    g.userData.seats = [{ p: [0, -0.42, 0.38], s: 0.88 }];
+    // (set down in the tub, so the pilot's helmet clears the canopy: it touched the glass)
+    const st = seatGeo(0.42, 0.62, 0.4, 0.3); st.translate(0, -0.4, 0.52); b.add(st, seatM);
+    const hb = new THREE.CapsuleGeometry(0.1, 0.16, 4, 10); hb.rotateZ(Math.PI / 2); hb.scale(1, 1.05, 0.8); hb.translate(0, 0.28, 0.73); b.add(hb, seatM);
+    const handle = new THREE.TorusGeometry(0.06, 0.011, 4, 10, Math.PI); handle.translate(0, 0.34, 0.67); nb.add(handle, M.propTip());
+    // side consoles along the tub walls beside the seat: the side-stick on the right one (forearm on its armrest), the
+    // throttle on the left. The pilot's feet on the rudder pedals just ahead of the seat (the tub floor is ~-0.52).
+    for (const sx of [-1, 1]) { const con = new THREE.BoxGeometry(0.17, 0.4, 0.8); con.translate(sx * 0.315, -0.38, 0.02); b.add(con, black); }
+    const arm = new THREE.BoxGeometry(0.13, 0.05, 0.34); arm.translate(0.29, -0.155, 0.15); b.add(arm, seatM); // the side-stick's raised mount and armrest
+    g.userData.seats = [{ p: [0, -0.28, 0.4], s: 0.88, fit: { at: [0, -0.4, 0.52], dims: [0.42, 0.62, 0.4, 0.3], floor: -0.52, feet: 'pedals' },
+      controls: { stickBase: [0.27, 0.17, -0.33], stickLen: 0.11, thrBase: [-0.27, 0.1, -0.25], thrLen: 0.11, pedZ: -0.55, pedY: -0.22 } }];
     const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.18, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.6); gl.rotateY(Math.PI); gl.translate(0, 0.14, -0.6); b.add(shell(gl, 0.008), black);
     const glTop = new THREE.CylinderGeometry(0.3, 0.3, 0.012, 18, 1, false, -1.3, 2.6); glTop.scale(1, 1, 0.6); glTop.rotateY(Math.PI); glTop.translate(0, 0.23, -0.6); b.add(capHoles(glTop), black);
     const pf = mx([0, 0.11, -0.6], [-0.2, 0, 0]), pnl = new THREE.BoxGeometry(0.52, 0.24, 0.012); pnl.applyMatrix4(pf); b.add(pnl, black); // (top edge under the glare shield's lid)
@@ -799,7 +805,7 @@ export function cockpitBuild(id, color) {
     // HUD combiner on two posts standing on the glare shield (it hung in the air above it)
     const hf = mx([0, 0.33, -0.62], [-0.35, 0, 0]), hud = new THREE.PlaneGeometry(0.15, 0.13); hud.applyMatrix4(hf); nb.add(hud, PM.canopy(0x3c6b52));
     for (const sx of [-1, 1]) { const top = V(sx * 0.068, -0.06, 0).applyMatrix4(hf); nb.add(bar(top, V(top.x, 0.226, top.z - 0.05), 0.012, 0.012, true, 6), black); }
-    g.userData.fit = [{ kind: 'seat', p: [0, -0.355, 0.36], w: 0.24, d: 0.22 }, { kind: 'panel', p: V(0, -0.12, 0).applyMatrix4(pf).toArray(), w: 0.46, d: 0.05, tilt: -0.2 }];
+    g.userData.fit = [{ kind: 'seat', p: [0, -0.435, 0.36], w: 0.24, d: 0.22 }, { kind: 'panel', p: V(0, -0.12, 0).applyMatrix4(pf).toArray(), w: 0.1, d: 0.05, tilt: -0.2 }]; // (the panel on a narrow centre pedestal: the legs go either side of it to the pedals)
   }
   b.to(g); nb.to(g, true);
   return g;
