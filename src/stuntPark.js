@@ -41,7 +41,7 @@ export const LAYOUTS = {
     kickers: [[40, 0.6, 16, 6.5], [58, 1.1, 19, 6.5]], tabletop: null, boost: 96, loop: 124, rumble: 172,
     jump: { boost: 6, mesa: 24, whoops: 122, n: 4 }, berms: [[1, 40, 120], [1, 174, 186], [2, 2, 22], [2, 112, 186]],
     flags: [-80, 80, 20], stands: [[-40, 1, 34], [62, 1, 30], [20, -1, 34]],
-    towers: [[-80, 62], [85, 62], [-75, -62], [70, -62], [-132, 0], [132, 0]],
+    towers: [[-80, 62], [85, 62], [-75, -62], [70, -62], [-140, 0], [140, 0]], // (the end ones well outside the bowl's fence and the banked turn's barrier: 45 m from the bends' centres)
   },
 };
 
