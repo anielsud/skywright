@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { PARTS, revolve, smoothProfile } from './parts.js';
 import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
-import { V, bar, tube, pipe, Bag, seatGeo, flightDeckGlass, shell, capHoles, ringLoft } from './partDetail.js';
+import { V, bar, tube, pipe, Bag, seatGeo, flightDeckGlass, shell, capHoles, ringLoft, insideRows, boxObstacle } from './partDetail.js';
 import { clipGeometry } from './skinBlend.js';
 import { Rig, cornerLinks, cornerGeometry } from './carRig.js';
 import { capsuleWindows, capsuleCouch } from './capsule.js';
@@ -367,6 +367,10 @@ function truckCab(g, S0, c) {
   { const kp = new THREE.BoxGeometry(0.56, 0.24, 0.22); kp.translate(-0.4, 0.57, -0.6); b.add(kp, black); } // the driver's lower dash, where the steering column goes in
   // driver on the left: on the seat's own surfaces, the cab floor (the skin's bottom, y = 0) under the pedals
   g.userData.seats = [{ p: [-0.4, 0.27, 0.3], s: 1, fit: { at: [-0.4, 0.23, 0.42], dims: [0.46, 0.62, 0.42, 0.22], floor: 0, feet: 'pedals' }, controls: { col: [0, 0.5, -0.52], tilt: 0.28, pedZ: -0.76, pedY: -0.27 } }];
+  // what the driver must keep clear of: inside the cab's skin (the lofted sections, superellipses of power n), the dash
+  // and the lower dash the column goes into
+  g.userData.seats[0].obstacles = [{ name: 'cab', inside: S0.filter((s) => s.z > -1.3 && s.z < 1.3).map((s) => [s.z, s.hw, (s.top - s.bot) / 2, (s.top + s.bot) / 2, s.n]) },
+    { name: 'dash', box: [0, 0.74, -0.58], size: [1.6, 0.14, 0.34] }, { name: 'lower dash', box: [-0.4, 0.57, -0.6], size: [0.56, 0.24, 0.22] }];
   // shut lines (thin dark grooves just proud of the paint), door handles, mirrors
   const line = (pts) => nb.add(tube(pts, 0.007, 4, pts.length * 4), seam);
   for (const sx of [-1, 1]) {
@@ -451,10 +455,11 @@ function heliCrewBay(b, fl, sy, sz) {
     b.add(hbox(0.34, sy - 0.03 - fl, 0.3, sx, (fl + sy - 0.03) / 2, sz - 0.16), dk); } // each seat on a box down to the deck
   b.add(hbox(0.06, sy + 0.03 - fl, 0.14, 0.05, (fl + sy + 0.03) / 2, sz), dk); // the collective's housing (its pivot on top)
   const py = sy + 0.02, pz = sz - 0.18, fit = { dims: [0.42, 0.6, 0.38, 0.22], floor: fl }, dy = fl - py; // (the seat point: the crew's rig origin)
+  const housing = { name: 'collective housing', box: [0.05, (fl + sy + 0.03) / 2, sz], size: [0.06, sy + 0.03 - fl, 0.14] };
   return [
-    { p: [0.3, py, pz], s: 0.8, fit: { ...fit, at: [0.3, sy, sz], feet: 'pedals' },
+    { p: [0.3, py, pz], s: 0.8, obstacles: [housing], fit: { ...fit, at: [0.3, sy, sz], feet: 'pedals' },
       controls: { stickBase: [0, dy + 0.04, -0.23], stickLen: 0.48, collBase: [-0.25, 0.01, 0.18], collLen: 0.34, pedZ: -0.42, pedY: dy + 0.01 } },
-    { p: [-0.3, py, pz], s: 0.8, role: 'crew', fit: { ...fit, at: [-0.3, sy, sz] } },
+    { p: [-0.3, py, pz], s: 0.8, role: 'crew', obstacles: [housing], fit: { ...fit, at: [-0.3, sy, sz] } },
   ];
 }
 // Bubble nose: glass dome forward of the cabin bulkhead, painted chin, two seats, pilots, instrument console.
@@ -477,6 +482,10 @@ function heliNose(c, lv) {
       b.add(ringLoft(rows, true, true), M.paint(0x2b2d31, 'matte')); }
     b.add(hbox(0.12, -0.24 - FL, 0.1, 0, (FL - 0.24) / 2, -0.86), M.paint(0x2b2d31, 'matte')); // the console's pedestal, down to the deck between the crew's feet
     g.userData.seats = heliCrewBay(b, FL, -0.34, SZ); b.to(g);
+    // what the crew must keep clear of: inside the bubble (the glass's ellipsoid, to where it meets the cabin), the
+    // console and its pedestal, and (heliCrewBay) the collective's housing
+    for (const st of g.userData.seats) st.obstacles = [{ name: 'bubble', below: 'mirror', inside: insideRows(-R * 1.45, -R * 1.45 * Math.cos(Math.PI * 0.62), 48, (z) => { const k = Math.sqrt(Math.max(0, 1 - (z / (R * 1.45)) ** 2)); return [R * 0.95 * k, R * 1.08 * k, 0]; }) },
+      boxObstacle('console', new THREE.Matrix4().makeRotationX(-0.55).setPosition(0, -0.2, -0.92), [0.86, 0.12, 0.3]), { name: 'pedestal', box: [0, (FL - 0.24) / 2, -0.86], size: [0.12, -0.24 - FL, 0.1] }, ...st.obstacles];
     return g;
   }
   const console_ = new THREE.BoxGeometry(0.9, 0.22, 0.35); console_.rotateX(-0.5); console_.translate(0, -0.12, -0.55); b.add(console_, M.black());

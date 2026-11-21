@@ -358,3 +358,49 @@ export function poseBody(rig, { grip = true, scale = 1.07, seat = { y: -0.09, ba
   const centre = hb.getCenter(V()), radii = hb.getSize(V()).multiplyScalar(0.5);
   return { pos, skinIndex: skI, skinWeight: skW, seg, along, eye: S.eye, index: S.idx, head: { centre, radii } };
 }
+
+// The head's size, measured from the mesh: the box round the head's vertices above the jaw (more than 6 cm up the head
+// bone), as { centre, radii } in the head bone's frame (origin at the neck joint, +Y up the head, -Z to the face), the
+// same measure poseBody gives for helmets and hair, but from the rest mesh (the head isn't stretched or bent), so the
+// posture solve can use it as an obstacle sphere without posing the whole body.
+const headCache = new Map();
+export function headSize(S = BODY, scale = 1.07) {
+  if (!S) return null; const key = S.id + '|' + scale; if (headCache.has(key)) return headCache.get(key);
+  const { bones: SB, byName: N } = S, J = (n, end = 'h') => SB[N[n]][end].clone().multiplyScalar(scale), neckB = J('neck01');
+  const inv = frame(neckB, J('head', 't').sub(neckB), V(0, 0, -1)).invert(), segOf = SB.map((b) => segmentOf(b.name)), hb = new THREE.Box3(), v = V();
+  for (let i = 0; i < S.n; i++) {
+    let wh = 0; for (let k = 0; k < 4; k++) if (segOf[S.bi[i * 4 + k]] === 'head') wh += S.bw[i * 4 + k]; if (wh < 128) continue;
+    v.set(S.pos[i * 3], S.pos[i * 3 + 1], S.pos[i * 3 + 2]).multiplyScalar(scale).applyMatrix4(inv); if (v.y > 0.06) hb.expandByPoint(v);
+  }
+  const out = { centre: hb.getCenter(V()), radii: hb.getSize(V()).multiplyScalar(0.5) }; headCache.set(key, out); return out;
+}
+
+// The limbs' thickness, measured from the mesh: for the upper arm, forearm, thigh and shin (right side), over the
+// middle of the bone's length (30 to 70% along) in its segment's frame (as the rig's bone: +Y along it, -Z to the front),
+// the middle of the flesh's cross-section (off: [x, z], it isn't centred on the bone: the calf is behind the shin bone)
+// and the furthest the skin gets from that line (r). A limb is then a capsule round the bone, offset by off (the posture
+// solve keeps those capsules out of the cockpit's walls and panels).
+const limbCache = new Map();
+export function limbRadii(S = BODY, scale = 1.07) {
+  if (!S) return null; const key = S.id + '|' + scale; if (limbCache.has(key)) return limbCache.get(key);
+  const { bones: SB, byName: N } = S, J = (n) => SB[N[n]].h.clone().multiplyScalar(scale), segOf = SB.map((b) => segmentOf(b.name));
+  const ends = { uArmR: ['upperarm01.R', 'lowerarm01.R'], fArmR: ['lowerarm01.R', 'wrist.R'], thighR: ['upperleg01.R', 'lowerleg01.R'], shinR: ['lowerleg01.R', 'foot.R'] };
+  const out = {}, v = V();
+  for (const [g, [a0, b0]] of Object.entries(ends)) {
+    const a = J(a0), b = J(b0), L = a.distanceTo(b), inv = frame(a, b.clone().sub(a), V(0, 0, -1)).invert(), pts = [];
+    for (let i = 0; i < S.n; i++) {
+      let w = 0; for (let k = 0; k < 4; k++) if (segOf[S.bi[i * 4 + k]] === g) w += S.bw[i * 4 + k]; if (w < 160) continue;
+      v.set(S.pos[i * 3], S.pos[i * 3 + 1], S.pos[i * 3 + 2]).multiplyScalar(scale).applyMatrix4(inv); if (v.y >= 0.3 * L && v.y <= 0.7 * L) pts.push([v.x, v.z]);
+    }
+    let cx = 0, cz = 0; for (const [x, z] of pts) { cx += x; cz += z; } cx /= pts.length || 1; cz /= pts.length || 1;
+    let r = 0; for (const [x, z] of pts) r = Math.max(r, Math.hypot(x - cx, z - cz));
+    out[g.slice(0, -1)] = { r, off: [cx, cz] };
+  }
+  // the foot (standing, flat): below the ankle joint, its heel and toe (z, from the ankle; -z forward), the sole's depth
+  // under the ankle and half its width, for a capsule along it
+  { const an = J('foot.R'); let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, y0 = Infinity;
+    for (let i = 0; i < S.n; i++) { if (segOf[S.bi[i * 4]] !== 'shinR') continue; v.set(S.pos[i * 3], S.pos[i * 3 + 1], S.pos[i * 3 + 2]).multiplyScalar(scale).sub(an); if (v.y > 0) continue;
+      x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x); z0 = Math.min(z0, v.z); z1 = Math.max(z1, v.z); y0 = Math.min(y0, v.y); }
+    out.foot = { toe: z0, heel: z1, sole: -y0, r: (x1 - x0) / 2 }; }
+  limbCache.set(key, out); return out;
+}

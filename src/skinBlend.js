@@ -332,7 +332,14 @@ function seatCanopy(ck, U, bodyColor, addTo, rivets) {
   for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; }
   tg.computeVertexNormals();
   addTo(cobj, tg, PM.seat(), { shadow: false });
+  addTubObstacle(cobj, rings, ck.inv);
   return true;
+}
+// The tub just built (rings of world points round its wall, top first) as an obstacle for the crew of seats that declare
+// obstacles (crew.js: { well }), in the cockpit's own coordinates, every other point round
+export function addTubObstacle(cobj, rings, inv) {
+  const well = rings.map((r) => r.filter((_, k) => k % 2 === 0).map((p) => p.clone().applyMatrix4(inv).toArray().map((x) => +x.toFixed(4))));
+  for (const st of cobj.userData.seats || []) if (st.obstacles) st.obstacles = [...st.obstacles.filter((o) => o.name !== 'tub'), { name: 'tub', well }];
 }
 
 // ---------- tubes meeting end to end: one fair skin across the seam ----------
