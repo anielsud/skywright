@@ -14,7 +14,7 @@ import { PARTS, partInfo, airfoil } from './parts.js';
 import { partMatrix, partScale, scaleSurface, linScale } from './design.js';
 import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
-import { V, bar, tube, pipe, norm, ringLoft, Bag, kitMaterial, kitSlot, kitUV, EXHAUST_ROUTES, exhaustPipes, navColour, shell } from './partDetail.js';
+import { V, bar, tube, pipe, norm, ringLoft, Bag, kitMaterial, kitSlot, kitUV, EXHAUST_ROUTES, exhaustPipes, navColour, shell, clipGeometry, OPEN_WELL } from './partDetail.js';
 import { clamp, lerp } from './noise.js';
 import { applyLivery } from './liveries.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
@@ -371,6 +371,42 @@ function seat(cp, cobj, bp, structure) {
   // sill: a rounded frame along the seam
   const sill = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(S, true), C.n * 3, cp.id === 'ck_open' ? 0.045 : 0.03, 6, true);
   addTo(cobj, sill, PM.skin(cp.id === 'ck_open' ? cp.color : bp.color));
+  if (cp.id === 'ck_open') openWell(cobj, structure);
+}
+// An open cockpit on a body that isn't reshaped round it (a car's tub): the body's deck inside the coaming used to stay
+// closed, so the driver sat through it. Now the deck is cut away inside the coaming and a well goes down to the floor
+// (OPEN_WELL.floor, as deep as skinBlend's tub for this cockpit, or the body's bottom if that is higher), running forward
+// under the deck as a footwell (floor, sides, ceiling under the deck, a front wall), so the legs go under the cowl.
+function openWell(cobj, structure) {
+  const W = cobj.matrixWorld, inv = W.clone().invert(), down = V(0, -1, 0).transformDirection(W).normalize(), up = down.clone().negate();
+  const L = (x, y, z) => V(x, y, z).applyMatrix4(W), yOf = (p) => p.clone().applyMatrix4(inv).y, { a, b, fw, foot } = OPEN_WELL;
+  const deck = cast(structure, L(0, 1.5, 0), down, 4); if (!deck) return;
+  const deckY = yOf(deck.p), bot = cast(structure, L(0, deckY - 0.02, 0), down, 4, true);
+  const floorY = Math.max(OPEN_WELL.floor, bot ? yOf(bot.p) + 0.015 : -Infinity); if (deckY - floorY < 0.2) return;
+  const deckAt = (x, z) => { const h = cast(structure, L(x, deckY + 1, z), down, 3); return h ? yOf(h.p) : deckY; }; // (the deck's top, before it is cut)
+  const ceilAt = (z) => { const h = cast(structure, L(0, floorY + 0.05, z), up, 2, true); return Math.max(floorY + 0.15, (h ? yOf(h.p) : deckY) - 0.015); }; // (under the deck)
+  const ze = (x) => -b * Math.sqrt(Math.max(0, 1 - (x / a) ** 2)), zf = ze(fw) - foot, N = 40;
+  // the well's outline: round the opening from one side of the footwell, behind the seat, to the other
+  const th0 = Math.asin(fw / a), rim = []; for (let k = 0; k <= N; k++) { const th = th0 + (2 * Math.PI - 2 * th0) * (k / N); rim.push([a * Math.sin(th), -b * Math.cos(th)]); }
+  const tops = rim.map(([x, z]) => deckAt(x * 1.04, z * 1.04));
+  const tunnel = []; for (let k = 0; k <= 8; k++) { const z = zf + (ze(fw) - zf) * (k / 8); tunnel.push([z, ceilAt(z)]); }
+  // cut the deck: the body's skin inside the opening, above the middle of the well (the floor stays)
+  const mid = (deckY + floorY) / 2;
+  for (const m of new Set([deck.m])) {
+    const g = m.geometry, P = g.attributes.position, val = new Float32Array(P.count), v = V(), toC = inv.clone().multiply(m.matrixWorld);
+    for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i).applyMatrix4(toC); val[i] = Math.max(Math.hypot(v.x / a, v.z / b) - 1, (mid - v.y) * 3); }
+    const g2 = clipGeometry(g, val); if (g2) { g2.computeBoundingSphere(); g2.computeBoundingBox(); m.geometry = g2; }
+  }
+  const mat = PM.duct(0x2a2c30), geos = [];
+  geos.push(gridGeo([rim.map(([x, z], k) => L(x, tops[k] - 0.004, z)), rim.map(([x, z]) => L(x, floorY, z))])); // walls round the opening
+  for (const sx of [-1, 1]) geos.push(gridGeo([tunnel.map(([z, c]) => L(sx * fw, c, z)), tunnel.map(([z]) => L(sx * fw, floorY, z))])); // footwell sides
+  geos.push(gridGeo([[L(-fw, tunnel[0][1], zf), L(fw, tunnel[0][1], zf)], [L(-fw, floorY, zf), L(fw, floorY, zf)]])); // its front wall
+  const cols = 16, ceil = [], flo = [];
+  for (let i = 0; i <= 8; i++) ceil.push(Array.from({ length: cols + 1 }, (_, j) => { const x = -fw + 2 * fw * (j / cols), z = zf + (ze(x) - zf) * (i / 8); return L(x, tunnel[Math.min(8, Math.round(((z - zf) / (ze(fw) - zf)) * 8))]?.[1] ?? deckY, z); }));
+  geos.push(gridGeo(ceil)); // its ceiling, up to the opening's edge
+  for (let i = 0; i <= 10; i++) flo.push(Array.from({ length: 33 }, (_, j) => { const x = -a + 2 * a * (j / 32), z0 = Math.abs(x) <= fw ? zf : ze(x), z1 = -ze(x); return L(x * 0.999, floorY, z0 + (z1 - z0) * (i / 10)); }));
+  geos.push(gridGeo(flo)); // the floor
+  for (const g of geos) addTo(cobj, g, mat);
 }
 
 // ---------- landing gear: wells, doors, boots ----------

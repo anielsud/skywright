@@ -231,10 +231,10 @@ function buggyTub(c, lv) {
   // detail: caps facing out (the plain part's nose and tail were see-through) and car paint instead of riveted panels
   const skin = lv ? PM.carPaint(c) : PM.skin(c);
   g.add(new THREE.Mesh(superLoft(S, 44, !!lv), skin)); g.children[0].userData.footTarget = true;
-  const scoop = superLoft(chaikin([{ z: -1.35, hw: 0.2, top: 0.24, bot: 0.06, n: 4 }, { z: -1.1, hw: 0.23, top: 0.31, bot: 0.1, n: 4 }, { z: -0.55, hw: 0.23, top: 0.38, bot: 0.2, n: 4 }, { z: -0.45, hw: 0.2, top: 0.36, bot: 0.24, n: 4 }], 1), 24, !!lv);
+  const scoop = superLoft(chaikin([{ z: -1.52, hw: 0.2, top: 0.24, bot: 0.06, n: 4 }, { z: -1.27, hw: 0.23, top: 0.31, bot: 0.1, n: 4 }, { z: -0.72, hw: 0.23, top: 0.38, bot: 0.2, n: 4 }, { z: -0.62, hw: 0.2, top: 0.36, bot: 0.24, n: 4 }], 1), 24, !!lv); // (ending ahead of the cockpit opening)
   g.add(new THREE.Mesh(scoop, skin)); g.children[1].userData.footTarget = true;
   const b = new Bag(), dark = M.darkMetal(), tp = tubePaint(0x1a1b1e);
-  const mouth = new THREE.BoxGeometry(0.3, 0.1, 0.02); mouth.translate(0, 0.17, -1.355); b.add(mouth, M.intake());
+  const mouth = new THREE.BoxGeometry(0.3, 0.1, 0.02); mouth.translate(0, 0.17, -1.525); b.add(mouth, M.intake());
   // front bumper / nerf bars / skid plate
   const tb = lv ? pipe : tube; // detail: closed tube ends (the plain part keeps its geometry: its volume centroid is a physics input)
   b.add(tb([V(-0.55, -0.22, -2.0), V(-0.45, -0.18, -2.32), V(0, -0.16, -2.4), V(0.45, -0.18, -2.32), V(0.55, -0.22, -2.0)], 0.045, 8, 40), tp);

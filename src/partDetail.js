@@ -774,14 +774,19 @@ export function cockpitBuild(id, color) {
     // windscreen bow and the rear hoop of the sliding hood (they follow the glass)
     for (const [z, rad] of [[-0.6, 0.018], [0.42, 0.014]]) { const k = Math.sqrt(1 - (z / bb) ** 2); b.add(bowGeo(a * k + 0.006, c * k + 0.006, z, rad), paint); }
     // tub fittings: seat, pilot, glare shield with the instrument panel under it, stick
-    const st = seatGeo(0.36, 0.52, 0.34, 0.32); st.translate(0, -0.3, 0.42); b.add(st, seatM);
-    const hrest = new THREE.CapsuleGeometry(0.06, 0.12, 4, 10); hrest.rotateZ(Math.PI / 2); hrest.scale(1, 1, 0.6); hrest.translate(0, 0.23, 0.6); b.add(hrest, seatM);
-    g.userData.seats = [{ p: [0, -0.37, 0.3], s: 0.8 }]; // planeDetail seats a pilot here (crew.js)
+    const st = seatGeo(0.36, 0.72, 0.34, 0.32); st.translate(0, -0.54, 0.42); b.add(st, seatM); // (low in a deep tub: a seated adult's head clears the glass)
+    const hrest = new THREE.CapsuleGeometry(0.06, 0.12, 4, 10); hrest.rotateZ(Math.PI / 2); hrest.scale(1, 1, 0.6); hrest.translate(0, 0.2, 0.64); b.add(hrest, seatM);
+    // the pilot (crew.js) on that seat; the seat point is where the hips settle. The controls where this cockpit has
+    // them (part coordinates): the stick standing on the tub floor between the knees, the throttle lever on the left
+    // wall beside the hip, the rudder pedals on the floor
+    { const P = [0, -0.392, 0.367], S = 0.8, at = (x, y, z) => [x - P[0], y - P[1], z - P[2]]; // (controls: part units from the seat point)
+      g.userData.seats = [{ p: P, s: S, fit: { at: [0, -0.54, 0.42], dims: [0.36, 0.72, 0.34, 0.32], floor: -0.66, feet: 'pedals' },
+        controls: { stickBase: at(0, -0.655, -0.12), stickLen: 0.42, thrBase: at(-0.355, -0.38, 0.1), pedY: at(0, -0.66, 0)[1], pedZ: at(0, 0, -0.28)[2] } }]; }
     const gl = new THREE.CylinderGeometry(0.26, 0.26, 0.16, 18, 1, true, -1.25, 2.5); gl.scale(1, 1, 0.55); gl.rotateY(Math.PI); gl.translate(0, 0.08, -0.55); b.add(shell(gl, 0.008), black);
     const glTop = new THREE.CylinderGeometry(0.26, 0.26, 0.012, 18, 1, false, -1.25, 2.5); glTop.scale(1, 1, 0.55); glTop.rotateY(Math.PI); glTop.translate(0, 0.16, -0.55); b.add(capHoles(glTop), black);
     const pf = mx([0, 0.06, -0.54], [-0.25, 0, 0]), pnl = new THREE.BoxGeometry(0.46, 0.2, 0.012); pnl.applyMatrix4(pf); b.add(pnl, black); // (its top edge up under the glare shield's lid: the shield hung ahead of it)
     for (let i = 0; i < 5; i++) { const d = new THREE.CircleGeometry(0.032, 12); d.applyMatrix4(pf.clone().multiply(mx([-0.18 + i * 0.09, 0.02 - (i % 2) * 0.06, 0.0065]))); nb.add(d, PM.dial()); } // on the panel face (they hung in front of it, or behind)
-    g.userData.fit = [{ kind: 'seat', p: [0, -0.333, 0.29], w: 0.2, d: 0.2 }, { kind: 'panel', p: V(0, -0.1, 0).applyMatrix4(pf).toArray(), w: 0.4, d: 0.05, tilt: -0.25 }];
+    g.userData.fit = [{ kind: 'seat', p: [0, -0.573, 0.29], w: 0.2, d: 0.2 }, { kind: 'panel', p: V(0, -0.1, 0).applyMatrix4(pf).toArray(), w: 0.4, d: 0.05, tilt: -0.25 }];
   } else if (id === 'ck_fighter') {
     const glass = revolveZ(smoothPts(FIGHTER_GLASS, 40), 48, 1.15);
     g.add(new THREE.Mesh(glass, PM.canopy(0x6b5524)));
@@ -804,6 +809,9 @@ export function cockpitBuild(id, color) {
   b.to(g); nb.to(g, true);
   return g;
 }
+// The open cockpit's well on a body that isn't reshaped round it (planeDetail.openWell): the opening inside the coaming
+// (half-width a, half-length b), the footwell's half-width and length ahead of the opening, and the floor's height.
+export const OPEN_WELL = { a: 0.37, b: 0.53, fw: 0.24, foot: 0.45, floor: -0.58 };
 // Detail build of the open cockpit: windscreen, coaming rim, a padded seat; the pilot (or driver) comes from crew.js.
 // The windscreen is a little curved, raked screen in a metal frame standing on the front of the coaming (its base at the
 // group origin): skinBlend moves it onto the seam when the cockpit is seated in a body, and leaves it untrimmed.
@@ -821,9 +829,16 @@ export function openCockpitBuild(color) {
   const rim = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.06, 10, 32), leatherMat(color)); rim.rotation.x = Math.PI / 2; rim.scale.set(1, 1.4, 1); g.add(rim); g.userData.rim = rim; // padded coaming (skinBlend swaps it for one along the seam)
   const st = seatGeo(0.4, 0.5, 0.36, 0.3); st.translate(0, -0.36, 0.32); b.add(st, PM.seat());
   const hrest = new THREE.CapsuleGeometry(0.06, 0.12, 4, 10); hrest.rotateZ(Math.PI / 2); hrest.scale(1, 1, 0.6); hrest.translate(0, 0.17, 0.48); b.add(hrest, PM.seat());
-  b.to(g);
+  // dash under the coaming's front: the instruments, and where a steering column goes in (on a car body it hangs from
+  // the deck, its ends in the footwell's sides; under a plane's coaming it is the instrument panel)
+  const pf = mx([0, -0.19, -0.5], [-0.15, 0, 0]), dash = new THREE.BoxGeometry(0.47, 0.2, 0.025); dash.applyMatrix4(pf); b.add(dash, M.black());
+  const nb = new Bag(); for (let i = 0; i < 3; i++) { const d = new THREE.CircleGeometry(0.03, 12); d.applyMatrix4(pf.clone().multiply(mx([-0.12 + i * 0.12, 0.02, 0.0135]))); nb.add(d, PM.dial()); }
+  b.to(g); nb.to(g, true);
   g.userData.fit = [{ kind: 'seat', p: [0, -0.393, 0.18], w: 0.22, d: 0.2 }];
-  g.userData.seats = [{ p: [0, -0.36, 0.16], s: 0.84 }];
+  // the pilot or driver (crew.js) on that seat, the seat point where the hips settle; pedals on the well's floor
+  { const P = [0, -0.219, 0.241], S = 0.84, at = (x, y, z) => [x - P[0], y - P[1], z - P[2]]; // (controls: part units from the seat point)
+    g.userData.seats = [{ p: P, s: S, fit: { at: [0, -0.36, 0.32], dims: [0.4, 0.5, 0.36, 0.3], floor: OPEN_WELL.floor, feet: 'pedals' },
+      controls: { pedY: at(0, OPEN_WELL.floor, 0)[1], pedZ: at(0, 0, -0.2)[2] } }]; }
   return g;
 }
 // small local copies of parts.js revolve helpers (parts.js imports this file)
