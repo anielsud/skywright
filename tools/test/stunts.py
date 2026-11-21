@@ -10,7 +10,7 @@ steer), and checks, at each location, that
     upright, goes over the top of the loop upside down with its wheels on the deck, and comes out upright in the exit lane;
   - coasting into the loop at the boost pad's speed still makes it round; far too slow, it rolls back down;
   - the mesa jump (boost -> mesa -> boost -> lip -> gap -> landing ramp): it clears the gap and lands upright;
-  - the bowl (wall ride) at several speeds: round it on the wall, back out upright;
+  - the bowl (wall ride) at several speeds, up to flat out: round it on the wall, never over the lip, back out upright;
   - at the Grand Canyon: planes on the mesas (one set down stands on it, one flown into a cliff hits it); the canyon
     jump's start is at its run-up, and a scripted run (full gas, no steering) clears the real gap, lands upright on the
     far ramp and is stopped by the parachute; a car too slow for it is lowered into the canyon by the rescue parachute.
@@ -54,8 +54,9 @@ def checks(r, loc):
     for b in r['bowl']:
         n = f"{b['name']} ({b['realism']}) bowl at {b['speed']} m/s"
         a = b['after']
-        add(f'{n}', b['onWall'] > 60 and b['maxBank'] > 25 and b['maxY'] < 8 and a['up'] > 0.9 and a['wheels'] >= min(3, a['of']) and b['alive'] == b['parts'],
-            f"bank up to {b['maxBank']} deg, {b['maxY']} m up the wall, out: up {a['up']}, {a['wheels']}/{a['of']} wheels down")
+        # (flat out, a motorbike rides right up to the lip: the catch fence holds it there; it must not go over the top)
+        add(f'{n}', b['onWall'] > 60 and b['maxBank'] > 25 and b['maxY'] < (9 if b['speed'] > 28 else 8) and b['maxD'] <= b['rimA'] + 0.05 and a['up'] > 0.9 and a['wheels'] >= min(3, a['of']) and b['alive'] == b['parts'],
+            f"bank up to {b['maxBank']} deg, {b['maxY']} m up the wall, {b['maxD']} m out (lip {b['rimA']}), out: up {a['up']}, {a['wheels']}/{a['of']} wheels down")
     p = r['planes']
     if p:
         la, cr = p['land'], p['crash']
@@ -111,6 +112,8 @@ async def shots(cdp, d, loc, evel):
     await shot('start.png', "(() => { const k = __sky.F.world.stunts.park, s = k.Lp(k.start.pos); __cam([s.x - 24, 4.5, s.z + 3], [s.x + 40, 2, s.z - 1]); return 1; })()")
     await shot('loop.png', "(() => { const L = __sky.F.world.stunts.park.loopInfo, x = L.entryX + 21; return __cam([x - 40, 7, 62], [x, 9, 30]); })()")
     await shot('car-mid-loop.png', "(() => { const L = __sky.F.world.stunts.park.loopInfo, b = -__sky.F.world.stunts.park.XS + __sky.F.world.stunts.park.L.boost; const p = __stunts.stage('Dune Buggy', b - 20, 33.5, 1, 20, (a) => a.up.y < -0.95); __cam([p[0] - 14, p[1] - 4, p[2] + 22], p); return 1; })()")
+    await shot('bowl.png', "(() => { const X = -__sky.F.world.stunts.park.XS; return __cam([X + 2, 5, -6], [X - 40, 6, 14]); })()")
+    await shot('bowl-rim.png', "(() => { const X = -__sky.F.world.stunts.park.XS; return __cam([X - 20, 22, -62], [X - 30, 4, 0]); })()")
     await shot('road.png', "(() => { const w = __sky.F.world, s = w.landStart('road'), c = __sky.rig.cam, V = __sky.THREE.Vector3; if (!s) return 'no road start'; const f = new V(-Math.sin(s.heading), 0, -Math.cos(s.heading)), p = s.pos.clone(); p.y = w.groundAt(p.x, p.z).h; c.position.copy(p).addScaledVector(f, -22).add(new V(0, 7, 0)); c.lookAt(p.clone().addScaledVector(f, 30)); c.userData.focus = c.position.clone(); w.update(0.016, c, new V(), []); w.flora?.update?.(c.position); return 1; })()", 4)
     if evel:
         await shot('evel-overview.png', "(() => { const P = __sky.F.world.stunts.evel.P; __cam([P.gap * 0.5, 120, 330], [P.gap * 0.5, -40, 0], 'evel'); return 1; })()", 5)
@@ -189,7 +192,7 @@ async def main(a):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--locations', default=','.join(LOCATIONS), help='comma-separated locations (default: all four)')
-    ap.add_argument('--cars', default='Dune Buggy,Chomper,Dirt Bike', help='comma-separated stock cars and bikes (default: Dune Buggy,Chomper,Dirt Bike)')
+    ap.add_argument('--cars', default='Dune Buggy,Chomper,Dirt Bike,Sport Bike', help='comma-separated stock cars and bikes (default: Dune Buggy,Chomper,Dirt Bike,Sport Bike)')
     ap.add_argument('--realism', default='pilot,arcade', help='comma-separated realism levels (default: pilot,arcade)')
     ap.add_argument('--quality', default='low', help='graphics setting (physics does not depend on it)')
     ap.add_argument('--shots', metavar='DIR', help='also save screenshots of each park, the canyon jump and cars mid-stunt to DIR')

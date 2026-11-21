@@ -304,6 +304,7 @@ export class StuntPark extends Site {
     const conc = col(T.bowl[0]), stripe = T.stripes.map(col);
     this.sweep(Pn, { s0: 0, s1: L, n: 64, path: pth, cross, color: (s, k, yy) => (k === 0 ? col(T.bowl[1]) : k >= 2 && k <= K && k % 4 === 0 ? stripe[(k / 4 - 1) % 3] : k === K + 1 ? col(T.bowl[2]) : conc.clone().multiplyScalar(0.95 + 0.05 * Math.sin(s))), type: () => PAINT, depth: 1.6, wallColor: () => col(T.bowl[3]), wallType: PAINT });
     const a78 = (78 * Math.PI) / 180, rimA = 1 + Rw * Math.sin(a78), rimY = Rw * (1 - Math.cos(a78));
+    this.bowlInfo = { env, L, rimA, rimY };
     let s0 = null, s1 = 0;
     for (let s = 6; s < L - 6; s += 1.6) { const f = pth(s); if (env(s) > 0.995) { this.tyres(f.p.clone().addScaledVector(f.r, rimA + 0.9).add(V(0, rimY, 0)), 2); s0 ??= s; s1 = s; } }
     this.wallLine(pth, s0, s1, rimA + 0.5, 1.5, rimY); // the barrier along the rim stops you riding over the top
@@ -312,6 +313,10 @@ export class StuntPark extends Site {
       this.tube(Pn, f0.p.clone().addScaledVector(f0.r, rimA).add(V(0, h0 + 0.06, 0)), f1.p.clone().addScaledVector(f1.r, rimA).add(V(0, h1 + 0.06, 0)), 0.09, 0.09, 6, col(0xc8ccd2), false);
     }
     this.sign(pth(L / 2).p.addScaledVector(pth(L / 2).r, rimA + 0.9).add(V(0, rimY, 0)), 'wall', 4.5, 0, false, pth(L / 2).r);
+    // a catch fence all along the lip, the lowered ends too (rimCatch() is what it does): posts and three cables
+    const post = col(0x50565e), cable = col(0xd8dce2), FH = 4, fp = (s, yy) => { const f = pth(s); return f.p.addScaledVector(f.r, rimA + 1.6).add(V(0, env(s) * rimY + yy, 0)); };
+    for (let s = 2; s <= L - 2; s += 4) this.tube(Pn, fp(s, 0), fp(s, FH), 0.08, 0.07, 5, post, false);
+    for (let s = 2; s < L - 2; s += 4) for (const yy of [1.6, 2.8, FH]) this.tube(Pn, fp(s, yy), fp(Math.min(L - 2, s + 4), yy), 0.025, 0.025, 4, cable, false);
   }
 
   // ---- the start arch, flags, stands, lights ----
@@ -387,6 +392,7 @@ export class StuntPark extends Site {
     if (!ac.isCar || ac.dead || !this.inside(ac.x.x, ac.x.z, 20)) { this.st.air = 0; return null; }
     const st = this.st, msgs = [], up = ac.up || Y;
     const fwd = V(0, 0, -1).applyQuaternion(ac.q);
+    this.rimCatch(ac, dt);
     if (ac.onGround) {
       this.boostPads(ac, dt, fwd, msgs);
       this.guide(ac, dt); this.bowlGuide(ac, dt);
@@ -434,6 +440,29 @@ export class StuntPark extends Site {
     ac.q.premultiply(turn).normalize(); ac.v.applyQuaternion(turn);
     ac.x.addScaledVector(this.Wd(f.b), -e * Math.min(1, 5 * dt));
   }
+  // The catch fence along the bowl's lip: whatever comes up the wall too fast (a motorbike flat out rides right up to
+  // the lip, and the wall is lowered under you at the exit) loses its speed outwards and upwards there instead of
+  // flying over the top. Every mode: it's a fence. Only for what came in from the bowl's side of it.
+  rimCatch(ac, dt) {
+    const B = this.bowlInfo, lp = this.Lp(ac.x), x = lp.x + this.XS, z = lp.z, r = Math.hypot(x, z), d = r - RT; // (d: out from the lane's middle)
+    if (x > 1 || d < -TW - 2) { ac.bowlIn = false; return; }
+    if (d < B.rimA - 3) ac.bowlIn = true;
+    if (!ac.bowlIn) return;
+    const psi = Math.atan2(z, x), s = clamp((psi < 0 ? -Math.PI / 2 - psi : 1.5 * Math.PI - psi) * RT, 0, B.L), lip = B.env(s) * B.rimY;
+    // Arcade and Pilot: no faster than the banking here can carry you round (the wall is lowered towards the exit, and
+    // what's left of it can't hold a motorbike flat out): eased off like a rider braking for the bend
+    if (ac.R.assist > 0 && ac.onGround && d > -TW) {
+      const e = B.env(s), vmax = Math.sqrt((RT + 5) * 9.81 * (e * 1.73 + 1)), v = ac.v.length(); // (banked at 60 degrees, half way up: plus the tyres' grip)
+      if (v > vmax) ac.v.multiplyScalar(Math.max(vmax, v - 14 * dt) / v);
+    }
+    if (lp.y > lip + 5) return; // (over the fence)
+    const k = smoothstep(B.rimA - 1, B.rimA, d); if (k <= 0) return; // (riding the wall below the lip: left alone)
+    const rad = this.Wd(V(x / r, 0, z / r)), vr = ac.v.dot(rad), f = k >= 1 ? 1 : Math.min(1, k * 12 * dt);
+    const back = lp.y > lip + 0.3 && d > B.rimA - 0.6 ? -3 : 0; // (up on the rim's top: back in over the lip, not along it)
+    if (vr > back) ac.v.addScaledVector(rad, (back - vr) * f);
+    if (ac.v.y > 0 && lp.y > lip + 0.5 && d > B.rimA - 0.4) ac.v.y *= 1 - f; // (no climbing up the barrier, or on over the lowered lip)
+    if (d > B.rimA) ac.x.addScaledVector(rad, B.rimA - d); // (held at the fence)
+  }
   // Arcade and Pilot: on the bowl's wall the car is turned to run round it (the bowl is a 180-degree turn you'd have
   // to steer hard into at full speed; kids hit it flat out). How high you ride is still your speed.
   bowlGuide(ac, dt) {
@@ -451,7 +480,10 @@ export class StuntPark extends Site {
     const err = Math.asin(clamp(fwd.clone().cross(t).dot(n), -1, 1)), turn = new THREE.Quaternion().setFromAxisAngle(nW, err * Math.min(1, 4 * dt * ac.R.assist / 0.45));
     ac.q.premultiply(turn).normalize(); ac.v.applyQuaternion(turn);
     // turning at the rate the bend needs (and not at all as you leave it: no slide off sideways at the exit)
-    const qi = ac.q.clone().invert(), wn = ac.w.clone().applyQuaternion(ac.q).dot(nW), want = (ac.v.length() / r) * (1 - out);
+    // (the bend goes on to the end of the bowl: easing off the turn early sends a fast car straight up the lowered wall
+    // and over its lip, so only let go in the last few degrees)
+    const late = z > 0 && psi < Math.PI ? smoothstep(0.3, 0.05, psi - Math.PI / 2) : 0;
+    const qi = ac.q.clone().invert(), wn = ac.w.clone().applyQuaternion(ac.q).dot(nW), want = (ac.v.length() / r) * (1 - late);
     ac.w.add(nW.clone().multiplyScalar((want - wn) * Math.min(1, 6 * dt)).applyQuaternion(qi));
     // and it keeps you flat on the wall (no tipping over sideways, tall trucks!), coming level with it as it flattens out
     const up = V(0, 1, 0).applyQuaternion(ac.q), f2 = V(0, 0, -1).applyQuaternion(ac.q), rollErr = Math.asin(clamp(up.clone().cross(nW).dot(f2), -1, 1));
