@@ -305,3 +305,14 @@ python3 tools/test/walls.py --places nyc --no-game
 
 Run it when you change `wallContacts` in `aircraft.js`, `world.wallBoxes`, or how towns, real places or New York file
 their buildings.
+
+## Frame benchmark
+
+`bench.py` flies a preset off the runway at each location with the graphics held fixed (no adaptive resolution) and
+prints JavaScript time per frame, the part spent inside rendering, draw calls and triangles. `--cpu-throttle 4`
+slows the page towards a tablet's CPU. Use it before and after performance work; numbers only compare runs on the
+same machine.
+
+```sh
+python3 tools/test/bench.py --cpu-throttle 4 --json before.json
+```
