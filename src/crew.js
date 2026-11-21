@@ -454,11 +454,56 @@ class Rig {
     // The forearm's direction depends on where the wrist is, so hand and arm are solved together (a few rounds).
     // A hand at rest on a surface (restN: its normal) instead lies flat on it: the back of the hand along the normal,
     // the fingers along the forearm's direction in the surface's plane, the palm's centre on the contact point.
+    // Holding a bar leaves two things free: how far the hand rolls round the bar (th) and how the elbow swings round
+    // the shoulder-wrist line (ph). Each candidate is scored against the arm's neutral, relaxed angles: the upper arm
+    // hanging mostly down (a little forward and out), the forearm near its mid twist (thumb up, as in a handshake,
+    // pronation and supination each comfortable to about 70 degrees), the wrist near straight (flexion/extension to
+    // about 60, sideways deviation to about 20). Cost rises with the square of each departure; out of reach is
+    // ruled out. The first solve searches everything; after that (every frame, steering) it refines round the
+    // previous answer, so the arm moves smoothly.
+    const comfortArm = (k, S, c, X, G, hint) => {
+      const L1 = D.upper, L2 = D.fore, sx = k === 'R' ? 1 : -1, relaxed = V(sx * 0.18, -1, -0.32).normalize();
+      const Y0 = c.clone().sub(S); Y0.addScaledVector(X, -Y0.dot(X)).normalize(); const Z0 = V().crossVectors(X, Y0);
+      const Yt = V(), Zt = V(), Wt = V(), d = V(), E = V(), u = V(), f = V(), pole = V(), u0 = V(), v0 = V(), tr = V(), th2 = V();
+      const score = (th, ph, out) => {
+        Yt.copy(Y0).multiplyScalar(Math.cos(th)).addScaledVector(Z0, Math.sin(th)); Zt.crossVectors(X, Yt);
+        Wt.copy(c).addScaledVector(X, -G.x).addScaledVector(Yt, -G.y).addScaledVector(Zt, -G.z);
+        d.copy(Wt).sub(S); const L0 = d.length(), L = clamp(L0, Math.abs(L1 - L2) + 0.01, L1 + L2 - 0.002), miss = Math.abs(L0 - L); d.divideScalar(L0); // (out of reach: the arm reaches as far as it can, at a large cost)
+        const x = (L1 * L1 - L2 * L2 + L * L) / (2 * L), y = Math.sqrt(Math.max(0, L1 * L1 - x * x));
+        u0.set(0, -1, 0).addScaledVector(d, d.y); if (u0.lengthSq() < 1e-6) u0.set(0, 0, -1).addScaledVector(d, -d.z); u0.normalize(); v0.crossVectors(d, u0);
+        pole.copy(u0).multiplyScalar(Math.cos(ph)).addScaledVector(v0, Math.sin(ph));
+        E.copy(S).addScaledVector(d, x).addScaledVector(pole, y); u.copy(E).sub(S).divideScalar(L1); f.copy(Wt).sub(E).normalize();
+        const sh = Math.acos(clamp(u.dot(relaxed), -1, 1));
+        const flex = Math.atan2(f.dot(Zt), f.dot(Yt)), dev = Math.asin(clamp(f.dot(X), -1, 1));
+        tr.copy(u).negate().addScaledVector(f, u.dot(f)); th2.copy(X).addScaledVector(f, -X.dot(f)); // (thumb-up reference, the thumb's actual direction, both across the forearm)
+        const tw = tr.lengthSq() > 1e-6 && th2.lengthSq() > 1e-6 ? Math.acos(clamp(tr.normalize().dot(th2.normalize()), -1, 1)) : 0;
+        const cost = (sh / 0.8) ** 2 + (flex / 1.05) ** 2 + (dev / 0.35) ** 2 + (tw / 1.2) ** 2 + miss * 1e4;
+        if (out) { out.W = Wt.clone(); out.Y = Yt.clone(); out.pole = pole.clone(); }
+        return cost;
+      };
+      const prev = (this.armSol ||= {})[k];
+      let best = { c: Infinity, th: 0, ph: 0 };
+      const grid = (th0, ph0, span, n) => { for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const th = th0 + span * (i / (n - 1) - 0.5) * 2, ph = ph0 + span * (j / (n - 1) - 0.5) * 2, cc = score(th, ph); if (cc < best.c) best = { c: cc, th, ph }; } };
+      if (prev) { best = { c: score(prev.th, prev.ph), th: prev.th, ph: prev.ph }; grid(prev.th, prev.ph, 0.25, 9); }
+      else grid(0, 0, Math.PI, 49);
+      for (const span of [0.12, 0.04, 0.012]) grid(best.th, best.ph, span, 7);
+      this.armSol[k] = { th: best.th, ph: best.ph };
+      const out = {}; score(best.th, best.ph, out); void hint; return out;
+    };
     const arm = (k, S, iu, iff, ih, hint) => {
       const c = hands[k], rest = this.restN?.[k], r = radii[k] ?? 0.03, G = this.hand.G(k, rest ? 0 : r), M = new THREE.Matrix4();
       const X = (axes[k] || V(k === 'R' ? -1 : 1, 0, 0)).clone().normalize().multiplyScalar(this.hand.thumb[k]);
       const Y = c.clone().sub(S); Y.addScaledVector(X, -Y.dot(X)).normalize();
       const Z = V(), W = V();
+      if (!rest) { // a hand on a bar: the most comfortable arm that holds it (see comfortArm)
+        const sol = comfortArm(k, S, c, X, G, hint);
+        Y.copy(sol.Y); Z.crossVectors(X, Y); W.copy(sol.W);
+        limb(S, W, D.upper, D.fore, sol.pole, iu, iff, -1);
+        p[ih].copy(W); q[ih].setFromRotationMatrix(M.makeBasis(X, Y, Z));
+        const Yf = V(0, 1, 0).applyQuaternion(q[iff]), Xf = V(1, 0, 0).applyQuaternion(q[iff]), Xh = X.clone().addScaledVector(Yf, -X.dot(Yf));
+        if (Xh.lengthSq() > 1e-6) { const tw = Math.atan2(V().crossVectors(Xf, Xh).dot(Yf), Xf.dot(Xh.normalize())); q[iff].premultiply(new THREE.Quaternion().setFromAxisAngle(Yf, tw / 2)); }
+        return;
+      }
       const frameUp = () => { if (rest) { Z.copy(rest); Y.addScaledVector(Z, -Y.dot(Z)).normalize(); X.crossVectors(Y, Z).normalize(); } else Z.crossVectors(X, Y); W.copy(c).addScaledVector(X, -G.x).addScaledVector(Y, -G.y).addScaledVector(Z, -G.z); };
       for (let it = 0; it < 4; it++) {
         frameUp();
