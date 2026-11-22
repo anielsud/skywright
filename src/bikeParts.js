@@ -13,6 +13,7 @@ import { M } from './materials.js';
 import { PM } from './planeMaterials.js';
 import { V, bar, tube, pipe, Bag, shell } from './partDetail.js';
 import { superLoft, chaikin } from './vehicleParts.js';
+import * as CK from './cabKit.js';
 
 const cached = new Map();
 const mat = (k, make) => { if (!cached.has(k)) cached.set(k, make()); return cached.get(k); };
@@ -438,6 +439,10 @@ function sportFrame(c, lv) {
   if (lv) {
     const scr = superLoft(chaikin([{ z: -0.66, hw: 0.17, top: 0.39, bot: 0.36, n: 2.4 }, { z: -0.56, hw: 0.2, top: 0.5, bot: 0.4, n: 2.6 }, { z: -0.47, hw: 0.19, top: 0.52, bot: 0.38, n: 2.6 }], 1), 24, true);
     b.add(scr, glass()); // the screen
+    { // the TFT dash under the screen, ahead of the top clamp on a bracket off the nose: revs, speed, gear (live: liveDisplays.js)
+      const lp = CK.livePanel(), m = CK.faceM(V(0, 0.445, -0.505), V(0, 0.62, 0.78));
+      CK.screen(b, b, m, 0.11, 0.055, 'engine', { d: 0.022, border: 0.008, housing: dark, fittings: false, live: { panel: lp, draw: CK.bikeTFT, px: [256, 128] } }); // (in the bike's dark anodising: one more draw call, the display)
+      b.add(bar(V(0, 0.395, -0.51), V(0, 0.43, -0.505), 0.014, 0.02, true, 6), dark); lp.to(g); }
     for (const sx of [-1, 1]) { // twin headlights in the nose, mirrors on stalks
       const l = new THREE.SphereGeometry(0.06, 16, 10); l.scale(1.3, 0.55, 0.5); l.rotateX(-Math.PI / 2 - 0.35); l.translate(sx * 0.1, 0.25, -0.8); b.add(l, M.light(0xfff4dd));
       b.add(bar(V(sx * 0.27, 0.36, -0.5), V(sx * 0.33, 0.42, -0.47), 0.012, 0.012, true, 6), dark);

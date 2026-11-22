@@ -31,7 +31,7 @@ import { MOTOR, isMotor, motorRpm } from './motorSound.js';
 export const REST = Object.freeze({
   spd: 0, kt: 0, mph: 0, kmh: 0, alt: 0, vs: 0, hdg: 0, pitch: 0, roll: 0, turn: 0, slip: 0,
   rpm: 0, rpmK: 0, thr: 0, map: 29.9, g: 1, gMax: 1, gMin: 1, oilP: 0, oilT: 0.1, cht: 0.1, egt: 0.1, fuelL: 0.72, fuelR: 0.68, amp: 0.35,
-  gearDown: 1, gearMove: 0, stall: 0, running: 0, off: 1, brake: 1, ab: 0, gearNo: 0, rev: 0, t: 0,
+  gearDown: 1, gearMove: 0, stall: 0, running: 0, off: 1, brake: 1, ab: 0, gearNo: 0, rev: 0, t: 0, metric: 0,
 });
 const _f = new THREE.Vector3(), _u = new THREE.Vector3(), _r = new THREE.Vector3();
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
@@ -80,6 +80,7 @@ export function signals(ac, ctx, S, dt) {
   S.gearDown = (ac.gearT ?? 1) > 0.98 ? 1 : 0; S.gearMove = (ac.gearT ?? 1) > 0.02 && (ac.gearT ?? 1) < 0.98 ? 1 : 0;
   S.stall = ac.stalled && ctx.stallWarn !== false ? 1 : 0;
   S.brake = ac.brake > 0.5 || ac.svcBrake > 0.5 || ac.ctl?.hand > 0.5 ? 1 : 0;
+  S.metric = ctx.metric ? 1 : 0; // (digital displays: km/h instead of mph)
   return S;
 }
 
@@ -108,6 +109,11 @@ export class Shape {
   quad(a, b, c, d) { return this.tri(a, b, c).tri(a, c, d); }
   // a convex polygon (counter-clockwise), fanned
   poly(pts, z, col, uv) { const i0 = this.n; for (const [x, y] of pts) this.v(x, y, z, col, uv); for (let k = 1; k < pts.length - 1; k++) this.tri(i0, i0 + k, i0 + k + 1); return this; }
+  // any simple polygon (triangulated)
+  outline(pts, z, col, uv) { // (each triangle turned to face +z)
+    const i0 = this.n, v2 = pts.map(([x, y]) => new THREE.Vector2(x, y)); for (const [x, y] of pts) this.v(x, y, z, col, uv);
+    for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(v2, [])) { const A = v2[a], B = v2[b], C = v2[c]; (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x) >= 0 ? this.tri(i0 + a, i0 + b, i0 + c) : this.tri(i0 + a, i0 + c, i0 + b); }
+    return this; }
   disc(cx, cy, r, z, col, uv, seg = 12) { const pts = []; for (let k = 0; k < seg; k++) { const a = (k / seg) * Math.PI * 2; pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]); } return this.poly(pts, z, col, uv); }
   // a thick line from (x0, y0) to (x1, y1)
   bar(x0, y0, x1, y1, w, z, col, uv) { const dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy) || 1, nx = (-dy / L) * w / 2, ny = (dx / L) * w / 2; return this.poly([[x0 - nx, y0 - ny], [x1 - nx, y1 - ny], [x1 + nx, y1 + ny], [x0 + nx, y0 + ny]], z, col, uv); }
@@ -250,7 +256,7 @@ export class LivePanel {
       s.ctx = cv.getContext('2d'); this.drawScreen(s, REST);
     }
     const geo = geos.length > 1 ? mergeAll(geos) : geos[0];
-    const mat = new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: Math.max(...this.screens.map((s) => s.glow)), roughness: 0.25, metalness: 0 });
+    const mat = new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: Math.max(...this.screens.map((s) => s.glow)), roughness: 0.6, metalness: 0 }); // (an anti-glare finish: the screen's glass gives the sheen)
     const mesh = new THREE.Mesh(geo, mat); mesh.userData.live = this; mesh.userData.near = true; mesh.userData.keepShape = true; mesh.castShadow = false; mesh.receiveShadow = true;
     this.screenTex = tex; this.screenMesh = mesh; this.canvas = cv; tex.needsUpdate = true; parent.add(mesh);
   }
@@ -285,6 +291,8 @@ export class LivePanel {
     this.pos.needsUpdate = true;
   }
   update(S, dt) {
+    const pa = this.mesh?.geometry.attributes.position; // (cabinLight gives the mesh a new geometry on the same attributes; a
+    if (pa && pa !== this.pos) { if (pa.count === this.pos.count) this.pos = pa; else this.items.length = 0; } // part cut away round another's interior is left as it is)
     if (this.items.length) this.step(S, dt);
     if (this.screens.length) { let dirty = false; for (const s of this.screens) { s.t += dt; if (s.t >= 1 / s.hz) { s.t = 0; this.drawScreen(s, S); dirty = true; } } if (dirty) this.screenTex.needsUpdate = true; }
   }

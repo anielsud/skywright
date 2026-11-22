@@ -221,6 +221,11 @@ function speedHull(c, lv) {
   { const rail = []; for (let k = 0; k <= 40; k++) { const s = stationAt(SPEED, -3.28 + 6.46 * (k / 40)); rail.push(V(s.hg + 0.01, s.ys - 0.02, s.z)); }
     for (const sx of [1, -1]) b.add(pipe(rail.map((p) => V(p.x * sx, p.y, p.z)), 0.035, 6, 120), M.darkMetal()); }
   if (lv) {
+    // the helm's engine display in a binnacle on the console's dash, raised and turned to the driver (as a bowrider's
+    // glass dash): the revs, the speed, trim and fuel, live (liveDisplays.js)
+    { const lp = CK.livePanel(), m = CK.faceM(V(0.5, 1.2, -0.64), V(0, 0.42, 0.91));
+      CK.screen(b, nb, m, 0.2, 0.1, 'engine', { d: 0.035, border: 0.012, housing: M.black(), fittings: false, live: { panel: lp, draw: CK.boatDash, px: [256, 128] } }); // (in the dash's own black: no extra draw call but the display's)
+      lp.to(g); }
     for (const sx of [1, -1]) { // bow rail on stanchions
       const pts = []; for (let k = 0; k <= 8; k++) { const z = -3.0 + 1.6 * (k / 8), s = stationAt(SPEED, z); pts.push(V(sx * Math.max(0.05, s.hg - 0.08), s.ys + 0.38, z)); }
       b.add(pipe(pts, 0.016, 6, 40), chrome);
@@ -496,7 +501,9 @@ function wheelhouse(c, lv) {
   const fm = (x, s, off = 0) => CK.faceM(A.clone().setX(x).addScaledVector(U, s).addScaledVector(N, off), N, U);
   CK.box(b, fm(0, L / 2, 0.004), [0, 0, 0], [W - 0.25, L - 0.02, 0.008], CK.satinBlack()); // the instrument face: a black panel on the slope
   if (lv) {
-    for (const [x, w, h, t] of [[0.18, 0.28, 0.22, 'radar'], [0.53, 0.28, 0.22, 'chart'], [0.9, 0.2, 0.15, 'engine']]) CK.screen(b, nb, fm(x, L / 2, 0.008), w, h, t);
+    const lp = CK.livePanel(); // (the engine monitor shows the engines live: liveDisplays.js)
+    for (const [x, w, h, t] of [[0.18, 0.28, 0.22, 'radar'], [0.53, 0.28, 0.22, 'chart'], [0.9, 0.2, 0.15, 'engine']]) CK.screen(b, nb, fm(x, L / 2, 0.008), w, h, t, t === 'engine' ? { live: { panel: lp, draw: CK.engineMonitor, px: [256, 192] } } : {});
+    lp.to(g);
     CK.screws(nb, fm(0, L / 2, 0.008), W - 0.28, L - 0.05, 0.0005); CK.placard(nb, fm(-0.58, L / 2 + 0.105, 0.0085), 0.08, 0.03, 0); CK.placard(nb, fm(-0.95, L / 2 + 0.105, 0.0085), 0.08, 0.03, 2);
     { const m = fm(-0.2, L / 2 + 0.03, 0.009); CK.screen(b, nb, m, 0.19, 0.095, 'vhf', { d: 0.04, border: 0.012 }); // VHF radio and its handset
       const hs = new THREE.CapsuleGeometry(0.022, 0.07, 4, 8); hs.applyMatrix4(fm(-0.36, L / 2, 0.035)); nb.add(hs, CK.blackM()); }

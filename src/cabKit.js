@@ -205,14 +205,51 @@ function rotShape(sh, a) { const c = Math.cos(-a), s = Math.sin(-a), p = sh.p; f
 // a race truck's digital dash (AiM / MoTeC style), drawn live on a LivePanel screen: shift lights across the top, the
 // gear big on the left, the speed, the revs, a brake light
 export function raceDash(c, S, w, h) {
-  const T = (s, x, y, px, col, al = 'center') => { c.font = `bold ${px}px Helvetica, Arial, sans-serif`; c.fillStyle = col; c.textAlign = al; c.textBaseline = 'middle'; c.fillText(s, x, y); };
+  const T = (...a) => _T(c, ...a);
   c.fillStyle = '#050607'; c.fillRect(0, 0, w, h);
   const lit = S.running ? Math.round(Math.max(0, Math.min(1, (S.rpmK - 0.45) / 0.5)) * 10) : 0, flash = S.rpmK > 0.97 && (S.t * 8) % 1 < 0.5;
   for (let i = 0; i < 10; i++) { const on = i < lit && !flash; c.fillStyle = i < 5 ? (on ? '#3ccf6a' : '#0f2a17') : i < 8 ? (on ? '#f2b705' : '#2e2408') : (on ? '#e23b3b' : '#2e0f0f'); c.beginPath(); c.roundRect(14 + i * 23, 7, 18, 11, 3); c.fill(); }
   T(S.gearNo < 0 ? 'R' : S.gearNo === 0 ? 'N' : String(S.gearNo), 52, 62, 58, S.gearNo === 0 ? '#3ccf6a' : '#ffffff');
-  T(String(Math.round(S.mph)), 172, 52, 40, '#64e0ff'); T('MPH', 172, 80, 13, '#9a9a9a');
+  const [sp, su] = speedTxt(S); T(sp, 172, 52, 40, '#64e0ff'); T(su, 172, 80, 13, '#9a9a9a');
   T(`${Math.round(S.rpm / 50) * 50} RPM`, 104, 92, 11, '#9a9a9a', 'left');
   if (S.brake) T('BRAKE', 246, 92, 11, '#e23b3b', 'right');
+}
+// the speed in the driver's units (mph unless the settings say metric)
+const speedTxt = (S) => [String(Math.round(S.metric ? S.kmh : S.mph)), S.metric ? 'KM/H' : 'MPH'];
+const _T = (c, s, x, y, px, col, al = 'center', w = 'bold') => { c.font = `${w} ${px}px Helvetica, Arial, sans-serif`; c.fillStyle = col; c.textAlign = al; c.textBaseline = 'middle'; c.fillText(s, x, y); };
+// a twin-engine monitor (the fireboat's helm): rpm, coolant, oil pressure and volts for both engines, as bars and numbers
+export function engineMonitor(c, S, w, h) {
+  c.fillStyle = '#0b0d10'; c.fillRect(0, 0, w, h);
+  const rows = [['RPM', Math.round(S.rpm / 10) * 10, S.rpmK], ['TEMP', `${Math.round(40 + 45 * S.oilT / 0.6)}°`, S.oilT * 1.2], ['OIL', (S.oilP * 6.5).toFixed(1), S.oilP], ['VOLT', (S.running ? 14.1 : 12.4).toFixed(1), S.running ? 0.7 : 0.5]];
+  for (const [k, nm] of [[0, 'PORT'], [1, 'STBD']]) {
+    const x0 = 10 + k * w / 2, bw = w / 2 - 20; _T(c, nm, x0 + bw / 2, 14, 15, '#9fd0ff');
+    rows.forEach(([lab, val, f], i) => { const y = 32 + i * (h - 40) / 4, ff = Math.max(0, Math.min(1, f * (1 + (k ? -0.01 : 0.01))));
+      c.fillStyle = '#20242a'; c.beginPath(); c.roundRect(x0, y, bw, 13, 3); c.fill(); c.fillStyle = i === 0 && ff > 0.92 ? '#e23b3b' : i === 1 && ff > 0.85 ? '#f2b705' : '#3ccf6a'; c.beginPath(); c.roundRect(x0, y, Math.max(4, bw * ff), 13, 3); c.fill();
+      _T(c, lab, x0, y + 24, 11, '#9a9a9a', 'left'); _T(c, String(val), x0 + bw, y + 24, 14, '#e8e8e2', 'right'); });
+  }
+}
+// a sterndrive / outboard boat's engine display (as Mercury's VesselView or a Garmin gauge page): a tach arc with the
+// revs, the speed big, trim and fuel
+export function boatDash(c, S, w, h) {
+  c.fillStyle = '#080b10'; c.fillRect(0, 0, w, h);
+  const cx = 70, cy = 82, R = 56, a0 = Math.PI * 0.85, a1 = Math.PI * 2.15, f = Math.max(0, Math.min(1, S.rpm / 6000)), at = (v) => a0 + (a1 - a0) * v;
+  c.lineWidth = 9; c.strokeStyle = '#1d2530'; c.beginPath(); c.arc(cx, cy, R, a0, a1); c.stroke();
+  c.strokeStyle = '#2f9bff'; c.beginPath(); c.arc(cx, cy, R, a0, at(Math.min(f, 0.9))); c.stroke(); if (f > 0.9) { c.strokeStyle = '#e23b3b'; c.beginPath(); c.arc(cx, cy, R, at(0.9), at(f)); c.stroke(); }
+  c.strokeStyle = '#e8e8e2'; c.lineWidth = 2; for (let i = 0; i <= 6; i++) { const a = at(i / 6); c.beginPath(); c.moveTo(cx + Math.cos(a) * (R - 14), cy + Math.sin(a) * (R - 14)); c.lineTo(cx + Math.cos(a) * (R - 6), cy + Math.sin(a) * (R - 6)); c.stroke(); _T(c, String(i), cx + Math.cos(a) * (R - 23), cy + Math.sin(a) * (R - 23), 11, '#9a9a9a'); }
+  _T(c, String(Math.round(S.rpm / 10) * 10), cx, cy + 6, 22, '#ffffff'); _T(c, 'RPM', cx, cy + 26, 10, '#9a9a9a');
+  const [sp, su] = speedTxt(S); _T(c, sp, 190, 48, 46, '#ffffff'); _T(c, su, 190, 80, 12, '#9fd0ff');
+  _T(c, 'TRIM', 148, 104, 10, '#9a9a9a', 'left'); for (let i = 0; i < 5; i++) { c.fillStyle = i < 2 ? '#2f9bff' : '#1d2530'; c.fillRect(176 + i * 13, 99, 10, 10); }
+  _T(c, 'FUEL', 148, 119, 10, '#9a9a9a', 'left'); c.fillStyle = '#1d2530'; c.fillRect(176, 115, 62, 8); c.fillStyle = '#3ccf6a'; c.fillRect(176, 115, 62 * S.fuelL, 8);
+}
+// a sport bike's TFT dash: a rev bar sweeping across the top into the red, the speed big, the gear in a box
+export function bikeTFT(c, S, w, h) {
+  c.fillStyle = '#050608'; c.fillRect(0, 0, w, h);
+  const n = 28, f = Math.max(0, Math.min(1, S.rpm / 14000)), lit = Math.round(f * n);
+  for (let i = 0; i < n; i++) { const x = 10 + i * ((w - 20) / n), hh = 8 + i * 0.7, red = i >= n * 0.82; c.fillStyle = i < lit ? (red ? '#ff3b3b' : i >= n * 0.7 ? '#f2b705' : '#e8e8e2') : (red ? '#3a1010' : '#1c1f24'); c.fillRect(x, 34 - hh, (w - 20) / n - 2, hh); }
+  for (let k = 0; k <= 14; k += 2) _T(c, String(k), 10 + (k / 14) * (w - 20), 44, 10, k >= 12 ? '#ff5b5b' : '#8a8f96');
+  const [sp, su] = speedTxt(S); _T(c, sp, 118, 84, 46, '#ffffff', 'right'); _T(c, su, 124, 96, 12, '#9a9a9a', 'left');
+  c.strokeStyle = '#8a8f96'; c.lineWidth = 2; c.strokeRect(186, 56, 52, 58); _T(c, S.gearNo <= 0 ? 'N' : String(S.gearNo), 212, 87, 44, S.gearNo <= 0 ? '#3ccf6a' : '#ffffff');
+  _T(c, `${Math.round(S.rpm / 100) * 100}`, 14, 112, 12, '#8a8f96', 'left');
 }
 // a cab's live panel (liveDisplays.js) on this atlas: one more draw call for all its moving needles and lamps
 export const livePanel = () => new LivePanel(atlasMat(), { white: swatchUV('white'), lamp: swatchUV('white') });
@@ -446,11 +483,14 @@ export function collect(parent, fn) { const n0 = parent.children.length; fn(); r
 const screenGlass = () => cached('ckScrGlass', () => new THREE.MeshPhysicalMaterial({ color: 0x0a0c0e, metalness: 0, roughness: 0.05, transparent: true, opacity: 0.14, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.4, depthWrite: false }));
 // a display inset in its bezel: a housing (depth d) whose front is a frame standing proud of the recessed face, the
 // face from the atlas, a glass with a sheen over it, two screws
-export function screen(bag, nb, m, w, h, tile, { d = 0.03, border = 0.014, housing = blackM() } = {}) {
+// (live: { panel, draw, px, hz }: the face is a canvas display of a LivePanel instead, redrawn while it is watched)
+export function screen(bag, nb, m, w, h, tile, { d = 0.03, border = 0.014, housing = blackM(), live = null, fittings = true } = {}) { // (fittings: the glass and screws)
   const W = w + 2 * border, H = h + 2 * border;
   box(bag, m, [0, 0, (d - 0.008) / 2], [W, H, d - 0.008], housing);
   for (const [cx, cy, sw, sh] of [[0, (H - border) / 2, W, border], [0, -(H - border) / 2, W, border], [(W - border) / 2, 0, border, h], [-(W - border) / 2, 0, border, h]]) box(bag, m, [cx, cy, d - 0.004], [sw, sh, 0.008], housing);
-  face(nb, m, w, h, tile, d - 0.0075);
+  if (live) live.panel.screen(at(m, 0, 0, d - 0.0075), w, h, { px: live.px || [256, Math.round(256 * h / w)], hz: live.hz || 10, draw: live.draw, z: 0 });
+  else face(nb, m, w, h, tile, d - 0.0075);
+  if (!fittings) return;
   const gl = new THREE.PlaneGeometry(w, h); gl.applyMatrix4(at(m, 0, 0, d - 0.005)); nb.add(gl, screenGlass());
   screws(nb, m, W - border, H - border, d + 0.0005, 2);
 }

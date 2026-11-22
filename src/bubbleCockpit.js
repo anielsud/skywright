@@ -421,7 +421,8 @@ export function bubbleInterior(g, b, nb, lv = 2) {
       lp.part(f, new Shape().disc(0, -R * 0.82, R * 0.065, 0.0006, color('#050506'), uv, 12), { src: 'slip', xf: (sl) => Math.max(-0.42, Math.min(0.42, -sl * 1.2)), pivot: [0, R * 0.2], w: 5 }); }
     { const q = Q.dg, f = F(q.x, q.y), R = q.r, wc = color('#f4f4f0'), uv = lp.white, z = 0.0012; // the card turns under a fixed aeroplane and lubber line
       lp.part(f, new Shape().card(R * 0.975, 0.0004, (x, y) => panelUV(q.x + x, q.y + y)), { src: 'hdg', xf: (h) => -h, wrap: true, w: 6 });
-      const sym = new Shape().bar(0, R * 0.32, 0, -R * 0.28, R * 0.09, z, wc, uv).bar(-R * 0.32, -R * 0.07, R * 0.32, -R * 0.07, R * 0.06, z, wc, uv).bar(-R * 0.13, -R * 0.27, R * 0.13, -R * 0.27, R * 0.05, z, wc, uv)
+      const plane = [[0, -0.32], [0.05, -0.05], [0.32, 0.04], [0.32, 0.1], [0.05, 0.08], [0.04, 0.24], [0.13, 0.3], [-0.13, 0.3], [-0.04, 0.24], [-0.05, 0.08], [-0.32, 0.1], [-0.32, 0.04], [-0.05, -0.05]].map(([x, y]) => [x * R, -y * R]);
+      const sym = new Shape().outline(plane, z, wc, uv)
         .poly([[0, R * 0.97], [-R * 0.07, R * 0.83], [R * 0.07, R * 0.83]], z, color('#f29a1f'), uv);
       lp.part(f, sym); }
     for (const k of Object.keys(SMALL.src)) { const q = Q[k]; lp.needle(F(q.x, q.y), { src: SMALL.src[k], at: (v) => SMALL.a0 + (SMALL.a1 - SMALL.a0) * Math.max(-0.03, Math.min(1.03, v)), len: q.r * 0.78, w: q.r * 0.09, pivot: [0, -q.r * 0.25], hub: 2.8, hubCol: '#202124', damp: 6 }); }
