@@ -13,7 +13,7 @@ import { PARTS, revolve, smoothProfile, loft } from './parts.js';
 import { M } from './materials.js';
 import { PM, SKIN_TILE } from './planeMaterials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
-import { V, Bag, bar, pipe, shell, ringLoft, capHoles, seatGeo, norm, insideRows, hoodObstacle } from './partDetail.js';
+import { V, Bag, bar, pipe, shell, ringLoft, capHoles, norm } from './partDetail.js';
 import { tandemInterior } from './jetCockpit.js';
 
 function ensureUv1(obj) {

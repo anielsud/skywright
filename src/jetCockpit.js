@@ -22,12 +22,23 @@ import { V, mx, bar, pipe, ringLoft, seatGeo, Bag, shell, capHoles, boxObstacle,
 
 const cache = new Map(), cached = (k, f) => { if (!cache.has(k)) cache.set(k, f()); return cache.get(k); };
 // cockpit paint (matt, a little sheen)
-export const jetPaint = (c) => cached('jp' + c, () => new THREE.MeshStandardMaterial({ color: c, metalness: 0.08, roughness: 0.78 }));
+// Cockpit paint (consoles, panel bodies, seat frames, cushions) is a solid swatch of the atlas: the furniture shares the
+// panels' material, one draw call. jetPaint(c) names a swatch; a bag wrapped by paintBag puts geometry added with it on
+// the atlas at that swatch.
+const SWATCHES = [0x2c3035, 0x222428, 0x3a3e44, 0x596067, 0x141518, 0x2a2c30, 0x55594c, 0x24262a];
+export const jetPaint = (c) => { const i = SWATCHES.indexOf(c); if (i < 0) throw new Error('jetPaint: no swatch ' + c.toString(16)); return { swatch: i }; };
+export function paintBag(bag) {
+  return { add(geo, mat, m) {
+    if (!mat?.swatch && mat?.swatch !== 0) return bag.add(geo, mat, m);
+    const n = geo.attributes.position.count, u = (768 + 16 * mat.swatch + 8) / S, v = 1 - 248 / S, a = new Float32Array(n * 2); for (let i = 0; i < n; i++) { a[i * 2] = u; a[i * 2 + 1] = v; }
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(a, 2)); return bag.add(geo, panelMat(), m);
+  } };
+}
 
 // ---------- the atlas ----------
 const S = 1024;
 const CELLS = {
-  mfdA: [0, 0, 256, 256], mfdB: [256, 0, 256, 256], scope: [512, 0, 256, 256], ufc: [768, 0, 256, 160], warn: [768, 160, 256, 96],
+  mfdA: [0, 0, 256, 256], mfdB: [256, 0, 256, 256], scope: [512, 0, 256, 256], ufc: [768, 0, 256, 160], warn: [768, 160, 256, 80], // (swatches in 768..1024 x 240..256)
   sr71: [0, 256, 512, 448], rso: [512, 256, 512, 384], gauges: [512, 640, 256, 192], wingL: [768, 640, 256, 192],
   sw0: [0, 704, 256, 160], sw1: [256, 704, 256, 160], sw2: [0, 864, 256, 160], sw3: [256, 864, 256, 160], sw4: [512, 832, 256, 192], sw5: [768, 832, 256, 192],
 };
@@ -123,8 +134,9 @@ function drawAtlas() {
     for (const x of [10, w - 46]) for (let i = 0; i < 4; i++) { rr(g, x, 58 + i * 25, 36, 21, 4); g.fillStyle = '#3d4045'; g.fill(); txt(g, ['COM1', 'COM2', 'IFF', 'LIST', 'A-A', 'A-G', 'NAV', 'MRK'][i + (x > 50 ? 4 : 0)], x + 18, 69 + i * 25, 8); } });
   // caution lights: a grid of legends, two lit amber and one green
   at('warn', (w, h) => { g.fillStyle = '#202225'; g.fillRect(0, 0, w, h); const lit = { 4: '#ffb020', 9: '#ffb020', 14: '#41ff5a' };
-    for (let i = 0; i < 18; i++) { const x = 8 + (i % 6) * 41, y = 8 + Math.floor(i / 6) * 28; g.fillStyle = '#3a2a12'; g.fillRect(x, y, 36, 22); const L = LEGENDS[(i * 7) % LEGENDS.length]; txt(g, L, x + 18, y + 11, 8, '#8a7550');
-      if (lit[i]) both((c) => { c.fillStyle = lit[i]; c.fillRect(x, y, 36, 22); txt(c, L, x + 18, y + 11, 8, '#1a1200'); }); } });
+    for (let i = 0; i < 18; i++) { const x = 8 + (i % 6) * 41, y = 6 + Math.floor(i / 6) * 24; g.fillStyle = '#3a2a12'; g.fillRect(x, y, 36, 20); const L = LEGENDS[(i * 7) % LEGENDS.length]; txt(g, L, x + 18, y + 10, 8, '#8a7550');
+      if (lit[i]) both((c) => { c.fillStyle = lit[i]; c.fillRect(x, y, 36, 20); txt(c, L, x + 18, y + 10, 8, '#1a1200'); }); } });
+  SWATCHES.forEach((c, i) => { g.fillStyle = '#' + c.toString(16).padStart(6, '0'); g.fillRect(768 + 16 * i, 240, 16, 16); });
   // the F-16's standby instruments between the MFDs
   at('gauges', (w, h) => { plate(0, 0, w, h, '#26292d'); DIALS.gauges.forEach((d, i) => dial(d.u * w, d.v * h, d.r * w, d.k, i + 3)); });
   // the SR-71 pilot's panel: black, dense with round gauges; the triple display (speed, Mach, altitude) top left
@@ -168,6 +180,9 @@ export const hudMat = () => cached('hudMat', () => {
   return new THREE.MeshBasicMaterial({ map: t, color: 0x6dff8e, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
 });
 
+// the combiner: clear glass with a faint green-gold tint (the canopy glass mirrored the sky: it read as a white card)
+export const combinerMat = () => cached('combiner', () => new THREE.MeshStandardMaterial({ color: 0x9fdcb4, metalness: 0, roughness: 0.05, transparent: true, opacity: 0.16, envMapIntensity: 0.25, depthWrite: false, side: THREE.DoubleSide }));
+
 // ---------- small geometry ----------
 // a textured quad showing an atlas cell, w x h, facing +z, placed by m
 export function quad(bag, cell, m, w, h) {
@@ -200,7 +215,7 @@ function bezels(nb, cell, m, w, h, minR = 0.05) {
   for (const d of DIALS[cell]) {
     if (d.r < minR) continue;
     const r = d.r * (CELLS[cell][2] / CELLS[cell][3]) * h, x = (d.u - 0.5) * w, y = (0.5 - d.v) * h; // (r: a fraction of the cell's width)
-    const rim = new THREE.CylinderGeometry(r * 1.06, r * 1.1, 0.008, 16, 1, true); rim.rotateX(Math.PI / 2); rim.translate(x, y, 0.004); rim.applyMatrix4(m); nb.add(rim, M.darkMetal());
+    const rim = new THREE.TorusGeometry(r * 1.07, 0.0045, 3, 18); rim.translate(x, y, 0.002); rim.applyMatrix4(m); nb.add(rim, M.darkMetal());
   }
 }
 
@@ -208,20 +223,21 @@ function bezels(nb, cell, m, w, h, minR = 0.05) {
 // seatGeo's padded back and pan at `at` (dims: [width, backH, panL, tilt]) with the rest of a jet's seat: the head box
 // with its headrest pad and the face-curtain handle on top, side plates up the back, the catapult rails behind, the
 // survival-kit pan under the cushion (kit), the seat-pan firing handle at the front. On bag (structure) and nb (small).
-export function ejectionSeat(bag, nb, { at, dims, kit = false, frame }) {
-  const [w, backH, panL, tilt] = dims, [ax, ay, az] = at, ct = Math.cos(tilt), st = Math.sin(tilt), seatM = PM.seat();
+export function ejectionSeat(bag0, nb, { at, dims, kit = false, frame, headUp = 0, cushion = jetPaint(0x24262a) }) {
+  const bag = paintBag(bag0);
+  const [w, backH, panL, tilt] = dims, [ax, ay, az] = at, ct = Math.cos(tilt), st = Math.sin(tilt), seatM = cushion;
   const s = seatGeo(w, backH, panL, tilt); s.translate(ax, ay, az); bag.add(s, seatM);
   const up = (k, dz = 0) => V(ax, ay + k * ct, az + k * st + dz); // a point up the back's rake (k along it), dz behind its front
   // head box (the parachute) on the top of the back, its pad facing forward, the loop handle on top
-  const hc = up(backH + 0.1, 0.04), hb = roundBox(0.3, 0.24, 0.15, 0.03); hb.applyMatrix4(mx(hc.toArray(), [tilt, 0, 0])); bag.add(hb, frame);
-  const pad = roundBox(0.2, 0.13, 0.03, 0.012); pad.applyMatrix4(mx(up(backH + 0.07, -0.045).toArray(), [tilt, 0, 0])); bag.add(pad, seatM);
-  { const top = up(backH + 0.22, 0.04), hm = mx(top.toArray(), [tilt, 0, 0]);
+  const hc = up(backH + 0.1 + headUp, 0.04), hb = roundBox(0.3, 0.24, 0.15, 0.03); hb.applyMatrix4(mx(hc.toArray(), [tilt, 0, 0])); bag.add(hb, frame);
+  const pad = roundBox(0.2, 0.13, 0.03, 0.012); pad.applyMatrix4(mx(up(backH + 0.07 + headUp, -0.045).toArray(), [tilt, 0, 0])); bag.add(pad, seatM);
+  { const top = up(backH + 0.22 + headUp, 0.04), hm = mx(top.toArray(), [tilt, 0, 0]);
     const h = new THREE.TorusGeometry(0.04, 0.008, 5, 12, Math.PI); h.applyMatrix4(hm); nb.add(h, M.propTip());
     for (const a of [0.5, 1.57, 2.64]) { const s2 = new THREE.CylinderGeometry(0.0095, 0.0095, 0.012, 6); s2.rotateZ(a); s2.translate(Math.cos(a) * 0.04, Math.sin(a) * 0.04, 0); s2.applyMatrix4(hm); nb.add(s2, M.black()); } }
   // side plates up the back, and the rails behind it
   for (const sx of [-1, 1]) {
-    const pl = new THREE.BoxGeometry(0.012, backH * 0.92, 0.12); pl.applyMatrix4(mx(up(backH * 0.48, 0.03).add(V(sx * (w / 2 + 0.007), 0, 0)).toArray(), [tilt, 0, 0])); bag.add(pl, frame);
-    bag.add(bar(up(-0.02, 0.1).add(V(sx * 0.1, 0, 0)), up(backH + 0.02, 0.1).add(V(sx * 0.1, 0, 0)), 0.03, 0.03), M.darkMetal());
+    const pl = new THREE.BoxGeometry(0.012, backH * 0.92 + headUp, 0.12); pl.applyMatrix4(mx(up((backH * 0.92 + headUp) / 2 + 0.01, 0.03).add(V(sx * (w / 2 + 0.007), 0, 0)).toArray(), [tilt, 0, 0])); bag.add(pl, frame);
+    bag.add(bar(up(-0.02, 0.1).add(V(sx * 0.1, 0, 0)), up(backH + 0.02 + headUp, 0.1).add(V(sx * 0.1, 0, 0)), 0.03, 0.03), M.darkMetal());
   }
   // the survival kit under the cushion (its pan's bottom is 3.3 cm under the seat point) and the firing handle ahead of it
   if (kit) { const k = roundBox(w * 0.86, 0.045, panL * 1.05, 0.01); k.translate(ax, ay - 0.033 - 0.0225 + 0.002, az - panL * 0.45); bag.add(k, frame); }
@@ -234,13 +250,14 @@ const panHandle = (at, panL) => ({ name: 'seat handle', box: [at[0], at[1] - 0.0
 // ---------- the fighter's cockpit ----------
 // Inside the fighter canopy (partDetail.cockpitBuild): everything sits in the tub under the revolved glass (its section
 // 1.15 x as tall as wide, the tub its continuation below the base). paint: the airframe's (frames and bows).
-export function fighterInterior(g, b, nb, paint) {
-  const R = fighterGlassR, con = jetPaint(0x2c3035), dark = jetPaint(0x222428), frame = jetPaint(0x3a3e44), black = M.black(), seatM = PM.seat();
+export function fighterInterior(g, b0, nb, paint) {
+  const b = paintBag(b0);
+  const R = fighterGlassR, con = jetPaint(0x2c3035), dark = jetPaint(0x222428), frame = jetPaint(0x3a3e44), black = M.black(), seatM = jetPaint(0x24262a);
   const wallX = (z, y, k = 1) => { const r = R(z) * k, s = Math.min(1, Math.abs(y) / (1.15 * r)); return r * Math.sqrt(1 - s * s); }; // the tub's wall at height y (k: drawn in)
   // ejection seat on rails (its own meshes, userData.seatRail: crew.js moves them to where the pilot set it), so whoever
   // flies it sits back against it within reach of the stick and throttle; set down in the tub so the helmet clears the glass
   const SEAT = { at: [0, -0.4, 0.52], dims: [0.42, 0.62, 0.4, 0.3] };
-  { const sb = new Bag(), snb = new Bag(); ejectionSeat(sb, snb, { ...SEAT, kit: true, frame });
+  { const sb = new Bag(), snb = new Bag(); ejectionSeat(sb, snb, { ...SEAT, kit: true, frame, cushion: jetPaint(0x55594c) });
     const n0 = g.children.length; sb.to(g); snb.to(g, true); for (const m of g.children.slice(n0)) m.userData.seatRail = 0; }
   // side consoles along the tub walls beside the seat (top 18 cm under the glass base, inboard faces 46 cm apart: the
   // thighs pass between them), their outboard sides following the tub down to where it comes in under them
@@ -285,7 +302,7 @@ export function fighterInterior(g, b, nb, paint) {
   // the HUD: its body on the glare shield, the combiner glass in a frame on top, the symbology glowing on it
   const hf = mx([0, 0.33, -0.62], [-0.35, 0, 0]);
   { const hb = roundBox(0.13, 0.035, 0.1, 0.008); hb.translate(0, 0.2535, -0.635); b.add(hb, black);
-    const hud = new THREE.PlaneGeometry(0.15, 0.13); hud.applyMatrix4(hf); nb.add(hud, PM.canopy(0x3c6b52));
+    const hud = new THREE.PlaneGeometry(0.15, 0.13); hud.applyMatrix4(hf); nb.add(hud, combinerMat());
     const sym = new THREE.PlaneGeometry(0.13, 0.11); sym.applyMatrix4(hf.clone().multiply(mx([0, 0.005, 0.002]))); nb.add(sym, hudMat());
     const c = (x, y) => V(x, y, 0).applyMatrix4(hf);
     for (const sx of [-1, 1]) nb.add(bar(c(sx * 0.079, -0.07), c(sx * 0.079, 0.068), 0.009, 0.009, true, 6), black);
@@ -326,11 +343,12 @@ export function fighterInterior(g, b, nb, paint) {
 // Inside the tandem canopy (supersonicParts.tandemCanopy, detail build): the pilot under the glass, the RSO under the
 // hatch behind the bulkhead (at z split .. split + 0.06). T: { w, h } the canopy's half-width and height at z,
 // tcPt(z, a, k) a point on its section, paint the airframe's.
-export function tandemInterior(g, b, nb, { T, tcPt, split, paint }) {
+export function tandemInterior(g, b0, nb, { T, tcPt, split, paint }) {
+  const b = paintBag(b0);
   const grey = jetPaint(0x596067), panel = jetPaint(0x141518), black = M.black(), frame = jetPaint(0x2a2c30);
   // ejection seats (the tub floor at -0.72, both seats on risers)
   const SEAT1 = { at: [0, -0.48, -0.62], dims: [0.42, 0.66, 0.4, 0.26] }, SEAT2 = { at: [0, -0.53, 1.18], dims: [0.42, 0.62, 0.4, 0.26] };
-  ejectionSeat(b, nb, { ...SEAT1, frame }); ejectionSeat(b, nb, { ...SEAT2, frame });
+  ejectionSeat(b, nb, { ...SEAT1, frame }); ejectionSeat(b, nb, { ...SEAT2, frame, headUp: 0.05 }); // (the RSO sits taller against the back: the head box higher, clear of the shoulders)
   // the pilot's side consoles (grey, as in the museum aircraft), switch panels on their tops round the throttle quadrant
   const P1 = { x: 0.31, y: -0.51, z: -0.88, w: 0.15, h: 0.42, d: 0.78 };
   const cons = (c, sx) => { const k = roundBox(c.w, c.h, c.d, 0.012); k.translate(sx * c.x, c.y, c.z); b.add(k, grey); };
@@ -361,7 +379,9 @@ export function tandemInterior(g, b, nb, { T, tcPt, split, paint }) {
   { const body = new THREE.BoxGeometry(0.56, RS.h, RS.d); body.translate(0, RS.y, zf + RS.d / 2); b.add(body, panel);
     const pm = mx([0, -0.215, zf + RS.d + 0.0005]); quad(b, 'rso', pm, 0.54, 0.405); bezels(nb, 'rso', pm, 0.54, 0.405, 0.05);
     const sc = DIALS.rso[0], sy = -0.215 + (0.5 - sc.v) * 0.405, sr = sc.r * 0.54; // the scope's hood
-    const hood = new THREE.CylinderGeometry(sr * 1.12, sr * 1.18, 0.04, 20, 1, true); hood.rotateX(Math.PI / 2); hood.translate(0, sy, zf + RS.d + 0.02); b.add(hood, black); }
+    const hood = new THREE.LatheGeometry([new THREE.Vector2(sr * 1.1, 0), new THREE.Vector2(sr * 1.22, 0), new THREE.Vector2(sr * 1.2, 0.045), new THREE.Vector2(sr * 1.12, 0.045), new THREE.Vector2(sr * 1.1, 0)], 20); hood.rotateX(Math.PI / 2); hood.translate(0, sy, zf + RS.d); b.add(hood, black);
+    // an upper panel over it (switches) up to 18 cm over the glass base
+    const up2 = new THREE.BoxGeometry(0.5, 0.18, 0.06); up2.translate(0, 0.09, zf + 0.03); b.add(up2, panel); switchPanel(b, nb, 'sw4', mx([0, 0.09, zf + 0.0605]), 0.48, 0.16); }
   const P2 = { x: 0.31, y: -0.56, z: 1.04, w: 0.11, h: 0.32, d: 0.56 }; // (beside the seat only: the feet go out either side of the panel's footwell)
   for (const sx of [-1, 1]) cons(P2, sx);
   top(P2, 'sw1', -1, 0.262, 0.358, 0.78, 1.0); top(P2, 'sw3', -1, 0.262, 0.358, 1.02, 1.31); top(P2, 'sw2', 1, 0.262, 0.358, 0.78, 1.0); top(P2, 'sw5', 1, 0.262, 0.358, 1.02, 1.31);
@@ -379,5 +399,5 @@ export function tandemInterior(g, b, nb, { T, tcPt, split, paint }) {
     hoodObstacle('glare shield', 0.3, 0.55, 1.3, 0.02, -1.5, 0.16), { name: 'pedestal', box: [0, -0.59, -1.5], size: [0.12, 0.28, 0.16] },
     { name: 'periscope', box: [0, yTop - 0.045, zp], size: [0.08, 0.05, 0.07] }, panHandle(SEAT1.at, SEAT1.dims[2])];
   g.userData.seats[1].obstacles = [glass, { name: 'bulkhead', plane: [0, 0, 1], at: [0, 0, split + 0.06] }, ...conObs(P2),
-    { name: 'RSO panel', box: [0, RS.y, zf + RS.d / 2 + 0.01], size: [0.56, RS.h, RS.d + 0.02 + 0.04] }, panHandle(SEAT2.at, SEAT2.dims[2])];
+    { name: 'RSO panel', box: [0, RS.y, zf + RS.d / 2 + 0.03], size: [0.56, RS.h, RS.d + 0.06] }, { name: 'RSO upper panel', box: [0, 0.09, zf + 0.04], size: [0.5, 0.18, 0.08] }, panHandle(SEAT2.at, SEAT2.dims[2])];
 }
