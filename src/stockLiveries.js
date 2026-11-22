@@ -156,7 +156,7 @@ L('centipede', {
   layers: [
     { type: 'band', on: ['body'], color: 0xf2b705, dir: [0, 1, 0], hi: -0.7, wave: 0.25, waveLen: 3 },
     { type: 'band', on: ['body'], color: 0x7bc142, dir: [0, 1, 0], lo: -0.7, hi: -0.45, wave: 0.25, waveLen: 3 },
-    { type: 'decal', on: ['ck_airliner'], art: 'face', at: [-13.1, -0.05], size: [4.2, 2.75] },
+    { type: 'decal', on: ['ck_airliner'], art: 'face', at: [-13.1, -0.5], size: [4.2, 2.3] }, // (the eye under the 737-style window band, not behind it)
     { type: 'decal', on: ['fus_airliner'], art: 'title', at: [-1.5, 1.05], size: [11, 1.6], text: true },
     { type: 'checker', on: ['t_big_vfin'], proj: 'side', color: 0x6a2c91, color2: 0xf2b705, cell: 0.9 },
   ],

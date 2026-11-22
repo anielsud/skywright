@@ -42,23 +42,39 @@ const BOUNCE_MIN = 0.06, BOUNCE = 1.0; // light coming back off the interior's o
 const DEEP = 0.25;
 const OPEN_K = 0.6; // an open cockpit (no interior: a speedboat's, a pontoon's) is darkened this much of what the bake finds
 const GLOW_K = 1.0; // display light scale (radiance -> the factor the shader adds)
+// A deck's own lamps at night (a part's userData.cabinLamps, part space: the dome light, the panel and pedestal floods, the
+// map lights): baked like the rest (irradiance at each cabin surface and crew vertex, shadowed through the voxels), and
+// switched on with the night (uCabinNight) in a warm colour; plus LAMP_FILL of their mean, the light they bounce round the
+// deck. With them the panels' integral lighting comes up: the dim legends in the emissive maps glow BACKLIT times more.
+const LAMP_MAX = 4, LAMP_FILL = 0.7, BACKLIT = 4.0, LAMP_GAIN = 8.0; // (LAMP_GAIN: baked irradiance -> radiance on the deck, by eye against the night photo)
 
 // ---------- the shader side ----------
 export const CABIN = {
   uCabinSunDir: { value: new THREE.Vector3(0, 1, 0) }, // towards the sun (or the moon by night), world space
   uCabinSunBake: { value: 0 }, // 1: no shadow maps, the baked sun visibility gates direct light
   uCabinDebug: { value: 0 }, // (tools: 1 shows the sky visibility, 2 the display glow, 3 the baked sun)
+  uCabinNight: { value: 0 }, // 0 by day, 1 at night: how far the decks' own lamps are up
+  uCabinLampCol: { value: new THREE.Color(1.0, 0.68, 0.38) }, // their light: warm incandescent
 };
-// called by the flight each frame (and by the hangar): the light's direction and whether shadow maps are on
-export function cabinSun(dir, shadows) { CABIN.uCabinSunDir.value.copy(dir); CABIN.uCabinSunBake.value = shadows ? 0 : 1; }
+// called by the flight each frame (and by the hangar): the light's direction, whether shadow maps are on, how dark it is
+export function cabinSun(dir, shadows, night = 0) { CABIN.uCabinSunDir.value.copy(dir); CABIN.uCabinSunBake.value = shadows ? 0 : 1; CABIN.uCabinNight.value = night; }
 
 const VERT_PARS = /* glsl */`
-attribute vec4 cabinLight; attribute vec4 cabinSun; varying vec4 vCabin; varying float vCabinSun; uniform vec3 uCabinSunDir;`;
+attribute vec4 cabinLight; attribute vec4 cabinSun; varying vec4 vCabin; varying float vCabinSun; uniform vec3 uCabinSunDir;
+#ifdef CABIN_LAMP
+attribute vec2 cabinLamp; varying vec2 vCabinLamp;
+#endif`;
 const VERT = /* glsl */`
 vCabin = cabinLight;
+#ifdef CABIN_LAMP
+vCabinLamp = cabinLamp;
+#endif
 { vec3 sd = normalize((vec4(uCabinSunDir, 0.0) * modelMatrix).xyz); vCabinSun = clamp(cabinSun.x + 2.0 * dot(cabinSun.yzw, sd), 0.0, 1.0); }`;
 const FRAG_PARS = /* glsl */`
-varying vec4 vCabin; varying float vCabinSun; uniform float uCabinSunBake; uniform float uCabinDebug;`;
+varying vec4 vCabin; varying float vCabinSun; uniform float uCabinSunBake; uniform float uCabinDebug;
+#ifdef CABIN_LAMP
+varying vec2 vCabinLamp; uniform float uCabinNight; uniform vec3 uCabinLampCol;
+#endif`;
 // (a double-sided skin's two faces are lit apart: its outside by the sky, its inside by what gets in)
 const FRAG = /* glsl */`
 { float ca = gl_FrontFacing ? vCabin.x : vCabin.z, cg = (gl_FrontFacing ? vCabin.y : vCabin.w) * 4.0;
@@ -70,26 +86,35 @@ const FRAG = /* glsl */`
     sheenSpecularIndirect *= ca;
   #endif
   reflectedLight.indirectDiffuse += diffuseColor.rgb * cg * vec3(0.85, 0.95, 1.0);
+  #ifdef CABIN_LAMP
+  if (uCabinNight > 0.0) { // (the deck's lamps, and the panels' integral lighting)
+    reflectedLight.indirectDiffuse += diffuseColor.rgb * uCabinLampCol * ((gl_FrontFacing ? vCabinLamp.x : vCabinLamp.y) * ${(LAMP_MAX * LAMP_GAIN).toFixed(1)} * uCabinNight);
+    float em = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
+    totalEmissiveRadiance *= 1.0 + uCabinNight * ${BACKLIT.toFixed(1)} * (1.0 - smoothstep(0.1, 0.35, em)); }
+  #endif
   if (uCabinSunBake > 0.5) { float s = smoothstep(0.15, 0.6, vCabinSun); reflectedLight.directDiffuse *= s; reflectedLight.directSpecular *= s; }
   if (uCabinDebug > 0.5) { reflectedLight.directDiffuse = reflectedLight.directSpecular = reflectedLight.indirectSpecular = vec3(0.0); reflectedLight.indirectDiffuse = vec3(uCabinDebug < 1.5 ? ca : uCabinDebug < 2.5 ? cg : vCabinSun); } }`;
 
 const LIT = (m) => m && !Array.isArray(m) && (m.isMeshStandardMaterial || m.isMeshLambertMaterial || m.isMeshPhongMaterial) && !m.transparent && !(m.transmission > 0);
-const VARIANTS = new WeakMap();
-// the cabin-lit variant of a material (one per material, shared by every vehicle; its own hook and key kept)
-export function cabinMaterial(base) {
+const VARIANTS = new WeakMap(), LAMP_VARIANTS = new WeakMap();
+// the cabin-lit variant of a material (one per material, shared by every vehicle; its own hook and key kept); lamp: the
+// one that also takes a deck's night lamps (cabinLamp)
+export function cabinMaterial(base, lamp = false) {
   if (base.userData?.cabinLit) return base;
-  let v = VARIANTS.get(base); if (v) return v;
+  const V = lamp ? LAMP_VARIANTS : VARIANTS;
+  let v = V.get(base); if (v) return v;
   try { v = base.clone(); } catch { return null; }
   const bob = base.onBeforeCompile, bkey = base.customProgramCacheKey();
   v.onBeforeCompile = (sh, r) => {
     bob.call(base, sh, r);
     Object.assign(sh.uniforms, CABIN);
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>' + VERT_PARS).replace('#include <begin_vertex>', '#include <begin_vertex>' + VERT);
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>' + FRAG_PARS).replace('#include <aomap_fragment>', '#include <aomap_fragment>' + FRAG);
+    const def = lamp ? '\n#define CABIN_LAMP\n' : ''; // (in the source, not material.defines: a material's copy() resets those)
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>' + def + VERT_PARS).replace('#include <begin_vertex>', '#include <begin_vertex>' + VERT);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>' + def + FRAG_PARS).replace('#include <aomap_fragment>', '#include <aomap_fragment>' + FRAG);
   };
-  v.customProgramCacheKey = () => 'cabin1|' + bkey;
+  v.customProgramCacheKey = () => (lamp ? 'cabin2|' : 'cabin1|') + bkey;
   v.userData.cabinLit = true; // (a flag, not the base itself: userData is copied through JSON when a material is cloned)
-  VARIANTS.set(base, v);
+  V.set(base, v);
   return v;
 }
 
@@ -393,6 +418,24 @@ export function bakeCabinLight(objs, root) {
       const mean = front ? va / front : 1;
       fit[s * 4] = mean; fit[s * 4 + 1] = (3 / K) * (vbx + mean * bsx); fit[s * 4 + 2] = (3 / K) * (vby + mean * bsy); fit[s * 4 + 3] = (3 / K) * (vbz + mean * bsz);
     }
+    // the deck's own lamps (lit at night): their irradiance at each sample, shadowed through the fine voxels, and a share of
+    // their mean everywhere for the light they bounce round the deck
+    const lamps = (owner.userData.cabinLamps || []).map((l) => { const p = new THREE.Vector3(...l.p).applyMatrix4(partToRoot), d = l.d ? new THREE.Vector3(...l.d).transformDirection(partToRoot) : null;
+      return { x: (p.x - G.o.x) / h, y: (p.y - G.o.y) / h, z: (p.z - G.o.z) / h, d, c0: l.cone ? l.cone[0] : -2, c1: l.cone ? l.cone[1] : -1, k: l.k, r2: (l.r ?? 0.2) ** 2 }; }); // (r: the fitting's size, softening 1/d^2 close to it)
+    const seen = (ax, ay, az, L) => { // a clear line from a point to a lamp (voxel units; the ends' own voxels skipped)
+      const dx = L.x - ax, dy = L.y - ay, dz = L.z - az, st = Math.ceil(Math.hypot(dx, dy, dz) * 2);
+      for (let i = 3; i < st - 3; i++) { const t = i / st, X = Math.floor(ax + dx * t), Y = Math.floor(ay + dy * t), Z = Math.floor(az + dz * t); if (X < 0 || Y < 0 || Z < 0 || X >= G.nx || Y >= G.ny || Z >= G.nz) continue; if (G.occ[X + G.nx * (Y + G.ny * Z)]) return false; }
+      return true; };
+    const lampDirs = (x, y, z) => { const out = []; for (const L of lamps) { // [direction to the lamp, irradiance face-on] per lamp that reaches (x, y, z)
+      const dx = L.x - x, dy = L.y - y, dz = L.z - z, dv = Math.hypot(dx, dy, dz) || 1, lx = dx / dv, ly = dy / dv, lz = dz / dv;
+      const f = L.d ? smoothstep(L.c0, L.c1, -(lx * L.d.x + ly * L.d.y + lz * L.d.z)) : 1; if (f <= 0 || !seen(x, y, z, L)) continue;
+      const dm = dv * h; out.push(lx, ly, lz, (L.k * f) / (dm * dm + L.r2)); } return out; };
+    const lampE = lamps.length ? new Float32Array(NS) : null; let lampFill = 0;
+    if (lampE) {
+      for (let s = 0; s < NS; s++) { const mx = sp[s * 6 + 3], my = sp[s * 6 + 4], mz = sp[s * 6 + 5], ld = lampDirs(sp[s * 6] + mx * 0.8, sp[s * 6 + 1] + my * 0.8, sp[s * 6 + 2] + mz * 0.8); let E = 0;
+        for (let j = 0; j < ld.length; j += 4) E += Math.max(0, ld[j] * mx + ld[j + 1] * my + ld[j + 2] * mz) * ld[j + 3]; lampE[s] = E; lampFill += E; }
+      lampFill = NS ? (LAMP_FILL * lampFill) / NS : 0; for (let s = 0; s < NS; s++) lampE[s] += lampFill;
+    }
     // the crew: a probe at each bone (where it is now), all round; each vertex takes its bones' probes, seen along its normal
     const probes = new Map(), bp = new THREE.Vector3();
     const probe = (bone) => {
@@ -409,13 +452,15 @@ export function bakeCabinLight(objs, root) {
       if (!SI || !SW || !N || SI.isInterleavedBufferAttribute || SW.isInterleavedBufferAttribute) continue;
       const sia = SI.array, swa = SW.array, swk = SW.normalized ? 1 / 255 : 1; // (weights may be stored as bytes)
       const prs = bones.map((b) => probe(b)), nm = new THREE.Matrix3().getNormalMatrix(_m.multiplyMatrices(rootInv, m.matrixWorld));
-      const r = { L: new Float32Array(n * 4), sun: new Float32Array(n * 4), sides: [1] }, nv = new THREE.Vector3();
+      const r = { L: new Float32Array(n * 4), sun: new Float32Array(n * 4), sides: [1], lamp: lampE ? new Float32Array(n * 2) : null }, nv = new THREE.Vector3();
+      const bl = lampE ? bones.map((b) => { b.getWorldPosition(bp).applyMatrix4(rootInv); return lampDirs((bp.x - G.o.x) / h, (bp.y - G.o.y) / h, (bp.z - G.o.z) / h); }) : null; // (each bone's lamps)
       for (let i = 0; i < n; i++) {
         let a = 0, x = 0, y = 0, z = 0, gl = 0;
         for (let j = 0; j < 4; j++) { const wgt = swa[i * 4 + j] * swk; if (!wgt) continue; const p = prs[sia[i * 4 + j]]; if (!p) continue; a += wgt * p[0]; x += wgt * p[1]; y += wgt * p[2]; z += wgt * p[3]; gl += wgt * p[4]; }
         nv.fromBufferAttribute(N, i).applyMatrix3(nm).normalize(); // (the rest pose's normal: near enough for light this soft)
         const v = Math.min(1, Math.max(0, a + (2 / 3) * (x * nv.x + y * nv.y + z * nv.z))); // (V(d) = a + b.d, averaged over the normal's hemisphere)
         r.L[i * 4] = r.L[i * 4 + 2] = v; r.L[i * 4 + 1] = r.L[i * 4 + 3] = gl;
+        if (bl) { let E = lampFill; for (let j = 0; j < 4; j++) { const wgt = swa[i * 4 + j] * swk; if (!wgt) continue; const ld = bl[sia[i * 4 + j]]; if (!ld) continue; for (let q = 0; q < ld.length; q += 4) E += wgt * Math.max(0, ld[q] * nv.x + ld[q + 1] * nv.y + ld[q + 2] * nv.z) * ld[q + 3]; } r.lamp[i * 2] = r.lamp[i * 2 + 1] = E; }
         r.sun[i * 4] = a; r.sun[i * 4 + 1] = x; r.sun[i * 4 + 2] = y; r.sun[i * 4 + 3] = z;
       }
       results.set(m, r);
@@ -431,10 +476,12 @@ export function bakeCabinLight(objs, root) {
     for (const { m, sid, sides } of recv) {
       const n = sid.length / 2; let r = results.get(m);
       if (!r) { r = { L: new Float32Array(n * 4), sun: new Float32Array(n * 4), sides }; for (let i = 0; i < n; i++) { r.L[i * 4] = 1; r.L[i * 4 + 2] = 1; r.sun[i * 4] = 1; } results.set(m, r); }
+      if (lampE && !r.lamp) r.lamp = new Float32Array(n * 2);
       const main = sides[0] < 0 ? 1 : 0;
       for (let i = 0; i < n; i++) for (let k = 0; k < 2; k++) {
         const s = sid[i * 2 + k]; if (s < 0) continue;
         r.L[i * 4 + k * 2] = Math.min(r.L[i * 4 + k * 2], vis[s]); r.L[i * 4 + k * 2 + 1] = Math.max(r.L[i * 4 + k * 2 + 1], glow[s]);
+        if (lampE) r.lamp[i * 2 + k] = Math.max(r.lamp[i * 2 + k], lampE[s]);
         if (k === main) for (let j = 0; j < 4; j++) r.sun[i * 4 + j] = fit[s * 4 + j];
       }
     }
@@ -444,7 +491,7 @@ export function bakeCabinLight(objs, root) {
   const tA = performance.now();
   const dirM = new THREE.Matrix4(), q = (v) => Math.max(-127, Math.min(127, Math.round(v * 127)));
   for (const [m, r] of results) {
-    const mat = cabinMaterial(m.material); if (!mat) continue;
+    const mat = cabinMaterial(m.material, !!r.lamp); if (!mat) continue;
     const n = r.L.length / 4, L = new Uint16Array(n * 4), S = new Int8Array(n * 4), only = r.sides.length === 1 ? (r.sides[0] < 0 ? 1 : 0) : -1;
     dirM.multiplyMatrices(rootInv, m.matrixWorld).invert(); // root -> the mesh's own frame (the shader turns the sun into it with modelMatrix)
     const e = dirM.elements, RL = r.L, RS = r.sun;
@@ -460,6 +507,7 @@ export function bakeCabinLight(objs, root) {
     g.boundingBox = o.boundingBox?.clone() ?? null; g.boundingSphere = o.boundingSphere?.clone() ?? null; g.userData = o.userData;
     g.setAttribute('cabinLight', new THREE.BufferAttribute(L, 4, true));
     g.setAttribute('cabinSun', new THREE.BufferAttribute(S, 4, true));
+    if (r.lamp) { const Lm = new Uint16Array(n * 2); for (let i = 0; i < n; i++) for (let k = 0; k < 2; k++) { const v = r.lamp[i * 2 + (only >= 0 ? only : k)] / LAMP_MAX; Lm[i * 2 + k] = (v >= 1 ? 1 : v) * 65535 + 0.5; } g.setAttribute('cabinLamp', new THREE.BufferAttribute(Lm, 2, true)); }
     m.geometry = g; m.material = mat; m.userData.cabinLit = true;
     stats.verts += n;
   }
