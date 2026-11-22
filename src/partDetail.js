@@ -989,15 +989,25 @@ const winVal = (z, th) => { const p = nosePt(z, th); return Math.min(p.y - SILL(
 // Everything painted or printed in the deck (panel greys, the displays, the mode control panel, the CDUs, the overhead's
 // switch panels, radios, circuit breakers, carpet, sheepskin) comes from one atlas: one material (colour + glowing
 // screens in its emissive map + roughness), so the whole deck is one draw call plus the kit fittings.
-const FDW = 1024;
-const fdR = (x, y, w, h) => [x / FDW, 1 - (y + h) / FDW, (x + w) / FDW, 1 - y / FDW];
+// The colour sheet is 2048 x 1024: the left half holds the printed faces (displays, panels, CDUs, radios: everything that
+// glows), the right half the materials laid over the furniture (powder-coated plates with their seams, Dzus fasteners,
+// baked shading in the corners and worn edges; the bezels, anti-glare fabric, carpet, fleece, leather, visor fabric).
+// The emissive map only covers the left half (its texture transform stretches it there; clamped black beyond).
+// The roughness map also carries, in red and blue, how strongly and how coarsely the shader's grain breaks up each
+// surface (fdPatch): fine powder-coat grain on the panels, weave on fabric, pile on the carpet, tufts on the fleece.
+const FDW = 1024, FW = 2048;
+const fdR = (x, y, w, h) => [x / FW, 1 - (y + h) / FDW, (x + w) / FW, 1 - y / FDW];
 const FDA = { pfd: fdR(0, 0, 320, 256), nd: fdR(320, 0, 320, 256), eng: fdR(640, 0, 320, 256), isfd: fdR(960, 0, 64, 64), gear: fdR(960, 64, 64, 192),
   mcp: fdR(0, 256, 768, 64), efis: fdR(768, 256, 128, 64), clock: fdR(896, 256, 128, 64), cdu: fdR(0, 320, 160, 256), radio: fdR(160, 320, 192, 256), cb: fdR(352, 320, 160, 256),
-  lowL: fdR(512, 320, 512, 64), lowR: fdR(512, 384, 512, 64), outb: fdR(512, 448, 256, 128), ovh: fdR(0, 576, 512, 384), door: fdR(512, 576, 256, 384), side: fdR(768, 576, 256, 384) };
-// solid swatches along the bottom row: [colour, roughness]
-const FDS = { panel: ['#5d6872', 0.7], trim: ['#a9b0b5', 0.8], glare: ['#25282c', 0.95], carpet: ['#3d4752', 1], fleece: ['#ddd2bd', 1], bezel: ['#2a2e33', 0.45],
-  grey: ['#78838c', 0.7], door: ['#8e969c', 0.6], white: ['#e6e6e1', 0.5], knob: ['#141518', 0.5], kick: ['#30353a', 0.9], shell: ['#3b4047', 0.55], yellow: ['#d8b22a', 0.6], red: ['#a8231d', 0.6], cream: ['#ece6d6', 0.4], ovh: ['#66717a', 0.7], post: ['#8a949c', 0.75] };
-const FDK = Object.keys(FDS), fdSw = (k) => [(FDK.indexOf(k) * 32 + 16) / FDW, 1 - 992 / FDW];
+  lowL: fdR(512, 320, 512, 64), lowR: fdR(512, 384, 512, 64), outb: fdR(512, 448, 256, 128), ovh: fdR(0, 576, 512, 384), door: fdR(512, 576, 256, 384), side: fdR(768, 576, 256, 384),
+  plateA: fdR(1024, 0, 256, 256), plateB: fdR(1280, 0, 256, 256), plateC: fdR(1536, 0, 256, 256), face: fdR(1792, 0, 256, 256),
+  bezel: fdR(1024, 256, 256, 256), fabric: fdR(1280, 256, 256, 256), carpet: fdR(1536, 256, 256, 256), fleece: fdR(1792, 256, 256, 256),
+  leather: fdR(1024, 512, 256, 256), worn: fdR(1280, 512, 256, 256), visor: fdR(1536, 512, 256, 256), post: fdR(1792, 512, 256, 256),
+  bulk: fdR(1024, 768, 256, 256), shell: fdR(1280, 768, 256, 256), lining: fdR(1536, 768, 256, 256) };
+// small solid swatches along the bottom row of the left half: [colour, roughness, grain strength, grain coarseness]
+const FDS = { panel: ['#5d6872', 0.7, 0.45, 0], trim: ['#a9b0b5', 0.8, 0.4, 0], glare: ['#1d1f22', 0.95, 0.9, 0.25], carpet: ['#3d4752', 1, 1, 0.6], fleece: ['#ddd2bd', 1, 1, 1], bezel: ['#24282d', 0.45, 0.3, 0],
+  grey: ['#78838c', 0.7, 0.45, 0], door: ['#8e969c', 0.6, 0.4, 0], white: ['#e6e6e1', 0.5, 0.3, 0], knob: ['#17181b', 0.45, 0.25, 0], kick: ['#30353a', 0.9, 0.5, 0], shell: ['#3b4047', 0.55, 0.3, 0], yellow: ['#d8b22a', 0.6, 0.3, 0], red: ['#a8231d', 0.6, 0.3, 0], cream: ['#ece6d6', 0.4, 0.2, 0], ovh: ['#66717a', 0.7, 0.45, 0], post: ['#8a949c', 0.75, 0.4, 0], lip: ['#08090a', 0.6, 0.2, 0] };
+const FDK = Object.keys(FDS), fdSw = (k) => [(FDK.indexOf(k) * 32 + 16) / FW, 1 - 992 / FDW];
 // the overhead's modules and its toggle switches (u across from the left, v from its aft edge to the front), shared by the
 // printed panel and the 3D toggles
 let _ovl = null;
@@ -1018,14 +1028,33 @@ function overheadLayout() {
 }
 const MCP_WIN = [[0.015, 0.075, '042'], [0.165, 0.255, '250'], [0.375, 0.445, '084'], [0.545, 0.665, '10000'], [0.755, 0.855, '-1200'], [0.925, 0.985, '042']];
 function fdAtlasTextures() {
-  const mk = () => { const c = document.createElement('canvas'); c.width = c.height = FDW; return [c, c.getContext('2d')]; };
-  const [ca, a] = mk(), [ce, e] = mk(), [cr, r] = mk();
-  a.fillStyle = FDS.panel[0]; a.fillRect(0, 0, FDW, FDW); e.fillStyle = '#000'; e.fillRect(0, 0, FDW, FDW);
-  r.fillStyle = 'rgb(0,180,0)'; r.fillRect(0, 0, FDW, FDW);
+  const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('2d')]; };
+  const [ca, a] = mk(FW, FDW), [ce, e] = mk(FDW, FDW), [cr, r] = mk(FW, FDW);
+  a.fillStyle = FDS.panel[0]; a.fillRect(0, 0, FW, FDW); e.fillStyle = '#000'; e.fillRect(0, 0, FDW, FDW);
+  let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  // roughness (green) with the grain's strength (red) and coarseness (blue)
+  const rmF = (x, y, w, h, rough, gs = 0.45, sc = 0) => { r.fillStyle = `rgb(${Math.round(gs * 255)},${Math.round(rough * 255)},${Math.round(sc * 255)})`; r.fillRect(x, y, w, h); };
+  rmF(0, 0, FW, FDW, 0.7);
   const T = (c, s, x, y, px, col, al = 'center', w = 'bold') => { c.font = `${w} ${px}px monospace`; c.textAlign = al; c.textBaseline = 'middle'; c.fillStyle = col; c.fillText(s, x, y); };
-  const screen = (x, y, w, h) => { a.fillStyle = '#050607'; a.fillRect(x, y, w, h); r.fillStyle = 'rgb(0,50,0)'; r.fillRect(x, y, w, h); };
+  const screen = (x, y, w, h) => { a.fillStyle = '#050607'; a.fillRect(x, y, w, h); rmF(x, y, w, h, 0.15, 0, 0); };
   const ring = (c, x, y, rad, col, lw = 2) => { c.strokeStyle = col; c.lineWidth = lw; c.beginPath(); c.arc(x, y, rad, 0, Math.PI * 2); c.stroke(); };
   const disc = (c, x, y, rad, col) => { c.fillStyle = col; c.beginPath(); c.arc(x, y, rad, 0, Math.PI * 2); c.fill(); };
+  // baked shading: an inner shadow round a rectangle (panels meeting, recesses), a soft dark ring round a knob or switch
+  const ao = (x, y, w, h, d = 10, k = 0.35, sides = 'tblr') => {
+    for (const [s, gx0, gy0, gx1, gy1, rx, ry, rw, rh] of [['t', x, y, x, y + d, x, y, w, d], ['b', x, y + h, x, y + h - d, x, y + h - d, w, d], ['l', x, y, x + d, y, x, y, d, h], ['r', x + w, y, x + w - d, y, x + w - d, y, d, h]]) {
+      if (!sides.includes(s)) continue; const g = a.createLinearGradient(gx0, gy0, gx1, gy1); g.addColorStop(0, `rgba(0,0,0,${k})`); g.addColorStop(1, 'rgba(0,0,0,0)'); a.fillStyle = g; a.fillRect(rx, ry, rw, rh); } };
+  const halo = (x, y, rad, k = 0.4) => { const g = a.createRadialGradient(x, y, rad * 0.7, x, y, rad * 1.9); g.addColorStop(0, `rgba(0,0,0,${k})`); g.addColorStop(1, 'rgba(0,0,0,0)'); a.fillStyle = g; a.beginPath(); a.arc(x, y, rad * 1.9, 0, Math.PI * 2); a.fill(); };
+  // a Dzus fastener: a slotted quarter-turn stud in a little ring
+  const dzus = (x, y, rad = 3.5) => { disc(a, x + 0.6, y + 0.8, rad + 1.2, 'rgba(0,0,0,0.35)'); disc(a, x, y, rad, '#a3aab0'); disc(a, x - rad * 0.25, y - rad * 0.25, rad * 0.45, 'rgba(255,255,255,0.25)'); a.strokeStyle = '#30353a'; a.lineWidth = Math.max(1, rad * 0.35); a.beginPath(); a.moveTo(x - rad * 0.75, y + rad * 0.3); a.lineTo(x + rad * 0.75, y - rad * 0.3); a.stroke(); };
+  // backlit legend: cream lettering that glows faintly (a real panel's light plate)
+  const legend = (s, x, y, px, al = 'center') => { T(a, s, x, y, px, '#efeadb', al); T(e, s, x, y, px, '#5a5444', al); };
+  const glow = (x, y, w, h, col, k = 1) => { e.save(); e.shadowColor = col; e.shadowBlur = 7; e.globalAlpha = k; e.fillStyle = col; e.fillRect(x, y, w, h); e.restore(); };
+  // a module face: a slightly different grey each, its seam, the light plate's edge, shading in its corners, fasteners
+  const module = (x, y, w, h, base = FDS.panel[0], fast = true) => {
+    a.fillStyle = base; a.fillRect(x, y, w, h); const k = (rnd() - 0.5) * 0.08; a.fillStyle = k > 0 ? `rgba(255,255,255,${k})` : `rgba(10,20,30,${-k})`; a.fillRect(x, y, w, h);
+    ao(x, y, w, h, Math.min(10, w / 6, h / 6), 0.3); a.strokeStyle = 'rgba(255,255,255,0.13)'; a.lineWidth = 1; a.strokeRect(x + 3.5, y + 3.5, w - 7, h - 7);
+    a.strokeStyle = '#1a1e22'; a.lineWidth = 2; a.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    if (fast && w > 40 && h > 30) for (const [fx, fy] of [[x + 7, y + 7], [x + w - 7, y + 7], [x + 7, y + h - 7], [x + w - 7, y + h - 7]]) dzus(fx, fy, 2.6); };
   // primary flight display: attitude (sky over ground, pitch ladder, the yellow aircraft symbol), speed and altitude tapes,
   // the mode annunciations along the top, the heading arc along the bottom
   const pfd = (x0, y0) => {
@@ -1083,89 +1112,181 @@ function fdAtlasTextures() {
   pfd(0, 0); nd(320, 0, 320, 256); eng(640, 0);
   { screen(960, 0, 64, 64); const c = e; c.save(); c.beginPath(); c.rect(974, 8, 36, 48); c.clip(); c.fillStyle = '#2470d6'; c.fillRect(974, 8, 36, 26); c.fillStyle = '#8b5428'; c.fillRect(974, 34, 36, 22); c.restore(); c.fillStyle = '#ffd21a'; c.fillRect(984, 32, 16, 3); T(c, '250', 966, 32, 7, '#fff', 'left'); T(c, '100', 1022, 32, 7, '#fff', 'right'); }
   { // landing gear panel round the gear lever: three green "down" lights, the lever's UP / OFF / DN placard
-    a.fillStyle = FDS.panel[0]; a.fillRect(960, 64, 64, 192); T(a, 'LANDING GEAR', 992, 76, 7, '#eee'); for (const [i, s] of ['UP', 'OFF', 'DN'].entries()) T(a, s, 1012, 150 + i * 26, 8, '#eee');
-    for (const [x, y] of [[992, 96], [978, 112], [1006, 112]]) { a.fillStyle = '#111'; a.fillRect(x - 7, y - 5, 14, 10); e.fillStyle = '#35d14a'; e.fillRect(x - 6, y - 4, 12, 8); }
-    T(a, 'AUTO BRAKE', 992, 236, 7, '#eee'); ring(a, 992, 222, 8, '#111', 5);
+    module(960, 64, 64, 192, '#5a6570', false); legend('LANDING GEAR', 992, 78, 7); for (const [i, s] of ['UP', 'OFF', 'DN'].entries()) legend(s, 1012, 150 + i * 26, 8);
+    for (const [x, y] of [[992, 98], [978, 114], [1006, 114]]) { a.fillStyle = '#0c0d0e'; a.fillRect(x - 7, y - 5, 14, 10); ao(x - 7, y - 5, 14, 10, 3, 0.5); glow(x - 5, y - 3, 10, 6, '#35d14a'); }
+    halo(992, 222, 9); legend('AUTO BRAKE', 992, 238, 7); ring(a, 992, 222, 8, '#111', 5); dzus(966, 70, 2.4); dzus(1018, 70, 2.4); dzus(966, 250, 2.4); dzus(1018, 250, 2.4);
   }
-  { // mode control panel: grey, black windows with the selected course / speed / heading / altitude / vertical speed, mode buttons
-    const x0 = 0, y0 = 256, W = 768; a.fillStyle = '#6b7680'; a.fillRect(x0, y0, W, 64); a.strokeStyle = '#4b545c'; a.lineWidth = 3; a.strokeRect(x0 + 1, y0 + 1, W - 2, 62);
-    for (const [u0, u1, s] of MCP_WIN) { const x = x0 + u0 * W, w = (u1 - u0) * W; a.fillStyle = '#060606'; a.fillRect(x, y0 + 12, w, 20); T(e, s, x + w / 2, y0 + 22, 17, '#f3eedc'); r.fillStyle = 'rgb(0,60,0)'; r.fillRect(x, y0 + 12, w, 20); }
-    for (const [i, s] of ['COURSE', 'IAS/MACH', 'HEADING', 'ALTITUDE', 'VERT SPEED', 'COURSE'].entries()) T(a, s, x0 + (MCP_WIN[i][0] + MCP_WIN[i][1]) / 2 * W, y0 + 6, 7, '#f2f2f2');
-    for (let k = 0; k < 22; k++) { const u = 0.09 + k * 0.038; if (MCP_WIN.some(([u0, u1]) => u > u0 - 0.03 && u < u1 + 0.01)) continue; const x = x0 + u * W; a.fillStyle = '#d4d6d8'; a.fillRect(x - 11, y0 + 38, 22, 14); a.fillStyle = '#222'; a.fillRect(x - 9, y0 + 40, 18, 3); if (k % 3 === 0) { e.fillStyle = '#3fe03f'; e.fillRect(x - 9, y0 + 40, 18, 3); } }
-    T(a, 'A/T ARM', x0 + 0.115 * W, y0 + 58, 6, '#f2f2f2'); T(a, 'CMD A', x0 + 0.89 * W, y0 + 58, 6, '#f2f2f2');
+  { // mode control panel: grey modules, recessed black windows with the selected course / speed / heading / altitude /
+    // vertical speed, mode buttons with their lit bars, backlit legends; shadow under the glare shield's lip along its top
+    const x0 = 0, y0 = 256, W = 768; module(x0, y0, W, 64, '#68737d', false);
+    for (const u of [0.13, 0.33, 0.5, 0.71, 0.9]) { a.fillStyle = '#1a1e22'; a.fillRect(x0 + u * W, y0 + 2, 2, 60); }
+    for (const [u0, u1, s] of MCP_WIN) { const x = x0 + u0 * W, w = (u1 - u0) * W; a.fillStyle = '#050505'; a.fillRect(x, y0 + 12, w, 20); ao(x, y0 + 12, w, 20, 5, 0.7); a.strokeStyle = 'rgba(255,255,255,0.18)'; a.lineWidth = 1; a.strokeRect(x - 1.5, y0 + 10.5, w + 3, 23);
+      T(e, s, x + w / 2, y0 + 22, 17, '#f3eedc'); rmF(x, y0 + 12, w, 20, 0.15, 0, 0); halo(x + w / 2, y0 + 47, 9, 0.35); }
+    for (const [i, s] of ['COURSE', 'IAS/MACH', 'HEADING', 'ALTITUDE', 'VERT SPEED', 'COURSE'].entries()) legend(s, x0 + (MCP_WIN[i][0] + MCP_WIN[i][1]) / 2 * W, y0 + 6, 7);
+    for (let k = 0; k < 22; k++) { const u = 0.09 + k * 0.038; if (MCP_WIN.some(([u0, u1]) => u > u0 - 0.03 && u < u1 + 0.01)) continue; const x = x0 + u * W; a.fillStyle = 'rgba(0,0,0,0.4)'; a.fillRect(x - 10, y0 + 40, 22, 14); a.fillStyle = '#c9ccce'; a.fillRect(x - 11, y0 + 38, 22, 14); a.fillStyle = 'rgba(255,255,255,0.35)'; a.fillRect(x - 11, y0 + 38, 22, 2);
+      a.fillStyle = '#1d1f21'; a.fillRect(x - 9, y0 + 41, 18, 3); if (k % 3 === 0) glow(x - 9, y0 + 41, 18, 3, '#3fe03f'); T(a, ['N1', 'SPD', 'LVL', 'VNAV', 'LNAV', 'VOR', 'APP', 'HDG', 'ALT', 'V/S', 'CMD', 'CWS'][k % 12], x, y0 + 49, 5, '#222'); }
+    legend('A/T ARM', x0 + 0.115 * W, y0 + 58, 6); legend('CMD A', x0 + 0.89 * W, y0 + 58, 6);
+    ao(x0, y0, W, 64, 16, 0.45, 't'); // (under the glare shield's lip)
   }
   { // EFIS control panels (minimums, baro, map mode and range knobs) and a clock face
-    a.fillStyle = '#6b7680'; a.fillRect(768, 256, 128, 64); ring(a, 796, 290, 14, '#222', 6); ring(a, 868, 290, 14, '#222', 6); for (let k = 0; k < 6; k++) { a.fillStyle = '#d4d6d8'; a.fillRect(818 + (k % 3) * 9, 270 + Math.floor(k / 3) * 22, 7, 12); }
-    T(a, 'MINS', 796, 266, 7, '#eee'); T(a, 'BARO', 868, 266, 7, '#eee');
-    a.fillStyle = '#6b7680'; a.fillRect(896, 256, 128, 64); disc(a, 960, 288, 28, '#0b0b0c'); ring(a, 960, 288, 28, '#ddd', 2); for (let k = 0; k < 12; k++) { const t = k * Math.PI / 6; a.strokeStyle = '#eee'; a.lineWidth = 2; a.beginPath(); a.moveTo(960 + Math.cos(t) * 20, 288 + Math.sin(t) * 20); a.lineTo(960 + Math.cos(t) * 26, 288 + Math.sin(t) * 26); a.stroke(); }
+    module(768, 256, 128, 64, '#626d77', false); for (const x of [796, 868]) { halo(x, 290, 14, 0.45); ring(a, x, 290, 14, '#1c1d1f', 6); } for (let k = 0; k < 6; k++) { a.fillStyle = '#c9ccce'; a.fillRect(818 + (k % 3) * 9, 270 + Math.floor(k / 3) * 22, 7, 12); }
+    legend('MINS', 796, 266, 7); legend('BARO', 868, 266, 7); ao(768, 256, 128, 64, 14, 0.45, 't');
+    module(896, 256, 128, 64, '#626d77', false); disc(a, 960, 288, 28, '#0b0b0c'); ring(a, 960, 288, 28, '#bbb', 2); for (let k = 0; k < 12; k++) { const t = k * Math.PI / 6; a.strokeStyle = '#eee'; a.lineWidth = 2; a.beginPath(); a.moveTo(960 + Math.cos(t) * 20, 288 + Math.sin(t) * 20); a.lineTo(960 + Math.cos(t) * 26, 288 + Math.sin(t) * 26); a.stroke(); }
     T(e, '14:23', 960, 296, 11, '#ffb02e');
   }
-  { // control display unit (FMS): its screen of route pages over a keypad, line-select keys either side
-    const x0 = 0, y0 = 320; a.fillStyle = '#3a3f45'; a.fillRect(x0, y0, 160, 256); screen(x0 + 16, y0 + 8, 128, 102);
-    for (let k = 0; k < 6; k++) for (const x of [x0 + 3, x0 + 147]) { a.fillStyle = '#c9ccd0'; a.fillRect(x, y0 + 20 + k * 15, 10, 9); }
+  { // control display unit (FMS): its screen sunk in the bezel, the keypad's raised keys with shadows, line-select keys
+    const x0 = 0, y0 = 320; module(x0, y0, 160, 256, '#363b41', true); a.fillStyle = '#0a0b0c'; a.fillRect(x0 + 13, y0 + 5, 134, 108); screen(x0 + 16, y0 + 8, 128, 102); ao(x0 + 16, y0 + 8, 128, 102, 6, 0.6);
+    const key = (x, y, w, h, s, col = '#c4c7cb') => { a.fillStyle = 'rgba(0,0,0,0.55)'; a.fillRect(x + 1, y + 1.5, w, h); a.fillStyle = col; a.fillRect(x, y, w, h); a.fillStyle = 'rgba(255,255,255,0.35)'; a.fillRect(x, y, w, 1.5); a.fillStyle = 'rgba(0,0,0,0.18)'; a.fillRect(x, y + h - 2, w, 2); if (s) T(a, s, x + w / 2, y + h / 2 + 0.5, 6, '#111'); };
+    for (let k = 0; k < 6; k++) for (const x of [x0 + 3, x0 + 147]) key(x, y0 + 20 + k * 15, 10, 9, '');
     const lines = [['ACT RTE 1 LEGS', '#fff', 1], ['084°     12NM', '#fff', 0], ['RIVET  250/FL100', '#ff48ff', 0], ['091°     31NM', '#fff', 0], ['TOPAZ  250/FL120', '#3fe03f', 0], ['', '', 0], ['KESTR  280/FL240', '#3fe03f', 0], ['', '', 0], ['-----------------', '#fff', 0], ['<RTE 2   RTE DATA>', '#fff', 0]];
     lines.forEach(([s, col, big], i) => s && T(e, s, x0 + 80, y0 + 16 + i * 9.5, big ? 9 : 8, col));
-    const key = (x, y, w, h, s, col = '#c9ccd0') => { a.fillStyle = col; a.fillRect(x, y, w, h); if (s) T(a, s, x + w / 2, y + h / 2 + 0.5, 6, '#111'); };
-    for (let k = 0; k < 10; k++) key(x0 + 8 + (k % 5) * 29, y0 + 118 + Math.floor(k / 5) * 14, 25, 11, ['INIT', 'RTE', 'CLB', 'CRZ', 'DES', 'MENU', 'LEGS', 'HOLD', 'PROG', 'EXEC'][k], k === 9 ? '#dfe3e6' : '#c9ccd0');
+    for (let k = 0; k < 10; k++) key(x0 + 8 + (k % 5) * 29, y0 + 118 + Math.floor(k / 5) * 14, 25, 11, ['INIT', 'RTE', 'CLB', 'CRZ', 'DES', 'MENU', 'LEGS', 'HOLD', 'PROG', 'EXEC'][k], k === 9 ? '#dfe3e6' : '#c4c7cb');
     for (let k = 0; k < 30; k++) key(x0 + 64 + (k % 5) * 18, y0 + 150 + Math.floor(k / 5) * 17, 15, 14, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ /<>'[k]);
     for (let k = 0; k < 12; k++) key(x0 + 8 + (k % 3) * 18, y0 + 168 + Math.floor(k / 3) * 19, 15, 15, '123456789.0-'[k]);
-    e.fillStyle = '#3fe03f'; e.fillRect(x0 + 125, y0 + 120, 20, 2);
+    glow(x0 + 125, y0 + 120, 20, 2, '#3fe03f'); legend('EXEC', x0 + 135, y0 + 140, 5); legend('DSPY  FAIL  MSG  OFST', x0 + 34, y0 + 152, 4);
   }
-  { // radio boxes on the aft pedestal: VHF / NAV frequency windows in red digits, their knobs; the transponder
-    const x0 = 160, y0 = 320; a.fillStyle = '#56606a'; a.fillRect(x0, y0, 192, 256);
+  { // radio boxes on the aft pedestal: each its own module (red-digit frequency windows sunk in it, knobs, transfer switch)
+    const x0 = 160, y0 = 320; a.fillStyle = '#2a2f34'; a.fillRect(x0, y0, 192, 256);
     const freq = [['118.30', '121.50'], ['110.30', '113.90'], ['124.85', '119.10'], ['ADF 362', '7000']];
-    for (let k = 0; k < 4; k++) { const y = y0 + 6 + k * 63; a.fillStyle = '#626d77'; a.fillRect(x0 + 4, y, 184, 57); a.strokeStyle = '#3d454c'; a.lineWidth = 2; a.strokeRect(x0 + 4, y, 184, 57);
-      for (const [j, xx] of [x0 + 12, x0 + 98].entries()) { a.fillStyle = '#050505'; a.fillRect(xx, y + 8, 76, 20); T(e, freq[k][j], xx + 38, y + 18, 15, '#ff4a2a'); }
-      ring(a, x0 + 40, y + 43, 9, '#1a1a1a', 6); ring(a, x0 + 150, y + 43, 9, '#1a1a1a', 6); a.fillStyle = '#e1e1dc'; a.fillRect(x0 + 84, y + 37, 24, 12); T(a, 'TFR', x0 + 96, y + 43, 6, '#111'); }
+    for (let k = 0; k < 4; k++) { const y = y0 + 4 + k * 63; module(x0 + 3, y, 186, 59, ['#5b6670', '#626c76', '#58636d', '#606a73'][k], true);
+      for (const [j, xx] of [x0 + 14, x0 + 100].entries()) { a.fillStyle = '#040404'; a.fillRect(xx, y + 9, 76, 20); ao(xx, y + 9, 76, 20, 5, 0.7); T(e, freq[k][j], xx + 38, y + 19, 15, '#ff4a2a'); rmF(xx, y + 9, 76, 20, 0.15, 0, 0); legend(j ? 'STBY' : 'ACTIVE', xx + 38, y + 4.5, 5); }
+      for (const xx of [x0 + 40, x0 + 152]) { halo(xx, y + 44, 9, 0.45); ring(a, xx, y + 44, 9, '#161718', 6); } a.fillStyle = '#e1e1dc'; a.fillRect(x0 + 84, y + 38, 24, 12); T(a, 'TFR', x0 + 96, y + 44, 6, '#111'); legend(['VHF 1', 'NAV 1', 'VHF 2', 'ADF / ATC'][k], x0 + 96, y + 55, 5); }
   }
-  { // circuit breakers: rows of black buttons with white collars and their labels
-    const x0 = 352, y0 = 320; a.fillStyle = '#5d6872'; a.fillRect(x0, y0, 160, 256);
-    for (let rr = 0; rr < 22; rr++) { a.fillStyle = '#d8d8d8'; a.fillRect(x0 + 4, y0 + 4 + rr * 11.4, 152, 1); for (let k = 0; k < 16; k++) { if ((rr * 7 + k * 3) % 11 === 0) continue; const x = x0 + 9 + k * 9.5, y = y0 + 10 + rr * 11.4; disc(a, x, y, 3.4, '#e6e6e2'); disc(a, x, y, 2.3, '#0d0d0e'); } }
+  { // circuit breakers: rows of black buttons with white collars and their labels, on two modules
+    const x0 = 352, y0 = 320; module(x0, y0, 160, 128, '#5b6670', true); module(x0, y0 + 128, 160, 128, '#606a74', true);
+    for (let rr = 0; rr < 22; rr++) { a.fillStyle = '#d8d8d8'; a.fillRect(x0 + 10, y0 + 4 + rr * 11.4, 140, 1); for (let k = 0; k < 15; k++) { if ((rr * 7 + k * 3) % 11 === 0) continue; const x = x0 + 13 + k * 9.5, y = y0 + 10 + rr * 11.4; disc(a, x + 0.7, y + 0.9, 3.6, 'rgba(0,0,0,0.4)'); disc(a, x, y, 3.4, '#e6e6e2'); disc(a, x, y, 2.3, '#0d0d0e'); } }
   }
-  { // panel strips below the displays: knobs, small switches, a few amber caution lights
-    for (const [y0, flip] of [[320, false], [384, true]]) { a.fillStyle = FDS.panel[0]; a.fillRect(512, y0, 512, 64); a.strokeStyle = '#475058'; a.lineWidth = 2; a.strokeRect(513, y0 + 1, 510, 62);
-      for (let k = 0; k < 8; k++) { const x = 512 + (flip ? 480 - k * 62 : 32 + k * 62); if (k % 3 === 1) { a.fillStyle = '#0a0a0a'; a.fillRect(x - 20, y0 + 16, 40, 18); e.fillStyle = k === 4 ? '#e09a22' : '#4a3010'; e.fillRect(x - 18, y0 + 18, 36, 14); T(a, 'CAUTION', x, y0 + 46, 6, '#eee'); } else { ring(a, x, y0 + 28, 10, '#141414', 7); T(a, ['MAIN DU', 'LOWER DU', 'BRT', 'FUEL FLOW', 'N1 SET', 'SPD REF'][k % 6], x, y0 + 50, 6, '#eee'); } } }
+  { // panel strips below the displays: knobs (with shadows), amber caution lights that glow, backlit legends, fasteners
+    for (const [y0, flip] of [[320, false], [384, true]]) { module(512, y0, 512, 64, flip ? '#5a6570' : '#5f6a74', true); for (const u of [170, 342]) { a.fillStyle = '#1a1e22'; a.fillRect(512 + u, y0 + 2, 2, 60); }
+      for (let k = 0; k < 8; k++) { const x = 512 + (flip ? 480 - k * 62 : 32 + k * 62); if (k % 3 === 1) { a.fillStyle = '#0a0a0a'; a.fillRect(x - 20, y0 + 16, 40, 18); ao(x - 20, y0 + 16, 40, 18, 4, 0.6); glow(x - 17, y0 + 19, 34, 12, k === 4 ? '#f0a020' : '#5a3a12', k === 4 ? 1 : 0.8); legend('CAUTION', x, y0 + 46, 6); } else { halo(x, y0 + 28, 10, 0.45); ring(a, x, y0 + 28, 10, '#141414', 7); legend(['MAIN DU', 'LOWER DU', 'BRT', 'FUEL FLOW', 'N1 SET', 'SPD REF'][k % 6], x, y0 + 50, 6); } } }
   }
   { // outboard panels: clock, the display brightness knobs, the nose wheel steering switch
-    const x0 = 512, y0 = 448; a.fillStyle = FDS.panel[0]; a.fillRect(x0, y0, 256, 128); disc(a, x0 + 60, y0 + 56, 34, '#0b0b0c'); ring(a, x0 + 60, y0 + 56, 34, '#ccc', 2);
+    const x0 = 512, y0 = 448; module(x0, y0, 256, 128, '#5c6771', true); halo(x0 + 60, y0 + 56, 34, 0.3); disc(a, x0 + 60, y0 + 56, 34, '#0b0b0c'); ring(a, x0 + 60, y0 + 56, 34, '#aaa', 2);
     T(e, '14:23', x0 + 60, y0 + 50, 13, '#ffb02e'); T(e, '02:41', x0 + 60, y0 + 70, 10, '#ffb02e');
-    for (let k = 0; k < 3; k++) { ring(a, x0 + 140 + k * 38, y0 + 40, 9, '#141414', 6); T(a, ['INBD', 'OUTBD', 'UPPER'][k], x0 + 140 + k * 38, y0 + 60, 7, '#eee'); }
-    a.fillStyle = '#0a0a0a'; a.fillRect(x0 + 130, y0 + 84, 100, 22); e.fillStyle = '#5a2a0a'; e.fillRect(x0 + 132, y0 + 86, 96, 18); T(a, 'NOSE WHEEL STEERING', x0 + 180, y0 + 118, 7, '#eee');
+    for (let k = 0; k < 3; k++) { halo(x0 + 140 + k * 38, y0 + 40, 9, 0.45); ring(a, x0 + 140 + k * 38, y0 + 40, 9, '#141414', 6); legend(['INBD', 'OUTBD', 'UPPER'][k], x0 + 140 + k * 38, y0 + 60, 7); }
+    a.fillStyle = '#0a0a0a'; a.fillRect(x0 + 130, y0 + 84, 100, 22); glow(x0 + 133, y0 + 87, 94, 16, '#6a320c', 0.8); legend('NOSE WHEEL STEERING', x0 + 180, y0 + 116, 7);
   }
-  { // overhead panel: its modules outlined in white, switch positions, annunciators, a couple of round gauges
-    const x0 = 0, y0 = 576, W = 512, H = 384, L = overheadLayout(); a.fillStyle = FDS.ovh[0]; a.fillRect(x0, y0, W, H);
+  { // overhead panel: modules each its own grey, outlined light plates, backlit legends, switch bosses, annunciators that glow
+    const x0 = 0, y0 = 576, W = 512, H = 384, L = overheadLayout(); a.fillStyle = '#1c2024'; a.fillRect(x0, y0, W, H);
     const px = (u, v) => [x0 + u * W, y0 + (1 - v) * H];
     let s = 5; const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
     for (const m of L.mods) {
-      const [xa, ya] = px(m.u0, m.v1), [xb, yb] = px(m.u1, m.v0); a.fillStyle = '#6e7982'; a.fillRect(xa, ya, xb - xa, yb - ya); a.strokeStyle = '#d8dcdf'; a.lineWidth = 1; a.strokeRect(xa + 2, ya + 2, xb - xa - 4, yb - ya - 4);
-      a.strokeStyle = '#3f474e'; a.lineWidth = 2; a.strokeRect(xa, ya, xb - xa, yb - ya);
-      T(a, ['FUEL', 'ELEC', 'HYD', 'BLEED', 'PRESS', 'ANTI-ICE', 'LIGHTS', 'APU', 'ENG START', 'WIPER'][Math.floor(rnd() * 10)], (xa + xb) / 2, ya + 7, 7, '#eceff1');
-      if (m.kind === 'ann') { const n = 2 + Math.floor(rnd() * 3); for (let i = 0; i < n; i++) for (let j = 0; j < 2; j++) { const x = xa + 8 + i * ((xb - xa - 16) / n), y = ya + 16 + j * ((yb - ya - 22) / 2), w = (xb - xa - 16) / n - 5, h = Math.min(12, (yb - ya - 22) / 2 - 4); a.fillStyle = '#16181a'; a.fillRect(x, y, w, h); const lit = rnd(); if (lit < 0.3) { e.fillStyle = lit < 0.12 ? '#3a78ff' : '#d08a1c'; e.globalAlpha = 0.55; e.fillRect(x + 1, y + 1, w - 2, h - 2); e.globalAlpha = 1; } } }
-      if (m.kind === 'gauge') { const n = (xb - xa) > 100 ? 2 : 1; for (let i = 0; i < n; i++) { const x = xa + (xb - xa) * ((i + 0.5) / n), y = (ya + yb) / 2 + 4, rad = Math.min(18, (yb - ya) / 2 - 8); disc(a, x, y, rad, '#0b0b0c'); ring(a, x, y, rad, '#ddd', 1.5); a.strokeStyle = '#fff'; a.lineWidth = 2; a.beginPath(); a.moveTo(x, y); a.lineTo(x + rad * 0.7, y - rad * 0.5); a.stroke(); } }
+      const [xa, ya] = px(m.u0, m.v1), [xb, yb] = px(m.u1, m.v0); module(xa, ya, xb - xa, yb - ya, ['#66717b', '#6c7680', '#616c76', '#69737c'][Math.floor(rnd() * 4)], true);
+      a.strokeStyle = 'rgba(232,230,220,0.55)'; a.lineWidth = 1; a.strokeRect(xa + 10, ya + 13, xb - xa - 20, yb - ya - 18);
+      legend(['FUEL', 'ELEC', 'HYD', 'BLEED', 'PRESS', 'ANTI-ICE', 'LIGHTS', 'APU', 'ENG START', 'WIPER'][Math.floor(rnd() * 10)], (xa + xb) / 2, ya + 8, 7);
+      if (m.kind === 'ann') { const n = 2 + Math.floor(rnd() * 3); for (let i = 0; i < n; i++) for (let j = 0; j < 2; j++) { const x = xa + 12 + i * ((xb - xa - 24) / n), y = ya + 18 + j * ((yb - ya - 26) / 2), w = (xb - xa - 24) / n - 5, h = Math.min(12, (yb - ya - 26) / 2 - 4); a.fillStyle = '#121416'; a.fillRect(x, y, w, h); ao(x, y, w, h, 3, 0.6); const lit = rnd(); if (lit < 0.3) glow(x + 1, y + 1, w - 2, h - 2, lit < 0.12 ? '#3a78ff' : '#d08a1c', 0.6); else { a.fillStyle = 'rgba(200,190,150,0.12)'; a.fillRect(x + 1, y + 1, w - 2, h - 2); } } }
+      if (m.kind === 'gauge') { const n = (xb - xa) > 100 ? 2 : 1; for (let i = 0; i < n; i++) { const x = xa + (xb - xa) * ((i + 0.5) / n), y = (ya + yb) / 2 + 4, rad = Math.min(18, (yb - ya) / 2 - 9); halo(x, y, rad, 0.35); disc(a, x, y, rad, '#0b0b0c'); ring(a, x, y, rad, '#bbb', 1.5); e.strokeStyle = '#8a8270'; e.lineWidth = 2; e.beginPath(); e.moveTo(x, y); e.lineTo(x + rad * 0.7, y - rad * 0.5); e.stroke(); } }
     }
-    for (const [u, v] of L.sw) { const [x, y] = px(u, v); disc(a, x, y, 5, '#2b2f33'); disc(a, x, y, 2.5, '#9aa0a5'); a.fillStyle = '#eceff1'; a.fillRect(x - 6, y + 8, 12, 1.5); }
+    for (const [u, v] of L.sw) { const [x, y] = px(u, v); halo(x, y, 5, 0.45); disc(a, x, y, 5, '#2b2f33'); disc(a, x, y, 2.5, '#9aa0a5'); a.fillStyle = '#eceff1'; a.fillRect(x - 6, y + 8, 12, 1.5); e.fillStyle = '#4a4538'; e.fillRect(x - 6, y + 8, 12, 1.5); legend(['ON', 'OFF', 'AUTO'][Math.floor(rnd() * 3)], x, y - 9, 4); }
   }
-  { // the flight-deck door: grey panel, a placard, the peephole, the keypad beside the handle
-    const x0 = 512, y0 = 576; a.fillStyle = FDS.door[0]; a.fillRect(x0, y0, 256, 384); a.strokeStyle = '#6d757b'; a.lineWidth = 4; a.strokeRect(x0 + 8, y0 + 8, 240, 368);
-    disc(a, x0 + 128, y0 + 120, 6, '#151515'); a.fillStyle = '#d9d9d4'; a.fillRect(x0 + 88, y0 + 160, 80, 30); T(a, 'FLIGHT DECK', x0 + 128, y0 + 175, 9, '#222');
-    a.fillStyle = '#5c646b'; a.fillRect(x0 + 40, y0 + 330, 176, 40); a.fillStyle = '#30353a'; a.fillRect(x0 + 200, y0 + 196, 30, 44);
+  { // the flight-deck door: grey panel, kick plate scuffed at the foot, a placard, the peephole, the keypad beside the handle
+    const x0 = 512, y0 = 576; a.fillStyle = FDS.door[0]; a.fillRect(x0, y0, 256, 384); ao(x0, y0, 256, 384, 20, 0.35); a.strokeStyle = '#6d757b'; a.lineWidth = 3; a.strokeRect(x0 + 12, y0 + 12, 232, 360);
+    a.strokeStyle = 'rgba(255,255,255,0.15)'; a.lineWidth = 1; a.strokeRect(x0 + 15, y0 + 15, 226, 354);
+    disc(a, x0 + 128, y0 + 120, 7, '#5c646b'); disc(a, x0 + 128, y0 + 120, 4.5, '#101010'); a.fillStyle = '#d9d9d4'; a.fillRect(x0 + 88, y0 + 160, 80, 30); T(a, 'FLIGHT DECK', x0 + 128, y0 + 175, 9, '#222');
+    a.fillStyle = '#5c646b'; a.fillRect(x0 + 30, y0 + 322, 196, 50); for (let k = 0; k < 40; k++) { a.fillStyle = `rgba(${rnd() < 0.5 ? '255,255,255' : '0,0,0'},0.12)`; a.fillRect(x0 + 32 + rnd() * 190, y0 + 324 + rnd() * 44, 4 + rnd() * 18, 1); }
+    a.fillStyle = '#30353a'; a.fillRect(x0 + 200, y0 + 196, 30, 44); for (let k = 0; k < 12; k++) { a.fillStyle = '#9aa0a5'; a.fillRect(x0 + 203 + (k % 3) * 9, y0 + 200 + Math.floor(k / 3) * 10, 6, 7); }
   }
-  { // side console top: oxygen mask stowage box outline, the audio control panel, a map light switch
-    const x0 = 768, y0 = 576; a.fillStyle = '#6b7680'; a.fillRect(x0, y0, 256, 384); a.strokeStyle = '#454d54'; a.lineWidth = 3; a.strokeRect(x0 + 4, y0 + 4, 248, 376);
-    a.fillStyle = FDS.panel[0]; a.fillRect(x0 + 40, y0 + 200, 176, 120); for (let k = 0; k < 10; k++) { a.fillStyle = '#d4d6d8'; a.fillRect(x0 + 52 + (k % 5) * 32, y0 + 214 + Math.floor(k / 5) * 34, 22, 14); e.fillStyle = k % 4 ? '#000' : '#3fe03f'; e.fillRect(x0 + 54 + (k % 5) * 32, y0 + 216 + Math.floor(k / 5) * 34, 18, 3); }
-    T(a, 'AUDIO CONTROL', x0 + 128, y0 + 300, 9, '#eee'); for (let k = 0; k < 4; k++) ring(a, x0 + 70 + k * 40, y0 + 280, 6, '#151515', 4);
+  { // side console top: its plate with fasteners and worn edge, the audio control panel (backlit), a map light switch
+    const x0 = 768, y0 = 576; module(x0, y0, 256, 384, '#66717a', true); a.fillStyle = 'rgba(220,225,230,0.16)'; a.fillRect(x0 + 2, y0 + 2, 12, 380); // (worn along the inner edge, where elbows rest)
+    module(x0 + 40, y0 + 200, 176, 120, '#56616b', true); for (let k = 0; k < 10; k++) { const x = x0 + 52 + (k % 5) * 32, y = y0 + 214 + Math.floor(k / 5) * 34; a.fillStyle = 'rgba(0,0,0,0.45)'; a.fillRect(x + 1, y + 2, 22, 14); a.fillStyle = '#c9ccce'; a.fillRect(x, y, 22, 14); a.fillStyle = '#1d1f21'; a.fillRect(x + 2, y + 2, 18, 3); if (!(k % 4)) glow(x + 2, y + 2, 18, 3, '#3fe03f'); }
+    legend('AUDIO CONTROL', x0 + 128, y0 + 300, 9); for (let k = 0; k < 4; k++) { halo(x0 + 70 + k * 40, y0 + 280, 6); ring(a, x0 + 70 + k * 40, y0 + 280, 6, '#151515', 4); }
+    module(x0 + 60, y0 + 40, 136, 110, '#5a6570', true); legend('OXYGEN', x0 + 128, y0 + 56, 8); a.fillStyle = '#0c0d0e'; a.fillRect(x0 + 80, y0 + 70, 96, 60); ao(x0 + 80, y0 + 70, 96, 60, 8, 0.6);
   }
+  // the right half: materials laid over the furniture
+  const mottle = (x0, y0, W, H, n = 70, k = 0.045) => { for (let i = 0; i < n; i++) { const x = x0 + rnd() * W, y = y0 + rnd() * H, rr = 8 + rnd() * 46, l = rnd() < 0.5 ? '255,255,255' : '0,0,0', g = a.createRadialGradient(x, y, 0, x, y, rr); g.addColorStop(0, `rgba(${l},${k})`); g.addColorStop(1, `rgba(${l},0)`); a.save(); a.beginPath(); a.rect(x0, y0, W, H); a.clip(); a.fillStyle = g; a.fillRect(x - rr, y - rr, 2 * rr, 2 * rr); a.restore(); } };
+  // a powder-coated panel plate: its own grey, mottled, the seam round it, a lighter light-plate edge, shading in the
+  // corners, a Dzus fastener at each corner; worn (lighter, scuffed) along one edge where hands go
+  const plate = (x0, y0, base, { top = 0, wear = 0, fast = true, rough = 0.72, gs = 0.45 } = {}) => {
+    const W = 256, H = 256; a.fillStyle = base; a.fillRect(x0, y0, W, H); mottle(x0, y0, W, H);
+    if (wear) { const g = a.createLinearGradient(0, y0, 0, y0 + 40); g.addColorStop(0, `rgba(215,222,228,${0.28 * wear})`); g.addColorStop(1, 'rgba(215,222,228,0)'); a.fillStyle = g; a.fillRect(x0, y0, W, 40);
+      for (let k = 0; k < 25 * wear; k++) { a.fillStyle = `rgba(${rnd() < 0.6 ? '230,235,240' : '20,22,25'},${0.04 + rnd() * 0.06})`; a.fillRect(x0 + rnd() * W, y0 + rnd() * H * 0.3, 2 + rnd() * 10, 1); } }
+    ao(x0, y0, W, H, 22, 0.42); if (top) ao(x0, y0, W, H, 90, top, 't');
+    a.strokeStyle = 'rgba(255,255,255,0.12)'; a.lineWidth = 1.5; a.strokeRect(x0 + 6.5, y0 + 6.5, W - 13, H - 13); a.strokeStyle = '#15181b'; a.lineWidth = 3; a.strokeRect(x0 + 1.5, y0 + 1.5, W - 3, H - 3);
+    if (fast) for (const [fx, fy] of [[x0 + 16, y0 + 16], [x0 + W - 16, y0 + 16], [x0 + 16, y0 + H - 16], [x0 + W - 16, y0 + H - 16]]) dzus(fx, fy, 5);
+    rmF(x0, y0, W, H, rough, gs, 0); };
+  plate(1024, 0, '#58636d'); plate(1280, 0, '#626c75'); plate(1536, 0, '#454d55'); plate(1792, 0, '#56616b', { top: 0.7 });
+  plate(1280, 512, '#4e5862', { wear: 1 });
+  { // display bezel: dark satin frame, the glass's black recess with shading into it, screws and the soft keys along its foot
+    const x0 = 1024, y0 = 256; a.fillStyle = '#22262b'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256, 40, 0.05); ao(x0, y0, 256, 256, 14, 0.5);
+    const hx = 256 * 0.065, hy = 256 * 0.085; a.fillStyle = '#060708'; a.fillRect(x0 + hx, y0 + hy, 256 - 2 * hx, 256 - 2 * hy); a.strokeStyle = 'rgba(255,255,255,0.14)'; a.lineWidth = 1.5; a.strokeRect(x0 + hx - 2, y0 + hy - 2, 256 - 2 * hx + 4, 256 - 2 * hy + 4);
+    for (const [fx, fy] of [[x0 + 8, y0 + 8], [x0 + 248, y0 + 8], [x0 + 8, y0 + 248], [x0 + 248, y0 + 248]]) { disc(a, fx, fy, 3, '#6b7177'); a.strokeStyle = '#111'; a.lineWidth = 1; a.beginPath(); a.moveTo(fx - 2, fy); a.lineTo(fx + 2, fy); a.stroke(); }
+    for (let k = 0; k < 6; k++) { a.fillStyle = '#3d4247'; a.fillRect(x0 + 40 + k * 31, y0 + 246, 18, 6); } rmF(x0, y0, 256, 256, 0.42, 0.3, 0);
+  }
+  { // anti-glare fabric: near-black weave, a stitched seam along its edge
+    const x0 = 1280, y0 = 256; a.fillStyle = '#1a1c1f'; a.fillRect(x0, y0, 256, 256);
+    mottle(x0, y0, 256, 256, 50, 0.06); a.strokeStyle = 'rgba(90,92,95,0.8)'; a.setLineDash([4, 3]); a.lineWidth = 1.2; a.strokeRect(x0 + 10, y0 + 10, 236, 236); a.setLineDash([]); ao(x0, y0, 256, 256, 10, 0.4); rmF(x0, y0, 256, 256, 0.97, 0.9, 0.25);
+  }
+  { // carpet: blue-grey pile, flecked, darker into the corners
+    const x0 = 1536, y0 = 256; a.fillStyle = '#3a4450'; a.fillRect(x0, y0, 256, 256); for (let k = 0; k < 6000; k++) { const v = rnd(); a.fillStyle = v < 0.45 ? '#323b46' : v < 0.9 ? '#44505c' : '#58636e'; a.fillRect(x0 + rnd() * 256, y0 + rnd() * 256, 1.5, 1.5); }
+    mottle(x0, y0, 256, 256, 60, 0.06); ao(x0, y0, 256, 256, 40, 0.5); rmF(x0, y0, 256, 256, 1, 1, 0.6);
+  }
+  { // sheepskin: cream fleece in tufts, shaded between them
+    const x0 = 1792, y0 = 256; a.fillStyle = '#dcd1bb'; a.fillRect(x0, y0, 256, 256); a.save(); a.beginPath(); a.rect(x0, y0, 256, 256); a.clip();
+    for (let k = 0; k < 3500; k++) { const x = x0 + rnd() * 256, y = y0 + rnd() * 256, rr = 1.5 + rnd() * 3, dk = rnd() < 0.45, g = a.createRadialGradient(x - rr * 0.3, y - rr * 0.3, 0, x, y, rr); g.addColorStop(0, dk ? 'rgba(190,178,156,0.3)' : 'rgba(248,243,232,0.45)'); g.addColorStop(1, 'rgba(0,0,0,0)'); a.fillStyle = g; a.fillRect(x - rr, y - rr, 2 * rr, 2 * rr); }
+    a.restore(); ao(x0, y0, 256, 256, 26, 0.3); rmF(x0, y0, 256, 256, 1, 0.42, 1);
+  }
+  { // leather: dark, mottled, a sheen worn into it, stitched along its edges
+    const x0 = 1024, y0 = 512; a.fillStyle = '#26231f'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256, 90, 0.07); const g = a.createLinearGradient(0, y0, 0, y0 + 256); g.addColorStop(0, 'rgba(255,240,220,0.1)'); g.addColorStop(0.5, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.25)'); a.fillStyle = g; a.fillRect(x0, y0, 256, 256);
+    a.strokeStyle = 'rgba(120,108,92,0.8)'; a.setLineDash([5, 4]); a.lineWidth = 1.5; a.strokeRect(x0 + 12, y0 + 12, 232, 232); a.setLineDash([]); ao(x0, y0, 256, 256, 14, 0.45); rmF(x0, y0, 256, 256, 0.5, 0.7, 0.35);
+  }
+  { // sun visor fabric: dark green-grey weave in a darker binding
+    const x0 = 1536, y0 = 512; a.fillStyle = '#383d36'; a.fillRect(x0, y0, 256, 256); for (let k = 0; k < 256; k += 3) { a.fillStyle = 'rgba(255,255,255,0.03)'; a.fillRect(x0, y0 + k, 256, 1); a.fillStyle = 'rgba(0,0,0,0.05)'; a.fillRect(x0 + k, y0, 1, 256); }
+    mottle(x0, y0, 256, 256, 40, 0.06); a.strokeStyle = '#1e211d'; a.lineWidth = 14; a.strokeRect(x0 + 7, y0 + 7, 242, 242); rmF(x0, y0, 256, 256, 0.95, 0.9, 0.3);
+  }
+  { // window posts and reveals: light grey trim, shaded along its long edges where it turns
+    const x0 = 1792, y0 = 512; a.fillStyle = '#5c646b'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256, 50, 0.05); ao(x0, y0, 256, 256, 26, 0.25, 'tb'); rmF(x0, y0, 256, 256, 0.9, 0.45, 0.05);
+  }
+  { // back bulkhead: light grey lining panels with their seams and fasteners, shaded at the edges
+    const x0 = 1024, y0 = 768; a.fillStyle = '#a1a9af'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256, 60, 0.05);
+    for (const u of [64, 192]) { a.fillStyle = 'rgba(20,24,28,0.6)'; a.fillRect(x0 + u, y0, 2, 256); for (let k = 0; k < 6; k++) dzus(x0 + u - 6, y0 + 20 + k * 44, 2.6); } a.fillStyle = 'rgba(20,24,28,0.6)'; a.fillRect(x0, y0 + 100, 256, 2);
+    ao(x0, y0, 256, 256, 30, 0.35); rmF(x0, y0, 256, 256, 0.8, 0.4, 0);
+  }
+  { // moulded plastic shell (seat backs, boxes): dark grey, lighter where its edges round over
+    const x0 = 1280, y0 = 768; a.fillStyle = '#383d44'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256, 40, 0.05); a.strokeStyle = 'rgba(255,255,255,0.12)'; a.lineWidth = 6; a.strokeRect(x0 + 4, y0 + 4, 248, 248); ao(x0, y0, 256, 256, 18, 0.3); rmF(x0, y0, 256, 256, 0.5, 0.3, 0);
+  }
+  { const x0 = 1536, y0 = 768; a.fillStyle = '#9ea6ac'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256); rmF(x0, y0, 256, 256, 0.85, 0.35, 0.05); }
   // swatches
-  FDK.forEach((k, i) => { a.fillStyle = FDS[k][0]; a.fillRect(i * 32, 960, 32, 64); const g = Math.round(FDS[k][1] * 255); r.fillStyle = `rgb(0,${g},0)`; r.fillRect(i * 32, 960, 32, 64); });
-  // carpet speckle and fleece tufts in their swatches
-  { let s = 3; const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647); const ci = FDK.indexOf('carpet') * 32, fi = FDK.indexOf('fleece') * 32; for (let k = 0; k < 500; k++) { a.fillStyle = rnd() < 0.5 ? '#36404a' : '#46515c'; a.fillRect(ci + rnd() * 32, 960 + rnd() * 64, 1.5, 1.5); a.fillStyle = rnd() < 0.5 ? '#cfc3ad' : '#e9dfcc'; a.fillRect(fi + rnd() * 32, 960 + rnd() * 64, 2, 2); } }
+  FDK.forEach((k, i) => { a.fillStyle = FDS[k][0]; a.fillRect(i * 32, 960, 32, 64); rmF(i * 32, 960, 32, 64, FDS[k][1], FDS[k][2], FDS[k][3]); });
+  // a fine grain over the whole sheet (a texel's worth of powder coat, felt where the shader's grain is too small to see)
+  { const img = a.getImageData(0, 0, FW, FDW), d = img.data; let s2 = 9; for (let i = 0; i < d.length; i += 4) { s2 = (s2 * 1103515245 + 12345) & 0x7fffffff; const n = ((s2 >> 16) & 15) - 7.5; d[i] += n; d[i + 1] += n; d[i + 2] += n; } a.putImageData(img, 0, 0); }
+  e.fillStyle = '#000'; e.fillRect(FDW - 2, 0, 2, FDW); // (clamped beyond its half: black)
   const tex = (c, srgb) => { const t = new THREE.CanvasTexture(c); if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; };
-  const small = document.createElement('canvas'); small.width = small.height = 256; small.getContext('2d').drawImage(cr, 0, 0, 256, 256); // (roughness only changes from region to region: a quarter size saves the tablet 3 MB)
-  return { map: tex(ca, true), emi: tex(ce, true), rm: tex(small, false) };
+  const small = document.createElement('canvas'); small.width = 512; small.height = 256; small.getContext('2d').drawImage(cr, 0, 0, 512, 256); // (roughness and grain change from region to region: a quarter size will do)
+  const emi = tex(ce, true); emi.repeat.set(2, 1); // (the emissive map covers the left half only)
+  return { map: tex(ca, true), emi, rm: tex(small, false) };
 }
-const fdMat = () => pdMat('fdAtlas', () => { const t = fdAtlasTextures(); return new THREE.MeshStandardMaterial({ map: t.map, emissiveMap: t.emi, emissive: 0xffffff, emissiveIntensity: 0.95, roughnessMap: t.rm, roughness: 1, metalness: 0 }); });
-// the lining inside the skin (seen from inside: back faces), Boeing's light grey
-const fdLinerMat = () => pdMat('fdLiner', () => new THREE.MeshStandardMaterial({ color: 0x9da5ab, roughness: 0.88, side: THREE.BackSide }));
+// The deck's surface grain, in the shader (crew.js's crewPatch does the same for the crew): a value-noise height field at
+// the surface's own scale bumps the normal and breaks up colour and roughness, so no surface reads as a flat colour. How
+// strong and how coarse comes from the roughness map's red and blue (or `fixed` [strength, coarseness]); a slower noise
+// mottles everything a little, as light does across real panels.
+const FD_GLSL = /* glsl */`varying vec3 vFdP;
+  float fdH(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float fdN(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(fdH(i), fdH(i + vec3(1,0,0)), f.x), mix(fdH(i + vec3(0,1,0)), fdH(i + vec3(1,1,0)), f.x), f.y), mix(mix(fdH(i + vec3(0,0,1)), fdH(i + vec3(1,0,1)), f.x), mix(fdH(i + vec3(0,1,1)), fdH(i + vec3(1,1,1)), f.x), f.y), f.z); }
+  vec3 fdBump(vec3 n, vec3 vp, float h, float k) { vec3 dpx = dFdx(vp), dpy = dFdy(vp); float dhx = dFdx(h), dhy = dFdy(h);
+    vec3 r1 = cross(dpy, n), r2 = cross(n, dpx); float det = dot(dpx, r1); vec3 g = sign(det) * (dhx * r1 + dhy * r2); return normalize(abs(det) * n - k * g); }`;
+function fdPatch(m, fixed, extra = '') {
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vFdP;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvFdP = position;');
+    const cls = fixed ? `vec4 fdC = vec4(${fixed[0].toFixed(3)}, 0.0, ${fixed[1].toFixed(3)}, 0.0);` : 'vec4 fdC = texture2D(roughnessMap, vRoughnessMapUv);';
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + FD_GLSL)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        ${cls} float fdGs = fdC.r, fdSc = fdC.b, fdF = mix(900.0, 75.0, fdSc);
+        float fdFw = clamp(length(fwidth(vFdP)) * fdF * 0.7, 0.0, 1.0);
+        float fdN1 = fdN(vFdP * fdF), fdN2 = fdN(vFdP * fdF * 2.3 + 3.7), fdLo = fdN(vFdP * 2.2), fdMid = fdN(vFdP * 14.0 + 1.3);
+        float fdHt = mix((fdN1 - 0.5) + (fdN2 - 0.5) * 0.5, 0.0, fdFw);
+        diffuseColor.rgb *= 1.0 + (fdLo - 0.5) * 0.14 + (fdMid - 0.5) * 0.08 + fdHt * 0.22 * fdGs; ${extra}`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n roughnessFactor = clamp(roughnessFactor * (1.0 + (fdMid - 0.5) * 0.45 + fdHt * 0.35 * fdGs), 0.04, 1.0);')
+      .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n normal = fdBump(normal, -vViewPosition, fdHt, fdGs * mix(0.00035, 0.0016, fdSc));');
+  };
+  m.customProgramCacheKey = () => 'fd-' + (fixed ? fixed.join('-') : 'atlas');
+  return m;
+}
+const fdMat = () => pdMat('fdAtlas', () => { const t = fdAtlasTextures(); return fdPatch(new THREE.MeshStandardMaterial({ map: t.map, emissiveMap: t.emi, emissive: 0xffffff, emissiveIntensity: 0.95, roughnessMap: t.rm, roughness: 1, metalness: 0 })); });
+// glass over the displays: a black, glossy layer added on top (only its reflection shows)
+const fdGlassMat = () => pdMat('fdGlass', () => new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.06, metalness: 0, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, envMapIntensity: 1.8 }));
+// the lining inside the skin (seen from inside: back faces), Boeing's light grey, with the same grain
+const fdLinerMat = () => pdMat('fdLiner', () => fdPatch(new THREE.MeshStandardMaterial({ color: 0x939ba1, roughness: 0.86, side: THREE.BackSide }), [0.4, 0.08], 'diffuseColor.rgb *= 0.55 + 0.45 * clamp((vFdP.y + 0.1) / 1.1, 0.0, 1.0) * clamp((vFdP.z + 3.6) / 1.2, 0.35, 1.0);')); // (shade baked by height and depth: darker low down and far forward, under the panel)
 // a geometry's uv (0..1 over a face) into an atlas rect, or all of it onto a swatch
 function fdUV(g, r) {
   norm(g); const a = g.attributes.uv;
@@ -1180,6 +1301,37 @@ function fdQuad(A, B, C, D, r, want) {
   return fdUV(g, r);
 }
 const fdBox = (w, h, d, r, m) => { const g = fdUV(new THREE.BoxGeometry(w, h, d), r); if (m) g.applyMatrix4(m); return g; };
+// uv projected along each vertex's main axis over the geometry's bounds (lofts, extrusions, seats: a material plate laid
+// over each face), into an atlas rect. Flat faces: unweld it first (flat = true).
+function fdTriUV(g, r, flat = false, seat = false) {
+  if (flat && g.index) { g = g.toNonIndexed(); g.computeVertexNormals(); }
+  norm(g); g.computeBoundingBox(); const bb = g.boundingBox, sz = bb.getSize(V()), P = g.attributes.position, N = g.attributes.normal, U = g.attributes.uv;
+  const f = (p, k) => (p - bb.min.getComponent(k)) / Math.max(1e-4, sz.getComponent(k));
+  let s0 = Infinity, s1 = -Infinity; if (seat) for (let i = 0; i < P.count; i++) { const t = P.getY(i) - P.getZ(i) * 0.8; s0 = Math.min(s0, t); s1 = Math.max(s1, t); }
+  for (let i = 0; i < P.count; i++) { const ax = Math.abs(N.getX(i)), ay = Math.abs(N.getY(i)), az = Math.abs(N.getZ(i)), p = [P.getX(i), P.getY(i), P.getZ(i)];
+    const [u, v] = seat ? [f(p[0], 0), (p[1] - p[2] * 0.8 - s0) / Math.max(1e-4, s1 - s0)] : ax >= ay && ax >= az ? [f(p[2], 2), f(p[1], 1)] : ay >= az ? [f(p[0], 0), f(p[2], 2)] : [f(p[0], 0), f(p[1], 1)]; // (a seat: across, and up the back then forward along the pan, without streaks)
+    U.setXY(i, r[0] + u * (r[2] - r[0]), r[1] + v * (r[3] - r[1])); }
+  return g;
+}
+// a ringLoft's uv: along the rings (u) and round each ring (v), into an atlas rect (its caps at the rect's middle)
+function fdLoftUV(g, n, rings, r) {
+  norm(g); const U = g.attributes.uv;
+  for (let i = 0; i < U.count; i++) { const [u, v] = i < n * rings ? [Math.floor(i / n) / (rings - 1), (i % n) / Math.max(1, n - 1)] : [0.5, 0.5]; U.setXY(i, r[0] + u * (r[2] - r[0]), r[1] + v * (r[3] - r[1])); }
+  return g;
+}
+// a display's bezel (local to its panel face, z out of the face): the frame's front ring (painted from the bezel plate:
+// screws, soft keys, shading into the recess), its sides, and the recess walls down to the screen, which sits `d` back
+function fdBezel(W, H, w, h, d, z0) {
+  const r = FDA.bezel, at = (x, y) => [r[0] + (x / W + 0.5) * (r[2] - r[0]), r[1] + (y / H + 0.5) * (r[3] - r[1])], out = [];
+  const q = (pts, uv, want) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts.flatMap((p) => p.toArray()), 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv.flat(), 2));
+    const n = pts[1].clone().sub(pts[0]).cross(pts[3].clone().sub(pts[0])); g.setIndex(n.dot(want) >= 0 ? [0, 1, 2, 0, 2, 3] : [0, 2, 1, 0, 3, 2]); g.computeVertexNormals(); out.push(norm(g)); };
+  const O = [[-W / 2, -H / 2], [W / 2, -H / 2], [W / 2, H / 2], [-W / 2, H / 2]], I = [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]], dark = at(0, 0);
+  for (let k = 0; k < 4; k++) { const j = (k + 1) % 4, f = (p, z) => V(p[0], p[1], z);
+    q([f(O[k], z0), f(O[j], z0), f(I[j], z0), f(I[k], z0)], [at(...O[k]), at(...O[j]), at(...I[j]), at(...I[k])], V(0, 0, 1)); // front ring
+    q([f(I[k], z0), f(I[j], z0), f(I[j], z0 - d), f(I[k], z0 - d)], [dark, dark, dark, dark], V(-(I[k][0] + I[j][0]), -(I[k][1] + I[j][1]), 0)); // recess walls (facing in)
+    q([f(O[k], z0), f(O[j], z0), f(O[j], z0 - 0.012), f(O[k], z0 - 0.012)], [at(...O[k]), at(...O[j]), at(...O[j]), at(...O[k])], V(O[k][0] + O[j][0], O[k][1] + O[j][1], 0)); } // outer sides
+  return mergeGeometries(out);
+}
 // The deck inside airlinerNoseBuild's skin (part coordinates; the nose looks along -z, the floor's top at FLOOR). Built
 // round the crew's seats and controls: the yokes' columns stand in the floor at z -3.16 ahead of each seat, the rudder
 // pedals hinge at the floor at z -3.03, the eyes are about 1.05 up. Returns the obstacles for the crew's posture solve.
@@ -1204,33 +1356,36 @@ function airlinerFlightDeck(g, b, nb, { SY, SZ, SEAT, FLOOR, zs }) {
     for (let i = 1; i < 6; i++) P(WTOP(-TH) + (edgeZ(-TH) - WTOP(-TH)) * (i / 6), -TH);
     const n = out.length, pos = [], idx = []; for (const p of [...out, ...inn]) pos.push(p.x, p.y, p.z);
     for (let i = 0; i < n; i++) { const j = (i + 1) % n; idx.push(i, j, n + j, i, n + j, n + i, i, n + j, j, i, n + i, n + j); } // (both faces)
-    const rv = new THREE.BufferGeometry(); rv.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); rv.setIndex(idx); rv.computeVertexNormals(); b.add(fdUV(rv, 'post'), A);
+    const rv = new THREE.BufferGeometry(); rv.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); rv.setIndex(idx); rv.computeVertexNormals();
+    { const uv = []; for (const v of [0, 1]) for (let i = 0; i < n; i++) uv.push(i / n, v); rv.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); } b.add(fdUV(rv, FDA.post), A);
     for (const th0 of [0, -0.38, 0.38, -0.76, 0.76]) {
       const z0 = edgeZ(th0), z1 = WTOP(th0), rings = [];
       for (let k = 0; k <= 8; k++) { const z = z0 - 0.02 + (z1 - z0 + 0.04) * (k / 8), d = (th0 ? 0.036 : 0.045) / nW(z); rings.push([nosePt(z, th0 - d, 0.999), nosePt(z, th0 + d, 0.999), nosePt(z, th0 + d * 0.8, K - 0.01), nosePt(z, th0 - d * 0.8, K - 0.01)]); }
-      b.add(fdUV(ringLoft(rings, true, true), 'post'), A);
+      b.add(fdLoftUV(ringLoft(rings, true, true), 4, rings.length, FDA.post), A);
     }
     // the side windows' latch handles, on the aft posts
     for (const sx of [-1, 1]) { const th = sx * 0.95, z = WTOP(th) - 0.02, p0 = nosePt(z, th, K - 0.01), p1 = nosePt(z - 0.05, th, K - 0.05); nb.add(bar(p0, p1, 0.02, 0.02, true, 6), kit.black); nb.add(bar(p1, p1.clone().add(V(-sx * 0.0, -0.09, 0.0)), 0.022, 0.022, true, 6), kit.black); }
   }
   // floor: blue-grey carpet, and each seat's tracks
-  b.add(fdBox(2.2, 0.05, 2.3, 'carpet', mx([0, -0.12, -2.65])), A);
+  b.add(fdBox(2.2, 0.05, 2.3, FDA.carpet, mx([0, -0.12, -2.65])), A);
   for (const sx of [-1, 1]) for (const dx of [-0.13, 0.13]) b.add(bar(V(sx * 0.55 + dx, FLOOR + 0.012, -2.86), V(sx * 0.55 + dx, FLOOR + 0.012, -1.86), 0.035, 0.024), kit.alu);
   // back bulkhead with the flight-deck door in its frame, circuit-breaker panels either side
-  { const bk = new THREE.CircleGeometry(1.84, 40); bk.rotateY(Math.PI); bk.translate(0, 0, -1.5); b.add(fdUV(bk, 'trim'), A);
+  { const bk = new THREE.CircleGeometry(1.84, 40); bk.rotateY(Math.PI); bk.translate(0, 0, -1.5); b.add(fdUV(bk, FDA.bulk), A);
     b.add(fdBox(0.74, 1.84, 0.03, 'door', mx([0, FLOOR + 0.92, -1.52])), A);
     b.add(fdQuad(V(0.36, FLOOR + 0.01, -1.536), V(-0.36, FLOOR + 0.01, -1.536), V(-0.36, FLOOR + 1.83, -1.536), V(0.36, FLOOR + 1.83, -1.536), FDA.door, V(0, 0, -1)), A);
-    for (const [x, w] of [[-0.4, 0.06], [0.4, 0.06]]) b.add(fdBox(w, 1.9, 0.05, 'grey', mx([x, FLOOR + 0.95, -1.52])), A);
-    b.add(fdBox(0.86, 0.06, 0.05, 'grey', mx([0, FLOOR + 1.9, -1.52])), A);
+    for (const [x, w] of [[-0.4, 0.06], [0.4, 0.06]]) b.add(fdBox(w, 1.9, 0.05, FDA.post, mx([x, FLOOR + 0.95, -1.52])), A);
+    b.add(fdBox(0.86, 0.06, 0.05, FDA.post, mx([0, FLOOR + 1.9, -1.52])), A);
     nb.add(bar(V(-0.28, FLOOR + 1.0, -1.56), V(-0.14, FLOOR + 1.0, -1.56), 0.022, 0.022, true, 8), kit.alu); nb.add(bar(V(-0.28, FLOOR + 1.0, -1.537), V(-0.28, FLOOR + 1.0, -1.565), 0.02, 0.02, true, 6), kit.alu);
     for (const sx of [-1, 1]) b.add(fdQuad(V(sx * 0.52, 0.5, -1.504), V(sx * 1.02, 0.5, -1.504), V(sx * 1.02, 1.28, -1.504), V(sx * 0.52, 1.28, -1.504), FDA.cb, V(0, 0, -1)), A); }
   // main instrument panel (the pf plane: tilted back 0.3 at its top): side sections full height, the centre one only above
   // the pedestal; four displays (captain's PFD and ND, the engine display and the first officer's PFD) in bezels, the
   // standby instrument and landing-gear lever between them, knob strips below; outboard panels angled towards each pilot
   const pf = mx([0, 0.46, -3.3], [-0.3, 0, 0]), P = (x, y, z) => pf.clone().multiply(mx([x, y, z]));
-  for (const sx of [-1, 1]) b.add(fdBox(0.61, 0.42, 0.06, 'panel', P(sx * 0.495, 0, 0)), A);
-  b.add(fdBox(0.38, 0.285, 0.06, 'panel', P(0, 0.0675, 0)), A);
-  const screenAt = (cx, cy, w, h, r, bag = b) => { bag.add(fdBox(w + 0.025, h + 0.025, 0.012, 'bezel', P(cx, cy, 0.036)), A); const s = fdUV(new THREE.PlaneGeometry(w, h), r); s.applyMatrix4(P(cx, cy, 0.0425)); bag.add(s, A); };
+  for (const sx of [-1, 1]) b.add(fdBox(0.61, 0.42, 0.06, FDA.face, P(sx * 0.495, 0, 0)), A);
+  b.add(fdBox(0.38, 0.285, 0.06, FDA.face, P(0, 0.0675, 0)), A);
+  const glassM = fdGlassMat(), screenAt = (cx, cy, w, h, r) => { // (the screen sunk 6 mm in its bezel, glass over it)
+    const W = w / 0.87, H = h / 0.83, bz = fdBezel(W, H, w, h, 0.006, 0.044); bz.applyMatrix4(P(cx, cy, 0)); b.add(bz, A);
+    const s = fdUV(new THREE.PlaneGeometry(w, h), r); s.applyMatrix4(P(cx, cy, 0.038)); b.add(s, A); const gl = new THREE.PlaneGeometry(w, h); gl.applyMatrix4(P(cx, cy, 0.0395)); nb.add(gl, glassM); };
   screenAt(-0.51, 0.025, 0.26, 0.2, FDA.pfd); screenAt(-0.215, 0.025, 0.26, 0.2, FDA.nd); screenAt(0.215, 0.025, 0.26, 0.2, FDA.eng); screenAt(0.51, 0.025, 0.26, 0.2, FDA.pfd);
   screenAt(0, 0.09, 0.07, 0.07, FDA.isfd);
   { const s = fdUV(new THREE.PlaneGeometry(0.1, 0.14), FDA.gear); s.applyMatrix4(P(0, -0.0, 0.0305)); b.add(s, A);
@@ -1240,20 +1395,20 @@ function airlinerFlightDeck(g, b, nb, { SY, SZ, SEAT, FLOOR, zs }) {
     for (let k = 0; k < 8; k++) if (k % 3 !== 1) { const kn = new THREE.CylinderGeometry(0.009, 0.01, 0.014, 10); kn.rotateX(Math.PI / 2); const u = sx < 0 ? 32 + k * 62 : 480 - k * 62; kn.applyMatrix4(P(sx * 0.495 + (u / 512 - 0.5) * 0.6, -0.155 + (0.5 - 28 / 64) * 0.1, 0.037)); nb.add(kn, kit.black); } }
   const wings = [];
   for (const sx of [-1, 1]) { const wm = pf.clone().multiply(mx([sx * 0.8, 0, 0], [0, -sx * 0.55, 0])).multiply(mx([sx * 0.13, 0, 0])); wings.push(wm);
-    b.add(fdBox(0.26, 0.42, 0.06, 'panel', wm), A); const s = fdUV(new THREE.PlaneGeometry(0.24, 0.12), FDA.outb); s.applyMatrix4(wm.clone().multiply(mx([0, 0.06, 0.0305]))); b.add(s, A); }
+    b.add(fdBox(0.26, 0.42, 0.06, FDA.face, wm), A); const s = fdUV(new THREE.PlaneGeometry(0.24, 0.12), FDA.outb); s.applyMatrix4(wm.clone().multiply(mx([0, 0.06, 0.0305]))); b.add(s, A); }
   // under the panel, the toe board (where the rudder pedals and the columns go into the floor), dark
   const toe = { a: V(0, FLOOR, -3.52), b: V(0, 0.27, -3.235) };
-  b.add(fdQuad(V(-1.0, toe.a.y, toe.a.z), V(1.0, toe.a.y, toe.a.z), V(1.0, toe.b.y, toe.b.z), V(-1.0, toe.b.y, toe.b.z), 'kick', V(0, 0.6, 1)), A);
+  b.add(fdQuad(V(-1.0, toe.a.y, toe.a.z), V(1.0, toe.a.y, toe.a.z), V(1.0, toe.b.y, toe.b.z), V(-1.0, toe.b.y, toe.b.z), FDA.plateC, V(0, 0.6, 1)), A);
   // glare shield: a flat anti-glare top out to the windscreen (its outline follows the lining), with the mode control panel
   // and the two EFIS control panels along its aft face, a padded lip
   const GZ = -3.255, GY0 = 0.65, GY1 = 0.75;
   { const hw = (z) => Math.max(0, secHW(z, GY1) - 0.012); let zt = GZ; while (hw(zt - 0.005) > 0.04 && zt > -3.9) zt -= 0.005;
     const sh = new THREE.Shape(), N = 18; sh.moveTo(-hw(GZ), -GZ); for (let i = 0; i <= N; i++) { const z = GZ + (zt - GZ) * (i / N); sh.lineTo(-hw(z), -z); } for (let i = N; i >= 0; i--) { const z = GZ + (zt - GZ) * (i / N); sh.lineTo(hw(z), -z); }
-    const gs = new THREE.ExtrudeGeometry(sh, { depth: GY1 - GY0, bevelEnabled: false, curveSegments: 4 }); gs.rotateX(-Math.PI / 2); gs.translate(0, GY0, 0); b.add(fdUV(gs, 'glare'), A);
-    const lip = new THREE.CylinderGeometry(0.018, 0.018, 2 * hw(GZ) - 0.02, 10); lip.rotateZ(Math.PI / 2); lip.translate(0, GY1 - 0.012, GZ + 0.004); b.add(fdUV(lip, 'glare'), A);
-    b.add(fdBox(0.8, 0.08, 0.025, 'grey', mx([0, 0.69, GZ + 0.0125])), A); { const s = fdUV(new THREE.PlaneGeometry(0.8, 0.08), FDA.mcp); s.translate(0, 0.69, GZ + 0.0255); b.add(s, A); }
+    const gs = new THREE.ExtrudeGeometry(sh, { depth: GY1 - GY0, bevelEnabled: false, curveSegments: 4 }); gs.rotateX(-Math.PI / 2); gs.translate(0, GY0, 0); b.add(fdTriUV(gs, FDA.fabric), A);
+    const lip = new THREE.CylinderGeometry(0.018, 0.018, 2 * hw(GZ) - 0.02, 10); lip.rotateZ(Math.PI / 2); lip.translate(0, GY1 - 0.012, GZ + 0.004); b.add(fdUV(lip, FDA.fabric), A);
+    b.add(fdBox(0.8, 0.08, 0.025, FDA.plateB, mx([0, 0.69, GZ + 0.0125])), A); { const s = fdUV(new THREE.PlaneGeometry(0.8, 0.08), FDA.mcp); s.translate(0, 0.69, GZ + 0.0255); b.add(s, A); }
     for (const [u0, u1] of MCP_WIN) { const kn = new THREE.CylinderGeometry(0.011, 0.012, 0.018, 12); kn.rotateX(Math.PI / 2); kn.translate(-0.4 + ((u0 + u1) / 2) * 0.8, 0.69 - 0.022, GZ + 0.034); nb.add(kn, kit.black); }
-    for (const sx of [-1, 1]) { b.add(fdBox(0.22, 0.08, 0.025, 'grey', mx([sx * 0.585, 0.69, GZ + 0.0125])), A); const s = fdUV(new THREE.PlaneGeometry(0.22, 0.08), FDA.efis); s.translate(sx * 0.585, 0.69, GZ + 0.0255); b.add(s, A);
+    for (const sx of [-1, 1]) { b.add(fdBox(0.22, 0.08, 0.025, FDA.plateB, mx([sx * 0.585, 0.69, GZ + 0.0125])), A); const s = fdUV(new THREE.PlaneGeometry(0.22, 0.08), FDA.efis); s.translate(sx * 0.585, 0.69, GZ + 0.0255); b.add(s, A);
       for (const dx of [-0.068, 0.068]) { const kn = new THREE.CylinderGeometry(0.013, 0.014, 0.02, 12); kn.rotateX(Math.PI / 2); kn.translate(sx * 0.585 + dx, 0.69 - 0.006, GZ + 0.035); nb.add(kn, kit.black); } }
     // the standby compass at the top of the centre post
     { const z = WTOP(0) + 0.06, y = topY(z, 0) - 0.05; nb.add(fdBox(0.07, 0.06, 0.07, 'knob', mx([0, y, z])), A); nb.add(bar(V(0, y + 0.03, z), V(0, topY(z, 0) + 0.01, z), 0.02, 0.02), kit.dark); }
@@ -1263,8 +1418,8 @@ function airlinerFlightDeck(g, b, nb, { SY, SZ, SEAT, FLOOR, zs }) {
   { const ZF = -2.62, ZA = -1.72, X = 0.36, yb = (z) => 1.4 + 0.2 * (z - ZF) / (ZA - ZF), yt = (z) => topY(z, X) - 0.006;
     const c = { lfb: V(-X, yb(ZF), ZF), rfb: V(X, yb(ZF), ZF), lab: V(-X, yb(ZA), ZA), rab: V(X, yb(ZA), ZA), lft: V(-X, yt(ZF), ZF), rft: V(X, yt(ZF), ZF), lat: V(-X, yt(ZA), ZA), rat: V(X, yt(ZA), ZA) };
     b.add(fdQuad(c.lfb, c.rfb, c.rab, c.lab, FDA.ovh, V(0, -1, 0.2)), A); // (its lettering's top towards the back: upright to a pilot looking up)
-    for (const sx of [-1, 1]) { const [f, a2, ft, at] = sx < 0 ? [c.lfb, c.lab, c.lft, c.lat] : [c.rfb, c.rab, c.rft, c.rat]; b.add(fdQuad(a2, f, ft, at, 'ovh', V(sx, 0, 0)), A); }
-    b.add(fdQuad(c.lfb, c.rfb, c.rft, c.lft, 'ovh', V(0, 0, -1)), A); b.add(fdQuad(c.lab, c.rab, c.rat, c.lat, 'ovh', V(0, 0, 1)), A);
+    for (const sx of [-1, 1]) { const [f, a2, ft, at] = sx < 0 ? [c.lfb, c.lab, c.lft, c.lat] : [c.rfb, c.rab, c.rft, c.rat]; b.add(fdQuad(a2, f, ft, at, FDA.plateB, V(sx, 0, 0)), A); }
+    b.add(fdQuad(c.lfb, c.rfb, c.rft, c.lft, FDA.plateB, V(0, 0, -1)), A); b.add(fdQuad(c.lab, c.rab, c.rat, c.lat, FDA.plateB, V(0, 0, 1)), A);
     const L = overheadLayout(), du = c.rfb.clone().sub(c.lfb), dv = c.lab.clone().sub(c.lfb), n = du.clone().cross(dv).normalize(); if (n.y > 0) n.negate();
     for (const [u, v, guard] of L.sw) { const p0 = c.lfb.clone().addScaledVector(du, u).addScaledVector(dv, v), p1 = p0.clone().addScaledVector(n, 0.017).add(V(0, 0, -0.004));
       nb.add(bar(p0, p1, 0.0045, 0.0045, true, 5), kit.chrome); nb.add(fdBox(0.008, 0.008, 0.008, guard ? 'red' : 'cream', mx(p1.toArray())), A); }
@@ -1274,9 +1429,9 @@ function airlinerFlightDeck(g, b, nb, { SY, SZ, SEAT, FLOOR, zs }) {
   // start levers, speed brake on the left, flap lever on the right, the stabiliser trim wheels on its sides), radios aft
   const PX = 0.19, prof = [[-2.0, FLOOR], [-2.0, 0.25], [-2.6, 0.285], [-2.64, 0.31], [-2.72, 0.335], [-2.84, 0.345], [-2.96, 0.335], [-3.02, 0.31], [-3.04, 0.27], [-3.28, 0.39], [-3.3, 0.39], [-3.3, FLOOR]];
   { const sh = new THREE.Shape(); prof.forEach(([z, y], i) => (i ? sh.lineTo(-z, y) : sh.moveTo(-z, y)));
-    const pg = new THREE.ExtrudeGeometry(sh, { depth: 2 * PX, bevelEnabled: false }); pg.applyMatrix4(new THREE.Matrix4().makeBasis(V(0, 0, -1), V(0, 1, 0), V(1, 0, 0))); pg.translate(-PX, 0, 0); b.add(fdUV(pg, 'panel'), A);
+    const pg = new THREE.ExtrudeGeometry(sh, { depth: 2 * PX, bevelEnabled: false }); pg.applyMatrix4(new THREE.Matrix4().makeBasis(V(0, 0, -1), V(0, 1, 0), V(1, 0, 0))); pg.translate(-PX, 0, 0); b.add(fdTriUV(pg, FDA.worn), A); // (worn pale along its top edges, where hands go)
     const sl = Math.atan2(0.12, 0.24), cm = (x) => mx([x, 0.33 + Math.cos(sl) * 0.016, -3.16 + Math.sin(sl) * 0.016], [-(Math.PI / 2 - sl), 0, 0]);
-    for (const sx of [-1, 1]) { b.add(fdBox(0.145, 0.25, 0.03, 'shell', cm(sx * 0.0925)), A); const s = fdUV(new THREE.PlaneGeometry(0.14, 0.245), FDA.cdu); s.applyMatrix4(cm(sx * 0.0925).multiply(mx([0, 0, 0.0155]))); b.add(s, A); }
+    for (const sx of [-1, 1]) { b.add(fdBox(0.145, 0.25, 0.03, FDA.plateC, cm(sx * 0.0925)), A); const s = fdUV(new THREE.PlaneGeometry(0.14, 0.245), FDA.cdu); s.applyMatrix4(cm(sx * 0.0925).multiply(mx([0, 0, 0.0155]))); b.add(s, A); }
     b.add(fdQuad(V(-0.18, 0.253, -2.02), V(0.18, 0.253, -2.02), V(0.18, 0.288, -2.59), V(-0.18, 0.288, -2.59), FDA.radio, V(0, 1, 0)), A);
     for (const x of [-0.05, 0.05]) b.add(fdBox(0.012, 0.004, 0.2, 'knob', mx([x, 0.344, -2.83])), A); // (the thrust levers' slots)
     // thrust levers with their knobs, reverser levers piggybacking, start levers aft of them
@@ -1291,28 +1446,37 @@ function airlinerFlightDeck(g, b, nb, { SY, SZ, SEAT, FLOOR, zs }) {
   for (const sx of [-1, 1]) {
     const XI = 0.9, YT = 0.42, rings = [], zz = [-3.12, -2.82, -2.5, -2.2, -1.95];
     for (const z of zz) { const xo = Math.max(XI + 0.05, secHW(z, YT) - 0.008); rings.push([V(sx * XI, FLOOR, z), V(sx * XI, YT, z), V(sx * xo, YT, z), V(sx * xo, FLOOR, z)]); }
-    b.add(fdUV(ringLoft(rings, true, true), 'grey'), A);
-    b.add(fdBox(0.02, 0.2, 0.62, 'shell', mx([sx * (XI - 0.01), 0.17, -2.45])), A); // (a chart pocket on its inner face)
+    b.add(fdTriUV(ringLoft(rings, true, true), FDA.plateA, true), A);
+    b.add(fdBox(0.02, 0.2, 0.62, FDA.leather, mx([sx * (XI - 0.01), 0.17, -2.45])), A); // (a chart pocket on its inner face)
     { const xo = secHW(-2.2, YT) - 0.02; b.add(fdQuad(V(sx * XI, YT + 0.002, -1.97), V(sx * xo, YT + 0.002, -1.97), V(sx * xo, YT + 0.002, -3.1), V(sx * XI, YT + 0.002, -3.1), FDA.side, V(0, 1, 0)), A); }
-    b.add(fdBox(0.13, 0.07, 0.17, 'shell', mx([sx * 1.02, YT + 0.035, -2.38])), A); b.add(fdBox(0.05, 0.012, 0.03, 'yellow', mx([sx * 0.98, YT + 0.075, -2.32])), A);
+    b.add(fdBox(0.13, 0.07, 0.17, FDA.shell, mx([sx * 1.02, YT + 0.035, -2.38])), A); b.add(fdBox(0.05, 0.012, 0.03, 'yellow', mx([sx * 0.98, YT + 0.075, -2.32])), A);
     { const tz = -2.96, ty = YT + 0.03; const tl = new THREE.TorusGeometry(0.055, 0.009, 6, 20); tl.rotateX(Math.PI / 2 - 0.25); tl.translate(sx * 1.0, ty + 0.02, tz); b.add(fdUV(tl, 'knob'), A);
       nb.add(bar(V(sx * 1.0, ty - 0.03, tz), V(sx * 1.0, ty + 0.02, tz), 0.02, 0.02, true, 8), kit.dark); nb.add(bar(V(sx * 1.045, ty + 0.03, tz), V(sx * 1.045, ty + 0.06, tz), 0.014, 0.014, true, 6), kit.black); }
   }
   // the crew seats: upholstered shells under fleece covers, on a frame over a base on floor tracks; headrest, armrests
   for (const sx of [-1, 1]) {
-    const sb = new Bag(), X = sx * 0.55, st = seatGeo(...SEAT); st.translate(X, SY, SZ); sb.add(fdUV(st, 'fleece'), A);
+    const sb = new Bag(), X = sx * 0.55, st = seatGeo(...SEAT); st.translate(X, SY, SZ); sb.add(fdTriUV(st, FDA.fleece, false, true), A);
     const tilt = SEAT[3], up = (h, dz = 0) => [X, SY + h * Math.cos(tilt), SZ + h * Math.sin(tilt) + dz];
-    const hr = new THREE.CapsuleGeometry(0.07, 0.16, 4, 10); hr.rotateZ(Math.PI / 2); hr.scale(1, 1, 0.55); hr.rotateX(tilt); hr.translate(...up(0.82, 0.075)); sb.add(fdUV(hr, 'fleece'), A);
-    sb.add(fdBox(0.46, 0.74, 0.05, 'shell', mx(up(0.38, 0.09), [tilt, 0, 0])), A); // (the seat back's hard shell)
-    sb.add(fdBox(0.08, 0.2, 0.05, 'shell', mx(up(0.8, 0.12), [tilt, 0, 0])), A); // (the headrest's stem)
-    sb.add(fdBox(0.44, 0.07, 0.44, 'shell', mx([X, SY - 0.05, SZ - 0.2])), A); // (pan frame)
-    for (const side of [-1, 1]) { const ax = X + side * 0.29; sb.add(fdBox(0.05, 0.05, 0.3, 'shell', mx([ax, SY + 0.2, SZ - 0.13])), A); sb.add(fdBox(0.03, 0.2, 0.04, 'shell', mx([ax, SY + 0.09, SZ + 0.04], [0.15, 0, 0])), A); }
+    const hr = new THREE.CapsuleGeometry(0.07, 0.16, 4, 10); hr.rotateZ(Math.PI / 2); hr.scale(1, 1, 0.55); hr.rotateX(tilt); hr.translate(...up(0.82, 0.075)); sb.add(fdTriUV(hr, FDA.fleece, false, true), A);
+    sb.add(fdBox(0.46, 0.74, 0.05, FDA.shell, mx(up(0.38, 0.09), [tilt, 0, 0])), A); // (the seat back's hard shell)
+    sb.add(fdBox(0.08, 0.2, 0.05, FDA.shell, mx(up(0.8, 0.12), [tilt, 0, 0])), A); // (the headrest's stem)
+    sb.add(fdBox(0.44, 0.07, 0.44, FDA.shell, mx([X, SY - 0.05, SZ - 0.2])), A); // (pan frame)
+    for (const side of [-1, 1]) { sb.add(fdBox(0.025, 0.07, 0.42, FDA.leather, mx([X + side * 0.235, SY - 0.02, SZ - 0.2])), A); } // (the cushion's leather sides)
+    for (const side of [-1, 1]) { const ax = X + side * 0.29; sb.add(fdBox(0.05, 0.05, 0.3, FDA.leather, mx([ax, SY + 0.2, SZ - 0.13])), A); sb.add(fdBox(0.03, 0.2, 0.04, FDA.shell, mx([ax, SY + 0.09, SZ + 0.04], [0.15, 0, 0])), A); }
     { const n0 = g.children.length; sb.to(g); for (const m of g.children.slice(n0)) m.userData.seatRail = sx === 1 ? 0 : 1; } // (the seats' order below)
-    const bh = SY - 0.09 - FLOOR; b.add(fdBox(0.36, bh, 0.36, 'shell', mx([X, FLOOR + bh / 2, SZ - 0.22])), A);
+    const bh = SY - 0.09 - FLOOR; b.add(fdBox(0.36, bh, 0.36, FDA.plateC, mx([X, FLOOR + bh / 2, SZ - 0.22])), A);
     for (const dx of [-0.13, 0.13]) b.add(fdBox(0.05, 0.03, 0.42, 'shell', mx([X + dx, FLOOR + 0.03, SZ - 0.22])), A);
   }
+  // sun visors (fabric over a stiff board, in a binding): pulled part-way down over the top of each side window, and stowed
+  // up against the lining behind the front windows' top edge, on their rails
+  const visor = (sx, th0, th1, z0f, z1f, k) => { const pos = [], uv = [], idx = [], NU = 6;
+    for (let i = 0; i <= NU; i++) for (const [j, zf] of [[0, z0f], [1, z1f]]) { const th = sx * (th0 + (th1 - th0) * (i / NU)), p = nosePt(zf(th), th, k); pos.push(p.x, p.y, p.z); uv.push(i / NU, j); }
+    for (let i = 0; i < NU; i++) { const a = i * 2, c = a + 2; idx.push(a, c, c + 1, a, c + 1, a + 1, a, c + 1, c, a, a + 1, c + 1); } // (both faces)
+    const v = new THREE.BufferGeometry(); v.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); v.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); v.setIndex(idx); v.computeVertexNormals(); nb.add(fdUV(v, FDA.visor), A);
+    const r0 = nosePt(z0f(sx * th0), sx * th0, k + 0.005), r1 = nosePt(z0f(sx * th1), sx * th1, k + 0.005); nb.add(bar(r0, r1, 0.012, 0.012, true, 6), kit.dark); };
+  for (const sx of [-1, 1]) { visor(sx, 0.8, 1.06, (th) => WTOP(th) + 0.005, (th) => WTOP(th) - 0.15, K - 0.03); visor(sx, 0.42, 0.72, (th) => WTOP(th) + 0.03, (th) => WTOP(th) + 0.22, K - 0.012); }
   // what the crew must keep clear of
-  const tb = new THREE.Matrix4().compose(toe.a.clone().add(toe.b).multiplyScalar(0.5).add(V(0, 0, -0.012)), new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), toe.b.clone().sub(toe.a).normalize()), V(1, 1, 1));
+  const tb =new THREE.Matrix4().compose(toe.a.clone().add(toe.b).multiplyScalar(0.5).add(V(0, 0, -0.012)), new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), toe.b.clone().sub(toe.a).normalize()), V(1, 1, 1));
   return [boxObstacle('panel', pf, [1.6, 0.42, 0.06]), boxObstacle('panel L', wings[0], [0.26, 0.42, 0.06]), boxObstacle('panel R', wings[1], [0.26, 0.42, 0.06]),
     { name: 'glare shield', box: [0, (GY0 + GY1) / 2, GZ - 0.19], size: [1.84, GY1 - GY0 + 0.01, 0.38] },
     { name: 'pedestal', box: [0, (FLOOR + 0.4) / 2, -3.0], size: [0.48, 0.4 - FLOOR, 0.6] }, { name: 'pedestal aft', box: [0, (FLOOR + 0.3) / 2, -2.35], size: [0.4, 0.3 - FLOOR, 0.7] },
