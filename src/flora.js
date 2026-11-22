@@ -29,7 +29,7 @@ const V3 = THREE.Vector3;
 const CELL = 275; // 22000 / 80: cells tile the core map and the 5500 m outer tiles exactly
 const STRIDE = 6; // per instance: x, y, z, scale, variant, yaw
 const IMP_CH = 6; // impostor chunks: 6 x 6 cells (1650 m), each its own draw with a bounding sphere (frustum culled)
-const SMALL_FAR = 1400; // shrubs, logs and stones vanish into the ground texture beyond this
+const SMALL_FAR = 2500; // shrubs, logs and stones vanish into the ground texture beyond this
 const AT = 2048; // foliage atlas layout size (the 1024 version is the same layout scaled)
 // atlas regions in AT pixels -- mirrored in tools/flora/build_atlas.py (REG)
 const REG = {
@@ -46,10 +46,10 @@ UV.whiteP = [(1984 + 32) / AT, (1984 + 32) / AT];
 // cand: candidates per dense cell, base: per far cell, dense / far: radii (m), lo: model -> impostor distance,
 // near: shadow-casting model radius, budget: ms per frame, imp: impostor buffer, oct: impostor views per axis, cs: px per view
 const TIER = {
-  low: { cand: 450, base: 40, dense: 1300, far: 5000, lo: 150, near: 90, budget: 2, imp: 60000, oct: 4, cs: 64, atlas: 1024 },
-  medium: { cand: 800, base: 60, dense: 2000, far: 6000, lo: 190, near: 120, budget: 3, imp: 120000, oct: 6, cs: 48, atlas: 1024 },
-  high: { cand: 1700, base: 150, dense: 3200, far: 9500, lo: 270, near: 160, budget: 5, imp: 350000, oct: 8, cs: 80, atlas: 2048 },
-  ultra: { cand: 2400, base: 240, dense: 4200, far: 12000, lo: 380, near: 220, budget: 7, imp: 600000, oct: 8, cs: 112, atlas: 2048 },
+  low: { cand: 450, base: 40, dense: 1300, far: 12000, lo: 150, near: 90, budget: 2, imp: 60000, oct: 4, cs: 64, atlas: 1024 },
+  medium: { cand: 800, base: 60, dense: 2000, far: 13000, lo: 190, near: 120, budget: 3, imp: 120000, oct: 6, cs: 48, atlas: 1024 },
+  high: { cand: 1700, base: 150, dense: 3200, far: 16000, lo: 270, near: 160, budget: 5, imp: 350000, oct: 8, cs: 80, atlas: 2048 },
+  ultra: { cand: 2400, base: 240, dense: 4200, far: 19000, lo: 380, near: 220, budget: 7, imp: 600000, oct: 8, cs: 112, atlas: 2048 },
 };
 const GRASS = { low: null, medium: { R: 60, per: 1 / 1.2, cap: 16000, agl: 120 }, high: { R: 110, per: 1 / 0.55, cap: 110000, agl: 200 }, ultra: { R: 150, per: 1 / 0.4, cap: 240000, agl: 260 } };
 
@@ -507,6 +507,10 @@ function upload(m, n) {
 const hash2 = (i, j, s) => ((Math.imul(i, 73856093) ^ Math.imul(j, 19349663) ^ Math.imul(s, 83492791)) >>> 0);
 let lastFlora = null;
 const GN = 12; // per-cell grid of terrain / forest samples (23 m apart) that candidates interpolate
+// Far sparse cells sample a 4 x 4 grid (69 m) instead: the grid was two-thirds of a cell's cost, and the 9x fewer samples
+// are what lets the far forest keep up with a fast plane on the tablet. A cell is regenerated on the fine grid when it
+// goes dense, so the few far trees the coarse grid placed differently change only then, among hundreds of new ones.
+const GN_FAR = 4, FINE_R = 3000; // (fine grid for sparse cells nearer than FINE_R)
 
 export class Flora {
   constructor(world) {
@@ -680,15 +684,15 @@ export class Flora {
   // ------------------------------------------------ placement
   key(i, j) { return i + ',' + j; }
   // coarse samples over the cell: height, forest density, canopy clumping
-  cellGrid(x0, z0) {
-    const W = this.w, n = W.noise, M = GN + 1, h = new Float32Array(M * M), F = new Float32Array(M * M), C = new Float32Array(M * M), st = CELL / GN;
+  cellGrid(x0, z0, gn = GN) {
+    const W = this.w, n = W.noise, M = gn + 1, h = new Float32Array(M * M), F = new Float32Array(M * M), C = new Float32Array(M * M), st = CELL / gn;
     for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) {
       const x = x0 + i * st, z = z0 + j * st, k = j * M + i;
       h[k] = W.sampleGrid(x, z); F[k] = this.forestAt(x, z);
       // clumps of trees and small clearings inside the forest (30-80 m)
       C[k] = smoothstep(-0.45, 0.15, n.n2(x / 70 + 31, z / 70) + 0.5 * n.n2(x / 23, z / 23 + 17));
     }
-    return { h, F, C, st };
+    return { h, F, C, st, gn };
   }
   // the hedgerow / tree-line trees around a farm field
   hedgerow(f, x0, z0, out, r) {
@@ -721,7 +725,7 @@ export class Flora {
     if (ex) for (let k = 0; k < ex.length; k += 4) out.push(ex[k], W.sampleGrid(ex[k], ex[k + 1]) - 0.2, ex[k + 1], ex[k + 2], ex[k + 3], (ex[k] * 1.7 + ex[k + 1]) % 6.283);
     const rh = mulberry32(hash2(cell.ci, cell.cj, 4321));
     for (const f of fields) this.hedgerow(f, x0, z0, out, rh);
-    const G = this.groups, dens = new Float32Array(G.length), grid = this.cellGrid(x0, z0), M = GN + 1;
+    const G = this.groups, dens = new Float32Array(G.length), grid = this.cellGrid(x0, z0, dense || cell.d < FINE_R ? GN : GN_FAR), gn = grid.gn, M = gn + 1;
     const e = { h: 0, s: 0, F: 0, C: 0, E: 0, wl: 0, open: 0, riv: 0 };
     const nFixed = out.length / STRIDE;
     let nBase = 0;
@@ -729,7 +733,7 @@ export class Flora {
       if (i === T.base) nBase = out.length / STRIDE;
       const fx = r(), fz = r(), u = r(), u2 = r(), u3 = r(), u4 = r(), yaw = r() * Math.PI * 2, x = x0 + fx * CELL, z = z0 + fz * CELL;
       // interpolate the coarse grid
-      const gx = fx * GN, gz = fz * GN, ix = Math.min(GN - 1, gx | 0), iz = Math.min(GN - 1, gz | 0), tx = gx - ix, tz = gz - iz, k00 = iz * M + ix;
+      const gx = fx * gn, gz = fz * gn, ix = Math.min(gn - 1, gx | 0), iz = Math.min(gn - 1, gz | 0), tx = gx - ix, tz = gz - iz, k00 = iz * M + ix;
       const bil = (A) => (A[k00] * (1 - tx) + A[k00 + 1] * tx) * (1 - tz) + (A[k00 + M] * (1 - tx) + A[k00 + M + 1] * tx) * tz;
       const hg = bil(grid.h); if (hg < wl + 0.5) continue;
       e.h = W.loc.flora ? W.loc.flora.h(hg) : hg; e.wl = hg - wl + (W.loc.flora?.wl || 0); // real places: altitudes mapped onto the borrowed biome's
@@ -768,7 +772,21 @@ export class Flora {
     cell.data = new Float32Array(out); cell.n = out.length / STRIDE; cell.nBase = nBase; cell.dense = dense;
     let y0 = Infinity, y1 = -Infinity; for (let k = 1; k < out.length; k += STRIDE) { if (out[k] < y0) y0 = out[k]; if (out[k] > y1) y1 = out[k]; }
     cell.y0 = y0; cell.y1 = y1;
-    cell.tile = this.tileOf(cell);
+    cell.tile = this.tileOf(cell); cell.reseat = false;
+  }
+  // The outer tile under a cell was rebuilt at another detail (or re-streamed): instead of generating the cell again,
+  // move each tree by how much the ground moved under it, old tile -> new tile (the old tile's heights stay readable
+  // after its mesh is gone). Generating whole cells again here made the far forest fall behind at speed, ~400 cells at a
+  // time whenever a tile changed level. (All of a cell's trees sit on one tile: 20 cells span a tile exactly.)
+  reseat(cell) {
+    const T = this.w.tiles, old = cell.tile, nw = this.tileOf(cell), d = cell.data, n = cell.n;
+    cell.reseat = false; if (!nw || !old || !d) { cell.data = null; return; }
+    let y0 = Infinity, y1 = -Infinity;
+    for (let k = 0; k < n * STRIDE; k += STRIDE) {
+      const x = d[k], z = d[k + 2]; d[k + 1] += T.sample(x, z, nw) - T.sample(x, z, old);
+      if (d[k + 1] < y0) y0 = d[k + 1]; if (d[k + 1] > y1) y1 = d[k + 1];
+    }
+    cell.y0 = y0; cell.y1 = y1; cell.tile = nw;
   }
   tileOf(cell) { // the outer terrain tile a cell sits on (null inside the core map)
     const T = this.w.tiles; if (!T) return null;
@@ -795,9 +813,9 @@ export class Flora {
       const key = this.key(i, j), dense = d < Rd; let c = this.cells.get(key);
       if (!c) { c = { ci: i, cj: j, key, data: null, n: 0, nBase: 0, dense: false, tile: null }; this.cells.set(key, c); }
       c.mark = this.frame; c.d = d;
-      if (c.data && c.tile !== undefined && c.tile !== this.tileOf(c)) { c.data = null; this.cellChanged(c); } // the ground under it was re-meshed
+      if (c.data && c.tile && c.tile !== this.tileOf(c)) c.reseat = true; // the ground under it was re-meshed: re-seat its trees
       if (c.data && !dense && c.dense) { c.dense = false; c.n = c.nBase; c.data = c.data.slice(0, c.nBase * STRIDE); this.cellChanged(c); }
-      if (!c.data || (dense && !c.dense)) { c.wantDense = dense; want.push(c); }
+      if (!c.data || (dense && !c.dense) || c.reseat) { c.wantDense = dense; want.push(c); }
     }
     for (const [key, c] of this.cells) if (c.mark !== this.frame && c.d > Rf * 1.05) { this.cells.delete(key); this.cellChanged(c); }
     // sparse far layer first everywhere close, then densify nearest-first
@@ -818,6 +836,7 @@ export class Flora {
       if (!this.cells.has(c.key)) continue;
       if (this.tileOf(c) === undefined) continue; // outer tile not built yet: try again when it is
       const t1 = performance.now();
+      if (c.reseat && c.data && !(c.wantDense && !c.dense)) { this.reseat(c); this.cellChanged(c); if (c.d < this.T.lo + 600) this.nearDirty = true; continue; } // (cheap: not counted in cellMs)
       this.genCell(c, c.wantDense); done++;
       this.cellMs += (performance.now() - t1 - this.cellMs) * 0.2; // typical cost of one cell (EMA)
       this.cellChanged(c); if (c.d < this.T.lo + 600) this.nearDirty = true;
