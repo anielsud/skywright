@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.120.0', items: [
+    "Real places now go on forever: fly as far as you like from New York, Jungfrau, Bora Bora or the Grand Canyon and the real land keeps coming, with no more stripes at the edge.",
+    "The flat land far from Jungfrau is dry land again instead of a big turquoise sea.",
+  ] },
   { v: '1.119.0', items: [
     "Crashed bikes no longer stretch the rider's arms! If the handlebars break off, the rider lets go instead of reaching after them.",
     "Riders and pilots now feel the g-forces: they lean back when you speed up, lurch forward when you brake hard, and slump a little in tight turns.",

@@ -145,7 +145,7 @@ export function terrainMaterial(maps, patch = false) {
         vec4 alb = texture2D(albedoTex, tuv);
         vec4 nrmS = texture2D(normTex, tuv);
         vec3 wn = normalize(nrmS.xyz * 2.0 - 1.0);
-        ${real ? 'alb.rgb = realGround(satColor(vTW.xz), wn); alb.a = mix(1.0, alb.a, 0.5); nrmS.a = 0.0;' : ''}
+        ${real ? 'alb.rgb = realGround(satColor(vTW.xz, alb.rgb), wn); alb.a = mix(1.0, alb.a, 0.5); nrmS.a = 0.0;' : ''}
         float terrainShadow = mix(1.0, texture2D(shadowTex, (vTW.xz - sOrig) / sSpan).r, shadowOn);
         float dist = length(vTW - cameraPosition);
         // farm parcels (farmland mask in the normal map's alpha), crisp up close
@@ -198,18 +198,21 @@ export function terrainMaterial(maps, patch = false) {
 }
 
 // Real-world locations (src/realworld.js): two nested squares of satellite imagery, the detailed one fading into
-// the coarse one at its edge. Mipmapped, so from high up it stays smooth.
+// the coarse one at its edge. Mipmapped, so from high up it stays smooth. Past the coarse square (and across its last
+// few km, satFarR.w) the ground's own baked albedo takes over: the streamed tiles bake it from the imagery streamed
+// at runtime (geostream.js), brightened by the same gain, so that is taken back out. (No smeared edge row: #151.)
 const REAL_SAT_GLSL = /* glsl */`
   uniform sampler2D satHi; uniform sampler2D satFar; uniform vec4 satHiR; uniform vec4 satFarR;
-  vec3 satColor(vec2 p) {
-    vec2 u = (p - satHiR.xy) * satHiR.z, v = clamp((p - satFarR.xy) * satFarR.z, 0.0, 1.0);
-    float e = min(min(u.x, 1.0 - u.x), min(u.y, 1.0 - u.y));
+  uniform vec3 satSun; uniform float satGain; uniform float satDeshade; uniform vec4 satCliff; uniform float satDetail;
+  vec3 satColor(vec2 p, vec3 baked) {
+    vec2 u = (p - satHiR.xy) * satHiR.z, v0 = (p - satFarR.xy) * satFarR.z, v = clamp(v0, 0.0, 1.0);
+    float e = min(min(u.x, 1.0 - u.x), min(u.y, 1.0 - u.y)), ef = min(min(v0.x, 1.0 - v0.x), min(v0.y, 1.0 - v0.y));
     vec3 far = texture2D(satFar, v).rgb, hi = texture2D(satHi, clamp(u, 0.0, 1.0)).rgb; // both sampled always: mip derivatives stay valid
+    far = mix(baked / satGain, far, smoothstep(0.0, satFarR.w, ef));
     return mix(far, hi, smoothstep(0.0, 0.01, e));
   }
   // the photo already has the light and shadow of the moment it was taken (satSun): take some of that out, so the
   // game's own sun does the shading, and lift it to the game's ground brightness
-  uniform vec3 satSun; uniform float satGain; uniform float satDeshade; uniform vec4 satCliff; uniform float satDetail;
   vec3 realGround(vec3 c, vec3 n) {
     float lit = max(dot(n, satSun), 0.0) * 0.75 + 0.25, ref = max(satSun.y, 0.2) * 0.75 + 0.25;
     float k = mix(1.0, clamp(ref / lit, 0.65, 2.0), satDeshade);

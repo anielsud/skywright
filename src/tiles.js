@@ -38,25 +38,44 @@ export class TerrainTiles {
         want.set(this.key(i, j), { i, j, d, lod: this.lodFor(d) });
       }
       for (const [k, t] of this.tiles) if (!want.has(k)) { this.drop(t); this.tiles.delete(k); this.treesDirty = true; this.far.maskDirty = true; }
-      this.queue = [...want.values()].filter((t) => { const have = this.tiles.get(this.key(t.i, t.j)); return !have || have.lod !== t.lod; }).sort((a, b) => a.d - b.d);
+      this.queue = [...want.values()].filter((t) => { const have = this.tiles.get(this.key(t.i, t.j)); return !have || have.lod !== t.lod || have.stale; }).sort((a, b) => a.d - b.d);
     }
     // work is time-sliced (a few ms per frame) so streaming never causes a hitch, even on a tablet
     const t0 = performance.now(), budget = 4;
     while (performance.now() - t0 < budget) {
       if (!this.job) {
-        if (this.queue.length) { const t = this.queue.shift(); this.job = { t, it: this.build(t.i, t.j, t.lod) }; }
+        if (this.queue.length) { const t = this.queue.shift(), have = this.tiles.get(this.key(t.i, t.j)); if (have ? have.lod === t.lod && !have.stale : t.inv) continue; /* (rebuilt already / dropped since) */ this.job = { t, it: this.build(t.i, t.j, t.lod) }; }
         else if (this.treesDirty) { this.treesDirty = false; this.treeCam = null; this.job = { water: true, it: this.updateWaterDepth(cam) }; }
         else break;
       }
       const r = this.job.it.next();
       if (r.done) {
-        if (this.job.t) { const t = this.job.t, k = this.key(t.i, t.j), old = this.tiles.get(k); if (old) this.drop(old); this.tiles.set(k, r.value); this.treesDirty = true; this.far.maskDirty = true; }
+        if (this.job.t) {
+          const t = this.job.t, k = this.key(t.i, t.j), old = this.tiles.get(k); if (old) this.drop(old); this.tiles.set(k, r.value); this.treesDirty = true; this.far.maskDirty = true;
+          if (this.job.stale) { r.value.stale = true; this.queue.push({ ...t, inv: true }); }
+        }
         this.job = null;
       }
     }
     this.far.update(cam, this.queue.length || this.job ? 1.5 : 3);
     // vegetation lives in Flora; tell it when the tiles under it change
     if (!this.treeCam || this.treeCam.distanceToSquared(cam) > 40 * 40) { this.treeCam = cam.clone(); this.layoutTrees(cam); }
+  }
+
+  // Ground under (x0,z0)-(x1,z1) was built from data that has since got better (a real place's streamed tiles arrived,
+  // geostream.js): rebuild the tiles there, nearest first, each swapped in when ready like any other (no hitch), and
+  // the far field's cells there.
+  invalidate(x0, z0, x1, z1) {
+    const T = this.size, c = this.lastCam;
+    for (const t of this.tiles.values()) {
+      if (t.stale || t.x0 > x1 || t.x0 + T < x0 || t.z0 > z1 || t.z0 + T < z0) continue;
+      t.stale = true;
+      const d = c ? Math.hypot(t.i + 0.5 - c.x / T, t.j + 0.5 - c.z / T) : 0;
+      this.queue.push({ i: t.i, j: t.j, d, lod: t.lod, inv: true });
+    }
+    if (this.job?.t) { const t = this.job.t, X = t.i * T, Z = t.j * T; if (!(X > x1 || X + T < x0 || Z > z1 || Z + T < z0)) this.job.stale = true; } // (being built from the old data: again after)
+    this.queue.sort((a, b) => a.d - b.d);
+    this.far.invalidate(x0, z0, x1, z1);
   }
 
   *build(i, j, lod) {
