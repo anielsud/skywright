@@ -859,7 +859,7 @@ export function mergeStatic(objs, root) {
         if (skip.has(o) || (o !== r && rigid.has(o)) || o.userData.isDisc || o.userData.live || o.isSkinnedMesh) return; // crew: skinned, posed every frame; live instruments (liveDisplays.js): rewritten every frame
         if (o.isMesh && o.visible && !o.isInstancedMesh) {
           const slot = kitSlot(o.material), mat = slot >= 0 ? kitMaterial() : o.material;
-          const key = mat.uuid + (o.castShadow ? 's' : '') + (o.userData.near ? 'n' : '') + (o.userData.planeLight ? 'l' : '');
+          const ga = o.geometry.attributes, key = mat.uuid + (o.castShadow ? 's' : '') + (o.userData.near ? 'n' : '') + (o.userData.planeLight ? 'l' : '') + (ga.cabinLight ? 'c' : '') + (ga.cabinLamp ? 'L' : ''); // (cabin-lit meshes only merge with each other: the same attributes)
           if (!buckets.has(key)) buckets.set(key, { mat, geos: [], shadow: o.castShadow, near: !!o.userData.near, light: !!o.userData.planeLight, recv: o.receiveShadow });
           m.multiplyMatrices(inv, o.matrixWorld);
           const g = norm(o.geometry.clone()); g.applyMatrix4(m); if (slot >= 0) kitUV(g, slot);

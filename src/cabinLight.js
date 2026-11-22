@@ -372,7 +372,7 @@ export function bakeCabinLight(objs, root) {
   const owners = objs.filter((o) => o && (o.userData.interior?.length || o.userData.seats?.length)); if (!owners.length) return stats;
   const allMeshes = [], crewOf = new Map();
   root.traverse((o) => {
-    if (!o.isMesh || o.isInstancedMesh || !o.geometry?.attributes.position || !shown(o, root)) return;
+    if (!o.isMesh || o.isInstancedMesh || o.userData.isDisc || !o.geometry?.attributes.position || !shown(o, root)) return; // (a prop disc: no say in the bake, and only shown in flight, so the hangar's bake and the flight's match)
     allMeshes.push(o); for (let x = o; x && x !== root; x = x.parent) if (x.userData.crewRig) { crewOf.set(o, x); break; }
   });
   const key = globalThis.__cabinKeep ? null : sigOf(allMeshes, owners, crewOf, rootInv), hit = key && SAVED.get(key);
