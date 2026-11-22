@@ -75,6 +75,7 @@ export class RemotePlane {
     // the scene's light count and recompiles every lit shader for everyone
     const lights = []; this.ac.root.traverse((o) => { if (o.isLight) lights.push(o); }); for (const l of lights) l.parent.remove(l); this.ac.landingLight = null;
     this.ac.ctl.throttle = 0;
+    this.ac.root.userData.detail?.lod?.crewDetail(); // (their people get lighter with distance: planeDetail DetailLOD)
     scene.add(this.ac.root);
     this.ac.root.visible = false; // until the first snapshot
     this.sonic = new SonicFX(this.ac, scene); // vapour cone, glow and sonic booms for other players too

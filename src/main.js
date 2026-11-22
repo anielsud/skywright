@@ -18,6 +18,7 @@ import { Controls } from './controls.js';
 import { HUD } from './hud.js';
 import { CameraRig } from './cameras.js';
 import { warmStations } from './stations.js';
+import { setCrewView } from './planeDetail.js';
 import { MODES, RingRace, LandingChallenge } from './missions.js';
 import { clamp, smoothstep } from './noise.js';
 import { installFog } from './shaders.js';
@@ -1457,6 +1458,7 @@ function frame(now) {
       const golden = Math.max(0, 1 - Math.abs(w.sunElev - 0.08) / 0.3);
       post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: (0.97 + golden * 0.12 - w.W.dark * 0.25) * (1 - 0.7 * (gvis.shown ? smoothstep(0, 0.7, gvis.grey) : 0)), contrast: 1.12, vignette: 0.3 }); // near-neutral colour, a little more contrast: photographic rather than candy
       fitNearPlane(F);
+      setCrewView(renderer.domElement.height, qualityTier()); // (other players' crews: their detail by size on screen)
       const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene) : null;
       post.render(F.scene, flightCam, dt);
       // shader programs must all exist before take-off (the warm-up above); flag any compiled mid-flight
