@@ -3,3 +3,5 @@
 export const VERSION = '1.131.0';
 export const COMMIT = 'dev';
 export const BUILT = '';
+// a hash of the crew posture solver (src/crew.js, src/body.js, assets/people/): solved postures stay valid until it changes
+export const SOLVER = 'dev';

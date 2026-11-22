@@ -11,12 +11,13 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { PARTS } from './parts.js';
-import { COMMIT } from './version.js';
+import { COMMIT, SOLVER } from './version.js';
 import { bodyReady, body, person, poseBody, handModel, torsoPoints, bodyDims, spinePose, armRest, headSize, limbRadii } from './body.js';
 const LIP_BONES = /^oris/; // the mouth's ring muscle in the body mesh's skeleton: its skin is the lips
 // Helmet models (assets/people/helmets.*, made by tools/people/helmets.py from three Sketchfab models): unit width, facing
 // -Z, centred on their eye point; parts by role (shell, accent, visor, liner, rubber, metal, baked colours). Without them
 // the procedural helmets stand in.
+const postureBake = SOLVER === 'dev' ? null : fetch(new URL('../assets/boot/postures.json', import.meta.url)).then((r) => (r.ok ? r.json() : null)).catch(() => null); // (see POSTURES)
 const helmetsLoad = (async () => {
   try {
     const base = new URL('../assets/people/', import.meta.url);
@@ -629,15 +630,19 @@ const RIDES = new Map(); // (solved rider postures: person, vehicle geometry -> 
 function gloved(HM, t) { if (!HM || !t) return HM; const o = {}; for (const s of ['R', 'L']) o[s] = { ...HM[s], G: (r) => HM[s].G(r + t) }; return o; }
 function glovedGrips(rig) { const t = rig.o.gloveT, g = rig.grips; if (!t || !g) return g; const o = {}; for (const s of ['R', 'L']) o[s] = g[s] && { ...g[s], r: g[s].r + t }; return o; }
 
-// Solved postures: person, seat and controls -> v. Kept between visits too (per build: a new one may solve differently),
-// so opening the game doesn't solve the pilot's posture all over again (a second or two on a tablet).
+// Solved postures: person, seat and controls -> v (the seat's and controls' geometry is in the key). Solving one takes a
+// second or two on a tablet, so they're kept: the deploy solves every stock vehicle's crew (tools/bake/boot.py ->
+// assets/boot/postures.json), and each device keeps what it solved itself in localStorage. Both are only used while
+// the solver is the same (SOLVER, a hash of its code and the people's meshes, stamped by the deploy).
 const POSTURE_LS = 'skywright.postures';
-const POSTURES = (() => {
-  const m = new Map(); if (COMMIT === 'dev') return m;
-  try { const s = JSON.parse(localStorage.getItem(POSTURE_LS)); if (s?.commit === COMMIT) for (const [k, r] of s.list) m.set(k, r); } catch { /* storage unavailable */ }
-  return m;
-})();
-const keepPostures = () => { if (COMMIT !== 'dev') try { localStorage.setItem(POSTURE_LS, JSON.stringify({ commit: COMMIT, list: [...POSTURES].slice(-60) })); } catch { /* full or unavailable */ } };
+const POSTURES = new Map();
+const keepPostures = () => { if (SOLVER !== 'dev') try { localStorage.setItem(POSTURE_LS, JSON.stringify({ solver: SOLVER, list: [...POSTURES].slice(-60), rides: [...RIDES].slice(-30) })); } catch { /* full or unavailable */ } };
+export const solvedPostures = () => ({ list: [...POSTURES], rides: [...RIDES] }); // (for the bake)
+if (SOLVER !== 'dev') {
+  const take = (s) => { if (s?.solver !== SOLVER) return; for (const [k, r] of s.list || []) if (!POSTURES.has(k)) POSTURES.set(k, r); for (const [k, r] of s.rides || []) if (!RIDES.has(k)) RIDES.set(k, r); };
+  try { take(JSON.parse(localStorage.getItem(POSTURE_LS))); } catch { /* storage unavailable */ }
+  take(await postureBake);
+}
 const ADJ_KEYS = ['pedZ', 'pedY', 'seatZ', 'seatY']; // (what a vehicle may declare adjustable: Rig.adjustVars)
 class Rig {
   constructor(kind, ctl, outfit, seed, opts = {}) {
@@ -916,7 +921,7 @@ class Rig {
     for (let f = v.fwd + 0.03; f <= v.fwd + gain + 1e-6; f += 0.03) { this.configureRide({ ...v, fwd: f }); this.pose(this.state); const h = this.rideHits(); if (h.torso + h.head > 0.004) break; fwdTuck = f; }
     delete this.armSol; this.configureRide(v); this.postureScore = this.rideCost(); delete this.armSol;
     this.solving = false; this.fwdTuck = fwdTuck; this.riderFit.fwdTuck = +fwdTuck.toFixed(3);
-    RIDES.set(key, { v: { ...v }, fwdTuck, score: this.postureScore, fit: this.riderFit });
+    RIDES.set(key, { v: { ...v }, fwdTuck, score: this.postureScore, fit: this.riderFit }); keepPostures();
     return { ...v };
   }
   // neck and shoulders on the spine (sp: spine-local -> rig space): the posed spine's, else the procedural proportions
