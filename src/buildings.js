@@ -56,6 +56,10 @@ function loadMats() {
 export const preloadTownTextures = () => { loadMats(); };
 const matsLoaded = () => !!matImgs && matImgs.every((im) => im.complete && im.naturalWidth > 0);
 
+// Hangar idle time (main.js): paint the atlas the first flight will use (~220 ms) once the photos are in, so the Fly
+// button doesn't wait for it. (Without the photos it would be painted twice.) Kept for the session like every atlas.
+export const prewarmAtlas = (cellPx) => loadMats()?.then((ok) => { if (ok) buildingAtlas(cellPx); });
+
 const _atlases = new Map();
 // cellPx: 128 low, 256 medium/high, 384 ultra
 export function buildingAtlas(cellPx = 256) {

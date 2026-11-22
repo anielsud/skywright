@@ -2,12 +2,13 @@ import * as THREE from 'three';
 import { PARTS, CATEGORIES, PAINTS } from './parts.js';
 import { makePresets, encodeDesign, decodeDesign, cloneDesign, analyze, sizeSliders, sizeValue, thrustScale, partPower, partBurn, POWER_RANGE, BURN_RANGE } from './design.js';
 import { Hangar, thumbnailDrawer } from './hangar.js';
-import { preloadTownTextures } from './buildings.js';
+import { preloadTownTextures, prewarmAtlas } from './buildings.js';
 import { preloadFoliage } from './flora.js';
 import { cabinBakesReady } from './cabinLight.js';
 import { Aircraft, REALISM } from './aircraft.js';
 import { World, LOCATIONS, WEATHER } from './world.js';
-import { Traffic, buildStatic, mergeByMaterial } from './traffic.js';
+import { Traffic, parkedStatic } from './traffic.js';
+import { prewarmMarina } from './marina.js';
 import { Effects } from './effects.js';
 import { SonicFX } from './sonic.js';
 import { Audio, MIX_DEFAULTS, OLD_MIX_DEFAULTS } from './audio.js';
@@ -681,11 +682,25 @@ function startFlight(cfgOverride) {
     try { buildFlight(cfg); } catch (e) { fail(e); }
   }, 50), (e) => { msg.textContent = msg0; fail(new Error(`couldn’t load ${loc.name} (it needs the internet the first time): ${e.message}`)); });
 }
+const PARKED = [2, 0, 4, 7]; // the airport's parked planes (presets)
+// Hangar idle time after boot: the first flight's share of the world's session caches (moored boats, parked planes,
+// building atlas), one step per idle slot so the hangar never stalls for long. Later flights reuse them anyway.
+function prewarmWorld() {
+  const idle = (fn) => (window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 3000 }) : setTimeout(fn, 100));
+  const parked = PARKED.map((i) => () => parkedStatic(presets[i]));
+  const step = () => {
+    if (state !== 'hangar') return setTimeout(step, 2000);
+    if (prewarmMarina()) return idle(step);
+    const p = parked.shift(); if (p) { p(); return idle(step); }
+    prewarmAtlas({ low: 128, medium: 192, ultra: 384 }[qualityTier()] ?? 256); // (the cell size World's buildings use)
+  };
+  idle(step);
+}
 function buildFlight(cfg) {
   const scene = new THREE.Scene();
   const world = new World(renderer, scene, { location: cfg.location, quality: qualityTier(), time: cfg.time, weather: cfg.weather });
   const moonSet = MOONS.find(([k]) => k === cfg.moon)?.[2]; if (moonSet != null) world.setMoonAge(moonSet); // 'real' keeps today's phase
-  world.addParked([2, 0, 4, 7].map((i) => mergeByMaterial(buildStatic(presets[i]))));
+  world.addParked(PARKED.map((i) => parkedStatic(presets[i]))); // (kept per design for the session: traffic.js)
   const realism = REALISM[cfg.realism];
   const design = cloneDesign(hangar.design);
   const ac = new Aircraft(design, realism);
@@ -1614,6 +1629,7 @@ async function boot() {
   $('#splash').classList.add('hide');
   setTimeout(() => $('#splash').remove(), 900);
   setTimeout(drawPartThumbs, 1200); // after the splash has faded
+  setTimeout(prewarmWorld, 2500);
   maybeShowWhatsNew();
   analytics.open({ quality: settings.quality, units: settings.units, control_mode: settings.controlMode, saved_planes: LS.get('designs', []).length, gpu: gpuName() });
   document.addEventListener('pointerdown', () => { audio.init(); if (state === 'hangar') audio.music(true); }, { once: true });

@@ -191,18 +191,12 @@ export class Marina {
 
   // ---------- moored boats (the stock boats, merged into one mesh per material) ----------
   buildBoats() {
-    const designs = makePresets().filter((d) => analyze(d).boat), R = this.rnd, W = this.world;
+    const designs = stockBoats(), R = this.rnd, W = this.world;
     if (!designs.length) return;
-    const statics = new Map(), root = new THREE.Group();
-    const of = (d) => {
-      if (statics.has(d.name)) return statics.get(d.name);
-      const g = buildStatic(d), lift = g.children[0].position.y - d.parts[0].pos[1], wl = analyze(d).waterline ?? 0; // (buildStatic stood it on its lowest point)
-      g.traverse((o) => { o.userData = {}; }); // (scenery: nothing to wire up, and clone() copies userData through JSON)
-      const s = { g, y: wl + lift }; statics.set(d.name, s); return s;
-    };
+    const root = new THREE.Group();
     const big = designs.find((d) => d.name === 'Fireboat'), small = designs.filter((d) => d !== big);
     const place = (d, lx, lz, yaw) => {
-      const s = of(d), o = s.g.clone(), p = this.W(lx, lz); o.position.set(p.x, this.water(lx, lz) - s.y, p.z); o.rotation.y = this.yaw + yaw; root.add(o);
+      const s = boatStatic(d), o = s.g.clone(), p = this.W(lx, lz); o.position.set(p.x, this.water(lx, lz) - s.y, p.z); o.rotation.y = this.yaw + yaw; root.add(o);
       this.moored.push({ name: d.name, x: p.x, z: p.z, yaw: this.yaw + yaw });
     };
     for (const s of this.slips || []) if (R() < 0.75) place(small[Math.floor(R() * small.length)], s.lx, s.lz, s.yaw + (R() - 0.5) * 0.08);
@@ -212,7 +206,6 @@ export class Marina {
     const merged = mergeByMaterial(root); merged.name = 'moored';
     merged.traverse((m) => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
     this.group.add(merged);
-    for (const s of statics.values()) s.g.traverse((m) => m.geometry?.dispose?.());
     void W;
   }
 
@@ -221,6 +214,25 @@ export class Marina {
     const s = this.startAt, p = this.W(s.lx, s.lz), a = this.yaw + s.yaw; // local +z (out) in world: (sin a, cos a)
     return { pos: p, heading: Math.atan2(-Math.sin(a), -Math.cos(a)) };
   }
+}
+
+// ---------- the stock boats, kept for the session ----------
+// The stock designs never change, so which are boats (analyze: ~250 ms the first time) and each one's merged mesh are
+// worked out once; every flight's marina clones them (shared geometry: World.dispose only disposes the merged copy).
+let _boats = null;
+const _boatStatics = new Map();
+const stockBoats = () => (_boats ??= makePresets().filter((d) => analyze(d).boat));
+function boatStatic(d) {
+  let s = _boatStatics.get(d.name); if (s) return s;
+  const b = buildStatic(d), lift = b.children[0].position.y - d.parts[0].pos[1], wl = analyze(d).waterline ?? 0; // (buildStatic stood it on its lowest point)
+  s = { g: mergeByMaterial(b), y: wl + lift }; _boatStatics.set(d.name, s); return s;
+}
+// Hangar idle time (main.js): do the first flight's share of this before the Fly button is pressed. One boat per call
+// so no single step holds up a frame for long; returns false when there is nothing left to do.
+export function prewarmMarina() {
+  if (!_boats) { stockBoats(); return true; }
+  const d = _boats.find((b) => !_boatStatics.has(b.name)); if (!d) return false;
+  boatStatic(d); return true;
 }
 
 // ---------- finding a site ----------
