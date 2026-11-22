@@ -9,6 +9,7 @@ import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
 import { revolve, airfoil } from './parts.js'; // (circular, used at build time only)
 import { bubbleInterior } from './bubbleCockpit.js'; // (circular, used at build time only)
+import { fighterInterior } from './jetCockpit.js'; // (circular too: build time only)
 
 export const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const KEEP = ['position', 'normal', 'uv', 'uv1'];
@@ -787,34 +788,8 @@ export function cockpitBuild(id, color, lv = 2) {
     g.add(new THREE.Mesh(glass, PM.canopy(0x6b5524)));
     // windscreen bow (thick) and the canopy arch, following the glass section
     for (const [z, rad] of [[-0.62, 0.026], [0.78, 0.02]]) { const r = fighterGlassR(z); b.add(bowGeo(r + 0.006, r * 1.15 + 0.006, z, rad, -r * 0.35), paint); }
-    // ejection seat: padded back, head box (inside the glass) with the yellow/black firing handle
-    // (set down in the tub, so the pilot's helmet clears the canopy: it touched the glass)
-    // on rails (its own meshes, userData.seatRail: crew.js moves them to where the pilot set it), so whoever flies it
-    // sits back against it within reach of the stick and throttle instead of hunching forward to them
-    const sb = new Bag(), st = seatGeo(0.42, 0.62, 0.4, 0.3); st.translate(0, -0.4, 0.52); sb.add(st, seatM);
-    const hb = new THREE.CapsuleGeometry(0.1, 0.16, 4, 10); hb.rotateZ(Math.PI / 2); hb.scale(1, 1.05, 0.8); hb.translate(0, 0.28, 0.73); sb.add(hb, seatM);
-    const handle = new THREE.TorusGeometry(0.06, 0.011, 4, 10, Math.PI); handle.translate(0, 0.34, 0.67); sb.add(handle, M.propTip());
-    { const n0 = g.children.length; sb.to(g); for (const m of g.children.slice(n0)) m.userData.seatRail = 0; }
-    // side consoles along the tub walls beside the seat: the side-stick on the right one (forearm on its armrest), the
-    // throttle on the left. The pilot's feet on the rudder pedals just ahead of the seat (the tub floor is ~-0.52).
-    for (const sx of [-1, 1]) { const con = new THREE.BoxGeometry(0.17, 0.4, 0.8); con.translate(sx * 0.315, -0.38, 0.02); b.add(con, black); }
-    const arm = new THREE.BoxGeometry(0.13, 0.05, 0.34); arm.translate(0.29, -0.155, 0.15); b.add(arm, seatM); // the side-stick's raised mount and armrest
-    g.userData.seats = [{ p: [0, -0.28, 0.4], s: 0.88, fit: { at: [0, -0.4, 0.52], dims: [0.42, 0.62, 0.4, 0.3], floor: -0.52, feet: 'pedals' },
-      controls: { stickBase: [0.27, 0.17, -0.33], stickLen: 0.11, thrBase: [-0.27, 0.1, -0.25], thrLen: 0.11, pedZ: -0.55, pedY: -0.22 },
-      adjust: { seatZ: [-0.08, 0.02], seatY: [-0.03, 0.03] } }]; // (the seat runs 8 cm forward to 2 cm back, 3 cm up or down)
-    const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.18, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.6); gl.rotateY(Math.PI); gl.translate(0, 0.14, -0.6); b.add(shell(gl, 0.008), black);
-    const glTop = new THREE.CylinderGeometry(0.3, 0.3, 0.012, 18, 1, false, -1.3, 2.6); glTop.scale(1, 1, 0.6); glTop.rotateY(Math.PI); glTop.translate(0, 0.23, -0.6); b.add(capHoles(glTop), black);
-    const pf = mx([0, 0.11, -0.6], [-0.2, 0, 0]), pnl = new THREE.BoxGeometry(0.52, 0.24, 0.012); pnl.applyMatrix4(pf); b.add(pnl, black); // (top edge under the glare shield's lid)
-    for (let i = 0; i < 2; i++) { const d = new THREE.PlaneGeometry(0.13, 0.11); d.applyMatrix4(pf.clone().multiply(mx([-0.1 + i * 0.2, 0, 0.0065]))); nb.add(d, PM.dial()); } // (on the panel face)
-    // HUD combiner on two posts standing on the glare shield (it hung in the air above it)
-    const hf = mx([0, 0.33, -0.62], [-0.35, 0, 0]), hud = new THREE.PlaneGeometry(0.15, 0.13); hud.applyMatrix4(hf); nb.add(hud, PM.canopy(0x3c6b52));
-    for (const sx of [-1, 1]) { const top = V(sx * 0.068, -0.06, 0).applyMatrix4(hf); nb.add(bar(top, V(top.x, 0.226, top.z - 0.05), 0.012, 0.012, true, 6), black); }
-    g.userData.fit = [{ kind: 'seat', p: [0, -0.435, 0.36], w: 0.24, d: 0.22 }, { kind: 'panel', p: V(0, -0.12, 0).applyMatrix4(pf).toArray(), w: 0.1, d: 0.05, tilt: -0.2 }]; // (the panel on a narrow centre pedestal: the legs go either side of it to the pedals)
-    // what the pilot must keep clear of: inside the glass (revolved, 1.15 x as tall as wide; walls below its base), the
-    // side consoles, the side-stick's armrest (the legs only: the forearm rests on it), the panel, its hood and the HUD
-    g.userData.seats[0].obstacles = [{ name: 'canopy', inside: insideRows(FIGHTER_GLASS[0][0], FIGHTER_GLASS.at(-1)[0], 72, (z) => [fighterGlassR(z), fighterGlassR(z) * 1.15, 0]) },
-      ...[-1, 1].map((sx) => ({ name: 'console', box: [sx * 0.315, -0.38, 0.02], size: [0.17, 0.4, 0.8] })), { name: 'armrest', box: [0.29, -0.155, 0.15], size: [0.13, 0.05, 0.34], parts: ['legs', 'torso'] },
-      boxObstacle('panel', pf, [0.52, 0.24, 0.012]), hoodObstacle('glare shield', 0.3, 0.6, 1.3, 0.14, -0.6, 0.18), boxObstacle('HUD', hf, [0.15, 0.13, 0.01])];
+    // the cockpit under it (jetCockpit.js): ejection seat on rails, consoles, side-stick, panel, glare shield, HUD, mirrors
+    fighterInterior(g, b, nb, paint);
   }
   b.to(g); nb.to(g, true);
   return g;
