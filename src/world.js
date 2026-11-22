@@ -1128,6 +1128,7 @@ export class World {
     // endless world: stream terrain tiles (and the far terrain), keep the sea and clouds centred on the camera
     const cp = camera.position;
     this.tiles?.update(cp);
+    this.roadGroup?.userData.cull?.(cp);
     this.updatePatch(cp);
     const snap = (v, g) => Math.round(v / g) * g;
     this.water.position.x = snap(cp.x, 2000); this.water.position.z = snap(cp.z, 2000);

@@ -1020,6 +1020,7 @@ class Rig {
       const L1 = D.upper, L2 = D.fore, sx = k === 'R' ? 1 : -1, relaxed = V(sx * 0.18, -1, -0.32).normalize();
       const Y0 = c.clone().sub(S); Y0.addScaledVector(X, -Y0.dot(X)).normalize(); const Z0 = V().crossVectors(X, Y0);
       const Yt = V(), Zt = V(), Wt = V(), d = V(), E = V(), u = V(), f = V(), pole = V(), u0 = V(), v0 = V(), th2 = V(), Nn = V(), M4 = new THREE.Matrix4();
+      const uz = V(), ux = V(), fz = V(), fx = V(), cr = V(), qU = new THREE.Quaternion(), rel = new THREE.Quaternion(), ARinv = this.armRest?.[k] ? this.armRest[k].uInSpine.clone().invert() : null; // (scratch: score() runs ~100 times a frame)
       const AR = this.armRest?.[k], spInv = q[B.spine].clone().invert(), wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
       const ELL = this.torsoEll, spP = p[B.spine], ap = V();
       // [from (0 shoulder / 1 elbow), to (1 elbow / 2 wrist), how far, the arm's radius there]
@@ -1037,11 +1038,11 @@ class Rig {
         const flex = Math.atan2(f.dot(Zt), f.dot(Yt)), dev = Math.asin(clamp(f.dot(X), -1, 1));
         // the bones' frames as limb() makes them: N the bend plane's normal (side -1 for arms), z = N x y, x = y x z
         Nn.crossVectors(pole, d).multiplyScalar(-1).normalize();
-        const uz = V().crossVectors(Nn, u).normalize(), ux = V().crossVectors(u, uz), fz = V().crossVectors(Nn, f).normalize(), fx = V().crossVectors(f, fz);
+        uz.crossVectors(Nn, u).normalize(); ux.crossVectors(u, uz); fz.crossVectors(Nn, f).normalize(); fx.crossVectors(f, fz);
         // forearm twist: the hand's X about the forearm's axis, against the rest pose's
-        th2.copy(X).addScaledVector(f, -X.dot(f)).normalize(); const tau = wrapA(Math.atan2(V().crossVectors(fx, th2).dot(f), fx.dot(th2)) - (AR ? AR.twist0 : 0));
+        th2.copy(X).addScaledVector(f, -X.dot(f)).normalize(); const tau = wrapA(Math.atan2(cr.crossVectors(fx, th2).dot(f), fx.dot(th2)) - (AR ? AR.twist0 : 0));
         // humeral rotation: the upper arm's frame in the spine's, against the rest pose's; its twist about the arm
-        let hum = 0; if (AR) { const qU = new THREE.Quaternion().setFromRotationMatrix(M4.makeBasis(ux, u, uz)), rel = AR.uInSpine.clone().invert().multiply(spInv.clone().multiply(qU)); hum = wrapA(2 * Math.atan2(rel.y, rel.w)); }
+        let hum = 0; if (AR) { qU.setFromRotationMatrix(M4.makeBasis(ux, u, uz)); rel.copy(ARinv).multiply(qU.premultiply(spInv)); hum = wrapA(2 * Math.atan2(rel.y, rel.w)); }
         // the arm stays outside the torso: points along the upper arm and forearm (each padded by the arm's radius)
         // against the torso's cross-sections; the cost grows with how deep any goes in
         let inside = 0;
@@ -1061,9 +1062,14 @@ class Rig {
       let best = { c: Infinity, th: 0, ph: 0 };
       const grid = (th0, ph0, span, n) => { for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const th = th0 + span * (i / (n - 1) - 0.5) * 2, ph = ph0 + span * (j / (n - 1) - 0.5) * 2, cc = score(th, ph); if (cc < best.c) best = { c: cc, th, ph }; } };
       const prevC = prev ? score(prev.th, prev.ph) : Infinity;
-      if (prev && prevC < 500) { best = { c: prevC, th: prev.th, ph: prev.ph }; grid(prev.th, prev.ph, 0.25, 9); } // (an answer from out of reach or past a joint's range is no place to refine from: search afresh)
-      else { if (prev) grid(prev.th, prev.ph, 0.8, 13); if (!(best.c < 500)) { const f0 = OB?.from; if (OB) { OB.from = 1; OB.to = 2; } grid(0, 0, Math.PI, 49); if (OB) { OB.from = f0; OB.to = 3; best.c = score(best.th, best.ph); } } } // (first a wider look round the last answer: an arm kept off a wall can sit near a joint's limit; the full search tests only the elbow against obstacles)
-      for (const span of [0.12, 0.04, 0.012]) grid(best.th, best.ph, span, 7);
+      const track = prev && prevC < 500 && !this.solving; // (the posture solve keeps the thorough search below; in flight the fresh search starts from a coarser grid)
+      if (track) { // tracking (every frame): the same reach round the last answer, coarse to fine, ~100 candidates
+        best = { c: prevC, th: prev.th, ph: prev.ph };
+        for (const span of [0.25, 0.06, 0.015, 0.004]) grid(best.th, best.ph, span, 5);
+      }
+      else if (prev && prevC < 500) { best = { c: prevC, th: prev.th, ph: prev.ph }; grid(prev.th, prev.ph, 0.25, 9); } // (an answer from out of reach or past a joint's range is no place to refine from: search afresh)
+      else { if (prev) grid(prev.th, prev.ph, 0.8, 13); if (!(best.c < 500)) { const f0 = OB?.from; if (OB) { OB.from = 1; OB.to = 2; } if (this.solving || !prev) grid(0, 0, Math.PI, 49); else { grid(0, 0, Math.PI, 25); grid(best.th, best.ph, 0.3, 7); } if (OB) { OB.from = f0; OB.to = 3; best.c = score(best.th, best.ph); } } } // (first a wider look round the last answer: an arm kept off a wall can sit near a joint's limit; the full search tests only the elbow against obstacles)
+      if (!track) for (const span of [0.12, 0.04, 0.012]) grid(best.th, best.ph, span, 7);
       this.armSol[k] = { th: best.th, ph: best.ph };
       const out = {}; score(best.th, best.ph, out); (this.armAngles ||= {})[k] = { ...Object.fromEntries(Object.entries(out.angles).map(([kk, v]) => [kk, +(kk === 'cost' || kk === 'inside' ? v : v * 180 / Math.PI).toFixed(3)])), at: this.gripA?.[k] != null ? +(this.gripA[k] * 180 / Math.PI).toFixed(0) : null }; void hint; return out;
     };
@@ -2361,7 +2367,7 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
     m.frustumCulled = false; // a few hundred triangles; skinned bounds would otherwise need a refresh as the pose changes
     root.add(m); m.bind(skel, new THREE.Matrix4());
   }
-  const smooth = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 };
+  const smooth = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 }, posed = {}; // (posed: the smoothed controls the bones were last posed for)
   root.userData.crewRig = {
     rig, root,
     eye: eyePoint(rig), // rig space: between the eyes, head straight (cockpit view, stations.js)
@@ -2378,6 +2384,11 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
       if (rig.ctl === 'bars') { tgt.lean = clamp(c.lean || 0, -0.6, 0.6); tgt.tuck = clamp(c.tuck || 0, 0, 1); tgt.foot = clamp(c.foot || 0, 0, 1); tgt.bikeLean = clamp(c.bikeLean || 0, -1, 1); s.hands = c.hands || null; }
       let moving = false;
       for (const a in tgt) { const kk = a === 'look' ? k * 0.35 : k; const v = s[a] + (tgt[a] - s[a]) * kk; if (Math.abs(v - tgt[a]) > 1e-3) moving = true; s[a] = v; }
+      // the pose is a function of the smoothed controls alone (riders: of the bars too): held still, it's already right
+      const P = posed; let same = rig.ctl !== 'bars' && P.ok;
+      if (same) for (const a in tgt) if (Math.abs(s[a] - P[a]) > 1e-4) { same = false; break; }
+      if (same) return moving;
+      for (const a in tgt) P[a] = s[a]; P.ok = true;
       rig.pose(s);
       for (let i = 0; i < NB; i++) { bones[i].position.copy(rig.p[i]); bones[i].quaternion.copy(rig.q[i]); }
       return moving;

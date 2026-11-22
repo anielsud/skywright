@@ -409,12 +409,13 @@ export function buildRoadMeshes(w, net) {
   // bridges: a deck slab with parapets, piers down to the ground or river bed, and abutments at both ends
   for (const rd of [...net.roads, ...(net.rail ? [net.rail] : [])]) {
     const P = rd.pts, n = P.length, closed = !!rd.closed; if (!rd.bridge?.some(Boolean)) continue;
-    const hw = rd.width / 2 + 1, pos = [];
+    const hw = rd.width / 2 + 1, decks = new Map(); let pos = null; // (deck triangles per chunk square: see bridgeAdd)
     const quad = (a, b, c, d) => pos.push(...a, ...b, ...c, ...a, ...c, ...d);
     let runLen = 0;
     for (let i = 0; i < (closed ? n : n - 1); i++) {
       if (!isBr(rd, i)) { runLen = 0; continue; }
       const j = (i + 1) % n, A = P[i], B = P[j], [, ra] = frame(P, i, closed), [, rb] = frame(P, j, closed);
+      const dk = chunk ? Math.floor(A.x / chunk) + ',' + Math.floor(A.z / chunk) : ''; pos = decks.get(dk); if (!pos) decks.set(dk, (pos = []));
       const at = (p, r, o, dy) => [p.x + r.x * o, p.y + dy, p.z + r.z * o];
       // deck: top, both sides, underside (the tarmac ribbon lies on top)
       quad(at(A, ra, -hw, -0.01), at(A, ra, hw, -0.01), at(B, rb, hw, -0.01), at(B, rb, -hw, -0.01));
@@ -438,7 +439,7 @@ export function buildRoadMeshes(w, net) {
         for (const s of [-1, 1]) { const cx = p.x + r.x * hw * 0.5 * s, cz = p.z + r.z * hw * 0.5 * s, cb = Math.min(w.sampleGrid(cx, cz), meshH(cx, cz)) - 1.5, ch = p.y - 2.6 - cb; if (ch > 0.5) bridgeGeos.push(new THREE.CylinderGeometry(0.75, 0.95, ch, 10).translate(cx, cb + ch / 2, cz)); }
       }
     }
-    if (pos.length) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); bridgeGeos.push(g); }
+    for (const dp of decks.values()) if (dp.length) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(dp, 3)); bridgeGeos.push(g); }
   }
   // street lamps (glow at night)
   const lamps = [];
@@ -455,12 +456,26 @@ export function buildRoadMeshes(w, net) {
   const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3));
   const lampMat = new THREE.PointsMaterial({ size: 3, color: new THREE.Color(3.2, 2.2, 1.1), map: glow(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0 });
   group.add(new THREE.Points(lg, lampMat)); group.userData.lampMat = lampMat;
-  for (const { material, geos } of pending.values()) { const m = new THREE.Mesh(mergeGeometries(geos), material); m.receiveShadow = true; group.add(m); }
-  if (bridgeGeos.length) { const m = new THREE.Mesh(mergeAll(bridgeGeos), concrete); m.castShadow = m.receiveShadow = true; group.add(m); }
+  // a chunked (city) network: chunks are drawn out to ROAD_D (the ground photo shows the roads beyond); world.update
+  // calls group.userData.cull. Each material keeps an empty stand-in, so its shader compiles at load even when all its
+  // chunks start out of range.
+  const chunks = [], warm = new Set(), keep = (m) => { if (!chunk) return; m.geometry.computeBoundingSphere(); const b = m.geometry.boundingSphere; chunks.push({ m, x: b.center.x, z: b.center.z, r: b.radius }); warm.add(m.material); };
+  for (const { material, geos } of pending.values()) { const m = new THREE.Mesh(mergeGeometries(geos), material); m.receiveShadow = true; group.add(m); keep(m); }
+  // bridges: per chunk square too in a city (NYC's viaducts and bridges are ~500k triangles across the whole map)
+  const bridgeCells = new Map();
+  for (const g of bridgeGeos) { const p = g.attributes.position.array, k = chunk ? Math.floor(p[0] / chunk) + ',' + Math.floor(p[2] / chunk) : ''; if (!bridgeCells.has(k)) bridgeCells.set(k, []); bridgeCells.get(k).push(g); }
+  for (const geos of bridgeCells.values()) { const m = new THREE.Mesh(mergeAll(geos), concrete); m.castShadow = m.receiveShadow = true; group.add(m); keep(m); }
+  const D = ROAD_D[w.qName];
+  if (chunks.length && D) {
+    for (const mt of warm) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(9, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0], 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(6, 2)); const m = new THREE.Mesh(g, mt); m.frustumCulled = false; m.receiveShadow = true; group.add(m); }
+    group.userData.cull = (cam) => { for (const c of chunks) c.m.visible = Math.hypot(c.x - cam.x, c.z - cam.z) - c.r < D; };
+  }
   if (railGeos.length) group.add(new THREE.Mesh(mergeAll(railGeos), steel));
   return group;
 }
 
+// a city's road chunks (ribbons and bridges) are drawn this far on the lighter settings; High and Ultra draw them all
+const ROAD_D = { low: 5000, medium: 8000 };
 function mergeAll(geos) {
   const ni = geos.map((g) => (g.index ? g.toNonIndexed() : g));
   let n = 0; for (const g of ni) n += g.attributes.position.count;
