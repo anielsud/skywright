@@ -101,6 +101,7 @@ export class Audio {
   }
   // Fetch + decode the recorded clips. Until they arrive (or if a browser can't decode Opus) voices stay synthesized.
   async loadSamples(base = 'assets/sfx/') {
+    this.samplesLoading = true; // (main.js holds the palette's part pictures until this is done: see drawPartThumbs)
     try {
       const index = await (await fetch(base + 'index.json')).json();
       await Promise.all(Object.keys(index).map(async (n) => {
@@ -110,6 +111,7 @@ export class Audio {
       for (const k of Object.keys(SAMPLE_ENGINES)) if (this.voices[k] && !this.voices[k].sampled && this.canSample(k)) this.dropVoice(k);
       if (this.roomOn) this.roomTone(true); // the hangar opened before its room tone had loaded
     } catch { /* offline first run etc.: synth only */ }
+    finally { this.samplesLoading = false; }
   }
   canSample(kind) { const d = SAMPLE_ENGINES[kind]; return !!d && ['idle', 'high', 'cabin', 'cabinIdle'].every((r) => !d[r] || this.buffers[d[r][0]]) && (!d.ab || this.buffers[d.ab]); }
   dropVoice(k) { const v = this.voices[k]; delete this.voices[k]; this.set(v.out.gain, 0, 0.05); setTimeout(() => { try { v.out.disconnect(); v.pan?.disconnect(); v.layers?.forEach((l) => l.src.stop()); } catch { /* gone */ } }, 300); }

@@ -291,13 +291,20 @@ async def run(args, url, ws_url, shots):
                 bike = await cdp.js(f'!!{S}.F.ac.isBike')
                 if bike:  # a motorbike rides off on the gas (W) and must still be on its wheels at the end
                     await cdp.js(f"{S}.controls.keys.add('w')")
+                elif await cdp.js(f"{S}.controls.vehicle === 'car'"):  # cars and boats: the gas pedal (setThrottle is the plane slider)
+                    await cdp.js(f'{S}.controls.pedal.gas = 1')
                 t0, w0 = await cdp.js(f'{S}.F.t'), time.time()
+                a0 = await cdp.js(f'{S}.audio.ctx?.currentTime ?? 0')
                 await asyncio.sleep(FLIGHT_SECONDS)
                 # cars, bikes and boats have their own synthesized engine voice (src/motorSound.js): it must be running and audible
                 motor = await cdp.js(f'''(() => {{ const a = {S}.F.ac, e = a.parts.find((p) => p.alive && p.engine && {S}.audio.voices[p.engine.sound]?.motor);
                     return e ? {{ kind: e.engine.sound, gain: {S}.audio.voices[e.engine.sound].out.gain.value }} : null; }})()''')
-                if motor and motor['gain'] < 0.01:
+                # a stalled audio clock (no output device, e.g. a Mac whose speakers went away) freezes every ramped gain:
+                # that's the machine, not the engine, so say so instead of failing the vehicle (#180)
+                stalled = (await cdp.js(f'{S}.audio.ctx?.currentTime ?? 0')) - a0 < FLIGHT_SECONDS * 0.25
+                if motor and motor['gain'] < 0.01 and not stalled:
                     raise AssertionError(f"its {motor['kind']} engine is silent at full throttle")
+                note = ' (audio clock stalled: engine sound not checked)' if motor and stalled else ''
                 if shoot:
                     await cdp.screenshot(os.path.join(shots, f'flight-{name}.png'))
                 # every cockpit view (one per seat, src/stations.js), the way the camera button steps through them
@@ -315,6 +322,7 @@ async def run(args, url, ws_url, shots):
                              parts: a.parts.length, speed: a.v.length(), alt: a.x.y, thr: {S}.controls.throttle, up: a.up.y }}; }})()""")
                 if bike:
                     await cdp.js(f"{S}.controls.keys.delete('w')")
+                await cdp.js(f'{S}.controls.pedal.gas = 0')
                 wall = time.time() - w0
                 if s is None:
                     raise AssertionError('the flight ended on its own')
@@ -332,7 +340,7 @@ async def run(args, url, ws_url, shots):
                 await cdp.js(f'{S}.endFlight()')
                 await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 10, 'the hangar')
                 return (f"{s['speed']:.0f} m/s, alt {s['alt']:.0f} m, {s['alive']}/{s['parts']} parts, "
-                        f"{ran / wall * 100:.0f}% realtime, {views} cockpit view(s)")
+                        f"{ran / wall * 100:.0f}% realtime, {views} cockpit view(s){note}")
             await r.step(f'fly: {name}', fly, timeout=150)
 
         if SR71 in names:  # (also with --only 'SR-71 Blackbird')

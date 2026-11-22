@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.141.0', items: [
+    "Behind the scenes: the game's automatic tests now really drive the cars and boats, so engine problems get caught sooner.",
+  ] },
   { v: '1.140.0', items: [
     "Vehicles you've built before open faster",
   ] },
