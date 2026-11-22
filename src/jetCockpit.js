@@ -276,8 +276,8 @@ export const panelMat = () => cached('panelMat', () => {
 });
 // (the HUD's symbology: liveHud.js)
 
-// the combiner: clear glass with a faint green-gold tint (the canopy glass mirrored the sky: it read as a white card)
-export const combinerMat = () => cached('combiner', () => new THREE.MeshStandardMaterial({ color: 0x9fdcb4, metalness: 0, roughness: 0.05, transparent: true, opacity: 0.16, envMapIntensity: 0.25, depthWrite: false, side: THREE.DoubleSide }));
+// the combiner: clear glass plates with the faintest green-gold cast (as the F-16's: you see the symbology, hardly the glass)
+export const combinerMat = () => cached('combiner', () => new THREE.MeshPhysicalMaterial({ color: 0xeef4d6, metalness: 0, roughness: 0.02, transparent: true, opacity: 0.025, envMapIntensity: 0.12, specularIntensity: 0.25, depthWrite: false, side: THREE.DoubleSide })); // (barely there: a faint green-gold cast and a faint reflection)
 
 // ---------- small geometry ----------
 // a textured quad showing an atlas cell, w x h, facing +z, placed by m
@@ -465,14 +465,17 @@ export function fighterInterior(g, b0, nb, paint) {
     for (let j = 0; j <= 8; j++) { const u = j / 8, row = []; for (let i = 0; i <= 10; i++) { const sx = -1 + 2 * (i / 10); let x = sx * 0.44, z = 0; for (let k = 0; k < 3; k++) { z = -0.95 + u * (zr(x) + 0.95); x = sx * W(z); } row.push(V(x, 0.045, z)); } rows.push(row); }
     b.add(shell(gridSurf(rows, V(0, 1, 0)), 0.006), coam); }
   // the HUD: its body on the glare shield, the combiner glass in a frame on top, the symbology glowing on it
-  const hf = mx([0, 0.33, -0.62 + PZ], [-0.35, 0, 0]), HUDG = [0.19, 0.16]; // (the combiner glass: about 15 x 13 degrees from the pilot's eye)
+  const hf = mx([0, 0.345, -0.62 + PZ], [-0.35, 0, 0]), HUDG = [0.19, 0.16]; // (the combiner glass: about 15 x 13 degrees from the pilot's eye, at the eye line: the boresight in view, the foot on the HUD's body)
   { const hb = roundBox(0.13, 0.035, 0.1, 0.008); hb.translate(0, 0.2535, -0.635 + PZ); b.add(hb, black);
     const hud = new THREE.PlaneGeometry(HUDG[0], HUDG[1]); hud.applyMatrix4(hf); nb.add(hud, combinerMat());
     // the symbology (liveHud.js): collimated, drawn at infinity through the combiner
-    const sym = new THREE.PlaneGeometry(HUDG[0] - 0.008, HUDG[1] - 0.008); sym.applyMatrix4(hf.clone().multiply(mx([0, 0, 0.002]))); collimatedHud(lp, g, sym);
-    const c = (x, y) => V(x, y, 0).applyMatrix4(hf), hx = HUDG[0] / 2 + 0.004, hy = HUDG[1] / 2;
-    for (const sx of [-1, 1]) nb.add(bar(c(sx * hx, -hy - 0.005), c(sx * hx, hy - 0.002), 0.009, 0.009, true, 6), black);
-    nb.add(bar(c(-hx - 0.004, hy - 0.002), c(hx + 0.004, hy - 0.002), 0.009, 0.009, true, 6), black); }
+    const sym = new THREE.PlaneGeometry(HUDG[0] - 0.008, HUDG[1] - 0.008); sym.applyMatrix4(hf.clone().multiply(mx([0, 0, 0.002]))); collimatedHud(lp, g, sym, { occluders: [[0, 0.2535, -0.635 + PZ, 0.068, 0.021, 0.056], ...[-1, 1].map((sx) => [sx * 0.12, 0.252, -0.665 + PZ, 0.027, 0.017, 0.015])] }); // (its body, hb below, and the indexers)
+    // a second, shorter plate just forward of it (the F-16's combiner is a pair of glass plates), held at the sides by slim
+    // brackets rising from the HUD's body a third of the way up; the glass's top edge free, no frame over it
+    { const p2 = new THREE.PlaneGeometry(HUDG[0] - 0.01, HUDG[1] * 0.72); p2.translate(0, -HUDG[1] * 0.14, -0.014); p2.applyMatrix4(hf); nb.add(p2, combinerMat()); }
+    const c = (x, y, z = 0) => V(x, y, z).applyMatrix4(hf), hx = HUDG[0] / 2 + 0.0025, hy = HUDG[1] / 2;
+    for (const sx of [-1, 1]) nb.add(bar(c(sx * hx, -hy - 0.05, -0.007), c(sx * hx, -hy + HUDG[1] * 0.36, -0.007), 0.005, 0.016, true, 6), black); // (down into the body)
+    nb.add(bar(c(-hx, -hy - 0.002, -0.007), c(hx, -hy - 0.002, -0.007), 0.004, 0.018, true, 6), black); }
   lp.to(g);
   // Round 2, the F-16's density (photos: F-16C cockpit, F-16 right console and side-stick, F-16 cockpits on Commons):
   // the centre pedestal under the panel down to the floor (its own pictures: fuel quantity and flow, a caution block,
