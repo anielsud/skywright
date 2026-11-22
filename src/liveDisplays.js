@@ -138,7 +138,6 @@ const WHITE = color(0xffffff), DARK = color(0x1c1d20);
 export const sweep = (v0, v1, a0, a1, over = 0.04) => (v) => { const t = clamp((v - v0) / (v1 - v0), -over, 1 + over); return a0 + (a1 - a0) * t; };
 
 // ---------- a cockpit's live panel ----------
-const _m4 = new THREE.Matrix4();
 export class LivePanel {
   // base: the atlas material the faces are drawn with (null: plain colours); white / lamp: uvs of a white texel (lamp:
   // one lit in the emissive map too); basic: unlit (for faces drawn with MeshBasicMaterial)
