@@ -432,13 +432,20 @@ function truckInterior(g, S, S0) {
   // digital dash pod on the hood, behind the wheel's top, tilted to the driver
   const POD = { c: [-0.4, 0.9, -0.52], s: [0.26, 0.11, 0.07], rx: -0.25 };
   { const m = new THREE.Matrix4().makeRotationX(POD.rx).setPosition(...POD.c); CK.box(b, m, [0, 0, 0], POD.s, CK.carbon()); CK.face(nb, m.clone().multiply(new THREE.Matrix4().makeTranslation(0, 0, POD.s[2] / 2)), 0.22, 0.085, 'digi', 0.0015); CK.gaugeGlass(nb, m.clone().multiply(new THREE.Matrix4().makeTranslation(0, 0, POD.s[2] / 2 - 0.005)).scale(V(2.4, 0.95, 1)), 0.046); }
-  // seats: carbon containment seats on aluminium brackets and floor rails; harness over the harness bar
-  const prof = (s) => (s < 0.3 ? [0.25, 0.12] : s < 0.5 ? [0.25 + (s - 0.3) * 0.2, 0.12 - (s - 0.3) * 0.35] : s < 0.84 ? [0.29, 0.05] : s < 0.88 ? [0.29 - (s - 0.84) * 2.1, 0.05 + (s - 0.84) * 2.75] : [0.206, 0.16]);
+  // seats: composite bucket seats (as a BRIDE / Sparco: hip width 53 cm, wider shoulders, head wings) on side-mount
+  // plates and floor rails; harness over the harness bar. prof: the shell's [half-width, side-wall rise] up the back,
+  // each change eased (an abrupt step between two loft rings twisted the old shell into slivers)
+  const ease = (a, b2, x) => { const u = Math.min(1, Math.max(0, (x - a) / (b2 - a))); return u * u * (3 - 2 * u); };
+  const prof = (s) => [0.265 + 0.03 * ease(0.3, 0.48, s) - 0.08 * ease(0.8, 0.9, s), 0.075 + 0.045 * ease(0.12, 0.22, s) - 0.07 * ease(0.32, 0.48, s) + 0.11 * ease(0.8, 0.92, s)];
   const belt = CK.webbing(0xe9e9e4), seatObs = [];
   for (const sx of [-1, 1]) {
-    const x = sx * 0.4, r = CK.raceSeat(b, [x, TRUCK_SEAT.y, TRUCK_SEAT.z], TRUCK_SEAT.dims, { prof, top: 1.05, headPad: 0.96, slots: 0.74 });
+    const x = sx * 0.4, r = CK.raceSeat(b, [x, TRUCK_SEAT.y, TRUCK_SEAT.z], TRUCK_SEAT.dims, { prof, top: 1.05, headPad: 0.96, slots: 0.74, insert: CK.suede(0x3a3d44) });
     if (sx < 0) seatObs.push(...r.obs);
-    for (const dx of [-0.17, 0.17]) { CK.box(b, null, [x + dx, (r.panTop - 0.095 + 0.005) / 2, TRUCK_SEAT.z - 0.12], [0.012, r.panTop - 0.095 - 0.005, 0.34], alu); CK.box(b, null, [x + dx, 0.015, TRUCK_SEAT.z - 0.12], [0.035, 0.022, 0.5], alu); }
+    for (const s2 of [-1, 1]) { // side-mount plates bolted to the shell's hips, down to floor rails
+      const px = x + s2 * (r.panHW + 0.004), z = TRUCK_SEAT.z, sh = new THREE.Shape([[-(z + 0.07), 0.026], [-(z - 0.33), 0.026], [-(z - 0.24), r.panTop + 0.01], [-(z + 0.01), r.panTop + 0.01]].map(([u, v]) => new THREE.Vector2(u, v)));
+      const pl = new THREE.ExtrudeGeometry(sh, { depth: 0.006, bevelEnabled: false }); pl.rotateY(Math.PI / 2); pl.translate(px + (s2 > 0 ? 0 : -0.006), 0, 0); b.add(pl, alu);
+      for (const bz of [z - 0.2, z - 0.04]) { const bt = new THREE.CylinderGeometry(0.009, 0.009, 0.008, 6); bt.rotateZ(Math.PI / 2); bt.translate(px + s2 * 0.008, r.panTop - 0.025, bz); nb.add(bt, chrome); }
+      CK.box(b, null, [px + s2 * 0.003, 0.015, z - 0.12], [0.03, 0.022, 0.5], alu); }
     for (const dx of [-0.075, 0.075]) { const sl = r.P(dx, 0.74, 0.02); CK.strap(b, [sl, V(x + dx, 0.925, 0.655), V(x + dx, 0.892, TRUCK_HOOP), V(x + dx, 0.858, TRUCK_HOOP + 0.042), V(x + dx, 0.79, TRUCK_HOOP + 0.046)], 0.05, 0.004, belt, V(0, 0.7, 0.7)); }
   }
   // foam pads on the cage where heads go: the A-pillar bars' upper runs and the roof rails
@@ -540,22 +547,48 @@ function heliCabinDetail(g, prof, c) {
 // The two-seat crew bay of a helicopter cabin: seats (on seatGeo's surfaces at (+-0.3, sy, sz)) on boxes down to the
 // deck at fl, the collective's housing between them, and the crew's seats: the pilot on the right (cyclic from the
 // deck between the knees, collective on the left between the seats, pedals on the deck), a rescue medic on the left,
-// feet on the deck. The seats are upholstered like a light helicopter's (grey leather cushions, a pleated back on a
-// shell, the harness's shoulder straps over the top to their anchors behind, lap-belt anchors at the sides); the
-// seat boxes are panelled and the collective's housing has its slotted cover and friction knob.
+// feet on the deck. The seats as a light helicopter's (Robinson R44, Bell 206, from photographs): grey leather,
+// each cushion a channelled centre panel between stuffed side rolls with piping down the seams, a rolled front edge
+// on the seat; the back cushion and a headrest in a moulded shell (CK.shellLoft: a solid back seen from behind, the
+// headrest its narrower top), a tubular frame round the seat's base with struts to the shell, the shoulder harness
+// through slots in the shell down to its inertia reel on the back, lap-belt anchors at the sides; the seat boxes
+// panelled, the collective's housing with its slotted cover and friction knob.
+let _heliShell = null; const heliShellM = () => (_heliShell ??= CK.surfaceKind('gel', new THREE.MeshStandardMaterial({ color: 0x6a6e76, metalness: 0.05, roughness: 0.45 }))); // the seat backs' moulded shells
 const hbox = (w, h, d, x, y, z) => { const q = new THREE.BoxGeometry(w, h, d); q.translate(x, y, z); return q; };
+const roll = (r, L, m, along = 'y') => { const g = new THREE.CapsuleGeometry(r, Math.max(0.001, L - 2 * r), 2, 8); if (along === 'x') g.rotateZ(Math.PI / 2); if (along === 'z') g.rotateX(Math.PI / 2); return m ? g.applyMatrix4(m) : g; };
 function heliCrewBay(b, fl, sy, sz) {
   const dk = M.paint(0x2b2d31, 'matte'), [w, bH, pL, tl] = [0.42, 0.6, 0.38, 0.22], pt = sy + 0.02 + 0.126 * w, lth = CK.leather(), lth2 = CK.leather(0x5d6066), belt = CK.webbing(0xd9dcdf);
+  const shellM = heliShellM(), alu = CK.sheetAlu(0x7d828a), c = 0.06, t = 0.018, top = bH + 0.17, hr = bH + 0.075; // (back cushion depth, shell wall, the headrest's top and centre)
+  const ease = (a, b2, x) => { const u = Math.min(1, Math.max(0, (x - a) / (b2 - a))); return u * u * (3 - 2 * u); };
+  const hwAt = (s) => 0.218 - 0.088 * ease(bH - 0.04, bH + 0.03, s); // the shell's half-width: the back, then the headrest
   for (const sx of [-0.3, 0.3]) {
-    const pc = CK.cushion(w, 0.075, pL, 0.035, 0.012); pc.translate(sx, pt - 0.0375, sz + 0.035 - pL / 2); b.add(pc, lth); // the cushion, its top on the declared pan
-    const bk = CK.cushion(w - 0.02, bH - 0.04, 0.07, 0.035, 0.012, 3); bk.translate(0, (bH - 0.04) / 2, 0.035); bk.rotateX(tl); bk.translate(sx, sy + 0.04, sz + 0.03); b.add(bk, lth); // the back, its face on the declared one
-    const sh = new THREE.BoxGeometry(w, bH, 0.025); sh.translate(0, bH / 2, 0.085); sh.rotateX(tl); sh.translate(sx, sy + 0.02, sz + 0.03); b.add(sh, lth2); // its shell
+    const m = CK.seatM([sx, sy, sz], tl), P = (x, s2, d) => V(x, s2, d).applyMatrix4(m); // (x across, s up the back's line, d behind its face)
+    // the back's shell, from the seat up past the shoulders to the headrest's rounded top
+    { const fr = [], N = V(0, Math.sin(tl), -Math.cos(tl)), at = (s2, hw) => fr.push({ o: P(0, s2, 0), N, hw, f: 0.012 });
+      for (let s2 = 0.0; s2 < top - 0.05; s2 += s2 > bH - 0.08 && s2 < bH + 0.06 ? 0.025 : 0.09) at(s2, hwAt(s2));
+      for (const a of [0, 0.6, 1.0, 1.3, Math.PI / 2]) { const s2 = top - 0.05 + 0.05 * Math.sin(a); at(s2, hwAt(s2) - 0.05 + 0.05 * Math.cos(a)); }
+      CK.shellLoft(b, fr, { c, t, R: 0.03, Ri: 0.012, bulge: 0.004 }, shellM, shellM); }
+    // the back cushion: a channelled centre panel between side rolls, piping down the seams; the headrest's pad
+    { const s0 = 0.03, s1 = bH - 0.05, g = CK.cushion(0.25, s1 - s0, c - 0.004, 0.015, 0, 5, [4, 20, 1]); g.translate(0, (s0 + s1) / 2, (c - 0.004) / 2 + 0.002); g.applyMatrix4(m); b.add(g, lth);
+      for (const x of [-0.16, 0.16]) { const rg = roll(0.034, s1 - s0, null); rg.scale(1, 1, 0.9); rg.translate(x, (s0 + s1) / 2, 0.025); b.add(rg.applyMatrix4(m), lth);
+        b.add(pipe([P(Math.sign(x) * 0.126, s0 + 0.02, -0.001), P(Math.sign(x) * 0.126, s1 - 0.02, -0.001)], 0.0045, 5, 2), lth2); }
+      const hp = CK.cushion(0.2, 0.12, c - 0.01, 0.02, 0, 0, [4, 4, 2]); hp.translate(0, hr, (c - 0.01) / 2 - 0.006); hp.applyMatrix4(m); b.add(hp, lth); }
+    // the seat: a base cushion on the box, a channelled centre panel on it between side rolls, a rolled front edge
+    { const zf = sz + 0.035 - pL, zb = sz + 0.035, zc = (zf + zb) / 2, base = CK.cushion(w, 0.06, pL, 0.022, 0, 0, [6, 2, 6]); base.translate(sx, pt - 0.042, zc); b.add(base, lth);
+      const cen = CK.cushion(0.25, 0.02, pL - 0.08, 0.008, 0, 0, [4, 1, 4]); cen.translate(sx, pt - 0.01, zc + 0.03); b.add(cen, lth);
+      for (const x of [-0.155, 0.155]) { b.add(roll(0.03, pL - 0.05, new THREE.Matrix4().makeTranslation(sx + x, pt - 0.026, zc + 0.02), 'z'), lth); b.add(pipe([V(sx + Math.sign(x) * 0.126, pt + 0.0005, zb - 0.02), V(sx + Math.sign(x) * 0.126, pt + 0.0005, zf + 0.06)], 0.0045, 5, 2), lth2); }
+      b.add(roll(0.033, w - 0.03, new THREE.Matrix4().makeTranslation(sx, pt - 0.031, zf + 0.036), 'x'), lth);
+      for (const x of [-0.045, 0.045]) b.add(pipe([V(sx + x, pt + 0.0005, zb - 0.03), V(sx + x, pt + 0.0005, zf + 0.08)], 0.002, 4, 2), lth2); // the centre panel's channels (sewn, piped)
+      // the frame: a tube round the base, struts from its back corners to the shell
+      const yb = pt - 0.08, xo = w / 2 + 0.012; b.add(pipe([V(sx - xo, yb, zb + 0.01), V(sx - xo, yb, zf - 0.005), V(sx + xo, yb, zf - 0.005), V(sx + xo, yb, zb + 0.01)], 0.01, 6, 12), alu);
+      for (const s2 of [-1, 1]) b.add(pipe([V(sx + s2 * xo, yb, zb + 0.01), P(s2 * (hwAt(0.3) - 0.03), 0.3, c + t + 0.006)], 0.009, 6, 2), alu); }
+    // the shoulder harness: down the cushion, through slots in the shell to the inertia reel on its back; the lap belts' anchors
+    { const sl = bH - 0.035, rear = c + t + 0.004, reel = CK.box(b, m, [0, bH - 0.25, rear + 0.025], [0.17, 0.08, 0.05], CK.blackM()); void reel;
+      for (const dx of [-0.075, 0.075]) { CK.strap(b, [P(dx, bH - 0.16, -0.004), P(dx, sl - 0.012, -0.004), P(dx, sl, 0.02), P(dx, sl - 0.012, rear + 0.006), P(dx * 0.7, bH - 0.21, rear + 0.006)], 0.045, 0.004, belt, V(0, Math.sin(tl), -Math.cos(tl)));
+        const sg = new THREE.CapsuleGeometry(0.008, 0.04, 2, 6); sg.rotateZ(Math.PI / 2); sg.scale(1, 1, 1.6); sg.translate(dx, sl, rear - 0.004); sg.applyMatrix4(m); b.add(sg, CK.blackM()); } }
     b.add(hbox(0.34, pt - 0.075 - fl, 0.3, sx, (fl + pt - 0.075) / 2, sz - 0.16), dk); // each seat on a box down to the deck
     for (const dx of [-0.1, 0.1]) { const fr = new THREE.BoxGeometry(0.004, pt - 0.075 - fl - 0.04, 0.26); fr.translate(sx + dx * 1.72, (fl + pt - 0.075) / 2, sz - 0.16); b.add(fr, lth2); } // the box's side panels
-    // shoulder straps over the back's top to their anchors behind it, and the lap belts' anchor brackets
-    const top = (d) => V(0, bH * Math.cos(tl) - d * Math.sin(tl), bH * Math.sin(tl) + d * Math.cos(tl)).add(V(sx, sy + 0.02, sz + 0.03));
-    for (const dx of [-0.075, 0.075]) { const a = top(-0.005), c = top(0.1); CK.strap(b, [a.clone().add(V(dx, -0.02, -0.02)), a.clone().add(V(dx, 0.012, 0.015)), c.clone().add(V(dx, 0.0, 0.0)), c.clone().add(V(dx, -0.18, 0.04))], 0.045, 0.004, belt, V(0, 0.7, 0.7)); }
-    for (const s of [-1, 1]) { const an = new THREE.BoxGeometry(0.012, 0.05, 0.03); an.translate(sx + s * (w / 2 + 0.008), pt - 0.04, sz + 0.0); b.add(an, M.steel()); }
+    for (const s of [-1, 1]) { const an = new THREE.BoxGeometry(0.012, 0.05, 0.03); an.translate(sx + s * (w / 2 + 0.026), pt - 0.04, sz + 0.0); b.add(an, M.steel()); }
   }
   b.add(hbox(0.06, sy + 0.03 - fl, 0.14, 0.05, (fl + sy + 0.03) / 2, sz), dk); // the collective's housing (its pivot on top)
   b.add(hbox(0.05, 0.006, 0.12, 0.05, sy + 0.033, sz), CK.sheetAlu(0x6d7279)); // its slotted cover
