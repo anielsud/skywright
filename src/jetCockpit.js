@@ -277,7 +277,7 @@ export const panelMat = () => cached('panelMat', () => {
 // (the HUD's symbology: liveHud.js)
 
 // the combiner: clear glass plates with the faintest green-gold cast (as the F-16's: you see the symbology, hardly the glass)
-export const combinerMat = () => cached('combiner', () => new THREE.MeshPhysicalMaterial({ color: 0xeef4d6, metalness: 0, roughness: 0.02, transparent: true, opacity: 0.025, envMapIntensity: 0.12, specularIntensity: 0.25, depthWrite: false, side: THREE.DoubleSide })); // (barely there: a faint green-gold cast and a faint reflection)
+export const combinerMat = () => cached('combiner', () => new THREE.MeshBasicMaterial({ color: 0x3a4422, transparent: true, opacity: 0.06, depthWrite: false, side: THREE.DoubleSide, fog: false })); // (barely there: the faintest green-gold dimming, as a real combiner's coating; a lit glass material mirrored the bright sky over the whole plate, and a light tint lifted a dark sea behind it)
 
 // ---------- small geometry ----------
 // a textured quad showing an atlas cell, w x h, facing +z, placed by m
