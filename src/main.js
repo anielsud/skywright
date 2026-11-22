@@ -4,6 +4,7 @@ import { makePresets, encodeDesign, decodeDesign, cloneDesign, analyze, sizeSlid
 import { Hangar, thumbnailDrawer } from './hangar.js';
 import { preloadTownTextures } from './buildings.js';
 import { preloadFoliage } from './flora.js';
+import { cabinBakesReady } from './cabinLight.js';
 import { Aircraft, REALISM } from './aircraft.js';
 import { World, LOCATIONS, WEATHER } from './world.js';
 import { Traffic, buildStatic, mergeByMaterial } from './traffic.js';
@@ -1594,6 +1595,7 @@ async function boot() {
   const saved = LS.get('current', null);
   await bootStep('vehicle', 'Building your vehicle…', 0.85, 3000);
   preloadTownTextures(); preloadFoliage(); // flight textures: downloaded while the vehicle is built
+  await cabinBakesReady; // (this device's saved cabin lighting, so a vehicle built before isn't baked again)
   hangar.setQuality(qualityTier());
   hangar.load(saved && saved.parts?.length ? saved : presets[0]);
   await bootStep('hangar', 'Opening the hangar…', 1, 800);
