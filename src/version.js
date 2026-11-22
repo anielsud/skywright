@@ -5,3 +5,5 @@ export const COMMIT = 'dev';
 export const BUILT = '';
 // a hash of the crew posture solver (src/crew.js, src/body.js, assets/people/): solved postures stay valid until it changes
 export const SOLVER = 'dev';
+// a hash of the cabin lighting bake (src/cabinLight.js, src/interior.js): saved bakes stay valid until it changes
+export const LIGHT = 'dev';

@@ -31,6 +31,9 @@ jobs:
           # the crew posture solver's version: solved postures (baked below, and kept by each device) stay valid until it changes
           SOLVER="$(cat src/crew.js src/body.js assets/people/* | sha1sum | cut -c1-10)"
           sed -i "s/^export const SOLVER = .*/export const SOLVER = '${SOLVER}';/" src/version.js
+          # the cabin lighting bake's version: bakes each device keeps (src/cabinLight.js) stay valid until it changes
+          LIGHT="$(cat src/cabinLight.js src/interior.js | sha1sum | cut -c1-10)"
+          sed -i "s/^export const LIGHT = .*/export const LIGHT = '${LIGHT}';/" src/version.js
           # a fresh offline-cache name per deploy, so installed apps always pick up the new build
           sed -i "s/^const CACHE = .*/const CACHE = 'skywright-${SHA}';/" sw.js
           cat src/version.js

@@ -28,6 +28,51 @@
 // draw calls (one material variant per material, shared by every vehicle). Bake: ~70-150 ms per cockpit on a desktop.
 import * as THREE from 'three';
 import { interiorOf } from './interior.js';
+import { LIGHT } from './version.js';
+
+// ---------- the saved bakes ----------
+// A bake depends only on the vehicle's built meshes (shapes, placement, materials, the crew's pose) and on this code,
+// so each device keeps the finished per-vertex values of the vehicles it has built (IndexedDB, the newest MAX_SAVED),
+// keyed by a fingerprint of those meshes (sigOf) and LIGHT (a hash of this file and interior.js, stamped by the
+// deploy). Building the same vehicle again, in the hangar or for a flight, on this visit or a later one, applies
+// them instead of baking. Locally (LIGHT 'dev') they're only kept for the visit.
+const MAX_SAVED = 12, SAVED = new Map(), DB = 'skywright-cabin', STORE = 'bakes';
+const db = LIGHT === 'dev' || typeof indexedDB === 'undefined' ? null : new Promise((res) => {
+  try { const rq = indexedDB.open(DB, 1); rq.onupgradeneeded = () => rq.result.createObjectStore(STORE); rq.onsuccess = () => res(rq.result); rq.onerror = rq.onblocked = () => res(null); } catch { res(null); }
+});
+// resolves once the saved bakes are in memory (main.js waits for it before building; never longer than 2 s)
+export const cabinBakesReady = !db ? Promise.resolve() : Promise.race([new Promise((r) => setTimeout(r, 2000)), db.then((d) => d && new Promise((res) => {
+  try { const tx = d.transaction(STORE, 'readonly'), st = tx.objectStore(STORE), rk = st.getAllKeys(), rv = st.getAll();
+    tx.oncomplete = () => { rk.result.forEach((k, i) => { if (k.startsWith(LIGHT + ':')) SAVED.set(k, rv.result[i]); }); res(); }; tx.onerror = tx.onabort = () => res();
+  } catch { res(); } }))]);
+function keepBake(key, rec) {
+  SAVED.set(key, rec);
+  if (SAVED.size > MAX_SAVED * 2) SAVED.delete(SAVED.keys().next().value); // (memory: the oldest)
+  db?.then((d) => { if (!d) return; try {
+    const tx = d.transaction(STORE, 'readwrite'), st = tx.objectStore(STORE); st.put(rec, key);
+    const rk = st.getAllKeys(); rk.onsuccess = () => { const old = rk.result.filter((k) => !k.startsWith(LIGHT + ':')); for (const k of old) st.delete(k); // (an older version's)
+      const mine = [...SAVED].filter(([k]) => rk.result.includes(k) || k === key).sort((a, b) => b[1].t - a[1].t); for (const [k] of mine.slice(MAX_SAVED)) { st.delete(k); SAVED.delete(k); } };
+  } catch { /* storage full or unavailable */ } });
+}
+// The fingerprint of everything a bake reads: each shown mesh's vertex and index counts, a sample of its positions,
+// normals and indices, its placement under the root, its material's say in the bake (opaque, lit, side, glow), the
+// crew's bones where they are, and the crewed parts' declared interiors, seats and lamps.
+function sigOf(allMeshes, owners, crewOf, rootInv) {
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  const add = (v) => { const x = Math.round(v * 1e4) | 0; h1 = Math.imul(h1 ^ x, 16777619); h2 = Math.imul(h2 ^ x, 2246822519) ^ (h2 >>> 13); };
+  const str = (s) => { for (let i = 0; i < s.length; i++) add(s.charCodeAt(i)); };
+  const arr = (a, step) => { if (!a) { add(-1); return; } add(a.length); for (let i = 0; i < a.length; i += step) add(a[i]); };
+  for (const m of allMeshes) {
+    const g = m.geometry, mat = m.material, em = emission(mat);
+    arr(g.attributes.position.array, 5); arr(g.attributes.normal?.array, 11); arr(g.index?.array, 7);
+    for (const e of _m.multiplyMatrices(rootInv, m.matrixWorld).elements) add(e);
+    add(OPAQUE(mat, m) ? 1 : 0); add(LIT(mat) ? 1 : 0); add(mat.side ?? 0); add(m.userData.near ? 1 : 0); add(m.isSkinnedMesh ? 1 : 0); add(crewOf.has(m) ? 1 : 0);
+    if (em) { add(em.k); const im = (mat.emissiveMap || mat.map)?.image; if (im) { add(im.width || 0); add(im.height || 0); } }
+    if (m.isSkinnedMesh) for (const b of m.skeleton.bones) { b.getWorldPosition(_v).applyMatrix4(rootInv); add(_v.x); add(_v.y); add(_v.z); }
+  }
+  for (const o of owners) { try { str(JSON.stringify([o.userData.interior || null, o.userData.seats || null, o.userData.cabinLamps || null, !!o.userData.cabinDeep])); } catch { add(-2); } }
+  return `${LIGHT}:${(h1 >>> 0).toString(36)}${(h2 >>> 0).toString(36)}:${allMeshes.length}`;
+}
 
 const MAX_VOX = 6e5; // voxels per interior (the voxel size grows to fit: ~4 cm for an airliner's deck, ~2.5 cm for a bubble)
 const MIN_H = 0.02;
@@ -303,6 +348,20 @@ function interiorBox(I) {
   return out.expandByVector(d.clone().divideScalar(S)).intersect(B);
 }
 
+// Put a bake's values on a mesh: a new geometry on the same attributes plus the bake's (crew geometry is shared between
+// figures, part geometry may be too), and its material's cabin variant.
+function applyCabin(m, L, S, Lm, mat = cabinMaterial(m.material, !!Lm)) {
+  if (!mat) return;
+  const o = m.geometry, g = new THREE.BufferGeometry();
+  for (const k in o.attributes) g.setAttribute(k, o.attributes[k]);
+  g.setIndex(o.index); for (const gr of o.groups) g.addGroup(gr.start, gr.count, gr.materialIndex); g.morphAttributes = o.morphAttributes; g.morphTargetsRelative = o.morphTargetsRelative; g.drawRange = { ...o.drawRange };
+  g.boundingBox = o.boundingBox?.clone() ?? null; g.boundingSphere = o.boundingSphere?.clone() ?? null; g.userData = o.userData;
+  g.setAttribute('cabinLight', new THREE.BufferAttribute(L, 4, true));
+  g.setAttribute('cabinSun', new THREE.BufferAttribute(S, 4, true));
+  if (Lm) g.setAttribute('cabinLamp', new THREE.BufferAttribute(Lm, 2, true));
+  m.geometry = g; m.material = mat; m.userData.cabinLit = true;
+}
+
 // Bake every crewed part of a vehicle. objs: its part objects (as assemble() takes them), root: their common parent.
 // Returns timing and counts (null when off).
 export function bakeCabinLight(objs, root) {
@@ -316,6 +375,13 @@ export function bakeCabinLight(objs, root) {
     if (!o.isMesh || o.isInstancedMesh || !o.geometry?.attributes.position || !shown(o, root)) return;
     allMeshes.push(o); for (let x = o; x && x !== root; x = x.parent) if (x.userData.crewRig) { crewOf.set(o, x); break; }
   });
+  const key = globalThis.__cabinKeep ? null : sigOf(allMeshes, owners, crewOf, rootInv), hit = key && SAVED.get(key);
+  if (hit) { // (built before: its saved values)
+    for (const s of hit.meshes) { const m = allMeshes[s.i]; if (m && m.geometry.attributes.position.count * 4 === s.L.length) applyCabin(m, s.L, s.S, s.Lm); }
+    hit.t = Date.now(); if (db) keepBake(key, hit);
+    return { ...hit.stats, saved: true, ms: Math.round(performance.now() - t0) };
+  }
+  const saved = [];
   const boxOf = new Map(), rootBox = (m) => { let b = boxOf.get(m); if (!b) { m.geometry.computeBoundingBox(); b = m.geometry.boundingBox.clone().applyMatrix4(_m.multiplyMatrices(rootInv, m.matrixWorld)); boxOf.set(m, b); } return b; };
   const verts = new Map(), vertsOf = (m) => { let v = verts.get(m); if (!v) { v = meshVerts(m, rootInv); verts.set(m, v); } return v; };
   // occluders: the vehicle's opaque meshes, not its crew (they are lit as a whole, below); glass: what light passes
@@ -505,18 +571,13 @@ export function bakeCabinLight(objs, root) {
       let x = e[0] * bx + e[4] * by + e[8] * bz, y = e[1] * bx + e[5] * by + e[9] * bz, z = e[2] * bx + e[6] * by + e[10] * bz; const l0 = Math.hypot(bx, by, bz), l1 = Math.hypot(x, y, z) || 1; x *= l0 / l1; y *= l0 / l1; z *= l0 / l1;
       S[i * 4] = q(RS[i * 4]); S[i * 4 + 1] = q(x / 2); S[i * 4 + 2] = q(y / 2); S[i * 4 + 3] = q(z / 2);
     }
-    const o = m.geometry, g = new THREE.BufferGeometry(); // (a new geometry on the same attributes: crew geometry is shared between figures, part geometry may be too)
-    for (const k in o.attributes) g.setAttribute(k, o.attributes[k]);
-    g.setIndex(o.index); for (const gr of o.groups) g.addGroup(gr.start, gr.count, gr.materialIndex); g.morphAttributes = o.morphAttributes; g.morphTargetsRelative = o.morphTargetsRelative; g.drawRange = { ...o.drawRange };
-    g.boundingBox = o.boundingBox?.clone() ?? null; g.boundingSphere = o.boundingSphere?.clone() ?? null; g.userData = o.userData;
-    g.setAttribute('cabinLight', new THREE.BufferAttribute(L, 4, true));
-    g.setAttribute('cabinSun', new THREE.BufferAttribute(S, 4, true));
-    if (r.lamp) { const Lm = new Uint16Array(n * 2); for (let i = 0; i < n; i++) for (let k = 0; k < 2; k++) { const v = r.lamp[i * 2 + (only >= 0 ? only : k)] / LAMP_MAX; Lm[i * 2 + k] = (v >= 1 ? 1 : v) * 65535 + 0.5; } g.setAttribute('cabinLamp', new THREE.BufferAttribute(Lm, 2, true)); }
-    m.geometry = g; m.material = mat; m.userData.cabinLit = true;
+    let Lm = null; if (r.lamp) { Lm = new Uint16Array(n * 2); for (let i = 0; i < n; i++) for (let k = 0; k < 2; k++) { const v = r.lamp[i * 2 + (only >= 0 ? only : k)] / LAMP_MAX; Lm[i * 2 + k] = (v >= 1 ? 1 : v) * 65535 + 0.5; }  }
+    applyCabin(m, L, S, Lm, mat); saved.push({ i: allMeshes.indexOf(m), L, S, Lm });
     stats.verts += n;
   }
   stats.tAttr = Math.round(performance.now() - tA);
   for (const k of ['tVox', 'tRecv', 'tMarch']) stats[k] = Math.round(stats[k]);
   stats.ms = Math.round(performance.now() - t0);
+  if (key) keepBake(key, { t: Date.now(), meshes: saved, stats: { ...stats } });
   return stats;
 }
