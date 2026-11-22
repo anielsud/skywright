@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.146.0', items: [
+    "Flying with friends is smoother: people in other players' planes use simpler shapes when they're far away, so lots of planes together don't slow the game down.",
+  ] },
   { v: '1.145.0', items: [
     "In a cockpit sunk deep into a big body, your pilot can see out the window again instead of popping their head through the glass.",
   ] },
