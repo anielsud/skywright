@@ -16,6 +16,8 @@ let BODY = null;
 export const bodyReady = (async () => {
   try {
     const base = new URL('../assets/people/', import.meta.url);
+    const targetsBin = fetch(new URL('targets.bin', base)).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.status)))); // (alongside the mesh, not after it)
+    targetsBin.catch(() => {}); // (handled below, if the mesh has targets)
     const [meta, bin] = await Promise.all([fetch(new URL('body.json', base)).then((r) => r.json()), fetch(new URL('body.bin', base)).then((r) => r.arrayBuffer())]);
     const n = meta.verts, t = meta.tris * 3; let o = 0;
     const pos = new Float32Array(bin, o, n * 3); o += n * 12;
@@ -28,7 +30,7 @@ export const bodyReady = (async () => {
     for (const b of bones) { b.h = V(...b.head); b.t = V(...b.tail); }
     let targets = null;
     if (meta.targets?.length) try {
-      const tb = await fetch(new URL('targets.bin', base)).then((r) => r.arrayBuffer()), per = (n + jn) * 3;
+      const tb = await targetsBin, per = (n + jn) * 3;
       targets = Object.fromEntries(meta.targets.map((t, k) => [t.name, { d: new Int8Array(tb, k * per, per), s: t.scale }]));
     } catch (e) { console.warn('body targets unavailable: one body shape for everyone', e); }
     BODY = { id: 'base', n, pos, idx, bi, bw, eye, bones, byName, jn, jpos, joints: meta.joints, targets };

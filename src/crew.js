@@ -11,13 +11,13 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { PARTS } from './parts.js';
+import { COMMIT } from './version.js';
 import { bodyReady, body, person, poseBody, handModel, torsoPoints, bodyDims, spinePose, armRest, headSize, limbRadii } from './body.js';
 const LIP_BONES = /^oris/; // the mouth's ring muscle in the body mesh's skeleton: its skin is the lips
-await bodyReady; // (the people's mesh: loaded once, before any figure is built; without it the procedural figure stands in)
 // Helmet models (assets/people/helmets.*, made by tools/people/helmets.py from three Sketchfab models): unit width, facing
 // -Z, centred on their eye point; parts by role (shell, accent, visor, liner, rubber, metal, baked colours). Without them
 // the procedural helmets stand in.
-const HELMETS = await (async () => {
+const helmetsLoad = (async () => {
   try {
     const base = new URL('../assets/people/', import.meta.url);
     const [meta, bin] = await Promise.all([fetch(new URL('helmets.json', base)).then((r) => r.json()), fetch(new URL('helmets.bin', base)).then((r) => r.arrayBuffer())]);
@@ -25,6 +25,8 @@ const HELMETS = await (async () => {
     return { meta: meta.helmets, pos, col, idx: new Uint16Array(bin, io, meta.indices) };
   } catch (e) { console.warn('helmet models unavailable: procedural helmets instead', e); return null; }
 })();
+const HELMETS = await helmetsLoad; // (downloaded alongside the people's mesh)
+await bodyReady; // (the people's mesh: loaded once, before any figure is built; without it the procedural figure stands in)
 // one helmet's parts as geometries (model units), each with its role, slot and source colours (linear)
 function helmetParts(name) {
   const H = HELMETS?.meta[name]; if (!H) return null;
@@ -627,7 +629,15 @@ const RIDES = new Map(); // (solved rider postures: person, vehicle geometry -> 
 function gloved(HM, t) { if (!HM || !t) return HM; const o = {}; for (const s of ['R', 'L']) o[s] = { ...HM[s], G: (r) => HM[s].G(r + t) }; return o; }
 function glovedGrips(rig) { const t = rig.o.gloveT, g = rig.grips; if (!t || !g) return g; const o = {}; for (const s of ['R', 'L']) o[s] = g[s] && { ...g[s], r: g[s].r + t }; return o; }
 
-const POSTURES = new Map(); // (solved postures: person, seat and controls -> v)
+// Solved postures: person, seat and controls -> v. Kept between visits too (per build: a new one may solve differently),
+// so opening the game doesn't solve the pilot's posture all over again (a second or two on a tablet).
+const POSTURE_LS = 'skywright.postures';
+const POSTURES = (() => {
+  const m = new Map(); if (COMMIT === 'dev') return m;
+  try { const s = JSON.parse(localStorage.getItem(POSTURE_LS)); if (s?.commit === COMMIT) for (const [k, r] of s.list) m.set(k, r); } catch { /* storage unavailable */ }
+  return m;
+})();
+const keepPostures = () => { if (COMMIT !== 'dev') try { localStorage.setItem(POSTURE_LS, JSON.stringify({ commit: COMMIT, list: [...POSTURES].slice(-60) })); } catch { /* full or unavailable */ } };
 const ADJ_KEYS = ['pedZ', 'pedY', 'seatZ', 'seatY']; // (what a vehicle may declare adjustable: Rig.adjustVars)
 class Rig {
   constructor(kind, ctl, outfit, seed, opts = {}) {
@@ -757,7 +767,7 @@ class Rig {
     for (const st0 of starts.slice(0, 2)) { this.gripA = st0.gripA && { ...st0.gripA }; delete this.armSol; cost(st0.v); const r = descend(st0.v, cost(st0.v)); r.gripA = this.gripA && { ...this.gripA }; if (!win || r.c < win.c) win = r; }
     let v = win.v, best = win.c; this.gripA = win.gripA; delete this.armSol;
     this.solving = false; this.postureScore = best;
-    POSTURES.set(key, { v: { ...v }, gripA: this.gripA && { ...this.gripA }, score: best });
+    POSTURES.set(key, { v: { ...v }, gripA: this.gripA && { ...this.gripA }, score: best }); keepPostures();
     return v;
   }
   // ---- adjustable controls and seat ----

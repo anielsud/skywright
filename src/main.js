@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { PARTS, CATEGORIES, PAINTS } from './parts.js';
 import { makePresets, encodeDesign, decodeDesign, cloneDesign, analyze, sizeSliders, sizeValue, thrustScale, partPower, partBurn, POWER_RANGE, BURN_RANGE } from './design.js';
-import { Hangar, makeThumbnails } from './hangar.js';
+import { Hangar, thumbnailDrawer } from './hangar.js';
+import { preloadTownTextures } from './buildings.js';
+import { preloadFoliage } from './flora.js';
 import { Aircraft, REALISM } from './aircraft.js';
 import { World, LOCATIONS, WEATHER } from './world.js';
 import { Traffic, buildStatic, mergeByMaterial } from './traffic.js';
@@ -96,14 +98,16 @@ const ui = {
 // ---------- hangar ----------
 const hangar = new Hangar(renderer, ui, audio);
 initThumbs(renderer);
-let thumbs = {};
+// Part pictures for the palette: drawn after the hangar is up (drawPartThumbs), kept per build in localStorage
+const THUMB_KEY = `parts1:${COMMIT}`; // (a new build may have changed how parts look: draw them again)
+let thumbs = COMMIT !== 'dev' && LS.get('partThumbs', null)?.key === THUMB_KEY ? LS.get('partThumbs').pics : {};
 let activeCat = 'fuselage';
 
 function buildPalette() {
   $('#cats').innerHTML = CATEGORIES.map((c) => `<button data-cat="${c.id}" class="${c.id === activeCat ? 'on' : ''}"><span>${c.icon}</span>${c.name}</button>`).join('');
   $('#cats').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { activeCat = b.dataset.cat; audio.play('click'); buildPalette(); }));
   const list = Object.values(PARTS).filter((p) => p.cat === activeCat);
-  $('#part-list').innerHTML = list.map((p) => `<button class="part-card ${hangar.placing === p.id ? 'on' : ''}" data-id="${p.id}"><img src="${thumbs[p.id] || ''}" alt=""><div><b>${p.name}</b><small>${p.desc}</small><em>${p.mass.toLocaleString()} kg${p.engine ? ` · ${Math.round((p.engine.ab || p.engine.thrust) / 1000)} kN` : ''}</em></div></button>`).join('');
+  $('#part-list').innerHTML = list.map((p) => `<button class="part-card ${hangar.placing === p.id ? 'on' : ''}" data-id="${p.id}"><img ${thumbs[p.id] ? `src="${thumbs[p.id]}"` : ''} alt=""><div><b>${p.name}</b><small>${p.desc}</small><em>${p.mass.toLocaleString()} kg${p.engine ? ` · ${Math.round((p.engine.ab || p.engine.thrust) / 1000)} kN` : ''}</em></div></button>`).join('');
   $('#part-list').querySelectorAll('.part-card').forEach((b) => b.addEventListener('click', () => {
     audio.init();
     if (hangar.placing === b.dataset.id) hangar.cancelPlacing(); else { hangar.startPlacing(b.dataset.id); if (hangar.design.parts.length > 1 || hangar.placing) ui.hint(isTouch ? 'Tap on your vehicle to attach' : 'Click on your vehicle to attach (Esc to cancel)'); }
@@ -1535,19 +1539,60 @@ window.skywrightBack = () => {
   if (!m) dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
 };
 
+// Draw the palette's missing part pictures a few at a time while the hangar is open (the shown category first), then
+// keep them for the next visit. On a tablet each picture is a few tens of ms, so they appear over a few seconds.
+function drawPartThumbs() {
+  const todo = Object.keys(PARTS).filter((id) => !thumbs[id]);
+  if (!todo.length) return;
+  const drawer = thumbnailDrawer();
+  const later = (f, ms) => (window.requestIdleCallback ? requestIdleCallback(f, { timeout: ms }) : setTimeout(f, 16));
+  const step = () => {
+    if (state !== 'hangar') { setTimeout(step, 1000); return; } // not during a flight or the wind tunnel
+    const t0 = performance.now();
+    do {
+      const i = Math.max(0, todo.findIndex((id) => PARTS[id].cat === activeCat)), id = todo.splice(i, 1)[0];
+      try { thumbs[id] = drawer.draw(id); } catch (e) { console.warn('part picture failed', id, e); thumbs[id] = ''; }
+      const img = document.querySelector(`#part-list .part-card[data-id="${id}"] img`); if (img && thumbs[id]) img.src = thumbs[id];
+    } while (todo.length && performance.now() - t0 < 10);
+    if (todo.length) { later(step, 200); return; }
+    drawer.dispose();
+    if (COMMIT !== 'dev') LS.set('partThumbs', { key: THUMB_KEY, pics: thumbs });
+  };
+  later(step, 200);
+}
+
 // ---------- boot ----------
 function gpuName() { try { const gl = renderer.getContext(), x = gl.getExtension('WEBGL_debug_renderer_info'); return x ? gl.getParameter(x.UNMASKED_RENDERER_WEBGL) : null; } catch { return null; } }
+// The splash's progress bar: index.html fills the first part while the code downloads; each step here sets where the
+// bar will be when it's done and lets it glide there (a compositor animation, so it keeps moving while a step blocks
+// the page), sized from how long that step took last time on this device.
+const bootBar = { el: document.querySelector('#splash .boot-bar i'), msg: document.querySelector('#splash .boot-msg'), times: LS.get('bootTimes', {}), t: 0, step: null };
+async function bootStep(name, msg, to, guessMs) {
+  const now = performance.now(), b = bootBar;
+  if (b.step) b.times[b.step] = Math.round(now - b.t);
+  b.step = name; b.t = now;
+  if (!b.el) return;
+  if (b.msg) b.msg.textContent = msg;
+  b.el.dataset.boot = '1'; // (index.html's download progress stops moving it)
+  b.el.style.transition = `transform ${b.times[name] || guessMs}ms cubic-bezier(.2,.6,.4,1)`;
+  b.el.style.transform = `scaleX(${to})`;
+  await new Promise((res) => requestAnimationFrame(() => setTimeout(res, 0))); // paint first
+}
 async function boot() {
   onResize();
   const saved = LS.get('current', null);
-  hangar.load(saved && saved.parts?.length ? saved : presets[0]);
-  try { thumbs = makeThumbnails(); } catch (e) { console.warn('thumbnails failed', e); }
-  buildPalette(); renderInspector();
+  await bootStep('vehicle', 'Building your vehicle…', 0.85, 3000);
+  preloadTownTextures(); preloadFoliage(); // flight textures: downloaded while the vehicle is built
   hangar.setQuality(qualityTier());
-  hangar.activate(true);
+  hangar.load(saved && saved.parts?.length ? saved : presets[0]);
+  await bootStep('hangar', 'Opening the hangar…', 1, 800);
+  buildPalette(); renderInspector();
+  hangar.activate(true, { rebuild: false });
   requestAnimationFrame(frame);
+  bootBar.times[bootBar.step] = Math.round(performance.now() - bootBar.t); LS.set('bootTimes', bootBar.times);
   $('#splash').classList.add('hide');
   setTimeout(() => $('#splash').remove(), 900);
+  setTimeout(drawPartThumbs, 1200); // after the splash has faded
   maybeShowWhatsNew();
   analytics.open({ quality: settings.quality, units: settings.units, control_mode: settings.controlMode, saved_planes: LS.get('designs', []).length, gpu: gpuName() });
   document.addEventListener('pointerdown', () => { audio.init(); if (state === 'hangar') audio.music(true); }, { once: true });

@@ -181,6 +181,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); padding: 0; }
 #splash.hide { opacity: 0; pointer-events: none; }
 .logo.big span { font-size: 40px; } .logo.big { gap: 16px; }
 #splash p { color: var(--dim); letter-spacing: .2em; text-transform: uppercase; font-size: 13px; }
+.boot-bar { position: relative; width: min(280px, 70vw); height: 6px; margin-top: 26px; border-radius: 3px; background: rgba(255, 255, 255, .12); overflow: hidden; }
+.boot-bar i { position: absolute; inset: 0; background: var(--accent); border-radius: 3px; transform-origin: left; transform: scaleX(.02); transition: transform .4s ease-out; }
+/* a sheen that sweeps the bar: runs on the compositor, so the splash looks alive even while a step blocks the page */
+.boot-bar::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .35), transparent); transform: translateX(-100%); animation: boot-sheen 1.4s ease-in-out infinite; }
+@keyframes boot-sheen { to { transform: translateX(100%); } }
+.boot-msg { margin-top: 10px; min-height: 1.3em; color: var(--dim); font-size: 13px; }
 
 /* ---------- flight HUD ---------- */
 #flight-ui { position: fixed; inset: 0; pointer-events: none; font-variant-numeric: tabular-nums; }
