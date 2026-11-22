@@ -11,6 +11,7 @@ import { Flora } from './flora.js';
 import { Towns } from './towns.js';
 import { Builder, buildingMaterial, C } from './buildings.js';
 import { TerrainTiles } from './tiles.js';
+import { MapTiles } from './maptiles.js';
 import { erode } from './erosion.js';
 import { terrainDetailUniforms } from './terrainTex.js';
 import { CascadedShadows, NEAR_SHADOW } from './cascades.js';
@@ -146,6 +147,7 @@ export class World {
     this.setWeather(this.weatherId);
     this.setTime(this.time);
     this.tiles = new TerrainTiles(this); // endless land beyond the detailed core
+    this.mapTiles = new MapTiles(this, RUNWAYS, RWY.len); // the HUD minimap, built around the plane as it flies
     this.space = new SpaceView(this); // up high: the planet below, a black sky, a sea of cloud (nothing below 5 km)
   }
 
@@ -251,7 +253,6 @@ export class World {
     const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true;
     this.terrain = mesh; this.group.add(mesh);
     this.roadGroup = buildRoadMeshes(this, this.net); this.group.add(this.roadGroup);
-    this.buildMinimap();
     this.buildPatch();
   }
   // The fine grid's heights straight from the height function (before towns and roads are carved in).
@@ -495,28 +496,6 @@ export class World {
     return false;
   }
 
-  buildMinimap() {
-    if (this.real) { this.minimap = this.real.minimap(this, RUNWAYS, RWY.len); return; }
-    const s = 256, c = document.createElement('canvas'); c.width = c.height = s;
-    const g = c.getContext('2d'), img = g.createImageData(s, s);
-    const col = new THREE.Color();
-    for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
-      const wx = -this.half + (x / s) * this.size, wz = -this.half + (y / s) * this.size;
-      const h = this.sampleGrid(wx, wz);
-      const hx = this.sampleGrid(wx + 60, wz);
-      const shade = clamp(0.75 + (h - hx) * 0.01, 0.4, 1.2);
-      if (h < this.waterLevel) col.set(0x2a6f8f); else col.set(this.loc.colors.grass[1]).lerp(new THREE.Color(this.loc.colors.rock), smoothstep(200, 1400, h - this.loc.rwyH)).lerp(new THREE.Color(0xffffff), h > this.loc.snowline ? 0.7 : 0);
-      const i = (y * s + x) * 4; img.data[i] = col.r * 255 * shade; img.data[i + 1] = col.g * 255 * shade; img.data[i + 2] = col.b * 255 * shade; img.data[i + 3] = 255;
-    }
-    g.putImageData(img, 0, 0);
-    g.fillStyle = '#222'; for (const r of RUNWAYS) g.fillRect(s / 2 + (r.x / this.size) * s - 1.5, s / 2 - (RWY.len / this.size) * s / 2, 3, (RWY.len / this.size) * s);
-    const toM = (p) => [((p.x + this.half) / this.size) * s, ((p.z + this.half) / this.size) * s];
-    for (const rd of this.net.roads) { g.strokeStyle = rd.kind === 'highway' ? 'rgba(250,220,120,0.9)' : 'rgba(240,240,230,0.7)'; g.lineWidth = rd.kind === 'street' ? 0.6 : 1.1; g.beginPath(); rd.pts.forEach((p, i) => { const [x, y] = toM(p); i ? g.lineTo(x, y) : g.moveTo(x, y); }); if (rd.closed) g.closePath(); g.stroke(); }
-    if (this.net.rail) { g.strokeStyle = 'rgba(60,40,30,0.9)'; g.setLineDash([2, 2]); g.beginPath(); this.net.rail.pts.forEach((p, i) => { const [x, y] = toM(p); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); g.setLineDash([]); }
-    for (const t of this.net.towns) { const [x, y] = toM(t.c); g.fillStyle = 'rgba(255,230,200,0.85)'; g.beginPath(); g.arc(x, y, 3.5 * t.size + 1.5, 0, 7); g.fill(); }
-    this.minimap = c;
-  }
-
   // ---------------- water ----------------
   buildWater() {
     // tileable ocean normal map from a sum of plane waves with integer wave numbers
@@ -536,7 +515,7 @@ export class World {
     }
     g.putImageData(img, 0, 0);
     const nt = new THREE.CanvasTexture(c); nt.wrapS = nt.wrapT = THREE.RepeatWrapping;
-    const pal = this.loc.waterColors || (this.loc.id === 'islands' ? { deep: 0x05324a, shallow: 0x19b5b0, sand: 0xe9dcb0 } : this.loc.desert ? { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 } : { deep: 0x0b2a35, shallow: 0x2f6f6a, sand: 0x6b6a55 });
+    const pal = this.waterPal = this.loc.waterColors || (this.loc.id === 'islands' ? { deep: 0x05324a, shallow: 0x19b5b0, sand: 0xe9dcb0 } : this.loc.desert ? { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 } : { deep: 0x0b2a35, shallow: 0x2f6f6a, sand: 0x6b6a55 }); // (kept: the minimap paints its water with it)
     // where the water is drawn at all, shallows and foam: the fine baked grid, which the ground near the camera is drawn
     // from and physics uses (the coarse core mesh further out is covered by the water shader's depth lift)
     const fine = { tex: this.heightTex(this.Hh, this.hR + 1), grid: new THREE.Vector4(-this.half, -this.half, 1 / this.hStep, this.hR) };

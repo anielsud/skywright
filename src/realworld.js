@@ -5,7 +5,7 @@
 // (~230 m heights, ~120 m imagery) out to the haze, so the real mountains carry on to the horizon. Past the coarse
 // square the same sources are streamed while flying (src/geostream.js), so a fast jet never reaches an edge.
 // Everything is loaded before the World is built (loadReal), then World asks this module for heights, colours,
-// the vegetation mask, the road network and the minimap. The game frame: metres, origin at the runway centre,
+// the vegetation mask and the road network (the minimap samples the same heights and colours). The game frame: metres, origin at the runway centre,
 // -z along the runway, which points to the compass bearing loc.north.
 import * as THREE from 'three';
 import { resample } from './roads.js';
@@ -468,14 +468,6 @@ class RealData {
       out.push({ name, c: new THREE.Vector3(x, h, z), dir: new THREE.Vector3(1, 0, 0), size: (type === 'village' ? 0.35 : 0.7) * (this.loc.townScale ?? 1), h });
     }
     return out.sort((a, b) => b.size - a.size || Math.hypot(a.c.x, a.c.z) - Math.hypot(b.c.x, b.c.z));
-  }
-  // minimap: the imagery itself, with the runways
-  minimap(w, runways, rwyLen) {
-    const s = 256, c = document.createElement('canvas'); c.width = c.height = s;
-    const g = c.getContext('2d'), h = this.meta.hi, k = this.hiBmp.width / h.size;
-    g.drawImage(this.hiBmp, (-w.half - h.x0) * k, (-w.half - h.z0) * k, w.size * k, w.size * k, 0, 0, s, s);
-    g.fillStyle = '#222'; for (const r of runways) g.fillRect(s / 2 + (r.x / w.size) * s - 1.5, s / 2 - (rwyLen / w.size) * s / 2, 3, (rwyLen / w.size) * s);
-    return c;
   }
   dispose() { this.tex?.hi.dispose(); this.tex?.far.dispose(); this.tex = null; this.stream.dispose(); }
 }

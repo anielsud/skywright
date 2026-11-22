@@ -1,6 +1,7 @@
 // Heads-up display (DOM + small canvases).
 import * as THREE from 'three';
 import { clamp } from './noise.js';
+import { MAP_BG } from './maptiles.js';
 
 const UNITS = {
   metric: { spd: 3.6, spdU: 'km/h', alt: 1, altU: 'm', vs: 1, vsU: 'm/s', temp: (c) => c, tempU: '°C' },
@@ -209,14 +210,14 @@ export class HUD {
   }
   drawMap(ac, world, mission, others) {
     const g = this.map, S = 180, R = this.mapRange;
-    const img = world.minimap, IS = img.width;
-    const px = ((ac.x.x + world.half) / world.size) * IS, pz = ((ac.x.z + world.half) / world.size) * IS;
-    const span = (R * 2 / world.size) * IS;
+    const V = world.mapTiles.update(ac.x.x, ac.x.z, ac.v.x, ac.v.z); // (builds a little of the map each frame: maptiles.js)
     g.save(); g.clearRect(0, 0, S, S);
     g.beginPath(); g.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2); g.clip();
-    g.fillStyle = '#1d3b4a'; g.fillRect(0, 0, S, S);
+    g.fillStyle = MAP_BG; g.fillRect(0, 0, S, S);
     g.imageSmoothingEnabled = true;
-    g.drawImage(img, px - span / 2, pz - span / 2, span, span, 0, 0, S, S);
+    // the tiles around the plane, drawn whole at their place on the map (not a source crop: browsers differ on crops
+    // that run off the image's edge)
+    const k = S / (R * 2); g.drawImage(V.c, S / 2 + (V.x0 - ac.x.x) * k, S / 2 + (V.z0 - ac.x.z) * k, V.span * k, V.span * k);
     const toMap = (x, z) => [S / 2 + ((x - ac.x.x) / (R * 2)) * S, S / 2 + ((z - ac.x.z) / (R * 2)) * S];
     if (mission?.rings) {
       mission.rings.forEach((r, i) => { const [x, y] = toMap(r.p.x, r.p.z); g.fillStyle = r.passed ? 'rgba(80,255,120,0.6)' : i === mission.idx ? '#ffb020' : 'rgba(255,176,32,0.5)'; g.beginPath(); g.arc(x, y, i === mission.idx ? 5 : 3, 0, 7); g.fill(); });
