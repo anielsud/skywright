@@ -1124,7 +1124,8 @@ class Rig {
       // (a grip only reachable past a joint's range, e.g. the stick at full throw: the wide search found nothing better
       // last frame, so refine round that answer and search wide again only every 20 frames)
       const local = prev && !this.solving && (prevC < 500 || (prev.hard > 0 && prevC < prev.c + 200));
-      if (local) { // frame to frame: the answer moves a little, so look just round it (51 tries, not 229)
+      if (local && this.coarse) best = { c: prevC, th: prev.th, ph: prev.ph }; // (far away: the last answer will do; see planeDetail crewPose)
+      else if (local) { // frame to frame: the answer moves a little, so look just round it (51 tries, not 229)
         best = { c: prevC, th: prev.th, ph: prev.ph }; grid(prev.th, prev.ph, 0.06, 5);
         if (Math.abs(best.th - prev.th) > 0.05 || Math.abs(best.ph - prev.ph) > 0.05) grid(best.th, best.ph, 0.25, 9); // (moving fast: a wider look)
         grid(best.th, best.ph, 0.015, 5);

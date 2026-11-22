@@ -728,8 +728,30 @@ export function setCrewView(h, tier) { VIEW.h = h || 800; VIEW.low = tier === 'l
 // once that error is under 0.15 of a pixel (0.3 on Low), with a margin either way so it doesn't flicker between
 // levels. (Well under a pixel because clothes are layered a millimetre or two apart: a strap on a life vest goes
 // under the vest once the vest's surface may move by more than that, so the error has to be tiny where it shows.) Our own vehicle never does: it's always the full figure, in the cockpit and the chase view alike.
+//
+// Posing follows the same opt-in (crewPose, from updateDetail before the frame is drawn, with the camera of the frame
+// before): a vehicle off screen, or past where its people are hidden, isn't posed at all (the pose waits where it
+// was; margins all round, so it's posed again before it can be seen); one whose people are small on screen (under
+// POSE_FAR.px pixels a metre, a person under about 40 px tall; on Low under 40 px a metre, about 70 px tall) is posed
+// about 20 times a second instead of every frame, each time with all the time since the last, and without the arms' search for their
+// most comfortable angles (crew.js comfortArm keeps the last answer: the hands stay exactly on the controls).
+const POSE_FAR = { px: 25, low: 40, hz: 20 };
+const _frus = new THREE.Frustum(), _pm = new THREE.Matrix4(), _poseSph = new THREE.Sphere();
 class DetailLOD extends THREE.Object3D {
-  constructor(items, radius) { super(); this.isLOD = true; this.autoUpdate = true; this.items = items; this.far = 40 + radius * 1.2; this.on = true; this._p = V(); this.figs = null; }
+  constructor(items, radius) { super(); this.isLOD = true; this.autoUpdate = true; this.items = items; this.far = 40 + radius * 1.2; this.radius = radius; this.on = true; this._p = V(); this.figs = null; this.cam = null; this.poseDt = 0; }
+  // this frame: { dt } to pose with (the time since the last pose), or null to leave them be; coarse: skip the arms' search
+  crewPose(dt) {
+    this.poseDt += dt;
+    const cam = this.cam, out = { dt: this.poseDt, coarse: false };
+    if (!this.figs || !cam?.isPerspectiveCamera) { this.poseDt = 0; return out; }
+    const at = this._p.setFromMatrixPosition(this.matrixWorld), d = at.distanceTo(cam.position);
+    if (d * (cam.zoom ? 1 / cam.zoom : 1) * (cam.fov / 50) > this.far * 1.25) return null; // (hidden: update() shows them from far * 0.9)
+    _frus.setFromProjectionMatrix(_pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    if (!_frus.intersectsSphere(_poseSph.set(at, this.radius * 1.3 + 4))) return null;
+    const pxPerM = VIEW.h * (cam.zoom || 1) / (2 * Math.tan(cam.fov * Math.PI / 360)) / Math.max(d - this.radius, 0.1);
+    if (pxPerM < (VIEW.low ? POSE_FAR.low : POSE_FAR.px)) { if (this.poseDt < 1 / POSE_FAR.hz) return null; out.coarse = true; }
+    this.poseDt = 0; return out;
+  }
   crewDetail() {
     const by = new Map();
     for (const m of this.items) if (m.isSkinnedMesh && m.userData.crew && m.parent) { if (!by.has(m.parent)) by.set(m.parent, []); by.get(m.parent).push({ m, geos: crewLodGeos(m) }); }
@@ -737,6 +759,7 @@ class DetailLOD extends THREE.Object3D {
   }
   update(camera) {
     if (!this.items.length) return;
+    if (camera.isPerspectiveCamera) this.cam = camera;
     const d = this._p.setFromMatrixPosition(this.matrixWorld).distanceTo(camera.position) * (camera.zoom ? 1 / camera.zoom : 1) * (camera.fov ? camera.fov / 50 : 1);
     const on = this.on ? d < this.far * 1.1 : d < this.far * 0.9;
     if (on !== this.on) { this.on = on; for (const m of this.items) m.visible = on; }
@@ -941,13 +964,14 @@ export function updateDetail(ac, dt) {
   let crewMoving = false;
   bikeSync(ac); // bike forks steer and slide, swingarms swing (before the riders reach for the bars)
   const gW = specificForce(ac, dt); // (what the seat pushes the crew with, world frame, in g: they sway against it)
+  const pose = D.lod?.figs ? D.lod.crewPose(dt) : { dt, coarse: false }; // (other players' crews: less often far away, not at all unseen)
   const ground = ac.onGround && (ac.ctl.throttle || 0) < 0.1 && spd > 6 ? 1 : 0;
   for (const p of ac.parts) {
     if (!p.alive) continue;
     const u = p.obj.userData;
-    if (u.crew) {
+    if (u.crew && pose) {
       const c = ac.ctl, steer = ac.isCar && ac.steerAngle ? ac.steerAngle() * 2.6 : ac.crewSteer ?? 0;
-      for (const r of u.crew) if (r.update({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: c.throttle, steer, gf: crewForce(r, gW), ...(r.bars ? riderInput(ac, r) : null) }, dt)) crewMoving = true;
+      for (const r of u.crew) { r.rig.coarse = pose.coarse; if (r.update({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: c.throttle, steer, gf: crewForce(r, gW), ...(r.bars ? riderInput(ac, r) : null) }, pose.dt)) crewMoving = true; }
     }
     if (u.wheelsFixed && u.wheels) { u.wheelsFixed.position.copy(u.wheels.position); u.wheelsFixed.rotation.y = u.wheels.rotation.y; }
     if (u.spike) u.spike.position.z = RAMJET.spikeTravel * smooth(clamp(((ac.mach || 0) - 1.6) / 1.6, 0, 1)); // inlet spike: locked forward to Mach 1.6, fully back by 3.2
