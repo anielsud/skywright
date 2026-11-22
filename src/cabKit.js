@@ -266,17 +266,17 @@ export function raceSeat(bag, at, [w, , panL, tilt], { prof, top, shell = carbon
   for (let k = 0; k <= 3; k++) { const z = zF + (Cz - L - zF) * (k / 3), p = Cz - z; fr.push({ o: V(ax, pt, z), N: V(0, 1, 0), hw: hwP(p), f: fP(p) }); }
   const [h0, f0] = [hwP(L), fP(L)], [h1, f1] = prof(sB);
   for (let k = 1; k <= 5; k++) { const ph = th * (k / 5), u = k / 5; fr.push({ o: V(ax, pt + rc - rc * Math.cos(ph), Cz - L + rc * Math.sin(ph)), N: V(0, Math.cos(ph), -Math.sin(ph)), hw: h0 + (h1 - h0) * u, f: f0 + (f1 - f0) * u }); }
-  const ss = []; for (let s = sB + 0.05; s < top - 0.07; s += s > 0.76 && s < 0.95 ? 0.025 : 0.05) ss.push(s);
+  const ss = []; for (let s = sB + 0.05; s < top - 0.07; s += s > 0.76 && s < 0.95 ? 0.03 : 0.06) ss.push(s);
   const back = (s, hw, f) => fr.push({ o: P(0, s, 0), N: V(0, sn, -cs), hw, f });
   for (const s of ss) back(s, ...prof(s));
   for (const a of [0, 0.5, 0.9, 1.25, Math.PI / 2]) { const s = top - 0.07 + 0.07 * Math.sin(a), [hw, f] = prof(s); back(s, hw - 0.07 + 0.07 * Math.cos(a), f); } // the top's corners rounded
   shellLoft(bag, fr, { c, t, bulge }, shell, pad);
   // the cushion on the pan (its top the declared pan), the lumbar insert (its face the declared back), the head pad
-  { const wc = 2 * (hwP(panL) - t) - 0.01, z0 = zF + 0.01, z1 = Cz - L - 0.004, cu = cushion(wc, c, z1 - z0, 0.012, 0, 0, [6, 2, 6]); cu.translate(ax, pt - c / 2, (z0 + z1) / 2); bag.add(cu, insert);
+  { const wc = 2 * (hwP(panL) - t) - 0.01, z0 = zF + 0.01, z1 = Cz - L - 0.004, cu = cushion(wc, c, z1 - z0, 0.012, 0, 0, [4, 1, 4]); cu.translate(ax, pt - c / 2, (z0 + z1) / 2); bag.add(cu, insert);
     for (const x of [-(wc / 2 - 0.05), wc / 2 - 0.05]) bag.add(pipe([V(ax + x, pt + 0.0012, z0 + 0.02), V(ax + x, pt + 0.0012, z1 - 0.02)], 0.0016, 4, 2), stitchM());
     bag.add(pipe([V(ax - wc / 2 + 0.05, pt + 0.0012, (z0 + z1) / 2), V(ax + wc / 2 - 0.05, pt + 0.0012, (z0 + z1) / 2)], 0.0016, 4, 2), stitchM()); }
   const s0 = sB + 0.004, s1 = slots - 0.05, wi = 2 * (Math.min(prof(s0)[0], prof(s1)[0]) - t) - 0.01;
-  { const g = cushion(wi, s1 - s0, c, 0.012, 0, 4, [6, 20, 2]); g.translate(0, (s0 + s1) / 2, c / 2); g.applyMatrix4(m); bag.add(g, insert);
+  { const g = cushion(wi, s1 - s0, c, 0.012, 0, 4, [4, 16, 1]); g.translate(0, (s0 + s1) / 2, c / 2); g.applyMatrix4(m); bag.add(g, insert);
     for (const x of [-(wi / 2 - 0.06), wi / 2 - 0.06]) bag.add(pipe([P(x, s0 + 0.02, -0.0012), P(x, s1 - 0.02, -0.0012)], 0.0016, 4, 2), stitchM()); }
   if (headPad) { const g = cushion(0.2, 0.15, c, 0.012, 0, 0, [4, 4, 2]); g.translate(0, headPad, c / 2 - 0.004); g.applyMatrix4(m); bag.add(g, insert); }
   // the harness: shoulder slots through the back, lap-belt slots through the hip bolsters
