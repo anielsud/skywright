@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.136.0', items: [
+    "Planes, cars and boats are drawn in far fewer steps, so the game has much less work to do every frame.",
+  ] },
   { v: '1.135.0', items: [
     "Fighter jets have a real head-up display: bright green lines on the glass show your speed, height, heading and g, and the pitch ladder stays on the horizon as you roll and loop.",
     "The fighter's radar screen shows other planes, helicopters and balloons around you, and the other screen shows a moving map.",
