@@ -105,11 +105,11 @@ export class Controls {
   showTouch(on) { this.el.style.display = on ? '' : 'none'; }
   // Cars get pedals (GAS / BRAKE-then-reverse) instead of the throttle and rudder sliders, and a handbrake button;
   // rockets keep the plane layout but the rudder slider rolls.
-  setVehicle(kind) {
+  setVehicle(kind, { bike = false } = {}) {
     this.vehicle = kind; this.pedal.gas = this.pedal.brake = 0;
     this.el.classList.toggle('car', kind === 'car'); this.el.classList.toggle('rocket', kind === 'rocket');
     this.el.querySelector('.t-rud-label').textContent = kind === 'rocket' ? 'ROLL' : 'RUDDER';
-    this.el.querySelector('[data-act="brake"]').textContent = kind === 'car' ? 'HANDBRAKE' : 'BRAKE';
+    this.el.querySelector('[data-act="brake"]').textContent = bike ? 'SKID' : kind === 'car' ? 'HANDBRAKE' : 'BRAKE'; // (on a bike it locks the back wheel)
   }
   setMode(mode) {
     this.mode = mode;

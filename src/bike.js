@@ -35,6 +35,7 @@ const MODE = {
 };
 export const LEAN_MAX = 0.62; // rad (~35°): 0.7 g of cornering, inside the tyres' 0.9 g
 const LOCK = 0.55; // rad: full lock at walking pace
+const SLIDE = 0.6; // rad: the slide angle a skid holds at full stick (~35°)
 const WHEELIE = 0.42, STOPPIE = -0.28, LOOP = 0.62; // rad (ground-relative pitch): wheelie and stoppie heights, hard limit
 
 // Two in-line wheels on the centreline? wheels: [{ x, z, ...}] in the vehicle frame. Returns { front, rear, L } or null.
@@ -77,7 +78,10 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
   b.lean = lean;
   // ---- steering and lean ----
   const roll = smooth(1.2, 7, spd) * (vg > 0 ? 1 : 0); // how much leaning is possible: none at a stop or rolling back
-  const want = s * b.leanMax * m.lean * roll;
+  // a skid: the back brake (the handbrake) locks the back wheel. The rider lets the tail swing out the way they steer
+  // (a brake slide), sitting more upright, then catches it when they let go (see the heading hold and opposite lock)
+  const rc0 = b.rear.contact, skid = ground && rc0 && (ctl.hand || 0) > 0.5 && vg > 2 ? smooth(2, 5, vg) : 0; b.skid = skid;
+  const want = s * b.leanMax * m.lean * roll * (1 - 0.5 * skid);
   b.leanT += clamp(want - b.leanT, -2.6 * dt, 2.6 * dt); // (the lean target moves at a rider's pace)
   const fallen = Math.abs(lean) > 1.15;
   let dg; // ground steering angle, + = right
@@ -92,7 +96,8 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
     // creeps sideways a little, below 0.2 m/s, so this does nothing in a normal turn)
     _a.copy(ac.v).applyQuaternion(_qi.copy(q).invert()); _p.copy(b.rear.top).sub(ac.com); _t.copy(w).cross(_p).add(_a);
     const slide = Math.sign(_t.x) * Math.max(0, Math.abs(_t.x) - 0.2);
-    if (vg > 3) dg = clamp(dg + 0.8 * Math.atan2(slide, Math.max(1, -_t.z)), -LOCK, LOCK);
+    if (vg > 3) dg = clamp(dg + 0.8 * (1 - 0.75 * skid) * Math.atan2(slide, Math.max(1, -_t.z)), -LOCK, LOCK); // (skidding: mostly let it slide)
+    if (skid) dg += (s * 0.12 - dg) * skid * Math.min(1, Math.abs(s) * 3); // (held straight, it still balances as usual) // (skidding, the bars point the way you push: no counter-steering, the slide goes that way)
   }
   // the wheel turns about the leaning steering head: the angle on the ground is the head's angle squashed by the lean
   b.steer += (-Math.atan(Math.tan(dg) / Math.max(0.35, Math.cos(lean))) - b.steer) * Math.min(1, dt * 30);
@@ -157,7 +162,11 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
   // the bike points where its front wheel takes it: a light back wheel (hard braking, a stoppie) or no front wheel
   // (a wheelie) can't hold the line by itself, so the rider catches a slide before it becomes a spin (about the vertical)
   if (ground && !fallen) {
-    const wy = su ? _a.copy(w).applyQuaternion(q).dot(su) : _a.copy(w).applyQuaternion(q).y, want = -vg * Math.tan(dg) / b.L, k = (fc && rc ? m.yaw : 30) * I[4] * (wy - want);
+    // (skidding: the rider holds the bike at a slide angle, the nose turned off the way it's going by up to SLIDE the
+    // way the stick pushes, the locked back wheel out the other side)
+    let want = -vg * Math.tan(dg) / b.L;
+    if (skid) { _p.copy(ac.v).applyQuaternion(_qi.copy(q).invert()); const nose = Math.atan2(-_p.x, Math.max(0.5, -_p.z)); want += (-4 * (s * SLIDE - nose) - want) * skid; }
+    const wy = su ? _a.copy(w).applyQuaternion(q).dot(su) : _a.copy(w).applyQuaternion(q).y, k = (fc && rc ? m.yaw : 30) * I[4] * (wy - want);
     T.add((su ? _t.copy(su).multiplyScalar(-k) : _t.set(0, -k, 0)).applyQuaternion(_qi.copy(q).invert()));
   }
   if (!ground) { // in the air: nose near the flight path (a touch up, so the back wheel lands first), no spin
