@@ -403,10 +403,11 @@ function dirtFrame(c, lv) {
   if (lv) { const tl = new THREE.BoxGeometry(0.06, 0.03, 0.02); tl.translate(0, 0.31, 1.0); b.add(tl, M.light(0xff2010)); }
   if (lv) { const cap = new THREE.CylinderGeometry(0.03, 0.03, 0.015, 14); cap.translate(0, 0.315, -0.18); b.add(cap, dark); } // fuel cap
   b.to(g);
-  // the rider (crew.js rideGeometry): on the saddle, knees gripping the tank and the shrouds (their outer faces, as a box
-  // round the radiators), feet on the pegs
+  // the rider (crew.js rideGeometry): standing in the attack stance over the saddle, knees gripping the tank and the
+  // shrouds (their outer faces, as a box round the radiators), feet on the pegs
   const shrouds = [{ z: -0.4, hw: 0.193, top: 0.22, bot: -0.08, n: 8 }, { z: -0.3, hw: 0.193, top: 0.29, bot: -0.08, n: 8 }, { z: -0.12, hw: 0.193, top: 0.3, bot: 0.0, n: 8 }, { z: -0.02, hw: 0.193, top: 0.28, bot: 0.14, n: 8 }];
-  g.userData.seats = [{ p: [0, 0.33, 0.2], s: 1, ctl: 'bars', rider: 'mx', pegs: [[-0.235, -0.335, 0.085], [0.235, -0.335, 0.085]], ground: -0.8, saddle, around: [tank, shrouds], knees: 'grip', lean: 0.55 }];
+  g.userData.seats = [{ p: [0, 0.33, 0.2], s: 1, ctl: 'bars', rider: 'mx', pegs: [[-0.235, -0.335, 0.085], [0.235, -0.335, 0.085]], ground: -0.8, saddle, around: [tank, shrouds], knees: 'grip', lean: 0.6,
+    stance: 'attack', legs: { hip: 1.95, knee: 2.2 }, hz0: 0.08 }]; // (the attack stance: up on the pegs, knees bent ~125 degrees, hips over the pegs, leaning over the bars)
   return g;
 }
 function sportFrame(c, lv) {
@@ -426,9 +427,9 @@ function sportFrame(c, lv) {
   // bodywork: the nose with its headlights and screen, the side panels and belly pan, tank, seat, tail
   const nose = chaikin([{ z: -0.9, hw: 0.04, top: 0.22, bot: 0.15, n: 2.5 }, { z: -0.84, hw: 0.15, top: 0.31, bot: 0.15, n: 3 }, { z: -0.7, hw: 0.24, top: 0.38, bot: 0.15, n: 3.5 }, { z: -0.54, hw: 0.29, top: 0.41, bot: 0.12, n: 4 }, { z: -0.44, hw: 0.29, top: 0.39, bot: 0.02, n: 4 }], 2);
   b.add(superLoft(nose, lv ? 36 : 14, !!lv), paint);
-  for (const sx of [-1, 1]) b.add(side([[-0.44, 0.08], [-0.4, -0.1], [-0.32, -0.27], [-0.1, -0.31], [0.15, -0.27], [0.12, -0.05], [0.02, 0.06], [-0.25, 0.1]], sx * 0.255, 0.02), paint); // side panels (clear of the road at full lean)
-  b.add(superLoft([{ z: -0.27, hw: 0.238, top: -0.22, bot: -0.46, n: 2.2 }, { z: 0.13, hw: 0.24, top: -0.22, bot: -0.43, n: 2.2 }], 20, !!lv), paint); // belly pan, meeting the side panels
-  if (lv) for (const sx of [-1, 1]) { const vent = side([[-0.3, -0.06], [-0.12, -0.12], [-0.12, -0.16], [-0.3, -0.12]], sx * 0.266, 0.004, 0.001); b.add(vent, blk); }
+  for (const sx of [-1, 1]) b.add(side([[-0.44, 0.08], [-0.4, -0.1], [-0.32, -0.27], [-0.1, -0.31], [0.15, -0.27], [0.12, -0.05], [0.02, 0.06], [-0.25, 0.1]], sx * 0.215, 0.02), paint); // side panels, set in behind the front cowl where the rider's knees go (clear of the road at full lean)
+  b.add(superLoft([{ z: -0.27, hw: 0.2, top: -0.22, bot: -0.46, n: 2.2 }, { z: 0.13, hw: 0.2, top: -0.22, bot: -0.43, n: 2.2 }], 20, !!lv), paint); // belly pan, meeting the side panels
+  if (lv) for (const sx of [-1, 1]) { const vent = side([[-0.3, -0.06], [-0.12, -0.12], [-0.12, -0.16], [-0.3, -0.12]], sx * 0.226, 0.004, 0.001); b.add(vent, blk); }
   const tank = chaikin([{ z: -0.34, hw: 0.1, top: 0.3, bot: 0.15, n: 3 }, { z: -0.26, hw: 0.17, top: 0.36, bot: 0.1, n: 3.5 }, { z: -0.1, hw: 0.18, top: 0.355, bot: 0.08, n: 4 }, { z: 0.05, hw: 0.13, top: 0.27, bot: 0.1, n: 3.5 }], 1);
   const saddle = chaikin([{ z: 0.0, hw: 0.11, top: 0.235, bot: 0.12, n: 3 }, { z: 0.12, hw: 0.13, top: 0.215, bot: 0.11, n: 4 }, { z: 0.36, hw: 0.11, top: 0.235, bot: 0.12, n: 4 }], 1);
   b.add(superLoft(tank, lv ? 28 : 12, !!lv), paint); // tank
@@ -449,8 +450,9 @@ function sportFrame(c, lv) {
   b.to(g);
   // the rider (crew.js rideGeometry): on the saddle, knees gripping the tank above the side panels (their outer faces
   // as a box), feet on the rearsets, reaching over the nose to the clip-ons
-  const panels = [{ z: -0.44, hw: 0.266, top: 0.08, bot: -0.08, n: 10 }, { z: -0.32, hw: 0.266, top: 0.095, bot: -0.27, n: 10 }, { z: -0.1, hw: 0.266, top: 0.09, bot: -0.31, n: 10 }, { z: 0.02, hw: 0.266, top: 0.06, bot: -0.3, n: 10 }, { z: 0.12, hw: 0.266, top: -0.05, bot: -0.28, n: 10 }];
-  g.userData.seats = [{ p: [0, 0.225, 0.2], s: 1, ctl: 'bars', rider: 'sport', pegs: [[-0.24, -0.205, 0.27], [0.24, -0.205, 0.27]], ground: -0.62, saddle, around: [tank, panels, nose], knees: 'grip', lean: 0.95 }];
+  const panels = [{ z: -0.44, hw: 0.226, top: 0.08, bot: -0.08, n: 10 }, { z: -0.32, hw: 0.226, top: 0.095, bot: -0.27, n: 10 }, { z: -0.1, hw: 0.226, top: 0.09, bot: -0.31, n: 10 }, { z: 0.02, hw: 0.226, top: 0.06, bot: -0.3, n: 10 }, { z: 0.12, hw: 0.226, top: -0.05, bot: -0.28, n: 10 }];
+  g.userData.seats = [{ p: [0, 0.225, 0.2], s: 1, ctl: 'bars', rider: 'sport', pegs: [[-0.24, -0.205, 0.27], [0.24, -0.205, 0.27]], ground: -0.62, saddle, around: [tank, panels, nose], knees: 'grip', lean: 0.95,
+    legs: { hip: 1.15, knee: 1.2 }, hz0: 0.08 }]; // (a racing crouch on rearsets: hips back on the seat, legs folded tight, knees to the tank)
   return g;
 }
 

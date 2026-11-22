@@ -784,7 +784,8 @@ class Rig {
   }
   // ---- riders ('bars' with opts.ride: rideGeometry) ----
   // A rider's posture v: { hz (the pelvis's place along the saddle, rig z), fwd (the torso's forward lean from the
-  // hips), flex (the back's bend), prot (the shoulders forward), kOut (the knees' swing out round the hip-peg line) }.
+  // hips), flex (the back's bend), prot (the shoulders forward), kOut (the knees' swing out round the hip-peg line),
+  // hy (standing: the pelvis's height above the saddle; an 'attack' stance only) }.
   // The pelvis sits on the saddle's top at hz (the body's lowest point on the cushion, sunk a little); hands on the
   // grips and feet on the pegs are the vehicle's, so the rest follows.
   configureRide(v) {
@@ -793,7 +794,7 @@ class Rig {
     if (this.rideGrips === undefined) this.rideGrips = R.grips?.length === 2 ? R.grips.map((g) => V(...g)) : null;
     let minY = -0.08; if (T2) { minY = Infinity; for (const p of T2.hips) minY = Math.min(minY, p.y - 0.012); } // (plus leathers)
     const top = saddleTop(R.saddle, v.hz);
-    this.base.set(R.saddle[0].cx || 0, top - 0.012 - minY, v.hz); this.rideSeatY = top - 0.012;
+    this.base.set(R.saddle[0].cx || 0, top - 0.012 - minY + (v.hy || 0), v.hz); this.rideSeatY = top - 0.012; // (hy: standing up off the saddle, an attack stance)
   }
   // per frame: the solved posture, bent further forward when tucked at speed (as far as the bodywork lets the chest
   // go), leaning further into a turn than the bike
@@ -846,7 +847,7 @@ class Rig {
     for (const [k, th, sh] of [['R', B.thighR, B.shinR], ['L', B.thighL, B.shinL]]) {
       const td = V(0, 1, 0).applyQuaternion(q[th]), sd = V(0, 1, 0).applyQuaternion(q[sh]);
       const hip = Math.acos(clamp(up.dot(td), -1, 1)), knee = Math.PI - Math.acos(clamp(td.dot(sd), -1, 1)), abd = Math.atan2(Math.abs(td.x), Math.hypot(td.y, td.z));
-      legs += ((hip - 1.66) / 0.6) ** 2 + ((knee - 1.85) / 0.6) ** 2 + (Math.max(0, abd - 0.12) / 0.25) ** 2;
+      legs += ((hip - (R.legs?.hip ?? 1.66)) / 0.6) ** 2 + ((knee - (R.legs?.knee ?? 1.85)) / 0.6) ** 2 + (Math.max(0, abd - 0.12) / 0.25) ** 2; // (the riding position's own hip and knee angles, else a seated person's)
       if (hip < 0.7 || knee < 0.75) legs += 1e3; // (past the joints' range)
       let g = null; for (const L of R.around) { const r = loftGap(L, p[sh], 0.055); if (r && (!g || r.gap < g.gap)) g = r; }
       const gap = g ? g.gap : 0.3;
@@ -870,6 +871,7 @@ class Rig {
     if (RIDES.has(key)) { const r = RIDES.get(key); this.fwdTuck = r.fwdTuck; this.postureScore = r.score; this.riderFit = r.fit; return { ...r.v }; }
     const z0 = R.saddle[0].z, z1 = R.saddle.at(-1).z, hz0 = R.hz0 ?? 0;
     const VARS = [['hz', Math.max(z0 + 0.08, hz0 - 0.2), Math.min(z1 - 0.12, hz0 + 0.2), 0.04], ['fwd', 0, 1.35, 0.12], ['flex', 0, 0.9, 0.12], ['prot', 0, 0.35, 0.06], ['kOut', -0.3, 1.4, 0.15]];
+    if (R.stance === 'attack') VARS.push(['hy', 0.04, 0.3, 0.04]); // (standing on the pegs: how far up off the saddle)
     this.solving = true;
     const cost = (vv) => { this.configureRide(vv); return this.rideCost(); };
     const descend = (v, best) => {
@@ -883,7 +885,7 @@ class Rig {
       return { v, c: best };
     };
     const starts = [];
-    for (const fwd of [0.3, 0.7, 1.05, R.lean]) for (const kOut of [0.15, 0.6]) { const t = { hz: clamp(hz0, VARS[0][1], VARS[0][2]), fwd, flex: 0.3, prot: 0.1, kOut }; delete this.armSol; starts.push({ v: t, c: cost(t) }); }
+    for (const fwd of [0.3, 0.7, 1.05, R.lean]) for (const kOut of [0.15, 0.6]) { const t = { hz: clamp(hz0, VARS[0][1], VARS[0][2]), fwd, flex: 0.3, prot: 0.1, kOut, ...(R.stance === 'attack' ? { hy: 0.14 } : {}) }; delete this.armSol; starts.push({ v: t, c: cost(t) }); }
     starts.sort((a, b) => a.c - b.c);
     let win = null;
     for (const s0 of starts.slice(0, 2)) { delete this.armSol; const r = descend(s0.v, cost(s0.v)); if (!win || r.c < win.c) win = r; }
@@ -2472,7 +2474,10 @@ function rideGeometry(st, obj, objs, ps, sc) {
   let best = null, bd = Infinity; for (const o of objs) { if (!o?.userData.grips) continue; const d = toR(o, V()).distanceTo(here); if (d < bd) { bd = d; best = o; } }
   if (best) grips = best.userData.grips.map((g) => toR(g.o, g.p).applyMatrix4(inv).sub(at).multiply(ps).divideScalar(sc).toArray().map(r3)).sort((a, b) => a[0] - b[0]);
   else if (st.grips?.length === 2) grips = st.grips.map((g) => V(...g).sub(at).multiply(ps).divideScalar(sc).toArray().map(r3));
-  return { saddle: secs(st.saddle), around: (st.around || []).map(secs), knees: st.knees || 'near', lean: st.lean ?? 0.35, grips };
+  // (optional: hz0, where the pelvis prefers to be along the saddle (part z, from the seat point); legs, the hip and knee
+  // angles this riding position prefers (radians; a seated person's by default); stance 'attack', standing on the pegs)
+  return { saddle: secs(st.saddle), around: (st.around || []).map(secs), knees: st.knees || 'near', lean: st.lean ?? 0.35, grips,
+    ...(st.hz0 != null ? { hz0: r3(st.hz0 * ps.z / sc) } : {}), ...(st.legs ? { legs: st.legs } : {}), ...(st.stance ? { stance: st.stance } : {}) };
 }
 export function addCrew(design, objs) {
   const rigs = [];
