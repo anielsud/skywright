@@ -8,6 +8,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
 import { revolve, airfoil } from './parts.js'; // (circular, used at build time only)
+import { bubbleInterior } from './bubbleCockpit.js'; // (circular, used at build time only)
 
 export const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const KEEP = ['position', 'normal', 'uv', 'uv1'];
@@ -770,7 +771,7 @@ export function seatGeo(width, backH, panL, tilt) {
 }
 // Detail build of the glazed cockpits. Replaces the plain part's boxes: everything inside fits under the glass.
 // The glass carries a skirt below its base (hidden): skinBlend clips it to the body skin and shows it when seated.
-export function cockpitBuild(id, color) {
+export function cockpitBuild(id, color, lv = 2) {
   const g = new THREE.Group(), b = new Bag(), nb = new Bag(), paint = PM.skin(color), black = M.black(), seatM = PM.seat();
   if (id === 'ck_bubble') {
     const a = 0.45, bb = 1.0, c = 0.425;
@@ -780,27 +781,7 @@ export function cockpitBuild(id, color) {
     skirt.visible = false; skirt.userData.glassSkirt = true; g.add(skirt);
     // windscreen bow and the rear hoop of the sliding hood (they follow the glass)
     for (const [z, rad] of [[-0.6, 0.018], [0.42, 0.014]]) { const k = Math.sqrt(1 - (z / bb) ** 2); b.add(bowGeo(a * k + 0.006, c * k + 0.006, z, rad), paint); }
-    // tub fittings: seat, pilot, glare shield with the instrument panel under it, stick
-    // the seat slides on floor rails (its own mesh, userData.seatRail: crew.js moves it to where the pilot set it)
-    const sb = new Bag(), st = seatGeo(0.36, 0.72, 0.34, 0.32); st.translate(0, -0.54, 0.42); sb.add(st, seatM); // (low in a deep tub: a seated adult's head clears the glass)
-    const hrest = new THREE.CapsuleGeometry(0.06, 0.12, 4, 10); hrest.rotateZ(Math.PI / 2); hrest.scale(1, 1, 0.6); hrest.translate(0, 0.2, 0.64); sb.add(hrest, seatM);
-    { const n0 = g.children.length; sb.to(g); for (const m of g.children.slice(n0)) m.userData.seatRail = 0; }
-    // the pilot (crew.js) on that seat; the seat point is where the hips settle. The controls where this cockpit has
-    // them (part coordinates): the stick standing on the tub floor between the knees, the throttle lever on the left
-    // wall beside the hip, the rudder pedals on the floor
-    { const P = [0, -0.392, 0.367], S = 0.8, at = (x, y, z) => [x - P[0], y - P[1], z - P[2]]; // (controls: part units from the seat point)
-      g.userData.seats = [{ p: P, s: S, fit: { at: [0, -0.54, 0.42], dims: [0.36, 0.72, 0.34, 0.32], floor: -0.66, feet: 'pedals' },
-        controls: { stickBase: at(0, -0.655, -0.12), stickLen: 0.42, thrBase: at(-0.325, -0.38, 0.1), pedY: at(0, -0.66, 0)[1], pedZ: at(0, 0, -0.28)[2] },
-        adjust: { pedZ: [-0.04, 0.08], seatZ: [-0.12, 0.04], seatY: [-0.04, 0.02] } }]; } // (the rudder pedals adjust 4 cm forward to 8 cm aft, the seat runs on rails 12 cm forward to 4 cm back and 4 cm down to 2 cm up: set once for whoever flies it)
-    const gl = new THREE.CylinderGeometry(0.26, 0.26, 0.16, 18, 1, true, -1.25, 2.5); gl.scale(1, 1, 0.55); gl.rotateY(Math.PI); gl.translate(0, 0.08, -0.55); b.add(shell(gl, 0.008), black);
-    const glTop = new THREE.CylinderGeometry(0.26, 0.26, 0.012, 18, 1, false, -1.25, 2.5); glTop.scale(1, 1, 0.55); glTop.rotateY(Math.PI); glTop.translate(0, 0.16, -0.55); b.add(capHoles(glTop), black);
-    const pf = mx([0, 0.06, -0.54], [-0.25, 0, 0]), pnl = new THREE.BoxGeometry(0.46, 0.2, 0.012); pnl.applyMatrix4(pf); b.add(pnl, black); // (its top edge up under the glare shield's lid: the shield hung ahead of it)
-    for (let i = 0; i < 5; i++) { const d = new THREE.CircleGeometry(0.032, 12); d.applyMatrix4(pf.clone().multiply(mx([-0.18 + i * 0.09, 0.02 - (i % 2) * 0.06, 0.0065]))); nb.add(d, PM.dial()); } // on the panel face (they hung in front of it, or behind)
-    g.userData.fit = [{ kind: 'seat', p: [0, -0.573, 0.25], w: 0.2, d: 0.28 }, // (the seat's rails: the riser runs under its whole travel)
-       { kind: 'panel', p: V(0, -0.1, 0).applyMatrix4(pf).toArray(), w: 0.4, d: 0.05, tilt: -0.25 }];
-    // what the pilot must keep clear of: inside the dome (and its skirt's walls down into the tub), the panel, the hood
-    g.userData.seats[0].obstacles = [{ name: 'canopy', inside: insideRows(-bb, bb, 40, (z) => { const k = Math.sqrt(Math.max(0, 1 - (z / bb) ** 2)); return [a * k, c * k, 0]; }) },
-      boxObstacle('panel', pf, [0.46, 0.2, 0.012]), hoodObstacle('glare shield', 0.26, 0.55, 1.25, 0.08, -0.55, 0.16)];
+    bubbleInterior(g, b, nb, lv); // the cockpit under it (bubbleCockpit.js): panel, glareshield, consoles, seat, side panels, floor
   } else if (id === 'ck_fighter') {
     const glass = revolveZ(smoothPts(FIGHTER_GLASS, 40), 48, 1.15);
     g.add(new THREE.Mesh(glass, PM.canopy(0x6b5524)));
