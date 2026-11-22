@@ -33,7 +33,8 @@ export function run(design, mode, script, { T = 20, spawn = {}, dt = 1 / 60 } = 
     const b = ac.bike || {}, spd = Math.hypot(ac.v.x, ac.v.z);
     out.maxLean = Math.max(out.maxLean, Math.abs(b.lean || 0)); out.minUp = Math.min(out.minUp, ac.up.y); out.maxSpeed = Math.max(out.maxSpeed, spd);
     if (ac.onGround) { out.maxPitch = Math.max(out.maxPitch, b.pitch || 0); out.minPitch = Math.min(out.minPitch, b.pitch || 0); }
-    if (f % 6 === 0) out.samples.push({ t: +t.toFixed(2), spd: +spd.toFixed(2), lean: +(b.lean || 0).toFixed(3), leanT: +(b.leanT || 0).toFixed(3), steer: +(b.steer || 0).toFixed(3), pitch: +(b.pitch || 0).toFixed(3), yaw: +(yaw - yaw0).toFixed(3), y: +ac.x.y.toFixed(3), up: +ac.up.y.toFixed(3), fc: !!b.front?.contact, rc: !!b.rear?.contact, ground: ac.onGround, dead: !!ac.dead, ...(globalThis.__rideDbg ? { wy: +ac.w.y.toFixed(3), wz: +ac.w.z.toFixed(3), fs: +(b.front?.slip || 0).toFixed(2), rs: +(b.rear?.slip || 0).toFixed(2), fcomp: +(b.front?.comp || 0).toFixed(3), rcomp: +(b.rear?.comp || 0).toFixed(3), vg: +ac.groundSpeed.toFixed(2), rev: ac.reversing, sb: +ac.svcBrake.toFixed(2) } : {}) });
+    const _bv = ac.v.clone().applyQuaternion(ac.q.clone().invert()), slide = spd > 1 ? Math.atan2(-_bv.x, Math.max(0.5, -_bv.z)) : 0;
+    if (f % 6 === 0) out.samples.push({ t: +t.toFixed(2), spd: +spd.toFixed(2), slide: +slide.toFixed(3), lean: +(b.lean || 0).toFixed(3), leanT: +(b.leanT || 0).toFixed(3), steer: +(b.steer || 0).toFixed(3), pitch: +(b.pitch || 0).toFixed(3), yaw: +(yaw - yaw0).toFixed(3), y: +ac.x.y.toFixed(3), up: +ac.up.y.toFixed(3), fc: !!b.front?.contact, rc: !!b.rear?.contact, ground: ac.onGround, dead: !!ac.dead, ...(globalThis.__rideDbg ? { wy: +ac.w.y.toFixed(3), wz: +ac.w.z.toFixed(3), fs: +(b.front?.slip || 0).toFixed(2), rs: +(b.rear?.slip || 0).toFixed(2), fcomp: +(b.front?.comp || 0).toFixed(3), rcomp: +(b.rear?.comp || 0).toFixed(3), vg: +ac.groundSpeed.toFixed(2), rev: ac.reversing, sb: +ac.svcBrake.toFixed(2) } : {}) });
     if (ac.dead) { out.dead = true; break; }
   }
   out.final = out.samples.at(-1); out.isBike = ac.isBike; out.isCar = ac.isCar; out.mass = +ac.mass.toFixed(1);
@@ -68,6 +69,21 @@ export function plan(presets, others = []) {
     const sp = run(d, mode, (t, ac) => (t < 1 ? { throttle: 0.6 } : { rev: Math.abs(ac.groundSpeed) > 0.3 ? 1 : 0 }), { T: 7, spawn: { speed: 18 } });
     const lift = sp.samples.filter((s) => s.fc && !s.rc && s.t > 1).length, down = sp.samples.filter((s) => s.t > 5.5).every((s) => s.fc && s.rc);
     check(`${d.name} ${mode}: stoppie`, sp, [[lift >= 3, `back never came up (${lift} samples)`], [sp.minPitch > -0.55, `nose too low (${sp.minPitch.toFixed(2)})`], [down, 'did not land'], [sp.minUp > 0.6, 'fell over'], [!sp.dead, 'wrecked']]);
+  }
+  // skid: at 20 m/s, the back brake (the handbrake, SKID on a touch screen) locks the back wheel. Straight, it slows
+  // gently in a straight line; with the stick held over, the tail swings out to a slide the rider holds (Arcade/Pilot
+  // 20-50 degrees, nose turned the way the stick pushes), it stays up and stops sooner than a straight skid
+  for (const d of presets) for (const mode of ['arcade', 'pilot', 'sim']) {
+    const skid = (roll) => { const r = run(d, mode, (t, ac) => (t < 1 ? { throttle: 0.5 } : { hand: 1, roll }), { T: 13, spawn: { speed: 20 } }); return r; };
+    const nose = (r) => r.samples.filter((x) => x.t > 1.2 && x.spd > 6).reduce((m, x) => Math.max(m, Math.abs(x.slide || 0)), 0);
+    const st = skid(0), tStop = (r) => (r.samples.find((x) => x.t > 1 && x.spd < 0.5) || { t: 99 }).t - 1;
+    check(`${d.name} ${mode}: straight skid`, st, [[!st.dead, 'wrecked'], [st.minUp > 0.9, 'fell over'], [nose(st) < 0.1, `slid sideways (${(nose(st) * 57.3).toFixed(0)} deg)`], [tStop(st) < 11.5, 'did not stop']]);
+    for (const dir of [1, -1]) {
+      const r = skid(dir), a = nose(r), turn = unwrapYaw(r, 1, r.final.t);
+      const conds = [[!r.dead, 'wrecked'], [r.minUp > (mode === 'sim' ? 0.5 : 0.85), `fell over (up ${r.minUp.toFixed(2)})`], [tStop(r) < tStop(st), `no quicker than a straight skid (${tStop(r).toFixed(1)} s)`], [turn * dir < 0, `turned the wrong way (${turn.toFixed(2)} rad)`]];
+      if (mode !== 'sim') conds.push([a > 0.35 && a < 0.9, `slide angle ${(a * 57.3).toFixed(0)} deg`]);
+      check(`${d.name} ${mode}: skid ${dir > 0 ? 'right' : 'left'}`, r, conds);
+    }
   }
   // jump: in the air at 2.5 m, 15 m/s, a little roll and nose-up: lands upright and rides on
   for (const d of presets) for (const mode of ['arcade', 'pilot', 'sim']) {

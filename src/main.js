@@ -750,8 +750,8 @@ function buildFlight(cfg) {
   } else controls.setThrottle(0);
   if (start === 'air') { ac.flaps = 0; }
   const touchUI = settings.touch === 'on' || (settings.touch === 'auto' && isTouch);
-  controls.setVehicle((st.car || st.boat) && !st.heli ? 'car' : st.rocket ? 'rocket' : 'plane'); ac.viewQ = flightCam.quaternion; // rockets steer relative to the screen
-  if (st.bike) setTimeout(() => ui.hint(touchUI ? 'Bike: GAS to go, BRAKE to stop, stick to lean into turns. Full GAS for a wheelie!' : 'Bike: W go · S brake · A D lean and turn · full W for a wheelie, hard S for a stoppie', 6000), 1500);
+  controls.setVehicle((st.car || st.boat) && !st.heli ? 'car' : st.rocket ? 'rocket' : 'plane', { bike: !!st.bike }); ac.viewQ = flightCam.quaternion; // rockets steer relative to the screen
+  if (st.bike) setTimeout(() => ui.hint(touchUI ? 'Bike: GAS to go, BRAKE to stop, stick to lean into turns. Full GAS for a wheelie! Hold SKID and steer to slide the back wheel.' : 'Bike: W go · S brake · A D lean and turn · full W for a wheelie, hard S for a stoppie · Space + steer to skid', 6000), 1500);
   else if (st.boat) setTimeout(() => ui.hint(touchUI ? 'Boat: GAS to go, BRAKE to slow down (keep holding it to reverse), stick to steer.' : 'Boat: W go · S slow down, hold to reverse · A D steer', 6000), 1500);
   else if (st.car && !st.heli) setTimeout(() => ui.hint((touchUI ? 'Car: GAS to go, BRAKE to stop (keep holding it to reverse), stick to steer' : 'Car: W go · S brake, hold to reverse · A D steer · Space handbrake') + (cfg.realism === 'pilot' ? (touchUI ? ' · HANDBRAKE + steer to drift!' : ' · Space + steer to drift!') : ''), 6000), 1500);
   else if (st.rocket) setTimeout(() => ui.hint(touchUI ? 'Rocket: full throttle to launch · the stick points the nose left/right/up/down on screen · the slider rolls' : 'Rocket: full throttle to launch · arrows / WASD point the nose left/right/up/down on screen · Q E roll', 6000), 1500);
@@ -1020,6 +1020,7 @@ function handleEvents(f, dt) {
       }
       case 'spray': effects.spray(e.pos, e.speed); break;
       case 'dust': effects.dust(e.pos, ac.v, e.surf, 1); break;
+      case 'skid': if (e.surf === 'runway' || e.surf === 'road') effects.tireSmoke(e.pos, e.speed); else effects.dust(e.pos, ac.v, e.surf, 2); break;
       case 'gear': audio.play('gear'); hud.toast(e.down ? 'Gear down' : 'Gear up'); break;
       case 'rocket': audio.play('rocket'); break;
       case 'debris': {
