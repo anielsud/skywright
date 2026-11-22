@@ -1024,6 +1024,8 @@ class Rig {
       const pitch = clamp(sw.z * gain * (sw.z > 0 ? 1 - 0.7 * lunge : 1) - Math.max(0, sw.y) * gain * (!bars ? 0.25 : this.v?.hy ? 0.6 : 0) - lunge * (stand ? 0.2 : 0.06), -lim, lim), roll = clamp(-sw.x * gain, -lim, lim);
       _swR.setFromEuler(_swE.set(pitch, 0, roll)); spQ.premultiply(_swR); spP.sub(p[B.hips]).applyQuaternion(_swR).add(p[B.hips]);
     }
+    // (the swing alone, about the hips: stations.js moves a seated crew's cockpit view with it, not with where the head looks)
+    if (!this.solving) { (this.gSwing ||= { q: new THREE.Quaternion(), at: V() }).at.copy(p[B.hips]); if (sw && (sw.x || sw.y || sw.z)) this.gSwing.q.copy(_swR); else this.gSwing.q.identity(); }
     if (sw || !bars) this.joints((x, y, z) => V(x, y, z).applyQuaternion(spQ).add(spP)); // (seated: from the configured spine each frame, so a swing never sticks)
     p[B.spine].copy(spP); q[B.spine].copy(spQ);
     p[B.head].copy(this.neck);
@@ -2512,6 +2514,9 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
     rig, root,
     eye: eyePoint(rig), // rig space: between the eyes, head straight (cockpit view, stations.js)
     // where the eyes are now (rig space): a motorbike rider bends over the tank and leans into turns (stations.js)
+    // how far the g has swung the eyes (rig space, from the settled pose): the torso's swing about the hips only, not the
+    // head turning to look; a seated crew's cockpit view moves by this (stations.js)
+    gEye(out = V()) { const w = rig.gSwing; if (!w) return out.set(0, 0, 0); out.copy(this.eye).sub(w.at).applyQuaternion(w.q).add(w.at); return out.sub(this.eye); },
     eyeNow(out = V()) { return out.set(0, 0.155, -0.075 * (outfit.head === 'bubble' && !rig.body ? 1.18 : 1)).applyQuaternion(rig.q[B.head]).add(rig.p[B.head]); },
     // first person: the head and torso (with whatever they wear) shrink to nothing so the camera in the head sees out;
     // hands, arms, legs and the controls stay
