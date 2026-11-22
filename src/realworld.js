@@ -10,6 +10,8 @@ import * as THREE from 'three';
 import { resample } from './roads.js';
 import { smoothstep, clamp } from './noise.js';
 import { inStuntCut } from './stuntPark.js';
+import { GLTFLoader } from '../vendor/addons/GLTFLoader.js';
+import { MeshoptDecoder } from '../vendor/addons/meshopt_decoder.module.js';
 
 const BASE = 'assets/real/';
 const GAIN = 1.35, DESHADE = 0.3; // imagery brightness (linear, loc.satGain overrides) and how much of its baked-in shading to remove (shaders.js)
@@ -159,8 +161,9 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   const dir = BASE + id + '/';
   const files = [get(dir + 'meta.json', 'json'), get(dir + 'hi.bin.gz'), get(dir + 'far.bin.gz'), get(dir + (loc.img?.[quality] || 'hi.jpg'), 'blob'), get(dir + 'far.jpg', 'blob'), get(dir + 'cover.png', 'blob'), get(dir + 'osm.json', 'json')];
   if (loc.city) files.push(get(dir + 'city.bin.gz')); // a city's buildings (realCity.js)
+  if (loc.city?.statue) files.push(get('assets/landmarks/liberty.glb').catch((e) => (console.warn('[landmarks] statue model', e), null))); // the Statue of Liberty scan (realLandmarks.js; tools/liberty)
   let done = 0; const tick = (p) => { done++; onProgress?.(done / files.length); return p; };
-  const [meta, hiZ, farZ, hiB, farB, coverB, osm, cityZ] = await Promise.all(files.map((p) => p.then(tick)));
+  const [meta, hiZ, farZ, hiB, farB, coverB, osm, cityZ, statueB] = await Promise.all(files.map((p) => p.then(tick)));
   // the largest imagery texture on this tier; a place with loc.img has a ready-made hi file per tier (no resize)
   const texSize = quality === 'high' || quality === 'ultra' ? 4096 : 2048, fit = { resizeWidth: texSize, resizeHeight: texSize, resizeQuality: 'high' };
   const opt = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
@@ -170,6 +173,7 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   ]);
   const D = new RealData(loc, meta, decodeHeights(await gunzip(hiZ), meta.hi.n), decodeHeights(await gunzip(farZ), meta.far.n), hiBmp, farBmp, coverBmp, osm);
   if (cityZ) D.city = decodeCity(await gunzip(cityZ));
+  if (statueB) try { D.statue = (await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(statueB, '')).scene; } catch (e) { console.warn('[landmarks] statue model', e); }
   D.key = key;
   cache.get(id)?.dispose();
   cache.set(id, D);
