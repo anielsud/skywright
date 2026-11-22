@@ -2357,14 +2357,14 @@ function figureGeometry(rig) {
   // grip longer forward, the antenna-elevation wheel and range knob under the fingers, the comms hat, cursor button and
   // speed-brake switch under the thumb (inboard), the dogfight slide outboard; the quadrant's slot with its detent marks
   function f16Grips() {
-    const L = C.stickLen, T = C.thrLen, grey = 0x3a3d42, lt = 0x6b7077, red = 0xc8102e, cyl = (r, h, c, ax) => { const g = new THREE.CylinderGeometry(r, r, h, 10); if (ax === 'x') g.rotateZ(Math.PI / 2); if (ax === 'z') g.rotateX(Math.PI / 2); return g.translate(c.x, c.y, c.z); };
-    at(B.ctlA, ellipsoid(V(0, L + 0.032, -0.014), 0.024, 0.024, 0.033), blk); // head
-    at(B.ctlA, cyl(0.007, 0.008, V(0, L + 0.058, -0.004)), grey); at(B.ctlA, ellipsoid(V(0, L + 0.063, -0.004), 0.004, 0.003, 0.004), lt, true); // trim hat
-    at(B.ctlA, ellipsoid(V(-0.01, L + 0.05, -0.03), 0.007, 0.005, 0.007), red, true); // weapon release (pickle)
+    const L = C.stickLen, T = C.thrLen, grey = 0x3a3d42, lt = 0x6b7077, red = 0xc8102e, cyl = (r, h, c, ax) => { const g = new THREE.CylinderGeometry(r, r, h, 8); if (ax === 'x') g.rotateZ(Math.PI / 2); if (ax === 'z') g.rotateX(Math.PI / 2); return g.translate(c.x, c.y, c.z); };
+    at(B.ctlA, ellipsoid(V(0, L + 0.032, -0.014), 0.024, 0.024, 0.033, { w: 16, h: 10 }), blk); // head
+    at(B.ctlA, cyl(0.007, 0.008, V(0, L + 0.058, -0.004)), grey); at(B.ctlA, ellipsoid(V(0, L + 0.063, -0.004), 0.004, 0.003, 0.004, { w: 10, h: 6 }), lt, true); // trim hat
+    at(B.ctlA, ellipsoid(V(-0.01, L + 0.05, -0.03), 0.007, 0.005, 0.007, { w: 10, h: 6 }), red, true); // weapon release (pickle)
     at(B.ctlA, cyl(0.005, 0.008, V(-0.024, L + 0.036, -0.008), 'x'), grey, true); at(B.ctlA, cyl(0.005, 0.008, V(-0.022, L + 0.018, -0.016), 'x'), grey, true); // TMS, DMS hats
-    at(B.ctlA, capAB(V(0, L + 0.012, -0.036), V(0, L - 0.018, -0.03), 0.0045, 0.004), grey, true); // trigger
+    at(B.ctlA, capAB(V(0, L + 0.012, -0.036), V(0, L - 0.018, -0.03), 0.0045, 0.004, { seg: 6, ring: 2 }), grey, true); // trigger
     at(B.ctlA, cyl(0.026, 0.008, V(0, 0.035, 0)), 0x9aa0a6, true); // collar
-    at(B.ctlB, ellipsoid(V(0, T + 0.012, -0.034), 0.022, 0.024, 0.026), blk); // the grip's front
+    at(B.ctlB, ellipsoid(V(0, T + 0.012, -0.034), 0.022, 0.024, 0.026, { w: 16, h: 10 }), blk); // the grip's front
     at(B.ctlB, cyl(0.009, 0.006, V(0, T + 0.03, -0.052), 'x'), lt, true); at(B.ctlB, cyl(0.006, 0.008, V(0.006, T + 0.036, -0.03)), grey); // antenna wheel, range knob
     at(B.ctlB, boxG(0.009, 0.009, 0.009, V(0.018, T + 0.028, -0.004)), lt, true); at(B.ctlB, cyl(0.007, 0.006, V(0.028, T + 0.006, -0.012), 'x'), grey); // comms hat, cursor
     at(B.ctlB, boxG(0.006, 0.01, 0.016, V(0.03, T - 0.014, 0.004)), lt, true); at(B.ctlB, boxG(0.006, 0.008, 0.014, V(-0.029, T + 0.014, -0.02)), lt, true); // speed brake, dogfight
