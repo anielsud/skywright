@@ -98,9 +98,15 @@ const ui = {
 // ---------- hangar ----------
 const hangar = new Hangar(renderer, ui, audio);
 initThumbs(renderer);
-// Part pictures for the palette: drawn after the hangar is up (drawPartThumbs), kept per build in localStorage
-const THUMB_KEY = `parts1:${COMMIT}`; // (a new build may have changed how parts look: draw them again)
+// Part pictures for the palette: drawn by the deploy (tools/bake/boot.py -> assets/boot/parts.json, for this build
+// only, as a new build may have changed how parts look). Any it lacks are drawn here after the hangar is up
+// (drawPartThumbs) and kept per build in localStorage.
+const THUMB_KEY = `parts1:${COMMIT}`;
 let thumbs = COMMIT !== 'dev' && LS.get('partThumbs', null)?.key === THUMB_KEY ? LS.get('partThumbs').pics : {};
+const showThumbs = () => document.querySelectorAll('#part-list .part-card').forEach((b) => { const img = b.querySelector('img'), u = thumbs[b.dataset.id]; if (u && img.getAttribute('src') !== u) img.src = u; });
+const bakedThumbs = (COMMIT === 'dev' ? Promise.resolve(null) : fetch('assets/boot/parts.json').then((r) => (r.ok ? r.json() : null)).catch(() => null))
+  .then((b) => { if (b?.key === COMMIT) { baked = b.pics; thumbs = { ...b.pics, ...thumbs }; showThumbs(); } });
+let baked = {};
 let activeCat = 'fuselage';
 
 function buildPalette() {
@@ -1541,8 +1547,9 @@ window.skywrightBack = () => {
 
 // Draw the palette's missing part pictures a few at a time while the hangar is open (the shown category first), then
 // keep them for the next visit. On a tablet each picture is a few tens of ms, so they appear over a few seconds.
-function drawPartThumbs() {
-  const todo = Object.keys(PARTS).filter((id) => !thumbs[id]);
+async function drawPartThumbs() {
+  await bakedThumbs;
+  const todo = Object.keys(PARTS).filter((id) => !(id in thumbs));
   if (!todo.length) return;
   const drawer = thumbnailDrawer();
   const later = (f, ms) => (window.requestIdleCallback ? requestIdleCallback(f, { timeout: ms }) : setTimeout(f, 16));
@@ -1556,7 +1563,7 @@ function drawPartThumbs() {
     } while (todo.length && performance.now() - t0 < 10);
     if (todo.length) { later(step, 200); return; }
     drawer.dispose();
-    if (COMMIT !== 'dev') LS.set('partThumbs', { key: THUMB_KEY, pics: thumbs });
+    if (COMMIT !== 'dev') LS.set('partThumbs', { key: THUMB_KEY, pics: Object.fromEntries(Object.entries(thumbs).filter(([id]) => !(id in baked))) });
   };
   later(step, 200);
 }
