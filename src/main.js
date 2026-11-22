@@ -34,6 +34,7 @@ import { WindTunnel } from './windTunnel.js';
 import { BoatFX } from './boatFX.js';
 import { cabinSun, CABIN } from './cabinLight.js';
 import { updateLive, setLiveRenderer } from './liveDisplays.js';
+import { GVision } from './gvision.js';
 import { initThumbs, renderThumb, designKey, presetSlug, savedThumbs, storeThumb, stockThumbs, STOCK_SIZE } from './thumbs.js';
 installFog();
 
@@ -646,6 +647,7 @@ let state = 'hangar';
 let F = null; // current flight
 const flightUI = $('#flight-ui');
 const hud = new HUD($('#hud'));
+const gvis = new GVision($('#flight-ui')); // the grey / red haze of heavy g in the cockpit view (gvision.js)
 const controls = new Controls($('#touch-root'), (a) => onAction(a));
 controls.invert = settings.invert; controls.setMode(settings.controlMode);
 const flightCam = new THREE.PerspectiveCamera(60, 1, 0.2, 60000);
@@ -883,6 +885,7 @@ function endFlight(restarting = false) {
   trackFlightEnd(F, restarting ? 'restart' : 'hangar');
   net.detach(); if (!restarting) net.leave();
   if (updatePending) { reloadFresh(); return; }
+  gvis.grey = gvis.red = 0; gvis.draw(false);
   const f = F; F = null; CABIN.uCabinSunBake.value = 0; CABIN.uCabinNight.value = 0; // (the hangar's lamps cast their own shadows; the decks' night lamps off)
   // Collect every GPU resource the flight scene holds BEFORE the subsystems detach their groups (anything detached first
   // used to be skipped, and materials/textures were never freed: ~64 geometries + ~18 textures leaked per flight, #80).
@@ -1174,6 +1177,7 @@ function stepFlight(dtReal) {
   let focus = null;
   if (ac.dead || ac.wrecked) { const biggest = ac.dead ? f.debris.reduce((a, d) => (!a || d.mass > a.mass ? d : a), null) : null; focus = biggest ? biggest.x : null; if (rig.mode === 'cockpit') rig.set('orbit'); }
   rig.update(dtReal, ac, world, focus);
+  gvis.update(dt, ac, ac.dead ? null : rig.curStation(ac), rig.mode === 'cockpit' && !focus); // (the body feels the g whatever the camera; it shows from the seat)
   f.streaks?.update(dtReal, flightCam.position, ac, ac.rocketK > 0.5 && (rig.mode === 'chase' || rig.mode === 'cockpit'));
   ac.setCockpitView(rig.mode === 'cockpit' && !focus ? rig.curStation(ac) : null); // (a capsule seat switches its cabin on: stations.js)
   world.update(dtReal, flightCam, rig.vel, f.events);
@@ -1451,7 +1455,7 @@ function frame(now) {
       post.ambientOcclusion({ radiusK: 0.04, rMin: 0.25, rMax: 8, maxDist: 1200, strength: 1.5 }); // (a small floor so close-ups get crisp contact shadows, not metre-wide smudges)
       post.shafts(new THREE.Vector2(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5), sp.z < 1 && w.sunDir.y > -0.03 ? (1 - w.W.dark) * smoothstep(1.8, 1.0, Math.max(Math.abs(sp.x), Math.abs(sp.y))) : 0, w.sun.color);
       const golden = Math.max(0, 1 - Math.abs(w.sunElev - 0.08) / 0.3);
-      post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: 0.97 + golden * 0.12 - w.W.dark * 0.25, contrast: 1.12, vignette: 0.3 }); // near-neutral colour, a little more contrast: photographic rather than candy
+      post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: (0.97 + golden * 0.12 - w.W.dark * 0.25) * (1 - 0.7 * (gvis.shown ? smoothstep(0, 0.7, gvis.grey) : 0)), contrast: 1.12, vignette: 0.3 }); // near-neutral colour, a little more contrast: photographic rather than candy
       fitNearPlane(F);
       const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene) : null;
       post.render(F.scene, flightCam, dt);
@@ -1625,6 +1629,6 @@ async function boot() {
     addEventListener('online', autoCheckUpdate);
     addEventListener('focus', autoCheckUpdate);
   }
-  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, get tunnel() { return tunnel; }, openTunnel, closeTunnel, net, presets, settings, flightCfg, controls, rig, analytics, hud };
+  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, get tunnel() { return tunnel; }, gvis, openTunnel, closeTunnel, net, presets, settings, flightCfg, controls, rig, analytics, hud };
 }
 boot();

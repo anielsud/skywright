@@ -300,8 +300,9 @@ export function buildStations(ac) {
     const crews = []; p.obj.traverse((o) => { if (o.userData.crewRig?.eye) crews.push(o); });
     for (const c of crews) {
       const r = c.userData.crewRig, f = frameOf(c.matrixWorld, r.eye, inv, r.ctl === 'bars' ? -0.36 : 0); // (a rider looks down the road over the bars)
-      // a motorbike rider moves on the bike (bends over the tank, tucks, leans into turns): the eye follows the head
-      const live = r.ctl === 'bars' ? new THREE.Matrix4().multiplyMatrices(inv, c.matrixWorld) : null;
+      // the eye follows the figure's head: a motorbike rider moves on the bike (bends over the tank, tucks, leans into
+      // turns); a seated pilot or driver only sways a little with the g (stationEye keeps that close to the seat's eye)
+      const live = new THREE.Matrix4().multiplyMatrices(inv, c.matrixWorld);
       list.push({ part: p, crew: c, rig: r, role: r.role || 'pilot', kind: r.kind || 'light', bike: r.ctl === 'bars', live, ...f });
     }
     if (!crews.length && p.d.cat === 'cockpit' && p.d.eye) { // a cockpit without a seat (a glazed nose): its part's eye, looking ahead and down
@@ -342,11 +343,20 @@ export function buildStations(ac) {
   return list;
 }
 
-// The station's eye now (body space): a rider's follows the head (keeping the seat's settling offset).
-const _e = V();
+// The station's eye now (body space): it follows the crew figure's head (keeping the seat's settling offset).
+const _e = V(), _sc = V();
+// A seated crew's eye moves only with the g (their torso swayed by a pull, a turn, a push of the throttle; not by the
+// head turning to look round, which the stick drives): no further
+// from where the seat was settled than 40% of the clearance it was settled with (the near plane is at 50%), so the
+// canopy and panel never clip.
 export function stationEye(st, out = V()) {
   if (!st.live) return out.copy(st.eye);
-  return out.copy(st.rig.eyeNow(_e).applyMatrix4(st.live)).add(st.eye).sub(st.eyeRest);
+  if (st.bike) return out.copy(st.rig.eyeNow(_e).applyMatrix4(st.live)).add(st.eye).sub(st.eyeRest);
+  const d = st.rig.gEye(_e); // (rig space)
+  const k = d.length(); if (k < 1e-6) return out.copy(st.eye);
+  d.transformDirection(st.live).multiplyScalar(k * _sc.setFromMatrixScale(st.live).x); // (into body space)
+  d.clampLength(0, Math.min(0.05 * (st.s || 1), 0.4 * (st.clear ?? st.clear0 ?? 0.05)));
+  return out.copy(st.eye).add(d);
 }
 
 // For the loading screen's shader warm-up: show what only a seat's view shows (capsule cabins, inside linings) so it

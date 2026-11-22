@@ -249,6 +249,28 @@ python3 tools/test/riders.py --only "dirt"    # one vehicle
 Run it when you change `src/crew.js` (the rig, the arm solve, cockpit obstacles) or how the riders get their grips
 (`riderInput` in `src/bikeParts.js`).
 
+## G-vision test
+
+`gvision.py` checks the heavy-g haze in the cockpit view (`src/gvision.js`) and the cockpit eye that moves with the
+pilot's g sway (`stationEye` in `src/stations.js`):
+
+- **the haze**: a crash-sized one-frame spike and a hard landing never show; holding 7 g greys the view over seconds;
+  a g-suit seat (jet, space crews) stays clear at 4.5 g where a light-plane pilot doesn't; -3 g reds it; it clears
+  within 2.5 s of the g coming off and hides outside the cockpit view; and at its worst it is never opaque (edges at
+  most 90%, the middle 50%), since the view must always be seen through and flown.
+- **pull** (every stock vehicle with a seated crew): a full pull for 3.5 s. The eye follows the pilot's swing by no
+  more than its seat's clamp (5 cm, or 40% of the seat's clearance: the near plane is at 50%) and comes back once the
+  g is off.
+- **stick stir**: stirring the controls (the head turns to look round) must not move the view any more than sitting
+  still does: the view moves with g only.
+
+```sh
+python3 tools/test/gvision.py                 # ~1 min
+python3 tools/test/gvision.py --only "viper"
+```
+
+Run it when you change `src/gvision.js`, `stationEye`, or the g swing in `src/crew.js`.
+
 ## Boat ride test
 
 `boatride.py` drives every stock boat through the game's own physics (60 Hz, no rendering) with the controls a player
