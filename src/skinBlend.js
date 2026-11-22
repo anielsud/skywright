@@ -333,6 +333,9 @@ function seatCanopy(ck, U, bodyColor, addTo, rivets) {
   tg.computeVertexNormals();
   addTo(cobj, tg, PM.seat(), { shadow: false });
   addTubObstacle(cobj, rings, ck.inv);
+  // furniture that follows the tub (a cockpit's userData.tubFit(the rings in its own frame) -> [[geometry, material]]
+  // in that frame: side panels, consoles pressed onto the walls, a floor)
+  if (cobj.userData.tubFit) try { for (const [geo, mat] of cobj.userData.tubFit(rings.map((r) => r.map((p) => p.clone().applyMatrix4(ck.inv))))) addTo(cobj, geo.applyMatrix4(W), mat, { shadow: false }); } catch (e) { console.warn('tubFit', e); }
   return true;
 }
 // The tub just built (rings of world points round its wall, top first) as an obstacle for the crew of seats that declare
@@ -340,6 +343,7 @@ function seatCanopy(ck, U, bodyColor, addTo, rivets) {
 export function addTubObstacle(cobj, rings, inv) {
   const well = rings.map((r) => r.filter((_, k) => k % 2 === 0).map((p) => p.clone().applyMatrix4(inv).toArray().map((x) => +x.toFixed(4))));
   for (const st of cobj.userData.seats || []) if (st.obstacles) st.obstacles = [...st.obstacles.filter((o) => o.name !== 'tub'), { name: 'tub', well }];
+  cobj.userData.tubWell = rings.map((r) => r.map((p) => p.clone().applyMatrix4(inv).toArray())); // (every point: interior.js keeps other parts out of it)
 }
 
 // ---------- tubes meeting end to end: one fair skin across the seam ----------

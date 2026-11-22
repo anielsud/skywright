@@ -555,7 +555,7 @@ def({ id: 'fus_glider', cat: 'fuselage', name: 'Glider Body', desc: 'Long slende
 // --- Cockpits / noses ---
 def({ id: 'ck_bubble', cat: 'cockpit', name: 'Bubble Canopy', desc: 'All-round view glass bubble. Sits on top of a body.', mass: 60, hp: 250, color: C.darkgray, eye: [0, 0.25, 0.1],
   build: (c, lv) => {
-    if (lv) return cockpitBuild('ck_bubble', c); // detail: shaped seat, pilot and panel inside the glass (skinBlend seats it)
+    if (lv) return cockpitBuild('ck_bubble', c, lv); // detail: the whole cockpit inside the glass (bubbleCockpit.js; skinBlend seats it)
     const g = new THREE.Group();
     const glass = new THREE.Mesh(new THREE.SphereGeometry(0.5, 28, 16, 0, Math.PI * 2, 0, Math.PI / 2), PM.canopy()); glass.scale.set(0.9, 0.85, 2.0); g.add(glass);
     const frame = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.025, 6, 40), PM.skin(c)); frame.rotation.x = Math.PI / 2; frame.scale.set(0.9, 2.0, 1); g.add(frame);

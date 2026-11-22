@@ -148,8 +148,8 @@ export const OUTFITS = {
   light: { head: 'headset', glasses: true, suit: 0x2f5d8a, suit2: 0xb9a57d, trim: 0x2a2c2e, glove: null, boot: 0x3b2a1e, cups: 0x26282b },
   warbird: { head: 'leather', suit: 0x6b4a2e, suit2: 0x5a5f45, trim: 0xd8d2c2, glove: 0x4a3322, boot: 0x2a1d14, harness: true },
   racer: { head: 'helmet', mask: false, visor: 0x1b2127, helmet: 0xf2b705, helmet2: 0x15161a, suit: 0xf2f2ee, suit2: 0xc8102e, trim: 0x15161a, glove: 0x15161a, boot: 0x15161a, harness: true },
-  heli: { head: 'helmet', mic: true, visor: 0x14191e, helmet: 0xf2f2ee, helmet2: 0xc8102e, suit: 0xd9531c, suit2: 0x3d3f44, trim: 0xd9dcdf, glove: 0x1d1e20, boot: 0x1a1a1a, stripes: true },
-  medic: { head: 'helmet', mic: true, visor: 0x14191e, helmet: 0xf2f2ee, helmet2: 0x2e7d32, suit: 0x2e7d32, suit2: 0x2b2d31, trim: 0xd9dcdf, glove: 0x1d1e20, boot: 0x1a1a1a, stripes: true },
+  heli: { head: 'helmet', mic: true, visor: 0x14191e, helmet: 0xf2f2ee, helmet2: 0xc8102e, suit: 0xd9531c, suit2: 0x3d3f44, trim: 0xd9dcdf, glove: 0x1d1e20, boot: 0x1a1a1a, stripes: true, harness: true },
+  medic: { head: 'helmet', mic: true, visor: 0x14191e, helmet: 0xf2f2ee, helmet2: 0x2e7d32, suit: 0x2e7d32, suit2: 0x2b2d31, trim: 0xd9dcdf, glove: 0x1d1e20, boot: 0x1a1a1a, stripes: true, harness: true },
   driver: { head: 'fullface', visor: 0x101418, helmet: 0xe8601c, helmet2: 0x15161a, suit: 0xc8102e, suit2: 0x15161a, trim: 0xf2f2ee, glove: 0x15161a, boot: 0x15161a, harness: true, stripes: true },
   // motorbike riders: a motocross kit (jersey, goggles under a peaked helmet, big boots) and road-racing leathers
   mx: { head: 'fullface', peak: true, visor: 0xd9761c, helmet: 0xf2f2ee, helmet2: 0xe8601c, suit: 0xe8601c, suit2: 0x2b2d31, trim: 0xf2f2ee, glove: 0x15161a, boot: 0xf2f2ee, stripes: true, bigBoots: true },
@@ -2375,12 +2375,25 @@ function figureGeometry(rig) {
     for (const a of C.spokes) at(B.ctlA, capAB(V(0, 0, 0), V(Math.cos(a) * C.wheelR, Math.sin(a) * C.wheelR, 0), 0.012, 0.012, { seg: 6 }), 0x8a8f96, true);
     at(B.ctlA, new THREE.CylinderGeometry(0.045, 0.05, 0.04, 14).rotateX(Math.PI / 2), 0x2b2d31);
     at(B.ctlA, ellipsoid(V(0, C.wheelR, 0.0), 0.02, 0.012, 0.02), 0xe8601c); // top-centre marker
+    if (C.qr) { // a race car's quick-release hub behind the boss: a splined body round the column and its anodised pull collar
+      at(B.ctlA, new THREE.CylinderGeometry(0.032, 0.032, 0.05, 14).rotateX(Math.PI / 2).translate(0, 0, -0.045), 0x9aa0a6, 'metal');
+      at(B.ctlA, new THREE.TorusGeometry(0.034, 0.007, 6, 18).translate(0, 0, -0.035), 0x1d6fd1, 'metal');
+    }
     at(B.ctlA, capAB(V(0, 0, -0.02), V(0, 0, -(0.42 + (rig.col.z - C.col.z) / Math.cos(C.tilt))), 0.025, 0.03, { seg: 8 }), 0x2b2d31); // column, forward and down into the dash (reaching as deep as it did before the wheel came towards the driver)
   }
   // pedals
   if (rig.ctl !== 'bars' && rig.floorY == null) for (const i of [B.pedR, B.pedL]) {
     at(i, boxG(0.085, 0.16, 0.018, V(0, 0.07, 0)), rig.ctl === 'wheel' && i === B.pedR ? 0x9aa0a6 : 0x2b2d31);
     at(i, capAB(V(0, 0.0, 0.02), V(0, 0.14, 0.1), 0.01, 0.01, { seg: 5 }), 0x2b2d31);
+  }
+  // toe brakes (a light plane's rudder pedals, controls.toeBrakes): each pedal on an arm down to its pivot on the
+  // floor, the brake cylinder from the pedal's top forward to the floor, rubber treads across the pad
+  if (C.toeBrakes && rig.ctl !== 'bars' && rig.floorY == null) for (const i of [B.pedR, B.pedL]) {
+    at(i, capAB(V(0, -0.015, -0.02), V(0, 0.13, -0.02), 0.011, 0.011, { seg: 6 }), 0x8b9097, true); // pedal arm
+    at(i, capAB(V(-0.055, -0.015, -0.02), V(0.055, -0.015, -0.02), 0.012, 0.012, { seg: 6 }), 0x2b2d31); // pivot
+    at(i, capAB(V(0, 0.12, -0.035), V(0, 0.0, -0.17), 0.014, 0.012, { seg: 8 }), 0x15161a); // brake cylinder
+    at(i, capAB(V(0, 0.125, -0.025), V(0, 0.105, -0.06), 0.005, 0.005, { seg: 5 }), 0xc9ccd1, true); // its rod
+    for (let k = 0; k < 4; k++) at(i, boxG(0.08, 0.008, 0.006, V(0, 0.03 + k * 0.032, 0.011)), 0x15161a); // treads
   }
   return k.build();
 }
@@ -2567,6 +2580,7 @@ export function addCrew(design, objs) {
         if (st.ground != null) groundY = (st.ground - st.p[1]) * ps.y / sc;
         ride = rideGeometry(st, obj, objs, ps, sc);
       }
+      if (st.harness && ctl !== 'bars' && OUTFITS[outfit] && OUTFITS[outfit].harness === undefined) colors = { ...(colors || {}), harness: true }; // (a seat with its own harness: whoever sits in it wears it)
       // a seat built with seatGeo declares it (fit: { at: where its geometry was placed, dims: seatGeo's arguments }), so
       // the figure can sit on its actual surfaces
       const seat = st.fit && ctl !== 'bars' ? seatSurfaces(st.fit, st.p, st.s || 1) : null, ctlSet = seatAdjust(st, st.s || 1, seatControls(st, st.s || 1));
@@ -2583,3 +2597,4 @@ export function addCrew(design, objs) {
   });
   return rigs;
 }
+export { prepObstacle, obstacleClear }; // (interior.js reads the seats' containing obstacles as each cockpit's interior)

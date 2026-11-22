@@ -11,6 +11,7 @@ import { detectBike, bikeSteer, bikeAssist } from './bike.js';
 import { buildStations, showStation } from './stations.js';
 import { detectBoat, boatFrame, boatForces, boatRecover, settleBoat, boatVisuals } from './boat.js';
 import { driveMode } from './drive.js';
+import { bakeCabinLight, keepCabinPatch } from './cabinLight.js';
 
 // spaceRCS: every plane can turn in space (no RCS part needed). rocketHigh: rockets push up to 1 + rocketHigh times harder
 // in the thin air above ~10 km (a generous shove towards space). Nothing changes lower down.
@@ -228,7 +229,7 @@ export class Aircraft {
       }
       this.parts.push(part);
     });
-    { const objs = []; for (const p of this.parts) objs[p.i] = p.obj; assemble(design, objs, this.root); mergeStatic(objs, this.root); } // fillets, pylons, doors, skin furniture (visual only), then one mesh per material per part
+    { const objs = []; for (const p of this.parts) objs[p.i] = p.obj; assemble(design, objs, this.root); mergeStatic(objs, this.root); try { this.cabin = bakeCabinLight(objs, this.root); } catch (e) { console.warn('cabinLight', e); } } // (then light into the cockpits and cabins only through their glass: cabinLight.js) // fillets, pylons, doors, skin furniture (visual only), then one mesh per material per part
     this.hasEngine = this.parts.some((p) => p.engine);
     this.hasRetract = this.parts.some((p) => p.gear?.retract);
     this.hasSmoke = this.parts.some((p) => p.smoke);
@@ -1035,7 +1036,7 @@ export class Aircraft {
     p.dmg += amount;
     if (!p.scorched && p.dmg > p.hp * 0.55) {
       p.scorched = true;
-      p.obj.traverse((o) => { if (o.isMesh && !o.material.transparent && o.material.color) { const old = o.material; o.material = old.clone(); keepHeatPatch(old, o.material); o.material.color.multiplyScalar(0.45); if (o.material.roughness !== undefined) o.material.roughness = 0.8; if (o.material.clearcoat) o.material.clearcoat = 1e-4; } }); // (not 0: that's another shader, compiled mid-crash)
+      p.obj.traverse((o) => { if (o.isMesh && !o.material.transparent && o.material.color) { const old = o.material; o.material = old.clone(); keepCabinPatch(old, o.material); keepHeatPatch(old, o.material); o.material.color.multiplyScalar(0.45); if (o.material.roughness !== undefined) o.material.roughness = 0.8; if (o.material.clearcoat) o.material.clearcoat = 1e-4; } }); // (not 0: that's another shader, compiled mid-crash)
       if (p.engine) this.emit('msg', { text: `${p.name} damaged!`, bad: true });
     }
     if (p.dmg >= p.hp) this.breakPart(p.i, 'impact');
