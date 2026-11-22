@@ -618,6 +618,7 @@ ${isLand(vehicleKind(analyze(hangar.design))) ? `<h4>Drive — keyboard</h4>
   <h4>Gamepad</h4><p>Left stick flies, right stick X is rudder, triggers set throttle, A brakes, B gear, X flaps, Y camera, LB smoke.</p>
   <h4>Tips</h4><p>Take off around the stall speed shown in the hangar. In Simulator mode, land gently (under ~3 m/s sink) or your gear will snap! Sailplanes can ride rising air under cumulus clouds and along sunny ridges.</p>
   <h4>Credits</h4><p>Voice callouts use the open-source Piper voice "joe". Engines, wind, tyres, weather, nature and crash sounds are real recordings from <a href="https://freesound.org" target="_blank" rel="noopener">Freesound</a>: <a href="assets/sfx/CREDITS.md" target="_blank" rel="noopener">sound credits</a>. Music: “Easy Lemon”, “Floating Cities” and “Heroic Age” by Kevin MacLeod (incompetech.com), licensed under <a href="http://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>.</p>
+  <p>Crew helmets: “space helmet” by J4747 and “Fox X Supreme Helmet” by Muhammad Seno Aji (Sketchfab, <a href="http://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>); “Motorcycle helmet - racing helmet” by ramyouny (Sketchfab). Simplified and recoloured.</p>
   <p>Jungfrau Region and Bora Bora: satellite imagery <a href="https://s2maps.eu" target="_blank" rel="noopener">Sentinel-2 cloudless 2016</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016, CC BY 4.0); elevation from Terrain Tiles on AWS; Bora Bora's lagoon depths are estimated from the imagery; map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</p>
   <p>Grand Canyon: aerial imagery from the USDA National Agriculture Imagery Program (NAIP) via the USGS <a href="https://www.usgs.gov/programs/national-geospatial-program/national-map" target="_blank" rel="noopener">National Map</a> (public domain); elevation from Terrain Tiles on AWS (USGS 3DEP); map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</p>
   <p>Earth from space: NASA Visible Earth (<a href="https://visibleearth.nasa.gov" target="_blank" rel="noopener">Blue Marble Next Generation and Earth at Night</a>, public domain).</p>
@@ -1428,10 +1429,10 @@ function frame(now) {
       const onScreen = sp.z < 1 && Math.abs(sp.x) < 1.4 && Math.abs(sp.y) < 1.4;
       post.flare(new THREE.Vector2(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5), onScreen ? F.sunVis * (1 - w.W.dark) : 0, w.sun.color, flightCam.aspect);
       // Ultra: sun shafts from the open sky around the sun (also when the sun itself is just behind a ridge or a cloud)
-      post.ambientOcclusion({ radiusK: 0.04, rMin: 1.5, rMax: 8, maxDist: 1200, strength: 1.8 });
+      post.ambientOcclusion({ radiusK: 0.04, rMin: 0.25, rMax: 8, maxDist: 1200, strength: 1.5 }); // (a small floor so close-ups get crisp contact shadows, not metre-wide smudges)
       post.shafts(new THREE.Vector2(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5), sp.z < 1 && w.sunDir.y > -0.03 ? (1 - w.W.dark) * smoothstep(1.8, 1.0, Math.max(Math.abs(sp.x), Math.abs(sp.y))) : 0, w.sun.color);
       const golden = Math.max(0, 1 - Math.abs(w.sunElev - 0.08) / 0.3);
-      post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: 1.1 + golden * 0.1 - w.W.dark * 0.25, vignette: 0.3 });
+      post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: 0.97 + golden * 0.12 - w.W.dark * 0.25, contrast: 1.12, vignette: 0.3 }); // near-neutral colour, a little more contrast: photographic rather than candy
       fitNearPlane(F);
       const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene) : null;
       post.render(F.scene, flightCam, dt);

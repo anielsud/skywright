@@ -14,16 +14,56 @@
 // into a cockpit or a working deck behind bulwarks where the stations say so. Painted bottom, a boot stripe, topsides,
 // a white gunwale cap and deck, each one strip so the creases stay crisp; the transom closes the stern.
 import * as THREE from 'three';
+import { mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { PARTS } from './parts.js';
 import { M } from './materials.js';
 import { PM } from './planeMaterials.js';
-import { V, bar, pipe, Bag, seatGeo } from './partDetail.js';
+import { V, bar, pipe, Bag, seatGeo, ringLoft } from './partDetail.js';
 
 const cached = new Map();
 const mat = (k, make) => { if (!cached.has(k)) cached.set(k, make()); return cached.get(k); };
 const gel = (c) => mat('gel' + c, () => new THREE.MeshPhysicalMaterial({ color: c, metalness: 0, roughness: 0.32, clearcoat: 0.9, clearcoatRoughness: 0.08 }));
-const nonSkid = (c) => mat('deck' + c, () => new THREE.MeshStandardMaterial({ color: c, metalness: 0, roughness: 0.85 }));
-const vinyl = (c) => mat('vinyl' + c, () => new THREE.MeshStandardMaterial({ color: c, metalness: 0, roughness: 0.6 }));
+// Procedural surface relief from the object-space position (no UVs needed): marine vinyl grain, non-skid diamonds
+const RELIEF = /* glsl */`
+  varying vec3 vRelP;
+  float rH(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float rN(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(rH(i), rH(i + vec3(1,0,0)), f.x), mix(rH(i + vec3(0,1,0)), rH(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(rH(i + vec3(0,0,1)), rH(i + vec3(1,0,1)), f.x), mix(rH(i + vec3(0,1,1)), rH(i + vec3(1,1,1)), f.x), f.y), f.z); }
+  vec3 rBump(vec3 n, vec3 vp, float h, float k) { vec3 dpx = dFdx(vp), dpy = dFdy(vp); float dhx = dFdx(h), dhy = dFdy(h);
+    vec3 r1 = cross(dpy, n), r2 = cross(n, dpx); float det = dot(dpx, r1); return normalize(abs(det) * n - k * sign(det) * (dhx * r1 + dhy * r2)); }`;
+function relief(m, field, key) {
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vRelP;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvRelP = position;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + RELIEF).replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n{ ${field} normal = rBump(normal, -vViewPosition, h, k); }`);
+  };
+  m.customProgramCacheKey = () => 'relief-' + key; return m;
+}
+const nonSkid = (c) => mat('deck' + c, () => relief(new THREE.MeshStandardMaterial({ color: c, metalness: 0, roughness: 0.82 }),
+  'vec2 q = vRelP.xz * 55.0; vec2 dq = abs(fract(vec2(q.x + q.y, q.x - q.y) * 0.5) - 0.5); float fw = clamp(length(fwidth(vRelP)) * 60.0, 0.0, 1.0); float h = mix(smoothstep(0.32, 0.18, max(dq.x, dq.y)), 0.0, fw) * 0.8 + (rN(vRelP * 140.0) - 0.5) * 0.3; float k = 0.0009;', 'deck'));
+// marine vinyl: a soft sheen, a little clearcoat and a fine leather grain
+const vinyl = (c) => mat('vinyl' + c, () => relief(new THREE.MeshPhysicalMaterial({ color: c, metalness: 0, roughness: 0.42, sheen: 0.5, sheenRoughness: 0.5, sheenColor: new THREE.Color(0.4, 0.4, 0.4), clearcoat: 0.35, clearcoatRoughness: 0.35 }),
+  'float h = (rN(vRelP * 320.0) - 0.5) * 0.6 + (rN(vRelP * 900.0) - 0.5) * 0.25; float k = 0.00035;', 'vinyl'));
+// An upholstered cushion: a rounded box (corner radius r) whose faces bulge out by `bulge`; `pleats` horizontal channels
+// sewn across the front face (backrests). Centred on the origin, w x h x d.
+function cushion(w, h, d, r = 0.05, bulge = 0.02, pleats = 0) {
+  const g = new THREE.BoxGeometry(w, h, d, 16, 12, 12), p = g.attributes.position, hw = w / 2, hh = h / 2, hd = d / 2, q = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    q.fromBufferAttribute(p, i); c.set(THREE.MathUtils.clamp(q.x, -hw + r, hw - r), THREE.MathUtils.clamp(q.y, -hh + r, hh - r), THREE.MathUtils.clamp(q.z, -hd + r, hd - r));
+    const n = q.clone().sub(c); const L = n.length() || 1; n.divideScalar(L); q.copy(c).addScaledVector(n, r);
+    const ux = q.x / hw, uy = q.y / hh, uz = q.z / hd; // bulge: the stuffing pushes each face out in the middle
+    q.addScaledVector(n, bulge * Math.max(0, 1 - ux * ux) * Math.max(0, 1 - uy * uy) * Math.max(0, 1 - uz * uz) * 4);
+    if (pleats && n.z < -0.5) { const t = (q.y / h + 0.5) * (pleats + 1); q.z += 0.012 * Math.exp(-(((t - Math.round(t)) / 0.08) ** 2)) * (Math.round(t) > 0 && Math.round(t) <= pleats ? 1 : 0); }
+    p.setXYZ(i, q.x, q.y, q.z);
+  }
+  g.deleteAttribute('normal'); const m = mergeVertices(g, 1e-4); m.computeVertexNormals(); return m;
+}
+// piping: a thin welted cord round a cushion's top edge (a rounded rectangle at height y)
+function piping(w, d, r, y, rad = 0.008) {
+  const pts = [], hw = w / 2 - r, hd = d / 2 - r;
+  for (const [cx, cz, a0] of [[hw, hd, 0], [-hw, hd, Math.PI / 2], [-hw, -hd, Math.PI], [hw, -hd, Math.PI * 1.5]]) for (let k = 0; k <= 6; k++) { const a = a0 + (k / 6) * Math.PI / 2; pts.push(V(cx + Math.cos(a) * r, y, cz + Math.sin(a) * r)); }
+  pts.push(pts[0].clone()); return pipe(pts, rad, 6, 120);
+}
 const rubberM = () => M.rubber();
 const WHITE = 0xf4f4f0, TEAK = 0xb8956a;
 
@@ -155,19 +195,27 @@ function speedHull(c, lv) {
     b.add(pipe(rows[1], 0.018, 6, 48), chrome); // top frame
     for (const k of [0, n]) b.add(bar(rows[0][k], rows[1][k], 0.03, 0.03, true, 6), chrome);
   }
-  // helm console (starboard) and the passenger's glovebox (port), on the cockpit floor
+  // helm console (starboard) and the passenger's glovebox (port), on the cockpit floor, 67 cm tall (the wheel is
+  // mounted on the helm console's back face: seats[0].helm)
   for (const sx of [1, -1]) {
-    const w = 0.62, x = sx * 0.5, z0 = -1.12, z1 = -0.55, y0 = 0.38, y1 = 0.92;
+    const w = 0.62, x = sx * 0.5, z0 = -1.12, z1 = -0.55, y0 = 0.38, y1 = 1.1;
     const geo = new THREE.BoxGeometry(w, y1 - y0, z1 - z0); geo.translate(x, (y0 + y1) / 2, (z0 + z1) / 2); b.add(geo, gel(WHITE));
     const dash = new THREE.BoxGeometry(w * 0.92, 0.04, 0.3); dash.rotateX(-0.35); dash.translate(x, y1 + 0.005, z1 - 0.14); b.add(dash, M.black());
   }
-  // bucket seats on pedestals, a bench across the back
+  // bucket seats on pedestals (cushion 42 cm above the deck, a helm seat's height), a bench across the back
   for (const sx of [1, -1]) {
-    const ped = new THREE.CylinderGeometry(0.08, 0.12, 0.3, 12); ped.translate(sx * 0.5, 0.54, 0.25); b.add(ped, chrome);
-    const s = seatGeo(0.5, 0.55, 0.46, 0.2); s.translate(sx * 0.5, 0.69, 0.42); b.add(s, sx > 0 ? seatM2 : seatM);
+    const ped = new THREE.CylinderGeometry(0.08, 0.12, 0.38, 12); ped.translate(sx * 0.5, 0.58, 0.25); b.add(ped, chrome);
+    const s = seatGeo(0.5, 0.55, 0.46, 0.2); s.translate(sx * 0.5, 0.77, 0.42); b.add(s, sx > 0 ? seatM2 : seatM);
+    if (lv) { const pc = cushion(0.44, 0.1, 0.42, 0.045, 0.014); pc.translate(sx * 0.5, 0.8, 0.2); b.add(pc, sx > 0 ? seatM2 : seatM); b.add(piping(0.43, 0.41, 0.045, 0.845).translate(sx * 0.5, 0, 0.2), sx > 0 ? seatM : seatM2); }
   }
-  { const bench = new THREE.BoxGeometry(1.9, 0.4, 0.55); bench.translate(0, 0.6, 2.05); b.add(bench, seatM);
-    const back = new THREE.BoxGeometry(1.9, 0.48, 0.14); back.translate(0, 1.0, 2.3); b.add(back, seatM2); }
+  { // the bench: a moulded gelcoat base, three upholstered seat cushions with piping, three pleated back cushions
+    const base = new THREE.BoxGeometry(1.94, 0.26, 0.56); base.translate(0, 0.53, 2.06); b.add(base, gel(WHITE));
+    for (const cx of [-0.63, 0, 0.63]) {
+      const sc = cushion(0.61, 0.16, 0.54, 0.055, 0.018); sc.translate(cx, 0.74, 2.04); b.add(sc, seatM);
+      b.add(piping(0.6, 0.53, 0.055, 0.81).translate(cx, 0, 2.04), seatM2);
+      const bk = cushion(0.61, 0.46, 0.13, 0.05, 0.016, 2); bk.rotateX(-0.12); bk.translate(cx, 1.08, 2.31); b.add(bk, seatM2);
+    }
+  }
   // rub rail along the gunwale, bow rails, cleats
   { const rail = []; for (let k = 0; k <= 40; k++) { const s = stationAt(SPEED, -3.28 + 6.46 * (k / 40)); rail.push(V(s.hg + 0.01, s.ys - 0.02, s.z)); }
     for (const sx of [1, -1]) b.add(pipe(rail.map((p) => V(p.x * sx, p.y, p.z)), 0.035, 6, 120), M.darkMetal()); }
@@ -178,6 +226,20 @@ function speedHull(c, lv) {
       for (const k of [0, 4, 8]) { const p = pts[k], s = stationAt(SPEED, p.z); b.add(bar(V(p.x, s.ys - 0.01, p.z), p, 0.03, 0.03, true, 6), chrome); }
     }
     for (const [sx, z] of [[1, -2.5], [-1, -2.5], [1, 2.9], [-1, 2.9]]) { const s = stationAt(SPEED, z), cl = new THREE.BoxGeometry(0.05, 0.05, 0.2); cl.translate(sx * (s.hg - 0.06), s.ys + 0.02, z); nb.add(cl, chrome); }
+    // the cockpit's furniture: upholstered side bolsters along both inner gunwales, a snap-in carpet, cup holders in the
+    // gunwale tops, speaker grilles low on the side panels and a grab handle for the passenger
+    const carpet = mat('carpet', () => relief(new THREE.MeshStandardMaterial({ color: 0x3b3e43, metalness: 0, roughness: 0.96 }), 'float h = (rN(vRelP * 700.0) - 0.5) * 0.8 + (rN(vRelP * 90.0) - 0.5) * 0.3; float k = 0.0007;', 'carpet'));
+    { const m = new THREE.Shape(), hw = 0.82, z0 = -0.52, z1 = 1.74, rr = 0.12; m.moveTo(-hw + rr, z0); m.lineTo(hw - rr, z0); m.quadraticCurveTo(hw, z0, hw, z0 + rr); m.lineTo(hw, z1 - rr); m.quadraticCurveTo(hw, z1, hw - rr, z1); m.lineTo(-hw + rr, z1); m.quadraticCurveTo(-hw, z1, -hw, z1 - rr); m.lineTo(-hw, z0 + rr); m.quadraticCurveTo(-hw, z0, -hw + rr, z0);
+      const mg = new THREE.ExtrudeGeometry(m, { depth: 0.012, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.006, bevelSegments: 2, curveSegments: 6 }); mg.rotateX(Math.PI / 2); mg.translate(0, 0.418, 0); b.add(mg, carpet); }
+    for (const sx of [1, -1]) {
+      const bl = cushion(0.09, 0.2, 2.25, 0.04, 0.012); bl.translate(sx * 0.975, 0.74, 0.63); b.add(bl, seatM);
+      b.add(piping(0.09, 2.25, 0.04, 0.84).translate(sx * 0.975, 0, 0.63), seatM2);
+      for (const z of [0.25, 1.45]) { const ring = new THREE.TorusGeometry(0.045, 0.008, 8, 24); ring.rotateX(Math.PI / 2); ring.translate(sx * 1.05, 0.905, z); nb.add(ring, chrome);
+        const cup = new THREE.CylinderGeometry(0.042, 0.04, 0.012, 20); cup.translate(sx * 1.05, 0.9, z); nb.add(cup, M.black()); }
+      for (const z of [0.55, 1.45]) { const g2 = new THREE.CylinderGeometry(0.075, 0.075, 0.01, 28); g2.rotateZ(Math.PI / 2); g2.translate(sx * 0.985, 0.54, z); nb.add(g2, M.black());
+        const r2 = new THREE.TorusGeometry(0.078, 0.008, 6, 28); r2.rotateY(Math.PI / 2); r2.translate(sx * 0.98, 0.54, z); nb.add(r2, chrome); }
+    }
+    { const hpts = []; for (let k = 0; k <= 10; k++) { const t = k / 10; hpts.push(V(-1.02, 0.905 + Math.sin(t * Math.PI) * 0.07, -0.55 + t * 0.32)); } b.add(pipe(hpts, 0.013, 8, 30), chrome); } // grab handle
     // spray strakes along the bottom (each half sunk into the skin)
     for (const f of [0.35, 0.68]) for (const sx of [1, -1]) {
       const pts = []; for (let k = 0; k <= 20; k++) { const z = -2.4 + 5.4 * (k / 20), s = stationAt(SPEED, z); pts.push(V(sx * s.hc * f, s.yk + (s.yc - s.yk) * f - 0.004, z)); }
@@ -185,7 +247,7 @@ function speedHull(c, lv) {
     }
   }
   b.to(g); nb.to(g, true);
-  g.userData.seats = [{ p: [0.5, 0.74, 0.3], s: 1 }, { p: [-0.5, 0.74, 0.3], s: 1, role: 'crew' }]; // driver to starboard
+  g.userData.seats = [{ p: [0.5, 0.82, 0.3], s: 1, fit: { at: [0.5, 0.77, 0.42], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.433 }, helm: { col: [0, 0.36, -0.5], tilt: 0.42 } }, { p: [-0.5, 0.82, 0.3], s: 1, role: 'crew', fit: { at: [-0.5, 0.77, 0.42], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.433 } }]; // driver to starboard (fit: the bucket seats' seatGeo and the carpet's top, so the crew sit on them, feet on the floor)
   return g;
 }
 
@@ -216,7 +278,12 @@ function jetSkiHull(c, lv) {
   }
   b.to(g);
   // ridden like a motorbike (crew.js 'bars'): feet in the footwells, hands on the handlebar grips
-  g.userData.seats = [{ p: [0, 0.82, 0.32], s: 1, ctl: 'bars', rider: 'boat', pegs: [[-0.36, 0.33, 0.28], [0.36, 0.33, 0.28]], ground: 0.3 }];
+  // the rider (crew.js rideGeometry): astride the saddle (the capsule's sections), knees beside the hood (the half
+  // ellipsoid's sections) and the saddle's spine
+  const ell = (zs, c, a, rx, ry, y) => zs.map((z) => { const f = Math.sqrt(Math.max(0.01, 1 - ((z - c) / a) ** 2)); return { z, hw: rx * f, top: y + ry * f, bot: y - ry * f, n: 2 }; });
+  const saddle = [...ell([-0.3, -0.25, -0.18, -0.1], -0.1, 0.2, 0.2, 0.11, 0.74), ...ell([1.1, 1.18, 1.25, 1.3], 1.1, 0.2, 0.2, 0.11, 0.74)];
+  const hood = ell([-1.36, -1.25, -1.1, -0.9, -0.62, -0.4, -0.2, -0.05, 0.12], -0.62, 0.75, 0.42, 0.3, 0.56), spine = [{ z: -0.295, hw: 0.21, top: 0.71, bot: 0.29, n: 10 }, { z: 1.255, hw: 0.21, top: 0.71, bot: 0.29, n: 10 }];
+  g.userData.seats = [{ p: [0, 0.82, 0.32], s: 1, ctl: 'bars', rider: 'boat', pegs: [[-0.36, 0.33, 0.04], [0.36, 0.33, 0.04]], ground: 0.3, saddle, around: [hood, spine] }];
   g.userData.grips = [{ o: g, p: V(-0.33, 1.0, -0.24) }, { o: g, p: V(0.33, 1.0, -0.24) }];
   return g;
 }
@@ -248,16 +315,17 @@ function pontoonHull(c, lv) {
   }
   // couches along the sides and across the stern, the helm console and its seat
   const cush = vinyl(WHITE), trim = vinyl(0x1d4e89);
-  for (const sx of [1, -1]) { const s = new THREE.BoxGeometry(0.55, 0.38, 3.2); s.translate(sx * 0.92, 0.72, 0.9); b.add(s, cush); const bk = new THREE.BoxGeometry(0.14, 0.4, 3.2); bk.translate(sx * 1.16, 1.1, 0.9); b.add(bk, trim); }
+  // (the starboard couch starts behind the helm seat, which would otherwise stand in it)
+  for (const sx of [1, -1]) { const z0 = sx > 0 ? 0.05 : -0.7, L = 2.5 - z0; const s = new THREE.BoxGeometry(0.55, 0.38, L); s.translate(sx * 0.92, 0.72, z0 + L / 2); b.add(s, cush); const bk = new THREE.BoxGeometry(0.14, 0.4, L); bk.translate(sx * 1.16, 1.1, z0 + L / 2); b.add(bk, trim); }
   { const s = new THREE.BoxGeometry(1.3, 0.38, 0.55); s.translate(0, 0.72, 2.75); b.add(s, cush); }
-  { const con = new THREE.BoxGeometry(0.6, 0.62, 0.55); con.translate(0.85, 0.84, -1.4); b.add(con, gel(WHITE)); const dash = new THREE.BoxGeometry(0.56, 0.04, 0.3); dash.rotateX(-0.3); dash.translate(0.85, 1.16, -1.3); b.add(dash, M.black());
-    const ped = new THREE.CylinderGeometry(0.07, 0.1, 0.3, 12); ped.translate(0.85, 0.68, -0.4); b.add(ped, M.chrome()); const s = seatGeo(0.5, 0.55, 0.46, 0.2); s.translate(0.85, 0.83, -0.25); b.add(s, cush); }
+  { const con = new THREE.BoxGeometry(0.6, 0.72, 0.55); con.translate(0.85, 0.89, -1.4); b.add(con, gel(WHITE)); const dash = new THREE.BoxGeometry(0.56, 0.04, 0.3); dash.rotateX(-0.3); dash.translate(0.85, 1.26, -1.3); b.add(dash, M.black());
+    const ped = new THREE.CylinderGeometry(0.07, 0.1, 0.36, 12); ped.translate(0.85, 0.71, -0.3); b.add(ped, M.chrome()); const s = seatGeo(0.5, 0.55, 0.46, 0.2); s.translate(0.85, 0.89, -0.15); b.add(s, cush); }
   if (lv) { // bimini top on two hoops
     const top = new THREE.BoxGeometry(2.3, 0.03, 2.2); top.translate(0, 2.12, -0.6); b.add(top, vinyl(0x1d4e89));
     for (const z of [-1.6, 0.4]) b.add(pipe([V(-1.25, y1 - 0.02, z), V(-1.2, 1.9, z), V(-0.9, 2.11, z), V(0.9, 2.11, z), V(1.2, 1.9, z), V(1.25, y1 - 0.02, z)], 0.022, 6, 40), alu);
   }
   b.to(g);
-  g.userData.seats = [{ p: [0.85, 0.88, -0.38], s: 1 }];
+  g.userData.seats = [{ p: [0.85, 0.94, -0.28], s: 1, fit: { at: [0.85, 0.89, -0.15], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.53 }, helm: { col: [0, 0.4, -0.5], tilt: 0.45 } }]; // (fit: the helm seat's seatGeo, feet on the deck; the wheel on the console's back face)
   return g;
 }
 
@@ -295,7 +363,20 @@ function outboard(c, lv) {
     const lip = new THREE.BoxGeometry(0.3, 0.06, 0.16); lip.translate(0, 0.07, 0.04); b.add(lip, black); }
   sw.position.z = OB.pivotZ; // the swivelling motor, built about its steering axis
   const loc = (x, y, z) => V(x, y, z - OB.pivotZ);
-  { const cowl = new THREE.CapsuleGeometry(0.24, 0.32, 6, 16); cowl.rotateX(Math.PI / 2); cowl.scale(0.95, 1.25, 1); cowl.translate(0, 0.42, 0.42 - OB.pivotZ); sb.add(cowl, paint);
+  if (lv) { // a moulded cowling: rounded nose towards the boat, widest near the back, a flatter top; the black lower cowl
+    // below the parting line, vent slots at the back of the top and a stripe decal down each side
+    const loft = (z0, z1, wF, hTop, hBot, n, N = 18, S = 28) => { const rings = [];
+      for (let k = 0; k <= N; k++) { const t = k / N, z = z0 + (z1 - z0) * t, w = wF(t), top = hTop(t), bot = hBot(t), cy = (top + bot) / 2, hh = (top - bot) / 2, ring = [];
+        for (let i = 0; i < S; i++) { const a2 = (i / S) * Math.PI * 2, ca = Math.cos(a2), sa = Math.sin(a2); ring.push(V(Math.sign(ca) * Math.abs(ca) ** (2 / n) * w, cy + Math.sign(sa) * Math.abs(sa) ** (2 / (sa > 0 ? n * 1.3 : n)) * hh, z - OB.pivotZ)); }
+        rings.push(ring); } return ringLoft(rings, true, true); };
+    const wUp = (t) => 0.235 * Math.pow(Math.sin(Math.PI * Math.min(1, 0.06 + t * 0.94)), 0.45) * (0.82 + 0.18 * t);
+    sb.add(loft(0.02, 0.84, wUp, (t) => 0.75 - 0.07 * (1 - t) ** 2, () => 0.24, 2.6), paint); // top cowl
+    sb.add(loft(0.08, 0.78, (t) => wUp(t) * 0.86, () => 0.26, () => -0.02, 2.4), black); // lower cowl
+    for (const sx of [1, -1]) {
+      for (let k = 0; k < 3; k++) { const v = new THREE.BoxGeometry(0.012, 0.018, 0.1); v.rotateZ(sx * 0.5); v.translate(sx * 0.13, 0.7, 0.58 + k * 0.045 - OB.pivotZ); sb.add(v, black); } // vents
+      const dec = new THREE.BoxGeometry(0.004, 0.05, 0.5); dec.translate(sx * 0.226, 0.46, 0.5 - OB.pivotZ); sb.add(dec, gel(0xf2f2ee)); // stripe decal
+    }
+  } else { const cowl = new THREE.CapsuleGeometry(0.24, 0.32, 6, 16); cowl.rotateX(Math.PI / 2); cowl.scale(0.95, 1.25, 1); cowl.translate(0, 0.42, 0.42 - OB.pivotZ); sb.add(cowl, paint);
     const cap = new THREE.BoxGeometry(0.36, 0.08, 0.5); cap.translate(0, 0.73, 0.44 - OB.pivotZ); sb.add(cap, black);
     const neck = new THREE.BoxGeometry(0.3, 0.3, 0.36); neck.translate(0, 0.08, 0.4 - OB.pivotZ); sb.add(neck, black); }
   { // the leg: a streamlined column from under the cowling to the gearcase, an anti-ventilation plate, the torpedo and skeg
@@ -307,7 +388,6 @@ function outboard(c, lv) {
   const prop = screw(0.2, 3, M.steel()); prop.position.set(0, OB.prop[1], OB.prop[2] - 0.01 - OB.pivotZ); sw.add(prop);
   g.add(sw); b.to(g);
   g.userData.strut = sw; g.userData.fan = prop;
-  if (lv) { const dec = new THREE.BoxGeometry(0.005, 0.14, 0.3); dec.translate(0.235, 0.46, 0.44 - OB.pivotZ); const m = new THREE.Mesh(dec, M.chrome()); sw.add(m); }
   return g;
 }
 // A three-bladed propeller about z (blades twisted), hub towards -z. Group so it can spin as one.
@@ -372,7 +452,7 @@ function wheelhouse(c, lv) {
     const base = new THREE.CylinderGeometry(0.08, 0.1, 0.2, 10); base.translate(0, H1 + 0.16, -0.7); b.add(base, M.black());
     for (const [sx, col] of [[-1, 0xff2020], [1, 0x2050ff]]) { const l = new THREE.SphereGeometry(0.09, 10, 8); l.translate(sx * 0.55, H1 + 1.42, 0.5); b.add(l, PM.light(col)); } }
   b.to(g);
-  g.userData.seats = [{ p: [0.4, 0.47, -0.05], s: 1, ctl: 'wheel' }];
+  g.userData.seats = [{ p: [0.4, 0.47, -0.05], s: 1, ctl: 'wheel', fit: { at: [0.4, 0.42, 0.1], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.02 }, helm: { col: [0, 0.36, -0.5], tilt: 0.42 } }]; // (fit: the helm chair's seatGeo, feet on the deck; the wheel on the helm's back face)
   return g;
 }
 // Water cannon (a fire monitor): a pedestal, a swivel body and a nozzle aimed forward and up. The smoke button turns

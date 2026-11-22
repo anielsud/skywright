@@ -460,10 +460,22 @@ function rotorHead({ R, blades, chord, mast = 0, side = false, color, lv = 0 }) 
   for (let b = 0; b < blades; b++) {
     const piv = new THREE.Object3D(); piv.rotation.z = (b / blades) * Math.PI * 2;
     const bl = new THREE.Mesh(bgeo, M.prop()); bl.rotation.x = Math.PI / 2 + 0.12; piv.add(bl); // flat in the disc plane, slight pitch
-    const tip = new THREE.Mesh(new THREE.BoxGeometry(R * 0.06, chord * 1.02, 0.05), M.propTip()); tip.position.x = R * 0.95; piv.add(tip);
+    if (lv) { const tip = new THREE.Mesh(rotorBlade(R, chord, { from: 0.9, to: 1, grow: 0.03 }), M.propTip()); tip.rotation.x = Math.PI / 2 + 0.12; piv.add(tip); }
+    else { const tip = new THREE.Mesh(new THREE.BoxGeometry(R * 0.06, chord * 1.02, 0.05), M.propTip()); tip.position.x = R * 0.95; piv.add(tip); }
+    if (lv) { // blade grip (bearing housing) on the hub arm, a pitch horn and a lead-lag damper
+      const grip = new THREE.Mesh(new THREE.CylinderGeometry(chord * 0.2, chord * 0.23, R * 0.11, 16), M.aluminum()); grip.rotation.z = -Math.PI / 2; grip.position.x = chord * 0.45 + R * 0.055; piv.add(grip);
+      for (const gx of [chord * 0.5, chord * 0.5 + R * 0.1]) { const bolt = new THREE.Mesh(new THREE.CylinderGeometry(chord * 0.05, chord * 0.05, chord * 0.55, 8), M.steel()); bolt.position.set(gx, 0, 0); bolt.rotation.x = Math.PI / 2; piv.add(bolt); }
+      const horn = new THREE.Mesh(new THREE.BoxGeometry(chord * 0.08, chord * 0.5, chord * 0.12), M.steel()); horn.position.set(chord * 0.6, chord * 0.32, -chord * 0.15); piv.add(horn);
+      const damp = new THREE.Mesh(new THREE.CylinderGeometry(chord * 0.07, chord * 0.07, R * 0.08, 10), M.paint(0x2a2c30)); damp.rotation.z = -Math.PI / 2; damp.position.set(chord * 0.45 + R * 0.04, -chord * 0.28, 0.0); piv.add(damp);
+    }
     spin.add(piv);
   }
-  const hub = new THREE.Mesh(new THREE.CylinderGeometry(chord * 0.6, chord * 0.6, chord * 0.5, 14), M.paint(color)); hub.rotation.x = Math.PI / 2; spin.add(hub);
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(chord * 0.6, chord * 0.6, chord * 0.5, lv ? 32 : 14), M.paint(color)); hub.rotation.x = Math.PI / 2; spin.add(hub);
+  if (lv) { // star plate under the hub, retaining nut and a cap on top
+    const star = new THREE.Mesh(new THREE.CylinderGeometry(chord * 0.85, chord * 0.85, chord * 0.12, blades * 2 > 4 ? blades * 2 : 6), M.aluminum()); star.rotation.x = Math.PI / 2; star.position.z = -chord * 0.22; spin.add(star);
+    const nut = new THREE.Mesh(new THREE.CylinderGeometry(chord * 0.26, chord * 0.26, chord * 0.22, 6), M.steel()); nut.rotation.x = Math.PI / 2; nut.position.z = chord * 0.34; spin.add(nut);
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(chord * 0.2, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), M.paint(color)); cap.rotation.x = Math.PI / 2; cap.position.z = chord * 0.45; spin.add(cap);
+  }
   const disc = new THREE.Mesh(new THREE.CircleGeometry(R, 48), M.propDisc()); disc.userData.isDisc = true;
   const holder = new THREE.Group(); holder.add(spin); holder.add(disc);
   holder.userData.spinner = spin; holder.userData.disc = disc;

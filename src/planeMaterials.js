@@ -79,17 +79,37 @@ function skinDetailTexture() {
 }
 
 // uv1 is in metres of the unscaled part; scale it by the mesh's world scale along part Z (u) and X (v).
+// Weathering (uGrime 0..1): dirt collects on surfaces facing down and in the panel seams, rain/oil streaks run down the
+// sides (world space, so they follow gravity whatever the part's orientation), and grimy paint loses its gloss.
+const GRIME_GLSL = /* glsl */`
+  uniform float uGrime; varying vec3 vGrimeW;
+  float gH(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float gN(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(gH(i), gH(i + vec3(1,0,0)), f.x), mix(gH(i + vec3(0,1,0)), gH(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(gH(i + vec3(0,0,1)), gH(i + vec3(1,0,1)), f.x), mix(gH(i + vec3(0,1,1)), gH(i + vec3(1,1,1)), f.x), f.y), f.z); }`;
 function skinCompile(sh) {
-  sh.vertexShader = sh.vertexShader.replace('#include <uv_vertex>', `
+  {
+    sh.uniforms.uGrime = { value: this?.userData?.grime ?? 0.32 };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGrimeW;')
+      .replace('#include <uv_vertex>', `
     vec2 uv1M = uv1 * vec2(length(modelMatrix[2].xyz), length(modelMatrix[0].xyz));
     #define uv1 uv1M
     #include <uv_vertex>
-    #undef uv1`);
-  // seams and rivets also darken the paint a little under direct sun (the aoMap alone only dims ambient light)
-  sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+    #undef uv1`).replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGrimeW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    // seams and rivets also darken the paint a little under direct sun (the aoMap alone only dims ambient light)
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + GRIME_GLSL).replace('#include <color_fragment>', `#include <color_fragment>
     vec3 skinT = texture2D(aoMap, vAoMapUv).rgb;
     diffuseColor.rgb *= mix(1.0, skinT.r, 0.4);
-    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.58, 0.6, 0.62), skinT.b * 0.55); // chipped paint: bare aluminium`);
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.58, 0.6, 0.62), skinT.b * 0.55); // chipped paint: bare aluminium
+    vec3 gWN = normalize(transpose(mat3(viewMatrix)) * normalize(vNormal));
+    float streak = gN(vec3(vGrimeW.x * 26.0, vGrimeW.y * 1.1, vGrimeW.z * 26.0)) * (0.6 + 0.4 * gN(vGrimeW * 7.0)); // thin vertical runs
+    float grime = clamp(smoothstep(0.1, -0.8, gWN.y) * 0.65 + smoothstep(0.55, 0.9, streak) * 0.3 * (1.0 - abs(gWN.y)) + (1.0 - skinT.r) * 1.6, 0.0, 1.0) * uGrime;
+    diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.62, 0.55, 0.46) + vec3(0.035, 0.028, 0.02), grime);
+    float dust = smoothstep(0.45, 0.95, gWN.y) * (0.35 + 0.65 * smoothstep(0.35, 0.8, gN(vGrimeW * 45.0))) * uGrime * 0.32; // a fine film of settled dust on top surfaces
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.6, 0.54, 0.45), dust); grime = max(grime, dust);`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n    roughnessFactor = mix(roughnessFactor, 0.82, grime);')
+      .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\n    material.clearcoat *= 1.0 - grime * 0.85;');
+  }
 }
 
 // Cabin windows for airliner tubes: channel-0 lathe UVs (u along the body 0..1, v around: 0 top, 0.25 right, 0.75 left).
@@ -240,14 +260,14 @@ export const PM = {
   },
   // Car paint: the same skin program (so liveries paint it) over a clean, seamless texture: no aircraft panel grid or
   // rivet rows on a buggy tub or a pickup body (their shut lines are modelled), deeper gloss.
-  carPaint(color) {
-    return cached('carPaint' + color, () => {
+  carPaint(color, finish = 'gloss') {
+    return cached('carPaint' + color + finish, () => {
       const t = cached('carTex', () => {
         const c = document.createElement('canvas'); c.width = c.height = 4; const g = c.getContext('2d'); g.fillStyle = 'rgb(255,190,0)'; g.fillRect(0, 0, 4, 4);
         const tx = new THREE.CanvasTexture(c); tx.channel = 1; tx.wrapS = tx.wrapT = THREE.RepeatWrapping; return tx;
       });
-      const m = new THREE.MeshPhysicalMaterial({ color, metalness: 0.1, roughness: 0.38, clearcoat: 1, clearcoatRoughness: 0.05, bumpMap: t, bumpScale: 0, roughnessMap: t, aoMap: t, aoMapIntensity: 1 });
-      m.onBeforeCompile = skinCompile;
+      const satin = finish === 'satin', m = new THREE.MeshPhysicalMaterial({ color, metalness: satin ? 0 : 0.1, roughness: satin ? 0.52 : 0.38, clearcoat: satin ? 0.2 : 1, clearcoatRoughness: satin ? 0.45 : 0.05, sheen: satin ? 0.3 : 0, sheenRoughness: 0.6, bumpMap: t, bumpScale: 0, roughnessMap: t, aoMap: t, aoMapIntensity: 1 });
+      m.onBeforeCompile = skinCompile; m.userData.grime = 0.75; // ground vehicles live in the dust
       return m;
     });
   },

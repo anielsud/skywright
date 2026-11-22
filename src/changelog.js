@@ -2,6 +2,12 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.117.0', items: [
+    "Your pilots, drivers and riders look like real people now: real faces and bodies, hands that wrap properly round the stick, the wheel or the handlebars, and they sit comfortably in their seats.",
+    "New helmets! Racing helmets for the bikes and cars, a proper motocross helmet with goggles for the dirt bike, and an astronaut helmet with a gold visor for the rocket and Stardust.",
+    "Dirt bike riders stand up on the pegs ready for the bumps, and sport bike riders tuck down low behind the screen.",
+    "Some seats slide forward or back and some pedals adjust, so every pilot can reach the controls.",
+  ] },
   { v: '1.116.0', items: [
     "The Statue of Liberty is now the real thing: a 3D scan of the actual statue, with her face, crown, torch and tablet. At night she's lit up and her torch glows!",
   ] },

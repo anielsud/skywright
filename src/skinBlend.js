@@ -27,7 +27,7 @@ const id3 = (q) => [q.x, q.y, q.z], idInv = (u, h, v) => V(u, h, v);
 const ell = (u, v, a, b) => (Math.hypot(u / a, v / b) - 1) * Math.min(a, b);
 const CK = {
   ck_bubble: {
-    frame: id3, local: idInv, up: V(0, 1, 0), a: 0.45, b: 1.0, c: 0.425, v0: -1, v1: 1, flare: 0.35, tub: 0.5, sill: 0.026,
+    frame: id3, local: idInv, up: V(0, 1, 0), a: 0.45, b: 1.0, c: 0.425, v0: -1, v1: 1, flare: 0.35, tub: 0.76, sill: 0.026,
     turtle: { cz: 0.6, ex: 0.3, ey: 0.13, ez: 1.5 },
     foot: (u, v, g) => ell(u, v, 0.45 * g, 1.0 * g),
     vol: (u, h, v) => (h >= 0 ? (Math.hypot(u / 0.45, h / 0.425, v) - 1) * 0.425 : ell(u, v, 0.45, 1.0)),
@@ -322,14 +322,24 @@ function seatCanopy(ck, U, bodyColor, addTo, rivets) {
   // tub: dark walls from just inside the seam down to a floor, kept inside the skin
   let depth = C.tub * s;
   const ring = (dd, shrink) => seam.map((p) => { const q = p.clone().addScaledVector(outOf(p), -0.012 * s).addScaledVector(up, -dd); return ctr.clone().addScaledVector(up, -dd).lerp(q, shrink); });
-  for (let it = 0; it < 6; it++) { if (ring(depth, 0.82).every((p) => skinF(p) < -0.01)) break; depth *= 0.75; }
+  // (a narrow-bottomed body: the floor narrows, the walls sloping in, before the tub gets shallower; the seat and the
+  // pilot's feet need the depth more than the floor needs the width)
+  let shrink = 0.82;
+  search: for (let it = 0; it < 6; it++) { for (const sh of [0.82, 0.64, 0.48]) if (ring(depth, sh).every((p) => skinF(p) < -0.01) && ring(depth * 0.55, 1 - (1 - sh) / 3).every((p) => skinF(p) < 0)) { shrink = sh; break search; } depth *= 0.75; }
   if (depth < 0.08 * s) return true;
-  const rings = [ring(0, 1), ring(depth * 0.55, 0.94), ring(depth, 0.82)];
+  const rings = [ring(0, 1), ring(depth * 0.55, 1 - (1 - shrink) / 3), ring(depth, shrink)];
   const tg = ringLoft(rings, false, true), idx = tg.index.array; // ringLoft orients outward: flip so the tub faces in
   for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; }
   tg.computeVertexNormals();
   addTo(cobj, tg, PM.seat(), { shadow: false });
+  addTubObstacle(cobj, rings, ck.inv);
   return true;
+}
+// The tub just built (rings of world points round its wall, top first) as an obstacle for the crew of seats that declare
+// obstacles (crew.js: { well }), in the cockpit's own coordinates, every other point round
+export function addTubObstacle(cobj, rings, inv) {
+  const well = rings.map((r) => r.filter((_, k) => k % 2 === 0).map((p) => p.clone().applyMatrix4(inv).toArray().map((x) => +x.toFixed(4))));
+  for (const st of cobj.userData.seats || []) if (st.obstacles) st.obstacles = [...st.obstacles.filter((o) => o.name !== 'tub'), { name: 'tub', well }];
 }
 
 // ---------- tubes meeting end to end: one fair skin across the seam ----------

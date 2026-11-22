@@ -6,10 +6,10 @@ import * as THREE from 'three';
 import { PARTS, revolve, smoothProfile } from './parts.js';
 import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
-import { V, bar, tube, pipe, Bag, seatGeo, flightDeckGlass, shell, capHoles, ringLoft } from './partDetail.js';
+import { V, bar, tube, pipe, Bag, seatGeo, flightDeckGlass, shell, capHoles, ringLoft, insideRows, boxObstacle } from './partDetail.js';
 import { clipGeometry } from './skinBlend.js';
 import { Rig, cornerLinks, cornerGeometry } from './carRig.js';
-import { capsuleWindows } from './capsule.js';
+import { capsuleWindows, capsuleCouch } from './capsule.js';
 
 const cached = new Map();
 const mat = (k, make) => { if (!cached.has(k)) cached.set(k, make()); return cached.get(k); };
@@ -231,10 +231,10 @@ function buggyTub(c, lv) {
   // detail: caps facing out (the plain part's nose and tail were see-through) and car paint instead of riveted panels
   const skin = lv ? PM.carPaint(c) : PM.skin(c);
   g.add(new THREE.Mesh(superLoft(S, 44, !!lv), skin)); g.children[0].userData.footTarget = true;
-  const scoop = superLoft(chaikin([{ z: -1.35, hw: 0.2, top: 0.24, bot: 0.06, n: 4 }, { z: -1.1, hw: 0.23, top: 0.31, bot: 0.1, n: 4 }, { z: -0.55, hw: 0.23, top: 0.38, bot: 0.2, n: 4 }, { z: -0.45, hw: 0.2, top: 0.36, bot: 0.24, n: 4 }], 1), 24, !!lv);
+  const scoop = superLoft(chaikin([{ z: -1.52, hw: 0.2, top: 0.24, bot: 0.06, n: 4 }, { z: -1.27, hw: 0.23, top: 0.31, bot: 0.1, n: 4 }, { z: -0.72, hw: 0.23, top: 0.38, bot: 0.2, n: 4 }, { z: -0.62, hw: 0.2, top: 0.36, bot: 0.24, n: 4 }], 1), 24, !!lv); // (ending ahead of the cockpit opening)
   g.add(new THREE.Mesh(scoop, skin)); g.children[1].userData.footTarget = true;
   const b = new Bag(), dark = M.darkMetal(), tp = tubePaint(0x1a1b1e);
-  const mouth = new THREE.BoxGeometry(0.3, 0.1, 0.02); mouth.translate(0, 0.17, -1.355); b.add(mouth, M.intake());
+  const mouth = new THREE.BoxGeometry(0.3, 0.1, 0.02); mouth.translate(0, 0.17, -1.525); b.add(mouth, M.intake());
   // front bumper / nerf bars / skid plate
   const tb = lv ? pipe : tube; // detail: closed tube ends (the plain part keeps its geometry: its volume centroid is a physics input)
   b.add(tb([V(-0.55, -0.22, -2.0), V(-0.45, -0.18, -2.32), V(0, -0.16, -2.4), V(0.45, -0.18, -2.32), V(0.55, -0.22, -2.0)], 0.045, 8, 40), tp);
@@ -363,8 +363,14 @@ function truckCab(g, S0, c) {
   const inner = new THREE.Mesh(geo, mat('cabIn', () => new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.9, side: THREE.BackSide }))); inner.castShadow = false; g.add(inner);
   const b = new Bag(), nb = new Bag(), black = M.black(), chrome = M.chrome(), seam = M.paint(0x0b0c0e, 'matte');
   const dash = new THREE.BoxGeometry(1.6, 0.14, 0.34); dash.translate(0, 0.74, -0.58); b.add(dash, black);
-  for (const sx of [-0.4, 0.4]) { const st = seatGeo(0.46, 0.62, 0.42, 0.22); st.translate(sx, 0.4, 0.42); b.add(st, PM.seat()); const rs = new THREE.BoxGeometry(0.34, 0.37, 0.3); rs.translate(sx, 0.18, 0.25); b.add(rs, black); } // on risers from the floor
-  g.userData.seats = [{ p: [-0.4, 0.44, 0.3], s: 1 }]; // driver on the left
+  for (const sx of [-0.4, 0.4]) { const st = seatGeo(0.46, 0.62, 0.42, 0.22); st.translate(sx, 0.23, 0.42); b.add(st, PM.seat()); const rs = new THREE.BoxGeometry(0.34, 0.2, 0.3); rs.translate(sx, 0.1, 0.25); b.add(rs, black); } // on risers from the floor (low enough for a helmet under the roof)
+  { const kp = new THREE.BoxGeometry(0.56, 0.24, 0.22); kp.translate(-0.4, 0.57, -0.6); b.add(kp, black); } // the driver's lower dash, where the steering column goes in
+  // driver on the left: on the seat's own surfaces, the cab floor (the skin's bottom, y = 0) under the pedals
+  g.userData.seats = [{ p: [-0.4, 0.27, 0.3], s: 1, fit: { at: [-0.4, 0.23, 0.42], dims: [0.46, 0.62, 0.42, 0.22], floor: 0, feet: 'pedals' }, controls: { col: [0, 0.5, -0.52], tilt: 0.28, pedZ: -0.76, pedY: -0.27 } }];
+  // what the driver must keep clear of: inside the cab's skin (the lofted sections, superellipses of power n), the dash
+  // and the lower dash the column goes into
+  g.userData.seats[0].obstacles = [{ name: 'cab', inside: S0.filter((s) => s.z > -1.3 && s.z < 1.3).map((s) => [s.z, s.hw, (s.top - s.bot) / 2, (s.top + s.bot) / 2, s.n]) },
+    { name: 'dash', box: [0, 0.74, -0.58], size: [1.6, 0.14, 0.34] }, { name: 'lower dash', box: [-0.4, 0.57, -0.6], size: [0.56, 0.24, 0.22] }];
   // shut lines (thin dark grooves just proud of the paint), door handles, mirrors
   const line = (pts) => nb.add(tube(pts, 0.007, 4, pts.length * 4), seam);
   for (const sx of [-1, 1]) {
@@ -428,16 +434,33 @@ function heliCabinDetail(g, prof, c) {
   { const top = -0.498, bot = top - 0.03, z1 = z0 + 1.25, n = 14, rows = [];
     for (let k = 0; k <= n; k++) { const z = z0 + (z1 - z0) * (k / n), wt = halfW(top, z) - 0.002, wb = halfW(bot, z) - 0.002; rows.push([V(-wt, top, z), V(wt, top, z), V(wb, bot, z), V(-wb, bot, z)]); }
     b.add(ringLoft(rows, true, true), M.paint(0x2b2d31, 'matte')); }
-  for (const s of [-0.3, 0.3]) { const st = seatGeo(0.42, 0.6, 0.38, 0.22); st.translate(s, -0.47, z0 + 0.92); b.add(st, PM.seat()); } // (pan 5 mm into the deck)
+  const seats = heliCrewBay(b, -0.498, -0.288, z0 + 0.92); // (on boxes on the deck: the seats stood on it, pan 10 cm off the floor)
   { const zb = z0 + 1.25, rb = prof.find(([z]) => z >= zb)?.[1] ?? r0, bh = new THREE.CircleGeometry(rb * 0.99, 40); bh.scale(sx, sy, 1); bh.rotateY(Math.PI); bh.translate(0, heliYOff(zb), zb); b.add(bh, M.paint(0x4a4e55, 'matte')); } // bulkhead behind the seats
   b.to(nose); nb.to(nose, true); g.add(nose);
   g.userData.noseCap = { obj: nose, front: [0, 0, z0 - L * 0.6] };
-  g.userData.seats = [{ p: [0.3, -0.45, z0 + 0.77], s: 0.8 }, { p: [-0.3, -0.45, z0 + 0.77], s: 0.8, role: 'crew' }]; // pilot right
+  g.userData.seats = seats; // pilot right
   // tail-boom joint: the cabin's tail tapers on into a short fairing with a bolted collar (closed if nothing plugs in)
   const cb = new Bag(), col = new THREE.TorusGeometry(rt * 0.84, 0.022, 6, 32); col.scale(sx, sy, 1); col.translate(0, yt, zt + 0.24); cb.add(col, M.darkMetal());
   for (let k = 0; k < 10; k++) { const a = (k / 10) * Math.PI * 2, bolt = new THREE.SphereGeometry(0.012, 6, 4); bolt.translate(Math.cos(a) * rt * 0.86 * sx, yt + Math.sin(a) * rt * 0.86 * sy, zt + 0.24); cb.add(bolt, M.steel()); }
   const n0 = g.children.length; cb.to(g); for (const m of g.children.slice(n0)) { m.userData.trim = 'boom collar: a bolted flange standing proud of the skin, not part of it'; m.userData.keepShape = true; }
   g.userData.tube = { prof: [...prof, [zt + 0.12, rt * 0.94], [zt + 0.3, rt * 0.8]], sx, sy, yOff: (z) => heliYOff(Math.min(z, zt)) }; // the cabin with its boom fairing (skinBlend fairs a boom into it)
+}
+// The two-seat crew bay of a helicopter cabin: seats (seatGeo at (+-0.3, sy, sz)) on boxes down to the deck at fl, the
+// collective's housing between them, and the crew's seats: the pilot on the right (cyclic from the deck between the
+// knees, collective on the left between the seats, pedals on the deck), a rescue medic on the left, feet on the deck.
+const hbox = (w, h, d, x, y, z) => { const q = new THREE.BoxGeometry(w, h, d); q.translate(x, y, z); return q; };
+function heliCrewBay(b, fl, sy, sz) {
+  const dk = M.paint(0x2b2d31, 'matte');
+  for (const sx of [-0.3, 0.3]) { const st = seatGeo(0.42, 0.6, 0.38, 0.22); st.translate(sx, sy, sz); b.add(st, PM.seat());
+    b.add(hbox(0.34, sy - 0.03 - fl, 0.3, sx, (fl + sy - 0.03) / 2, sz - 0.16), dk); } // each seat on a box down to the deck
+  b.add(hbox(0.06, sy + 0.03 - fl, 0.14, 0.05, (fl + sy + 0.03) / 2, sz), dk); // the collective's housing (its pivot on top)
+  const py = sy + 0.02, pz = sz - 0.18, fit = { dims: [0.42, 0.6, 0.38, 0.22], floor: fl }, dy = fl - py; // (the seat point: the crew's rig origin)
+  const housing = { name: 'collective housing', box: [0.05, (fl + sy + 0.03) / 2, sz], size: [0.06, sy + 0.03 - fl, 0.14] };
+  return [
+    { p: [0.3, py, pz], s: 0.8, obstacles: [housing], fit: { ...fit, at: [0.3, sy, sz], feet: 'pedals' },
+      controls: { stickBase: [0, dy + 0.04, -0.23], stickLen: 0.48, collBase: [-0.25, 0.01, 0.18], collLen: 0.34, pedZ: -0.42, pedY: dy + 0.01 } },
+    { p: [-0.3, py, pz], s: 0.8, role: 'crew', obstacles: [housing], fit: { ...fit, at: [-0.3, sy, sz] } },
+  ];
 }
 // Bubble nose: glass dome forward of the cabin bulkhead, painted chin, two seats, pilots, instrument console.
 function heliNose(c, lv) {
@@ -452,9 +475,17 @@ function heliNose(c, lv) {
   const b = new Bag();
   if (lv) { // detail: the crew sit forward in the bubble (the cabin's front bulkhead is at z = 0), a low console ahead of them
     const con = new THREE.BoxGeometry(0.86, 0.12, 0.3); con.rotateX(-0.55); con.translate(0, -0.2, -0.92); b.add(con, M.black());
-    for (const sx of [-0.3, 0.3]) { const st = seatGeo(0.42, 0.6, 0.38, 0.22); st.translate(sx, -0.34, 0.0); b.add(st, PM.seat()); }
-    b.to(g);
-    g.userData.seats = [{ p: [0.3, -0.32, -0.18], s: 0.8 }, { p: [-0.3, -0.32, -0.18], s: 0.8, role: 'crew' }]; // pilot right, rescue medic left
+    // a deck inside the chin (the crew's feet and the controls stand on it), its edges on the bubble's inside
+    const FL = -0.55, SZ = 0.12, ax = R * 0.95 - 0.025, ay = R * 1.08 - 0.025, az = R * 1.45 - 0.025, halfW = (y, z) => ax * Math.sqrt(Math.max(0, 1 - (y / ay) ** 2 - (z / az) ** 2));
+    { const top = FL, bot = top - 0.03, zf = -az * Math.sqrt(1 - (bot / ay) ** 2) + 0.02, z1 = SZ + 0.05, n = 14, rows = [];
+      for (let k = 0; k <= n; k++) { const z = zf + (z1 - zf) * (k / n), wt = halfW(top, z), wb = halfW(bot, z); rows.push([V(-wt, top, z), V(wt, top, z), V(wb, bot, z), V(-wb, bot, z)]); }
+      b.add(ringLoft(rows, true, true), M.paint(0x2b2d31, 'matte')); }
+    b.add(hbox(0.12, -0.24 - FL, 0.1, 0, (FL - 0.24) / 2, -0.86), M.paint(0x2b2d31, 'matte')); // the console's pedestal, down to the deck between the crew's feet
+    g.userData.seats = heliCrewBay(b, FL, -0.34, SZ); b.to(g);
+    // what the crew must keep clear of: inside the bubble (the glass's ellipsoid, to where it meets the cabin), the
+    // console and its pedestal, and (heliCrewBay) the collective's housing
+    for (const st of g.userData.seats) st.obstacles = [{ name: 'bubble', below: 'mirror', inside: insideRows(-R * 1.45, -R * 1.45 * Math.cos(Math.PI * 0.62), 48, (z) => { const k = Math.sqrt(Math.max(0, 1 - (z / (R * 1.45)) ** 2)); return [R * 0.95 * k, R * 1.08 * k, 0]; }) },
+      boxObstacle('console', new THREE.Matrix4().makeRotationX(-0.55).setPosition(0, -0.2, -0.92), [0.86, 0.12, 0.3]), { name: 'pedestal', box: [0, (FL - 0.24) / 2, -0.86], size: [0.12, -0.24 - FL, 0.1] }, ...st.obstacles];
     return g;
   }
   const console_ = new THREE.BoxGeometry(0.9, 0.22, 0.35); console_.rotateX(-0.5); console_.translate(0, -0.12, -0.55); b.add(console_, M.black());
@@ -476,7 +507,7 @@ def({ id: 'fus_truck', cat: 'fuselage', name: 'Monster Truck Body', desc: 'Picku
   build: (c, lv) => truckBody(c, lv) });
 def({ id: 'fus_heli', cat: 'fuselage', name: 'Heli Cabin', desc: 'Helicopter cabin with an engine hump. Bubble Nose in front, Tail Boom behind, rotor on top.', mass: 260, hp: 1100, color: 0xc8102e,
   build: (c, lv) => heliCabin(c, lv) });
-def({ id: 'ck_heli', cat: 'cockpit', name: 'Bubble Nose', desc: 'Wrap-around glass helicopter nose with two seats. Bolts to the front of a Heli Cabin.', mass: 70, hp: 300, color: 0xc8102e, eye: [0.3, 0.4, -0.1],
+def({ id: 'ck_heli', cat: 'cockpit', name: 'Bubble Nose', desc: 'Wrap-around glass helicopter nose with two seats. Bolts to the front of a Heli Cabin.', mass: 70, hp: 300, color: 0xc8102e, eye: [0.3, 0.4, 0.02],
   build: (c, lv) => heliNose(c, lv) });
 
 const cornerDef = (id, name, desc, mass, o, steer) => def({ id, cat: 'car', name, desc, mass, hp: o.hp, color: o.color, attach: 'gear',
@@ -572,9 +603,16 @@ def({ id: 'fus_rocket', cat: 'fuselage', name: 'Rocket Stage', desc: 'Tall fuel 
     b.add(pipe(loop(W.r + 0.02, 40), 0.035, 8, 80), M.darkMetal());
     for (let k = 0; k < 10; k++) { const a = (k / 10) * Math.PI * 2, bolt = new THREE.SphereGeometry(0.014, 6, 4), p = onSkin(Math.sin(a) * (W.r + 0.075), Math.cos(a) * (W.r + 0.075), Rs + 0.004); bolt.translate(p.x, p.y, p.z); b.add(bolt, M.steel()); }
     b.to(g);
-    // the astronaut lies with the head towards the nose, facing the porthole (+x): rig up = -z, rig forward = +x
-    const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(V(0, 1, 0), V(0, 0, -1), V(-1, 0, 0)));
-    g.userData.seats = [{ p: [-0.14, 0, -3.1], s: 0.85, quat: q.toArray(), ctl: 'none' }]; // (no stick in front of the face)
-    capsuleWindows(g, ROCKET_PROF, g.userData.seats[0].p); // more windows for the crew to look out of (capsule.js: also the first-person cabin)
+    // more windows for the crew to look out of (capsule.js: also the first-person cabin, laid out from this seat z)
+    const L = capsuleWindows(g, ROCKET_PROF, [0, 0, -3.1]);
+    // the astronaut lies on their back in the launch couch (the first-person cabin's: capsuleCouch), head aft of the
+    // porthole and facing the nose: with the rocket on its tail that is facing the sky, pressed into the couch by the
+    // climb (they sat upright before, back to the wall, in mid-air). Couch and deck are drawn here too; the feet rest
+    // in the foot restraints (crew.js's pedals) on the deck.
+    const b2 = new Bag(), cc = capsuleCouch(L), st = seatGeo(...cc.dims); st.translate(...cc.at); b2.add(st, PM.seat());
+    const deck = new THREE.BoxGeometry(0.7, 0.03, 1.0); deck.translate(0, cc.floor - 0.015, cc.at[2] - 0.4); b2.add(deck, M.paint(0x3a3e45, 'matte'));
+    b2.to(g);
+    const p = [0, cc.at[1] + 0.108, cc.at[2] - 0.05]; // (where the hips go: the couch's declared surfaces (fit) seat the suited astronaut on the cushion and against the back, and its posture is solved there, crew.js)
+    g.userData.seats = [{ p, s: 0.85, ctl: 'none', fit: { at: cc.at, dims: cc.dims, floor: cc.floor, feet: 'pedals' }, controls: { pedY: cc.floor - p[1], pedZ: -0.56 } }];
     return g;
   } });
