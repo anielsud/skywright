@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.144.0', items: [
+    "Pull really hard in cockpit view and the edges of your screen go grey, like a real pilot feeling the g-force! Push down hard and they go red. Ease off and it clears.",
+    "In cockpit view you now feel the pull: your view sways with your pilot's body in tight turns and big pulls.",
+  ] },
   { v: '1.143.0', items: [
     "Find your friends! Other players always show on the fighter radar, the airliner map and the Fireboat radar, with their name. If they're far away, an arrow on the edge points the way and tells you how far.",
     "The fighter's head-up display stays clean right through loops, and its warning lights come on for real: engine, over-g, stall, afterburner, brakes.",
