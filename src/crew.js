@@ -2366,15 +2366,38 @@ function figureGeometry(rig) {
   }
   // ---- controls ----
   const C = rig.C, blk = 0x15161a, metal = 0x6b7077;
+  // an F-16's side-stick and throttle grips (seat.controls.grips 'f16'), after the real ones' switchology: the stick's
+  // head leaning forward over the grip with the trim hat on top, the red weapon-release button, the target and display
+  // management hats under the thumb (inboard), the trigger in front, a bright collar over the grey boot; the throttle's
+  // grip longer forward, the antenna-elevation wheel and range knob under the fingers, the comms hat, cursor button and
+  // speed-brake switch under the thumb (inboard), the dogfight slide outboard; the quadrant's slot with its detent marks
+  function f16Grips() {
+    const L = C.stickLen, T = C.thrLen, grey = 0x3a3d42, lt = 0x6b7077, red = 0xc8102e, cyl = (r, h, c, ax) => { const g = new THREE.CylinderGeometry(r, r, h, 8); if (ax === 'x') g.rotateZ(Math.PI / 2); if (ax === 'z') g.rotateX(Math.PI / 2); return g.translate(c.x, c.y, c.z); };
+    at(B.ctlA, ellipsoid(V(0, L + 0.032, -0.014), 0.024, 0.024, 0.033, { w: 16, h: 10 }), blk); // head
+    at(B.ctlA, cyl(0.007, 0.008, V(0, L + 0.058, -0.004)), grey); at(B.ctlA, ellipsoid(V(0, L + 0.063, -0.004), 0.004, 0.003, 0.004, { w: 10, h: 6 }), lt, true); // trim hat
+    at(B.ctlA, ellipsoid(V(-0.01, L + 0.05, -0.03), 0.007, 0.005, 0.007, { w: 10, h: 6 }), red, true); // weapon release (pickle)
+    at(B.ctlA, cyl(0.005, 0.008, V(-0.024, L + 0.036, -0.008), 'x'), grey, true); at(B.ctlA, cyl(0.005, 0.008, V(-0.022, L + 0.018, -0.016), 'x'), grey, true); // TMS, DMS hats
+    at(B.ctlA, capAB(V(0, L + 0.012, -0.036), V(0, L - 0.018, -0.03), 0.0045, 0.004, { seg: 6, ring: 2 }), grey, true); // trigger
+    at(B.ctlA, cyl(0.026, 0.008, V(0, 0.035, 0)), 0x9aa0a6, true); // collar
+    at(B.ctlB, ellipsoid(V(0, T + 0.012, -0.034), 0.022, 0.024, 0.026, { w: 16, h: 10 }), blk); // the grip's front
+    at(B.ctlB, cyl(0.009, 0.006, V(0, T + 0.03, -0.052), 'x'), lt, true); at(B.ctlB, cyl(0.006, 0.008, V(0.006, T + 0.036, -0.03)), grey); // antenna wheel, range knob
+    at(B.ctlB, boxG(0.009, 0.009, 0.009, V(0.018, T + 0.028, -0.004)), lt, true); at(B.ctlB, cyl(0.007, 0.006, V(0.028, T + 0.006, -0.012), 'x'), grey); // comms hat, cursor
+    at(B.ctlB, boxG(0.006, 0.01, 0.016, V(0.03, T - 0.014, 0.004)), lt, true); at(B.ctlB, boxG(0.006, 0.008, 0.014, V(-0.029, T + 0.014, -0.02)), lt, true); // speed brake, dogfight
+    const q0 = V(C.thrBase.x, C.thrBase.y + 0.011, C.thrBase.z - 0.02);
+    at(B.ctlC, boxG(0.024, 0.002, 0.3, q0), 0x0b0c0d); // the lever's slot
+    for (const [dz, w] of [[-0.12, 0.05], [-0.05, 0.05], [0.04, 0.05], [0.12, 0.03]]) at(B.ctlC, boxG(w, 0.002, 0.004, q0.clone().add(V(0, 0, dz))), 0xd9dcd6); // detents: AB, MIL, IDLE, OFF
+    at(B.ctlC, boxG(0.01, 0.02, 0.05, q0.clone().add(V(0.042, 0.008, 0.1))), lt, true); // friction lever
+  }
   if (rig.ctl === 'stick' || rig.ctl === 'cyclic') {
     at(B.ctlA, capsule(0.06, 0.05, 0.035, { seg: 10 }).translate(0, -0.02, 0), blk); // rubber boot
     at(B.ctlA, capsule(C.stickLen - 0.06, 0.013, 0.013, { seg: 6 }), metal, true);
     at(B.ctlA, capsule(0.1, 0.022, 0.026, { seg: 8 }).translate(0, C.stickLen - 0.06, 0), blk); // grip
-    at(B.ctlA, ellipsoid(V(0, C.stickLen + 0.04, -0.012), 0.008, 0.008, 0.008), 0xc8102e, true); // trigger / button
+    if (C.grips !== 'f16') at(B.ctlA, ellipsoid(V(0, C.stickLen + 0.04, -0.012), 0.008, 0.008, 0.008), 0xc8102e, true); // trigger / button
     if (rig.ctl === 'stick') {
       at(B.ctlC, boxG(0.1, 0.06, 0.34, V(C.thrBase.x, C.thrBase.y - 0.02, C.thrBase.z - 0.02)), 0x2b2d31); // throttle quadrant (on the rig's fixed frame, where the vehicle put it: not on the hips, which move with the seat fit)
       at(B.ctlB, capsule(C.thrLen, 0.01, 0.01, { seg: 6 }), metal, true);
       at(B.ctlB, ellipsoid(V(0, C.thrLen, 0), 0.026, 0.03, 0.04), blk);
+      if (C.grips === 'f16') f16Grips();
     } else {
       at(B.ctlB, capsule(C.collLen, 0.016, 0.016, { seg: 6 }), metal, true);
       at(B.ctlB, capsule(0.12, 0.024, 0.024, { seg: 8 }).translate(0, C.collLen - 0.1, 0), blk);
@@ -2519,7 +2542,7 @@ function seatSurfaces(fit, p, s) {
 // (keys ending in 'tilt' or 'Ang') don't.
 function seatControls(st, s) {
   const src = { ...(st.helm ? { col: st.helm.col, tilt: st.helm.tilt } : {}), ...(st.controls || {}) }, out = {};
-  for (const [k, v] of Object.entries(src)) { if (v == null) continue; out[k] = Array.isArray(v) ? V(...v).divideScalar(s) : /(tilt|Ang)$/.test(k) ? v : v / s; }
+  for (const [k, v] of Object.entries(src)) { if (v == null) continue; out[k] = typeof v === 'string' ? v : Array.isArray(v) ? V(...v).divideScalar(s) : /(tilt|Ang)$/.test(k) ? v : v / s; } // (a string names a style, e.g. grips: 'f16')
   return Object.keys(out).length ? out : null;
 }
 // A seat's adjustable controls and seat (seat.adjust, part units: { pedZ, pedY, seatZ, seatY: [lo, hi] }, offsets
