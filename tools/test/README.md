@@ -212,6 +212,28 @@ python3 tools/test/bikeride.py --json out.json  # full report, with samples
 
 Run it when you change `src/bike.js`, the bike parts (`src/bikeParts.js`) or ground contact in `src/aircraft.js`.
 
+## Crew rig test
+
+`riders.py` steps every stock vehicle that carries people through the game's own physics (60 Hz, controls sweeping
+to full throw, no rendering) and checks each person's skeleton every frame:
+
+- **ride**: no hand lets go of an intact control, each hand bone sits at the end of its forearm (a grip out of reach is reached by bringing the shoulder
+  forward a few centimetres, or let go; the skin between forearm and hand never stretches), no bone is more than
+  1.5 m from the hips, no NaN.
+- **fork lost** (every bike): the fork breaks off mid-ride and flies away. The rider must let go of the handlebars and
+  stay in one piece, and posing the crew must not get more expensive afterwards.
+
+It prints how long posing the crew takes per frame (mean and p95, ms) for each vehicle: the number to watch when
+changing the arm solve.
+
+```sh
+python3 tools/test/riders.py                  # serves the repo itself, ~1 min
+python3 tools/test/riders.py --only "dirt"    # one vehicle
+```
+
+Run it when you change `src/crew.js` (the rig, the arm solve, cockpit obstacles) or how the riders get their grips
+(`riderInput` in `src/bikeParts.js`).
+
 ## Boat ride test
 
 `boatride.py` drives every stock boat through the game's own physics (60 Hz, no rendering) with the controls a player

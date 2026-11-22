@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.119.0', items: [
+    "Crashed bikes no longer stretch the rider's arms! If the handlebars break off, the rider lets go instead of reaching after them.",
+    "Riders and pilots now feel the g-forces: they lean back when you speed up, lurch forward when you brake hard, and slump a little in tight turns.",
+  ] },
   { v: '1.118.0', items: [
     "New York runs much faster now, especially at the water park: smoother boats, cars and planes on your tablet.",
     "Your pilots and drivers take less work to animate, so every place runs a bit smoother too.",

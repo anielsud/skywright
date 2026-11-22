@@ -388,6 +388,8 @@ const CTL = {
   none: {},
 };
 
+const REACH_SH = 0.07; // (how far a shoulder comes forward to reach a grip: protraction, metres)
+const _swQ = new THREE.Quaternion(), _swR = new THREE.Quaternion(), _swE = new THREE.Euler(), _swP = new THREE.Vector3(), _hY = new THREE.Vector3();
 function ikTwo(S, T, a, b, pole, outE, outP = null) {
   const d = T.clone().sub(S), L = clamp(d.length(), Math.abs(a - b) + 1e-3, a + b - 1e-3); d.normalize();
   const x = (a * a - b * b + L * L) / (2 * L), y = Math.sqrt(Math.max(0, a * a - x * x));
@@ -422,7 +424,7 @@ function prepObstacle(d) {
   else if (d.box) { o.k = 'box'; o.c = V(...d.box); o.h = V(...d.size).multiplyScalar(0.5); const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(...(d.rot || [0, 0, 0]))); o.ax = [V(1, 0, 0), V(0, 1, 0), V(0, 0, 1)].map((a) => a.applyQuaternion(q)); }
   else if (d.capsule) { o.k = 'cap'; o.a = V(...d.capsule[0]); o.b = V(...d.capsule[1]); o.r = d.r || 0; }
   else if (d.well) { o.k = 'well'; o.rings = d.well; o.y0 = Math.min(...d.well.at(-1).map((p) => p[1])); o.y1 = Math.max(...d.well[0].map((p) => p[1])); o.xz = new Float64Array(d.well[0].length * 2);
-    const R0 = d.well[0], n = R0.length; o.cx = R0.reduce((a, p) => a + p[0], 0) / n; o.cz = R0.reduce((a, p) => a + p[2], 0) / n; o.ang = R0.map((p) => Math.atan2(p[0] - o.cx, p[2] - o.cz)); }
+    const R0 = d.well[0], n = R0.length; o.cx = R0.reduce((a, p) => a + p[0], 0) / n; o.cz = R0.reduce((a, p) => a + p[2], 0) / n; o.ang = R0.map((p) => Math.atan2(p[0] - o.cx, p[2] - o.cz)); o.bx = Float64Array.from(o.ang, Math.sin); o.bz = Float64Array.from(o.ang, Math.cos); }
   else if (d.inside) { o.k = 'tube'; o.rows = d.inside; o.ex = d.ex ?? 2; o.ey = d.ey ?? 2; o.below = d.below || 'walls'; o.wBelow = d.wBelow ?? 1; o.top = d.top ?? Infinity; }
   return o;
 }
@@ -470,6 +472,7 @@ function obstacleClear(o, c, r, coarse = false) {
 }
 // A sphere in a well: its centre's height's section (each wall line's point there), the distance to the polygon's edges
 // (negative outside it) less the radius
+const _wellKs = new Int32Array(9);
 function wellClear(o, c, r) {
   if (c.y > o.y1 || c.y < o.y0) return Infinity;
   const R = o.rings, n = R[0].length, xz = o.xz, col = (k) => { // wall line k's point at the centre's height
@@ -479,11 +482,12 @@ function wellClear(o, c, r) {
   };
   // only the wall near the point's bearing from the well's middle (the section is near enough star-shaped round it): the
   // nearest edge is among them, and whether the point is inside is which side of the edge it crosses
-  const th = Math.atan2(c.x - o.cx, c.z - o.cz); let k0 = 0, best = Infinity;
-  for (let k = 0; k < n; k++) { const d = Math.abs(Math.atan2(Math.sin(o.ang[k] - th), Math.cos(o.ang[k] - th))); if (d < best) { best = d; k0 = k; } }
-  const W = Math.min(4, n >> 1), ks = []; for (let i = -W; i <= W; i++) { const k = (k0 + i + n) % n; ks.push(k); col(k); }
+  // (the nearest bearing: the wall line whose direction from the middle has the largest dot product with the point's)
+  const qx = c.x - o.cx, qz = c.z - o.cz; let k0 = 0, best = -Infinity;
+  for (let k = 0; k < n; k++) { const d = o.bx[k] * qx + o.bz[k] * qz; if (d > best) { best = d; k0 = k; } }
+  const W = Math.min(4, n >> 1), ks = _wellKs; let nk = 0; for (let i = -W; i <= W; i++) { const k = (k0 + i + n) % n; ks[nk++] = k; col(k); }
   let d2 = Infinity, inside = true;
-  for (let i = 1; i < ks.length; i++) {
+  for (let i = 1; i < nk; i++) {
     const ja = ks[i - 1], jb = ks[i], ax = xz[ja * 2], az = xz[ja * 2 + 1], ex = xz[jb * 2] - ax, ez = xz[jb * 2 + 1] - az;
     const t = clamp(((c.x - ax) * ex + (c.z - az) * ez) / (ex * ex + ez * ez || 1), 0, 1), dx = c.x - ax - ex * t, dz = c.z - az - ez * t, dd = dx * dx + dz * dz;
     if (dd < d2) { d2 = dd; inside = (ex * (c.z - az) - ez * (c.x - ax)) * (ex * (o.cz - az) - ez * (o.cx - ax)) >= 0; } // (on the middle's side of it)
@@ -938,6 +942,8 @@ class Rig {
       for (const k of ['R', 'L']) { const g = this.rimAt(k, this.gripA?.[k] ?? 1.15); hands[k] = g.c; axes[k] = g.axis; radii[k] = 0.017; }
     } else if (this.ctl === 'bars') { // on the grips (rig space, from the fork), else resting on the tank
       hands.L = s.hands?.[0] || this.rideGrips?.[0] || V(-0.2, 0.05, -0.42); hands.R = s.hands?.[1] || this.rideGrips?.[1] || V(0.2, 0.05, -0.42); axes.L = V(1, 0, 0); axes.R = V(-1, 0, 0); radii.L = radii.R = 0.016; // (thumbs inboard)
+      // a grip the vehicle no longer has (the fork broke off): that hand lets go for good (see arm: grab)
+      this.lost = s.hands ? { L: !s.hands[0], R: !s.hands[1] } : null;
       feet.L = this.pegs[0].clone().lerp(V(this.pegs[0].x - 0.1, this.groundY + 0.06, this.pegs[0].z - 0.12), s.foot || 0); // a foot down when stopped
       feet.R = this.pegs[1].clone();
       return { hands, feet, axes, radii };
@@ -971,10 +977,22 @@ class Rig {
     }
     if (bars) p[B.hips].copy(this.hipAt); else p[B.hips].copy(this.base);
     q[B.hips].identity();
-    p[B.spine].copy(this.spinePos); q[B.spine].copy(this.spineQ);
+    // g-forces: the torso swings about the hips the way the vehicle's acceleration throws it (s.sw: the body's lag, in
+    // g, from update's spring; +x right, +z back, +y heavier). Belted into a seat it moves a little (and the canopy
+    // is close); a rider on the pegs much more. The shoulders, neck and arms follow the swung spine.
+    const sw = s.sw, spQ = _swQ.copy(this.spineQ), spP = _swP.copy(this.spinePos);
+    if (sw && !this.solving && (sw.x || sw.y || sw.z)) {
+      const lim = bars ? 0.3 : 0.1, gain = bars ? 0.16 : 0.07;
+      const pitch = clamp(sw.z * gain - Math.max(0, sw.y) * gain * 0.25, -lim, lim), roll = clamp(-sw.x * gain, -lim, lim);
+      _swR.setFromEuler(_swE.set(pitch, 0, roll)); spQ.premultiply(_swR); spP.sub(p[B.hips]).applyQuaternion(_swR).add(p[B.hips]);
+    }
+    if (sw || !bars) this.joints((x, y, z) => V(x, y, z).applyQuaternion(spQ).add(spP)); // (seated: from the configured spine each frame, so a swing never sticks)
+    p[B.spine].copy(spP); q[B.spine].copy(spQ);
     p[B.head].copy(this.neck);
-    if (bars) q[B.head].setFromEuler(new THREE.Euler(-0.1, s.look * 0.5, (s.bikeLean || 0) * 0.55 + (s.lean || 0) * 0.5, 'YXZ')); // eyes level, looking up the road
-    else q[B.head].setFromEuler(new THREE.Euler(-0.08 + s.pitch * 0.05, s.look, s.look * 0.15, 'YXZ'));
+    // the head keeps the eyes near level (its own reflex), nodding a little under heavy g and lagging the torso's swing
+    const hp = sw && !this.solving ? clamp(-Math.max(0, sw.y) * 0.05 + sw.z * 0.04, -0.25, 0.2) : 0, hr = sw && !this.solving ? clamp(-sw.x * 0.05, -0.2, 0.2) : 0;
+    if (bars) q[B.head].setFromEuler(new THREE.Euler(-0.1 + hp, s.look * 0.5, (s.bikeLean || 0) * 0.55 + (s.lean || 0) * 0.5 + hr, 'YXZ')); // eyes level, looking up the road
+    else q[B.head].setFromEuler(new THREE.Euler(-0.08 + s.pitch * 0.05 + hp, s.look, s.look * 0.15 + hr, 'YXZ'));
     const E = V(), P = V();
     // Both bones of a limb take their twist from the plane the limb bends in (the bend direction P is perpendicular to
     // shoulder->hand, so it is never along either bone). A fixed 'forward' hint flipped the twist by up to 110 degrees
@@ -1062,23 +1080,48 @@ class Rig {
       let best = { c: Infinity, th: 0, ph: 0 };
       const grid = (th0, ph0, span, n) => { for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const th = th0 + span * (i / (n - 1) - 0.5) * 2, ph = ph0 + span * (j / (n - 1) - 0.5) * 2, cc = score(th, ph); if (cc < best.c) best = { c: cc, th, ph }; } };
       const prevC = prev ? score(prev.th, prev.ph) : Infinity;
-      const track = prev && prevC < 500 && !this.solving; // (the posture solve keeps the thorough search below; in flight the fresh search starts from a coarser grid)
-      if (track) { // tracking (every frame): the same reach round the last answer, coarse to fine, ~100 candidates
-        best = { c: prevC, th: prev.th, ph: prev.ph };
-        for (const span of [0.25, 0.06, 0.015, 0.004]) grid(best.th, best.ph, span, 5);
-      }
-      else if (prev && prevC < 500) { best = { c: prevC, th: prev.th, ph: prev.ph }; grid(prev.th, prev.ph, 0.25, 9); } // (an answer from out of reach or past a joint's range is no place to refine from: search afresh)
+      // (a grip only reachable past a joint's range, e.g. the stick at full throw: the wide search found nothing better
+      // last frame, so refine round that answer and search wide again only every 20 frames)
+      const local = prev && !this.solving && (prevC < 500 || (prev.hard > 0 && prevC < prev.c + 200));
+      if (local) { // frame to frame: the answer moves a little, so look just round it (51 tries, not 229)
+        best = { c: prevC, th: prev.th, ph: prev.ph }; grid(prev.th, prev.ph, 0.06, 5);
+        if (Math.abs(best.th - prev.th) > 0.05 || Math.abs(best.ph - prev.ph) > 0.05) grid(best.th, best.ph, 0.25, 9); // (moving fast: a wider look)
+        grid(best.th, best.ph, 0.015, 5);
+      } else if (prev && prevC < 500) { best = { c: prevC, th: prev.th, ph: prev.ph }; grid(prev.th, prev.ph, 0.25, 9); } // (an answer from out of reach or past a joint's range is no place to refine from: search afresh)
       else { if (prev) grid(prev.th, prev.ph, 0.8, 13); if (!(best.c < 500)) { const f0 = OB?.from; if (OB) { OB.from = 1; OB.to = 2; } if (this.solving || !prev) grid(0, 0, Math.PI, 49); else { grid(0, 0, Math.PI, 25); grid(best.th, best.ph, 0.3, 7); } if (OB) { OB.from = f0; OB.to = 3; best.c = score(best.th, best.ph); } } } // (first a wider look round the last answer: an arm kept off a wall can sit near a joint's limit; the full search tests only the elbow against obstacles)
-      if (!track) for (const span of [0.12, 0.04, 0.012]) grid(best.th, best.ph, span, 7);
-      this.armSol[k] = { th: best.th, ph: best.ph };
+      if (!local) for (const span of [0.12, 0.04, 0.012]) grid(best.th, best.ph, span, 7);
+      this.armSol[k] = { th: best.th, ph: best.ph, c: best.c, hard: best.c < 500 ? 0 : local ? (prev.hard || 0) - 1 : 20 };
       const out = {}; score(best.th, best.ph, out); (this.armAngles ||= {})[k] = { ...Object.fromEntries(Object.entries(out.angles).map(([kk, v]) => [kk, +(kk === 'cost' || kk === 'inside' ? v : v * 180 / Math.PI).toFixed(3)])), at: this.gripA?.[k] != null ? +(this.gripA[k] * 180 / Math.PI).toFixed(0) : null }; void hint; return out;
     };
+    // The hand bone always goes where the forearm actually ends (the arm's two bones can't stretch, so a grip out of
+    // reach leaves the hand short of it, never the skin between forearm and hand stretched after it).
+    const handAt = (ih, iff) => p[ih].copy(_hY.set(0, D.fore, 0).applyQuaternion(q[iff])).add(p[iff]);
+    // Holding on (per hand, outside the posture solves): a grip a little beyond the arm's reach is reached by bringing
+    // the shoulder forward (up to REACH_SH); one further away than that (a control at an odd angle, a vehicle bent in
+    // a crash) or gone (lost: the fork broke off) is let go. The hand then goes to a braced spot ahead of the chest
+    // and takes hold again once the grip is back within reach for a moment. t: how far onto the grip the hand is.
+    const grab = (k, S, c, G) => {
+      const g = (this.grab ||= {})[k] ||= { t: 1, near: 0 }, dt = s.dt ?? 1 / 60;
+      const over = c.distanceTo(S) - (D.upper + D.fore) * 0.99 - G.length() * 0.9;
+      const lost = !!this.lost?.[k], hold = !lost && (g.t > 0.99 ? over < REACH_SH + 0.03 : over < REACH_SH - 0.03);
+      g.near = hold ? g.near + dt : 0;
+      g.t = hold ? (g.t >= 1 || g.near > 0.25 ? Math.min(1, g.t + dt / 0.3) : g.t) : Math.max(0, g.t - dt / 0.12);
+      return { t: g.t, over };
+    };
     const arm = (k, S, iu, iff, ih, hint) => {
-      const c = hands[k], rest = this.restN?.[k], r = radii[k] ?? 0.03, G = this.hand.G(k, rest ? 0 : r), M = new THREE.Matrix4();
+      let c = hands[k]; const rest = this.restN?.[k], r = radii[k] ?? 0.03, G = this.hand.G(k, rest ? 0 : r), M = new THREE.Matrix4();
       const X = (axes[k] || V(k === 'R' ? -1 : 1, 0, 0)).clone().normalize().multiplyScalar(this.hand.thumb[k]);
+      let free = false;
+      if (!rest && !this.solving) {
+        const gr = grab(k, S, c, G), sx = k === 'R' ? 1 : -1;
+        if (gr.t < 1) { // letting go / taking hold: towards a braced spot ahead of the chest (cheap two-bone arm, below)
+          const brace = V(sx * 0.07, -0.3, -0.3).applyQuaternion(q[B.spine]).add(S), e = gr.t * gr.t * (3 - 2 * gr.t);
+          c = brace.lerp(c, e); free = true;
+        } else if (gr.over > 0) S = S.clone().addScaledVector(c.clone().sub(S).normalize(), Math.min(gr.over, REACH_SH)); // (the shoulder comes forward to reach)
+      }
       const Y = c.clone().sub(S); Y.addScaledVector(X, -Y.dot(X)).normalize();
       const Z = V(), W = V();
-      if (!rest) { // a hand on a bar: the most comfortable arm that holds it (see comfortArm)
+      if (!rest && !free) { // a hand on a bar: the most comfortable arm that holds it (see comfortArm)
         if (this.rimAt && this.gripA?.[k] == null) { // first solve on a wheel: also choose where round the rim to hold (1 to 4 o'clock)
           let bestA = null;
           // not where a spoke meets the rim: a hand (about 9 cm across) plus the spoke takes about 0.32 rad of a 19 cm rim
@@ -1099,7 +1142,7 @@ class Rig {
         const sol = comfortArm(k, S, c, X, G, hint);
         Y.copy(sol.Y); Z.crossVectors(X, Y); W.copy(sol.W);
         limb(S, W, D.upper, D.fore, sol.pole, iu, iff, -1);
-        p[ih].copy(W); q[ih].setFromRotationMatrix(M.makeBasis(X, Y, Z));
+        handAt(ih, iff); q[ih].setFromRotationMatrix(M.makeBasis(X, Y, Z));
         const Yf = V(0, 1, 0).applyQuaternion(q[iff]), Xf = V(1, 0, 0).applyQuaternion(q[iff]), Xh = X.clone().addScaledVector(Yf, -X.dot(Yf));
         if (Xh.lengthSq() > 1e-6) { const tw = Math.atan2(V().crossVectors(Xf, Xh).dot(Yf), Xf.dot(Xh.normalize())); q[iff].premultiply(new THREE.Quaternion().setFromAxisAngle(Yf, tw / 2)); }
         return;
@@ -1112,7 +1155,7 @@ class Rig {
       }
       frameUp();
       limb(S, W, D.upper, D.fore, rest ? hint : gripPole(S, W, D.upper, D.fore, hint, X), iu, iff, -1);
-      p[ih].copy(W); q[ih].setFromRotationMatrix(M.makeBasis(X, Y, Z));
+      handAt(ih, iff); q[ih].setFromRotationMatrix(M.makeBasis(X, Y, Z));
       // the forearm takes half the twist between elbow and hand (the radius rolls over the ulna along its length)
       const Yf = V(0, 1, 0).applyQuaternion(q[iff]), Xf = V(1, 0, 0).applyQuaternion(q[iff]), Xh = X.clone().addScaledVector(Yf, -X.dot(Yf));
       if (Xh.lengthSq() > 1e-6) { const tw = Math.atan2(V().crossVectors(Xf, Xh).dot(Yf), Xf.dot(Xh.normalize())); q[iff].premultiply(new THREE.Quaternion().setFromAxisAngle(Yf, tw / 2)); }
@@ -2351,6 +2394,8 @@ function eyePoint(rig) {
 
 const geoCache = new Map();
 // outfit: OUTFITS key or object; ctl: 'stick' | 'cyclic' | 'yoke' | 'wheel' | 'none'; seed picks skin/hair tones
+const sameHands = (a, b) => a === b || (!!a && !!b && a.length === b.length && a.every((v, i) => v === b[i] || (!!v && !!b[i] && v.distanceToSquared(b[i]) < 1e-8)));
+const sameSig = (a, b) => a === b || (!!a && !!b && a.every((v, i) => Math.abs(v - b[i]) < 1e-4));
 export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, pegs = null, groundY, seat = null, helm = null, ride = null } = {}) {
   const outfit = { ...(OUTFITS[outfitKey] || OUTFITS.light), ...(colors || {}) };
   const rig = new Rig(outfitKey, ctl, outfit, seed, { pegs, groundY, seat, helm, ride });
@@ -2367,7 +2412,7 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
     m.frustumCulled = false; // a few hundred triangles; skinned bounds would otherwise need a refresh as the pose changes
     root.add(m); m.bind(skel, new THREE.Matrix4());
   }
-  const smooth = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 }, posed = {}; // (posed: the smoothed controls the bones were last posed for)
+  const smooth = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 };
   root.userData.crewRig = {
     rig, root,
     eye: eyePoint(rig), // rig space: between the eyes, head straight (cockpit view, stations.js)
@@ -2384,11 +2429,21 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
       if (rig.ctl === 'bars') { tgt.lean = clamp(c.lean || 0, -0.6, 0.6); tgt.tuck = clamp(c.tuck || 0, 0, 1); tgt.foot = clamp(c.foot || 0, 0, 1); tgt.bikeLean = clamp(c.bikeLean || 0, -1, 1); s.hands = c.hands || null; }
       let moving = false;
       for (const a in tgt) { const kk = a === 'look' ? k * 0.35 : k; const v = s[a] + (tgt[a] - s[a]) * kk; if (Math.abs(v - tgt[a]) > 1e-3) moving = true; s[a] = v; }
-      // the pose is a function of the smoothed controls alone (riders: of the bars too): held still, it's already right
-      const P = posed; let same = rig.ctl !== 'bars' && P.ok;
-      if (same) for (const a in tgt) if (Math.abs(s[a] - P[a]) > 1e-4) { same = false; break; }
-      if (same) return moving;
-      for (const a in tgt) P[a] = s[a]; P.ok = true;
+      // g-forces (c.gf: the specific force in the rig's frame, in g; (0, 1, 0) sitting still): the body lags the
+      // vehicle's acceleration on a damped spring (about 2 Hz, a little bounce after a jolt), capped so a crash's spike
+      // throws it hard but not without limit
+      if (c.gf) {
+        const sw = s.sw ||= { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 }, h = Math.min(dt || 0.016, 0.05), W2 = 160, Z2 = 2 * 0.45 * Math.sqrt(W2);
+        const ux = clamp(-c.gf.x, -2.5, 2.5), uy = clamp(c.gf.y - 1, -2, 4), uz = clamp(-c.gf.z, -2.5, 2.5);
+        for (const [a, va, u] of [['x', 'vx', ux], ['y', 'vy', uy], ['z', 'vz', uz]]) { sw[va] += (W2 * (u - sw[a]) - Z2 * sw[va]) * h; sw[a] += sw[va] * h; if (Math.abs(sw[va]) > 0.01) moving = true; }
+      }
+      s.dt = dt || 0.016;
+      // nothing has changed since the last pose (controls settled, the same grips, the body still): keep it (the
+      // arm solves are the expensive part of a frame's crew work)
+      const hs = s.hands, sig = s.sw ? [s.sw.x, s.sw.y, s.sw.z] : null, grabbing = ['R', 'L'].some((k) => rig.grab?.[k] && rig.grab[k].t < 1 && !rig.lost?.[k]); // (a hand waiting to take hold again)
+      const same = !moving && !grabbing && this.last && sameHands(this.last.hands, hs) && sameSig(this.last.sig, sig);
+      this.last = { hands: hs && hs.map((v) => v && v.clone()), sig };
+      if (same) return false;
       rig.pose(s);
       for (let i = 0; i < NB; i++) { bones[i].position.copy(rig.p[i]); bones[i].quaternion.copy(rig.q[i]); }
       return moving;
