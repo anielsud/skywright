@@ -10,6 +10,7 @@ import { M } from './materials.js';
 import { Bag, bar } from './partDetail.js';
 import { bikeStand } from './bikeParts.js';
 import { boatTrailer } from './boatTrailer.js';
+import { bakeCabinLight } from './cabinLight.js';
 
 // the hour the flight settings will fly at: the hangar's daylight follows it
 const flightHour = () => { try { const t = JSON.parse(localStorage.getItem('skywright.flight'))?.time; return Number.isFinite(t) ? t : 10; } catch { return 10; } };
@@ -465,7 +466,9 @@ export function buildDesign(design, root, { quick = false, near = true } = {}) {
     o.traverse((c) => { if (c.isMesh) { c.castShadow = !c.material.transparent; c.receiveShadow = true; } if (c.userData.isDisc) c.visible = false; });
     root.add(o);
   });
-  return assemble(design, objs, root, { quick, near });
+  const out = assemble(design, objs, root, { quick, near });
+  if (!quick && near) try { out.cabin = bakeCabinLight(objs, root); } catch (e) { console.warn('cabinLight', e); } // light into cockpits and cabins only through their glass (cabinLight.js; not while a slider is dragged)
+  return out;
 }
 
 // A vertical launcher (a rocket with no main wing: analyze().vertical) is shown standing on its tail, the way it

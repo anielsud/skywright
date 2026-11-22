@@ -29,6 +29,7 @@ import { aircraftLights, updateAircraftLights } from './navLights.js';
 import { Streaks } from './streaks.js';
 import { WindTunnel } from './windTunnel.js';
 import { BoatFX } from './boatFX.js';
+import { cabinSun, CABIN } from './cabinLight.js';
 import { initThumbs, renderThumb, designKey, presetSlug, savedThumbs, storeThumb, stockThumbs, STOCK_SIZE } from './thumbs.js';
 installFog();
 
@@ -867,7 +868,7 @@ function endFlight(restarting = false) {
   trackFlightEnd(F, restarting ? 'restart' : 'hangar');
   net.detach(); if (!restarting) net.leave();
   if (updatePending) { reloadFresh(); return; }
-  const f = F; F = null;
+  const f = F; F = null; CABIN.uCabinSunBake.value = 0; // (the hangar's lamps cast their own shadows)
   // Collect every GPU resource the flight scene holds BEFORE the subsystems detach their groups (anything detached first
   // used to be skipped, and materials/textures were never freed: ~64 geometries + ~18 textures leaked per flight, #80).
   const res = collectGpu(f.scene);
@@ -1160,6 +1161,7 @@ function stepFlight(dtReal) {
   f.streaks?.update(dtReal, flightCam.position, ac, ac.rocketK > 0.5 && (rig.mode === 'chase' || rig.mode === 'cockpit'));
   ac.setCockpitView(rig.mode === 'cockpit' && !focus ? rig.curStation(ac) : null); // (a capsule seat switches its cabin on: stations.js)
   world.update(dtReal, flightCam, rig.vel, f.events);
+  cabinSun(world.lightDir, world.q.shadows && perf.level < 3); // cockpits: the sun or moon through the glass (cabinLight.js: baked when there are no shadow maps)
   updateAircraftLights(f.nav, dtReal, f.env);
   effects.setLighting(world, flightCam);
   post.shimmer(f.sonic.shimmer(flightCam, f.shim), perf.level < 1 && qualityTier() !== 'low'); // heat haze is the first thing Auto quality sheds
