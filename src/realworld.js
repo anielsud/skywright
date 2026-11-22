@@ -181,12 +181,59 @@ export async function loadReal(loc, quality = 'high', onProgress) {
 }
 export function realData(loc) { return cache.get(loc.id) || null; }
 
+// The coarse square's sea, carved under the water. Off New York the AWS Terrain Tiles have no sea floor: the open
+// ocean is stored flat at sea level, exactly 0 m (the heights are hydro-flattened). The bake carves the detailed
+// square's sea (bake.py carve_water) but not this one's, so out there the ground sat exactly at the water level,
+// which everything downstream takes for dry land (World.shoreSnap lifts it to SHORE_OVER above): the water shader
+// discarded it, the tiles found no land worth a mesh (anyLand) and the far field didn't drown it, so nothing was
+// drawn at all and the haze behind showed through as a flat pale sheet, edged by the bathymetry tiles (#153).
+// Here it gets a sea floor the way the bake does the detailed square's: big flat runs at the water level (small ones
+// are low ground: left alone) sink under it, deeper further from the nearest dry sample (chamfer distance, 2 passes).
+// Exported for any other grid of real heights (streamed ones past the squares have the same flat sea).
+export function carveFlatSea(G, wl, k = 0.05, dmax = 25, minRun = 64) {
+  const n = G.n, H = G.H, N = n * n, flat = new Uint8Array(N); // 1: at the water level; then 2: in a big run (sea), 3: being filled, 4: in a small run
+  let any = false;
+  for (let q = 0; q < N; q++) if (Math.abs(H[q] - wl) < 0.07) { flat[q] = 1; any = true; } // (heights come in 1/8 m steps)
+  if (!any) return 0;
+  const stack = new Int32Array(N), run = new Int32Array(N); let carved = 0;
+  for (let s = 0; s < N; s++) {
+    if (flat[s] !== 1) continue;
+    let sp = 0, m = 0; stack[sp++] = s; flat[s] = 3;
+    while (sp) {
+      const q = stack[--sp], i = q % n; run[m++] = q;
+      if (i > 0 && flat[q - 1] === 1) { flat[q - 1] = 3; stack[sp++] = q - 1; }
+      if (i < n - 1 && flat[q + 1] === 1) { flat[q + 1] = 3; stack[sp++] = q + 1; }
+      if (q >= n && flat[q - n] === 1) { flat[q - n] = 3; stack[sp++] = q - n; }
+      if (q < N - n && flat[q + n] === 1) { flat[q + n] = 3; stack[sp++] = q + n; }
+    }
+    const v = m >= minRun ? 2 : 4; for (let a = 0; a < m; a++) flat[run[a]] = v;
+  }
+  // distance (in samples) to the nearest dry sample: anything above the water level (sea floor already under it counts as sea)
+  const D = new Float32Array(N), R2 = Math.SQRT2;
+  for (let q = 0; q < N; q++) D[q] = H[q] > wl + 0.07 ? 0 : 1e9;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const q = j * n + i; let d = D[q]; if (!d) continue;
+    if (i > 0) d = Math.min(d, D[q - 1] + 1);
+    if (j > 0) { d = Math.min(d, D[q - n] + 1); if (i > 0) d = Math.min(d, D[q - n - 1] + R2); if (i < n - 1) d = Math.min(d, D[q - n + 1] + R2); }
+    D[q] = d;
+  }
+  for (let j = n - 1; j >= 0; j--) for (let i = n - 1; i >= 0; i--) {
+    const q = j * n + i; let d = D[q]; if (!d) continue;
+    if (i < n - 1) d = Math.min(d, D[q + 1] + 1);
+    if (j < n - 1) { d = Math.min(d, D[q + n] + 1); if (i < n - 1) d = Math.min(d, D[q + n + 1] + R2); if (i > 0) d = Math.min(d, D[q + n - 1] + R2); }
+    D[q] = d;
+  }
+  for (let q = 0; q < N; q++) if (flat[q] === 2) { H[q] = wl - 1.2 - Math.min(dmax, D[q] * G.sp * k); carved++; }
+  return carved;
+}
+
 class RealData {
   constructor(loc, meta, hiH, farH, hiBmp, farBmp, coverBmp, osm) {
     this.loc = loc; this.meta = meta; this.osm = osm;
     this.gain = loc.satGain ?? GAIN; this.gainS = Math.pow(this.gain, 1 / 2.2); // (per place: aerial photos come brighter than Sentinel-2)
     this.hi = { ...meta.hi, H: hiH, sp: meta.hi.size / (meta.hi.n - 1) };
     this.far = { ...meta.far, H: farH, sp: meta.far.size / (meta.far.n - 1) };
+    carveFlatSea(this.far, meta.water ?? loc.water); // (the open sea off New York is flat at 0 m in this square: see carveFlatSea)
     this.hiBmp = hiBmp; this.farBmp = farBmp;
     // CPU copies of the imagery for vertex colours (far terrain, grass tint, roofs): 2048 px is plenty
     this.hiPx = { ...meta.hi, n: 2048, d: pixels(hiBmp, 2048) };
