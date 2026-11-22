@@ -19,6 +19,7 @@ import { PARTS } from './parts.js';
 import { M } from './materials.js';
 import { PM } from './planeMaterials.js';
 import { V, bar, pipe, Bag, seatGeo, ringLoft } from './partDetail.js';
+import * as CK from './cabKit.js';
 
 const cached = new Map();
 const mat = (k, make) => { if (!cached.has(k)) cached.set(k, make()); return cached.get(k); };
@@ -436,23 +437,120 @@ function waterJet(c, lv) {
 }
 
 // ---------- fittings ----------
-// Wheelhouse: a cabin with glass all round, a helm inside, a roof with a mast, a searchlight and work lights.
+// Wheelhouse: a cabin with glass all round, a helm inside, a roof with a mast, a searchlight and work lights. Laid
+// out after fireboat, tug and pilot-boat wheelhouses: the front windows raked out at the top (no glare, spray runs
+// off) with pantograph wipers, framed panes all round, a dark non-skid sole, a full-width helm console whose sloped
+// face carries the radar, the chart plotter and the engine monitor, a VHF radio, the fire-monitor panel and its
+// joystick, a switch panel, twin throttles and a compass binnacle on the dash top; an overhead console with the
+// radios and the searchlight's control; the helm chair on a pedestal with armrests; teak sills, a bench aft and the
+// door in the after bulkhead. The helmsman's declaration (chair surfaces, wheel, floor) and obstacles match it.
+const WH = { W: 2.4, D: 2.4, H0: 1.05, H1: 2.1, RK: 0.14, FL: 0.04 };
 function wheelhouse(c, lv) {
-  const g = new THREE.Group(), b = new Bag(), paint = gel(c), white = gel(WHITE), W = 2.4, D = 2.4, H0 = 1.05, H1 = 2.1;
+  const g = new THREE.Group(), b = new Bag(), nb = new Bag(), paint = gel(c), white = gel(WHITE), { W, D, H0, H1, RK, FL } = WH;
+  const frame = CK.satinBlack(), glassM = M.glass(0x5f7f96);
   for (const [x, z, w, d] of [[0, -D / 2, W, 0.08], [0, D / 2, W, 0.08], [-W / 2, 0, 0.08, D], [W / 2, 0, 0.08, D]]) { const p = new THREE.BoxGeometry(w, H0, d); p.translate(x, H0 / 2 - 0.02, z); b.add(p, paint); }
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const p = new THREE.BoxGeometry(0.1, H1 - H0 + 0.02, 0.1); p.translate(sx * (W / 2 - 0.01), (H0 + H1) / 2, sz * (D / 2 - 0.01)); b.add(p, white); }
+  // the front glass leans out towards the top (z of the front plane at height y)
+  const zF = (y) => -D / 2 - RK * (y - H0) / (H1 - H0);
+  for (const sx of [-1, 1]) {
+    b.add(bar(V(sx * (W / 2 - 0.01), H0 - 0.01, -D / 2 + 0.01), V(sx * (W / 2 - 0.01), H1 + 0.01, zF(H1) + 0.01), 0.1, 0.1), white); // front corner posts, raked
+    const p = new THREE.BoxGeometry(0.1, H1 - H0 + 0.02, 0.1); p.translate(sx * (W / 2 - 0.01), (H0 + H1) / 2, D / 2 - 0.01); b.add(p, white);
+  }
   { const roof = new THREE.BoxGeometry(W + 0.3, 0.12, D + 0.3); roof.translate(0, H1 + 0.05, 0); b.add(roof, white); }
-  const glass = M.glass(0x5f7f96);
-  for (const [x, z, w, d] of [[0, -D / 2, W - 0.1, 0.02], [0, D / 2, W - 0.1, 0.02], [-W / 2, 0, 0.02, D - 0.1], [W / 2, 0, 0.02, D - 0.1]]) { const p = new THREE.BoxGeometry(w, H1 - H0, d); p.translate(x, (H0 + H1) / 2, z); g.add(new THREE.Mesh(p, glass)); }
-  { const helm = new THREE.BoxGeometry(1.4, 0.95, 0.45); helm.translate(0, 0.475, -D / 2 + 0.28); b.add(helm, M.black());
-    const s = seatGeo(0.5, 0.55, 0.46, 0.2); s.translate(0.4, 0.42, 0.1); b.add(s, vinyl(0x2b2d31)); const ped = new THREE.CylinderGeometry(0.07, 0.1, 0.46, 10); ped.translate(0.4, 0.21, -0.05); b.add(ped, M.chrome()); }
+  // panes (thin slabs between four corners) and their frames: three raked panes in front, two each side, two aft
+  // either side of the door
+  const pane = (a, e, f, h) => { const n = e.clone().sub(a).cross(h.clone().sub(a)).normalize().multiplyScalar(0.006), q = [a, e, f, h];
+    g.add(new THREE.Mesh(ringLoft([q.map((p) => p.clone().add(n)), q.map((p) => p.clone().sub(n))], true, true), glassM)); };
+  const MW = 0.05;
+  for (const [x0, x1] of [[-W / 2 + 0.06, -0.4 - MW / 2], [-0.4 + MW / 2, 0.4 - MW / 2], [0.4 + MW / 2, W / 2 - 0.06]]) pane(V(x0, H0, zF(H0)), V(x1, H0, zF(H0)), V(x1, H1, zF(H1)), V(x0, H1, zF(H1)));
+  for (const sx of [-1, 1]) {
+    const X = sx * W / 2;
+    pane(V(X, H0, zF(H0) + 0.06), V(X, H0, -MW / 2), V(X, H1, -MW / 2), V(X, H1, zF(H1) + 0.06));
+    pane(V(X, H0, MW / 2), V(X, H0, D / 2 - 0.06), V(X, H1, D / 2 - 0.06), V(X, H1, MW / 2));
+    b.add(bar(V(sx * 0.4, H0, zF(H0)), V(sx * 0.4, H1, zF(H1)), MW, MW), frame); // front mullions
+    { const m = new THREE.BoxGeometry(MW, H1 - H0, MW); m.translate(X, (H0 + H1) / 2, 0); b.add(m, frame); } // side mullion
+    { const m = new THREE.BoxGeometry(MW, H1 - H0, MW); m.translate(sx * 0.4, (H0 + H1) / 2, D / 2); b.add(m, frame); } // door posts
+  }
+  pane(V(-W / 2 + 0.06, H0, D / 2), V(-0.4 - MW / 2, H0, D / 2), V(-0.4 - MW / 2, H1, D / 2), V(-W / 2 + 0.06, H1, D / 2));
+  pane(V(0.4 + MW / 2, H0, D / 2), V(W / 2 - 0.06, H0, D / 2), V(W / 2 - 0.06, H1, D / 2), V(0.4 + MW / 2, H1, D / 2));
+  pane(V(-0.4 + MW / 2, H0, D / 2), V(0.4 - MW / 2, H0, D / 2), V(0.4 - MW / 2, H1, D / 2), V(-0.4 + MW / 2, H1, D / 2)); // the door's window
+  for (const z of [D / 2 - 0.0475, D / 2 + 0.0475]) { // the door in the after bulkhead: its frame strips and handles, inside and out
+    for (const x of [-0.38, 0.38]) { const f = new THREE.BoxGeometry(0.04, H0 - 0.03, 0.015); f.translate(x, H0 / 2 - 0.005, z); b.add(f, frame); }
+    b.add(bar(V(0.28, 0.82, z + Math.sign(z - D / 2) * 0.02), V(0.28, 0.97, z + Math.sign(z - D / 2) * 0.02), 0.022, 0.022, true, 8), M.steel()); }
+  b.add(bar(V(-W / 2, H0 + 0.01, zF(H0)), V(W / 2, H0 + 0.01, zF(H0)), 0.06, 0.04), frame); // front sill
+  for (const sx of [-1, 1]) b.add(bar(V(sx * W / 2, H0 + 0.01, -D / 2), V(sx * W / 2, H0 + 0.01, D / 2), 0.04, 0.06), frame);
+  b.add(bar(V(-W / 2, H0 + 0.01, D / 2), V(W / 2, H0 + 0.01, D / 2), 0.06, 0.04), frame);
+  // mast, searchlight, the blue and red lights
   { const mast = new THREE.CylinderGeometry(0.06, 0.08, 1.4, 10); mast.translate(0, H1 + 0.8, 0.5); b.add(mast, white);
     const yard = bar(V(-0.6, H1 + 1.3, 0.5), V(0.6, H1 + 1.3, 0.5), 0.06, 0.06, true, 8); b.add(yard, white);
     const sl = new THREE.CylinderGeometry(0.16, 0.13, 0.3, 14); sl.rotateX(Math.PI / 2); sl.translate(0, H1 + 0.3, -0.7); b.add(sl, M.black());
     const base = new THREE.CylinderGeometry(0.08, 0.1, 0.2, 10); base.translate(0, H1 + 0.16, -0.7); b.add(base, M.black());
     for (const [sx, col] of [[-1, 0xff2020], [1, 0x2050ff]]) { const l = new THREE.SphereGeometry(0.09, 10, 8); l.translate(sx * 0.55, H1 + 1.42, 0.5); b.add(l, PM.light(col)); } }
-  b.to(g);
-  g.userData.seats = [{ p: [0.4, 0.47, -0.05], s: 1, ctl: 'wheel', fit: { at: [0.4, 0.42, 0.1], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.02 }, helm: { col: [0, 0.36, -0.5], tilt: 0.42 } }]; // (fit: the helm chair's seatGeo, feet on the deck; the wheel on the helm's back face)
+  // inside: the dark non-skid sole, teak sills on the bulkheads' tops
+  { const f = new THREE.BoxGeometry(W - 0.16, FL - 0.02, D - 0.16); f.translate(0, (FL + 0.02) / 2, 0); b.add(f, nonSkid(0x33373c)); }
+  for (const [x, z, w, d] of [[-0.77, D / 2 - 0.1, 0.7, 0.12], [0.77, D / 2 - 0.1, 0.7, 0.12], [-(W / 2 - 0.1), 0.19, 0.12, 1.7], [W / 2 - 0.1, 0.19, 0.12, 1.7]]) { const s = new THREE.BoxGeometry(w, 0.025, d); s.translate(x, H0 - 0.005, z); b.add(s, gel(TEAK)); }
+  // the helm console: a cabinet across the front, its face sloping up towards the glass, a shelf along the glass
+  const CON = { z0: -D / 2 + 0.045, z1: -0.7, top: 1.04, knee: 0.86 };
+  { const sh = new THREE.Shape(); [[CON.z0, FL], [CON.z1, FL], [CON.z1, CON.knee], [CON.z1 - 0.06, CON.knee + 0.04], [-1.06, CON.top], [CON.z0, CON.top]].forEach(([z, y], i) => (i ? sh.lineTo(z, y) : sh.moveTo(z, y)));
+    const cg = new THREE.ExtrudeGeometry(sh, { depth: W - 0.17, bevelEnabled: true, bevelThickness: 0.004, bevelSize: 0.004, bevelSegments: 1 }); cg.rotateY(-Math.PI / 2); cg.translate(W / 2 - 0.085, 0, 0); b.add(cg, gel(0xc9ccd0)); }
+  const A = V(0, CON.knee + 0.04, CON.z1 - 0.06), Bp = V(0, CON.top, -1.06), L = A.distanceTo(Bp), U = Bp.clone().sub(A).divideScalar(L), N = V(0, -U.z, U.y);
+  const fm = (x, s, off = 0) => CK.faceM(A.clone().setX(x).addScaledVector(U, s).addScaledVector(N, off), N, U);
+  CK.box(b, fm(0, L / 2, 0.004), [0, 0, 0], [W - 0.25, L - 0.02, 0.008], CK.satinBlack()); // the instrument face: a black panel on the slope
+  if (lv) {
+    for (const [x, w, h, t] of [[0.18, 0.3, 0.24, 'radar'], [0.53, 0.3, 0.24, 'chart'], [0.9, 0.22, 0.17, 'engine']]) { const m = fm(x, L / 2, 0.009); CK.box(b, m, [0, 0, 0.012], [w + 0.03, h + 0.03, 0.024], CK.blackM()); CK.face(nb, m, w, h, t, 0.0245); }
+    { const m = fm(-0.2, L / 2 + 0.03, 0.009); CK.box(b, m, [0, 0, 0.02], [0.22, 0.115, 0.04], CK.blackM()); CK.face(nb, m, 0.2, 0.1, 'vhf', 0.0405); // VHF radio and its handset
+      const hs = new THREE.CapsuleGeometry(0.022, 0.07, 4, 8); hs.applyMatrix4(fm(-0.36, L / 2, 0.035)); nb.add(hs, CK.blackM()); }
+    { const m = fm(-0.58, L / 2, 0.009); CK.face(nb, m, 0.26, 0.13, 'monitor'); } // fire monitor panel
+    { const m = fm(-0.95, L / 2, 0.009), w = 0.26, h = 0.13; CK.face(nb, m, w, h, 'switches'); for (let i = 0; i < 8; i++) CK.toggle(nb, m, (40 + i * 62) / 512 * w - w / 2, (0.5 - 69 / 256) * h, M.chrome()); }
+    // the fire monitor's joystick (it aims the roof cannon) and twin throttle / gear levers on a control head
+    { const m = fm(-0.3, 0.05, 0.009); const boot = new THREE.CylinderGeometry(0.02, 0.035, 0.04, 12); boot.rotateX(Math.PI / 2); boot.applyMatrix4(CK.local(m, 0, 0, 0.02)); nb.add(boot, CK.blackM());
+      nb.add(bar(V(0, 0, 0.03), V(0, 0, 0.12), 0.012, 0.012, true, 6).applyMatrix4(m), M.steel()); const kn = new THREE.CapsuleGeometry(0.018, 0.04, 4, 8); kn.rotateX(Math.PI / 2); kn.applyMatrix4(CK.local(m, 0, 0, 0.14)); nb.add(kn, M.paint(0xc8102e)); }
+    { const m = fm(0.8, 0.07, 0.009); CK.box(b, m, [0, 0, 0.03], [0.13, 0.1, 0.06], CK.blackM());
+      for (const dx of [-0.03, 0.03]) { nb.add(bar(V(dx, 0, 0.05), V(dx, 0.08, 0.17), 0.01, 0.01, true, 6).applyMatrix4(m), M.chrome()); const k = new THREE.SphereGeometry(0.02, 10, 8); k.applyMatrix4(CK.local(m, dx, 0.085, 0.18)); nb.add(k, dx < 0 ? M.paint(0xc8102e) : M.paint(0x2a7d3a)); } }
+    // compass binnacle on the dash top, in front of the helm
+    { const by = CON.top, bz = -1.1; const base = new THREE.CylinderGeometry(0.058, 0.068, 0.04, 20); base.translate(0.4, by + 0.02, bz); b.add(base, CK.blackM());
+      const card = CK.toTile(new THREE.CircleGeometry(0.05, 20), 'compass'); card.rotateX(-Math.PI / 2); card.translate(0.4, by + 0.05, bz); nb.add(card, CK.atlasMat());
+      const dome = new THREE.SphereGeometry(0.058, 18, 8, 0, Math.PI * 2, 0, Math.PI / 2); dome.translate(0.4, by + 0.04, bz); g.add(new THREE.Mesh(dome, M.glass(0xdfe8ee))); }
+    // the column's boss where it goes into the console
+    { const boss = new THREE.CylinderGeometry(0.085, 0.09, 0.03, 20); boss.rotateX(Math.PI / 2); boss.translate(0.4, 0.757, CON.z1 + 0.015); b.add(boss, CK.blackM()); }
+    // overhead console under the roof's front: radios, a loud hailer, the searchlight's joystick, gauges
+    { const sh = new THREE.Shape(); [[-1.16, H1 - 0.01], [-0.86, H1 - 0.01], [-0.86, 2.03], [-1.0, 1.9], [-1.16, 1.9]].forEach(([z, y], i) => (i ? sh.lineTo(z, y) : sh.moveTo(z, y)));
+      const og = new THREE.ExtrudeGeometry(sh, { depth: 1.8, bevelEnabled: false }); og.rotateY(-Math.PI / 2); og.translate(0.9, 0, 0); b.add(og, gel(0xc9ccd0));
+      const oa = V(0, 2.03, -0.86), ob = V(0, 1.9, -1.0), oL = oa.distanceTo(ob), oU = ob.clone().sub(oa).divideScalar(oL), oN = V(0, oU.z, -oU.y);
+      const om = (x, s, off = 0.004) => CK.faceM(oa.clone().setX(x).addScaledVector(oU, s).addScaledVector(oN, off), oN, oU.clone().negate());
+      for (const x of [0.4, 0.05]) { CK.box(b, om(x, oL / 2), [0, 0, 0.012], [0.22, 0.12, 0.024], CK.blackM()); CK.face(nb, om(x, oL / 2), 0.2, 0.1, 'vhf', 0.0245); }
+      CK.face(nb, om(-0.35, oL / 2), 0.24, 0.12, 'switches');
+      for (const x of [-0.68, -0.82]) CK.gauge(nb, om(x, oL / 2, 0.006), 0.045, 'gauge');
+      CK.knob(nb, om(0.7, oL / 2), 0, 0, 0.03, CK.blackM()); nb.add(bar(V(0, 0, 0.02), V(0, 0, 0.09), 0.012, 0.012, true, 6).applyMatrix4(om(0.7, oL / 2)), M.steel()); }
+    // wipers on the three front panes: a pivot under each, the arm and blade parked across the glass
+    { const Ug = V(0, H1 - H0, zF(H1) - zF(H0)).normalize(), Ng = V(0, Ug.z, -Ug.y); // (up the glass, out of it)
+      for (const x of [-0.78, 0, 0.78]) { const piv = V(x - 0.06, H0 + 0.07, zF(H0 + 0.07)).addScaledVector(Ng, 0.03), dir = V(1, 0, 0).multiplyScalar(Math.cos(1.3)).addScaledVector(Ug, Math.sin(1.3));
+        const cap = new THREE.CylinderGeometry(0.02, 0.02, 0.03, 10); cap.rotateX(Math.PI / 2); cap.applyMatrix4(CK.faceM(piv, Ng)); nb.add(cap, CK.blackM());
+        nb.add(bar(piv, piv.clone().addScaledVector(dir, 0.45), 0.014, 0.014), CK.blackM());
+        nb.add(bar(piv.clone().addScaledVector(dir, 0.04).addScaledVector(Ng, -0.012), piv.clone().addScaledVector(dir, 0.5).addScaledVector(Ng, -0.012), 0.012, 0.02), M.rubber()); } }
+    // a bench along the after bulkhead, to port of the door
+    { const bs = cushion(0.7, 0.1, 0.4, 0.04, 0.012); bs.translate(-0.78, 0.45, D / 2 - 0.27); b.add(bs, vinyl(0x2b2d31));
+      const bb = new THREE.BoxGeometry(0.7, 0.36, 0.38); bb.translate(-0.78, 0.22, D / 2 - 0.27); b.add(bb, gel(0xc9ccd0));
+      const bk = cushion(0.7, 0.36, 0.08, 0.035, 0.01, 2); bk.translate(-0.78, 0.74, D / 2 - 0.1); b.add(bk, vinyl(0x2b2d31)); }
+  }
+  // the helm chair: a pedestal on a base plate, a slide under the seat, upholstered cushions and armrests
+  const SEAT = { at: [0.4, 0.42, 0.1], dims: [0.5, 0.55, 0.46, 0.2] }, [sx0, sy0, sz0] = SEAT.at, [sw, sbH, spL, stl] = SEAT.dims, spt = sy0 + 0.02 + 0.126 * sw;
+  { const base = new THREE.CylinderGeometry(0.22, 0.24, 0.02, 24); base.translate(sx0, FL + 0.01, -0.05); b.add(base, CK.blackM());
+    const ped = new THREE.CylinderGeometry(0.055, 0.065, 0.32, 14); ped.translate(sx0, FL + 0.18, -0.05); b.add(ped, PM.metal('brushed'));
+    const sl = new THREE.BoxGeometry(0.34, 0.05, 0.36); sl.translate(sx0, spt - 0.125, -0.1); b.add(sl, CK.blackM()); }
+  const seatM = vinyl(0x2b2d31), seatM2 = vinyl(0x1d1e21);
+  { const pc = cushion(sw, 0.1, spL, 0.045, 0.014); pc.translate(sx0, spt - 0.05, sz0 + 0.03 - spL / 2); b.add(pc, seatM); // the cushion, its top on the declared pan
+    if (lv) b.add(piping(sw - 0.01, spL - 0.01, 0.045, spt - 0.005).translate(sx0, 0, sz0 + 0.03 - spL / 2), seatM2);
+    const bk = cushion(sw - 0.02, sbH, 0.1, 0.045, 0.014, 3); bk.translate(0, sbH / 2, 0.05); bk.rotateX(stl); bk.translate(sx0, sy0 + 0.05, sz0 + 0.03); b.add(bk, seatM); // the back, its face on the declared one
+    const shl = new THREE.BoxGeometry(sw - 0.04, sbH * 0.9, 0.03); shl.translate(0, sbH * 0.47, 0.115); shl.rotateX(stl); shl.translate(sx0, sy0 + 0.05, sz0 + 0.03); b.add(shl, CK.blackM()); }
+  const ARM = []; for (const s of [-1, 1]) { const ax = sx0 + s * 0.3, a = new THREE.CapsuleGeometry(0.035, 0.26, 4, 10); a.rotateX(Math.PI / 2); a.translate(ax, 0.685, -0.02); b.add(a, seatM);
+    b.add(bar(V(ax, 0.66, 0.07), V(ax, spt - 0.115, 0.07), 0.03, 0.03), CK.blackM()); b.add(bar(V(ax + s * 0.015, spt - 0.1, 0.07), V(sx0 + s * 0.16, spt - 0.1, 0.07), 0.03, 0.03), CK.blackM());
+    ARM.push({ name: 'armrest', capsule: [[ax, 0.685, -0.17], [ax, 0.685, 0.13]], r: 0.035, parts: ['arms', 'hands', 'torso'] }); }
+  b.to(g); nb.to(g, true);
+  // the helmsman: on the chair's surfaces, feet on the sole, hands on the wheel on the console's face (seats[0].helm)
+  const st = { p: [0.4, 0.47, -0.05], s: 1, ctl: 'wheel', fit: { at: SEAT.at, dims: SEAT.dims, floor: FL }, helm: { col: [0, 0.36, -0.5], tilt: 0.42 } };
+  st.obstacles = [{ name: 'console', box: [0, (FL + CON.top) / 2, (CON.z0 + CON.z1) / 2], size: [W - 0.17, CON.top - FL, CON.z1 - CON.z0] },
+    { name: 'overhead', box: [0, 1.995, -1.01], size: [1.8, 0.19, 0.3] }, ...ARM];
+  g.userData.seats = [st];
   return g;
 }
 // Water cannon (a fire monitor): a pedestal, a swivel body and a nozzle aimed forward and up. The smoke button turns

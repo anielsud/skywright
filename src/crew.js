@@ -2326,6 +2326,10 @@ function figureGeometry(rig) {
     for (const a of C.spokes) at(B.ctlA, capAB(V(0, 0, 0), V(Math.cos(a) * C.wheelR, Math.sin(a) * C.wheelR, 0), 0.012, 0.012, { seg: 6 }), 0x8a8f96, true);
     at(B.ctlA, new THREE.CylinderGeometry(0.045, 0.05, 0.04, 14).rotateX(Math.PI / 2), 0x2b2d31);
     at(B.ctlA, ellipsoid(V(0, C.wheelR, 0.0), 0.02, 0.012, 0.02), 0xe8601c); // top-centre marker
+    if (C.qr) { // a race car's quick-release hub behind the boss: a splined body round the column and its anodised pull collar
+      at(B.ctlA, new THREE.CylinderGeometry(0.032, 0.032, 0.05, 14).rotateX(Math.PI / 2).translate(0, 0, -0.045), 0x9aa0a6, 'metal');
+      at(B.ctlA, new THREE.TorusGeometry(0.034, 0.007, 6, 18).translate(0, 0, -0.035), 0x1d6fd1, 'metal');
+    }
     at(B.ctlA, capAB(V(0, 0, -0.02), V(0, 0, -(0.42 + (rig.col.z - C.col.z) / Math.cos(C.tilt))), 0.025, 0.03, { seg: 8 }), 0x2b2d31); // column, forward and down into the dash (reaching as deep as it did before the wheel came towards the driver)
   }
   // pedals
