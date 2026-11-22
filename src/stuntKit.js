@@ -259,12 +259,13 @@ export class Site {
 
   // ---- boost pads ----
   // glowing chevrons on the ground; drive over it and you are pushed up to `target` m/s
-  // exact: sets the speed both ways (a jump that needs just the right speed); rumble: a slowing strip; push: m/s^2
+  // exact: sets the speed both ways (a jump that needs just the right speed); rumble: a slowing strip; push: m/s^2;
+  // o.add: instead a steady push (m/s^2) on top of your own speed, up to target; o.cap = false: never holds you back
   boost(pth, s0, L, target, y = 0, exact = false, w = 2.4, rumble = false, o = {}) {
     const f0 = pth(s0), h = y + 0.08, n = Math.max(1, Math.round(L / (o.tile || 4))), q = (ss, a) => { const f = pth(ss); return f.p.addScaledVector(f.r, a).setY(h); };
     if (rumble) for (let i = 0; i < L / 1.2; i++) this.quad(this.G.paint, q(s0 + i * 1.2, -w), q(s0 + i * 1.2, w), q(s0 + i * 1.2 + 1.2, w), q(s0 + i * 1.2 + 1.2, -w), i % 2 ? col(0xf2f2f2) : col(0xe0262a), null, Y);
     else for (let i = 0; i < n; i++) { const sa = s0 + (L * i) / n, sb = s0 + (L * (i + 1)) / n; this.signQuad([q(sa, -w), q(sa, w), q(sb, w), q(sb, -w)], ATLAS[o.tex || 'chev']); }
-    this.boosts.push({ a: this.W(f0.p.clone().setY(y)), t: this.Wd(f0.t), r: this.Wd(f0.r), L, w: w + 0.6, target, y, exact, rumble, push: o.push || 26, msg: o.msg || 'BOOST!' });
+    this.boosts.push({ a: this.W(f0.p.clone().setY(y)), t: this.Wd(f0.t), r: this.Wd(f0.r), L, w: w + 0.6, target, y, exact, rumble, push: o.push || 26, msg: o.msg || 'BOOST!', add: o.add || 0, cap: o.cap !== false });
   }
   // the boost pads under a car on the ground: push or hold it back (messages for the HUD into msgs)
   boostPads(ac, dt, fwd, msgs) {
@@ -273,8 +274,9 @@ export class Site {
       if (s < 0 || s > b.L || Math.abs(l) > b.w || Math.abs(d.y) > 3) continue;
       const v = ac.v.dot(fwd);
       if (fwd.dot(b.t) < 0.7) continue;
+      if (b.add) { if (v < b.target) { ac.v.addScaledVector(fwd, Math.min(b.target - v, b.add * dt)); if (!b.glow || b.glow < 0.2) msgs.push({ center: b.msg }); b.glow = 1; } continue; } // (a steady push on top of your own speed, up to a ceiling: the faster you come in, the faster you go out)
       if (v < b.target && !b.rumble) { ac.v.addScaledVector(fwd, Math.min(b.target - v, b.push * dt)); if (!b.glow || b.glow < 0.2) msgs.push({ center: b.msg }); b.glow = 1; }
-      else if (v > b.target + (b.exact ? 0 : 1)) ac.v.addScaledVector(fwd, -Math.min(v - b.target - (b.exact ? 0 : 1), (b.exact ? 30 : 12) * dt)); // too fast for what's next: it holds you back
+      else if (b.cap && v > b.target + (b.exact ? 0 : 1)) ac.v.addScaledVector(fwd, -Math.min(v - b.target - (b.exact ? 0 : 1), (b.exact ? 30 : 12) * dt)); // too fast for what's next: it holds you back
     }
   }
 

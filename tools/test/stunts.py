@@ -78,6 +78,14 @@ def checks(r, loc):
         add(f'{n}: clears the {e["gap"]:.0f} m gap', e['air'] > 4 and e['minYOverGap'] > 5 and e['touchX'] > e['gap'] and e['slowmo'], f"{e['air']} s in the air, up to {e['peakY']} m, lowest over the gap {e['minYOverGap']} m above the rim, down at x {e['touchX']} (far rim {e['gap']})")
         add(f'{n}: lands upright on the far ramp, parachute stops it', e['onFarSide'] and e['landUp'] > 0.85 and e['minUpAfter'] > 0.8 and e['chute'] and e['endX'] < e['runEnd'] and e['endV'] < 6.5 and e['alive'] == e['parts'] and not e['dead'],
             f"lowest up {e['minUpAfter']}, stopped at x {e['endX']} (run-out ends {e['runEnd']}), {e['alive']}/{e['parts']} parts")
+    for e in r.get('longRun', []):
+        n = f"{e['name']} ({e['realism']}) long run-up from the park"
+        if e['zE'] == 0:
+            add(f'{n}: flat out through the fork, on the rocket strip: a bigger jump, lands upright, stopped', e['vFork'] > 30 and e['onFarSide'] and e['landUp'] > 0.85 and e['alive'] == e['parts'] and not e['dead'] and e['endX'] < e['runEnd'] and e['touchX'] > e['gap'],
+                f"{e['vFork']} m/s at the fork, {e['vFoot']} m/s at the ramp, {e['vLip']} at the lip; {e['air']} s air, up to {e['peakY']} m, down at x {e['touchX']}, stopped at {e['endX']} (run-out ends {e['runEnd']}), up {e['landUp']}, {e['alive']}/{e['parts']} parts; {', '.join(m for m in e['msgs'] if 'canyon' in m)}")
+        else:
+            add(f'{n}: beside the rocket strip (no boost): too slow, the rescue parachute', 'PARACHUTE!' in e['msgs'] and not e['onFarSide'] and not e['dead'] and e['vFoot'] < e['planned'] * 0.75,
+                f"{e['vFoot']} m/s at the ramp (planned {e['planned']}), {e['zStrip']} m off the centreline on the strip, {e['alive']}/{e['parts']} parts")
     es = r.get('evelShort')
     if es:
         add('too slow for the canyon jump: the rescue parachute lowers it', es['chute'] and es['touchVy'] > -9 and es['endUp'] > 0.5 and not es['dead'], f"falling at {es['fastestFall']} m/s before it opens, {es['touchVy']} m/s at touchdown, {es['endY']} m down in the canyon, up {es['endUp']}, {es['alive']}/{es['parts']} parts")

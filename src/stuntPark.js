@@ -188,10 +188,10 @@ export class StuntPark extends Site {
       this.sign(p1(s0 - 6).p.add(V(0, 0, w + 6)), 'tabletop', 3.5, -1);
     }
     // the boost pad and the loop
-    this.boost(lane(p1, LANE), L.boost, 16, 26.5, 0, false, 5.5); // (wide: you can't miss it; enough for a coasting bike in thick air too)
+    this.boost(lane(p1, LANE), L.boost, 16, 26.5, 0, false, 5.5, false, { cap: false }); // (wide: you can't miss it; enough for a coasting bike in thick air too. It never holds you back: a long run-up keeps its speed)
     this.loop(lane(p1, 0), L.loop);
     // a rumble strip after it: out of the loop flat out, it slows you to a speed the banked turn can take
-    this.boost(p1, L.rumble, 14, 20, 0, true, TW, true);
+    this.boost(p1, L.rumble, 14, 20, 0, true, TW, true, { cap: !this.link }); // (with the fork to the canyon jump it only rumbles: flat out to the jump; the banked turn's guide still slows you for the bend)
   }
 
   straight2() {

@@ -164,6 +164,22 @@ export function planeRuns(S, name = 'Kestrel') {
 }
 // The daredevil canyon jump: from its start, full gas (the lane keeps you straight): the rocket strip, the ramp, over
 // the canyon, onto the landing ramp, the brake parachute.
+// The long run-up: from the park's start arch flat out down straight 1 (the kickers, the boost, round the loop), the fork
+// to the link lane, the jump's run-up (on the rocket strip at zE = 0, or beside it at zE = +-4.5: no boost) and over.
+export function longRun(S, name, realism, zE = 0) {
+  const P = park(S), E = S.F.world.stunts.evel, EP = E.P, XS = P.XS, s0 = P.Lp(P.start.pos), ac = place(S, name, realism, s0.x, s0.z, 1), parts = ac.parts.length, msgs = [];
+  const keep = (lp, fl, z) => Math.max(-1, Math.min(1, 0.12 * (z - lp.z) - 1.6 * Math.atan2(fl.z, fl.x)));
+  const rollAt = (lp, fl) => { if (!ac.onGround || ac.up.y < 0.5) return 0; const e = E.Lp(ac.x); if (e.x > EP.runStart - 20) { const f = E.Ld(new S.THREE.Vector3(0, 0, -1).applyQuaternion(ac.q)), far = Math.abs(zE - e.z) > 1.5, r = Math.max(-1, Math.min(1, (far ? 0.12 : 0.05) * (zE - e.z) - (far ? 1.6 : 0.8) * Math.atan2(f.z, f.x))); return e.x < EP.ramp0 && Math.abs(r) > 0.04 ? r : 0; } return lp.x < P.loopInfo.entryX ? keep(lp, fl, s0.z) : lp.x < XS - 10 ? 0 : lp.x < XS + 8 ? 0.6 : keep(lp, fl, 30); };
+  E.st.phase = 'idle';
+  const tr = drive(S, ac, { z: s0.z, dir: 1, T: 60, rollAt, msgs, until: (a, t) => { const e = E.Lp(a.x); return (e.x > EP.gap + 40 && a.onGround && a.v.length() < 6) || e.y < -150 || P.Lp(a.x).z < 0; } });
+  // speeds in the jump's frame (the trace is in the park's)
+  const W = (p) => E.Lp(P.W(new S.THREE.Vector3(p.x, p.y, p.z))), et = tr.map((p) => ({ ...p, ...W(p) }));
+  const at = (x) => et.find((p) => p.x > x), air = longestAir(et), landed = et[air.i] || et.at(-1), end = et.at(-1);
+  return { name, realism, zE, parts, alive: end.alive, dead: end.dead, planned: r2(EP.v0), gap: r2(EP.gap), runUp: r2(EP.ramp0 - EP.runStart),
+    zStrip: r2(Math.max(0, ...et.filter((p) => p.x > EP.ramp0 - 172 && p.x < EP.ramp0).map((p) => Math.abs(p.z)))), vFork: r2(tr.find((p) => p.x > XS)?.v ?? 0), vStrip: r2(at(EP.ramp0 - 172)?.v ?? 0), vFoot: r2(at(EP.ramp0)?.v ?? 0), vLip: r2(at(-8)?.v ?? 0), zLip: r2(at(-8)?.z ?? 99),
+    air: r2(air.t), peakY: r2(Math.max(...et.map((p) => p.y))), touchX: r2(landed.x), touchV: r2(landed.v), landUp: r2(air.landUp), endX: r2(end.x), endY: r2(end.y), runEnd: r2(EP.runEnd),
+    onFarSide: end.x > EP.gap + 10 && end.y > EP.yB - 3, msgs: [...new Set(msgs.map((m) => m.center || m.toast).filter(Boolean))] };
+}
 export function evelRun(S, name, realism) {
   const E = S.F.world.stunts.evel, P = E.P, s0 = E.Lp(E.start.pos);
   const ac = place(S, name, realism, s0.x, 0, 1, 0, E), parts = ac.parts.length, msgs = [];
@@ -190,11 +206,12 @@ export function evelShort(S, name = 'Dune Buggy') {
 export function run(opts = {}) {
   const S = window.__sky, F = S.F; F.paused = true;
   F.world.gust.set(0, 0, 0); F.world.gustT.set(0, 0, 0); // (the same wind every run: gusts are random)
-  const P = park(S), out = { stats: F.world.stunts.stats, site: F.world.stuntPlan.site, loop: [], speeds: [], jump: [], bowl: [], turn: [], fork: [], planes: null, evel: [], evelShort: null };
+  const P = park(S), out = { stats: F.world.stunts.stats, site: F.world.stuntPlan.site, loop: [], speeds: [], jump: [], bowl: [], turn: [], fork: [], planes: null, evel: [], evelShort: null, longRun: [] };
   for (const name of opts.cars || ['Dune Buggy', 'Chomper']) for (const rl of opts.realism || ['pilot']) {
     out.loop.push(loopRun(S, name, rl));
     if (opts.full !== false) { out.speeds.push(loopSpeeds(S, name, rl)); out.jump.push(jumpRun(S, name, rl)); for (const v of opts.bowlSpeeds || [14, 20, 26, 34]) out.bowl.push(bowlRun(S, name, rl, v)); out.turn.push(turnRun(S, name, rl)); if (P.link && F.world.stunts.evel) out.fork.push(forkRun(S, name, rl)); }
     if (F.world.stunts.evel && opts.evel !== false) out.evel.push(evelRun(S, name, rl));
+    if (F.world.stunts.evel && opts.evel !== false && P.link) { out.longRun.push(longRun(S, name, rl, 0)); if (name === (opts.cars || ['Dune Buggy'])[0]) out.longRun.push(longRun(S, name, rl, 5.6)); }
   }
   if (opts.planes !== false && P.L.tabletop != null) out.planes = planeRuns(S);
   if (F.world.stunts.evel && opts.evel !== false) out.evelShort = evelShort(S);
