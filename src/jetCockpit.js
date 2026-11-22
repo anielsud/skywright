@@ -476,6 +476,8 @@ export function tandemInterior(g, b0, nb, { T, tcPt, split, paint }) {
   { const f = new THREE.CapsuleGeometry(0.03, 0.12, 4, 8); f.rotateX(Math.PI / 2); f.scale(1, 0.8, 1); f.translate(0, yTop + 0.018, zp); b.add(f, paint);
     const ep = roundBox(0.08, 0.05, 0.07, 0.012); ep.translate(0, yTop - 0.03, zp); b.add(ep, black); // (up against its fairing through the glass)
     const mf = new THREE.PlaneGeometry(0.06, 0.03); mf.translate(0, yTop - 0.032, zp + 0.0355); nb.add(mf, M.chrome()); }
+  // the bulkhead between the stations (built by the canopy: its shape follows the arch), painted like the consoles
+  if (g.userData.bulkhead) { b.add(g.userData.bulkhead, frame); delete g.userData.bulkhead; }
   // the RSO's station: the panel on the bulkhead's back with the viewsight's big round scope in the middle, grey consoles
   const zf = split + 0.06, RS = { y: -0.25, h: 0.5, d: 0.13 };
   { const body = new THREE.BoxGeometry(0.56, RS.h, RS.d); body.translate(0, RS.y, zf + RS.d / 2); b.add(body, panel);

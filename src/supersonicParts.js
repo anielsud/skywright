@@ -252,7 +252,7 @@ function tandemCanopy(c, lv) {
     for (const sx of [-1, 1]) { const pm = new THREE.BoxGeometry(0.07, 0.07, 0.1); pm.translate(sx * 0.112, -0.685, -1.2); b.add(pm, M.darkMetal()); }
     // the bulkhead between the two cockpits, under the arch
     { const sh = new THREE.Shape(); sh.moveTo(-TC.w(split) * 0.9, -0.72); for (let i = 0; i <= 16; i++) { const p = tcPt(split, -Math.PI / 2 + Math.PI * (i / 16), 0.985); sh.lineTo(p.x, p.y); } sh.lineTo(TC.w(split) * 0.9, -0.72); sh.closePath();
-      const bh = new THREE.ExtrudeGeometry(sh, { depth: 0.03, bevelEnabled: false }); bh.translate(0, 0, split + 0.03); b.add(bh, PM.seat()); }
+      const bh = new THREE.ExtrudeGeometry(sh, { depth: 0.03, bevelEnabled: false }); bh.translate(0, 0, split + 0.03); g.userData.bulkhead = bh; } // (painted with the stations: tandemInterior)
     // both stations (jetCockpit.js): ejection seats, consoles, the panels, glare shield, periscope; the crew's seats
     tandemInterior(g, b, nb, { T: TC, tcPt, split, paint });
   } else {
