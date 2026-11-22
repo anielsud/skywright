@@ -25,15 +25,29 @@ const cache = new Map(), cached = (k, f) => { if (!cache.has(k)) cache.set(k, f(
 // Cockpit paint (consoles, panel bodies, seat frames, cushions) is a solid swatch of the atlas: the furniture shares the
 // panels' material, one draw call. jetPaint(c) names a swatch; a bag wrapped by paintBag puts geometry added with it on
 // the atlas at that swatch.
-const SWATCHES = [0x2c3035, 0x222428, 0x3a3e44, 0x596067, 0x141518, 0x2a2c30, 0x55594c, 0x24262a];
-export const jetPaint = (c) => { const i = SWATCHES.indexOf(c); if (i < 0) throw new Error('jetPaint: no swatch ' + c.toString(16)); return { swatch: i }; };
+// Each swatch has a surface (cls): 0 painted metal / plastic (powder-coat grain), 0.5 the anti-glare coaming (a coarse
+// matt texture), 1 fabric (cushions, webbing: a weave, quilting seams and stitching). The atlas material's shader
+// (panelMat) draws the grain, roughness and bump from the part-space position, so nothing needs UVs.
+const SWATCHES = [0x2c3035, 0x222428, 0x3a3e44, 0x596067, 0x141518, 0x2a2c30, 0x55594c, 0x24262a, 0x4f5440, 0x16171a, 0x5d6168];
+export const jetPaint = (c, cls = 0) => { const i = SWATCHES.indexOf(c); if (i < 0) throw new Error('jetPaint: no swatch ' + c.toString(16)); return { swatch: i, cls }; };
+// Baked ambient occlusion: while a cockpit builds, AO(x, y, z) says how shut in a point is (0 open .. 1), from where it
+// is in the tub (deep down, under the glare shield); it goes on the atlas material's geometry as uv1.x (uv1.y: cls).
+let AO = null;
+function bake(geo, cls) {
+  const P = geo.attributes.position, n = P.count, a = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) { a[i * 2] = AO ? AO(P.getX(i), P.getY(i), P.getZ(i)) : 0; a[i * 2 + 1] = cls; }
+  geo.setAttribute('uv1', new THREE.Float32BufferAttribute(a, 2));
+}
 export function paintBag(bag) {
   return { add(geo, mat, m) {
+    if (mat === panelMat()) { if (m) geo.applyMatrix4(m); bake(geo, 0); return bag.add(geo, mat); }
     if (!mat?.swatch && mat?.swatch !== 0) return bag.add(geo, mat, m);
+    if (m) geo.applyMatrix4(m);
     const n = geo.attributes.position.count, u = (768 + 16 * mat.swatch + 8) / S, v = 1 - 248 / S, a = new Float32Array(n * 2); for (let i = 0; i < n; i++) { a[i * 2] = u; a[i * 2 + 1] = v; }
-    geo.setAttribute('uv', new THREE.Float32BufferAttribute(a, 2)); return bag.add(geo, panelMat(), m);
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(a, 2)); bake(geo, mat.cls || 0); return bag.add(geo, panelMat());
   } };
 }
+const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
 // ---------- the atlas ----------
 const S = 1024;
@@ -74,17 +88,36 @@ const LAYOUTS = new Map(); const layoutOf = (name) => { if (!LAYOUTS.has(name)) 
 
 function drawAtlas() {
   const mk = () => { const c = document.createElement('canvas'); c.width = c.height = S; return c; };
-  const cA = mk(), cE = mk(), g = cA.getContext('2d'), e = cE.getContext('2d');
+  const cA = mk(), cE = mk(), cR = mk(), g = cA.getContext('2d'), e = cE.getContext('2d'), ro = cR.getContext('2d');
   g.fillStyle = '#1a1c1f'; g.fillRect(0, 0, S, S); e.fillStyle = '#000'; e.fillRect(0, 0, S, S);
+  ro.fillStyle = 'rgb(0,175,0)'; ro.fillRect(0, 0, S, S); // (roughness in G: 0.69 painted panels; glass and screens glossy)
+  const gloss = (x, y, w, h, v, round = false) => { ro.fillStyle = `rgb(0,${Math.round(v * 255)},0)`; if (round) { ro.beginPath(); ro.arc(x, y, w, 0, Math.PI * 2); ro.fill(); } else ro.fillRect(x, y, w, h); };
+  const lit = (s, x, y, px, col = '#e4e6df') => { txt(g, s, x, y, px, col); txt(e, s, x, y, px, 'rgba(255,232,196,0.42)'); }; // backlit white lettering
+  // a screen sunk in its bezel: shadowed inner edges (on the glow too), a lit lip round it
+  const inset = (x, y, w, h) => { for (const [c, a] of [[g, 0.55], [e, 0.9]]) { c.strokeStyle = `rgba(0,0,0,${a})`; c.lineWidth = 7; c.strokeRect(x + 2, y + 2, w - 4, h - 4); c.lineWidth = 3; c.strokeStyle = `rgba(0,0,0,${a * 0.6})`; c.strokeRect(x + 6, y + 6, w - 12, h - 12); } g.strokeStyle = 'rgba(160,165,172,0.35)'; g.lineWidth = 1; g.strokeRect(x - 1.5, y - 1.5, w + 3, h + 3); };
+  const halo = (x, y, r) => { const gr = g.createRadialGradient(x + 1.5, y + 2.5, r * 0.6, x + 1.5, y + 2.5, r * 1.9); gr.addColorStop(0, 'rgba(0,0,0,0.55)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; g.beginPath(); g.arc(x + 1.5, y + 2.5, r * 1.9, 0, Math.PI * 2); g.fill(); }; // (occlusion round a knob)
+  let plates = 0;
   const both = (f) => { f(g); f(e); };
   const circ = (c, x, y, r) => { c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); };
   const rr = (c, x, y, w, h, r) => { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); };
   const txt = (c, s, x, y, px, col = '#d9dcd6', al = 'center') => { c.font = `bold ${px}px Helvetica, Arial, sans-serif`; c.textAlign = al; c.textBaseline = 'middle'; c.fillStyle = col; c.fillText(s, x, y); };
   const dzus = (x, y) => { circ(g, x, y, 2.6); g.fillStyle = '#7d8187'; g.fill(); g.strokeStyle = '#2a2c2f'; g.lineWidth = 1; g.beginPath(); g.moveTo(x - 2, y); g.lineTo(x + 2, y); g.stroke(); };
-  const plate = (x, y, w, h, col = '#2b2e33') => { g.fillStyle = '#0c0d0e'; g.fillRect(x, y, w, h); g.fillStyle = col; g.fillRect(x + 1.5, y + 1.5, w - 3, h - 3); for (const [a, b] of [[x + 6, y + 6], [x + w - 6, y + 6], [x + 6, y + h - 6], [x + w - 6, y + h - 6]]) dzus(a, b); };
+  // a console module: its own shade (they vary panel to panel), a black seam round it, shadowed inner edges, the edge
+  // nearest the pilot's hands worn lighter with a few scuffs, Dzus fasteners at the corners, a semi-gloss finish
+  const plate = (x, y, w, h, col) => {
+    const R2 = rnd(++plates * 131 + 7), k = col ? 0 : Math.round((R2() - 0.5) * 16), base = col || `rgb(${42 + k},${45 + k},${50 + k})`;
+    g.fillStyle = '#08090a'; g.fillRect(x, y, w, h); g.fillStyle = base; g.fillRect(x + 1.5, y + 1.5, w - 3, h - 3);
+    for (let i = 0; i < 4; i++) { g.strokeStyle = `rgba(0,0,0,${0.32 - i * 0.07})`; g.lineWidth = 1; g.strokeRect(x + 2 + i, y + 2 + i, w - 4 - 2 * i, h - 4 - 2 * i); }
+    g.fillStyle = 'rgba(190,196,204,0.22)'; g.fillRect(x + 2, y + h - 4, w - 4, 1.5); g.fillStyle = 'rgba(190,196,204,0.12)'; g.fillRect(x + 2, y + 2, 1.2, h - 4);
+    for (let i = 0; i < 14; i++) { const sx = x + 4 + R2() * (w - 8), sy = y + h - 4 - R2() * R2() * h * 0.4; g.fillStyle = `rgba(200,205,210,${0.06 + R2() * 0.12})`; g.fillRect(sx, sy, 1 + R2() * 5, 0.8); }
+    gloss(x + 1.5, y + 1.5, w - 3, h - 3, 0.58 + R2() * 0.12);
+    for (const [a, b] of [[x + 6, y + 6], [x + w - 6, y + 6], [x + 6, y + h - 6], [x + w - 6, y + h - 6]]) dzus(a, b);
+  };
   // a round instrument: a black face, white ticks and numbers, a needle (or an attitude ball, a compass card, a scope)
-  const dial = (x, y, r, k = 'gauge', seed = 1) => {
-    const R = rnd(seed * 97 + 13);
+  const dial = (x, y, r, k = 'gauge', seed = 1) => { dialFace(x, y, r, k, seed); gloss(x, y, r, 0, 0.1, true);
+    g.strokeStyle = 'rgba(255,255,255,0.22)'; g.lineWidth = Math.max(1, r * 0.08); g.beginPath(); g.arc(x, y, r * 0.8, Math.PI * 1.1, Math.PI * 1.45); g.stroke(); }; // (the glass over it catches the light)
+  const dialFace = (x, y, r, k, seed) => {
+    const R = rnd(seed * 97 + 13); halo(x, y, r + 2);
     circ(g, x, y, r + 2); g.fillStyle = '#3a3d41'; g.fill();
     if (k === 'adi') {
       g.save(); circ(g, x, y, r); g.clip(); const roll = (R() - 0.5) * 0.3; g.translate(x, y); g.rotate(roll);
@@ -112,61 +145,98 @@ function drawAtlas() {
     const a = a0 + (a1 - a0) * (0.2 + R() * 0.6); g.strokeStyle = '#f4f4f0'; g.lineWidth = Math.max(1.5, r * 0.07); g.beginPath(); g.moveTo(x - Math.cos(a) * r * 0.15, y - Math.sin(a) * r * 0.15); g.lineTo(x + Math.cos(a) * r * 0.8, y + Math.sin(a) * r * 0.8); g.stroke();
     circ(g, x, y, Math.max(1.5, r * 0.08)); g.fillStyle = '#555'; g.fill();
   };
-  const at = (name, f) => { const [x, y, w, h] = CELLS[name]; g.save(); e.save(); g.translate(x, y); e.translate(x, y); g.beginPath(); g.rect(0, 0, w, h); g.clip(); e.beginPath(); e.rect(0, 0, w, h); e.clip(); f(w, h); g.restore(); e.restore(); };
+  const at = (name, f) => { const [x, y, w, h] = CELLS[name]; for (const c of [g, e, ro]) { c.save(); c.translate(x, y); c.beginPath(); c.rect(0, 0, w, h); c.clip(); } f(w, h); for (const c of [g, e, ro]) c.restore(); };
   const green = '#5dff7a';
   // MFDs: a bezel with five buttons a side, a radar page and a horizontal situation page
   for (const [name, page] of [['mfdA', 0], ['mfdB', 1]]) at(name, (w, h) => {
     rr(g, 2, 2, w - 4, h - 4, 14); g.fillStyle = '#25272a'; g.fill(); g.strokeStyle = '#0d0e0f'; g.lineWidth = 3; g.stroke();
-    for (let i = 0; i < 5; i++) { const t = 58 + i * 35; for (const [bx, by] of [[t - 9, 8], [t - 9, h - 26], [8, t - 9], [w - 26, t - 9]]) { rr(g, bx, by, 18, 18, 3); g.fillStyle = '#4a4d52'; g.fill(); g.fillStyle = '#e6e6e0'; g.fillRect(bx + 6, by + 8, 6, 2); } }
-    both((c) => { c.fillStyle = '#020604'; c.fillRect(36, 36, w - 72, h - 72); });
+    for (let i = 0; i < 5; i++) { const t = 58 + i * 35; for (const [bx, by] of [[t - 9, 8], [t - 9, h - 26], [8, t - 9], [w - 26, t - 9]]) { halo(bx + 9, by + 9, 9); rr(g, bx, by, 18, 18, 3); g.fillStyle = '#4a4d52'; g.fill(); g.fillStyle = '#e6e6e0'; g.fillRect(bx + 6, by + 8, 6, 2); } }
+    both((c) => { c.fillStyle = '#020604'; c.fillRect(36, 36, w - 72, h - 72); }); gloss(36, 36, w - 72, h - 72, 0.08);
     both((c) => { c.save(); c.beginPath(); c.rect(36, 36, w - 72, h - 72); c.clip(); c.strokeStyle = green; c.fillStyle = green; c.lineWidth = 1.6;
       const cx = w / 2, cy = h - 50;
       if (page === 0) { for (const k of [0.25, 0.5, 0.75, 1]) { c.beginPath(); c.arc(cx, cy, 140 * k, -Math.PI * 0.8, -Math.PI * 0.2); c.stroke(); } for (const a of [-0.8, -0.65, -0.5, -0.35, -0.2]) { c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx + Math.cos(a * Math.PI) * 140, cy + Math.sin(a * Math.PI) * 140); c.stroke(); } for (const [x, y] of [[100, 92], [150, 120], [128, 76]]) c.fillRect(x, y, 7, 5); }
       else { const cy2 = h / 2 + 10; c.beginPath(); c.arc(cx, cy2, 62, 0, 7); c.stroke(); for (let i = 0; i < 36; i++) { const a = (i / 36) * Math.PI * 2, L = i % 3 ? 5 : 10; c.beginPath(); c.moveTo(cx + Math.cos(a) * 62, cy2 + Math.sin(a) * 62); c.lineTo(cx + Math.cos(a) * (62 - L), cy2 + Math.sin(a) * (62 - L)); c.stroke(); } c.beginPath(); c.moveTo(cx, cy2 - 12); c.lineTo(cx, cy2 + 12); c.moveTo(cx - 10, cy2 - 2); c.lineTo(cx + 10, cy2 - 2); c.stroke(); c.beginPath(); c.moveTo(cx, cy2); c.lineTo(cx + 40, cy2 - 46); c.stroke(); }
       const labs = page ? ['HSD', 'SMS', 'DCLT', 'FCR', 'SWAP'] : ['CRM', 'RWS', 'NORM', 'OVRD', 'CNTL']; labs.forEach((s, i) => { txt(c, s, 58 + i * 35, 46, 9, green); txt(c, ['DTE', 'TEST', 'FLIR', 'TFR', 'WPN'][i], 58 + i * 35, h - 46, 9, green); });
-      c.restore(); });
+      c.restore(); }); inset(36, 36, w - 72, h - 72);
   });
   // up-front controls: the data entry display over a keypad
-  at('ufc', (w, h) => { g.fillStyle = '#2c2f33'; g.fillRect(0, 0, w, h); both((c) => { c.fillStyle = '#071008'; c.fillRect(56, 8, 144, 40); });
-    both((c) => { ['UHF  242.00  STPT  8', '  VHF  10  *  15:42:07', ' M1 3  C   MAN  T 75X'].forEach((s, i) => { c.font = 'bold 10px monospace'; c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillStyle = '#9dff6e'; c.fillText(s, 60, 16 + i * 12); }); });
+  at('ufc', (w, h) => { g.fillStyle = '#2c2f33'; g.fillRect(0, 0, w, h); both((c) => { c.fillStyle = '#071008'; c.fillRect(56, 8, 144, 40); }); gloss(56, 8, 144, 40, 0.08);
+    both((c) => { ['UHF  242.00  STPT  8', '  VHF  10  *  15:42:07', ' M1 3  C   MAN  T 75X'].forEach((s, i) => { c.font = 'bold 10px monospace'; c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillStyle = '#9dff6e'; c.fillText(s, 60, 16 + i * 12); }); }); inset(56, 8, 144, 40);
     const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'RCL', '0', 'ENTR'];
-    keys.forEach((k, i) => { const x = 66 + (i % 3) * 42, y = 58 + Math.floor(i / 3) * 25; rr(g, x, y, 36, 21, 4); g.fillStyle = '#4b4f55'; g.fill(); txt(g, k, x + 18, y + 11, k.length > 1 ? 8 : 12); });
-    for (const x of [10, w - 46]) for (let i = 0; i < 4; i++) { rr(g, x, 58 + i * 25, 36, 21, 4); g.fillStyle = '#3d4045'; g.fill(); txt(g, ['COM1', 'COM2', 'IFF', 'LIST', 'A-A', 'A-G', 'NAV', 'MRK'][i + (x > 50 ? 4 : 0)], x + 18, 69 + i * 25, 8); } });
+    keys.forEach((k, i) => { const x = 66 + (i % 3) * 42, y = 58 + Math.floor(i / 3) * 25; halo(x + 18, y + 11, 13); rr(g, x, y, 36, 21, 4); g.fillStyle = '#4b4f55'; g.fill(); lit(k, x + 18, y + 11, k.length > 1 ? 8 : 12); });
+    for (const x of [10, w - 46]) for (let i = 0; i < 4; i++) { rr(g, x, 58 + i * 25, 36, 21, 4); g.fillStyle = '#3d4045'; g.fill(); lit(['COM1', 'COM2', 'IFF', 'LIST', 'A-A', 'A-G', 'NAV', 'MRK'][i + (x > 50 ? 4 : 0)], x + 18, 69 + i * 25, 8); } });
   // caution lights: a grid of legends, two lit amber and one green
   at('warn', (w, h) => { g.fillStyle = '#202225'; g.fillRect(0, 0, w, h); const lit = { 4: '#ffb020', 9: '#ffb020', 14: '#41ff5a' };
     for (let i = 0; i < 18; i++) { const x = 8 + (i % 6) * 41, y = 6 + Math.floor(i / 6) * 24; g.fillStyle = '#3a2a12'; g.fillRect(x, y, 36, 20); const L = LEGENDS[(i * 7) % LEGENDS.length]; txt(g, L, x + 18, y + 10, 8, '#8a7550');
-      if (lit[i]) both((c) => { c.fillStyle = lit[i]; c.fillRect(x, y, 36, 20); txt(c, L, x + 18, y + 10, 8, '#1a1200'); }); } });
-  SWATCHES.forEach((c, i) => { g.fillStyle = '#' + c.toString(16).padStart(6, '0'); g.fillRect(768 + 16 * i, 240, 16, 16); });
+      gloss(x, y, 36, 20, 0.12); if (lit[i]) { e.shadowColor = lit[i]; e.shadowBlur = 8; both((c) => { c.fillStyle = lit[i]; c.fillRect(x, y, 36, 20); }); e.shadowBlur = 0; both((c) => txt(c, L, x + 18, y + 10, 8, '#1a1200')); } } });
+  SWATCHES.forEach((c, i) => { g.fillStyle = '#' + c.toString(16).padStart(6, '0'); g.fillRect(768 + 16 * i, 240, 16, 16); gloss(768 + 16 * i, 240, 16, 16, [0.62, 0.66, 0.55, 0.6, 0.62, 0.6, 0.95, 0.85, 0.95, 0.97, 0.5][i]); });
   // the F-16's standby instruments between the MFDs
   at('gauges', (w, h) => { plate(0, 0, w, h, '#26292d'); DIALS.gauges.forEach((d, i) => dial(d.u * w, d.v * h, d.r * w, d.k, i + 3)); });
   // the SR-71 pilot's panel: black, dense with round gauges; the triple display (speed, Mach, altitude) top left
   at('sr71', (w, h) => { g.fillStyle = '#111214'; g.fillRect(0, 0, w, h); for (let i = 1; i < 4; i++) { g.fillStyle = '#060607'; g.fillRect((w * i) / 4 + (i === 2 ? 0 : 0), 0, 2, h); }
     for (const [x, y] of [[8, 8], [w - 8, 8], [8, h - 8], [w - 8, h - 8], [w / 2, 8], [w / 2, h - 8]]) dzus(x, y);
     DIALS.sr71.forEach((d, i) => dial(d.u * w, d.v * h, d.r * w, d.k, i + 11));
-    g.fillStyle = '#222428'; g.fillRect(w * 0.08, h * 0.06, w * 0.28, h * 0.13); both((c) => { ['KEAS 310', 'MACH 3.17', 'ALT 78500'].forEach((s, i) => { c.fillStyle = '#05070a'; c.fillRect(w * 0.1, h * 0.07 + i * 18, w * 0.24, 15); c.font = 'bold 12px monospace'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#ffd36a'; c.fillText(s, w * 0.22, h * 0.07 + i * 18 + 8); }); });
+    g.fillStyle = '#222428'; g.fillRect(w * 0.08, h * 0.06, w * 0.28, h * 0.13); both((c) => { ['KEAS 310', 'MACH 3.17', 'ALT 78500'].forEach((s, i) => { c.fillStyle = '#05070a'; c.fillRect(w * 0.1, h * 0.07 + i * 18, w * 0.24, 15); c.font = 'bold 12px monospace'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#ffd36a'; c.fillText(s, w * 0.22, h * 0.07 + i * 18 + 8); }); }); gloss(w * 0.1, h * 0.07, w * 0.24, 52, 0.1); inset(w * 0.08, h * 0.06, w * 0.28, h * 0.13);
     for (let i = 0; i < 6; i++) { const x = w * 0.37 + i * 26, y = h * 0.06; g.fillStyle = '#2a1d0c'; g.fillRect(x, y, 22, 14); if (i === 2) both((c) => { c.fillStyle = '#ffb020'; c.fillRect(x, y, 22, 14); }); }
-    for (let i = 0; i < 9; i++) txt(g, ['FUEL', 'OIL', 'HYD A', 'HYD B', 'INLET', 'EGT', 'RPM', 'NOZ', 'CIT'][i], w * (0.6 + (i % 3) * 0.1), h * (0.96 - Math.floor(i / 3) * 0.02 - 0.02), 8, '#bfc2bd'); });
+    for (let i = 0; i < 9; i++) lit(['FUEL', 'OIL', 'HYD A', 'HYD B', 'INLET', 'EGT', 'RPM', 'NOZ', 'CIT'][i], w * (0.6 + (i % 3) * 0.1), h * (0.96 - Math.floor(i / 3) * 0.02 - 0.02), 8); });
   // the RSO's panel: the viewsight's big round scope in the middle, the navigation display over it, gauges either side
   at('rso', (w, h) => { g.fillStyle = '#121315'; g.fillRect(0, 0, w, h); for (const [x, y] of [[8, 8], [w - 8, 8], [8, h - 8], [w - 8, h - 8]]) dzus(x, y);
     DIALS.rso.forEach((d, i) => dial(d.u * w, d.v * h, d.r * w, d.k, i + 41));
-    g.fillStyle = '#2a2d31'; g.fillRect(w * 0.33, h * 0.04, w * 0.34, h * 0.2); both((c) => { c.fillStyle = '#041007'; c.fillRect(w * 0.35, h * 0.06, w * 0.3, h * 0.16); ['ANS  STAR TRK  3', 'LAT N 34 12.4', 'LON W118 06.9', 'DEST 07  ETA 12'].forEach((s, i) => { c.font = 'bold 10px monospace'; c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillStyle = '#7dff8a'; c.fillText(s, w * 0.37, h * 0.085 + i * 13); }); });
-    for (let i = 0; i < 10; i++) { const x = w * 0.18 + i * 34, y = h * 0.92; g.fillStyle = '#3c3f44'; g.fillRect(x, y, 26, 14); txt(g, ['CAM', 'SLR', 'TEOC', 'ELINT', 'DEF', 'REC', 'ON', 'OFF', 'TEST', 'IFF'][i], x + 13, y + 7, 7); } });
+    g.fillStyle = '#2a2d31'; g.fillRect(w * 0.33, h * 0.04, w * 0.34, h * 0.2); both((c) => { c.fillStyle = '#041007'; c.fillRect(w * 0.35, h * 0.06, w * 0.3, h * 0.16); ['ANS  STAR TRK  3', 'LAT N 34 12.4', 'LON W118 06.9', 'DEST 07  ETA 12'].forEach((s, i) => { c.font = 'bold 10px monospace'; c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillStyle = '#7dff8a'; c.fillText(s, w * 0.37, h * 0.085 + i * 13); }); }); gloss(w * 0.35, h * 0.06, w * 0.3, h * 0.16, 0.08); inset(w * 0.35, h * 0.06, w * 0.3, h * 0.16);
+    for (let i = 0; i < 10; i++) { const x = w * 0.18 + i * 34, y = h * 0.92; halo(x + 13, y + 7, 12); g.fillStyle = '#3c3f44'; g.fillRect(x, y, 26, 14); lit(['CAM', 'SLR', 'TEOC', 'ELINT', 'DEF', 'REC', 'ON', 'OFF', 'TEST', 'IFF'][i], x + 13, y + 7, 7); } });
   // switch panels (consoles and the panel's side wings) from their layouts
   for (const name of ['sw0', 'sw1', 'sw2', 'sw3', 'sw4', 'sw5', 'wingL']) at(name, (w, h) => {
     const L = layoutOf(name);
     for (const [v0, v1] of L.subs) plate(0, v0 * h, w, (v1 - v0) * h);
     for (const it of L.items) {
       const x = it.u * w, y = it.v * h, r = it.r * w;
-      txt(g, it.label, x, y - r - 9, 9);
+      lit(it.label, x, y - r - 9, 9);
+      halo(x, y, it.kind === 'knob' ? r : r * 0.8);
       if (it.kind === 'knob') { for (let i = 0; i <= 6; i++) { const a = -Math.PI * 1.2 + (i / 6) * Math.PI * 1.4; g.strokeStyle = '#d9dcd6'; g.lineWidth = 1.2; g.beginPath(); g.moveTo(x + Math.cos(a) * r * 1.25, y + Math.sin(a) * r * 1.25); g.lineTo(x + Math.cos(a) * r * 1.5, y + Math.sin(a) * r * 1.5); g.stroke(); } circ(g, x, y, r); g.fillStyle = '#0c0c0d'; g.fill(); }
-      else if (it.kind === 'tog') { if (it.guard) { g.fillStyle = '#b4161b'; g.fillRect(x - r * 1.4, y - r * 1.8, r * 2.8, r * 3.6); } circ(g, x, y, r * 0.7); g.fillStyle = '#9a9ea4'; g.fill(); txt(g, 'ON', x + r * 2.1, y - r * 0.9, 7); txt(g, 'OFF', x + r * 2.3, y + r * 0.9, 7); }
-      else { rr(g, x - r * 1.6, y - r * 1.1, r * 3.2, r * 2.2, 2); g.fillStyle = '#3f4247'; g.fill(); both((c) => { c.fillStyle = it.u > 0.5 ? '#3cff64' : '#ffb020'; c.fillRect(x - r * 1.2, y - r * 0.3, r * 2.4, r * 0.6); }); }
+      else if (it.kind === 'tog') { if (it.guard) { g.fillStyle = '#b4161b'; g.fillRect(x - r * 1.4, y - r * 1.8, r * 2.8, r * 3.6); } circ(g, x, y, r * 0.7); g.fillStyle = '#9a9ea4'; g.fill(); lit('ON', x + r * 2.1, y - r * 0.9, 7); lit('OFF', x + r * 2.3, y + r * 0.9, 7); }
+      else { rr(g, x - r * 1.6, y - r * 1.1, r * 3.2, r * 2.2, 2); g.fillStyle = '#3f4247'; g.fill(); e.shadowColor = it.u > 0.5 ? '#3cff64' : '#ffb020'; e.shadowBlur = 6; both((c) => { c.fillStyle = it.u > 0.5 ? '#3cff64' : '#ffb020'; c.fillRect(x - r * 1.2, y - r * 0.3, r * 2.4, r * 0.6); }); e.shadowBlur = 0; gloss(x - r * 1.6, y - r * 1.1, r * 3.2, r * 2.2, 0.15); }
     }
   });
-  const tex = (c) => { const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; };
-  return { map: tex(cA), emissiveMap: tex(cE) };
+  // a fine plastic / powder-coat grain over all of it (colour and roughness)
+  { const id = g.getImageData(0, 0, S, S), d = id.data, ir = ro.getImageData(0, 0, S, S), dr = ir.data, R3 = rnd(77);
+    for (let i = 0; i < d.length; i += 4) { const n = (R3() - 0.5) * 9; d[i] += n; d[i + 1] += n; d[i + 2] += n; dr[i + 1] += (R3() - 0.5) * 14; }
+    g.putImageData(id, 0, 0); ro.putImageData(ir, 0, 0); }
+  const tex = (c, srgb = true) => { const t = new THREE.CanvasTexture(c); if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; };
+  return { map: tex(cA), emissiveMap: tex(cE), roughnessMap: tex(cR, false) };
 }
-export const panelMat = () => cached('panelMat', () => { const t = drawAtlas(); return new THREE.MeshStandardMaterial({ map: t.map, emissiveMap: t.emissiveMap, emissive: 0xffffff, emissiveIntensity: 0.9, roughness: 0.72, metalness: 0.12 }); });
+// The surface shader: the atlas picture times a grain from the part-space position (colour and roughness), the baked
+// occlusion (uv1.x: darker diffuse and reflections), and a bump: fine grain on paint, a weave with quilting seams and
+// stitches on fabric (uv1.y = 1), a coarse matt texture on the coaming (0.5); faded out where it would alias.
+const SURF = /* glsl */`
+  varying vec3 vJP; varying vec2 vJA;
+  float jH(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float jN(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(jH(i), jH(i + vec3(1,0,0)), f.x), mix(jH(i + vec3(0,1,0)), jH(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(jH(i + vec3(0,0,1)), jH(i + vec3(1,0,1)), f.x), mix(jH(i + vec3(0,1,1)), jH(i + vec3(1,1,1)), f.x), f.y), f.z); }
+  vec3 jBump(vec3 n, vec3 vp, float h, float k) { vec3 dpx = dFdx(vp), dpy = dFdy(vp); float dhx = dFdx(h), dhy = dFdy(h);
+    vec3 r1 = cross(dpy, n), r2 = cross(n, dpx); float det = dot(dpx, r1); return normalize(abs(det) * n - k * sign(det) * (dhx * r1 + dhy * r2)); }`;
+export const panelMat = () => cached('panelMat', () => {
+  const t = drawAtlas(), m = new THREE.MeshStandardMaterial({ map: t.map, emissiveMap: t.emissiveMap, emissive: 0xffffff, emissiveIntensity: 0.9, roughness: 1, roughnessMap: t.roughnessMap, metalness: 0.1 });
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vJP; varying vec2 vJA;\n#ifndef USE_UV1\nattribute vec2 uv1;\n#endif')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvJP = position; vJA = uv1;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + SURF)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        float jFab = step(0.75, vJA.y), jCoam = step(0.25, vJA.y) * (1.0 - jFab), jG = jN(vJP * 260.0), jF = jN(vJP * 1500.0);
+        float jFw = clamp(length(fwidth(vJP)) * 500.0, 0.0, 1.0);
+        float jSeam = abs(fract(vJP.y / 0.065) - 0.5) * 0.065;
+        diffuseColor.rgb *= (0.92 + 0.12 * jG + 0.06 * (jF - 0.5) * (1.0 - jFw)) * (1.0 - min(vJA.x, 0.9) * 0.62) * (1.0 - jFab * 0.3 * smoothstep(0.004, 0.0, jSeam));`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = clamp(roughnessFactor + (jG - 0.5) * 0.14 + (jF - 0.5) * 0.08, 0.04, 1.0);')
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        { vec3 q = vJP * 1100.0; float h = (jF - 0.5) * 0.35 * roughnessFactor;
+          h += jFab * (sin(q.x + q.z) * sin(q.y) * 0.45 - smoothstep(0.005, 0.0, jSeam) * 2.0 + step(0.5, fract((vJP.x + vJP.z) * 140.0)) * smoothstep(0.009, 0.006, jSeam) * smoothstep(0.004, 0.006, jSeam) * 0.8);
+          h += jCoam * (jN(vJP * 700.0) - 0.5) * 1.4;
+          normal = jBump(normal, -vViewPosition, h * (1.0 - jFw), 0.0005); }`)
+      .replace('#include <aomap_fragment>', '#include <aomap_fragment>\nreflectedLight.indirectDiffuse *= 1.0 - min(vJA.x, 0.9) * 0.5; reflectedLight.indirectSpecular *= 1.0 - min(vJA.x, 0.9) * 0.6;');
+  };
+  m.customProgramCacheKey = () => 'jetSurf1';
+  return m;
+});
 // the HUD's symbology, glowing on the combiner glass
 export const hudMat = () => cached('hudMat', () => {
   const c = document.createElement('canvas'); c.width = c.height = 256; const g = c.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, 256, 256);
@@ -200,6 +270,15 @@ export function roundBox(w, h, d, r) {
   g.deleteAttribute('normal'); g.deleteAttribute('uv'); const m = mergeVertices(g, 1e-5); m.computeVertexNormals(); return m;
 }
 const shellOf = (g) => shell(g, 0.008), capOf = (g) => capHoles(g);
+// a surface through a grid of points pts[j][i] (rows along j), its normals turned towards `towards` (a direction)
+function gridSurf(pts, towards) {
+  const nj = pts.length, ni = pts[0].length, pos = [], idx = [];
+  for (const row of pts) for (const q of row) pos.push(q.x, q.y, q.z);
+  for (let j = 0; j < nj - 1; j++) for (let i = 0; i < ni - 1; i++) { const a = j * ni + i, b2 = a + 1, c = a + ni, d = c + 1; idx.push(a, c, b2, b2, c, d); }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+  const n = V().fromBufferAttribute(g.attributes.normal, 0); if (n.dot(towards) < 0) { for (let k = 0; k < idx.length; k += 3) { const t = idx[k + 1]; idx[k + 1] = idx[k + 2]; idx[k + 2] = t; } g.setIndex(idx); g.computeVertexNormals(); }
+  return g;
+}
 const flat = (geo) => { const g = geo.index ? geo.toNonIndexed() : geo; g.deleteAttribute('normal'); g.computeVertexNormals(); return g; };
 // A switch panel: its picture (on bag) and the knobs and toggles standing off it (on nb), w x h, facing +z under m
 export function switchPanel(bag, nb, cell, m, w, h) {
@@ -223,7 +302,7 @@ function bezels(nb, cell, m, w, h, minR = 0.05) {
 // seatGeo's padded back and pan at `at` (dims: [width, backH, panL, tilt]) with the rest of a jet's seat: the head box
 // with its headrest pad and the face-curtain handle on top, side plates up the back, the catapult rails behind, the
 // survival-kit pan under the cushion (kit), the seat-pan firing handle at the front. On bag (structure) and nb (small).
-export function ejectionSeat(bag0, nb, { at, dims, kit = false, frame, headUp = 0, cushion = jetPaint(0x24262a) }) {
+export function ejectionSeat(bag0, nb, { at, dims, kit = false, frame, headUp = 0, cushion = jetPaint(0x24262a, 1) }) {
   const bag = paintBag(bag0);
   const [w, backH, panL, tilt] = dims, [ax, ay, az] = at, ct = Math.cos(tilt), st = Math.sin(tilt), seatM = cushion;
   const s = seatGeo(w, backH, panL, tilt); s.translate(ax, ay, az); bag.add(s, seatM);
@@ -232,17 +311,25 @@ export function ejectionSeat(bag0, nb, { at, dims, kit = false, frame, headUp = 
   const hc = up(backH + 0.1 + headUp, 0.04), hb = roundBox(0.3, 0.24, 0.15, 0.03); hb.applyMatrix4(mx(hc.toArray(), [tilt, 0, 0])); bag.add(hb, frame);
   const pad = roundBox(0.2, 0.13, 0.03, 0.012); pad.applyMatrix4(mx(up(backH + 0.07 + headUp, -0.045).toArray(), [tilt, 0, 0])); bag.add(pad, seatM);
   { const top = up(backH + 0.22 + headUp, 0.04), hm = mx(top.toArray(), [tilt, 0, 0]);
-    const h = new THREE.TorusGeometry(0.04, 0.008, 5, 12, Math.PI); h.applyMatrix4(hm); nb.add(h, M.propTip());
-    for (const a of [0.5, 1.57, 2.64]) { const s2 = new THREE.CylinderGeometry(0.0095, 0.0095, 0.012, 6); s2.rotateZ(a); s2.translate(Math.cos(a) * 0.04, Math.sin(a) * 0.04, 0); s2.applyMatrix4(hm); nb.add(s2, M.black()); } }
+    const h = new THREE.TorusGeometry(0.04, 0.008, 5, 12, Math.PI); h.translate(0, -0.006, 0); h.applyMatrix4(hm); nb.add(h, M.propTip());
+    for (const a of [0.5, 1.57, 2.64]) { const s2 = new THREE.CylinderGeometry(0.0095, 0.0095, 0.012, 6); s2.rotateZ(a); s2.translate(Math.cos(a) * 0.04, Math.sin(a) * 0.04 - 0.006, 0); s2.applyMatrix4(hm); nb.add(s2, M.black()); } }
   // side plates up the back, and the rails behind it
   for (const sx of [-1, 1]) {
     const pl = new THREE.BoxGeometry(0.012, backH * 0.92 + headUp, 0.12); pl.applyMatrix4(mx(up((backH * 0.92 + headUp) / 2 + 0.01, 0.03).add(V(sx * (w / 2 + 0.007), 0, 0)).toArray(), [tilt, 0, 0])); bag.add(pl, frame);
     bag.add(bar(up(-0.02, 0.1).add(V(sx * 0.1, 0, 0)), up(backH + 0.02 + headUp, 0.1).add(V(sx * 0.1, 0, 0)), 0.03, 0.03), M.darkMetal());
   }
+  // harness webbing: the lap belts' ends lying over the pan's sides with their buckles, the shoulder straps coming out of
+  // the head box down the back's top (olive webbing, stitched)
+  const web = jetPaint(0x4f5440, 1);
+  for (const sx of [-1, 1]) {
+    const a = V(ax + sx * (w * 0.43), ay + 0.075, az - panL * 0.3), b2 = V(ax + sx * (w * 0.5 + 0.004), ay - 0.01, az - panL * 0.3);
+    bag.add(bar(a, b2, 0.045, 0.004), web); const bk = new THREE.BoxGeometry(0.008, 0.035, 0.05); bk.translate(b2.x + sx * 0.002, b2.y + 0.02, b2.z); nb.add(bk, M.steel());
+    bag.add(bar(up(backH + 0.01, 0.019).add(V(sx * 0.075, 0, 0)), up(backH - 0.07, 0.019).add(V(sx * 0.075, 0, 0)), 0.045, 0.004), web);
+  }
   // the survival kit under the cushion (its pan's bottom is 3.3 cm under the seat point) and the firing handle ahead of it
   if (kit) { const k = roundBox(w * 0.86, 0.045, panL * 1.05, 0.01); k.translate(ax, ay - 0.033 - 0.0225 + 0.002, az - panL * 0.45); bag.add(k, frame); }
-  { const h = new THREE.TorusGeometry(0.032, 0.007, 5, 12, Math.PI); h.rotateZ(Math.PI); h.translate(ax, ay + 0.0, az - panL * 0.45 - 0.255); nb.add(h, M.propTip());
-    for (const a of [-0.6, -1.57, -2.5]) { const s2 = new THREE.CylinderGeometry(0.0085, 0.0085, 0.01, 6); s2.rotateZ(a); s2.translate(ax + Math.cos(a) * 0.032, ay + Math.sin(a) * 0.032, az - panL * 0.45 - 0.255); nb.add(s2, M.black()); } }
+  { const h = new THREE.TorusGeometry(0.032, 0.007, 5, 12, Math.PI); h.rotateZ(Math.PI); h.translate(ax, ay + 0.0, az - panL * 0.45 - 0.243); nb.add(h, M.propTip());
+    for (const a of [-0.6, -1.57, -2.5]) { const s2 = new THREE.CylinderGeometry(0.0085, 0.0085, 0.01, 6); s2.rotateZ(a); s2.translate(ax + Math.cos(a) * 0.032, ay + Math.sin(a) * 0.032, az - panL * 0.45 - 0.243); nb.add(s2, M.black()); } }
 }
 // where the seat-pan handle is (for the legs' obstacles)
 const panHandle = (at, panL) => ({ name: 'seat handle', box: [at[0], at[1] - 0.02, at[2] - panL * 0.45 - 0.255], size: [0.08, 0.05, 0.02], parts: ['legs', 'feet'] });
@@ -252,12 +339,14 @@ const panHandle = (at, panL) => ({ name: 'seat handle', box: [at[0], at[1] - 0.0
 // 1.15 x as tall as wide, the tub its continuation below the base). paint: the airframe's (frames and bows).
 export function fighterInterior(g, b0, nb, paint) {
   const b = paintBag(b0);
-  const R = fighterGlassR, con = jetPaint(0x2c3035), dark = jetPaint(0x222428), frame = jetPaint(0x3a3e44), black = M.black(), seatM = jetPaint(0x24262a);
+  const R = fighterGlassR, con = jetPaint(0x2c3035), dark = jetPaint(0x222428), frame = jetPaint(0x3a3e44), black = M.black(), seatM = jetPaint(0x24262a, 1), coam = jetPaint(0x16171a, 0.5), worn = jetPaint(0x5d6168);
+  // occlusion: deeper in the tub darker (the floor, the consoles' feet), and the panel's top under the glare shield
+  AO = (x, y, z) => Math.min(0.85, sm(-0.2, -0.52, y) * 0.55 + (z < -0.47 ? sm(-0.1, 0.22, y) * sm(-0.47, -0.55, z) * 0.5 : 0) + sm(0.3, 0.46, Math.abs(x)) * 0.15);
   const wallX = (z, y, k = 1) => { const r = R(z) * k, s = Math.min(1, Math.abs(y) / (1.15 * r)); return r * Math.sqrt(1 - s * s); }; // the tub's wall at height y (k: drawn in)
   // ejection seat on rails (its own meshes, userData.seatRail: crew.js moves them to where the pilot set it), so whoever
   // flies it sits back against it within reach of the stick and throttle; set down in the tub so the helmet clears the glass
   const SEAT = { at: [0, -0.4, 0.52], dims: [0.42, 0.62, 0.4, 0.3] };
-  { const sb = new Bag(), snb = new Bag(); ejectionSeat(sb, snb, { ...SEAT, kit: true, frame, cushion: jetPaint(0x55594c) });
+  { const sb = new Bag(), snb = new Bag(); ejectionSeat(sb, snb, { ...SEAT, kit: true, frame, cushion: jetPaint(0x55594c, 1) });
     const n0 = g.children.length; sb.to(g); snb.to(g, true); for (const m of g.children.slice(n0)) m.userData.seatRail = 0; }
   // side consoles along the tub walls beside the seat (top 18 cm under the glass base, inboard faces 46 cm apart: the
   // thighs pass between them), their outboard sides following the tub down to where it comes in under them
@@ -271,8 +360,17 @@ export function fighterInterior(g, b0, nb, paint) {
     }
     b.add(flat(ringLoft(rings, true, true)), con);
     // an edge strip along the top's inboard edge
-    b.add(bar(V(sx * (CI + 0.004), CT + 0.002, CZ0 + 0.01), V(sx * (CI + 0.004), CT + 0.002, CZ1 - 0.01), 0.008, 0.008), frame);
+    b.add(bar(V(sx * (CI + 0.004), CT + 0.002, CZ0 + 0.01), V(sx * (CI + 0.004), CT + 0.002, CZ1 - 0.01), 0.008, 0.008), worn); // (worn bright where hands and sleeves rub)
   }
+  // the sidewalls over the consoles lined (painted panels following the tub up to the glass base) with the canopy-sill
+  // rail along their top; a floor plate (coarse matt) along the tub's bottom under the pedals
+  for (const sx of [-1, 1]) {
+    const rows = []; for (let j = 0; j <= 10; j++) { const z = -0.5 + 1.25 * (j / 10), row = []; for (const y of [CT + 0.008, -0.1, -0.015]) row.push(V(sx * wallX(z, y, 0.968), y, z)); rows.push(row); }
+    b.add(gridSurf(rows, V(-sx, 0, 0)), frame);
+    const rail = []; for (let j = 0; j <= 10; j++) { const z = -0.5 + 1.25 * (j / 10); rail.push(V(sx * (wallX(z, -0.02, 0.968) - 0.006), -0.02, z)); } b.add(pipe(rail, 0.007, 6, 40), worn);
+  }
+  { const rows = []; for (let j = 0; j <= 8; j++) { const z = -0.45 + 0.6 * (j / 8), y = -1.07 * R(z), w2 = wallX(z, y, 0.97) - 0.01; rows.push([V(-w2, y, z), V(0, y, z), V(w2, y, z)]); }
+    b.add(gridSurf(rows, V(0, 1, 0)), jetPaint(0x16171a, 0.5)); }
   // their tops: switch panels round the throttle quadrant (left; crew.js draws it, 9 x 30 cm on the console at the
   // throttle's base) and round the side-stick's mount and armrest (right)
   const top = (cell, sx, x0, x1, z0, z1) => switchPanel(b, nb, cell, mx([sx * (x0 + x1) / 2, CT + 0.0015, (z0 + z1) / 2], [-Math.PI / 2, 0, 0]), x1 - x0, z1 - z0);
@@ -285,7 +383,8 @@ export function fighterInterior(g, b0, nb, paint) {
   // standby instruments between the MFDs, caution lights over them
   const pf = mx([0, 0.11, -0.6], [-0.2, 0, 0]), on = (x, y, z) => pf.clone().multiply(mx([x, y, z]));
   { const body = new THREE.BoxGeometry(0.52, 0.24, 0.03); body.applyMatrix4(on(0, 0, -0.009)); b.add(body, dark); } // (its face where the old panel's was, top edge under the glare shield's lid)
-  for (const [sx, cell] of [[-1, 'mfdA'], [1, 'mfdB']]) { const mb = roundBox(0.155, 0.155, 0.024, 0.006); mb.applyMatrix4(on(sx * 0.165, -0.035, 0.018)); b.add(mb, black); quad(b, cell, on(sx * 0.165, -0.035, 0.0305), 0.15, 0.15); }
+  for (const [sx, cell] of [[-1, 'mfdA'], [1, 'mfdB']]) { const mb = roundBox(0.155, 0.155, 0.024, 0.006); mb.applyMatrix4(on(sx * 0.165, -0.035, 0.018)); b.add(mb, black); quad(b, cell, on(sx * 0.165, -0.035, 0.0305), 0.15, 0.15);
+    for (const [x, y, w2, h2] of [[0, 0.057, 0.12, 0.006], [0, -0.057, 0.12, 0.006], [0.057, 0, 0.006, 0.12], [-0.057, 0, 0.006, 0.12]]) { const lip = new THREE.BoxGeometry(w2, h2, 0.005); lip.applyMatrix4(on(sx * 0.165 + x, -0.035 + y, 0.0328)); nb.add(lip, black); } } // (a lip round the screen: it sits in the bezel)
   { const u = new THREE.BoxGeometry(0.14, 0.0875, 0.06); u.applyMatrix4(on(0, 0.07, 0.036)); b.add(u, black); quad(b, 'ufc', on(0, 0.07, 0.0663), 0.14, 0.0875); }
   quad(b, 'gauges', on(0, -0.06, 0.0068), 0.15, 0.1125); bezels(nb, 'gauges', on(0, -0.06, 0.0068), 0.15, 0.1125, 0.08);
   for (const sx of [-1, 1]) quad(b, 'warn', on(sx * 0.165, 0.08, 0.0068), 0.13, 0.049);
@@ -296,9 +395,9 @@ export function fighterInterior(g, b0, nb, paint) {
     if (sx < 0) { const k0 = V(0.045, 0.035, 0).applyMatrix4(wm), k1 = V(0.045, 0.035, 0.04).applyMatrix4(wm); nb.add(bar(k0, k1, 0.008, 0.008, true, 6), M.steel());
       const kn = new THREE.CylinderGeometry(0.014, 0.014, 0.018, 10); kn.rotateX(Math.PI / 2); kn.applyMatrix4(wm.clone().multiply(mx([0.045, 0.035, 0.045]))); nb.add(kn, M.pilot()); } });
   // glare shield over the panel (a part-cylinder hood, open behind), its padded lip along the rear edge
-  const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.18, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.6); gl.rotateY(Math.PI); gl.translate(0, 0.14, -0.6); b.add(shellOf(gl), black);
-  const glTop = new THREE.CylinderGeometry(0.3, 0.3, 0.012, 18, 1, false, -1.3, 2.6); glTop.scale(1, 1, 0.6); glTop.rotateY(Math.PI); glTop.translate(0, 0.23, -0.6); b.add(capOf(glTop), black);
-  b.add(pipe([V(-0.288, 0.229, -0.646), V(-0.14, 0.229, -0.62), V(0, 0.229, -0.6), V(0.14, 0.229, -0.62), V(0.288, 0.229, -0.646)], 0.011, 6, 30), dark);
+  const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.18, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.6); gl.rotateY(Math.PI); gl.translate(0, 0.14, -0.6); b.add(shellOf(gl), coam);
+  const glTop = new THREE.CylinderGeometry(0.3, 0.3, 0.012, 18, 1, false, -1.3, 2.6); glTop.scale(1, 1, 0.6); glTop.rotateY(Math.PI); glTop.translate(0, 0.23, -0.6); b.add(capOf(glTop), coam);
+  b.add(pipe([V(-0.288, 0.229, -0.646), V(-0.14, 0.229, -0.62), V(0, 0.229, -0.6), V(0.14, 0.229, -0.62), V(0.288, 0.229, -0.646)], 0.011, 6, 30), coam);
   // the HUD: its body on the glare shield, the combiner glass in a frame on top, the symbology glowing on it
   const hf = mx([0, 0.33, -0.62], [-0.35, 0, 0]);
   { const hb = roundBox(0.13, 0.035, 0.1, 0.008); hb.translate(0, 0.2535, -0.635); b.add(hb, black);
@@ -337,6 +436,7 @@ export function fighterInterior(g, b0, nb, paint) {
     boxObstacle('panel', on(0, 0, -0.009), [0.52, 0.24, 0.03]), boxObstacle('UFC', on(0, 0.07, 0.036), [0.14, 0.0875, 0.06]),
     ...[-1, 1].map((sx) => boxObstacle('MFD', on(sx * 0.165, -0.035, 0.018), [0.155, 0.155, 0.024])), ...wings.map((wm) => boxObstacle('panel wing', wm.clone().multiply(mx([0, 0, 0.005])), [0.17, 0.14, 0.05])),
     hoodObstacle('glare shield', 0.3, 0.6, 1.3, 0.14, -0.6, 0.18), boxObstacle('HUD', hf, [0.17, 0.15, 0.02]), { name: 'HUD body', box: [0, 0.2535, -0.635], size: [0.13, 0.035, 0.1] }, panHandle(SEAT.at, SEAT.dims[2])];
+  AO = null;
 }
 
 // ---------- the SR-71's two stations ----------
@@ -345,7 +445,9 @@ export function fighterInterior(g, b0, nb, paint) {
 // tcPt(z, a, k) a point on its section, paint the airframe's.
 export function tandemInterior(g, b0, nb, { T, tcPt, split, paint }) {
   const b = paintBag(b0);
-  const grey = jetPaint(0x596067), panel = jetPaint(0x141518), black = M.black(), frame = jetPaint(0x2a2c30);
+  const grey = jetPaint(0x596067), panel = jetPaint(0x141518), black = M.black(), frame = jetPaint(0x2a2c30), coam = jetPaint(0x16171a, 0.5);
+  // occlusion: deep in the tub, the pilot's panel under its glare shield, the RSO's station shut in under the hatch
+  AO = (x, y, z) => Math.min(0.85, sm(-0.4, -0.72, y) * 0.55 + (z < -1.38 && z > -1.7 ? sm(-0.35, 0.1, y) * 0.45 : 0) + (z > split ? 0.12 + sm(0.05, 0.3, y) * 0.15 : 0));
   // ejection seats (the tub floor at -0.72, both seats on risers)
   const SEAT1 = { at: [0, -0.48, -0.62], dims: [0.42, 0.66, 0.4, 0.26] }, SEAT2 = { at: [0, -0.53, 1.18], dims: [0.42, 0.62, 0.4, 0.26] };
   ejectionSeat(b, nb, { ...SEAT1, frame }); ejectionSeat(b, nb, { ...SEAT2, frame, headUp: 0.05 }); // (the RSO sits taller against the back: the head box higher, clear of the shoulders)
@@ -359,21 +461,21 @@ export function tandemInterior(g, b0, nb, { T, tcPt, split, paint }) {
   // the centre pedestal under the panel, between the legs
   { const ped = new THREE.BoxGeometry(0.12, 0.28, 0.16); ped.translate(0, -0.59, -1.5); b.add(ped, panel); }
   // the panel: black, dense with round gauges (the picture, bezels on the big ones); the glare shield over it with its lip
-  { const body = new THREE.BoxGeometry(0.5, 0.52, 0.15); body.translate(0, -0.2, -1.485); b.add(body, panel);
-    const pm = mx([0, -0.19, -1.4095]); quad(b, 'sr71', pm, 0.48, 0.42); bezels(nb, 'sr71', pm, 0.48, 0.42, 0.055); }
-  const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.16, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.55); gl.rotateY(Math.PI); gl.translate(0, 0.02, -1.5); b.add(shellOf(gl), black);
-  const glTop = new THREE.CylinderGeometry(0.3, 0.3, 0.012, 18, 1, false, -1.3, 2.6); glTop.scale(1, 1, 0.55); glTop.rotateY(Math.PI); glTop.translate(0, 0.1, -1.5); b.add(capOf(glTop), black);
-  b.add(pipe([V(-0.288, 0.1, -1.544), V(-0.14, 0.1, -1.52), V(0, 0.1, -1.5), V(0.14, 0.1, -1.52), V(0.288, 0.1, -1.544)], 0.011, 6, 30), panel);
+  { const body = new THREE.BoxGeometry(0.5, 0.554, 0.15); body.translate(0, -0.183, -1.485); b.add(body, panel); // (its top up under the glare shield's lid, which it carries)
+    const pm = mx([0, -0.19, -1.4095]); quad(b, 'sr71', pm, 0.48, 0.42); bezels(nb, 'sr71', pm, 0.48, 0.42, 0.055); quad(b, 'warn', mx([0, 0.058, -1.4095]), 0.2, 0.0625); }
+  const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.16, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.55); gl.rotateY(Math.PI); gl.translate(0, 0.02, -1.5); b.add(shellOf(gl), coam);
+  const glTop = new THREE.CylinderGeometry(0.3, 0.3, 0.012, 18, 1, false, -1.3, 2.6); glTop.scale(1, 1, 0.55); glTop.rotateY(Math.PI); glTop.translate(0, 0.1, -1.5); b.add(capOf(glTop), coam);
+  b.add(pipe([V(-0.288, 0.1, -1.544), V(-0.14, 0.1, -1.52), V(0, 0.1, -1.5), V(0.14, 0.1, -1.52), V(0.288, 0.1, -1.544)], 0.011, 6, 30), coam);
   // side wings of the panel angled in to the pilot (gear handle on the left), under the glare shield, ahead of the consoles
-  const wings = [-1, 1].map((sx) => mx([sx * 0.31, -0.24, -1.37], [0, -sx * 0.75, 0]));
+  const wings = [-1, 1].map((sx) => mx([sx * 0.3, -0.24, -1.37], [0, -sx * 0.75, 0])); // (their inner ends against the panel's sides)
   wings.forEach((wm, i) => { const sx = i ? 1 : -1, bx = new THREE.BoxGeometry(0.14, 0.3, 0.02); bx.applyMatrix4(wm.clone().multiply(mx([0, 0, -0.01]))); b.add(bx, panel);
     switchPanel(b, nb, sx < 0 ? 'wingL' : 'sw5', wm.clone().multiply(mx([0, 0.04, 0.0008])), 0.13, sx < 0 ? 0.1 : 0.11);
     if (sx < 0) { const kn = new THREE.CylinderGeometry(0.014, 0.014, 0.018, 10); kn.rotateX(Math.PI / 2); kn.applyMatrix4(wm.clone().multiply(mx([0.02, -0.08, 0.04]))); nb.add(kn, M.pilot()); nb.add(bar(V(0.02, -0.08, 0).applyMatrix4(wm), V(0.02, -0.08, 0.035).applyMatrix4(wm), 0.008, 0.008, true, 6), M.steel()); } });
   // the periscope on the canopy roof (its fairing outside, the eyepiece and mirror hanging inside under the glass)
   const zp = -1.3, yTop = tcPt(zp, 0).y;
   { const f = new THREE.CapsuleGeometry(0.03, 0.12, 4, 8); f.rotateX(Math.PI / 2); f.scale(1, 0.8, 1); f.translate(0, yTop + 0.018, zp); b.add(f, paint);
-    const ep = roundBox(0.08, 0.05, 0.07, 0.012); ep.translate(0, yTop - 0.045, zp); b.add(ep, black);
-    const mf = new THREE.PlaneGeometry(0.06, 0.03); mf.translate(0, yTop - 0.047, zp + 0.0355); nb.add(mf, M.chrome()); }
+    const ep = roundBox(0.08, 0.05, 0.07, 0.012); ep.translate(0, yTop - 0.03, zp); b.add(ep, black); // (up against its fairing through the glass)
+    const mf = new THREE.PlaneGeometry(0.06, 0.03); mf.translate(0, yTop - 0.032, zp + 0.0355); nb.add(mf, M.chrome()); }
   // the RSO's station: the panel on the bulkhead's back with the viewsight's big round scope in the middle, grey consoles
   const zf = split + 0.06, RS = { y: -0.25, h: 0.5, d: 0.13 };
   { const body = new THREE.BoxGeometry(0.56, RS.h, RS.d); body.translate(0, RS.y, zf + RS.d / 2); b.add(body, panel);
@@ -385,6 +487,11 @@ export function tandemInterior(g, b0, nb, { T, tcPt, split, paint }) {
   const P2 = { x: 0.31, y: -0.56, z: 1.04, w: 0.11, h: 0.32, d: 0.56 }; // (beside the seat only: the feet go out either side of the panel's footwell)
   for (const sx of [-1, 1]) cons(P2, sx);
   top(P2, 'sw1', -1, 0.262, 0.358, 0.78, 1.0); top(P2, 'sw3', -1, 0.262, 0.358, 1.02, 1.31); top(P2, 'sw2', 1, 0.262, 0.358, 0.78, 1.0); top(P2, 'sw5', 1, 0.262, 0.358, 1.02, 1.31);
+  // the sidewalls over the consoles lined (painted panels up to just under the glass base, the sill rail on top)
+  for (const [c, y0] of [[P1, P1.y + P1.h / 2], [P2, P2.y + P2.h / 2]]) for (const sx of [-1, 1]) {
+    const x = c.x + c.w / 2 + 0.006, l = new THREE.BoxGeometry(0.012, -0.08 - y0, c.d); l.translate(sx * x, (y0 - 0.08) / 2, c.z); b.add(l, frame);
+    b.add(bar(V(sx * (x - 0.008), -0.085, c.z - c.d / 2), V(sx * (x - 0.008), -0.085, c.z + c.d / 2), 0.012, 0.012, true, 6), jetPaint(0x5d6168));
+  }
   // the pilot: centre stick from the floor between the knees, throttles on the left console, feet on the rudder pedals
   g.userData.seats = [{ p: [0, -0.35, -0.74], s: 0.86, fit: { at: SEAT1.at, dims: SEAT1.dims, floor: -0.72, feet: 'pedals' },
     controls: { stickBase: [0, -0.3, -0.34], stickLen: 0.61, thrBase: [-0.27, 0.04, -0.3], thrLen: 0.12, pedZ: -0.48, pedY: -0.3 } },
@@ -395,9 +502,10 @@ export function tandemInterior(g, b0, nb, { T, tcPt, split, paint }) {
   const glass = { name: 'canopy', ey: 8 / 3, wBelow: 0.9, inside: insideRows(T.z0, T.z1, 92, (z) => [T.w(z), T.h(z) + 0.06, -0.06]) };
   const conObs = (c) => [-1, 1].map((sx) => ({ name: 'console', box: [sx * c.x, c.y + 0.0075, c.z], size: [c.w, c.h + 0.015, c.d] }));
   g.userData.seats[0].obstacles = [glass, { name: 'bulkhead', plane: [0, 0, -1], at: [0, 0, split + 0.03] }, ...conObs(P1),
-    { name: 'panel', box: [0, -0.2, -1.485], size: [0.5, 0.52, 0.17] }, ...wings.map((wm) => boxObstacle('panel wing', wm.clone().multiply(mx([0, 0, 0.005])), [0.14, 0.3, 0.05])),
+    { name: 'panel', box: [0, -0.183, -1.485], size: [0.5, 0.554, 0.17] }, ...wings.map((wm) => boxObstacle('panel wing', wm.clone().multiply(mx([0, 0, 0.005])), [0.14, 0.3, 0.05])),
     hoodObstacle('glare shield', 0.3, 0.55, 1.3, 0.02, -1.5, 0.16), { name: 'pedestal', box: [0, -0.59, -1.5], size: [0.12, 0.28, 0.16] },
-    { name: 'periscope', box: [0, yTop - 0.045, zp], size: [0.08, 0.05, 0.07] }, panHandle(SEAT1.at, SEAT1.dims[2])];
+    { name: 'periscope', box: [0, yTop - 0.03, zp], size: [0.08, 0.05, 0.07] }, panHandle(SEAT1.at, SEAT1.dims[2])];
   g.userData.seats[1].obstacles = [glass, { name: 'bulkhead', plane: [0, 0, 1], at: [0, 0, split + 0.06] }, ...conObs(P2),
     { name: 'RSO panel', box: [0, RS.y, zf + RS.d / 2 + 0.03], size: [0.56, RS.h, RS.d + 0.06] }, { name: 'RSO upper panel', box: [0, 0.09, zf + 0.04], size: [0.5, 0.18, 0.08] }, panHandle(SEAT2.at, SEAT2.dims[2])];
+  AO = null;
 }
