@@ -213,28 +213,45 @@ export class RealScenery {
 
   // ---------------- railways: ballast + rails draped on the ground, bridges straight ----------------
   buildRails(list) {
-    const W = this.w, pos = [], idx = [], steel = [], sIdx = [];
-    const ribbon = (pts, br, width, lift, out, oi) => {
+    // Merged per 2 km square (a city's rail network spans the whole map: one mesh could never be culled): squares off
+    // screen are frustum culled, and update() shows the thin steel rails only near the camera (sub-pixel beyond) and
+    // the ballast out to a few km.
+    const W = this.w, CELL = 2000, cells = new Map();
+    const cellOf = (x, z) => { const k = Math.floor(x / CELL) + ',' + Math.floor(z / CELL); let c = cells.get(k); if (!c) cells.set(k, (c = { pos: [], idx: [], steel: [], sIdx: [] })); return c; };
+    const ribbon = (pts, br, width, lift, which) => {
       const ys = pts.map((p) => W.sampleGrid(p[0], p[1]));
       if (br) { const a = ys[0], b = ys.at(-1); ys.forEach((_, i) => (ys[i] = a + (b - a) * (i / (ys.length - 1)) + 1)); }
-      const o = out.length / 3;
-      pts.forEach((p, i) => {
-        const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)], dx = b[0] - a[0], dz = b[1] - a[1], L = Math.hypot(dx, dz) || 1;
-        const nx = -dz / L * width / 2, nz = dx / L * width / 2;
-        out.push(p[0] - nx, ys[i] + lift, p[1] - nz, p[0] + nx, ys[i] + lift, p[1] + nz);
-        if (i) { const k = o + (i - 1) * 2; oi.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
-      });
+      // runs of points in one square (consecutive runs share their boundary point, so the ribbon stays closed)
+      let i0 = 0;
+      while (i0 < pts.length - 1) {
+        const c = cellOf(pts[i0][0], pts[i0][1]), k0 = Math.floor(pts[i0][0] / CELL), m0 = Math.floor(pts[i0][1] / CELL);
+        let i1 = i0 + 1; while (i1 < pts.length - 1 && Math.floor(pts[i1][0] / CELL) === k0 && Math.floor(pts[i1][1] / CELL) === m0) i1++;
+        const out = which ? c.steel : c.pos, oi = which ? c.sIdx : c.idx, o = out.length / 3;
+        for (let i = i0; i <= i1; i++) {
+          const p = pts[i], a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)], dx = b[0] - a[0], dz = b[1] - a[1], L = Math.hypot(dx, dz) || 1;
+          const nx = -dz / L * width / 2, nz = dx / L * width / 2;
+          out.push(p[0] - nx, ys[i] + lift, p[1] - nz, p[0] + nx, ys[i] + lift, p[1] + nz);
+          if (i > i0) { const k = o + (i - 1 - i0) * 2; oi.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
+        }
+        i0 = i1;
+      }
     };
     for (const [kind, br, flat] of list) {
       const raw = []; for (let k = 0; k < flat.length; k += 2) raw.push([flat[k], flat[k + 1]]);
       const pts = densify(raw, 6);
       if (pts.length < 2) continue;
-      ribbon(pts, br, 3.6, 0.25, pos, idx);
-      for (const s of [-0.55, 0.55]) ribbon(offset(pts, s), br, 0.14, 0.45, steel, sIdx);
+      ribbon(pts, br, 3.6, 0.25, 0);
+      for (const s of [-0.55, 0.55]) ribbon(offset(pts, s), br, 0.14, 0.45, 1);
     }
-    const mk = (p, i, m) => { if (!p.length) return; const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3)); g.setIndex(i); g.computeVertexNormals(); const mesh = new THREE.Mesh(g, m); mesh.receiveShadow = true; this.group.add(mesh); };
-    mk(pos, idx, new THREE.MeshStandardMaterial({ color: 0x4e463e, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }));
-    mk(steel, sIdx, new THREE.MeshStandardMaterial({ color: 0x8b9097, metalness: 0.8, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6 }));
+    const ballast = new THREE.MeshStandardMaterial({ color: 0x4e463e, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
+    const steelM = new THREE.MeshStandardMaterial({ color: 0x8b9097, metalness: 0.8, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6 });
+    this.railChunks = [];
+    const mk = (p, i, m, steel) => { if (!p.length) return; const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3)); g.setIndex(i); g.computeVertexNormals(); g.computeBoundingSphere(); const mesh = new THREE.Mesh(g, m); mesh.receiveShadow = true; this.group.add(mesh); this.railChunks.push({ m: mesh, x: g.boundingSphere.center.x, z: g.boundingSphere.center.z, r: g.boundingSphere.radius, steel }); };
+    for (const c of cells.values()) { mk(c.pos, c.idx, ballast, false); mk(c.steel, c.sIdx, steelM, true); }
+    // empty stand-ins, always there, so both shaders compile behind the loading screen even when no rails are in view
+    // yet (a compile mid-flight is a hitch on the tablet)
+    if (this.railChunks.length) for (const m of [ballast, steelM]) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0, 0, 0, 0], 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0], 3)); g.setIndex([0, 1, 2]); const w = new THREE.Mesh(g, m); w.frustumCulled = false; w.receiveShadow = true; this.group.add(w); }
+    this.railView = { steel: RAIL_STEEL_D[W.qName] ?? 900, ballast: Math.min(this.view, RAIL_BALLAST_D[W.qName] ?? 6000) };
   }
 
   // ---------------- cable cars / gondolas / chair lifts: sagging cables between the stations ----------------
@@ -323,12 +340,15 @@ export class RealScenery {
   }
   update(dt, t, fx, cam) {
     if (this.river) this.river.material.normalMap.offset.y = -(t || 0) * 0.06; // flowing downstream
+    if (cam && this.railChunks) for (const c of this.railChunks) c.m.visible = Math.hypot(c.x - cam.x, c.z - cam.z) - c.r < (c.steel ? this.railView.steel : this.railView.ballast);
     if (this.city) { this.city.update(dt, cam); this.landmarks.update(dt, cam); return; }
     if (!cam || !this.chunkList) return;
     for (const c of this.chunkList) c.m.visible = Math.hypot(c.x - cam.x, c.z - cam.z) < this.view + c.r;
   }
 }
 
+// railways: how far the steel rails (14 cm wide: under a pixel beyond this) and the ballast bed (3.6 m) are drawn
+const RAIL_STEEL_D = { low: 600, medium: 900, high: 1500, ultra: 1500 }, RAIL_BALLAST_D = { low: 4000, medium: 6000, high: 10000, ultra: 12000 };
 function densify(pts, step) {
   const out = [pts[0]];
   for (let i = 1; i < pts.length; i++) {

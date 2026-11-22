@@ -154,7 +154,7 @@ export class Vehicles {
     for (const t in this.meshes) { this.meshes[t].count = this.parkedCount[t] || 0; if (!this.meshes[t].instanceColor) this.meshes[t].setColorAt(0, col.set(0xffffff)); this.meshes[t].instanceColor.needsUpdate = true; }
     this.drawDist = { low: 1200, medium: 1800, high: 3000 }[world.qBase] || 1800;
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1);
-    for (const c of this.parked) { c.p.y = world.sampleGrid(c.p.x, c.p.z) + 0.03; q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), c.yaw); m4.compose(c.p, q, one); this.meshes[c.type].setMatrixAt(c.slot, m4); }
+    for (const c of this.parked) { c.p.y = world.sampleGrid(c.p.x, c.p.z) + 0.03; q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), c.yaw); m4.compose(c.p, q, one); this.meshes[c.type].setMatrixAt(c.slot, m4); c.m4 = m4.clone(); }
     // lights (points): 2 head + 2 tail per moving car
     const n = this.cars.length * 4;
     this.lp = new Float32Array(n * 3); this.lc = new Float32Array(n * 3);
@@ -163,6 +163,18 @@ export class Vehicles {
     this.lights.frustumCulled = false; this.group.add(this.lights);
     this.buildTrain();
     this.t = 0;
+    // Per frame only the cars near the camera cost anything. A city's lanes are thousands of short segments with a car
+    // or two each (NYC: ~6000), so the cars are grouped by lane once, and each lane carries a bounding circle: a lane
+    // wholly beyond the draw distance is skipped with one distance check (its cars still drive on).
+    this.lanes = [];
+    const byPath = new Map();
+    for (const c of this.cars) { if (!byPath.has(c.path)) byPath.set(c.path, []); byPath.get(c.path).push(c); }
+    for (const [path, list] of byPath) {
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (const q of path.pts) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); z0 = Math.min(z0, q.z); z1 = Math.max(z1, q.z); }
+      this.lanes.push({ path, list, cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, r: Math.hypot(x1 - x0, z1 - z0) / 2 + 10 });
+    }
+    this.lightsOn = 0; // light slots written last frame (the rest are past the draw range)
   }
   pathPoint(path, s, out, dirOut) {
     s = ((s % path.total) + path.total) % path.total;
@@ -175,48 +187,67 @@ export class Vehicles {
     out.y = path.kind === 'apron' ? this.world.sampleGrid(out.x, out.z) + 0.25 : a.y + (b.y - a.y) * t + 0.02;
     return lo;
   }
+  // Parked cars near the camera take the first slots of each type's instances (the moving ones follow): re-chosen every
+  // 150 m of camera movement, so the parked cars of the whole map (a city's: hundreds) aren't all drawn every frame.
+  placeParked(camPos) {
+    const R = this.drawDist + 150, col = new THREE.Color(), n = {};
+    for (const c of this.parked) {
+      if ((c.p.x - camPos.x) ** 2 + (c.p.z - camPos.z) ** 2 > R * R) { c.slot = undefined; continue; }
+      const m = this.meshes[c.type]; c.slot = n[c.type] = (n[c.type] ?? -1) + 1; m.setMatrixAt(c.slot, c.m4); m.setColorAt(c.slot, col.set(c.color));
+    }
+    for (const t in this.meshes) this.parkedCount[t] = (n[t] ?? -1) + 1;
+    this.parkAt = { x: camPos.x, z: camPos.z }; this.parkFull = true; // (upload the parked slots too this frame)
+  }
   update(dt, camPos) {
     this.t += dt;
+    if (camPos && (!this.parkAt || Math.hypot(camPos.x - this.parkAt.x, camPos.z - this.parkAt.z) > 150)) this.placeParked(camPos);
     const W = this.world, night = W.night || W.W.dark > 0.5;
-    // car following per path
-    const byPath = new Map();
-    for (const c of this.cars) { if (!byPath.has(c.path)) byPath.set(c.path, []); byPath.get(c.path).push(c); }
-    for (const [path, list] of byPath) {
-      list.sort((a, b) => a.s - b.s);
-      for (let i = 0; i < list.length; i++) {
-        const c = list[i], ahead = list[(i + 1) % list.length];
-        let gap = ahead === c ? 1e9 : (ahead.s - c.s + path.total) % path.total - this.models[ahead.type].L * 0.5 - this.models[c.type].L * 0.5;
-        const want = Math.min(c.want, Math.max(0, (gap - 6) / 1.6));
-        const dv = clamp(want - c.v, -6 * dt, 2.2 * dt);
-        c.brake = dv < -0.5 * dt ? 1 : Math.max(0, c.brake - dt * 2);
-        c.v = Math.max(0, c.v + dv); c.s = (c.s + c.v * dt) % path.total;
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), d = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
+    const eu = new THREE.Euler(), lv = new THREE.Vector3(), col = new THREE.Color(); // reused per car (no garbage per car per frame)
+    const vis = {}; for (const t in this.meshes) vis[t] = this.parkedCount[t] || 0;
+    const R2 = this.drawDist * this.drawDist, show = night ? 1 : 0, LP = this.lp, LC = this.lc;
+    let nl = 0; // lights written (packed: only the cars drawn this frame)
+    const put = (lp, c0, c1, c2, on) => { const v = lv.set(lp[0], lp[1], lp[2]).applyQuaternion(q).add(p), o = nl * 3; LP[o] = v.x; LP[o + 1] = v.y; LP[o + 2] = v.z; LC[o] = c0 * on; LC[o + 1] = c1 * on; LC[o + 2] = c2 * on; nl++; };
+    for (const L of this.lanes) {
+      const { path, list } = L;
+      // car following along the lane
+      if (list.length === 1) { const c = list[0], dv = clamp(c.want - c.v, -6 * dt, 2.2 * dt); c.brake = dv < -0.5 * dt ? 1 : Math.max(0, c.brake - dt * 2); c.v = Math.max(0, c.v + dv); c.s = (c.s + c.v * dt) % path.total; }
+      else {
+        list.sort((a, b) => a.s - b.s);
+        for (let i = 0; i < list.length; i++) {
+          const c = list[i], ahead = list[(i + 1) % list.length];
+          const gap = (ahead.s - c.s + path.total) % path.total - this.models[ahead.type].L * 0.5 - this.models[c.type].L * 0.5;
+          const want = Math.min(c.want, Math.max(0, (gap - 6) / 1.6));
+          const dv = clamp(want - c.v, -6 * dt, 2.2 * dt);
+          c.brake = dv < -0.5 * dt ? 1 : Math.max(0, c.brake - dt * 2);
+          c.v = Math.max(0, c.v + dv); c.s = (c.s + c.v * dt) % path.total;
+        }
+      }
+      if (camPos) { const dl = Math.hypot(L.cx - camPos.x, L.cz - camPos.z) - L.r; if (dl > this.drawDist) { for (const c of list) c.slot = undefined; continue; } } // the whole lane is too far to see: simulate only
+      for (const c of list) {
+        this.pathPoint(path, c.s, p, d);
+        if (camPos && (p.x - camPos.x) ** 2 + (p.z - camPos.z) ** 2 > R2) { c.slot = undefined; continue; }
+        const mdl = this.models[c.type], mesh = this.meshes[c.type];
+        c.slot = vis[c.type]++;
+        // pitch with the road's grade (no per-frame allocations: reuse eu)
+        const yaw = Math.atan2(-d.x, -d.z), pitch = Math.atan2(d.y, Math.hypot(d.x, d.z));
+        q.setFromEuler(eu.set(pitch, yaw, 0, 'YXZ'));
+        m4.compose(p, q, one); mesh.setMatrixAt(c.slot, m4); mesh.setColorAt(c.slot, col.set(c.color));
+        const tail = Math.max(show * 0.5, c.brake ? 1 : 0);
+        if (show || tail) { put(mdl.head[0], 1, 0.95, 0.8, show); put(mdl.head[1], 1, 0.95, 0.8, show); put(mdl.tail[0], 1, 0.08, 0.04, tail); put(mdl.tail[1], 1, 0.08, 0.04, tail); }
       }
     }
-    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), d = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0), fw = new THREE.Vector3(0, 0, -1);
-    const eu = new THREE.Euler(), lv = new THREE.Vector3(); // reused per car (no garbage per car per frame)
-    const vis = {}; for (const t in this.meshes) vis[t] = this.parkedCount[t] || 0;
-    const R2 = this.drawDist * this.drawDist;
-    this.cars.forEach((c, ci) => {
-      const mdl = this.models[c.type];
-      this.pathPoint(c.path, c.s, p, d);
-      const o = ci * 12;
-      if (camPos && (p.x - camPos.x) ** 2 + (p.z - camPos.z) ** 2 > R2) { this.lc.fill(0, o, o + 12); c.slot = undefined; return; } // too far to see: simulate only
-      c.slot = vis[c.type]++;
-      // pitch with the road's grade (no per-frame allocations: reuse eu)
-      const yaw = Math.atan2(-d.x, -d.z), pitch = Math.atan2(d.y, Math.hypot(d.x, d.z));
-      q.setFromEuler(eu.set(pitch, yaw, 0, 'YXZ'));
-      m4.compose(p, q, one); this.meshes[c.type].setMatrixAt(c.slot, m4);
-      // lights
-      const show = night ? 1 : 0, brk = c.brake ? 1 : 0;
-      const put = (k, lp, col, on) => { const v = lv.set(lp[0], lp[1], lp[2]).applyQuaternion(q).add(p); this.lp[o + k * 3] = v.x; this.lp[o + k * 3 + 1] = v.y; this.lp[o + k * 3 + 2] = v.z; this.lc[o + k * 3] = col[0] * on; this.lc[o + k * 3 + 1] = col[1] * on; this.lc[o + k * 3 + 2] = col[2] * on; };
-      put(0, mdl.head[0], [1, 0.95, 0.8], show); put(1, mdl.head[1], [1, 0.95, 0.8], show);
-      put(2, mdl.tail[0], [1, 0.08, 0.04], Math.max(show * 0.5, brk)); put(3, mdl.tail[1], [1, 0.08, 0.04], Math.max(show * 0.5, brk));
-    });
-    const col = new THREE.Color();
-    for (const t in this.meshes) { const m = this.meshes[t]; m.count = vis[t]; m.instanceMatrix.needsUpdate = true; }
-    for (const c of this.cars) if (c.slot !== undefined && c.slot >= (this.parkedCount[c.type] || 0) && c.slot < vis[c.type]) this.meshes[c.type].setColorAt(c.slot, col.set(c.color));
-    for (const t in this.meshes) if (this.meshes[t].instanceColor) this.meshes[t].instanceColor.needsUpdate = true;
-    this.lights.geometry.attributes.position.needsUpdate = true; this.lights.geometry.attributes.color.needsUpdate = true;
+    // upload only the slots in use (parked cars first, then this frame's moving ones), not every car in the city
+    for (const t in this.meshes) {
+      const m = this.meshes[t], n = vis[t], n0 = this.parkFull ? 0 : this.parkedCount[t] || 0; m.count = n;
+      if (n > n0) { m.instanceMatrix.clearUpdateRanges(); m.instanceMatrix.addUpdateRange(n0 * 16, (n - n0) * 16); m.instanceMatrix.needsUpdate = true;
+        m.instanceColor.clearUpdateRanges(); m.instanceColor.addUpdateRange(n0 * 3, (n - n0) * 3); m.instanceColor.needsUpdate = true; }
+    }
+    this.parkFull = false;
+    const lg = this.lights.geometry;
+    lg.setDrawRange(0, nl);
+    if (nl) for (const a of [lg.attributes.position, lg.attributes.color]) { a.clearUpdateRanges(); a.addUpdateRange(0, nl * 3); a.needsUpdate = true; }
+    this.lightsOn = nl;
     this.updateTrain(dt);
   }
   // ---------- train ----------
