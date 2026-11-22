@@ -308,15 +308,16 @@ export function ejectionSeat(bag0, nb, { at, dims, kit = false, frame, headUp = 
   const s = seatGeo(w, backH, panL, tilt); s.translate(ax, ay, az); bag.add(s, seatM);
   const up = (k, dz = 0) => V(ax, ay + k * ct, az + k * st + dz); // a point up the back's rake (k along it), dz behind its front
   // head box (the parachute) on the top of the back, its pad facing forward, the loop handle on top
-  const hc = up(backH + 0.1 + headUp, 0.04), hb = roundBox(0.3, 0.24, 0.15, 0.03); hb.applyMatrix4(mx(hc.toArray(), [tilt, 0, 0])); bag.add(hb, frame);
+  const hc = up(backH + 0.1 + headUp / 2, 0.04), hb = roundBox(0.3, 0.24 + headUp, 0.15, 0.03); hb.applyMatrix4(mx(hc.toArray(), [tilt, 0, 0])); bag.add(hb, frame);
   const pad = roundBox(0.2, 0.13, 0.03, 0.012); pad.applyMatrix4(mx(up(backH + 0.07 + headUp, -0.045).toArray(), [tilt, 0, 0])); bag.add(pad, seatM);
   { const top = up(backH + 0.22 + headUp, 0.04), hm = mx(top.toArray(), [tilt, 0, 0]);
-    const h = new THREE.TorusGeometry(0.04, 0.008, 5, 12, Math.PI); h.translate(0, -0.006, 0); h.applyMatrix4(hm); nb.add(h, M.propTip());
-    for (const a of [0.5, 1.57, 2.64]) { const s2 = new THREE.CylinderGeometry(0.0095, 0.0095, 0.012, 6); s2.rotateZ(a); s2.translate(Math.cos(a) * 0.04, Math.sin(a) * 0.04 - 0.006, 0); s2.applyMatrix4(hm); nb.add(s2, M.black()); } }
+    const hs = new THREE.BoxGeometry(0.1, 0.022, 0.05); hs.translate(0, 0.003, 0); hs.applyMatrix4(hm); bag.add(hs, frame); // (the handle's housing)
+    const h = new THREE.TorusGeometry(0.04, 0.008, 5, 12, Math.PI); h.translate(0, 0.006, 0); h.applyMatrix4(hm); nb.add(h, M.propTip());
+    for (const a of [0.5, 1.57, 2.64]) { const s2 = new THREE.CylinderGeometry(0.0095, 0.0095, 0.012, 6); s2.rotateZ(a); s2.translate(Math.cos(a) * 0.04, Math.sin(a) * 0.04 + 0.006, 0); s2.applyMatrix4(hm); nb.add(s2, M.black()); } }
   // side plates up the back, and the rails behind it
   for (const sx of [-1, 1]) {
     const pl = new THREE.BoxGeometry(0.012, backH * 0.92 + headUp, 0.12); pl.applyMatrix4(mx(up((backH * 0.92 + headUp) / 2 + 0.01, 0.03).add(V(sx * (w / 2 + 0.007), 0, 0)).toArray(), [tilt, 0, 0])); bag.add(pl, frame);
-    bag.add(bar(up(-0.02, 0.1).add(V(sx * 0.1, 0, 0)), up(backH + 0.02 + headUp, 0.1).add(V(sx * 0.1, 0, 0)), 0.03, 0.03), M.darkMetal());
+    bag.add(bar(up(-0.02, 0.074).add(V(sx * 0.1, 0, 0)), up(backH + 0.02 + headUp, 0.074).add(V(sx * 0.1, 0, 0)), 0.03, 0.03), M.darkMetal()); // (against the back's rear face)
   }
   // harness webbing: the lap belts' ends lying over the pan's sides with their buckles, the shoulder straps coming out of
   // the head box down the back's top (olive webbing, stitched)
@@ -328,11 +329,11 @@ export function ejectionSeat(bag0, nb, { at, dims, kit = false, frame, headUp = 
   }
   // the survival kit under the cushion (its pan's bottom is 3.3 cm under the seat point) and the firing handle ahead of it
   if (kit) { const k = roundBox(w * 0.86, 0.045, panL * 1.05, 0.01); k.translate(ax, ay - 0.033 - 0.0225 + 0.002, az - panL * 0.45); bag.add(k, frame); }
-  { const h = new THREE.TorusGeometry(0.032, 0.007, 5, 12, Math.PI); h.rotateZ(Math.PI); h.translate(ax, ay + 0.0, az - panL * 0.45 - 0.243); nb.add(h, M.propTip());
-    for (const a of [-0.6, -1.57, -2.5]) { const s2 = new THREE.CylinderGeometry(0.0085, 0.0085, 0.01, 6); s2.rotateZ(a); s2.translate(ax + Math.cos(a) * 0.032, ay + Math.sin(a) * 0.032, az - panL * 0.45 - 0.243); nb.add(s2, M.black()); } }
+  { const h = new THREE.TorusGeometry(0.032, 0.007, 5, 12, Math.PI); h.rotateZ(Math.PI); h.translate(ax, ay + 0.0, az - panL * 0.45 - 0.228); nb.add(h, M.propTip());
+    for (const a of [-0.6, -1.57, -2.5]) { const s2 = new THREE.CylinderGeometry(0.0085, 0.0085, 0.01, 6); s2.rotateZ(a); s2.translate(ax + Math.cos(a) * 0.032, ay + Math.sin(a) * 0.032, az - panL * 0.45 - 0.228); nb.add(s2, M.black()); } }
 }
 // where the seat-pan handle is (for the legs' obstacles)
-const panHandle = (at, panL) => ({ name: 'seat handle', box: [at[0], at[1] - 0.02, at[2] - panL * 0.45 - 0.255], size: [0.08, 0.05, 0.02], parts: ['legs', 'feet'] });
+const panHandle = (at, panL) => ({ name: 'seat handle', box: [at[0], at[1] - 0.02, at[2] - panL * 0.45 - 0.228], size: [0.08, 0.05, 0.02], parts: ['legs', 'feet'] });
 
 // ---------- the fighter's cockpit ----------
 // Inside the fighter canopy (partDetail.cockpitBuild): everything sits in the tub under the revolved glass (its section
@@ -366,11 +367,11 @@ export function fighterInterior(g, b0, nb, paint) {
   // rail along their top; a floor plate (coarse matt) along the tub's bottom under the pedals
   for (const sx of [-1, 1]) {
     const rows = []; for (let j = 0; j <= 10; j++) { const z = -0.5 + 1.25 * (j / 10), row = []; for (const y of [CT + 0.008, -0.1, -0.015]) row.push(V(sx * wallX(z, y, 0.968), y, z)); rows.push(row); }
-    b.add(gridSurf(rows, V(-sx, 0, 0)), frame);
+    b.add(shell(gridSurf(rows, V(-sx, 0, 0)), 0.006), frame);
     const rail = []; for (let j = 0; j <= 10; j++) { const z = -0.5 + 1.25 * (j / 10); rail.push(V(sx * (wallX(z, -0.02, 0.968) - 0.006), -0.02, z)); } b.add(pipe(rail, 0.007, 6, 40), worn);
   }
   { const rows = []; for (let j = 0; j <= 8; j++) { const z = -0.45 + 0.6 * (j / 8), y = -1.07 * R(z), w2 = wallX(z, y, 0.97) - 0.01; rows.push([V(-w2, y, z), V(0, y, z), V(w2, y, z)]); }
-    b.add(gridSurf(rows, V(0, 1, 0)), jetPaint(0x16171a, 0.5)); }
+    b.add(shell(gridSurf(rows, V(0, 1, 0)), 0.006), jetPaint(0x16171a, 0.5)); }
   // their tops: switch panels round the throttle quadrant (left; crew.js draws it, 9 x 30 cm on the console at the
   // throttle's base) and round the side-stick's mount and armrest (right)
   const top = (cell, sx, x0, x1, z0, z1) => switchPanel(b, nb, cell, mx([sx * (x0 + x1) / 2, CT + 0.0015, (z0 + z1) / 2], [-Math.PI / 2, 0, 0]), x1 - x0, z1 - z0);
@@ -411,8 +412,8 @@ export function fighterInterior(g, b0, nb, paint) {
     for (const da of [-0.5, 0, 0.5]) { const a = Math.PI / 2 + da, p = V(-Math.cos(a) * w, Math.sin(a) * h, -0.6), n = V(-Math.cos(a) * w, Math.sin(a) * h, 0).normalize();
       const c = p.addScaledVector(n, -0.05), mm = mx(c.toArray(), [0.3, 0, -da * 0.9]);
       const mb = new THREE.BoxGeometry(0.075, 0.03, 0.008); mb.applyMatrix4(mm); nb.add(mb, black);
-      const mf = new THREE.PlaneGeometry(0.068, 0.023); mf.applyMatrix4(mm.clone().multiply(mx([0, 0, 0.0045]))); nb.add(mf, M.chrome());
-      nb.add(bar(c.clone().addScaledVector(n, 0.008), c.clone().addScaledVector(n, 0.03), 0.008, 0.008, true, 5), black); } }
+      const mf = new THREE.PlaneGeometry(0.068, 0.023); mf.applyMatrix4(mm.clone().multiply(mx([0, 0, 0.0041]))); nb.add(mf, M.chrome());
+      nb.add(bar(c.clone().addScaledVector(n, 0.008), c.clone().addScaledVector(n, 0.04), 0.008, 0.008, true, 5), black); } }
   // a bulkhead behind the seat (to the tub's walls, up to 12 cm over the glass base) and the avionics deck sloping back
   // from it under the canopy's tail
   { const zb = 0.93, yt = 0.12, y0 = -0.46, sh = new THREE.Shape(), N = 10;
