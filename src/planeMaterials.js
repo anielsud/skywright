@@ -45,10 +45,15 @@ function skinCompile(sh) {
     sh.uniforms.uGrime = { value: this?.userData?.grime ?? 0.32 };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGrimeW;')
       .replace('#include <uv_vertex>', `
-    vec2 uv1M = uv1 * vec2(length(modelMatrix[2].xyz), length(modelMatrix[0].xyz));
+    #ifdef USE_BATCHING
+    mat4 skinM = modelMatrix * getBatchingMatrix( getIndirectIndex( gl_DrawID ) ); // (a batched plane: acBatch.js)
+    #else
+    mat4 skinM = modelMatrix;
+    #endif
+    vec2 uv1M = uv1 * vec2(length(skinM[2].xyz), length(skinM[0].xyz));
     #define uv1 uv1M
     #include <uv_vertex>
-    #undef uv1`).replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGrimeW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    #undef uv1`).replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGrimeW = (skinM * vec4(transformed, 1.0)).xyz;');
     // seams and rivets also darken the paint a little under direct sun (the aoMap alone only dims ambient light)
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + GRIME_GLSL).replace('#include <color_fragment>', `#include <color_fragment>
     vec3 skinT = texture2D(aoMap, vAoMapUv).rgb;

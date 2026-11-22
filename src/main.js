@@ -865,6 +865,7 @@ function collectGpu(root) {
   root.traverse((o) => {
     if (o.geometry) geo.add(o.geometry);
     if (o.skeleton?.boneTexture) tex.add(o.skeleton.boneTexture); // the crew's bones (crew.js), uploaded as a texture
+    if (o.isBatchedMesh) for (const k of ['_matricesTexture', '_indirectTexture', '_colorsTexture']) addTex(o[k]); // a batched plane's per-instance data (acBatch.js)
     for (const m of [].concat(o.material || [])) {
       if (!m) continue; mat.add(m);
       for (const v of Object.values(m)) addTex(v);

@@ -69,7 +69,11 @@ vCabin = cabinLight;
 #ifdef CABIN_LAMP
 vCabinLamp = cabinLamp;
 #endif
-{ vec3 sd = normalize((vec4(uCabinSunDir, 0.0) * modelMatrix).xyz); vCabinSun = clamp(cabinSun.x + 2.0 * dot(cabinSun.yzw, sd), 0.0, 1.0); }`;
+{ mat4 cabM = modelMatrix;
+#ifdef USE_BATCHING
+cabM = modelMatrix * batchingMatrix; // (a batched plane: the mesh's own frame, acBatch.js)
+#endif
+vec3 sd = normalize((vec4(uCabinSunDir, 0.0) * cabM).xyz); vCabinSun = clamp(cabinSun.x + 2.0 * dot(cabinSun.yzw, sd), 0.0, 1.0); }`;
 const FRAG_PARS = /* glsl */`
 varying vec4 vCabin; varying float vCabinSun; uniform float uCabinSunBake; uniform float uCabinDebug;
 #ifdef CABIN_LAMP

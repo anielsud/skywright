@@ -1,5 +1,6 @@
 // Runtime aircraft: rigid-body flight model built from parts, ground contact, damage & break-up.
 import * as THREE from 'three';
+import { batchAircraft, syncBatch, unbatchAircraft } from './acBatch.js';
 import { PARTS, partInfo } from './parts.js';
 import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale, partPower, partBurn, isRocketDesign, onRoadWheels } from './design.js';
 import { M } from './materials.js';
@@ -1107,6 +1108,7 @@ export class Aircraft {
     // world transforms are kept by Debris constructor
     this.root.updateMatrixWorld(true);
     const deb = new Debris(objs, c, v, wW, mass, hull, { burning: why === 'wreck' && burning ? burning : burning * 0.5, smoking: 1, name: names[0] });
+    syncBatch(this.batch); // its meshes left the plane: they draw themselves again (now, even if the plane is gone)
     this.emit('debris', { debris: deb, why, names, ids: idxs.map((k) => this.parts[k].p.id), pos: c.clone(), speed: v.length(), cause: this.cause ? { ...this.cause } : null });
     if (why !== 'wreck') this.emit('msg', { text: `${names[0]} ${why === 'gear' ? 'snapped off' : 'broke off'}!`, bad: true });
     if (this.alive().length === 0) { this.dead = true; return; }
@@ -1188,6 +1190,11 @@ export class Aircraft {
     if (this.normalsDirty) {
       this.normalsDirty = false;
       this.root.traverse((o) => { if (o.isMesh && o.userData.dirtyNormals) { o.geometry.computeVertexNormals(); o.userData.dirtyNormals = false; } });
+    }
+    // draw-call batching (acBatch.js): built on the first visual frame (after SonicFX's heat copies), then kept in sync
+    if (this.batchOff !== true) {
+      try { if (!this.batch) this.batch = batchAircraft(this); else syncBatch(this.batch); }
+      catch (err) { console.warn('acBatch', err); unbatchAircraft(this.batch); this.batch = null; this.batchOff = true; }
     }
   }
 

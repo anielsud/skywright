@@ -102,7 +102,7 @@ function heatMaterial(mat, U) {
     sh.uniforms.uHeatFwd = U.fwd; sh.uniforms.uHeatAxis = U.axis; sh.uniforms.uHeatNose = U.nose; sh.uniforms.uHeatLen = U.len; sh.uniforms.uHeatC = U.c; sh.uniforms.uHeatAmb = U.amb;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vHeatW;')
-      .replace('#include <project_vertex>', '#include <project_vertex>\nvHeatW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      .replace('#include <project_vertex>', '#include <project_vertex>\n#ifdef USE_BATCHING\nvHeatW = (modelMatrix * batchingMatrix * vec4(transformed, 1.0)).xyz;\n#else\nvHeatW = (modelMatrix * vec4(transformed, 1.0)).xyz;\n#endif');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\n' + HEAT_GLSL)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
@@ -144,8 +144,8 @@ export class SonicFX {
     this.minZ = minZ; this.maxZ = maxZ; this.len = Math.max(2, maxZ - minZ); this.span = span; this.hgt = hgt;
     // heat glow uniforms (shared by the whole plane)
     this.U = { fwd: { value: new THREE.Vector3(0, 0, -1) }, axis: { value: new THREE.Vector3(0, 0, -1) }, nose: { value: new THREE.Vector3() }, len: { value: this.len }, c: { value: 15 }, amb: { value: 15 } };
+    const done = new Map(); // one heat copy per material for the whole plane (not per part: then parts can share draw calls, acBatch.js)
     for (const p of ac.parts) {
-      const done = new Map();
       p.obj.traverse((o) => {
         if (!o.isMesh || !o.material?.isMeshStandardMaterial || o.material.transparent) return;
         if (!done.has(o.material)) done.set(o.material, heatMaterial(o.material, this.U));
