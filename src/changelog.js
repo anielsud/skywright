@@ -2,6 +2,12 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.135.0', items: [
+    "Fighter jets have a real head-up display: bright green lines on the glass show your speed, height, heading and g, and the pitch ladder stays on the horizon as you roll and loop.",
+    "The fighter's radar screen shows other planes, helicopters and balloons around you, and the other screen shows a moving map.",
+    "The Jumbo and Centipede screens work: the horizon tilts, speed and height scroll, the map turns with you and the engine gauges follow the throttle.",
+    "The SR-71's dials move too.",
+  ] },
   { v: '1.134.0', items: [
     "New SKID button for bikes (Space on a keyboard): it locks the back wheel. Hold it and steer to slide the back of the bike out, with tyre smoke or a cloud of dust!",
     "Bike brakes grip harder too.",
