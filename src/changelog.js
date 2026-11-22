@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.126.0', items: [
+    "The Jumbo and Centipede have a real airliner nose now, long and low with a narrow band of cockpit windows, and the flight deck inside is shaded like a real one.",
+  ] },
   { v: '1.125.0', items: [
     "The fighter cockpit is packed with more switches and panels like a real F-16, and the control stick and throttle are covered in buttons like the real ones.",
   ] },

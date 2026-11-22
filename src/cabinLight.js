@@ -36,6 +36,10 @@ const CELL = 1 / 3; // surface points closer than 3 voxels, facing the same way,
 const FAR = 6; // ... and coarsely, out to this far (rays that get further out are free)
 const NEAR = 0.5; // the cabin air is flooded out to this far round the interior (the deck in front of and above the crew)
 const BOUNCE_MIN = 0.06, BOUNCE = 1.0; // light coming back off the interior's own surfaces (more, the more open the interior is)
+// ... except in a deep, enclosed deck (a part that says userData.cabinDeep: an airliner's flight deck, a narrow band of
+// windows round a big room): little light gets in to bounce there, and the photos show it dark round bright windows.
+// It keeps only DEEP of the floor (the share that comes with its own openness stays).
+const DEEP = 0.25;
 const OPEN_K = 0.6; // an open cockpit (no interior: a speedboat's, a pontoon's) is darkened this much of what the bake finds
 const GLOW_K = 1.0; // display light scale (radiance -> the factor the shader adds)
 
@@ -420,7 +424,7 @@ export function bakeCabinLight(objs, root) {
     if (globalThis.__cabinKeep) Object.assign(globalThis.__cabinDbg, { sp, vis: vis.slice() });
     // a little light back off the interior's own surfaces, in proportion to how open it is
     let avg = 0; for (let s = 0; s < NS; s++) avg += vis[s]; avg = NS ? avg / NS : 0;
-    const bounce = Math.min(0.3, BOUNCE_MIN + BOUNCE * avg), lift = open ? (v) => 1 - OPEN_K * (1 - v) * (1 - bounce) : (v) => v + (1 - v) * bounce;
+    const bounce = Math.min(0.3, BOUNCE_MIN * (owner.userData.cabinDeep && !open ? DEEP : 1) + BOUNCE * avg), lift = open ? (v) => 1 - OPEN_K * (1 - v) * (1 - bounce) : (v) => v + (1 - v) * bounce;
     for (let s = 0; s < NS; s++) vis[s] = lift(vis[s]);
     for (const m of crewMeshes) { const r = results.get(m); if (r) for (let i = 0; i < r.L.length; i += 2) r.L[i] = lift(r.L[i]); }
     // per vertex, merged over interiors (the darker, the brighter glow)
