@@ -222,6 +222,9 @@ to full throw, no rendering) and checks each person's skeleton every frame:
   1.5 m from the hips, no NaN.
 - **fork lost** (every bike): the fork breaks off mid-ride and flies away. The rider must let go of the handlebars and
   stay in one piece, and posing the crew must not get more expensive afterwards.
+- **landing** (every bike): a jump from 2.5 m at 15 m/s. The rider's knees must bend to soak up the landing (15
+  degrees or more standing on the pegs, at least 2 sitting), come back afterwards, and the rider must go no more than
+  1 cm further into the bike than when sitting still.
 
 It prints how long posing the crew takes per frame (mean and p95, ms) for each vehicle: the number to watch when
 changing the arm solve.

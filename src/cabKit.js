@@ -205,42 +205,88 @@ function carbonTex() {
 }
 
 // ---------- seats, belts, padding ----------
-// A racing containment seat on the same surfaces a seatGeo(w, backH, panL, tilt) placed at `at` declares (crew.js
-// seatSurfaces: the cushion's top at at.y + 0.02 + 0.126 w, the back's front face through (at.y, at.z + 0.02) raked back
-// by tilt), so the crew sit on it exactly as before: a moulded shell behind the back whose sides wrap forward (rib
-// bolsters low down, wide shoulder wings outside the arms, head wings either side of the helmet), a padded insert on
-// the back, a cushion pan with raised thigh bolsters, the harness slots. prof(s) gives the shell's [half-width, forward
-// wrap] at s metres up the back's line; top: how far up it goes. Returns the head wings as obstacles (part space).
-export function raceSeat(bag, at, [w, backH, panL, tilt], { prof, top, shell = carbon(), pad = suede(), slots = 0.72, headPad = null } = {}) {
-  const [ax, ay, az] = at, sn = Math.sin(tilt), cs = Math.cos(tilt), pt = ay + 0.02 + 0.126 * w, th = 0.028, db = 0.055;
+// A moulded seat shell lofted along a spine (frames: { o, N, hw, f }: o a point on the occupant's surface on the
+// seat's centre line, N the unit normal towards the occupant there, hw the shell's half-width, f how far its side
+// walls rise above that surface). Its section, across x and along N (n), is one closed U, every corner rounded (so
+// smoothed normals never fold over a sharp edge): a rolled rim on each side wall (radius t / 2), the outer face
+// down the side and round under the back (n = -c - t, bowed out by `bulge` in the middle), the inner face down the
+// wall to the padding's bed at n = -c. Faces wind outwards; the outer half (rim tops, sides, back) takes `outer`, the
+// inner half (rims' insides, walls, bed) `inner`; flat caps close the ends (each triangle turned to face away).
+export function shellLoft(bag, frames, { c, t, R = 0.05, Ri = 0.03, bulge = 0.006 }, outer, inner) {
+  const rr = t / 2, c45 = Math.SQRT1_2, nb = -c - t;
+  const sec = (hw, f) => {
+    const L = -hw + rr, Rx = hw - rr, Rc = Math.min(R, hw * 0.45), Ic = Math.min(Ri, (hw - t) * 0.45);
+    return [[L, f + rr], [L - rr * c45, f + rr * c45], [-hw, f], [-hw, nb + Rc], [-hw + Rc * (1 - c45), nb + Rc * (1 - c45)], [-hw + Rc, nb], [0, nb - bulge],
+      [hw - Rc, nb], [hw - Rc * (1 - c45), nb + Rc * (1 - c45)], [hw, nb + Rc], [hw, f], [Rx + rr * c45, f + rr * c45], [Rx, f + rr], // (12: outer ends)
+      [Rx - rr * c45, f + rr * c45], [hw - t, f], [hw - t, -c + Ic], [hw - t - Ic * (1 - c45), -c + Ic * (1 - c45)], [hw - t - Ic, -c], [0, -c],
+      [-(hw - t - Ic), -c], [-(hw - t - Ic * (1 - c45)), -c + Ic * (1 - c45)], [-(hw - t), -c + Ic], [-hw + t, f], [L + rr * c45, f + rr * c45]];
+  };
+  const X = V(1, 0, 0), secs = frames.map((fr) => sec(fr.hw, fr.f)), K = secs[0].length;
+  const pt = (k, i) => frames[k].o.clone().addScaledVector(X, secs[k][i][0]).addScaledVector(frames[k].N, secs[k][i][1]);
+  const strip = (ids, mat) => {
+    const pos = [], uv = [], idx = [], n = ids.length; let v = 0; // (uvs in metres / 0.6 along the section and the spine: the carbon weave's scale)
+    for (let k = 0; k < frames.length; k++) { if (k) v += frames[k].o.distanceTo(frames[k - 1].o); let u = 0, q = null; for (const i of ids) { const p = pt(k, i); if (q) u += p.distanceTo(q); q = p; pos.push(p.x, p.y, p.z); uv.push(u / 0.6, v / 0.6); } }
+    for (let k = 0; k < frames.length - 1; k++) for (let j = 0; j < n - 1; j++) { const a = k * n + j, b = a + 1, cc = b + n, d = a + n; idx.push(a, b, cc, a, cc, d); }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals(); bag.add(g, mat);
+  };
+  strip([...Array(13).keys()], outer); strip([...Array(K - 12).keys()].map((i) => (i + 12) % K), inner);
+  for (const [k, k2] of [[0, 1], [frames.length - 1, frames.length - 2]]) {
+    const q = secs[k], away = frames[k].o.clone().sub(frames[k2].o), tris = THREE.ShapeUtils.triangulateShape(q.map(([x, n]) => new THREE.Vector2(x, n)), []), pos = [];
+    for (const tr of tris) { const [A, B, C] = tr.map((i) => pt(k, i)), flip = B.clone().sub(A).cross(C.clone().sub(A)).dot(away) < 0; for (const p of flip ? [A, C, B] : [A, B, C]) pos.push(p.x, p.y, p.z); }
+    const cg = new THREE.BufferGeometry(); cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.computeVertexNormals(); bag.add(cg, outer);
+  }
+}
+// the seat's own frame: x across, s up the back's line, d behind its face (as seatGeo's surfaces), at `at` raked by tilt
+export const seatM = ([ax, ay, az], tilt) => new THREE.Matrix4().makeBasis(V(1, 0, 0), V(0, Math.cos(tilt), Math.sin(tilt)), V(0, -Math.sin(tilt), Math.cos(tilt))).setPosition(ax, ay, az + 0.02);
+// a rounded slot through a shell (a dark capsule in the seat's frame m, centred at [x, s, d]): along 'x' an oval
+// across the back (half-lengths long x short) through the shell's depth (d, half depthH); along 's' an oval up a side
+// wall through its thickness (x, half depthH)
+function slot(bag, m, [x, s, d], long, short, depthH, along = 'x') {
+  const g = new THREE.CapsuleGeometry(1, 2 * (long / short - 1), 2, 8);
+  if (along === 'x') { g.rotateZ(Math.PI / 2); g.scale(short, short, depthH); } else g.scale(depthH, short, short);
+  g.translate(x, s, d); g.applyMatrix4(m); bag.add(g, blackM());
+}
+// A racing bucket seat (Sparco / OMP / BRIDE style, as photographed) on the same surfaces a seatGeo(w, backH, panL,
+// tilt) placed at `at` declares (crew.js seatSurfaces: the cushion's top at at.y + 0.02 + 0.126 w, the back's front
+// face through (at.y, at.z + 0.02) raked back by tilt), so the crew sit on it exactly as before. One moulded composite
+// shell (shellLoft) runs from the pan's front edge, round a filleted crease and up the back to the head: thigh
+// bolsters on the pan, tall rib bolsters at the hips, shoulder wings outside the arms, head wings either side of the
+// helmet, the top's corners rounded; padded (suede) inside, bare composite outside, a solid back seen from behind. In
+// it: a pleated lumbar insert and a cushion on the declared surfaces, a head pad, the harness's shoulder slots
+// through the back, lap-belt slots through the hip bolsters, contrast stitching. prof(s) gives the shell's
+// [half-width, side-wall rise] at s metres up the back's line; panF the pan's thigh-bolster rise [front, back];
+// top: how far up it goes; insert: the cushions' cover (a contrast panel). Returns the head wings as obstacles (part space) and the pan's half-width (for mounts).
+export function raceSeat(bag, at, [w, , panL, tilt], { prof, top, shell = carbon(), pad = suede(), insert = pad, slots = 0.72, headPad = null, panF = [0.05, 0.07], c = 0.03, t = 0.042, rc = 0.12, bulge = 0.006 } = {}) {
+  const [ax, ay, az] = at, sn = Math.sin(tilt), cs = Math.cos(tilt), pt = ay + 0.02 + 0.126 * w, m = seatM(at, tilt);
   const P = (x, s, d) => V(ax + x, ay + s * cs - d * sn, az + 0.02 + s * sn + d * cs); // x across, s up the back's line, d behind its face
-  const rings = [], N = 16, sec = (s) => { const [hw, f] = prof(s); return [[-hw, -f], [-hw - 0.006, 0.02], [-hw * 0.7, db], [0, db + 0.004], [hw * 0.7, db], [hw + 0.006, 0.02], [hw, -f], [hw - th, -f], [hw - th, 0.016], [0, 0.02], [-(hw - th), 0.016], [-(hw - th), -f]]; };
-  for (let i = 0; i <= N; i++) { const s = top * (i / N); rings.push(sec(s).map(([x, d]) => P(x, s, d))); }
-  bag.add(ringLoft(rings), shell);
-  // its ends: the U section triangulated (a fan from the middle folds over a U), both ways round
-  for (const s of [0, top]) { const q = sec(s), tris = THREE.ShapeUtils.triangulateShape(q.map(([x, d]) => new THREE.Vector2(x, d)), []), pos = [];
-    for (const t of tris) for (const k of [t[0], t[1], t[2], t[0], t[2], t[1]]) { const p = P(q[k][0], s, q[k][1]); pos.push(p.x, p.y, p.z); }
-    const cg = new THREE.BufferGeometry(); cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.computeVertexNormals(); bag.add(cg, shell); }
-  // the back's padded insert (its face on the declared surface)
-  { const s0 = 0.05, s1 = Math.min(backH + 0.12, top - 0.28), g = new THREE.BoxGeometry(w * 0.62, s1 - s0, 0.02, 1, 1, 1); g.translate(0, (s0 + s1) / 2, 0.01); g.rotateX(tilt); g.translate(ax, ay, az + 0.02); bag.add(g, pad);
-    // contrast stitching down the insert's edges and across it
-    for (const x of [-w * 0.27, w * 0.27]) bag.add(pipe([P(x, s0 + 0.02, -0.0012), P(x, s1 - 0.02, -0.0012)], 0.0016, 4, 2), stitchM());
-    for (const s of [s0 + (s1 - s0) * 0.35, s0 + (s1 - s0) * 0.62]) bag.add(pipe([P(-w * 0.29, s, -0.0012), P(w * 0.29, s, -0.0012)], 0.0016, 4, 2), stitchM()); }
-  // the pan: a shell tub with thigh bolsters, the cushion's top on the declared height
-  { const rs = [], hw = prof(0)[0] - 0.01;
-    for (let k = 0; k <= 6; k++) { const t = k / 6, z = az + 0.03 - panL * t, bol = 0.05 - 0.03 * t, y0 = pt - 0.095;
-      rs.push([V(ax - hw, pt + bol, z), V(ax - hw + 0.065, pt - 0.016, z), V(ax + hw - 0.065, pt - 0.016, z), V(ax + hw, pt + bol, z), V(ax + hw, y0, z), V(ax - hw, y0, z)]); }
-    bag.add(ringLoft(rs, true, true), shell);
-    const cu = new THREE.BoxGeometry(2 * hw - 0.14, 0.016, panL * 0.92); cu.translate(ax, pt - 0.008, az + 0.03 - panL * 0.48); bag.add(cu, pad);
-    for (const x of [-(hw - 0.08), hw - 0.08]) bag.add(pipe([V(ax + x, pt + 0.0012, az + 0.01), V(ax + x, pt + 0.0012, az + 0.04 - panL * 0.93)], 0.0016, 4, 2), stitchM()); }
-  // head pad on the shell behind the helmet, belt slots through the back at shoulder height
-  if (headPad) { const g = new THREE.CapsuleGeometry(0.05, 0.1, 4, 10); g.rotateZ(Math.PI / 2); g.scale(1, 1, 0.4); const c = P(0, headPad, 0.0); g.rotateX(tilt); g.translate(c.x, c.y, c.z); bag.add(g, pad); }
-  for (const sx of [-1, 1]) { const g = new THREE.BoxGeometry(0.065, 0.016, 0.03); g.rotateX(tilt); const c = P(sx * 0.075, slots, 0.03); g.translate(c.x, c.y, c.z); bag.add(g, blackM()); }
+  // the spine in (y, z): the pan's top from its front edge to the crease, a fillet of radius rc, the back's face up to the top
+  const sC = (pt - ay) / cs, Cz = az + 0.02 + sC * sn, th = Math.PI / 2 - tilt, L = rc * Math.tan(th / 2), zF = az + 0.03 - panL, sB = sC + L;
+  const hwP = (p) => prof(0)[0] - 0.015 * (p / panL), fP = (p) => panF[1] + (panF[0] - panF[1]) * Math.min(1, p / panL); // (p: distance forward of the crease)
+  const fr = [];
+  for (let k = 0; k <= 3; k++) { const z = zF + (Cz - L - zF) * (k / 3), p = Cz - z; fr.push({ o: V(ax, pt, z), N: V(0, 1, 0), hw: hwP(p), f: fP(p) }); }
+  const [h0, f0] = [hwP(L), fP(L)], [h1, f1] = prof(sB);
+  for (let k = 1; k <= 5; k++) { const ph = th * (k / 5), u = k / 5; fr.push({ o: V(ax, pt + rc - rc * Math.cos(ph), Cz - L + rc * Math.sin(ph)), N: V(0, Math.cos(ph), -Math.sin(ph)), hw: h0 + (h1 - h0) * u, f: f0 + (f1 - f0) * u }); }
+  const ss = []; for (let s = sB + 0.05; s < top - 0.07; s += s > 0.76 && s < 0.95 ? 0.03 : 0.06) ss.push(s);
+  const back = (s, hw, f) => fr.push({ o: P(0, s, 0), N: V(0, sn, -cs), hw, f });
+  for (const s of ss) back(s, ...prof(s));
+  for (const a of [0, 0.5, 0.9, 1.25, Math.PI / 2]) { const s = top - 0.07 + 0.07 * Math.sin(a), [hw, f] = prof(s); back(s, hw - 0.07 + 0.07 * Math.cos(a), f); } // the top's corners rounded
+  shellLoft(bag, fr, { c, t, bulge }, shell, pad);
+  // the cushion on the pan (its top the declared pan), the lumbar insert (its face the declared back), the head pad
+  { const wc = 2 * (hwP(panL) - t) - 0.01, z0 = zF + 0.01, z1 = Cz - L - 0.004, cu = cushion(wc, c, z1 - z0, 0.012, 0, 0, [4, 1, 4]); cu.translate(ax, pt - c / 2, (z0 + z1) / 2); bag.add(cu, insert);
+    for (const x of [-(wc / 2 - 0.05), wc / 2 - 0.05]) bag.add(pipe([V(ax + x, pt + 0.0012, z0 + 0.02), V(ax + x, pt + 0.0012, z1 - 0.02)], 0.0016, 4, 2), stitchM());
+    bag.add(pipe([V(ax - wc / 2 + 0.05, pt + 0.0012, (z0 + z1) / 2), V(ax + wc / 2 - 0.05, pt + 0.0012, (z0 + z1) / 2)], 0.0016, 4, 2), stitchM()); }
+  const s0 = sB + 0.004, s1 = slots - 0.05, wi = 2 * (Math.min(prof(s0)[0], prof(s1)[0]) - t) - 0.01;
+  { const g = cushion(wi, s1 - s0, c, 0.012, 0, 4, [4, 16, 1]); g.translate(0, (s0 + s1) / 2, c / 2); g.applyMatrix4(m); bag.add(g, insert);
+    for (const x of [-(wi / 2 - 0.06), wi / 2 - 0.06]) bag.add(pipe([P(x, s0 + 0.02, -0.0012), P(x, s1 - 0.02, -0.0012)], 0.0016, 4, 2), stitchM()); }
+  if (headPad) { const g = cushion(0.2, 0.15, c, 0.012, 0, 0, [4, 4, 2]); g.translate(0, headPad, c / 2 - 0.004); g.applyMatrix4(m); bag.add(g, insert); }
+  // the harness: shoulder slots through the back, lap-belt slots through the hip bolsters
+  { const d0 = c - 0.002, d1 = c + t + bulge + 0.003; for (const sx of [-1, 1]) slot(bag, m, [sx * 0.075, slots, (d0 + d1) / 2], 0.034, 0.011, (d1 - d0) / 2); }
+  { const s = sB + 0.07, [hw] = prof(s); for (const sx of [-1, 1]) slot(bag, m, [sx * (hw - t / 2), s, -0.045], 0.024, 0.01, t / 2 + 0.003, 's'); }
   // obstacles: the head wings (where the shell's sides reach forward round the head)
-  const obs = []; let s0 = null;
-  for (let i = 0; i <= N; i++) { const s = top * (i / N); if (prof(s)[1] > 0.1 && s > backH) { s0 ??= s; } }
-  if (s0 != null) { const [hw, f] = prof(top - 0.01), sm = (s0 + top) / 2; for (const sx of [-1, 1]) { const c = P(sx * (hw - th / 2), sm, -f / 2); obs.push({ name: 'head wing', box: c.toArray(), size: [th + 0.01, top - s0, f], rot: [tilt, 0, 0], parts: ['head'] }); } }
-  return { panTop: pt, P, obs };
+  const obs = []; let sw = null;
+  for (let s = sB; s <= top; s += 0.02) if (prof(s)[1] > 0.1 && s > 0.6) sw ??= s;
+  if (sw != null) { const [hw, f] = prof(top - 0.01), sm = (sw + top) / 2; for (const sx of [-1, 1]) { const cc = P(sx * (hw - t / 2), sm, -f / 2); obs.push({ name: 'head wing', box: cc.toArray(), size: [t + 0.01, top - sw, f], rot: [tilt, 0, 0], parts: ['head'] }); } }
+  return { panTop: pt, P, obs, panHW: prof(0)[0], bottom: pt - c - t - bulge };
 }
 export const stitchM = () => cached('ckStitch', () => new THREE.MeshStandardMaterial({ color: 0xb8bcc2, metalness: 0, roughness: 0.8 }));
 // a flat belt (webbing) along points, width wd, thickness th, its flat face turned towards `n` (or flat on the way)
@@ -262,9 +308,10 @@ export { mergeGeometries, pipe };
 // leather upholstery (light aircraft and helicopter seats): a soft sheen, a fine grain from the roughness
 export const leather = (c = 0x8d9096) => cached('ckLeather' + c, () => kind('leather', new THREE.MeshPhysicalMaterial({ color: c, metalness: 0, roughness: 0.55, sheen: 0.4, sheenRoughness: 0.5, sheenColor: new THREE.Color(0.35, 0.35, 0.35), clearcoat: 0.15, clearcoatRoughness: 0.4 })));
 // An upholstered cushion: a rounded box (corner radius r) whose faces bulge out by `bulge`, with `pleats` channels sewn
-// across its front (-z) face. Centred on the origin, w x h x d. (As the boats' cushions.)
-export function cushion(w, h, d, r = 0.04, bulge = 0.015, pleats = 0) {
-  const g = new THREE.BoxGeometry(w, h, d, 12, 10, 8), p = g.attributes.position, hw = w / 2, hh = h / 2, hd = d / 2, q = new THREE.Vector3(), c = new THREE.Vector3();
+// across its front (-z) face. Centred on the origin, w x h x d. (As the boats' cushions.) seg: the box's segments
+// (fewer for small pads: tablet triangles).
+export function cushion(w, h, d, r = 0.04, bulge = 0.015, pleats = 0, seg = [12, 10, 8]) {
+  const g = new THREE.BoxGeometry(w, h, d, ...seg), p = g.attributes.position, hw = w / 2, hh = h / 2, hd = d / 2, q = new THREE.Vector3(), c = new THREE.Vector3();
   for (let i = 0; i < p.count; i++) {
     q.fromBufferAttribute(p, i); c.set(THREE.MathUtils.clamp(q.x, -hw + r, hw - r), THREE.MathUtils.clamp(q.y, -hh + r, hh - r), THREE.MathUtils.clamp(q.z, -hd + r, hd - r));
     const n = q.clone().sub(c); const L = n.length() || 1; n.divideScalar(L); q.copy(c).addScaledVector(n, r);

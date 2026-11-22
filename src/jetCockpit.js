@@ -28,7 +28,7 @@ const cache = new Map(), cached = (k, f) => { if (!cache.has(k)) cache.set(k, f(
 // Each swatch has a surface (cls): 0 painted metal / plastic (powder-coat grain), 0.5 the anti-glare coaming (a coarse
 // matt texture), 1 fabric (cushions, webbing: a weave, quilting seams and stitching). The atlas material's shader
 // (panelMat) draws the grain, roughness and bump from the part-space position, so nothing needs UVs.
-const SWATCHES = [0x2c3035, 0x222428, 0x3a3e44, 0x596067, 0x141518, 0x2a2c30, 0x55594c, 0x24262a, 0x4f5440, 0x16171a, 0x5d6168];
+const SWATCHES = [0x2c3035, 0x222428, 0x3a3e44, 0x596067, 0x141518, 0x2a2c30, 0x55594c, 0x24262a, 0x4f5440, 0x16171a, 0x5d6168, 0x2f6b34, 0xd8b21c];
 export const jetPaint = (c, cls = 0) => { const i = SWATCHES.indexOf(c); if (i < 0) throw new Error('jetPaint: no swatch ' + c.toString(16)); return { swatch: i, cls }; };
 // Baked ambient occlusion: while a cockpit builds, AO(x, y, z) says how shut in a point is (0 open .. 1), from where it
 // is in the tub (deep down, under the glare shield); it goes on the atlas material's geometry as uv1.x (uv1.y: cls).
@@ -52,8 +52,9 @@ const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
 // ---------- the atlas ----------
 const S = 1024;
 const CELLS = {
-  mfdA: [0, 0, 256, 256], mfdB: [256, 0, 256, 256], scope: [512, 0, 256, 256], ufc: [768, 0, 256, 160], warn: [768, 160, 256, 80], // (swatches in 768..1024 x 240..256)
+  mfdA: [0, 0, 256, 256], mfdB: [256, 0, 256, 256], ufc: [768, 0, 256, 160], warn: [768, 160, 256, 80], // (swatches in 768..1024 x 240..256)
   sr71: [0, 256, 512, 448], rso: [512, 256, 512, 384], gauges: [512, 640, 256, 192], wingL: [768, 640, 256, 192],
+  ped: [512, 0, 96, 256], aux: [608, 0, 160, 112], aux2: [608, 112, 160, 112], aoa: [608, 224, 64, 32], nws: [672, 224, 64, 32], // (the F-16's centre pedestal, its knee panels, the glare shield's indexers)
   sw0: [0, 704, 256, 160], sw1: [256, 704, 256, 160], sw2: [0, 864, 256, 160], sw3: [256, 864, 256, 160], sw4: [512, 832, 256, 192], sw5: [768, 832, 256, 192],
 };
 // round instruments on the big panels, cell-normalised (u, v; r a fraction of the cell's width): drawn into the atlas,
@@ -169,9 +170,25 @@ function drawAtlas() {
   at('warn', (w, h) => { g.fillStyle = '#202225'; g.fillRect(0, 0, w, h); const lit = { 4: '#ffb020', 9: '#ffb020', 14: '#41ff5a' };
     for (let i = 0; i < 18; i++) { const x = 8 + (i % 6) * 41, y = 6 + Math.floor(i / 6) * 24; g.fillStyle = '#3a2a12'; g.fillRect(x, y, 36, 20); const L = LEGENDS[(i * 7) % LEGENDS.length]; txt(g, L, x + 18, y + 10, 8, '#8a7550');
       gloss(x, y, 36, 20, 0.12); if (lit[i]) { e.shadowColor = lit[i]; e.shadowBlur = 8; both((c) => { c.fillStyle = lit[i]; c.fillRect(x, y, 36, 20); }); e.shadowBlur = 0; both((c) => txt(c, L, x + 18, y + 10, 8, '#1a1200')); } } });
-  SWATCHES.forEach((c, i) => { g.fillStyle = '#' + c.toString(16).padStart(6, '0'); g.fillRect(768 + 16 * i, 240, 16, 16); gloss(768 + 16 * i, 240, 16, 16, [0.62, 0.66, 0.55, 0.6, 0.62, 0.6, 0.95, 0.85, 0.95, 0.97, 0.5][i]); });
+  SWATCHES.forEach((c, i) => { g.fillStyle = '#' + c.toString(16).padStart(6, '0'); g.fillRect(768 + 16 * i, 240, 16, 16); gloss(768 + 16 * i, 240, 16, 16, [0.62, 0.66, 0.55, 0.6, 0.62, 0.6, 0.95, 0.85, 0.95, 0.97, 0.5, 0.45, 0.4][i]); });
   // the F-16's standby instruments between the MFDs
   at('gauges', (w, h) => { plate(0, 0, w, h, '#26292d'); DIALS.gauges.forEach((d, i) => dial(d.u * w, d.v * h, d.r * w, d.k, i + 3)); });
+  // the F-16's centre pedestal under the standby instruments: fuel quantity and flow over a caution block, the
+  // oxygen and cabin-pressure gauges, a row of push buttons at the bottom
+  at('ped', (w, h) => { plate(0, 0, w, 104, '#26292d'); dial(w * 0.5, 36, 27, 'gauge', 61); both((c) => { c.fillStyle = '#05070a'; c.fillRect(18, 74, w - 36, 16); }); inset(18, 74, w - 36, 16);
+    both((c) => { c.font = 'bold 11px monospace'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#ffd36a'; c.fillText('3200', w / 2, 82); }); lit('FUEL QTY', w / 2, 96, 8);
+    plate(0, 104, w, 54); const on = { 1: '#ffb020', 6: '#41ff5a' };
+    for (let i = 0; i < 8; i++) { const x = 8 + (i % 2) * 42, y = 112 + Math.floor(i / 2) * 11; g.fillStyle = '#3a2a12'; g.fillRect(x, y, 38, 9); const L = LEGENDS[(i * 5 + 3) % LEGENDS.length]; txt(g, L, x + 19, y + 4.5, 6, '#8a7550'); gloss(x, y, 38, 9, 0.12);
+      if (on[i]) { e.shadowColor = on[i]; e.shadowBlur = 6; both((c) => { c.fillStyle = on[i]; c.fillRect(x, y, 38, 9); }); e.shadowBlur = 0; both((c) => txt(c, L, x + 19, y + 4.5, 6, '#1a1200')); } }
+    plate(0, 158, w, 98, '#26292d'); dial(w * 0.28, 188, 18, 'gauge', 62); dial(w * 0.72, 188, 18, 'gauge', 63); lit('OXY', w * 0.28, 214, 8); lit('CABIN', w * 0.72, 214, 8);
+    for (let i = 0; i < 3; i++) { const x = 10 + i * 27, y = 226; halo(x + 11, y + 9, 10); rr(g, x, y, 22, 17, 3); g.fillStyle = '#3d4045'; g.fill(); lit(['FCR', 'RALT', 'ECM'][i], x + 11, y + 8.5, 7); } });
+  // the glare shield's indexers: angle of attack (a green chevron, an amber doughnut, a red chevron; the doughnut lit)
+  // and the air-refuelling / nose-wheel-steering lights (RDY, AR/NWS, DISC; the middle one lit)
+  at('aoa', (w, h) => { g.fillStyle = '#101113'; g.fillRect(0, 0, w, h); const cx = [12, 32, 52];
+    g.lineWidth = 3; g.strokeStyle = '#1f3a22'; g.beginPath(); g.moveTo(5, 10); g.lineTo(12, 20); g.lineTo(19, 10); g.stroke(); g.strokeStyle = '#3a1a16'; g.beginPath(); g.moveTo(45, 22); g.lineTo(52, 12); g.lineTo(59, 22); g.stroke();
+    both((c) => { c.lineWidth = 3.5; c.strokeStyle = '#ffb020'; circ(c, cx[1], 16, 7); c.stroke(); }); gloss(0, 0, w, h, 0.1); });
+  at('nws', (w, h) => { g.fillStyle = '#101113'; g.fillRect(0, 0, w, h);
+    ['RDY', 'NWS', 'DISC'].forEach((L, i) => { const x = 3 + i * 20.5; g.fillStyle = '#1c2216'; g.fillRect(x, 8, 18, 16); txt(g, L, x + 9, 16, 6, '#5d6a4a'); if (i === 1) { e.shadowColor = '#41ff5a'; e.shadowBlur = 6; both((c) => { c.fillStyle = '#41ff5a'; c.fillRect(x, 8, 18, 16); }); e.shadowBlur = 0; both((c) => txt(c, L, x + 9, 16, 6, '#062a0c')); } }); gloss(0, 0, w, h, 0.1); });
   // the SR-71 pilot's panel: black, dense with round gauges; the triple display (speed, Mach, altitude) top left
   at('sr71', (w, h) => { g.fillStyle = '#111214'; g.fillRect(0, 0, w, h); for (let i = 1; i < 4; i++) { g.fillStyle = '#060607'; g.fillRect((w * i) / 4 + (i === 2 ? 0 : 0), 0, 2, h); }
     for (const [x, y] of [[8, 8], [w - 8, 8], [8, h - 8], [w - 8, h - 8], [w / 2, 8], [w / 2, h - 8]]) dzus(x, y);
@@ -185,7 +202,7 @@ function drawAtlas() {
     g.fillStyle = '#2a2d31'; g.fillRect(w * 0.33, h * 0.04, w * 0.34, h * 0.2); both((c) => { c.fillStyle = '#041007'; c.fillRect(w * 0.35, h * 0.06, w * 0.3, h * 0.16); ['ANS  STAR TRK  3', 'LAT N 34 12.4', 'LON W118 06.9', 'DEST 07  ETA 12'].forEach((s, i) => { c.font = 'bold 10px monospace'; c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillStyle = '#7dff8a'; c.fillText(s, w * 0.37, h * 0.085 + i * 13); }); }); gloss(w * 0.35, h * 0.06, w * 0.3, h * 0.16, 0.08); inset(w * 0.35, h * 0.06, w * 0.3, h * 0.16);
     for (let i = 0; i < 10; i++) { const x = w * 0.18 + i * 34, y = h * 0.92; halo(x + 13, y + 7, 12); g.fillStyle = '#3c3f44'; g.fillRect(x, y, 26, 14); lit(['CAM', 'SLR', 'TEOC', 'ELINT', 'DEF', 'REC', 'ON', 'OFF', 'TEST', 'IFF'][i], x + 13, y + 7, 7); } });
   // switch panels (consoles and the panel's side wings) from their layouts
-  for (const name of ['sw0', 'sw1', 'sw2', 'sw3', 'sw4', 'sw5', 'wingL']) at(name, (w, h) => {
+  for (const name of ['sw0', 'sw1', 'sw2', 'sw3', 'sw4', 'sw5', 'wingL', 'aux', 'aux2']) at(name, (w, h) => {
     const L = layoutOf(name);
     for (const [v0, v1] of L.subs) plate(0, v0 * h, w, (v1 - v0) * h);
     for (const it of L.items) {
@@ -327,6 +344,9 @@ export function ejectionSeat(bag0, nb, { at, dims, kit = false, frame, headUp = 
     bag.add(bar(a, b2, 0.045, 0.004), web); const bk = new THREE.BoxGeometry(0.008, 0.035, 0.05); bk.translate(b2.x + sx * 0.002, b2.y + 0.02, b2.z); nb.add(bk, M.steel());
     bag.add(bar(up(backH + 0.01, 0.019).add(V(sx * 0.075, 0, 0)), up(backH - 0.07, 0.019).add(V(sx * 0.075, 0, 0)), 0.045, 0.004), web);
   }
+  // the emergency-oxygen ring (the "green apple") on its cable at the left of the pan's front
+  { const ring = new THREE.TorusGeometry(0.016, 0.0045, 5, 12); ring.rotateY(Math.PI / 2); ring.translate(ax - w / 2 - 0.009, ay - 0.012, az - panL * 0.72); bag.add(ring, jetPaint(0x2f6b34));
+    nb.add(bar(V(ax - w / 2 - 0.009, ay + 0.004, az - panL * 0.72), V(ax - w / 2 - 0.004, ay + 0.02, az - panL * 0.55), 0.004, 0.004, true, 4), M.steel()); }
   // the survival kit under the cushion (its pan's bottom is 3.3 cm under the seat point) and the firing handle ahead of it
   if (kit) { const k = roundBox(w * 0.86, 0.045, panL * 1.05, 0.01); k.translate(ax, ay - 0.033 - 0.0225 + 0.002, az - panL * 0.45); bag.add(k, frame); }
   { const h = new THREE.TorusGeometry(0.032, 0.007, 5, 12, Math.PI); h.rotateZ(Math.PI); h.translate(ax, ay + 0.0, az - panL * 0.45 - 0.228); nb.add(h, M.propTip());
@@ -407,6 +427,60 @@ export function fighterInterior(g, b0, nb, paint) {
     const c = (x, y) => V(x, y, 0).applyMatrix4(hf);
     for (const sx of [-1, 1]) nb.add(bar(c(sx * 0.079, -0.07), c(sx * 0.079, 0.068), 0.009, 0.009, true, 6), black);
     nb.add(bar(c(-0.083, 0.068), c(0.083, 0.068), 0.009, 0.009, true, 6), black); }
+  // Round 2, the F-16's density (photos: F-16C cockpit, F-16 right console and side-stick, F-16 cockpits on Commons):
+  // the centre pedestal under the panel down to the floor (its own pictures: fuel quantity and flow, a caution block,
+  // oxygen and cabin gauges, buttons), the knee panels (the auxiliary consoles: each console's forward end rising to
+  // the panel's wing, its sloped top a switch panel), the indexers either side of the HUD on the glare shield, the
+  // canopy handle and the jettison T-handle on the sills, wiring looms clipped along the sidewalls, the canopy's
+  // actuator on the deck behind the seat. (Nothing of it is near the pilot: the feet are 30 cm behind the pedestal.)
+  const PED = { x: 0.09, y0: -0.49, y1: -0.012, z0: -0.66, z1: -0.574 };
+  { const pb = new THREE.BoxGeometry(PED.x * 2, PED.y1 - PED.y0, PED.z1 - PED.z0); pb.translate(0, (PED.y0 + PED.y1) / 2, (PED.z0 + PED.z1) / 2); b.add(pb, dark);
+    quad(b, 'ped', mx([0, (PED.y0 + PED.y1) / 2 + 0.005, PED.z1 + 0.0007]), 0.165, 0.44);
+    for (const x of [-0.0464, 0, 0.0464]) { const k = new THREE.BoxGeometry(0.034, 0.025, 0.006); k.translate(x, -0.429, PED.z1 + 0.0035); nb.add(k, black); } } // (the push buttons at its foot stand off the picture)
+  const auxTop = (z) => z < -0.54 ? -0.12 : -0.12 - 0.058 * (z + 0.54) / 0.135, AUX0 = -0.56, AUX1 = -0.402; // (the top slopes down aft to the console's)
+  for (const sx of [-1, 1]) {
+    const rings = [];
+    for (let j = 0; j <= 6; j++) {
+      const z = AUX0 + (AUX1 - AUX0) * (j / 6), yt = auxTop(z), r = R(z) * 0.962, yb = -1.15 * r * Math.sqrt(Math.max(0, 1 - (CI / r) ** 2)), ring = [V(sx * CI, yt, z)];
+      for (let i = 0; i <= 7; i++) { const y = yt + (yb - yt) * (i / 7); ring.push(V(sx * Math.max(CI, wallX(z, y, 0.962)), y, z)); }
+      rings.push(ring);
+    }
+    b.add(flat(ringLoft(rings, true, true)), con);
+    const a = Math.atan2(0.058, 0.135), zc = -0.4725, m = mx([sx * 0.3375, auxTop(zc) + 0.0015, zc], [-(Math.PI / 2 - a), 0, 0]);
+    switchPanel(b, nb, sx < 0 ? 'aux' : 'aux2', m, 0.185, 0.13);
+    b.add(bar(V(sx * (CI + 0.004), auxTop(-0.54) + 0.002, -0.55), V(sx * (CI + 0.004), auxTop(-0.405) + 0.002, -0.405), 0.008, 0.008), worn);
+  }
+  for (const [sx, cell] of [[-1, 'aoa'], [1, 'nws']]) { const ib = roundBox(0.05, 0.03, 0.024, 0.004); ib.translate(sx * 0.12, 0.252, -0.666); b.add(ib, black); quad(b, cell, mx([sx * 0.12, 0.252, -0.6535]), 0.044, 0.022); }
+  { // the canopy handle on the right sill (a bracket on the lining, the lever along it, its grip forward) and the canopy
+    // jettison T-handle (yellow and black) on the left sill ahead of the throttle
+    const x = wallX(-0.04, -0.08, 0.968) - 0.004, steel = M.steel();
+    const br = new THREE.BoxGeometry(0.014, 0.05, 0.03); br.translate(x - 0.007, -0.08, 0.04); nb.add(br, steel);
+    nb.add(bar(V(x - 0.016, -0.08, 0.04), V(x - 0.022, -0.075, -0.1), 0.012, 0.008), steel);
+    const gr = roundBox(0.022, 0.03, 0.05, 0.008); gr.translate(x - 0.024, -0.074, -0.12); nb.add(gr, black);
+    const xl = wallX(-0.3, -0.07, 0.968) - 0.004, yel = jetPaint(0xd8b21c);
+    const hs = new THREE.BoxGeometry(0.012, 0.04, 0.05); hs.translate(-(xl - 0.006), -0.07, -0.3); b.add(hs, dark);
+    nb.add(bar(V(-(xl - 0.012), -0.07, -0.3), V(-(xl - 0.03), -0.07, -0.3), 0.008, 0.008, true, 6), steel);
+    const th = new THREE.CylinderGeometry(0.008, 0.008, 0.06, 8); th.rotateX(Math.PI / 2); th.translate(-(xl - 0.036), -0.07, -0.3); b.add(th, yel);
+    for (const dz of [-0.02, 0, 0.02]) { const st = new THREE.CylinderGeometry(0.0085, 0.0085, 0.008, 8); st.rotateX(Math.PI / 2); st.translate(-(xl - 0.036), -0.07, -0.3 + dz); nb.add(st, black); } }
+  // switch panels on the sidewall linings over the consoles (the F-16's sidewalls carry them forward of the canopy handle
+  // and behind it), leaning with the tub's wall: the left ones behind the T-handle, the right ones either side of the
+  // canopy handle
+  const wallPanel = (cell, sx, zc) => {
+    const yt = -0.064, yb = -0.156, T = V(sx * (wallX(zc, yt, 0.968) - 0.009), yt, zc), Bt = V(sx * (wallX(zc, yb, 0.968) - 0.009), yb, zc), up = T.clone().sub(Bt).normalize();
+    const zx = V(-sx, 0, 0).addScaledVector(up, sx * up.x).normalize(); // (facing inboard, square to the wall's lean)
+    const xa = up.clone().cross(zx).normalize(), m = new THREE.Matrix4().makeBasis(xa, up, zx).setPosition(T.clone().lerp(Bt, 0.5));
+    switchPanel(b, nb, cell, m, 0.15, 0.092);
+  };
+  wallPanel('sw2', -1, -0.165); wallPanel('sw5', -1, -0.01); wallPanel('sw3', 1, -0.31); wallPanel('sw0', 1, 0.205);
+  for (const sx of [-1, 1]) { // wiring looms along the sidewalls under the sill rail, clipped every 20 cm
+    const pts = []; for (let j = 0; j <= 12; j++) { const z = -0.38 + 1.1 * (j / 12); pts.push(V(sx * (wallX(z, -0.045, 0.968) - 0.009), -0.045, z)); }
+    nb.add(pipe(pts, 0.0055, 5, 36), black);
+    for (let j = 0; j <= 5; j++) { const z = -0.36 + 0.2 * j, q = V(sx * (wallX(z, -0.045, 0.968) - 0.007), -0.045, z), c = new THREE.BoxGeometry(0.008, 0.016, 0.01); c.translate(q.x, q.y, q.z); nb.add(c, M.steel()); } }
+  { // the canopy's actuator on the deck behind the seat (aft of the avionics boxes): its cylinder from a mount on the deck to the hinge
+    const dy = (z) => 0.12 + (-0.012 - 0.12) * ((z - 0.93) / (1.95 - 0.93)), a0 = V(0, dy(1.3) + 0.03, 1.3), a1 = V(0, dy(1.62) + 0.06, 1.62), mid = a0.clone().lerp(a1, 0.55);
+    const mt = new THREE.BoxGeometry(0.08, 0.04, 0.06); mt.translate(0, dy(1.3) + 0.016, 1.3); b.add(mt, frame);
+    b.add(bar(a0, mid, 0.045, 0.045, true, 10), frame); nb.add(bar(mid, a1, 0.022, 0.022, true, 8), M.chrome());
+    for (const sx of [-1, 1]) { const hb = new THREE.BoxGeometry(0.02, 0.09, 0.07); hb.translate(sx * 0.035, dy(1.62) + 0.04, 1.62); b.add(hb, frame); } }
   // three mirrors on the windscreen bow (z -0.62: the bow's section half-width w, height h), facing the pilot
   { const r = R(-0.62), w = r + 0.006, h = r * 1.15 + 0.006;
     for (const da of [-0.5, 0, 0.5]) { const a = Math.PI / 2 + da, p = V(-Math.cos(a) * w, Math.sin(a) * h, -0.6), n = V(-Math.cos(a) * w, Math.sin(a) * h, 0).normalize();
@@ -426,9 +500,9 @@ export function fighterInterior(g, b0, nb, paint) {
   // the pilot (crew.js) on the seat: the side-stick on its mount on the right console (the forearm on the armrest), the
   // throttle on the left console, the feet on the rudder pedals just ahead of the seat (the tub floor is ~-0.52)
   g.userData.seats = [{ p: [0, -0.28, 0.4], s: 0.88, fit: { at: SEAT.at, dims: SEAT.dims, floor: -0.52, feet: 'pedals' },
-    controls: { stickBase: [0.27, 0.17, -0.33], stickLen: 0.11, thrBase: [-0.27, 0.1, -0.25], thrLen: 0.11, pedZ: -0.55, pedY: -0.22 },
+    controls: { stickBase: [0.27, 0.17, -0.33], stickLen: 0.11, thrBase: [-0.27, 0.1, -0.25], thrLen: 0.11, pedZ: -0.55, pedY: -0.22, grips: 'f16' },
     adjust: { seatZ: [-0.08, 0.02], seatY: [-0.03, 0.03] } }]; // (the seat runs 8 cm forward to 2 cm back, 3 cm up or down)
-  g.userData.fit = [{ kind: 'seat', p: [0, -0.475, 0.36], w: 0.24, d: 0.22 }, { kind: 'panel', p: V(0, -0.12, 0).applyMatrix4(pf).toArray(), w: 0.1, d: 0.05, tilt: -0.2 }]; // (the seat's rails under the survival kit; the panel on a narrow centre pedestal: the legs go either side of it to the pedals)
+  g.userData.fit = [{ kind: 'seat', p: [0, -0.475, 0.36], w: 0.24, d: 0.22 }, { kind: 'panel', p: [0, PED.y0, (PED.z0 + PED.z1) / 2], w: PED.x * 2, d: PED.z1 - PED.z0 }]; // (the seat's rails under the survival kit; the centre pedestal carried on down if the floor is deeper)
   // what the pilot must keep clear of: inside the glass (revolved, 1.15 x as tall as wide; walls below its base), the
   // consoles with their knobs, the side-stick's mount and armrest (the legs and torso only: the forearm rests on it), the
   // panel and everything standing off it, the wings, the glare shield, the HUD, the seat-pan handle (the legs)
@@ -436,7 +510,10 @@ export function fighterInterior(g, b0, nb, paint) {
     ...[-1, 1].map((sx) => ({ name: 'console', box: [sx * 0.335, -0.3725, 0.02], size: [0.21, 0.415, 0.84] })), { name: 'armrest', box: [0.29, -0.15, 0.15], size: [0.13, 0.06, 0.34], parts: ['legs', 'torso'] },
     boxObstacle('panel', on(0, 0, -0.009), [0.52, 0.24, 0.03]), boxObstacle('UFC', on(0, 0.07, 0.036), [0.14, 0.0875, 0.06]),
     ...[-1, 1].map((sx) => boxObstacle('MFD', on(sx * 0.165, -0.035, 0.018), [0.155, 0.155, 0.024])), ...wings.map((wm) => boxObstacle('panel wing', wm.clone().multiply(mx([0, 0, 0.005])), [0.17, 0.14, 0.05])),
-    hoodObstacle('glare shield', 0.3, 0.6, 1.3, 0.14, -0.6, 0.18), boxObstacle('HUD', hf, [0.17, 0.15, 0.02]), { name: 'HUD body', box: [0, 0.2535, -0.635], size: [0.13, 0.035, 0.1] }, panHandle(SEAT.at, SEAT.dims[2])];
+    hoodObstacle('glare shield', 0.3, 0.6, 1.3, 0.14, -0.6, 0.18), boxObstacle('HUD', hf, [0.17, 0.15, 0.02]), { name: 'HUD body', box: [0, 0.2535, -0.635], size: [0.13, 0.035, 0.1] }, panHandle(SEAT.at, SEAT.dims[2]),
+    { name: 'pedestal', box: [0, (PED.y0 + PED.y1) / 2, (PED.z0 + PED.z1) / 2 + 0.004], size: [PED.x * 2, PED.y1 - PED.y0, PED.z1 - PED.z0 + 0.008] },
+    ...[-1, 1].map((sx) => ({ name: 'knee panel', box: [sx * 0.335, -0.31, -0.48], size: [0.21, 0.4, 0.16] })), ...[-1, 1].map((sx) => ({ name: 'indexer', box: [sx * 0.12, 0.252, -0.665], size: [0.05, 0.03, 0.026] })),
+    { name: 'canopy handle', box: [0.45, -0.077, -0.04], size: [0.06, 0.06, 0.2] }, ...[[-1, -0.165], [-1, -0.01], [1, -0.31], [1, 0.205]].map(([sx, z]) => ({ name: 'wall panel', box: [sx * 0.455, -0.11, z], size: [0.05, 0.1, 0.15] })), { name: 'jettison handle', box: [-0.44, -0.07, -0.3], size: [0.06, 0.05, 0.07] }];
   AO = null;
 }
 
@@ -495,6 +572,14 @@ export function tandemInterior(g, b0, nb, { T, tcPt, split, paint }) {
     const x = c.x + c.w / 2 + 0.006, l = new THREE.BoxGeometry(0.012, -0.08 - y0, c.d); l.translate(sx * x, (y0 - 0.08) / 2, c.z); b.add(l, frame);
     b.add(bar(V(sx * (x - 0.008), -0.085, c.z - c.d / 2), V(sx * (x - 0.008), -0.085, c.z + c.d / 2), 0.012, 0.012, true, 6), jetPaint(0x5d6168));
   }
+  // the pilot's sidewalls (as the fighter's): switch panels on the linings over the consoles, a wiring loom clipped
+  // along under the sill rail
+  for (const sx of [-1, 1]) {
+    const x = P1.x + P1.w / 2;
+    for (const [zc, cell] of [[-1.12, sx < 0 ? 'sw3' : 'sw0'], [-0.76, sx < 0 ? 'sw1' : 'sw2']]) switchPanel(b, nb, cell, mx([sx * (x - 0.0005), -0.19, zc], [0, -sx * Math.PI / 2, 0]), 0.15, 0.092);
+    nb.add(bar(V(sx * (x - 0.006), -0.122, P1.z - P1.d / 2 + 0.01), V(sx * (x - 0.006), -0.122, P1.z + P1.d / 2 - 0.01), 0.011, 0.011, true, 5), black);
+    for (let j = 0; j < 4; j++) { const c = new THREE.BoxGeometry(0.008, 0.018, 0.01); c.translate(sx * (x - 0.004), -0.122, P1.z - P1.d / 2 + 0.08 + j * 0.2); nb.add(c, M.steel()); }
+  }
   // the pilot: centre stick from the floor between the knees, throttles on the left console, feet on the rudder pedals
   g.userData.seats = [{ p: [0, -0.35, -0.74], s: 0.86, fit: { at: SEAT1.at, dims: SEAT1.dims, floor: -0.72, feet: 'pedals' },
     controls: { stickBase: [0, -0.3, -0.34], stickLen: 0.61, thrBase: [-0.27, 0.04, -0.3], thrLen: 0.12, pedZ: -0.48, pedY: -0.3 } },
@@ -507,7 +592,8 @@ export function tandemInterior(g, b0, nb, { T, tcPt, split, paint }) {
   g.userData.seats[0].obstacles = [glass, { name: 'bulkhead', plane: [0, 0, -1], at: [0, 0, split + 0.03] }, ...conObs(P1),
     { name: 'panel', box: [0, -0.183, -1.485], size: [0.5, 0.554, 0.17] }, ...wings.map((wm) => boxObstacle('panel wing', wm.clone().multiply(mx([0, 0, 0.005])), [0.14, 0.3, 0.05])),
     hoodObstacle('glare shield', 0.3, 0.55, 1.3, 0.02, -1.5, 0.16), { name: 'pedestal', box: [0, -0.59, -1.5], size: [0.12, 0.28, 0.16] },
-    { name: 'periscope', box: [0, yTop - 0.03, zp], size: [0.08, 0.05, 0.07] }, panHandle(SEAT1.at, SEAT1.dims[2])];
+    { name: 'periscope', box: [0, yTop - 0.03, zp], size: [0.08, 0.05, 0.07] }, panHandle(SEAT1.at, SEAT1.dims[2]),
+    ...[-1, 1].map((sx) => ({ name: 'sidewall', box: [sx * (P1.x + P1.w / 2 - 0.01), -0.16, P1.z], size: [0.03, 0.12, P1.d] }))];
   g.userData.seats[1].obstacles = [glass, { name: 'bulkhead', plane: [0, 0, 1], at: [0, 0, split + 0.06] }, ...conObs(P2),
     { name: 'RSO panel', box: [0, RS.y, zf + RS.d / 2 + 0.03], size: [0.56, RS.h, RS.d + 0.06] }, { name: 'RSO upper panel', box: [0, 0.09, zf + 0.04], size: [0.5, 0.18, 0.08] }, panHandle(SEAT2.at, SEAT2.dims[2])];
   AO = null;
