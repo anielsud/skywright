@@ -29,6 +29,9 @@ const V3 = THREE.Vector3;
 const CELL = 275; // 22000 / 80: cells tile the core map and the 5500 m outer tiles exactly
 const STRIDE = 6; // per instance: x, y, z, scale, variant, yaw
 const IMP_CH = 6; // impostor chunks: 6 x 6 cells (1650 m), each its own draw with a bounding sphere (frustum culled)
+// Past IMP_FAR a 3 x 3 block of chunks (~5 km) is drawn as one big chunk instead: with trees out to 12+ km the small
+// chunks far away were ~60 draw calls for little culling gain (far chunks are small on screen and mostly in view).
+const IMP_BIG = 3, IMP_FAR = 6000;
 const SMALL_FAR = 2500; // shrubs, logs and stones vanish into the ground texture beyond this
 const AT = 2048; // foliage atlas layout size (the 1024 version is the same layout scaled)
 // atlas regions in AT pixels -- mirrored in tools/flora/build_atlas.py (REG)
@@ -562,7 +565,7 @@ export class Flora {
     // an empty stand-in chunk, always there, so the impostor shader compiles behind the loading screen with everything
     // else (the real chunks only appear as the forest streams in, a second into the flight: a hitch on the tablet)
     this.impWarm = new THREE.Mesh(this.impBuf(1).g, this.impMat); this.impWarm.frustumCulled = false; this.group.add(this.impWarm);
-    this.impCh = new Map(); this.impDirtyCh = new Set(); this.impN = 0; this.impTmp = { pos: new Float32Array(0), data: new Float32Array(0) };
+    this.impCh = new Map(); this.impBig = new Map(); this.impDirtyCh = new Set(); this.impN = 0; this.impTmp = { pos: new Float32Array(0), data: new Float32Array(0) };
     for (const V of this.vars) V.ext = Math.abs(V.bC.y) + V.bR * 1.42; // reach of a quad from the tree's foot, per unit scale
     if (this.atlas.ready) this.capture();
     // streamed cells
@@ -680,7 +683,24 @@ export class Flora {
   clearTrees() { this.extra.clear(); this.extraN = 0; this.reset(); }
   reset() { for (const c of this.cells.values()) this.cellChanged(c); this.cells.clear(); this.felled.clear(); this.wantAt = null; this.nearDirty = true; }
   // a cell's trees changed (generated, densified, thinned, dropped): its impostor chunk needs a rebuild
-  cellChanged(c) { this.impDirtyCh.add(Math.floor(c.ci / IMP_CH) + ',' + Math.floor(c.cj / IMP_CH)); this.impDirty = true; }
+  cellChanged(c) {
+    const ki = Math.floor(c.ci / IMP_CH), kj = Math.floor(c.cj / IMP_CH), bk = Math.floor(ki / IMP_BIG) + ',' + Math.floor(kj / IMP_BIG);
+    this.impDirtyCh.add(this.impBig.get(bk) ? 'B' + bk : ki + ',' + kj); this.impDirty = true;
+  }
+  // which 3x3 blocks are drawn as one big chunk (far from the camera), with hysteresis; a switch rebuilds the block in
+  // its new form, and the old form is removed only once the new one is in (no gap; at most a frame or two drawn twice)
+  impBlocks(cam) {
+    const S = IMP_BIG * IMP_CH * CELL, seen = new Set();
+    for (const c of this.cells.values()) seen.add(Math.floor(c.ci / IMP_CH / IMP_BIG) + ',' + Math.floor(c.cj / IMP_CH / IMP_BIG));
+    for (const bk of this.impBig.keys()) if (!seen.has(bk)) this.impBig.delete(bk);
+    for (const bk of seen) {
+      const [bi, bj] = bk.split(',').map(Number), d = Math.hypot((bi + 0.5) * S - cam.x, (bj + 0.5) * S - cam.z), cur = !!this.impBig.get(bk);
+      const want = d > IMP_FAR + (cur ? -600 : 600); if (want === cur) continue;
+      this.impBig.set(bk, want); this.impDirty = true;
+      if (want) this.impDirtyCh.add('B' + bk); // its small chunks go when it's built
+      else { for (let a = 0; a < IMP_BIG; a++) for (let b = 0; b < IMP_BIG; b++) this.impDirtyCh.add((bi * IMP_BIG + a) + ',' + (bj * IMP_BIG + b)); this.impDirtyCh.add('X' + bk); }
+    }
+  }
 
   // ------------------------------------------------ placement
   key(i, j) { return i + ',' + j; }
@@ -819,6 +839,7 @@ export class Flora {
       if (!c.data || (dense && !c.dense) || c.reseat) { c.wantDense = dense; want.push(c); }
     }
     for (const [key, c] of this.cells) if (c.mark !== this.frame && c.d > Rf * 1.05) { this.cells.delete(key); this.cellChanged(c); }
+    this.impBlocks(cam);
     // sparse far layer first everywhere close, then densify nearest-first
     this.queue = want.sort((a, b) => a.d - b.d);
   }
@@ -898,15 +919,19 @@ export class Flora {
     this.impDirty = false; this.lastImp = this.frame;
     const vars = this.vars, keys = [...this.impDirtyCh]; this.impDirtyCh.clear();
     let budget = 0;
+    const drop = (k) => { const ch = this.impCh.get(k); if (ch) { this.imp.remove(ch.mesh); ch.B.g.dispose(); this.impN -= ch.n; this.impCh.delete(k); } };
     for (const key of keys) {
-      const [ki, kj] = key.split(',').map(Number), list = [];
+      // 'B'+block: a far block as one chunk; 'X'+block: drop a block's big chunk (its small chunks were just rebuilt); else a small chunk
+      if (key[0] === 'X') { if (!this.impBig.get(key.slice(1))) drop('B' + key.slice(1)); continue; }
+      const big = key[0] === 'B', [ki, kj] = (big ? key.slice(1) : key).split(',').map(Number), list = [], span = big ? IMP_BIG * IMP_CH : IMP_CH;
+      if (big !== !!this.impBig.get(big ? key.slice(1) : Math.floor(ki / IMP_BIG) + ',' + Math.floor(kj / IMP_BIG))) continue; // stale: the block switched form since
       let cnt = 0;
-      for (let i = ki * IMP_CH; i < (ki + 1) * IMP_CH; i++) for (let j = kj * IMP_CH; j < (kj + 1) * IMP_CH; j++) {
+      for (let i = ki * span; i < (ki + 1) * span; i++) for (let j = kj * span; j < (kj + 1) * span; j++) {
         const c = this.cells.get(this.key(i, j)); if (!c || !c.data) continue;
         list.push(c); cnt += c.dense ? c.n : c.nBase;
       }
       let ch = this.impCh.get(key);
-      if (!cnt) { if (ch) { this.imp.remove(ch.mesh); ch.B.g.dispose(); this.impN -= ch.n; this.impCh.delete(key); } continue; }
+      if (!cnt) { drop(key); if (big) for (let a = 0; a < IMP_BIG; a++) for (let b = 0; b < IMP_BIG; b++) drop((ki * IMP_BIG + a) + ',' + (kj * IMP_BIG + b)); continue; }
       if (!ch) { const B = this.impBuf(Math.ceil(cnt * 1.3)), mesh = new THREE.Mesh(B.g, this.impMat); this.imp.add(mesh); this.impCh.set(key, (ch = { B, mesh, n: 0 })); }
       // filled into scratch arrays over several slices, then copied into the chunk's buffers in one go: the chunk keeps
       // drawing (and, if it was off screen, uploading) its old content consistently until then
@@ -935,6 +960,7 @@ export class Flora {
       for (const a of [g.attributes.iPos, g.attributes.iData]) { a.clearUpdateRanges(); a.addUpdateRange(0, n * a.itemSize); a.needsUpdate = true; }
       if (B !== ch.B) { ch.B.g.dispose(); ch.B = B; ch.mesh.geometry = g; }
       this.impN += n - ch.n; ch.n = n; ch.nBig = nBig; ch.far = null; // placeImpostors sets the count
+      if (big) for (let a = 0; a < IMP_BIG; a++) for (let b = 0; b < IMP_BIG; b++) drop((ki * IMP_BIG + a) + ',' + (kj * IMP_BIG + b)); // the block's small chunks, now drawn by this one
       if ((this.impUp += n * 24) > 3e6) yield 'frame'; // spread big re-uploads over frames
     }
   }
