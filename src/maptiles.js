@@ -23,7 +23,7 @@ export const MAP_BG = '#1d3b4a'; // where no tile is built yet
 export class MapTiles {
   constructor(w, runways, rwyLen) {
     this.w = w; this.T = w.size / 4; this.runways = runways; this.rwyLen = rwyLen;
-    this.tiles = new Map(); this.list = []; this.job = null; this.frame = 0; this.pool = []; this.scratch = new Map();
+    this.tiles = new Map(); this.list = []; this.job = null; this.frame = 0; this.rowMs = 0; this.pool = []; this.scratch = new Map();
     this.c = new THREE.Color(); this.nrm = new THREE.Vector3(); this.light = new THREE.Vector3();
     this.stats = { ms: 0, frames: 0, max: 0, built: 0, bootMs: 0 }; // (the headless tests read these)
     // the composite the HUD draws: n x n tiles, enough for the widest view wherever the plane is inside its tile
@@ -32,12 +32,12 @@ export class MapTiles {
     this.mg = this.mos.getContext('2d'); this.mosAt = null; this.mosDirty = true;
     // water as the water shader draws it seen from straight above, by depth (0.5 m steps): shallow -> deep, the seabed
     // showing through the shallows with red absorbed first (shaders.js waterMaterial); in linear light, stored as sRGB
-    const P = w.waterPal, deep = new THREE.Color(P.deep), sh = new THREE.Color(P.shallow), sand = new THREE.Color(P.sand), K = [0.38, 0.072, 0.05];
+    const P = w.waterPal, deep = new THREE.Color(P.deep), sh = new THREE.Color(P.shallow), sand = new THREE.Color(P.sand), K = [0.38, 0.072, 0.05], sky = new THREE.Color().setRGB(0.6, 0.73, 0.84); // (sRGB-coded)
     this.water = new Uint8Array(128 * 3);
     for (let q = 0; q < 128; q++) {
       const d = q * 0.5, dk = 1 - Math.exp(-d * 0.09), body = sh.clone().lerp(deep, dk), out = [];
       ['r', 'g', 'b'].forEach((ch, m) => { const Tr = Math.exp(-K[m] * d * 2); out.push(sand[ch] * 0.9 * Tr + (sh[ch] * 0.55 * (1 - dk) + body[ch] * dk) * (1 - Tr)); });
-      this.c.setRGB(out[0], out[1], out[2]).convertLinearToSRGB();
+      this.c.setRGB(out[0], out[1], out[2]).convertLinearToSRGB().lerp(sky, 0.3); // (plus some of the sky it reflects, as the water you see does)
       this.water.set([this.c.r * 255, this.c.g * 255, this.c.b * 255], q * 3);
     }
     // baked rivers and lakes (procedural places with a terrain bake): the terrain shader's water tint
@@ -74,10 +74,12 @@ export class MapTiles {
     } else if (Math.hypot(px - this.at[0], pz - this.at[1]) > T * 0.1) this.want(px, pz, vx, vz);
     // the hillshade follows the sun (procedural places): a new time of day redraws the tiles, one by one
     if (!this.w.real && this.frame % 60 === 1 && this.lightKey !== this.lightFor()) { this.lightKey = this.lightFor(); for (const t of this.tiles.values()) t.stale = true; }
-    // work, a row at a time, until the frame's budget is spent
-    while (performance.now() - t0 < MS) {
+    // work, a row at a time, while the next row (its cost so far, rowMs) still fits in the frame's budget; at least one
+    // row a frame, so a slow device still gets there
+    for (let rows = 0; ; rows++) {
+      const t = performance.now(); if (rows && t - t0 + this.rowMs > MS) break;
       if (!this.job) { this.job = this.pick(); if (!this.job) break; }
-      const r = this.job.it.next();
+      const r = this.job.it.next(), dt = performance.now() - t; this.rowMs += (dt - this.rowMs) * 0.1;
       if (r.done) { const J = this.job; this.job = null; this.finish(J.t, J.res, r.value); if (J.redo) this.tiles.get(J.t.key).stale = true; }
     }
     const v = this.view(px, pz), ms = performance.now() - t0, S = this.stats;
