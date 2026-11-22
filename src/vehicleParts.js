@@ -11,6 +11,7 @@ import { clipGeometry } from './skinBlend.js';
 import { Rig, cornerLinks, cornerGeometry } from './carRig.js';
 import { capsuleWindows, capsuleCouch } from './capsule.js';
 import * as CK from './cabKit.js';
+import { compassStrip, compassKey, chartRoad, chartKey } from './liveScreens.js';
 
 const cached = new Map();
 const mat = (k, make) => { if (!cached.has(k)) cached.set(k, make()); return cached.get(k); };
@@ -429,7 +430,7 @@ function truckInterior(g, S, S0) {
     for (let i = 0; i < 8; i++) CK.toggle(nb, m, (40 + i * 62) / 512 * W - W / 2, (0.5 - 69 / 256) * H, chrome);
     const st = new THREE.CylinderGeometry(0.012, 0.012, 0.008, 14); st.rotateX(Math.PI / 2); st.applyMatrix4(CK.local(m, (1 - 72 / 512) * W - W / 2, (0.5 - 176 / 256) * H, 0.007)); nb.add(st, M.paint(0xc8102e)); }
   // GPS on the passenger's side, in a bezel; the fire system's pull handle under the switch panel
-  CK.screen(b, nb, fm(0.4, 0.135, 0.003), 0.19, 0.13, 'chart');
+  CK.screen(b, nb, fm(0.4, 0.135, 0.003), 0.19, 0.13, 'chart', { live: { panel: lp, draw: chartRoad, px: [256, 176], hz: 6, key: chartKey } }); // (the GPS: a live map)
   { const m = fm(0.03, 0.03, 0.003); nb.add(bar(V(0, 0, 0), V(0, 0, 0.04), 0.012, 0.012, true, 8).applyMatrix4(m), chrome); nb.add(bar(V(-0.03, 0, 0.045), V(0.03, 0, 0.045), 0.016, 0.016, true, 8).applyMatrix4(m), M.paint(0xc8102e)); }
   // digital dash pod on the hood, behind the wheel's top, tilted to the driver
   const POD = { c: [-0.4, 0.9, -0.52], s: [0.26, 0.11, 0.07], rx: -0.25 };
@@ -657,10 +658,10 @@ function heliNose(c, lv) {
     CK.face(nb, CK.local(face, 0, 0.11), 0.26, 0.032, 'annun'); CK.screws(nb, face, PAN.s[0] - 0.025, PAN.s[1] - 0.02, 0.0012); // caution panel, the panel's screws
     CK.placard(nb, CK.local(face, 0.215, -0.112), 0.06, 0.03, 2);
     // (live: the attitude ball, the altimeter's hands, the tach and an oil pressure follow the aircraft: liveDisplays.js)
-    const lp = CK.livePanel(), LIVE = { ai: 'att', alt: 'alt', tach: (S) => S.rpm / 9000 };
-    for (const [x, y, t, val] of [[-0.19, 0.045, 'gauge', 'oilP'], [-0.065, 0.045, 'ai'], [0.065, 0.045, 'alt'], [0.19, 0.045, 'gauge', 0.58], [-0.19, -0.055, 'tach'], [-0.065, -0.055, 'gauge', 0.36], [0.065, -0.055, 'compass'], [0.19, -0.055, 'gauge', 0.66]])
-      CK.gauge(nb, CK.local(face, x, y), 0.044, t, null, LIVE[t] || typeof val === 'string' ? { live: lp, src: LIVE[t] || val } : { val });
-    lp.to(g);
+    // (the other pressures: fuel, hydraulic and the main gearbox's oil, with the engine and the rotor's revs)
+    const lp = CK.livePanel(), LIVE = { ai: 'att', alt: 'alt', tach: (S) => S.rpm / 9000, compass: 'hdg' }, P = { fuelP: (S) => (S.running ? 0.46 + 0.04 * S.thr : 0), hydP: (S) => (S.running ? 0.62 + 0.03 * S.rpmK : 0.04), xmsnP: (S) => 0.34 * Math.min(1, S.rpmK * 1.4) + (S.running ? 0.06 : 0) };
+    for (const [x, y, t, val] of [[-0.19, 0.045, 'gauge', 'oilP'], [-0.065, 0.045, 'ai'], [0.065, 0.045, 'alt'], [0.19, 0.045, 'gauge', P.fuelP], [-0.19, -0.055, 'tach'], [-0.065, -0.055, 'gauge', P.hydP], [0.065, -0.055, 'compass'], [0.19, -0.055, 'gauge', P.xmsnP]])
+      CK.gauge(nb, CK.local(face, x, y), 0.044, t, null, LIVE[t] || typeof val === 'string' || typeof val === 'function' ? { live: lp, src: LIVE[t] || val } : { val });
     CK.face(nb, CK.local(face, 0, -0.112), 0.25, 0.04, 'heliSw');
     for (let i = 0; i < 7; i++) CK.toggle(nb, CK.local(face, 0, -0.112), (22 + i * 35) / 256 * 0.25 - 0.125, 0.004, M.chrome());
     // the pedestal (tapering, its back face leaning forward), the avionics stack on that face
@@ -671,8 +672,9 @@ function heliNose(c, lv) {
       CK.face(nb, m, 0.15, 0.3, 'avionics'); CK.gaugeGlass(nb, m.clone().scale(V(1, 2, 1)), 0.075); CK.screws(nb, m, 0.15, 0.31, 0.002);
       for (const yy of [0.11, 0.03, -0.05, -0.12]) for (const xx of [-0.055, 0.055]) CK.knob(nb, m, xx, yy, 0.009, CK.blackM()); }
     // magnetic compass on the hood, facing the crew
-    { const cm = pm.clone().multiply(new THREE.Matrix4().makeTranslation(0, HOOD.c[1] + 0.04, 0.02)); CK.box(b, cm, [0, 0, 0], [0.06, 0.05, 0.05], CK.blackM()); CK.face(nb, CK.local(cm, 0, 0, 0.026), 0.04, 0.03, 'compass');
+    { const cm = pm.clone().multiply(new THREE.Matrix4().makeTranslation(0, HOOD.c[1] + 0.04, 0.02)); CK.box(b, cm, [0, 0, 0], [0.06, 0.05, 0.05], CK.blackM()); lp.screen(CK.local(cm, 0, 0, 0.0262), 0.04, 0.03, { px: [80, 60], hz: 10, z: 0, dark: true, draw: compassStrip, key: compassKey }); // (the magnetic compass's card, live)
       b.add(bar(V(0, HOOD.c[1] + 0.012, 0.02).applyMatrix4(pm), V(0, HOOD.c[1] + 0.02, 0.02).applyMatrix4(pm), 0.02, 0.02, true, 6), CK.blackM()); }
+    lp.to(g); // (the live gauges, the compasses' cards)
     g.userData.seats = heliCrewBay(b, FL, -0.34, SZ);
     { const ms = CK.collect(g, () => { b.to(g); nb.to(g, true); }); for (const m of ms) m.userData.keepShape = true;
       CK.cabFinish(ms, [[-0.8, FL, -1.2], [0.8, 0.9, 0.45]], { key: 'heli', kinds: new Map([[CK.suede(0x55595f), 'floor']]) }); } // (grain, scuffs and occlusion) // (furniture, frames and fittings keep their shapes: skinBlend fairs only the skin into the cabin)

@@ -20,6 +20,7 @@ import { M } from './materials.js';
 import { PM } from './planeMaterials.js';
 import { V, bar, pipe, Bag, seatGeo, ringLoft } from './partDetail.js';
 import * as CK from './cabKit.js';
+import * as LS from './liveScreens.js';
 
 const cached = new Map();
 const mat = (k, make) => { if (!cached.has(k)) cached.set(k, make()); return cached.get(k); };
@@ -502,8 +503,8 @@ function wheelhouse(c, lv) {
   CK.box(b, fm(0, L / 2, 0.004), [0, 0, 0], [W - 0.25, L - 0.02, 0.008], CK.satinBlack()); // the instrument face: a black panel on the slope
   if (lv) {
     const lp = CK.livePanel(); // (the engine monitor shows the engines live: liveDisplays.js)
-    for (const [x, w, h, t] of [[0.18, 0.28, 0.22, 'radar'], [0.53, 0.28, 0.22, 'chart'], [0.9, 0.2, 0.15, 'engine']]) CK.screen(b, nb, fm(x, L / 2, 0.008), w, h, t, t === 'engine' ? { live: { panel: lp, draw: CK.engineMonitor, px: [256, 192] } } : {});
-    lp.to(g);
+    const LV = { radar: { draw: LS.boatRadar, px: [256, 200], hz: 8 }, chart: { draw: LS.chartBoat, px: [256, 200], hz: 6, key: LS.chartKey }, engine: { draw: CK.engineMonitor, px: [256, 192] } }; // (radar, chart plotter, engines: all live)
+    for (const [x, w, h, t] of [[0.18, 0.28, 0.22, 'radar'], [0.53, 0.28, 0.22, 'chart'], [0.9, 0.2, 0.15, 'engine']]) CK.screen(b, nb, fm(x, L / 2, 0.008), w, h, t, { live: { panel: lp, ...LV[t] } });
     CK.screws(nb, fm(0, L / 2, 0.008), W - 0.28, L - 0.05, 0.0005); CK.placard(nb, fm(-0.58, L / 2 + 0.105, 0.0085), 0.08, 0.03, 0); CK.placard(nb, fm(-0.95, L / 2 + 0.105, 0.0085), 0.08, 0.03, 2);
     { const m = fm(-0.2, L / 2 + 0.03, 0.009); CK.screen(b, nb, m, 0.19, 0.095, 'vhf', { d: 0.04, border: 0.012 }); // VHF radio and its handset
       const hs = new THREE.CapsuleGeometry(0.022, 0.07, 4, 8); hs.applyMatrix4(fm(-0.36, L / 2, 0.035)); nb.add(hs, CK.blackM()); }
@@ -516,8 +517,9 @@ function wheelhouse(c, lv) {
       for (const dx of [-0.03, 0.03]) { nb.add(bar(V(dx, 0, 0.05), V(dx, 0.08, 0.17), 0.01, 0.01, true, 6).applyMatrix4(m), M.chrome()); const k = new THREE.SphereGeometry(0.02, 10, 8); k.applyMatrix4(CK.local(m, dx, 0.085, 0.18)); nb.add(k, dx < 0 ? M.paint(0xc8102e) : M.paint(0x2a7d3a)); } }
     // compass binnacle on the dash top, in front of the helm
     { const by = CON.top, bz = -1.1; const base = new THREE.CylinderGeometry(0.058, 0.068, 0.04, 20); base.translate(0.4, by + 0.02, bz); b.add(base, CK.blackM());
-      const card = CK.toTile(new THREE.CircleGeometry(0.05, 20), 'compass'); card.rotateX(-Math.PI / 2); card.translate(0.4, by + 0.05, bz); nb.add(card, CK.atlasMat());
+      lp.screen(new THREE.Matrix4().makeRotationX(-Math.PI / 2).setPosition(0.4, by + 0.05, bz), 0.1, 0.1, { px: [128, 128], hz: 10, z: 0, dark: true, round: true, draw: LS.compassRose, key: LS.compassKey }); // (its card: turning to stay on north)
       const dome = new THREE.SphereGeometry(0.058, 18, 8, 0, Math.PI * 2, 0, Math.PI / 2); dome.translate(0.4, by + 0.04, bz); g.add(new THREE.Mesh(dome, M.glass(0xdfe8ee))); }
+    lp.to(g); // (the live displays and the compass card: one draw call)
     // the column's boss where it goes into the console
     { const boss = new THREE.CylinderGeometry(0.085, 0.09, 0.03, 20); boss.rotateX(Math.PI / 2); boss.translate(0.4, 0.757, CON.z1 + 0.015); b.add(boss, CK.blackM()); }
     // overhead console under the roof's front: radios, a loud hailer, the searchlight's joystick, gauges

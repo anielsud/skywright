@@ -2,6 +2,11 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.143.0', items: [
+    "Find your friends! Other players always show on the fighter radar, the airliner map and the Fireboat radar, with their name. If they're far away, an arrow on the edge points the way and tells you how far.",
+    "The fighter's head-up display stays clean right through loops, and its warning lights come on for real: engine, over-g, stall, afterburner, brakes.",
+    "More instruments work: the Dragonfly's gauges and compass, the Fireboat's radar, chart and compass, and the Chomper's map.",
+  ] },
   { v: '1.142.0', items: [
     "The hangar no longer freezes for a moment when it opens",
   ] },

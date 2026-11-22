@@ -81,6 +81,9 @@ export function signals(ac, ctx, S, dt) {
   S.stall = ac.stalled && ctx.stallWarn !== false ? 1 : 0;
   S.brake = ac.brake > 0.5 || ac.svcBrake > 0.5 || ac.ctl?.hand > 0.5 ? 1 : 0;
   S.metric = ctx.metric ? 1 : 0; // (digital displays: km/h instead of mph)
+  S.hasRetract = ac.hasRetract ? 1 : 0; S.onGround = ac.onGround ? 1 : 0;
+  { const W = ctx.world; S.agl = W?.heightAt ? ac.x.y - Math.max(W.heightAt(ac.x.x, ac.x.z), W.waterLevel ?? -1e9) : 1e4; }
+  { let dm = 0; for (const p of ac.parts) if (p.alive && p.engine && p.hp) dm = Math.max(dm, (p.dmg || 0) / p.hp); S.engDmg = dm; } // (an engine's damage: the ENGINE and ENG FIRE cautions)
   S.mach = ac.mach || 0; S.north = ctx.world?.loc?.north || 0; S.flaps = ac.flaps || 0; S.x = ac.x.x; S.y = ac.x.y; S.z = ac.x.z;
   { const v = _r.copy(ac.v).applyQuaternion(_q.copy(ac.q).invert()), L = Math.hypot(v.x, v.z); // the flight path in the aircraft's frame (degrees off the nose)
     const sp = ac.v.length(); S.fpmAz = sp > 3 ? THREE.MathUtils.radToDeg(Math.atan2(v.x, -v.z)) : 0; S.fpmEl = sp > 3 ? THREE.MathUtils.radToDeg(Math.atan2(v.y, L)) : 0; }
@@ -223,7 +226,9 @@ export class LivePanel {
   // is called hz times a second while it is watched. All a panel's screens share one canvas and one material.
   // (same: another screen of this panel whose picture this one shows too, as a second PFD; dark: no diffuse, the
   // picture only glows, as a real display's black glass)
-  screen(m, w, h, { px = [256, 128], hz = 10, draw, z = 0.0005, glow = 0.9, same = null, dark = false }) { const sc = { m: m.clone(), w, h, px, hz, draw, z, glow, same, y: 0, t: 1e9 }; if (dark) this.dark = true; this.screens.push(sc); return sc; }
+  // (key(S): what the picture shows, as a string: unchanged, it is neither redrawn nor uploaded)
+  // (round: a disc w across, as a dial's face, not a rectangle)
+  screen(m, w, h, { px = [256, 128], hz = 10, draw, z = 0.0005, glow = 0.9, same = null, dark = false, key = null, round = false }) { const sc = { m: m.clone(), w, h, px, hz, draw, z, glow, same, key, round, last: null, y: 0, t: 1e9 }; if (dark) this.dark = true; this.screens.push(sc); return sc; }
   // anything else to do each frame while watched (fn(S, dt)): a HUD's uniforms and canvas (liveHud.js)
   hook(fn) { this.hooks.push(fn); return this; }
 
@@ -256,11 +261,11 @@ export class LivePanel {
   }
   buildScreens(parent) {
     const own = this.screens.filter((s) => !s.same), cw = Math.max(...own.map((s) => s.px[0])); let ch = 0; for (const s of own) { s.y = ch; ch += s.px[1]; }
-    const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch; const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+    const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch; const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4; tex.flipY = false; // (not flipped: a screen's rows go up as they are, so one can be uploaded on its own)
     const geos = [];
     for (const s of this.screens) {
-      const pg = new THREE.PlaneGeometry(s.w, s.h), uv = pg.attributes.uv;
-      const r = s.same || s; for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * r.px[0]) / cw, 1 - (r.y + (1 - uv.getY(i)) * r.px[1]) / ch);
+      const pg = s.round ? new THREE.CircleGeometry(s.w / 2, 28) : new THREE.PlaneGeometry(s.w, s.h), uv = pg.attributes.uv;
+      const r = s.same || s; for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * r.px[0]) / cw, (r.y + (1 - uv.getY(i)) * r.px[1]) / ch);
       pg.translate(0, 0, s.z); pg.applyMatrix4(s.m); geos.push(pg);
       if (!s.same) { s.ctx = cv.getContext('2d'); this.drawScreen(s, REST); }
     }
@@ -268,6 +273,20 @@ export class LivePanel {
     const mat = new THREE.MeshStandardMaterial({ map: this.dark ? null : tex, color: this.dark ? 0x000000 : 0xffffff, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: Math.max(...this.screens.map((s) => s.glow)), roughness: 0.6, metalness: 0 }); // (an anti-glare finish: the screen's glass gives the sheen)
     const mesh = new THREE.Mesh(geo, mat); mesh.userData.live = this; mesh.userData.near = true; mesh.userData.keepShape = true; mesh.castShadow = false; mesh.receiveShadow = true;
     this.screenTex = tex; this.screenMesh = mesh; this.canvas = cv; tex.needsUpdate = true; parent.add(mesh);
+  }
+  // redraw the screens that are due (at their rate, scaled down when frames are tight: liveStats.rate) and whose picture
+  // changed (key), and upload just those (their rows of the shared canvas: texSubImage, not the whole texture)
+  updateScreens(S, dt) {
+    const dirty = [];
+    for (const s of this.screens) {
+      if (s.same) continue; s.t += dt; if (s.t < 1 / (s.hz * liveStats.rate)) continue; s.t = 0;
+      if (s.key) { const k = s.key(S); if (k === s.last) continue; s.last = k; }
+      this.drawScreen(s, S); dirty.push(s);
+    }
+    if (!dirty.length) return;
+    const R = _renderer, tex = this.screenTex, cw = this.canvas.width;
+    if (R && R.properties.get(tex).__webglTexture && tex.version > 0) dirty.forEach((s, i) => uploadRegion(R, this.canvas, tex, 0, s.y, s.px[0], s.px[1], i === dirty.length - 1)); // (each screen redrawn, its own rows; the mip levels rebuilt once)
+    else { tex.needsUpdate = true; liveStats.bytes += cw * this.canvas.height * 4; liveStats.uploads++; }
   }
   drawScreen(s, S) { const c = s.ctx; c.save(); c.beginPath(); c.rect(0, s.y, s.px[0], s.px[1]); c.clip(); c.translate(0, s.y); s.draw(c, S, s.px[0], s.px[1]); c.restore(); }
 
@@ -304,7 +323,7 @@ export class LivePanel {
     if (pa && pa !== this.pos) { if (pa.count === this.pos.count) this.pos = pa; else this.items.length = 0; } // part cut away round another's interior is left as it is)
     if (this.items.length) this.step(S, dt);
     for (const h of this.hooks) h(S, dt);
-    if (this.screens.length) { let dirty = false; for (const s of this.screens) { if (s.same) continue; s.t += dt; if (s.t >= 1 / s.hz) { s.t = 0; this.drawScreen(s, S); dirty = true; } } if (dirty) this.screenTex.needsUpdate = true; }
+    if (this.screens.length) this.updateScreens(S, dt);
   }
 }
 // a critically damped spring (a needle settling on its value: no overshoot, ~1/w seconds)
@@ -319,7 +338,22 @@ function mergeAll(geos) { // (PlaneGeometries: same attributes)
 }
 
 // ---------- per frame ----------
-export const liveStats = { ms: 0, panels: 0, frames: 0 };
+// (bytes / uploads: what the screens have sent to the GPU, for the tests; rate: how fast the screens redraw, 1 = as declared)
+export const liveStats = { ms: 0, panels: 0, frames: 0, bytes: 0, uploads: 0, rate: 1 };
+let _renderer = null; const _pos = new THREE.Vector2();
+// main.js hands over the renderer: the screens then upload only their own rows
+export function setLiveRenderer(r) { _renderer = r; }
+export const liveRenderer = () => _renderer;
+// a rectangle of a canvas into its (already uploaded, unflipped) texture: copied through a scratch canvas of just that
+// size (WebGL ignores the unpack-skip settings for a canvas source in some browsers: a region of the source itself
+// came out wrong), so the upload is the rectangle's bytes, not the whole canvas's
+const _scr = document.createElement('canvas'), _scrG = _scr.getContext('2d'), _scrT = new THREE.Texture(_scr);
+// (mips: rebuild the texture's mip levels after it: only the last of a frame's uploads to one texture needs to)
+export function uploadRegion(R, src, tex, x, y, w, h, mips = true) {
+  if (_scr.width !== w || _scr.height !== h) { _scr.width = w; _scr.height = h; } else _scrG.clearRect(0, 0, w, h);
+  _scrG.drawImage(src, x, y, w, h, 0, 0, w, h); _pos.set(x, y); const gm = tex.generateMipmaps; tex.generateMipmaps = gm && mips; R.copyTextureToTexture(_scrT, tex, null, _pos); tex.generateMipmaps = gm;
+  liveStats.bytes += w * h * 4; liveStats.uploads++;
+}
 // ac: the player's vehicle; ctx: { dt, cockpit (the camera is in the cockpit), world, wheelV (main.js drivenWheels),
 // stallWarn }. Nothing happens unless the camera is in the cockpit.
 export function updateLive(ac, ctx) {
@@ -328,6 +362,7 @@ export function updateLive(ac, ctx) {
   if (!ac._livePanels) { const P = []; ac.root.traverse((o) => { const lp = o.userData.live; if (lp instanceof LivePanel && !P.includes(lp)) P.push(lp); }); ac._livePanels = P; }
   const P = ac._livePanels; if (!P.length) return;
   const dt = Math.min(0.1, Math.max(0, ctx.dt || 0)), S = ac._liveS ||= { ...REST };
+  liveStats.rate = ctx.rate ?? 1; // (main.js: lower when the frame budget is tight)
   signals(ac, ctx, S, dt);
   for (const lp of P) lp.update(S, dt);
   liveStats.panels = P.length; liveStats.frames++; liveStats.ms += (performance.now() - t0 - liveStats.ms) * 0.05;
