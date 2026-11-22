@@ -41,7 +41,7 @@ async def main(a):
     for r in report:
         ms = r['msBefore'] or {}
         after = f"  after {r['msAfter']['mean']:.2f}" if r.get('msAfter') else ''
-        print(f"{'PASS' if r['ok'] else 'FAIL'}  {r['check']:<10} {r['name']:<34} x{r['people']}  hand gap {r['gap'] * 100:5.2f} cm  far {r['far']:.2f} m  pose {ms.get('mean', 0):.2f} ms (p95 {ms.get('p95', 0):.2f}){after}" + (f"  knees {r['knee']['rest']}->{r['knee']['min']}->{r['knee']['end']} deg, into bike {r.get('hitsRest', 0) * 100:.1f}->{r['hits'] * 100:.1f} cm" if r['check'] == 'landing' else '') + (f"  hips back {r['back'] * 100:.1f} cm, into bike {r.get('hitsRest', 0) * 100:.1f}->{r['hits'] * 100:.1f} cm" if r['check'] == 'hard stop' else '') + ('' if r['ok'] else f"\n      {r['why']}"))
+        print(f"{'PASS' if r['ok'] else 'FAIL'}  {r['check']:<10} {r['name']:<34} x{r['people']}  hand gap {r['gap'] * 100:5.2f} cm  far {r['far']:.2f} m  pose {ms.get('mean', 0):.2f} ms (p95 {ms.get('p95', 0):.2f}){after}" + (f"  knees {r['knee']['rest']}->{r['knee']['min']}->{r['knee']['end']} deg, into bike {r.get('hitsRest', 0) * 100:.1f}->{r['hits'] * 100:.1f} cm" if r['check'] == 'landing' else '') + (f"  hips back {r['back'] * 100:.1f} cm, into bike {r.get('hitsRest', 0) * 100:.1f}->{r['hits'] * 100:.1f} cm" if r['check'] in ('hard stop', 'full gas', 'wheelie') else '') + ('' if r['ok'] else f"\n      {r['why']}"))
     for p in probs.take()[:10]:
         print('      page:', p)
         bad.append(p)

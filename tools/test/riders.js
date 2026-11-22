@@ -5,7 +5,7 @@
 //   - nothing flies off: every bone stays within 1.5 m of the hips (rig metres);
 //   - the cost: milliseconds spent posing the crew per frame (min / mean of the run).
 // A hard stop: the rider braces (hips back, arms straight) without letting go or going into the bike, and sits back
-// up once stopped.
+// up once stopped. Full gas: they lean forward over the bars, the same way.
 // Then the bikes lose their forks (the fork part breaks off and flies away, as in a crash): the riders must let go and
 // stay in one piece. Physics + rig only, no rendering.
 import * as THREE from 'three';
@@ -113,6 +113,31 @@ export function plan(presets) {
     if (Math.abs(r.hipZ.at(-1) - z0) > 0.01) bad.push(`hips did not come back (${(z0 * 100).toFixed(1)} -> ${(r.hipZ.at(-1) * 100).toFixed(1)} cm)`);
     if (r.hits - (r.hitsRest || 0) > 0.01) bad.push(`rider ${((r.hits - r.hitsRest) * 100).toFixed(1)} cm further into the bike than riding along (${(r.hitsRest * 100).toFixed(1)} cm)`);
     out.push({ ...r, back: +back.toFixed(3), check: 'hard stop', ok: !bad.length, why: bad.join('; ') });
+  }
+  // full gas from a roll (Sim: no wheelie trick): the rider leans forward over the bars (hips forward by 3 cm or more
+  // standing, 1 sitting), keeps hold, goes no further into the bike, and sits back in place once stopped
+  for (const d of presets.filter((d) => d.parts.some((p) => /^b_fork/.test(p.id)))) {
+    const r = run(d, { mode: 'sim', T: 9, spawn: { speed: 3 }, script: (t, ac) => t < 0.5 ? { throttle: 0.2 } : t < 3.5 ? { throttle: 1 } : { rev: Math.abs(ac.groundSpeed) > 0.3 ? 0.6 : 0 } }); if (!r) continue;
+    const bad = [], stand = !!crews(new Aircraft(d, REALISM.pilot))[0]?.rig.v?.hy, z0 = r.hipZ[20], fwd = z0 - Math.min(...r.hipZ);
+    if (!r.finite) bad.push('NaN in the skeleton');
+    if (r.gap > 0.01) bad.push(`hand ${(r.gap * 100).toFixed(1)} cm off its forearm`);
+    if (r.letGo) bad.push(`a hand let go of the bars (${r.letGo} hand-frames)`);
+    if (fwd < (stand ? 0.03 : 0.01)) bad.push(`hips went forward only ${(fwd * 100).toFixed(1)} cm`);
+    if (Math.abs(r.hipZ.at(-1) - z0) > 0.01) bad.push(`hips did not come back (${(z0 * 100).toFixed(1)} -> ${(r.hipZ.at(-1) * 100).toFixed(1)} cm)`);
+    if (r.hits - (r.hitsRest || 0) > 0.01) bad.push(`rider ${((r.hits - r.hitsRest) * 100).toFixed(1)} cm further into the bike than riding along (${(r.hitsRest * 100).toFixed(1)} cm)`);
+    out.push({ ...r, back: +(-fwd).toFixed(3), check: 'full gas', ok: !bad.length, why: bad.join('; ') });
+  }
+  // a wheelie (Arcade: full gas lifts the front): the rider sits back (hips back by 2 cm or more standing, 1 sitting),
+  // keeps hold and stays out of the bike
+  for (const d of presets.filter((d) => d.parts.some((p) => /^b_fork/.test(p.id)))) {
+    const r = run(d, { mode: 'arcade', T: 4, spawn: { speed: 3 }, script: (t) => ({ throttle: t < 0.5 ? 0.2 : 1 }) }); if (!r) continue;
+    const bad = [], stand = !!crews(new Aircraft(d, REALISM.pilot))[0]?.rig.v?.hy, back = Math.max(...r.hipZ) - r.hipZ[20];
+    if (!r.finite) bad.push('NaN in the skeleton');
+    if (r.gap > 0.01) bad.push(`hand ${(r.gap * 100).toFixed(1)} cm off its forearm`);
+    if (r.letGo) bad.push(`a hand let go of the bars (${r.letGo} hand-frames)`);
+    if (back < (stand ? 0.02 : 0.01)) bad.push(`hips went back only ${(back * 100).toFixed(1)} cm`);
+    if (r.hits - (r.hitsRest || 0) > 0.01) bad.push(`rider ${((r.hits - r.hitsRest) * 100).toFixed(1)} cm further into the bike than riding along (${(r.hitsRest * 100).toFixed(1)} cm)`);
+    out.push({ ...r, back: +back.toFixed(3), check: 'wheelie', ok: !bad.length, why: bad.join('; ') });
   }
   return out;
 }
