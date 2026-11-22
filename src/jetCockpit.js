@@ -21,7 +21,7 @@ import { PM } from './planeMaterials.js';
 import { V, mx, bar, pipe, ringLoft, seatGeo, Bag, shell, capHoles, boxObstacle, hoodObstacle, insideRows, fighterGlassR, FIGHTER_GLASS } from './partDetail.js';
 import { LivePanel, Shape, color as liveColor } from './liveDisplays.js';
 import { collimatedHud } from './liveHud.js';
-import { fighterRadar, fighterMap, cautionLamps, gearLamps, sr71Triple } from './liveScreens.js';
+import { fighterRadar, fighterMap, cautionLamps, gearLamps, sr71Triple, cautionPanel, cautionKey, fighterMapKey } from './liveScreens.js';
 
 const cache = new Map(), cached = (k, f) => { if (!cache.has(k)) cache.set(k, f()); return cache.get(k); };
 // cockpit paint (matt, a little sheen)
@@ -445,9 +445,9 @@ export function fighterInterior(g, b0, nb, paint) {
   // live (liveDisplays.js): the standby attitude, airspeed (hundreds of knots), altitude (ten thousands of feet) and
   // heading; the MFDs (radar on the left, a moving map and the engine on the right), the master caution and AB lights
   const lp = livePanel(); liveDials(lp, 'gauges', on(0, -0.06, 0.0068), 0.15, 0.1125, { 0: 'adi', 1: (S) => S.kt / 1000, 2: (S) => S.alt / 100000, 5: 'hsi' });
-  for (const sx of [-1, 1]) lp.screen(on(sx * 0.165, -0.035, 0.0312), 0.1078, 0.1078, { px: [256, 256], hz: 10, z: 0, dark: true, draw: sx < 0 ? fighterRadar : fighterMap });
+  for (const sx of [-1, 1]) lp.screen(on(sx * 0.165, -0.035, 0.0312), 0.1078, 0.1078, { px: [256, 256], hz: sx < 0 ? 6 : 8, z: 0, dark: true, draw: sx < 0 ? fighterRadar : fighterMap, key: sx < 0 ? null : fighterMapKey }); // (the radar's sweep 6 times a second; the map when it changes)
   lp.screen(on(-0.086, 0.083, 0.0072), 0.026, 0.04, { px: [64, 96], hz: 8, z: 0, dark: true, draw: cautionLamps });
-  for (const sx of [-1, 1]) quad(b, 'warn', on(sx * 0.165, 0.08, 0.0068), 0.13, 0.049);
+  for (const sx of [-1, 1]) { quad(b, 'warn', on(sx * 0.165, 0.08, 0.0068), 0.13, 0.049); lp.screen(on(sx * 0.165, 0.08, 0.0074), 0.13, 0.049, { px: [256, 96], hz: 6, z: 0, dark: true, draw: cautionPanel(sx < 0 ? 0 : 1), key: cautionKey }); } // (live: each legend lit while what it warns of is so)
   // side wings angled in towards the pilot under the glare shield, the landing-gear handle on the left one
   const wings = [-1, 1].map((sx) => mx([sx * 0.325, -0.03, -0.545 + PZ], [0, -sx * 0.71, 0]));
   wings.forEach((wm, i) => { const sx = i ? 1 : -1, bx = new THREE.BoxGeometry(0.17, 0.14, 0.02); bx.applyMatrix4(wm.clone().multiply(mx([0, 0, -0.01]))); b.add(bx, dark);

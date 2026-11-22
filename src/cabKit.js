@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { V, ringLoft, pipe, bar } from './partDetail.js';
 import { LivePanel, Shape, shapeGeometry } from './liveDisplays.js';
+import { compassRound, compassKey } from './liveScreens.js';
 
 const cache = new Map();
 const cached = (k, make) => { if (!cache.has(k)) cache.set(k, make()); return cache.get(k); };
@@ -198,6 +199,7 @@ function dialNeedles(bag, m, r, tile, L, val) {
       L.live.needle(m, { src: L.src, at: (f) => turn(f / 10000), len: R * 0.5, w: r * 0.1, z, tail: 0.15, damp: 9, hub: 0 });
       L.live.needle(m, { src: L.src, at: (f) => turn(f / 1000), len: R * 0.84, w: r * 0.055, z: z + 0.0004, damp: 9, hubCol: '#222326', hub: 2.4 });
     } else { fixed(blade(R * 0.5, r * 0.1, 'white', turn(ft / 10000), 0.15)); fixed(blade(R * 0.84, r * 0.055, 'white', turn(ft / 1000))); fixed(hub(r * 0.07, z + 0.0006)); }
+  } else if (tile === 'compass' && L) { L.live.screen(m.clone().multiply(new THREE.Matrix4().makeTranslation(0, 0, 0.0012)), R * 2, R * 2, { px: [96, 96], hz: 10, z: 0, dark: true, round: true, draw: compassRound, key: compassKey });
   } else if (tile === 'ai' && L) L.live.attitude(m, R * 0.96, { sky: '#2f7fd0', ground: '#7a4a22', symbol: '#f2b705' }); // (over the painted ball)
 }
 const WHITE_C = new THREE.Color(1, 1, 1);

@@ -8,7 +8,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
 import { LivePanel } from './liveDisplays.js';
-import { airlinerPFD, airlinerND, airlinerENG, airlinerGear } from './liveScreens.js';
+import { airlinerPFD, airlinerND, airlinerENG, airlinerGear, airlinerISFD, pfdKey, ndKey, engKey, gearKey, attKey } from './liveScreens.js';
 import { revolve, airfoil } from './parts.js'; // (circular, used at build time only)
 import { bubbleInterior } from './bubbleCockpit.js'; // (circular, used at build time only)
 import { fighterInterior } from './jetCockpit.js'; // (circular too: build time only)
@@ -1387,11 +1387,13 @@ function airlinerFlightDeck(g, bR, nbR, { SY, SZ, SEAT, FLOOR, zs, DY, DZ }) {
     const s = fdUV(new THREE.PlaneGeometry(w, h), r); s.applyMatrix4(P(cx, cy, 0.038)); b.add(s, A); const gl = new THREE.PlaneGeometry(w, h); gl.applyMatrix4(P(cx, cy, 0.0395)); nb.add(gl, glassM); };
   // the displays are live (liveDisplays.js, liveScreens.js): the PFDs, the ND and the engine display redrawn ~12 times a
   // second while the deck is watched, on one canvas (the first officer's PFD shows the captain's); the gear's lights
-  const lp = new LivePanel(null), live = (cx, cy, w, h, draw, same = null) => lp.screen(SH.clone().multiply(P(cx, cy, 0.0382)), w, h, { px: [320, 256], hz: 12, z: 0, dark: true, glow: 0.95, draw, same });
+  const lp = new LivePanel(null), live = (cx, cy, w, h, draw, same = null, hz = 12, key = null) => lp.screen(SH.clone().multiply(P(cx, cy, 0.0382)), w, h, { px: [320, 256], hz, z: 0, dark: true, glow: 0.95, draw, same, key });
   for (const cx of [-0.51, -0.215, 0.215, 0.51]) { const W = 0.26 / 0.87, H = 0.2 / 0.83, bz = fdBezel(W, H, 0.26, 0.2, 0.006, 0.044); bz.applyMatrix4(P(cx, 0.025, 0)); b.add(bz, A);
     const gl = new THREE.PlaneGeometry(0.26, 0.2); gl.applyMatrix4(P(cx, 0.025, 0.0395)); nb.add(gl, glassM); }
-  const pfdL = live(-0.51, 0.025, 0.26, 0.2, airlinerPFD); live(-0.215, 0.025, 0.26, 0.2, airlinerND); live(0.215, 0.025, 0.26, 0.2, airlinerENG); live(0.51, 0.025, 0.26, 0.2, null, pfdL);
-  lp.screen(SH.clone().multiply(P(0, 0.04, 0.0309)), 0.06, 0.024, { px: [120, 48], hz: 6, z: 0, dark: true, glow: 0.95, draw: airlinerGear });
+  // (each at its own pace, redrawn and uploaded only when what it shows changed: the attitude smooth, the map and the engines slower)
+  const pfdL = live(-0.51, 0.025, 0.26, 0.2, airlinerPFD, null, 12, pfdKey); live(-0.215, 0.025, 0.26, 0.2, airlinerND, null, 6, ndKey); live(0.215, 0.025, 0.26, 0.2, airlinerENG, null, 4, engKey); live(0.51, 0.025, 0.26, 0.2, null, pfdL);
+  lp.screen(SH.clone().multiply(P(0, 0.04, 0.0309)), 0.06, 0.024, { px: [120, 48], hz: 4, z: 0, dark: true, glow: 0.95, draw: airlinerGear, key: gearKey });
+  lp.screen(SH.clone().multiply(P(0, 0.09, 0.0382)), 0.07, 0.07, { px: [96, 96], hz: 10, z: 0, dark: true, glow: 0.95, draw: airlinerISFD, key: attKey }); // (the standby attitude, over its painted face)
   screenAt(0, 0.09, 0.07, 0.07, FDA.isfd);
   { const s = fdUV(new THREE.PlaneGeometry(0.1, 0.14), FDA.gear); s.applyMatrix4(P(0, -0.0, 0.0305)); b.add(s, A);
     nb.add(bar(V(0, 0, 0).applyMatrix4(P(0.022, -0.035, 0.03)), V(0, 0, 0).applyMatrix4(P(0.022, -0.02, 0.1)), 0.012, 0.012, true, 6), kit.alu); // the gear lever and its wheel-shaped knob

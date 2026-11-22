@@ -23,6 +23,7 @@ import { M } from './materials.js';
 import { PM } from './planeMaterials.js';
 import { V, mx, bar, pipe, shell, Bag, seatGeo, boxObstacle } from './partDetail.js';
 import { LivePanel, Shape, sweep, color } from './liveDisplays.js';
+import { planeMap, planeMapKey } from './liveScreens.js';
 
 // the glass (partDetail's dome: half-axes across, up, along)
 const A = 0.45, C = 0.425, BB = 1.0;
@@ -428,6 +429,7 @@ export function bubbleInterior(g, b, nb, lv = 2) {
     for (const k of Object.keys(SMALL.src)) { const q = Q[k]; lp.needle(F(q.x, q.y), { src: SMALL.src[k], at: (v) => SMALL.a0 + (SMALL.a1 - SMALL.a0) * Math.max(-0.03, Math.min(1.03, v)), len: q.r * 0.78, w: q.r * 0.09, pivot: [0, -q.r * 0.25], hub: 2.8, hubCol: '#202124', damp: 6 }); }
     ANN.forEach(([, x, , src], i) => { const [lx, ly] = ANN_LIT(i); lp.lamp(F(x, 0.128), { src, w: 80 / pS, h: 24 / pS, uv: [lx / TW, 1 - (ly + 24) / TH, (lx + 80) / TW, 1 - ly / TH] }); });
     for (const [dx, dy] of GEAR.at) lp.lamp(F(GEAR.x + dx, GEAR.y + dy), { src: 'gearDown', r: GEAR.r, color: '#3cdc5a' });
+    lp.screen(F((SCREEN.x0 + SCREEN.x1) / 2, (SCREEN.y0 + SCREEN.y1) / 2), SCREEN.x1 - SCREEN.x0, SCREEN.y1 - SCREEN.y0, { px: [256, 208], hz: 6, z: 0.0006, dark: true, draw: planeMap, key: planeMapKey }); // (the moving map: live)
     lp.to(g);
   }
   // ---- side consoles along the walls at hip height (their outer faces are pressed onto the tub's walls once the

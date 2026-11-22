@@ -32,7 +32,7 @@ import { Streaks } from './streaks.js';
 import { WindTunnel } from './windTunnel.js';
 import { BoatFX } from './boatFX.js';
 import { cabinSun, CABIN } from './cabinLight.js';
-import { updateLive } from './liveDisplays.js';
+import { updateLive, setLiveRenderer } from './liveDisplays.js';
 import { initThumbs, renderThumb, designKey, presetSlug, savedThumbs, storeThumb, stockThumbs, STOCK_SIZE } from './thumbs.js';
 installFog();
 
@@ -60,6 +60,7 @@ const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
+setLiveRenderer(renderer); // (live cockpit screens upload only the rows they redrew)
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.localClippingEnabled = true; // retracting gear is clipped at the skin so it tucks into its bay
@@ -1228,7 +1229,7 @@ function stepFlight(dtReal) {
   spaceMilestones(f, ac);
   flightCam.userData.ladder = rig.mode === 'chase' || rig.mode === 'cockpit';
   hud.update(ac, world, f.mission, flightCam, net.markers());
-  updateLive(ac, { dt: dtReal, cockpit, world, wheelV: drive?.v ?? null, stallWarn: f.stallWarn, metric: settings.units === 'metric', traffic, net }); // the cockpit's needles and lamps (liveDisplays.js: only ours, only seen from the cockpit)
+  updateLive(ac, { dt: dtReal, cockpit, world, wheelV: drive?.v ?? null, stallWarn: f.stallWarn, metric: settings.units === 'metric', traffic, net, rate: qualityTier() === 'low' || perf.level >= 2 ? 0.5 : perf.level >= 1 ? 0.75 : 1 }); // (rate: the screens redraw slower when frames are tight) // the cockpit's needles and lamps (liveDisplays.js: only ours, only seen from the cockpit)
   if (f.debug) $('#debug').textContent = `α ${(ac.alpha * 57.3).toFixed(1)}° g ${ac.g.toFixed(2)} V ${ac.airspeed?.toFixed(1)} m=${Math.round(ac.mass)} com=${ac.com.toArray().map((v) => v.toFixed(2))} w=${ac.w.toArray().map((v) => v.toFixed(2))}`;
   $('#debug').style.display = f.debug ? '' : 'none';
 }
