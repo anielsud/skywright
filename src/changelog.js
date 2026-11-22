@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.127.0', items: [
+    "Fly the Jumbo or Centipede at night: the flight deck lights up warm, with the dome light on and the overhead switches glowing.",
+    "The Centipede's googly eye is back in the right place below the windows.",
+  ] },
   { v: '1.126.0', items: [
     "The Jumbo and Centipede have a real airliner nose now, long and low with a narrow band of cockpit windows, and the flight deck inside is shaded like a real one.",
   ] },

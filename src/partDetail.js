@@ -1533,6 +1533,13 @@ export function airlinerNoseBuild(color, skinMat) {
   // what each pilot must keep clear of: inside the lining (the nose's sections at 0.97), and the deck's furniture
   for (const st of g.userData.seats) st.obstacles = [{ name: 'lining', below: 'mirror', inside: insideRows(-4.0, -1.5 + DZ, 50, (z) => [nW(z) * 0.97, (nT(z) - nB(z)) / 2 * 0.97, (nT(z) + nB(z)) / 2]) }, ...deck];
   g.userData.cabinDeep = true; // (cabinLight: a deep, enclosed deck, lit only through its band of windows)
+  // the deck's own lamps, lit at night (cabinLight bakes them; deck coordinates, set down with it): the dome light aft of the
+  // overhead (a big diffuser: r), the overhead's flood from the glare shield, the panel floods under the glare shield's lip,
+  // the pedestal flood under the overhead's front, and each pilot's map light on the side wall, aimed at the lap and the
+  // yoke's chart clip. [position, aim, cone (cos), strength, size]
+  const lamp = (p, d, cone, k, r) => ({ p: [p[0], p[1] + DY, p[2] + DZ], d: d && V(...d).normalize().toArray(), cone, k, r });
+  g.userData.cabinLamps = [lamp([0, 1.78, -1.62], [0, -1, 0], [-0.2, 0.3], 0.6, 0.6), lamp([0, 0.8, -3.15], [0, 0.8, 0.6], [0.4, 0.8], 0.25, 0.15), lamp([0, 1.2, -2.7], [0, -1, -0.2], [0.6, 0.9], 0.12),
+    ...[-1, 1].flatMap((sx) => [lamp([sx * 0.45, 0.62, -3.1], [0, -0.87, -0.49], [0.3, 0.75], 0.2), lamp([sx * 0.98, 1.1, -2.62], [-sx * 0.43, -0.55, -0.13], [0.75, 0.92], 0.08)])];
   g.userData.tube = { z0: -4.6, z1: 0, sec: (z) => { const T = nT(z), B = nB(z); return [(T + B) / 2, nW(z), (T - B) / 2]; } }; // its section, for skinBlend's seam with the tube behind
   return g;
 }
