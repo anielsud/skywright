@@ -817,9 +817,16 @@ class Rig {
     const sx = k === 'R' ? 1 : -1, hip = k === 'R' ? this.hipR : this.hipL, R = this.opts.ride, D = this.D, E = V();
     const pole = (a) => V(sx * Math.sin(a), 0.55 * Math.cos(a), -Math.cos(a));
     let a = this.v.kOut; if (this.solving) return pole(a);
-    for (let n = 0; n < 8; n++) {
+    // (the knee, then the whole thigh and shin as rideHits measures them: a leg bent further, landing a jump, can push the
+    // thigh into a tank or shroud with the knee itself still clear)
+    const P = V(), deep = (pt, r) => { let d = 0; for (const L of R.around) d = Math.max(d, loftDepth(L, pt, r)); return d; };
+    const legDeep = () => { let d = 0; for (const [t, r] of [[0.45, 0.07], [0.7, 0.062], [0.9, 0.055]]) d = Math.max(d, deep(P.copy(hip).lerp(E, t), r));
+      for (const [t, r] of [[0.15, 0.05], [0.4, 0.045], [0.7, 0.04]]) d = Math.max(d, deep(P.copy(E).lerp(foot, t), r)); return d; };
+    let d0 = null;
+    for (let n = 0; n < 12; n++) {
       ikTwo(hip, foot, D.thigh, D.shin, pole(a), E);
-      const g = Math.min(...R.around.map((L) => loftGap(L, E, 0.055)?.gap ?? 1)); if (g > -0.01) break; a += 0.06;
+      const g = Math.min(...R.around.map((L) => loftGap(L, E, 0.055)?.gap ?? 1)), d = legDeep(); d0 ??= Math.max((this.legRest ||= {})[k] ??= d, 0.004); // (no deeper than the solved posture's own, at rest: the first pose)
+      if (g > -0.01 && d <= d0) break; a += 0.06;
     }
     return pole(a);
   }
@@ -975,6 +982,14 @@ class Rig {
       this.joints(sp);
       this.hipR = V(D.hipW, 0, 0).add(this.hipAt); this.hipL = V(-D.hipW, 0, 0).add(this.hipAt);
     }
+    // riders soak up landings with their legs: the hips sink towards the pegs as the g builds (the spring in update)
+    // and come back up, the knees and hips bending. Standing in the attack stance there's a lot of travel; sat on the
+    // saddle, only the cushion's (and no folding forward: a road rider's chest is already down on the tank). Unweighted
+    // (a bump, in the air) they rise a little.
+    if (bars && s.sw && !this.solving) {
+      const stand = !!this.v?.hy, dy = clamp(-s.sw.y * (stand ? 0.04 : 0.008), stand ? -Math.min(0.13, Math.max(0, this.v.hy - 0.02)) : -0.02, stand ? 0.025 : 0.01); // (a standing rider sinks no lower than just above the saddle)
+      if (dy) { this.hipAt.y += dy; this.spinePos.y += dy; this.hipR.y += dy; this.hipL.y += dy; }
+    }
     if (bars) p[B.hips].copy(this.hipAt); else p[B.hips].copy(this.base);
     q[B.hips].identity();
     // g-forces: the torso swings about the hips the way the vehicle's acceleration throws it (s.sw: the body's lag, in
@@ -983,7 +998,7 @@ class Rig {
     const sw = s.sw, spQ = _swQ.copy(this.spineQ), spP = _swP.copy(this.spinePos);
     if (sw && !this.solving && (sw.x || sw.y || sw.z)) {
       const lim = bars ? 0.3 : 0.1, gain = bars ? 0.16 : 0.07;
-      const pitch = clamp(sw.z * gain - Math.max(0, sw.y) * gain * 0.25, -lim, lim), roll = clamp(-sw.x * gain, -lim, lim);
+      const pitch = clamp(sw.z * gain - Math.max(0, sw.y) * gain * (!bars ? 0.25 : this.v?.hy ? 0.6 : 0), -lim, lim), roll = clamp(-sw.x * gain, -lim, lim);
       _swR.setFromEuler(_swE.set(pitch, 0, roll)); spQ.premultiply(_swR); spP.sub(p[B.hips]).applyQuaternion(_swR).add(p[B.hips]);
     }
     if (sw || !bars) this.joints((x, y, z) => V(x, y, z).applyQuaternion(spQ).add(spP)); // (seated: from the configured spine each frame, so a swing never sticks)
