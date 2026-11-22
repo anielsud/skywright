@@ -230,7 +230,7 @@ export class Aircraft {
       }
       this.parts.push(part);
     });
-    { const objs = []; for (const p of this.parts) objs[p.i] = p.obj; assemble(design, objs, this.root); mergeStatic(objs, this.root); try { this.cabin = bakeCabinLight(objs, this.root); } catch (e) { console.warn('cabinLight', e); } } // (then light into the cockpits and cabins only through their glass: cabinLight.js) // fillets, pylons, doors, skin furniture (visual only), then one mesh per material per part
+    { const objs = []; for (const p of this.parts) objs[p.i] = p.obj; assemble(design, objs, this.root); try { this.cabin = bakeCabinLight(objs, this.root); } catch (e) { console.warn('cabinLight', e); } mergeStatic(objs, this.root); } // fillets, pylons, doors, skin furniture (visual only); light into the cockpits and cabins only through their glass (cabinLight.js: baked on the same meshes as the hangar's copy, so its saved bake applies, no second bake); then one mesh per material per part (the cabin light's values merge with them)
     this.hasEngine = this.parts.some((p) => p.engine);
     this.hasRetract = this.parts.some((p) => p.gear?.retract);
     this.hasSmoke = this.parts.some((p) => p.smoke);
