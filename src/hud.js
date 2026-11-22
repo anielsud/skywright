@@ -209,14 +209,17 @@ export class HUD {
   }
   drawMap(ac, world, mission, others) {
     const g = this.map, S = 180, R = this.mapRange;
-    const img = world.minimap, IS = img.width;
-    const px = ((ac.x.x + world.half) / world.size) * IS, pz = ((ac.x.z + world.half) / world.size) * IS;
-    const span = (R * 2 / world.size) * IS;
+    world.tickMinimap?.(ac.x.x, ac.x.z);
     g.save(); g.clearRect(0, 0, S, S);
     g.beginPath(); g.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2); g.clip();
     g.fillStyle = '#1d3b4a'; g.fillRect(0, 0, S, S);
     g.imageSmoothingEnabled = true;
-    g.drawImage(img, px - span / 2, pz - span / 2, span, span, 0, 0, S, S);
+    // each image drawn whole at its place on the map (not a source crop: browsers differ on crops that run off
+    // the image's edge, which near the edge of the core cut the map off): the surround, then the core on top
+    const k = S / (R * 2), place = (img, cx, cz, span) => g.drawImage(img, S / 2 + (cx - span / 2 - ac.x.x) * k, S / 2 + (cz - span / 2 - ac.x.z) * k, span * k, span * k);
+    const A = world.minimapAround;
+    if (A) place(A.img, A.cx, A.cz, A.span);
+    place(world.minimap, 0, 0, world.size);
     const toMap = (x, z) => [S / 2 + ((x - ac.x.x) / (R * 2)) * S, S / 2 + ((z - ac.x.z) / (R * 2)) * S];
     if (mission?.rings) {
       mission.rings.forEach((r, i) => { const [x, y] = toMap(r.p.x, r.p.z); g.fillStyle = r.passed ? 'rgba(80,255,120,0.6)' : i === mission.idx ? '#ffb020' : 'rgba(255,176,32,0.5)'; g.beginPath(); g.arc(x, y, i === mission.idx ? 5 : 3, 0, 7); g.fill(); });

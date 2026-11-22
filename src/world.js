@@ -29,6 +29,10 @@ import { WaterParks } from './waterPark.js';
 import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
 
 export const RWY = { len: 1800, width: 45 };
+// minimap surround (World.tickMinimap): its span (m), its size (px: about the core image's scale), how close (m) the
+// plane may get to its edge before it's rebuilt (the widest map range, 12 km, plus room to fly while it builds), and
+// the time (ms) it may take per frame
+const MM_SPAN = 48000, MM_RES = 512, MM_KEEP = 14000, MM_MS = 2;
 // Two parallel runways (the airport is centred on the east one, which has the PAPI and the landing mission).
 // Facing north the west one is on the left, so it is 36L / 18R; the east one is 36R / 18L.
 export const RUNWAYS = [{ x: 0, name: '36R', back: '18L' }, { x: -200, name: '36L', back: '18R' }];
@@ -494,19 +498,24 @@ export class World {
     return false;
   }
 
+  // the minimap colour of the ground at (wx, wz), into img.data at i; hf: the height function to sample
+  minimapPixel(img, i, wx, wz, hf, col) {
+    let shade = 1;
+    if (this.real) this.real.color(wx, wz, col);
+    else {
+      const h = hf(wx, wz), hx = hf(wx + 60, wz);
+      shade = clamp(0.75 + (h - hx) * 0.01, 0.4, 1.2);
+      if (h < this.waterLevel) col.set(0x2a6f8f); else col.set(this.loc.colors.grass[1]).lerp(this._mmRock ??= new THREE.Color(this.loc.colors.rock), smoothstep(200, 1400, h - this.loc.rwyH)).lerp(this._mmSnow ??= new THREE.Color(0xffffff), h > this.loc.snowline ? 0.7 : 0);
+    }
+    img.data[i] = col.r * 255 * shade; img.data[i + 1] = col.g * 255 * shade; img.data[i + 2] = col.b * 255 * shade; img.data[i + 3] = 255;
+  }
   buildMinimap() {
+    this.minimapAround = null; this.mmJob = null; // the surround (endless land beyond the core), built as the plane flies: tickMinimap
     if (this.real) { this.minimap = this.real.minimap(this, RUNWAYS, RWY.len); return; }
     const s = 256, c = document.createElement('canvas'); c.width = c.height = s;
     const g = c.getContext('2d'), img = g.createImageData(s, s);
-    const col = new THREE.Color();
-    for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
-      const wx = -this.half + (x / s) * this.size, wz = -this.half + (y / s) * this.size;
-      const h = this.sampleGrid(wx, wz);
-      const hx = this.sampleGrid(wx + 60, wz);
-      const shade = clamp(0.75 + (h - hx) * 0.01, 0.4, 1.2);
-      if (h < this.waterLevel) col.set(0x2a6f8f); else col.set(this.loc.colors.grass[1]).lerp(new THREE.Color(this.loc.colors.rock), smoothstep(200, 1400, h - this.loc.rwyH)).lerp(new THREE.Color(0xffffff), h > this.loc.snowline ? 0.7 : 0);
-      const i = (y * s + x) * 4; img.data[i] = col.r * 255 * shade; img.data[i + 1] = col.g * 255 * shade; img.data[i + 2] = col.b * 255 * shade; img.data[i + 3] = 255;
-    }
+    const col = new THREE.Color(), hf = (x, z) => this.sampleGrid(x, z);
+    for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) this.minimapPixel(img, (y * s + x) * 4, -this.half + (x / s) * this.size, -this.half + (y / s) * this.size, hf, col);
     g.putImageData(img, 0, 0);
     g.fillStyle = '#222'; for (const r of RUNWAYS) g.fillRect(s / 2 + (r.x / this.size) * s - 1.5, s / 2 - (RWY.len / this.size) * s / 2, 3, (RWY.len / this.size) * s);
     const toM = (p) => [((p.x + this.half) / this.size) * s, ((p.z + this.half) / this.size) * s];
@@ -514,6 +523,34 @@ export class World {
     if (this.net.rail) { g.strokeStyle = 'rgba(60,40,30,0.9)'; g.setLineDash([2, 2]); g.beginPath(); this.net.rail.pts.forEach((p, i) => { const [x, y] = toM(p); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); g.setLineDash([]); }
     for (const t of this.net.towns) { const [x, y] = toM(t.c); g.fillStyle = 'rgba(255,230,200,0.85)'; g.beginPath(); g.arc(x, y, 3.5 * t.size + 1.5, 0, 7); g.fill(); }
     this.minimap = c;
+  }
+  // The minimap's surround: the land beyond the core, a MM_SPAN square (same scale as the core image) centred near the
+  // plane, drawn under the core image. The core image alone left the map half empty a few km from the airport, since
+  // the map shows up to 24 km across and the land goes on forever. Rebuilt a few rows per frame when the plane nears
+  // its edge (the old one stays up until the new one is done), so it never stalls a frame.
+  tickMinimap(px, pz) {
+    const SP = MM_SPAN, s = MM_RES, A = this.minimapAround;
+    if (!this.mmJob) {
+      if (A && Math.max(Math.abs(px - A.cx), Math.abs(pz - A.cz)) < SP / 2 - MM_KEEP) return;
+      const st = SP / 8, cx = Math.round(px / st) * st, cz = Math.round(pz / st) * st; // (snapped, so it doesn't creep)
+      const c = document.createElement('canvas'); c.width = c.height = s;
+      const g = c.getContext('2d');
+      this.mmJob = { cx, cz, c, g, img: g.createImageData(s, s), y: 0, col: new THREE.Color() };
+    }
+    const J = this.mmJob, k = SP / s, x0 = J.cx - SP / 2, z0 = J.cz - SP / 2, half = this.half, hf = (x, z) => this.rawHeight(x, z);
+    const t0 = performance.now();
+    for (; J.y < s && performance.now() - t0 < MM_MS; J.y++) {
+      const wz = z0 + (J.y + 0.5) * k, inZ = Math.abs(wz) < half;
+      for (let x = 0; x < s; x++) {
+        const wx = x0 + (x + 0.5) * k;
+        if (inZ && Math.abs(wx) < half) continue; // under the core image
+        this.minimapPixel(J.img, (J.y * s + x) * 4, wx, wz, hf, J.col);
+      }
+    }
+    if (J.y < s) return;
+    J.g.putImageData(J.img, 0, 0);
+    this.minimapAround = { cx: J.cx, cz: J.cz, span: SP, img: J.c };
+    this.mmJob = null;
   }
 
   // ---------------- water ----------------
