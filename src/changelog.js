@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.114.0', items: [
+    "At the Grand Canyon jump, a long run-up now counts: drive flat out from the stunt park, through the loop, onto the rocket strip and you fly way further over the canyon!",
+    "The rocket strip is now a narrow stripe down the middle. Ride beside it if you dare: without the boost you won't make it across, and the rescue parachute lowers you into the canyon.",
+  ] },
   { v: '1.113.0', items: [
     "Boat water parks! Take a boat to the new water park in Bora Bora, New York or the Swiss lake: hit the boost and fly the MEGA JUMP over an island, a container barge or a log raft, jump through the hoop, weave the buoy slalom and zoom through the waterfall.",
   ] },
