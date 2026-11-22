@@ -4,6 +4,7 @@ name: Smoke test
 # Reduced check: the runner has no GPU, so software WebGL draws only about one flight frame every few seconds.
 # Each flight is still built and stepped (catches load/startup errors and NaN physics), but frame rate isn't checked.
 # Informational: not a required check. The full check is `python3 tools/test/smoke.py` on your machine.
+# The flights are split over 4 parallel jobs (smoke.py --shard): each boots the game and flies a quarter of the presets.
 on:
   pull_request:
   workflow_dispatch:
@@ -18,7 +19,12 @@ concurrency:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 20 # (the full suite passed 10 min as presets were added: runs were stopped mid-way and showed as cancelled, #180)
+    timeout-minutes: 10 # (a part takes about 4 min; the whole suite in one job took 10-11, #180)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: smoke (part ${{ matrix.shard }}/4)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,11 +33,11 @@ jobs:
       - name: Install websockets
         run: python -m pip install websockets
       - name: Smoke test
-        run: python tools/test/smoke.py --out smoke-shots --quality low --size 800x500 --min-realtime 0
+        run: python tools/test/smoke.py --out smoke-shots --quality low --size 800x500 --min-realtime 0 --shard ${{ matrix.shard }}/4
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-screenshots
+          name: smoke-screenshots-${{ matrix.shard }}
           path: smoke-shots
           if-no-files-found: ignore

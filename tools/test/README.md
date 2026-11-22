@@ -26,6 +26,11 @@ python3 tools/test/smoke.py     # serves the repo root itself on a free port; no
 | `--quality low` | graphics setting for the flights |
 | `--min-realtime R` | fail a flight whose clock runs slower than R × realtime (default 0.25; 0 = any frame) |
 | `--port N` / `--cdp-port N` | fixed ports for the static server / Chrome debugger (default: free ones) |
+| `--shard I/N` | run part I of N: every Nth flight (each part boots and checks audio; part 1 also does the modals and hangar shot, the last part the SR-71 flights). CI runs 4 parts as parallel jobs |
+| `--jobs N` | run all N parts at once, each in its own browser. Only faster on a quiet machine: with other sessions' tests running it is slower and flakier |
+
+Each flight's line shows how long the flight took to start and end (`start 8.7 s, end 0.6 s`): starting it (building the
+world, the stunt parks, the crew) is most of a step, the flying itself 4 s.
 
 Chrome is found at the usual macOS path, or `google-chrome` / `chromium` on Linux. Set `CHROME=/path/to/chrome` to override.
 On Linux it uses SwiftShader for WebGL (no GPU needed), which is how it runs in CI.

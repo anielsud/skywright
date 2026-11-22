@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Skywright smoke test: boot the game in headless Chrome and fly every preset.
 
-Run from anywhere:  python3 tools/test/smoke.py [--only Kestrel] [--keep] [--port 8774]
+Run from anywhere:  python3 tools/test/smoke.py [--only Kestrel] [--keep] [--port 8774] [--jobs 3]
+Split the flights over several browsers with --jobs N (here) or --shard I/N (one part: CI runs the parts as parallel
+jobs). Every part boots the game and checks audio; the Settings/Help modals and the hangar shot are in part 1, the
+SR-71's scripted flights in the last part.
 Needs Python 3.9+, the `websockets` package (pip install websockets) and Chrome/Chromium.
 Exits non-zero if any step fails. See tools/test/README.md.
 """
@@ -262,22 +265,27 @@ async def run(args, url, ws_url, shots):
             await cdp.js("document.querySelector('#modal-root [data-close]').click()", gesture=True)
             await cdp.wait_for("document.getElementById('modal-root').style.display === 'none'", 5, 'the modal to close')
 
-        await r.step('modal: Settings', lambda: modal('#btn-settings', 'Settings'))
-        await r.step('modal: Help', lambda: modal('#btn-help', 'How to play'))
+        first, last = args.shard[0] == 1, args.shard[0] == args.shard[1]
+        if first:
+            await r.step('modal: Settings', lambda: modal('#btn-settings', 'Settings'))
+            await r.step('modal: Help', lambda: modal('#btn-help', 'How to play'))
 
         async def hangar_shot():
             await asyncio.sleep(0.5)
             await cdp.screenshot(os.path.join(shots, 'hangar.png'))
 
-        await r.step('screenshot: hangar', hangar_shot)
+        if first:
+            await r.step('screenshot: hangar', hangar_shot)
 
-        names = await cdp.js(f'{S}.presets.map((d) => d.name)')
+        names = all_names = await cdp.js(f'{S}.presets.map((d) => d.name)')
         if args.only:
             if args.only not in names:
                 print(f'FAIL  no preset named {args.only!r}; have: {", ".join(names)}')
                 r.results.append((f'preset {args.only}', False, 0))
                 return r.results
             names = [args.only]
+        k, n = args.shard
+        names = names[k - 1::n]  # (this part's share of the flights)
 
         for i, name in enumerate(names):
             async def fly(name=name, shoot=(i == 0)):
@@ -285,8 +293,10 @@ async def run(args, url, ws_url, shots):
                 if await cdp.js(f'!!{S}.F'):
                     await cdp.js(f'{S}.endFlight()')
                 await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 30, 'the hangar')
+                ts = time.time()
                 await cdp.js(f'{S}.hangar.load({S}.presets.find((d) => d.name === {json.dumps(name)})); {S}.startFlight()')
                 await cdp.wait_for(f'{S}.F && {S}.F.ac && {S}.F.t > 0', 90, 'the flight to start')
+                t_start = time.time() - ts
                 await cdp.js(f'{S}.controls.setThrottle(1)')
                 bike = await cdp.js(f'!!{S}.F.ac.isBike')
                 if bike:  # a motorbike rides off on the gas (W) and must still be on its wheels at the end
@@ -337,13 +347,15 @@ async def run(args, url, ws_url, shots):
                     raise AssertionError(f"the bike didn't ride off ({s['speed']:.1f} m/s)")
                 if ran <= 0 or ran < wall * args.min_realtime:
                     raise AssertionError(f'frame loop stalled: flight clock moved {ran:.2f} s in {wall:.1f} s')
+                te = time.time()
                 await cdp.js(f'{S}.endFlight()')
                 await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 10, 'the hangar')
-                return (f"{s['speed']:.0f} m/s, alt {s['alt']:.0f} m, {s['alive']}/{s['parts']} parts, "
+                t_end = time.time() - te
+                return (f"start {t_start:.1f} s, end {t_end:.1f} s; {s['speed']:.0f} m/s, alt {s['alt']:.0f} m, {s['alive']}/{s['parts']} parts, "
                         f"{ran / wall * 100:.0f}% realtime, {views} cockpit view(s){note}")
             await r.step(f'fly: {name}', fly, timeout=150)
 
-        if SR71 in names:  # (also with --only 'SR-71 Blackbird')
+        if last and (SR71 in names or (SR71 in all_names and not args.only)):  # (also with --only 'SR-71 Blackbird')
             await r.step('SR-71: Mach 2.5+ above 60k ft', lambda: sr71_climb(cdp, shots), timeout=420)
             await r.step('SR-71: land from the approach', lambda: sr71_land(cdp, shots), timeout=300)
         return r.results
@@ -446,8 +458,17 @@ def main():
                     help='fail a flight if its clock runs slower than R x realtime (default 0.25; 0 = any frame '
                          'at all, for CI where software WebGL draws about one flight frame every few seconds)')
     ap.add_argument('--size', default='1280x800', help='window size WxH')
+    ap.add_argument('--shard', default='1/1', metavar='I/N', help='run part I of N (the flights split N ways; CI runs the parts in parallel)')
+    ap.add_argument('--jobs', type=int, default=1, metavar='N', help='run all N parts at once, each in its own browser, and report them together')
     args = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)  # keep step lines in order when piped (CI logs)
+    try:
+        args.shard = tuple(int(x) for x in args.shard.split('/'))
+        assert len(args.shard) == 2 and 1 <= args.shard[0] <= args.shard[1]
+    except (ValueError, AssertionError):
+        ap.error('--shard wants I/N, e.g. 2/4')
+    if args.jobs > 1:
+        sys.exit(run_jobs(args))
 
     port, cdp_port = args.port or free_port(), args.cdp_port or free_port()
     shots = os.path.abspath(args.out) if args.out else tempfile.mkdtemp(prefix='skywright-smoke-')
@@ -480,6 +501,31 @@ def main():
     else:
         shutil.rmtree(shots, ignore_errors=True)
     sys.exit(1 if failed else 0)
+
+
+def run_jobs(args):
+    """--jobs N: every part in its own smoke.py (own server, browser and screenshot folder), the outputs printed in
+    order once all are done."""
+    t0, n, procs = time.time(), args.jobs, []
+    rest, skip = [], False
+    for a in sys.argv[1:]:  # (the same options, minus --jobs and --shard)
+        if skip: skip = False; continue
+        if a in ('--jobs', '--shard'): skip = True; continue
+        if not a.startswith(('--jobs=', '--shard=')): rest.append(a)
+    for k in range(1, n + 1):
+        cmd = [sys.executable, os.path.abspath(__file__), *rest, '--shard', f'{k}/{n}']
+        if args.out:
+            cmd += ['--out', os.path.join(os.path.abspath(args.out), f'part{k}')]
+        procs.append(subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
+    bad = 0
+    for k, p in enumerate(procs, 1):
+        out, _ = p.communicate()
+        print(f'===== part {k}/{n}' + ('' if p.returncode == 0 else '  (FAILED)'))
+        print(out.rstrip())
+        bad += p.returncode != 0
+    print('=' * 60)
+    print(f"{'FAIL' if bad else 'PASS'}  {n - bad}/{n} parts passed in {time.time() - t0:.0f} s")
+    return 1 if bad else 0
 
 
 if __name__ == '__main__':
