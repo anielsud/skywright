@@ -91,6 +91,22 @@ function clearMaterial() {
   m.customProgramCacheKey = () => 'crew-clear'; m.name = 'crew_clear';
   return (mats.clear = m);
 }
+// The gold film's colour: a layer that multiplies whatever is behind it (the face, the sky) by its colour, drawn before
+// the bubble's reflections. Not fogged (a multiply toward fog colour would darken it at range). The 'gold' slot.
+function goldFilmMaterial() {
+  const mats = crewMaterials(); if (mats.gold) return mats.gold;
+  return (mats.gold = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, fog: false, toneMapped: false,
+    blending: THREE.CustomBlending, blendSrc: THREE.ZeroFactor, blendDst: THREE.SrcColorFactor, name: 'crew_gold' }));
+}
+// The astronaut's gold-filmed bubble: the same premultiplied glass, but metallic gold (reflections come back gold) and
+// half-opaque, so the face shows through it dimmed and warm. Front faces only, so from inside (the astronaut's own
+// view) it isn't drawn. The 'tint' slot.
+function tintMaterial() {
+  const mats = crewMaterials(); if (mats.tint) return mats.tint;
+  const m = clearMaterial().clone(); Object.assign(m, { roughness: 0.05, metalness: 0.9, opacity: 0.1, envMapIntensity: 1.6 });
+  m.onBeforeCompile = clearMaterial().onBeforeCompile; m.customProgramCacheKey = () => 'crew-tint'; m.name = 'crew_tint';
+  return (mats.tint = m);
+}
 
 // ---------- outfits ----------
 // colours: suit, suit2 (vest / trousers), trim (stripes, harness), glove, boot, skin, hair, helmet, helmet2, visor
@@ -270,6 +286,25 @@ function tubeLoop(pts, r, seg = 8) {
   for (let j = 0; j < n; j++) for (let k = 0; k < seg; k++) { const a = j * seg + k, b = j * seg + (k + 1) % seg, c = ((j + 1) % n) * seg + k, d = ((j + 1) % n) * seg + (k + 1) % seg; idx.push(a, b, c, b, d, c); }
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals(); return g;
 }
+// A surface from a point function P(u, v) over u round (-PI..PI), v up (v0..v1), as dsphere's grid; hole(u, v) leaves
+// a face open. Welded.
+function gsurf(P, { w = 128, h = 96, hole = null, v0 = -Math.PI / 2, v1 = Math.PI / 2 } = {}) {
+  const pos = [], idx = [];
+  for (let j = 0; j <= h; j++) for (let i = 0; i <= w; i++) { const p = P(-Math.PI + (i / w) * Math.PI * 2, v1 - (j / h) * (v1 - v0)); pos.push(p.x, p.y, p.z); }
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    if (hole && hole(-Math.PI + ((i + 0.5) / w) * Math.PI * 2, v1 - ((j + 0.5) / h) * (v1 - v0))) continue;
+    const a = j * (w + 1) + i, b = a + 1, cc = a + w + 1, d = cc + 1; idx.push(a, b, cc, b, d, cc);
+  }
+  let g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
+  g = mergeVertices(g, 1e-5); g.computeVertexNormals(); return g;
+}
+// how far a ray from c along unit d runs before leaving the ellipsoid (centre e, radii r); 0 if it never is inside it
+function rayOut(c, d, e, r) {
+  const ox = (c.x - e.x) / r[0], oy = (c.y - e.y) / r[1], oz = (c.z - e.z) / r[2], dx = d.x / r[0], dy = d.y / r[1], dz = d.z / r[2];
+  const a = dx * dx + dy * dy + dz * dz, b = 2 * (ox * dx + oy * dy + oz * dz), cc = ox * ox + oy * oy + oz * oz - 1, disc = b * b - 4 * a * cc;
+  return disc < 0 ? 0 : Math.max(0, (-b + Math.sqrt(disc)) / (2 * a));
+}
+const smax = (a, b, k) => (a + b + Math.sqrt((a - b) ** 2 + k * k)) / 2;
 function flipWinding(g) { const ia = g.index.array; for (let f = 0; f < ia.length; f += 3) { const t = ia[f + 1]; ia[f + 1] = ia[f + 2]; ia[f + 2] = t; } g.index.needsUpdate = true; g.computeVertexNormals(); return g; }
 const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const wrapU = (u) => Math.atan2(Math.sin(u), Math.cos(u));
@@ -1398,10 +1433,24 @@ function figureGeometry(rig) {
       at(B.spine, ribbon(P, N, 0.048, 0.006), 0x15161a, 'fabric');
       at(B.spine, ribbon(P.map((p) => p.clone().addScaledVector(nUp, 0.006)), N, 0.04, 0.0015), o.epaulettes, true); }
   }
-  if (o.hump) { // leathers' aero hump: on the measured back between the shoulder blades (sunk 2 cm into the suit there)
-    let c = V(0, D.shoulderUp - 0.06, 0.12);
-    if (BP) { const S = torsoSurface(), sp = rig.spine, y = (sp ? (sp.sh.R.y + sp.sh.L.y) / 2 : D.shoulderUp) - 0.1, b = S.onto(V(0, y, S.cz(y)), V(0, 0, 1), S.wear + 0.04); if (b) c = b; }
-    at(B.spine, ellipsoid(c, 0.09, 0.12, 0.06, { w: 24 }), o.suit, true); }
+  if (o.hump) { // leathers' aero hump: a fairing grown from the measured back, from just under the collar down the spine
+    // (30 cm), tallest (7 cm) behind the helmet and tapering to a tail, its edges blending flush into the suit. Each grid
+    // point is the back's surface (a ray backward from the torso's middle) pushed further back by the hump's height there.
+    if (BP) {
+      const S = torsoSurface(), sp = rig.spine, yTop = (sp ? sp.neck.y : D.shoulderUp + 0.05) - 0.05, LEN = 0.3, NS = 24, NX = 16, pos = [], idx = [];
+      for (let j = 0; j <= NS; j++) {
+        const s = j / NS, y = yTop - s * LEN, w = 0.092 * (1 - 0.55 * s), H = 0.075 * Math.sqrt(sstep(0, 0.18, s)) * (1 - s) ** 1.1;
+        for (let i2 = 0; i2 <= NX; i2++) {
+          const t = -1 + (2 * i2) / NX, x = t * w, b = S.onto(V(x, y, S.cz(y)), V(0, 0, 1), S.wear - 0.002) || V(x, y, S.cz(y) + 0.1);
+          b.z += H * Math.max(0, 1 - t * t) ** 0.45; pos.push(b.x, b.y, b.z);
+        }
+      }
+      for (let j = 0; j < NS; j++) for (let i2 = 0; i2 < NX; i2++) { const a = j * (NX + 1) + i2, b = a + 1, c = a + NX + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+      { const n = V().fromBufferAttribute(g.attributes.normal, (NS >> 1) * (NX + 1) + (NX >> 1)); if (n.z < 0) flipWinding(g); } // (facing back, +Z)
+      at(B.spine, g, o.suit, 'fabric'); // (the leathers' own finish)
+    }
+  }
   if (BP && o.vest) lifeJacket(o.vest);
   if (BP && o.bulk) spaceSuit(); // (a pressure suit, gloves, boots, neck ring and bubble helmet)
   // A life jacket made as one: foam panels round the torso on a grid about the spine's axis (angle round it, height up
@@ -1623,65 +1672,87 @@ function figureGeometry(rig) {
         { w: 128, h: 80, hole: (u, v) => v < edge(u) }), hair, 'hair');
     }
   };
-  // helmets: one sculpted shell fitted to the head inside it (helmetRadii), its eye port centred on the measured eyes
-  // (PV: their height on the shell, as an angle); every opening has a rolled rubber edge over a dark liner. A motocross
-  // helmet has a chin "beak", goggles seated in the port (frame, mirrored lens, strap) and a peak screwed to the
-  // forehead; road / car helmets close the port with a visor on side pivots; jet helmets are open below the visor
+  // helmets: a shell modelled on the head inside it. Its form is the union (a smooth max along rays from the head's
+  // centre) of the cranium shell (helmetRadii) and, on full-face helmets, a chin bar round the measured jaw and chin:
+  // 2.5 cm clear of the chin in front and below it, wider than the jaw by the liner (a motocross bar reaches further
+  // forward and comes to a point, its mouthpiece vented). The neck opening is cut along a line in side view from the
+  // nape (the base of the skull, 10.5 cm below the eyes) down to under the chin bar, so its edge sweeps down to the
+  // front as on a real helmet; a jet helmet is cut higher and open in front. The eye port is centred on the measured
+  // eyes; every opening is hemmed with a rolled rubber edge over a dark liner. Road / car helmets close the port with a
+  // visor on side pivots; a motocross helmet takes goggles in a bigger port and a peak continuing the forehead.
   const HS = BP ? helmetRadii(HR) : [0.128, 0.136, 0.143];
   const eyeY = () => (eyesAt.length ? eyesAt.reduce((a, e) => a + e.c.y, 0) / eyesAt.length : hc.y + Math.sin(0.15) * HS[1]);
+  const eyeZ = () => (eyesAt.length ? eyesAt.reduce((a, e) => a + e.c.z, 0) / eyesAt.length : hc.z - HS[2] * 0.7);
   const se = (x, a, p = 6) => Math.abs(x / a) ** p; // (superellipse terms: round-cornered openings)
-  const helmetDisp = (kind) => (u, v) => {
-    const au = Math.abs(u); let d = 0.004 * gs(u, v - 1.25, 0.25, 0.25) + 0.006 * gs(au - Math.PI, v + 0.1, 0.8, 0.4); // crown ridge, rear spoiler
-    if (kind === 'mx') d += 0.055 * gs(u, v + 0.3, 0.33, 0.17) * sstep(0.05, -0.15, v); // the chin beak
-    if (kind === 'road') d += 0.012 * gs(u, v + 0.3, 0.6, 0.2);
-    return d;
+  // the mesh head (head bone space): the face's depth at (x, y), the chin, the jaw's half-width
+  const headPts = BP ? (() => { const hinv = R(B.head).invert(), a = []; for (let i = 0; i < BP.seg.length; i++) if (BP.seg[i] === 'head' && !BP.eye[i]) a.push(V(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(hinv)); return a; })() : [];
+  const frontAt = (x, y, w = 0.008) => { let z = Infinity; for (const p of headPts) if (Math.abs(p.x - x) < w && Math.abs(p.y - y) < w && p.z < z) z = p.z; return Number.isFinite(z) ? z : hc.z - HR[2] * 0.95; };
+  const chinPt = (() => { const mid = headPts.filter((p) => Math.abs(p.x - hc.x) < 0.012); if (!mid.length) return V(0, hc.y - 0.13, hc.z - 0.08);
+    const zMin = Math.min(...mid.map((p) => p.z)); let c = null; for (const p of mid) if (p.z < zMin + 0.045 && p.y < hc.y - 0.04 && (!c || p.y < c.y)) c = p; return c ? c.clone() : V(0, hc.y - 0.13, hc.z - 0.08); })();
+  const jawW = (() => { const y = chinPt.y + 0.05; let m = 0; for (const p of headPts) if (Math.abs(p.y - y) < 0.008 && p.z < hc.z) m = Math.max(m, Math.abs(p.x - hc.x)); return m || 0.055; })();
+  const helmetForm = (kind) => {
+    const full = kind === 'road' || kind === 'mx', ey = eyeY();
+    const CE = kind === 'mx' ? V(0, chinPt.y + 0.03, chinPt.z + 0.03) : V(0, chinPt.y + 0.032, chinPt.z + 0.052), CR = kind === 'mx' ? [jawW + 0.006, 0.075, 0.1] : [jawW + 0.008, 0.072, 0.077];
+    const dirOf = (u, v) => V(Math.cos(v) * Math.sin(u), Math.sin(v), -Math.cos(v) * Math.cos(u));
+    const vChin = Math.atan2(chinPt.y + 0.025 - hc.y, hc.z - (CE.z - CR[2])); // (the chin bar's front at mouth height: the mouthpiece, its vents)
+    const ridge = (u, v) => { const au = Math.abs(u); let d = 0.004 * gs(u, v - 1.25, 0.25, 0.25) + 0.006 * gs(au - Math.PI, v + 0.1, 0.8, 0.4); // crown ridge, rear spoiler
+      if (kind === 'mx') d += 0.058 * Math.max(0, 1 - au / 0.5) ** 1.5 * gs(0, v - vChin + 0.05, 1, 0.3); // the mouthpiece: a wedge coming to a point in front (V-shaped seen from above)
+      return d; };
+    const rad = (u, v) => { const d = dirOf(u, v), r1 = rayOut(hc, d, hc, HS); return (full ? smax(r1, rayOut(hc, d, CE, CR), 0.03) : r1) + ridge(u, v); };
+    const P = (u, v, off = 0) => hc.clone().addScaledVector(dirOf(u, v), rad(u, v) + (typeof off === 'function' ? off(u, v) : off));
+    const uvOf = (p) => { const d = p.clone().sub(hc).normalize(); return [Math.atan2(d.x, -d.z), Math.asin(clamp(d.y, -1, 1))]; };
+    const onto = (off) => (p) => P(...uvOf(p), off);
+    const normal = (u, v) => { const e = 0.01, a = P(u + e, v).sub(P(u - e, v)), b = P(u, v + e).sub(P(u, v - e)); return b.cross(a).normalize(); };
+    // the neck line: from the nape down to under the chin (a jet helmet's: over the jaw hinge to the cheek)
+    const zb = hc.z + HS[2], yb = ey - 0.105, zf = full ? CE.z - CR[2] : eyeZ() + 0.02, yf = full ? CE.y - CR[1] + (kind === 'mx' ? 0.012 : 0.008) : ey - 0.075;
+    const below = (p) => p.y < yb + (yf - yb) * clamp((p.z - zb) / (zf - zb), 0, 1);
+    const ev = uvOf(V(0, ey, eyeZ()))[1];
+    return { P, onto, normal, below, PV: ev, vChin, full };
   };
-  // a surface on the shell: rs radii, cut by hole; hemmed edges, optionally a liner `liner` inside and a rolled edge
-  const shellPart = (rs, disp, hole, hex, slot, { liner = 0, rim = 0, rimHex = 0x15161a, w = 128, h = 96 } = {}) => {
-    const g = dsphere(hc, ...rs, disp, { w, h, hole }), loops = hemEdges(g, ontoDS(hc, ...rs, disp)); at(B.head, g, hex, slot);
-    if (liner) { const ri = rs.map((r) => r - liner), gi = dsphere(hc, ...ri, disp, { w, h, hole }); hemEdges(gi, ontoDS(hc, ...ri, disp)); at(B.head, flipWinding(gi), 0x26272a, 'fabric'); }
+  // a surface over the shell (radial offset off: a number or (u, v) => metres), cut by hole(u, v); hemmed, optionally
+  // lined (`liner` inside) with a rolled edge
+  const shellPart = (F, off, hole, hex, slot, { liner = 0, rim = 0, rimHex = 0x15161a, w = 128, h = 96 } = {}) => {
+    const g = gsurf((u, v) => F.P(u, v, off), { w, h, hole }), loops = hemEdges(g, F.onto(off), 24); at(B.head, g, hex, slot);
+    if (liner) { const lo = (u, v) => (typeof off === 'function' ? off(u, v) : off) - liner, gi = gsurf((u, v) => F.P(u, v, lo), { w, h, hole }); hemEdges(gi, F.onto(lo), 24); at(B.head, flipWinding(gi), 0x26272a, 'fabric'); }
     if (rim) for (const L of loops) at(B.head, tubeLoop(L.map((p) => { const d = p.clone().sub(hc), l = d.length(); return hc.clone().addScaledVector(d, 1 - liner / 2 / l); }), rim), rimHex, 'rubber');
     return loops;
   };
-  const shellNormal = (p, rs) => V((p.x - hc.x) / rs[0] ** 2, (p.y - hc.y) / rs[1] ** 2, (p.z - hc.z) / rs[2] ** 2).normalize();
   if (BP && o.bulk) spaceHelmet(); else if (o.head === 'helmet' || o.head === 'fullface' || o.head === 'bubble') {
     const big = o.head === 'bubble' ? 1.18 : 1, kind = o.head === 'bubble' ? 'bubble' : o.peak ? 'mx' : o.head === 'fullface' ? 'road' : 'jet';
     if (kind !== 'bubble') face(false);
-    const PV = Math.asin(clamp((eyeY() - hc.y) / HS[1], -0.4, 0.6)), disp = helmetDisp(kind), LINER = 0.012;
+    const F = kind === 'bubble' ? null : helmetForm(kind), PV = F ? F.PV : 0.15, LINER = 0.012;
+    const onShell = (u, v) => F.P(u, v); // (the bare shell's point: holes are decided there, so every layer cuts alike)
     if (kind === 'bubble') at(B.head, ellipsoid(hc, 0.128 * big, 0.135 * big, 0.142 * big, { w: 48, h: 32, th: [0, Math.PI * 0.66] }), o.helmet, 'paint');
     else {
-      const port = kind === 'jet' ? (u, v) => v > -0.95 && se(u, 0.95) + se(Math.max(0, v - PV), 0.19) < 1 : (u, v) => se(u, 0.78) + se(v - PV - 0.01, 0.17) < 1;
-      const bottom = kind === 'jet' ? -0.55 : -0.78;
-      shellPart(HS, disp, (u, v) => port(u, v) || v < bottom, o.helmet, 'paint', { liner: LINER, rim: 0.0075 });
-      // the stripe: a band of constant width (not angle) from above the port over the crown and down the back, laid on the
-      // shell's own surface (crown ridge included) 1.5 mm out
-      const sd = (u, v) => disp(u, v) + 0.0015;
-      shellPart(HS, sd, (u, v) => Math.abs(Math.sin(u) * Math.cos(v)) * HS[0] > 0.012 || v < (Math.cos(u) > 0 ? PV + 0.3 : -0.15), o.helmet2, 'paint', { w: 192 });
+      const port = kind === 'jet' ? (u, v) => se(u, 0.98) + se(Math.max(0, v - PV), 0.2) < 1 && v > PV - 1.1
+        : kind === 'mx' ? (u, v) => se(u, 0.86) + se(v - PV + 0.02, 0.22) < 1 : (u, v) => se(u, 0.8) + se(v - PV - 0.01, 0.185) < 1;
+      shellPart(F, 0, (u, v) => port(u, v) || F.below(onShell(u, v)), o.helmet, 'paint', { liner: LINER, rim: 0.0075 });
+      // the stripe: a band of constant width (not angle) from above the port over the crown and down the back, 1.5 mm out
+      shellPart(F, 0.0015, (u, v) => Math.abs(onShell(u, v).x - hc.x) > 0.012 || v < (Math.cos(u) > 0 ? PV + 0.32 : -0.15), o.helmet2, 'paint', { w: 192 });
     }
     if (kind === 'mx') {
-      const ring = []; for (let k2 = 0; k2 < 48; k2++) { const t = (k2 / 48) * Math.PI * 2, c = Math.cos(t), sn = Math.sin(t); ring.push(dsPoint(hc, ...HS, disp, Math.sign(c) * Math.abs(c) ** (1 / 3) * 0.8, PV + 0.01 + Math.sign(sn) * Math.abs(sn) ** (1 / 3) * 0.18, 0.006)); }
-      at(B.head, tubeLoop(ring, 0.0095, 10), 0x15161a, 'rubber'); // goggle frame, on the port's edge
-      shellPart(HS, (u, v) => disp(u, v) + 0.01, (u, v) => se(u, 0.77, 4) + se(v - PV - 0.01, 0.165, 4) > 1, o.visor, 'glass', { w: 96, h: 72 }); // lens
-      shellPart(HS, (u, v) => disp(u, v) + 0.003, (u, v) => !(v > PV - 0.06 && v < PV + 0.08 && Math.abs(u) > 0.76), o.helmet2, 'fabric', { w: 96 }); // strap
-      const pk = new THREE.Shape(); pk.moveTo(-0.085, 0); pk.quadraticCurveTo(-0.11, 0.08, -0.06, 0.13); pk.lineTo(0.06, 0.13); pk.quadraticCurveTo(0.11, 0.08, 0.085, 0); pk.closePath();
+      const ring = []; for (let k2 = 0; k2 < 56; k2++) { const t = (k2 / 56) * Math.PI * 2, c = Math.cos(t), sn = Math.sin(t); ring.push(F.P(Math.sign(c) * Math.abs(c) ** (1 / 3) * 0.88, PV - 0.02 + Math.sign(sn) * Math.abs(sn) ** (1 / 3) * 0.23, 0.007)); }
+      at(B.head, tubeLoop(ring, 0.011, 10), 0x15161a, 'rubber'); // goggle frame, round the port's edge
+      shellPart(F, 0.013, (u, v) => se(u, 0.87, 4) + se(v - PV + 0.02, 0.22, 4) > 1, o.visor, 'glass', { w: 96, h: 72 }); // lens
+      shellPart(F, 0.004, (u, v) => !(v > PV - 0.07 && v < PV + 0.07 && Math.abs(u) > 0.86), 0x15161a, 'fabric', { w: 96 }); // strap
+      shellPart(F, 0.0015, (u, v) => se(u, 0.15, 6) + se(v - F.vChin + 0.02, 0.032, 4) > 1, 0x15161a, 'rubber', { w: 192, h: 192 }); // mouthpiece vent (a slot across the point)
+      // the peak: wide at the forehead and wrapped round it, continuing the forehead's line forward and up
+      const pk = new THREE.Shape(); pk.moveTo(-0.1, 0); pk.quadraticCurveTo(-0.11, 0.07, -0.07, 0.125); pk.lineTo(-0.02, 0.135); pk.lineTo(0, 0.128); pk.lineTo(0.02, 0.135); pk.lineTo(0.07, 0.125); pk.quadraticCurveTo(0.11, 0.07, 0.1, 0); pk.closePath();
       const pg = new THREE.ExtrudeGeometry(pk, { depth: 0.005, bevelEnabled: true, bevelThickness: 0.002, bevelSize: 0.002, bevelSegments: 2, curveSegments: 16 });
       pg.rotateX(-Math.PI / 2); // shape +Y -> forward (-Z)
-      { const pp = pg.attributes.position; for (let k2 = 0; k2 < pp.count; k2++) { const x = pp.getX(k2); pp.setZ(k2, pp.getZ(k2) + x * x / (2 * HS[0])); pp.setY(k2, pp.getY(k2) - 0.25 * x * x); } pg.computeVertexNormals(); } // curved round the forehead
-      pg.rotateX(0.38); // tipped up
-      const anchor = dsPoint(hc, ...HS, disp, 0, PV + 0.24, 0); pg.translate(anchor.x, anchor.y, anchor.z + 0.012); at(B.head, pg, o.helmet2, 'paint'); // peak (its root lying on the forehead)
-      for (const sx of [-1, 1]) { const sp = dsPoint(hc, ...HS, disp, sx * 0.62, PV + 0.27, 0.004); at(B.head, new THREE.CylinderGeometry(0.006, 0.006, 0.004, 12).applyQuaternion(basis(shellNormal(sp, HS))).translate(sp.x, sp.y, sp.z), 0x9aa0a6, 'metal'); } // its screws
-      for (const uu of [-0.16, 0, 0.16]) { const vp = dsPoint(hc, ...HS, disp, uu, -0.22, 0.001); at(B.head, boxG(0.012, 0.005, 0.018, vp), 0x15161a, 'rubber'); } // chin vents
+      { const pp = pg.attributes.position; for (let k2 = 0; k2 < pp.count; k2++) { const x = pp.getX(k2), zf = -pp.getZ(k2); pp.setZ(k2, pp.getZ(k2) + x * x / (2 * HS[0]) * (1 - zf / 0.2)); pp.setY(k2, pp.getY(k2) - 0.4 * x * x); } pg.computeVertexNormals(); } // wrapped round the forehead at its root
+      pg.rotateX(0.3); // tipped up
+      const anchor = F.P(0, PV + 0.27, 0); pg.translate(anchor.x, anchor.y, anchor.z + 0.01); at(B.head, pg, o.helmet2, 'paint');
+      for (const sx of [-1, 1]) { const uu = sx * 0.7, vv = PV + 0.3, sp = F.P(uu, vv, 0.003); at(B.head, new THREE.CylinderGeometry(0.006, 0.006, 0.004, 12).applyQuaternion(basis(F.normal(uu, vv))).translate(sp.x, sp.y, sp.z), 0x9aa0a6, 'metal'); } // its screws
     } else if (kind === 'road' || kind === 'jet') {
-      const ua = kind === 'jet' ? 1.02 : 0.92, vc = kind === 'jet' ? PV - 0.05 : PV + 0.02, vb = kind === 'jet' ? 0.26 : 0.21, VO = 0.007;
-      shellPart(HS, (u, v) => disp(u, v) + VO, (u, v) => se(u, ua, 4) + se(v - vc, vb, 4) > 1, o.visor, 'glass', { rim: 0.0025, rimHex: 0x15161a, w: 128, h: 96 }); // visor
-      for (const sx of [-1, 1]) { const pp = dsPoint(hc, ...HS, disp, sx * (ua + 0.05), vc + 0.03, 0.002), n = shellNormal(pp, HS);
-        at(B.head, new THREE.CylinderGeometry(0.014, 0.014, 0.007, 20).applyQuaternion(basis(n)).translate(pp.x, pp.y, pp.z), 0x2a2c30, 'rubber'); } // visor pivots, on the shell
+      const ua = kind === 'jet' ? 1.04 : 0.94, vc = kind === 'jet' ? PV - 0.04 : PV + 0.02, vb = kind === 'jet' ? 0.27 : 0.22, VO = 0.007;
+      shellPart(F, VO, (u, v) => se(u, ua, 4) + se(v - vc, vb, 4) > 1, o.visor, 'glass', { rim: 0.0025 }); // visor
+      for (const sx of [-1, 1]) { const uu = sx * (ua + 0.05), pp = F.P(uu, vc + 0.03, 0.002);
+        at(B.head, new THREE.CylinderGeometry(0.014, 0.014, 0.007, 20).applyQuaternion(basis(F.normal(uu, vc + 0.03))).translate(pp.x, pp.y, pp.z), 0x2a2c30, 'rubber'); } // visor pivots, on the shell
+      if (F.full) shellPart(F, 0.0015, (u, v) => se(u, 0.14, 4) + se(v - F.vChin, 0.04, 4) > 1, 0x15161a, 'rubber', { w: 192, h: 144 }); // chin vent
     } else { // spacesuit: big gold visor
       const vis = frontPatch(0.148 * big, 1.05, Math.PI * 0.3, Math.PI * 0.72, 36, 16); vis.translate(hc.x, hc.y, hc.z); at(B.head, vis, o.visor, 'glass');
     }
-    // the face's front (the mesh head's depth at x, y): where the mask and mic sit
-    const headPts = BP ? (() => { const hinv = R(B.head).invert(), a = []; for (let i = 0; i < BP.seg.length; i++) if (BP.seg[i] === 'head' && !BP.eye[i]) a.push(V(BP.pos[i * 3], BP.pos[i * 3 + 1], BP.pos[i * 3 + 2]).applyMatrix4(hinv)); return a; })() : [];
-    const frontAt = (x, y, w = 0.008) => { let z = Infinity; for (const p of headPts) if (Math.abs(p.x - x) < w && Math.abs(p.y - y) < w && p.z < z) z = p.z; return Number.isFinite(z) ? z : hc.z - HR[2] * 0.95; };
     const fk = HR[1] / 0.111, ey = eyeY(); // (face proportions scale with the head)
     if (o.mask) { // oxygen mask over nose and mouth: a rubber cup from the cheeks out past the nose tip, a valve, a hose to the chest, straps to the helmet
       const ym = ey - 0.06 * fk, zN = frontAt(0, ey - 0.045 * fk), zC = frontAt(0.035 * fk, ym, 0.01), rz = zC - zN + 0.016, cc = V(0, ym, zC);
@@ -1689,11 +1760,11 @@ function figureGeometry(rig) {
       at(B.head, tubeLoop(Array.from({ length: 40 }, (_, k2) => { const t = (k2 / 40) * Math.PI * 2; return V(Math.cos(t) * 0.04 * fk, ym + Math.sin(t) * 0.052 * fk, zC + 0.002); }), 0.004), 0x2a2c2e, 'rubber'); // its seal
       const valve = V(0, ym - 0.012 * fk, zC - rz + 0.004); at(B.head, new THREE.CylinderGeometry(0.014, 0.016, 0.016, 20).rotateX(Math.PI / 2).translate(valve.x, valve.y, valve.z - 0.004), 0x2a2c2e, 'rubber');
       at(B.head, capAB(valve.clone().add(V(0.004, -0.008, 0)), V(0.05, hc.y - 0.2, hc.z - 0.1), 0.012, 0.013), 0x2a2c2e, 'rubber'); // hose
-      for (const sx of [-1, 1]) { const ha = V(sx * 0.038 * fk, ym + 0.01, zC + 0.004), hb = dsPoint(hc, ...HS, disp, sx * 1.15, PV - 0.32, -0.004); at(B.head, capAB(ha, hb, 0.004, 0.004, { seg: 8 }), 0x2a2c2e, 'rubber');
+      for (const sx of [-1, 1]) { const ha = V(sx * 0.038 * fk, ym + 0.01, zC + 0.004), hb = F.P(sx * 1.15, PV - 0.32, -0.004); at(B.head, capAB(ha, hb, 0.004, 0.004, { seg: 8 }), 0x2a2c2e, 'rubber');
         at(B.head, ellipsoid(hb, 0.011, 0.011, 0.011), 0x9aa0a6, 'metal'); } // straps, bayonet fittings
     }
     if (o.mic) { // boom mic from inside the helmet's cheek to just off the corner of the mouth
-      const mouth = V(0.022 * fk, ey - 0.075 * fk, 0), base = dsPoint(hc, ...HS, disp, 1.25, PV - 0.38, -LINER * 0.6); mouth.z = frontAt(mouth.x, mouth.y) - 0.012;
+      const mouth = V(0.022 * fk, ey - 0.075 * fk, 0), base = F.P(1.25, PV - 0.38, -LINER * 0.6); mouth.z = frontAt(mouth.x, mouth.y) - 0.012;
       at(B.head, capAB(base, mouth, 0.004, 0.004, { seg: 10 }), 0x15161a, 'rubber'); at(B.head, ellipsoid(mouth, 0.008, 0.007, 0.009), 0x15161a, 'rubber');
     }
     if (o.ring) at(B.head, torusAB(0.16, 0.022, Math.PI * 2, 48).rotateX(Math.PI / 2).translate(0, 0.02, 0), o.trim, 'paint');
@@ -1956,9 +2027,8 @@ function figureGeometry(rig) {
     for (let q = 0; q < sh.SRC.length; q++) { if (sh.AL[q] > T0 + 0.03) continue; p.set(sh.Q[q * 3], sh.Q[q * 3 + 1], sh.Q[q * 3 + 2]).applyMatrix4(inv); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); z0 = Math.min(z0, p.z); z1 = Math.max(z1, p.z); }
     if (Number.isFinite(x0)) at(sb, ellipseTube({ cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, rx: (x1 - x0) / 2 + 0.002, rz: (z1 - z0) / 2 + 0.002 }, y, 0.008), o.boot, 'rubber'); // rolled top
   }
-  // The helmet: the face (the body mesh's, eyes and hair) inside a clear bubble on the neck ring (bubbleFit), a suit
-  // collar flaring from round the neck up under the ring, the ring itself (trim, a red band), and over the back and top
-  // of the bubble a white shell with the gold sun visor raised on it, clear of the face.
+  // The helmet: the face (the body mesh's, eyes and hair) inside a bubble on the neck ring (bubbleFit), a suit collar
+  // flaring from round the neck up under the ring, the ring itself (trim, a red band); the bubble is gold-filmed all over.
   function spaceHelmet() {
     meshFace(true);
     const bf = bubbleFit(), { t, Rb, rr, nr, M } = bf, put = (g, hex, slot) => { g.applyMatrix4(M); at(B.spine, g, hex, slot); };
@@ -1966,15 +2036,10 @@ function figureGeometry(rig) {
     put(lathe([[nr + o.bulk * 0.9, -0.05], [rr - 0.012, -0.03], [rr - 0.002, -0.022]]), o.suit, 'fabric'); // collar
     put(lathe([[rr - 0.006, 0.006], [rr - 0.006, -0.03], [rr + 0.004, -0.034], [rr + 0.013, -0.028], [rr + 0.015, -0.004], [rr + 0.01, 0.006], [rr - 0.006, 0.006]].reverse()), o.trim, 'metal'); // neck ring
     put(lathe([[rr + 0.0165, -0.02], [rr + 0.0165, -0.011]]), o.helmet2, 'paint'); // its red band
-    if (!k.p.clear) k.p.clear = []; clearMaterial();
+    if (!k.p.tint) k.p.tint = []; if (!k.p.gold) k.p.gold = []; tintMaterial(); goldFilmMaterial();
     const v0 = -Math.asin(clamp(t / Rb, 0, 0.99)), Cc = V(0, t, 0);
-    put(dsphere(Cc, Rb, Rb, Rb, null, { w: 64, h: 40, v0 }), 0xdde6ee, 'clear'); // the bubble
-    const Rs = Rb + 0.007, open = (u, v) => Math.abs(u) < 1.35 && v < 0.85; // (the face window: 77 degrees either side, up to 49 above the middle)
-    { const g = dsphere(Cc, Rs, Rs, Rs, null, { w: 128, h: 80, v0: v0 + 0.06, hole: open }), loops = hemEdges(g, ontoDS(Cc, Rs, Rs, Rs, null)); put(g, o.helmet, 'paint'); // shell
-      for (const L of loops) put(tubeLoop(L.map((q) => Cc.clone().addScaledVector(q.clone().sub(Cc), (Rs - 0.003) / Rs)), 0.006), o.helmet, 'paint'); } // its rolled edges
-    put(dsphere(Cc, Rs + 0.0008, Rs + 0.0008, Rs + 0.0008, null, { w: 96, h: 40, v0: 0.2, hole: (u, v) => Math.abs(wrapU(u - Math.PI)) > 0.08 }), o.helmet2, 'paint'); // centre stripe down the back
-    { const Rv = Rs + 0.009, g = dsphere(Cc, Rv, Rv, Rv, null, { w: 128, h: 80, hole: (u, v) => Math.abs(u / 1.2) ** 4 + Math.abs((v - 1.01) / 0.21) ** 4 > 1 }), loops = hemEdges(g, ontoDS(Cc, Rv, Rv, Rv, null)); put(g, o.visor, 'glass'); // the sun visor, raised
-      for (const L of loops) put(tubeLoop(L, 0.003), o.trim, 'metal'); } // its edge
+    put(dsphere(Cc, Rb, Rb, Rb, null, { w: 96, h: 60, v0 }), 0xe0a838, 'gold'); // the bubble's gold film (what's seen through it)
+    put(dsphere(Cc, Rb, Rb, Rb, null, { w: 96, h: 60, v0 }), 0xd9a83a, 'tint'); // and its gold reflections
   }
   // A glasses arm from its hinge back along the side of the head, over the top of the ear where it meets the skull,
   // then down behind it. The ear is found on the mesh head: where the side of the head stands out from the temple in
@@ -2075,7 +2140,7 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
   const skel = new THREE.Skeleton(bones);
   for (const [k, g] of Object.entries(geos)) {
     if (!g) continue;
-    const m = new THREE.SkinnedMesh(g, mats[k] || mats.fabric); m.userData.near = true; m.userData.crew = true; m.userData.cosmetic = true; m.castShadow = k !== 'clear'; m.receiveShadow = true; // (clear glass casts no shadow)
+    const m = new THREE.SkinnedMesh(g, mats[k] || mats.fabric); m.userData.near = true; m.userData.crew = true; m.userData.cosmetic = true; m.castShadow = k !== 'clear' && k !== 'tint' && k !== 'gold'; if (k === 'gold') m.renderOrder = 1; if (k === 'tint') m.renderOrder = 2; m.receiveShadow = true; // (clear glass casts no shadow)
     m.frustumCulled = false; // a few hundred triangles; skinned bounds would otherwise need a refresh as the pose changes
     root.add(m); m.bind(skel, new THREE.Matrix4());
   }
