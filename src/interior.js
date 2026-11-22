@@ -99,7 +99,7 @@ export function interiorOf(obj) {
 // number of triangles taken out (whole or in part), 0 if it was untouched.
 function cutMesh(mesh, owner, I) {
   const geo = mesh.geometry, P = geo.attributes.position;
-  if (!P || P.isInterleavedBufferAttribute || geo.groups.length > 1 || Array.isArray(mesh.material) || Object.keys(geo.morphAttributes).length) return 0;
+  if (!P || P.isInterleavedBufferAttribute || Array.isArray(mesh.material) || Object.keys(geo.morphAttributes).length) return 0; // (one material: its groups, if any, are not used)
   const toPart = new THREE.Matrix4().multiplyMatrices(owner.matrixWorld.clone().invert(), mesh.matrixWorld);
   const n = P.count, lp = new Float64Array(n * 3), v = new THREE.Vector3();
   for (let i = 0; i < n; i++) { v.fromBufferAttribute(P, i).applyMatrix4(toPart); lp[i * 3] = v.x; lp[i * 3 + 1] = v.y; lp[i * 3 + 2] = v.z; }
