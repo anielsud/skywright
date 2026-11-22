@@ -924,10 +924,12 @@ export function flightDeckGlass() {
 }
 export const AIRLINER_NOSE =[[-4.6, 0], [-4.4, 0.7], [-3.4, 1.4], [-1.8, 1.82], [0, 1.9]];
 // Detail nose shape, in side view: crown line T, keel line B and half-width W along z (z = 0 joins the tube, r = 1.9).
-// Like a 747 / A320 / 787 nose: the tip sits low, the radome rises to a windscreen face raked back ~45-50 deg, and the
-// crown line flattens out behind it; the keel curves up gently. (The plain part, which physics reads, is unchanged.)
-const NOSE_T = [[-4.6, -0.2], [-4.52, 0.12], [-4.3, 0.42], [-3.95, 0.64], [-3.55, 0.84], [-3.1, 1.24], [-2.6, 1.64], [-2.1, 1.84], [-1.2, 1.9], [0, 1.9]];
-const NOSE_B = [[-4.6, -0.2], [-4.52, -0.5], [-4.3, -0.86], [-3.9, -1.24], [-3.3, -1.58], [-2.5, -1.8], [-1.4, -1.89], [0, -1.9]];
+// A 737's, traced off a side-on photo (scaled by its 1.83 m front door, the tip and the fuselage axis lined up): the
+// tip hangs low, the crown runs up the long radome and the avionics bay at ~25 deg to the windscreen, steepens up
+// the windscreen (~45 deg) and only then rounds over into the crown, well aft of the windows, so there is a deep brow of
+// skin over them; the keel curves up gently. (The plain part, which physics reads, is unchanged.)
+const NOSE_T = [[-4.6, -0.62], [-4.52, -0.42], [-4.38, -0.28], [-4.18, -0.13], [-3.98, -0.02], [-3.58, 0.18], [-3.18, 0.35], [-3.0, 0.43], [-2.8, 0.6], [-2.6, 0.82], [-2.38, 0.98], [-2.18, 1.1], [-1.98, 1.2], [-1.58, 1.36], [-1.18, 1.52], [-0.6, 1.74], [0, 1.9]];
+const NOSE_B = [[-4.6, -0.62], [-4.55, -0.8], [-4.38, -0.97], [-4.18, -1.07], [-3.98, -1.13], [-3.58, -1.3], [-3.18, -1.4], [-2.78, -1.52], [-2.38, -1.6], [-1.98, -1.66], [-1.2, -1.78], [0, -1.9]];
 const NOSE_W = [[-4.6, 0], [-4.52, 0.36], [-4.3, 0.72], [-3.9, 1.06], [-3.3, 1.42], [-2.5, 1.7], [-1.4, 1.87], [0, 1.9]];
 function lineFn(pts) { // spline through (z, v), tabulated on a uniform z grid
   const s = new THREE.SplineCurve(pts.map(([z, v]) => new THREE.Vector2(z, v))).getPoints(160), z0 = pts[0][0], z1 = pts.at(-1)[0], N = 1024, t = new Float32Array(N + 1);
@@ -937,10 +939,41 @@ function lineFn(pts) { // spline through (z, v), tabulated on a uniform z grid
 const nT = lineFn(NOSE_T), nB = lineFn(NOSE_B), nW = lineFn(NOSE_W);
 // a point on the nose skin: z along, th round from the top (+ = right)
 const nosePt = (z, th, k = 1) => { const T = nT(z), B = nB(z), mid = (T + B) / 2, c = Math.cos(th), h = c >= 0 ? T - mid : mid - B; return V(Math.sin(th) * nW(z) * k, mid + c * h * k, z); };
-// flight-deck window set: above a sill line (horizontal in side view, rising a little aft), ahead of a top edge that
-// sweeps back towards the sides; > 0 inside the glazing
-const SILL = (z) => 0.82 + 0.06 * (z + 3.5), WTOP = (th) => -2.7 + 0.7 * th * th, WSIDE = 1.12;
-const winVal = (z, th) => { const p = nosePt(z, th); return Math.min(p.y - SILL(z), WTOP(th) - z, (WSIDE - Math.abs(th)) * 0.8); };
+// flight-deck window set, measured off a 737's (side-on and head-on photos; heights over the fuselage axis, the deck's
+// floor 0.6 under it): a shallow band between a sill line (0.40 at the front panes, rising aft) and a top line 0.82 up,
+// just over the pilots' eyes, ending aft at the third side window's back edge (its lower corner cut back), under a
+// deep brow of skin. Three panes a side: the wide front one, the sliding window beside the pilot, the small one aft.
+// > 0 inside the glazing
+const SILL = (z) => 0.4 + 0.045 * (z + 3.0), WTOPY = (z) => 0.82 + 0.02 * (z + 2.6), WAFT = (y) => -1.38 - 0.45 * Math.max(0, 0.67 - y);
+const WPOST1 = 0.52, WPOST2 = -1.93; // the front/sliding window post's azimuth, the sliding/aft window post's z
+const winVal = (z, th) => { const y = nosePt(z, th).y; return Math.min(y - SILL(z), WTOPY(z) - y, WAFT(y) - z, (1.3 - Math.abs(th)) * 0.8); };
+// where a line y = lvl(z) crosses the skin at azimuth th (the skin rises aft there), and the azimuth of height y at z
+const zOn = (th, lvl) => { let lo = -4.0, hi = -1.0; for (let it = 0; it < 30; it++) { const m = (lo + hi) / 2; if (nosePt(m, th).y - lvl(m) > 0) hi = m; else lo = m; } return hi; };
+const thAt = (z, y) => { const T = nT(z), B = nB(z), mid = (T + B) / 2; return Math.acos(Math.min(1, Math.max(-1, (y - mid) / (y >= mid ? T - mid : mid - B)))); };
+// the glazing's outline as [z, th], round from the left aft corner of the sill: sill, right aft edge, top, left aft edge
+function winOutline(n = 30) {
+  const fix = (lvl) => { let y = lvl(-2); for (let i = 0; i < 20; i++) y = lvl(WAFT(y)); return y; }; // (where the aft edge meets the line)
+  // a line across the nose: by azimuth over the front (th0 either side), then by z along the side (where the skin runs
+  // nearly level with it, so its azimuth is the well-defined one), to the aft edge at yEnd
+  const line = (lvl, th0, yEnd, dir) => { const zA = zOn(th0, lvl), zB = WAFT(yEnd), pts = [];
+    for (let i = 0; i <= n; i++) { const z = zB + (zA - zB) * (i / n); pts.push([z, -thAt(z, lvl(z))]); }
+    for (let i = 1; i < n; i++) { const th = -th0 + 2 * th0 * (i / n); pts.push([zOn(th, lvl), th]); }
+    for (let i = 0; i <= n; i++) { const z = zA + (zB - zA) * (i / n); pts.push([z, thAt(z, lvl(z))]); }
+    return dir > 0 ? pts : pts.reverse().map(([z, th]) => [z, th]); };
+  const ys = fix(SILL), yt = fix(WTOPY), out = [...line(SILL, 0.85, ys, 1)];
+  for (let i = 1; i < 8; i++) { const y = ys + (yt - ys) * (i / 8), z = WAFT(y); out.push([z, thAt(z, y)]); }
+  out.push(...line(WTOPY, 0.6, yt, -1));
+  for (let i = 1; i < 8; i++) { const y = yt + (ys - yt) * (i / 8), z = WAFT(y); out.push([z, -thAt(z, y)]); }
+  return out;
+}
+// the posts between the panes, each as [z, th] from the sill up: the centre one, the front panes' outer posts, and the
+// posts between the sliding and aft side windows (upright in side view)
+function winPosts() {
+  const P = [];
+  for (const th of [0, -WPOST1, WPOST1]) { const z0 = zOn(th, SILL), z1 = zOn(th, WTOPY), pts = []; for (let k = 0; k <= 8; k++) pts.push([z0 + (z1 - z0) * (k / 8), th]); P.push(pts); }
+  for (const sx of [-1, 1]) { const z = WPOST2, y0 = SILL(z), y1 = WTOPY(z), pts = []; for (let k = 0; k <= 8; k++) { const y = y0 + (y1 - y0) * (k / 8); pts.push([z, sx * thAt(z, y)]); } P.push(pts); }
+  return P;
+}
 // ---------- the airliner's flight deck (Boeing 737NG / MAX style, from photos of real ones) ----------
 // Everything painted or printed in the deck (panel greys, the displays, the mode control panel, the CDUs, the overhead's
 // switch panels, radios, circuit breakers, carpet, sheepskin) comes from one atlas: one material (colour + glowing
@@ -961,8 +994,8 @@ const FDA = { pfd: fdR(0, 0, 320, 256), nd: fdR(320, 0, 320, 256), eng: fdR(640,
   leather: fdR(1024, 512, 256, 256), worn: fdR(1280, 512, 256, 256), visor: fdR(1536, 512, 256, 256), post: fdR(1792, 512, 256, 256),
   bulk: fdR(1024, 768, 256, 256), shell: fdR(1280, 768, 256, 256), lining: fdR(1536, 768, 256, 256) };
 // small solid swatches along the bottom row of the left half: [colour, roughness, grain strength, grain coarseness]
-const FDS = { panel: ['#5d6872', 0.7, 0.45, 0], trim: ['#a9b0b5', 0.8, 0.4, 0], glare: ['#1d1f22', 0.95, 0.9, 0.25], carpet: ['#3d4752', 1, 1, 0.6], fleece: ['#ddd2bd', 1, 1, 1], bezel: ['#24282d', 0.45, 0.3, 0],
-  grey: ['#78838c', 0.7, 0.45, 0], door: ['#8e969c', 0.6, 0.4, 0], white: ['#e6e6e1', 0.5, 0.3, 0], knob: ['#17181b', 0.45, 0.25, 0], kick: ['#30353a', 0.9, 0.5, 0], shell: ['#3b4047', 0.55, 0.3, 0], yellow: ['#d8b22a', 0.6, 0.3, 0], red: ['#a8231d', 0.6, 0.3, 0], cream: ['#ece6d6', 0.4, 0.2, 0], ovh: ['#66717a', 0.7, 0.45, 0], post: ['#8a949c', 0.75, 0.4, 0], lip: ['#08090a', 0.6, 0.2, 0] };
+const FDS = { panel: ['#4f5963', 0.7, 0.45, 0], trim: ['#7f878e', 0.8, 0.4, 0], glare: ['#111214', 0.95, 0.9, 0.25], carpet: ['#3d4752', 1, 1, 0.6], fleece: ['#ddd2bd', 1, 1, 1], bezel: ['#24282d', 0.45, 0.3, 0],
+  grey: ['#5e6871', 0.7, 0.45, 0], door: ['#6b737a', 0.6, 0.4, 0], white: ['#e6e6e1', 0.5, 0.3, 0], knob: ['#17181b', 0.45, 0.25, 0], kick: ['#30353a', 0.9, 0.5, 0], shell: ['#3b4047', 0.55, 0.3, 0], yellow: ['#d8b22a', 0.6, 0.3, 0], red: ['#a8231d', 0.6, 0.3, 0], cream: ['#ece6d6', 0.4, 0.2, 0], ovh: ['#57616b', 0.7, 0.45, 0], post: ['#5b646c', 0.75, 0.4, 0], lip: ['#08090a', 0.6, 0.2, 0] };
 const FDK = Object.keys(FDS), fdSw = (k) => [(FDK.indexOf(k) * 32 + 16) / FW, 1 - 992 / FDW];
 // the overhead's modules and its toggle switches (u across from the left, v from its aft edge to the front), shared by the
 // printed panel and the 3D toggles
@@ -1127,7 +1160,7 @@ function fdAtlasTextures() {
     const px = (u, v) => [x0 + u * W, y0 + (1 - v) * H];
     let s = 5; const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
     for (const m of L.mods) {
-      const [xa, ya] = px(m.u0, m.v1), [xb, yb] = px(m.u1, m.v0); module(xa, ya, xb - xa, yb - ya, ['#66717b', '#6c7680', '#616c76', '#69737c'][Math.floor(rnd() * 4)], true);
+      const [xa, ya] = px(m.u0, m.v1), [xb, yb] = px(m.u1, m.v0); module(xa, ya, xb - xa, yb - ya, ['#58636d', '#5e6872', '#545f69', '#5b656f'][Math.floor(rnd() * 4)], true);
       a.strokeStyle = 'rgba(232,230,220,0.55)'; a.lineWidth = 1; a.strokeRect(xa + 10, ya + 13, xb - xa - 20, yb - ya - 18);
       legend(['FUEL', 'ELEC', 'HYD', 'BLEED', 'PRESS', 'ANTI-ICE', 'LIGHTS', 'APU', 'ENG START', 'WIPER'][Math.floor(rnd() * 10)], (xa + xb) / 2, ya + 8, 7);
       if (m.kind === 'ann') { const n = 2 + Math.floor(rnd() * 3); for (let i = 0; i < n; i++) for (let j = 0; j < 2; j++) { const x = xa + 12 + i * ((xb - xa - 24) / n), y = ya + 18 + j * ((yb - ya - 26) / 2), w = (xb - xa - 24) / n - 5, h = Math.min(12, (yb - ya - 26) / 2 - 4); a.fillStyle = '#121416'; a.fillRect(x, y, w, h); ao(x, y, w, h, 3, 0.6); const lit = rnd(); if (lit < 0.3) glow(x + 1, y + 1, w - 2, h - 2, lit < 0.12 ? '#3a78ff' : '#d08a1c', 0.6); else { a.fillStyle = 'rgba(200,190,150,0.12)'; a.fillRect(x + 1, y + 1, w - 2, h - 2); } } }
@@ -1143,7 +1176,7 @@ function fdAtlasTextures() {
     a.fillStyle = '#30353a'; a.fillRect(x0 + 200, y0 + 196, 30, 44); for (let k = 0; k < 12; k++) { a.fillStyle = '#9aa0a5'; a.fillRect(x0 + 203 + (k % 3) * 9, y0 + 200 + Math.floor(k / 3) * 10, 6, 7); }
   }
   { // side console top: its plate with fasteners and worn edge, the audio control panel (backlit), a map light switch
-    const x0 = 768, y0 = 576; module(x0, y0, 256, 384, '#66717a', true); a.fillStyle = 'rgba(220,225,230,0.16)'; a.fillRect(x0 + 2, y0 + 2, 12, 380); // (worn along the inner edge, where elbows rest)
+    const x0 = 768, y0 = 576; module(x0, y0, 256, 384, '#57616a', true); a.fillStyle = 'rgba(220,225,230,0.16)'; a.fillRect(x0 + 2, y0 + 2, 12, 380); // (worn along the inner edge, where elbows rest)
     module(x0 + 40, y0 + 200, 176, 120, '#56616b', true); for (let k = 0; k < 10; k++) { const x = x0 + 52 + (k % 5) * 32, y = y0 + 214 + Math.floor(k / 5) * 34; a.fillStyle = 'rgba(0,0,0,0.45)'; a.fillRect(x + 1, y + 2, 22, 14); a.fillStyle = '#c9ccce'; a.fillRect(x, y, 22, 14); a.fillStyle = '#1d1f21'; a.fillRect(x + 2, y + 2, 18, 3); if (!(k % 4)) glow(x + 2, y + 2, 18, 3, '#3fe03f'); }
     legend('AUDIO CONTROL', x0 + 128, y0 + 300, 9); for (let k = 0; k < 4; k++) { halo(x0 + 70 + k * 40, y0 + 280, 6); ring(a, x0 + 70 + k * 40, y0 + 280, 6, '#151515', 4); }
     module(x0 + 60, y0 + 40, 136, 110, '#5a6570', true); legend('OXYGEN', x0 + 128, y0 + 56, 8); a.fillStyle = '#0c0d0e'; a.fillRect(x0 + 80, y0 + 70, 96, 60); ao(x0 + 80, y0 + 70, 96, 60, 8, 0.6);
@@ -1169,7 +1202,7 @@ function fdAtlasTextures() {
     for (let k = 0; k < 6; k++) { a.fillStyle = '#3d4247'; a.fillRect(x0 + 40 + k * 31, y0 + 246, 18, 6); } rmF(x0, y0, 256, 256, 0.42, 0.3, 0);
   }
   { // anti-glare fabric: near-black weave, a stitched seam along its edge
-    const x0 = 1280, y0 = 256; a.fillStyle = '#1a1c1f'; a.fillRect(x0, y0, 256, 256);
+    const x0 = 1280, y0 = 256; a.fillStyle = '#111214'; a.fillRect(x0, y0, 256, 256);
     mottle(x0, y0, 256, 256, 50, 0.06); a.strokeStyle = 'rgba(90,92,95,0.8)'; a.setLineDash([4, 3]); a.lineWidth = 1.2; a.strokeRect(x0 + 10, y0 + 10, 236, 236); a.setLineDash([]); ao(x0, y0, 256, 256, 10, 0.4); rmF(x0, y0, 256, 256, 0.97, 0.9, 0.25);
   }
   { // carpet: blue-grey pile, flecked, darker into the corners
@@ -1189,18 +1222,18 @@ function fdAtlasTextures() {
     const x0 = 1536, y0 = 512; a.fillStyle = '#383d36'; a.fillRect(x0, y0, 256, 256); for (let k = 0; k < 256; k += 3) { a.fillStyle = 'rgba(255,255,255,0.03)'; a.fillRect(x0, y0 + k, 256, 1); a.fillStyle = 'rgba(0,0,0,0.05)'; a.fillRect(x0 + k, y0, 1, 256); }
     mottle(x0, y0, 256, 256, 40, 0.06); a.strokeStyle = '#1e211d'; a.lineWidth = 14; a.strokeRect(x0 + 7, y0 + 7, 242, 242); rmF(x0, y0, 256, 256, 0.95, 0.9, 0.3);
   }
-  { // window posts and reveals: light grey trim, shaded along its long edges where it turns
-    const x0 = 1792, y0 = 512; a.fillStyle = '#5c646b'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256, 50, 0.05); ao(x0, y0, 256, 256, 26, 0.25, 'tb'); rmF(x0, y0, 256, 256, 0.9, 0.45, 0.05);
+  { // window posts and reveals: mid grey trim, shaded along its long edges where it turns
+    const x0 = 1792, y0 = 512; a.fillStyle = '#4a5158'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256, 50, 0.05); ao(x0, y0, 256, 256, 26, 0.25, 'tb'); rmF(x0, y0, 256, 256, 0.9, 0.45, 0.05);
   }
-  { // back bulkhead: light grey lining panels with their seams and fasteners, shaded at the edges
-    const x0 = 1024, y0 = 768; a.fillStyle = '#a1a9af'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256, 60, 0.05);
+  { // back bulkhead: grey lining panels with their seams and fasteners, shaded at the edges
+    const x0 = 1024, y0 = 768; a.fillStyle = '#737b82'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256, 60, 0.05);
     for (const u of [64, 192]) { a.fillStyle = 'rgba(20,24,28,0.6)'; a.fillRect(x0 + u, y0, 2, 256); for (let k = 0; k < 6; k++) dzus(x0 + u - 6, y0 + 20 + k * 44, 2.6); } a.fillStyle = 'rgba(20,24,28,0.6)'; a.fillRect(x0, y0 + 100, 256, 2);
     ao(x0, y0, 256, 256, 30, 0.35); rmF(x0, y0, 256, 256, 0.8, 0.4, 0);
   }
   { // moulded plastic shell (seat backs, boxes): dark grey, lighter where its edges round over
     const x0 = 1280, y0 = 768; a.fillStyle = '#383d44'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256, 40, 0.05); a.strokeStyle = 'rgba(255,255,255,0.12)'; a.lineWidth = 6; a.strokeRect(x0 + 4, y0 + 4, 248, 248); ao(x0, y0, 256, 256, 18, 0.3); rmF(x0, y0, 256, 256, 0.5, 0.3, 0);
   }
-  { const x0 = 1536, y0 = 768; a.fillStyle = '#9ea6ac'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256); rmF(x0, y0, 256, 256, 0.85, 0.35, 0.05); }
+  { const x0 = 1536, y0 = 768; a.fillStyle = '#727a81'; a.fillRect(x0, y0, 256, 256); mottle(x0, y0, 256, 256); rmF(x0, y0, 256, 256, 0.85, 0.35, 0.05); }
   // swatches
   FDK.forEach((k, i) => { a.fillStyle = FDS[k][0]; a.fillRect(i * 32, 960, 32, 64); rmF(i * 32, 960, 32, 64, FDS[k][1], FDS[k][2], FDS[k][3]); });
   // a fine grain over the whole sheet (a texel's worth of powder coat, felt where the shader's grain is too small to see)
@@ -1241,8 +1274,8 @@ function fdPatch(m, fixed, extra = '') {
 const fdMat = () => pdMat('fdAtlas', () => { const t = fdAtlasTextures(); return fdPatch(new THREE.MeshStandardMaterial({ map: t.map, emissiveMap: t.emi, emissive: 0xffffff, emissiveIntensity: 0.95, roughnessMap: t.rm, roughness: 1, metalness: 0 })); });
 // glass over the displays: a black, glossy layer added on top (only its reflection shows)
 const fdGlassMat = () => pdMat('fdGlass', () => new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.06, metalness: 0, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, envMapIntensity: 1.8 }));
-// the lining inside the skin (seen from inside: back faces), Boeing's light grey, with the same grain
-const fdLinerMat = () => pdMat('fdLiner', () => fdPatch(new THREE.MeshStandardMaterial({ color: 0x939ba1, roughness: 0.86, side: THREE.BackSide }), [0.4, 0.08], 'diffuseColor.rgb *= 0.55 + 0.45 * clamp((vFdP.y + 0.1) / 1.1, 0.0, 1.0) * clamp((vFdP.z + 3.6) / 1.2, 0.35, 1.0);')); // (shade baked by height and depth: darker low down and far forward, under the panel)
+// the lining inside the skin (seen from inside: back faces), a mid grey (the photos' deck reads dark round its bright windows), with the same grain
+const fdLinerMat = () => pdMat('fdLiner', () => fdPatch(new THREE.MeshStandardMaterial({ color: 0x6d757c, roughness: 0.86, side: THREE.BackSide }), [0.4, 0.08], 'diffuseColor.rgb *= 0.55 + 0.45 * clamp((vFdP.y + 0.1) / 1.1, 0.0, 1.0) * clamp((vFdP.z + 3.6) / 1.2, 0.35, 1.0);')); // (shade baked by height and depth: darker low down and far forward, under the panel)
 // a geometry's uv (0..1 over a face) into an atlas rect, or all of it onto a swatch
 function fdUV(g, r) {
   norm(g); const a = g.attributes.uv;
@@ -1291,42 +1324,46 @@ function fdBezel(W, H, w, h, d, z0) {
 // The deck inside airlinerNoseBuild's skin (part coordinates; the nose looks along -z, the floor's top at FLOOR). Built
 // round the crew's seats and controls: the yokes' columns stand in the floor at z -3.16 ahead of each seat, the rudder
 // pedals hinge at the floor at z -3.03, the eyes are about 1.05 up. Returns the obstacles for the crew's posture solve.
-function airlinerFlightDeck(g, b, nb, { SY, SZ, SEAT, FLOOR, zs }) {
+function airlinerFlightDeck(g, bR, nbR, { SY, SZ, SEAT, FLOOR, zs, DY, DZ }) {
   const A = fdMat(), K = 0.97, kit = { black: M.black(), dark: M.darkMetal(), alu: M.aluminum(), rubber: M.rubber(), chrome: M.chrome() };
-  // the lining's inner half-width at (z, y), and its top at (z, x)
-  const secHW = (z, y, k = K) => { const T = nT(z), B = nB(z), mid = (T + B) / 2, h = (y >= mid ? T - mid : mid - B) * k, c = (y - mid) / h; return Math.abs(c) >= 1 ? 0 : Math.sqrt(1 - c * c) * nW(z) * k; };
-  const topY = (z, x, k = K) => { const T = nT(z), B = nB(z), mid = (T + B) / 2, s = Math.min(1, Math.abs(x) / (nW(z) * k)); return mid + Math.sqrt(1 - s * s) * (T - mid) * k; };
+  // The furniture is laid out in deck coordinates and set down into the nose by (0, DY, DZ) (b, nb; the obstacles too);
+  // what follows the skin (lining, window reveals and posts, visors) is built in place (bR, nbR)
+  const SH = new THREE.Matrix4().makeTranslation(0, DY, DZ), shift = (bag) => ({ add: (geo, mat, m) => bag.add(geo, mat, m ? SH.clone().multiply(m) : SH), to: (...a) => bag.to(...a) });
+  const b = shift(bR), nb = shift(nbR);
+  // the lining's inner half-width at (z, y), and its top at (z, x), in deck coordinates
+  const secHW = (z0, y0, k = K) => { const z = z0 + DZ, y = y0 + DY, T = nT(z), B = nB(z), mid = (T + B) / 2, h = (y >= mid ? T - mid : mid - B) * k, c = (y - mid) / h; return Math.abs(c) >= 1 ? 0 : Math.sqrt(1 - c * c) * nW(z) * k; };
+  const topY = (z0, x, k = K) => { const z = z0 + DZ, T = nT(z), B = nB(z), mid = (T + B) / 2, s = Math.min(1, Math.abs(x) / (nW(z) * k)); return mid + Math.sqrt(1 - s * s) * (T - mid) * k - DY; };
   // lining: the nose's sections at 0.97, cut open at the windows (it hid them: the pilots saw grey where the glass is) and
   // below the floor
-  { const lz = zs.filter((z) => z > -4.05 && z < -1.4), LS = 96, lp = [], li = [], val = [];
-    for (const z of lz) for (let i = 0; i <= LS; i++) { const t = (i / LS) * Math.PI * 2, th = t > Math.PI ? t - Math.PI * 2 : t, p = nosePt(z, th, K); lp.push(p.x, p.y, p.z); val.push(Math.min(z < -4.0 || z > -1.5 ? 1 : -winVal(z, th), p.y - FLOOR + 0.06)); }
+  { const lz = zs.filter((z) => z > -4.05 && z < -1.4 + DZ), LS = 96, lp = [], li = [], val = [];
+    for (const z of lz) for (let i = 0; i <= LS; i++) { const t = (i / LS) * Math.PI * 2, th = t > Math.PI ? t - Math.PI * 2 : t, p = nosePt(z, th, K); lp.push(p.x, p.y, p.z); val.push(Math.min(z < -4.0 || z > -1.5 + DZ ? 1 : -winVal(z, th), p.y - (FLOOR + DY) + 0.06)); }
     for (let j = 0; j < lz.length - 1; j++) for (let i = 0; i < LS; i++) { const a = j * (LS + 1) + i, c = a + LS + 1; li.push(a, c, c + 1, a, c + 1, a + 1); }
     const liner = new THREE.BufferGeometry(); liner.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3)); liner.setIndex(li); liner.computeVertexNormals();
     g.add(new THREE.Mesh(clipGeometry(liner, Float32Array.from(val)) || liner, fdLinerMat())); }
   // window reveals: the lining turned out to the skin all round the glazing, and the posts between the panes cased in trim
-  { const TH = WSIDE - 0.004, out = [], inn = [], P = (z, th) => { out.push(nosePt(z, th, 1.0)); inn.push(nosePt(z, th, K - 0.002)); };
-    const edgeZ = (th) => { let lo = -4.0, hi = WTOP(th); for (let it = 0; it < 30; it++) { const m = (lo + hi) / 2; if (nosePt(m, th).y - SILL(m) > 0) hi = m; else lo = m; } return hi; };
-    for (let i = 0; i <= 40; i++) { const th = -TH + 2 * TH * (i / 40); P(edgeZ(th), th); }
-    for (let i = 1; i < 6; i++) P(edgeZ(TH) + (WTOP(TH) - edgeZ(TH)) * (i / 6), TH);
-    for (let i = 0; i <= 40; i++) { const th = TH - 2 * TH * (i / 40); P(WTOP(th), th); }
-    for (let i = 1; i < 6; i++) P(WTOP(-TH) + (edgeZ(-TH) - WTOP(-TH)) * (i / 6), -TH);
+  { const out = [], inn = []; for (const [z, th] of winOutline(40)) { out.push(nosePt(z, th, 1.0)); inn.push(nosePt(z, th, K - 0.002)); }
     const n = out.length, pos = [], idx = []; for (const p of [...out, ...inn]) pos.push(p.x, p.y, p.z);
     for (let i = 0; i < n; i++) { const j = (i + 1) % n; idx.push(i, j, n + j, i, n + j, n + i, i, n + j, j, i, n + i, n + j); } // (both faces)
     const rv = new THREE.BufferGeometry(); rv.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); rv.setIndex(idx); rv.computeVertexNormals();
-    { const uv = []; for (const v of [0, 1]) for (let i = 0; i < n; i++) uv.push(i / n, v); rv.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); } b.add(fdUV(rv, FDA.post), A);
-    for (const th0 of [0, -0.38, 0.38, -0.76, 0.76]) {
-      const z0 = edgeZ(th0), z1 = WTOP(th0), rings = [];
-      for (let k = 0; k <= 8; k++) { const z = z0 - 0.02 + (z1 - z0 + 0.04) * (k / 8), d = (th0 ? 0.036 : 0.045) / nW(z); rings.push([nosePt(z, th0 - d, 0.999), nosePt(z, th0 + d, 0.999), nosePt(z, th0 + d * 0.8, K - 0.01), nosePt(z, th0 - d * 0.8, K - 0.01)]); }
-      b.add(fdLoftUV(ringLoft(rings, true, true), 4, rings.length, FDA.post), A);
+    { const uv = []; for (const v of [0, 1]) for (let i = 0; i < n; i++) uv.push(i / n, v); rv.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); } bR.add(fdUV(rv, FDA.post), A);
+    for (const [pi, post] of winPosts().entries()) { // (each cased across its run, a little past the sill and the top)
+      const at = (t) => { const k = Math.min(post.length - 2, Math.max(0, Math.floor(t * (post.length - 1)))), f = t * (post.length - 1) - k; return [post[k][0] + (post[k + 1][0] - post[k][0]) * f, post[k][1] + (post[k + 1][1] - post[k][1]) * f]; };
+      const w = pi ? 0.036 : 0.045, rings = [];
+      for (let k = 0; k <= 8; k++) { const t = -0.05 + 1.1 * (k / 8), [z, th] = at(t), po = nosePt(z, th, 0.999), pin = nosePt(z, th, K - 0.01);
+        const [za, tha] = at(t - 0.02), [zb, thb] = at(t + 0.02), tg = nosePt(zb, thb).sub(nosePt(za, tha)), nr = po.clone().sub(V(0, (nT(z) + nB(z)) / 2, z)), a = nr.cross(tg).normalize();
+        rings.push([po.clone().addScaledVector(a, -w), po.clone().addScaledVector(a, w), pin.clone().addScaledVector(a, w * 0.8), pin.clone().addScaledVector(a, -w * 0.8)]); }
+      bR.add(fdLoftUV(ringLoft(rings, true, true), 4, rings.length, FDA.post), A);
     }
-    // the side windows' latch handles, on the aft posts
-    for (const sx of [-1, 1]) { const th = sx * 0.95, z = WTOP(th) - 0.02, p0 = nosePt(z, th, K - 0.01), p1 = nosePt(z - 0.05, th, K - 0.05); nb.add(bar(p0, p1, 0.02, 0.02, true, 6), kit.black); nb.add(bar(p1, p1.clone().add(V(-sx * 0.0, -0.09, 0.0)), 0.022, 0.022, true, 6), kit.black); }
+    // the sliding windows' latch handles, on their aft frames
+    for (const sx of [-1, 1]) { const z = WPOST2 - 0.05, th = sx * thAt(z, 1.22), p0 = nosePt(z, th, K - 0.01), p1 = nosePt(z - 0.05, th, K - 0.05); nbR.add(bar(p0, p1, 0.02, 0.02, true, 6), kit.black); nbR.add(bar(p1, p1.clone().add(V(-sx * 0.0, -0.09, 0.0)), 0.022, 0.022, true, 6), kit.black); }
   }
   // floor: blue-grey carpet, and each seat's tracks
   b.add(fdBox(2.2, 0.05, 2.3, FDA.carpet, mx([0, -0.12, -2.65])), A);
   for (const sx of [-1, 1]) for (const dx of [-0.13, 0.13]) b.add(bar(V(sx * 0.55 + dx, FLOOR + 0.012, -2.86), V(sx * 0.55 + dx, FLOOR + 0.012, -1.86), 0.035, 0.024), kit.alu);
   // back bulkhead with the flight-deck door in its frame, circuit-breaker panels either side
-  { const bk = new THREE.CircleGeometry(1.84, 40); bk.rotateY(Math.PI); bk.translate(0, 0, -1.5); b.add(fdUV(bk, FDA.bulk), A);
+  { const bp = [0, 0, -1.5 + DZ]; for (let i = 0; i <= 48; i++) bp.push(...nosePt(-1.5 + DZ, (i / 48) * Math.PI * 2, K + 0.01).toArray()); // (the nose's section where it stands)
+    const bk = new THREE.BufferGeometry(); bk.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3)); bk.setIndex(Array.from({ length: 48 }, (_, i) => [0, i + 1, i + 2]).flat()); // (facing the deck) bk.computeVertexNormals();
+    { const P = bk.attributes.position, uv = []; for (let i = 0; i < P.count; i++) uv.push(0.5 + P.getX(i) / 4, 0.5 + P.getY(i) / 4); bk.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); } bR.add(fdUV(bk, FDA.bulk), A);
     b.add(fdBox(0.74, 1.84, 0.03, 'door', mx([0, FLOOR + 0.92, -1.52])), A);
     b.add(fdQuad(V(0.36, FLOOR + 0.01, -1.536), V(-0.36, FLOOR + 0.01, -1.536), V(-0.36, FLOOR + 1.83, -1.536), V(0.36, FLOOR + 1.83, -1.536), FDA.door, V(0, 0, -1)), A);
     for (const [x, w] of [[-0.4, 0.06], [0.4, 0.06]]) b.add(fdBox(w, 1.9, 0.05, FDA.post, mx([x, FLOOR + 0.95, -1.52])), A);
@@ -1367,11 +1404,14 @@ function airlinerFlightDeck(g, b, nb, { SY, SZ, SEAT, FLOOR, zs }) {
     for (const sx of [-1, 1]) { b.add(fdBox(0.22, 0.08, 0.025, FDA.plateB, mx([sx * 0.585, 0.69, GZ + 0.0125])), A); const s = fdUV(new THREE.PlaneGeometry(0.22, 0.08), FDA.efis); s.translate(sx * 0.585, 0.69, GZ + 0.0255); b.add(s, A);
       for (const dx of [-0.068, 0.068]) { const kn = new THREE.CylinderGeometry(0.013, 0.014, 0.02, 12); kn.rotateX(Math.PI / 2); kn.translate(sx * 0.585 + dx, 0.69 - 0.006, GZ + 0.035); nb.add(kn, kit.black); } }
     // the standby compass at the top of the centre post
-    { const z = WTOP(0) + 0.06, y = topY(z, 0) - 0.05; nb.add(fdBox(0.07, 0.06, 0.07, 'knob', mx([0, y, z])), A); nb.add(bar(V(0, y + 0.03, z), V(0, topY(z, 0) + 0.01, z), 0.02, 0.02), kit.dark); }
+    { const z = zOn(0, WTOPY) + 0.06 - DZ, y = topY(z, 0) - 0.05; nb.add(fdBox(0.07, 0.06, 0.07, 'knob', mx([0, y, z])), A); nb.add(bar(V(0, y + 0.03, z), V(0, topY(z, 0) + 0.01, z), 0.02, 0.02), kit.dark); }
   }
-  // overhead panel: a box hung under the crown from just behind the windscreen's top back over the seats, sloping up aft,
-  // its face full of switch panels (the toggles stand out of it), grab handles at its front corners
-  { const ZF = -2.62, ZA = -1.72, X = 0.36, yb = (z) => 1.4 + 0.2 * (z - ZF) / (ZA - ZF), yt = (z) => topY(z, X) - 0.006;
+  // overhead panel: a box hung under the crown from just behind the windscreen's top back over the seats, sloping up aft
+  // with the crown (a 737's starts right at the windscreen's top: it is the deck's ceiling there), its face full of switch
+  // panels (the toggles stand out of it), grab handles at its front corners
+  const OVH = { ZF: -2.85, ZA: -1.72, D: 0.16 };
+  { const { ZF, ZA, D } = OVH, X = 0.36, yt = (z) => topY(z, X) - 0.006, yb = (z) => yt(ZF) - D + (yt(ZA) - yt(ZF)) * (z - ZF) / (ZA - ZF);
+    OVH.y0 = yb(ZF); OVH.y1 = topY(ZA, 0);
     const c = { lfb: V(-X, yb(ZF), ZF), rfb: V(X, yb(ZF), ZF), lab: V(-X, yb(ZA), ZA), rab: V(X, yb(ZA), ZA), lft: V(-X, yt(ZF), ZF), rft: V(X, yt(ZF), ZF), lat: V(-X, yt(ZA), ZA), rat: V(X, yt(ZA), ZA) };
     b.add(fdQuad(c.lfb, c.rfb, c.rab, c.lab, FDA.ovh, V(0, -1, 0.2)), A); // (its lettering's top towards the back: upright to a pilot looking up)
     for (const sx of [-1, 1]) { const [f, a2, ft, at] = sx < 0 ? [c.lfb, c.lab, c.lft, c.lat] : [c.rfb, c.rab, c.rft, c.rat]; b.add(fdQuad(a2, f, ft, at, FDA.plateB, V(sx, 0, 0)), A); }
@@ -1411,7 +1451,7 @@ function airlinerFlightDeck(g, b, nb, { SY, SZ, SEAT, FLOOR, zs }) {
   }
   // the crew seats: upholstered shells under fleece covers, on a frame over a base on floor tracks; headrest, armrests
   for (const sx of [-1, 1]) {
-    const sb = new Bag(), X = sx * 0.55, st = seatGeo(...SEAT); st.translate(X, SY, SZ); sb.add(fdTriUV(st, FDA.fleece, false, true), A);
+    const sb = shift(new Bag()), X = sx * 0.55, st = seatGeo(...SEAT); st.translate(X, SY, SZ); sb.add(fdTriUV(st, FDA.fleece, false, true), A);
     const tilt = SEAT[3], up = (h, dz = 0) => [X, SY + h * Math.cos(tilt), SZ + h * Math.sin(tilt) + dz];
     const hr = new THREE.CapsuleGeometry(0.07, 0.16, 4, 10); hr.rotateZ(Math.PI / 2); hr.scale(1, 1, 0.55); hr.rotateX(tilt); hr.translate(...up(0.82, 0.075)); sb.add(fdTriUV(hr, FDA.fleece, false, true), A);
     sb.add(fdBox(0.46, 0.74, 0.05, FDA.shell, mx(up(0.38, 0.09), [tilt, 0, 0])), A); // (the seat back's hard shell)
@@ -1423,14 +1463,15 @@ function airlinerFlightDeck(g, b, nb, { SY, SZ, SEAT, FLOOR, zs }) {
     const bh = SY - 0.09 - FLOOR; b.add(fdBox(0.36, bh, 0.36, FDA.plateC, mx([X, FLOOR + bh / 2, SZ - 0.22])), A);
     for (const dx of [-0.13, 0.13]) b.add(fdBox(0.05, 0.03, 0.42, 'shell', mx([X + dx, FLOOR + 0.03, SZ - 0.22])), A);
   }
-  // sun visors (fabric over a stiff board, in a binding): pulled part-way down over the top of each side window, and stowed
+  // sun visors (fabric over a stiff board, in a binding): pulled part-way down over the top of each sliding window, and stowed
   // up against the lining behind the front windows' top edge, on their rails
   const visor = (sx, th0, th1, z0f, z1f, k) => { const pos = [], uv = [], idx = [], NU = 6;
     for (let i = 0; i <= NU; i++) for (const [j, zf] of [[0, z0f], [1, z1f]]) { const th = sx * (th0 + (th1 - th0) * (i / NU)), p = nosePt(zf(th), th, k); pos.push(p.x, p.y, p.z); uv.push(i / NU, j); }
     for (let i = 0; i < NU; i++) { const a = i * 2, c = a + 2; idx.push(a, c, c + 1, a, c + 1, a + 1, a, c + 1, c, a, a + 1, c + 1); } // (both faces)
-    const v = new THREE.BufferGeometry(); v.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); v.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); v.setIndex(idx); v.computeVertexNormals(); nb.add(fdUV(v, FDA.visor), A);
-    const r0 = nosePt(z0f(sx * th0), sx * th0, k + 0.005), r1 = nosePt(z0f(sx * th1), sx * th1, k + 0.005); nb.add(bar(r0, r1, 0.012, 0.012, true, 6), kit.dark); };
-  for (const sx of [-1, 1]) { visor(sx, 0.8, 1.06, (th) => WTOP(th) + 0.005, (th) => WTOP(th) - 0.15, K - 0.03); visor(sx, 0.42, 0.72, (th) => WTOP(th) + 0.03, (th) => WTOP(th) + 0.22, K - 0.012); }
+    const v = new THREE.BufferGeometry(); v.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); v.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); v.setIndex(idx); v.computeVertexNormals(); nbR.add(fdUV(v, FDA.visor), A);
+    const r0 = nosePt(z0f(sx * th0), sx * th0, k + 0.005), r1 = nosePt(z0f(sx * th1), sx * th1, k + 0.005); nbR.add(bar(r0, r1, 0.012, 0.012, true, 6), kit.dark); };
+  const zTop = (th) => zOn(th, WTOPY);
+  for (const sx of [-1, 1]) { visor(sx, WPOST1 + 0.04, 0.72, (th) => zTop(th) + 0.005, (th) => zTop(th) - 0.14, K - 0.03); visor(sx, 0.12, 0.45, (th) => zTop(th) + 0.03, (th) => zTop(th) + 0.2, K - 0.012); }
   // what the crew must keep clear of
   const tb =new THREE.Matrix4().compose(toe.a.clone().add(toe.b).multiplyScalar(0.5).add(V(0, 0, -0.012)), new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), toe.b.clone().sub(toe.a).normalize()), V(1, 1, 1));
   return [boxObstacle('panel', pf, [1.6, 0.42, 0.06]), boxObstacle('panel L', wings[0], [0.26, 0.42, 0.06]), boxObstacle('panel R', wings[1], [0.26, 0.42, 0.06]),
@@ -1438,12 +1479,12 @@ function airlinerFlightDeck(g, b, nb, { SY, SZ, SEAT, FLOOR, zs }) {
     { name: 'pedestal', box: [0, (FLOOR + 0.4) / 2, -3.0], size: [0.48, 0.4 - FLOOR, 0.6] }, { name: 'pedestal aft', box: [0, (FLOOR + 0.3) / 2, -2.35], size: [0.4, 0.3 - FLOOR, 0.7] },
     { name: 'thrust levers', box: [0, 0.4, -2.8], size: [0.36, 0.17, 0.24] },
     { name: 'console L', box: [-1.25, (FLOOR + 0.5) / 2, -2.53], size: [0.7, 0.5 - FLOOR, 1.2] }, { name: 'console R', box: [1.25, (FLOOR + 0.5) / 2, -2.53], size: [0.7, 0.5 - FLOOR, 1.2] },
-    { name: 'overhead', box: [0, 1.56, -2.17], size: [0.76, 0.38, 0.92] }, boxObstacle('toe board', tb, [2.0, toe.b.distanceTo(toe.a), 0.024])];
+    { name: 'overhead', box: [0, (OVH.y0 + OVH.y1) / 2, (OVH.ZF + OVH.ZA) / 2], size: [0.76, OVH.y1 - OVH.y0, OVH.ZA - OVH.ZF] }, boxObstacle('toe board', tb, [2.0, toe.b.distanceTo(toe.a), 0.024])].map((o) => ({ ...o, box: [o.box[0], o.box[1] + DY, o.box[2] + DZ] }));
 }
 export function airlinerNoseBuild(color, skinMat) {
   const g = new THREE.Group(), b = new Bag(), nb = new Bag(), black = M.black();
   // skin grid: dense rings round the windscreen, coarser elsewhere
-  const zs = []; for (let z = -4.6; z < -4.2; z += 0.05) zs.push(z); for (let z = -4.2; z < -1.9; z += 0.05) zs.push(z); for (let z = -1.9; z < -0.001; z += 0.2) zs.push(z); zs.push(0);
+  const zs = []; for (let z = -4.6; z < -4.2; z += 0.05) zs.push(z); for (let z = -4.2; z < -1.0; z += 0.05) zs.push(z); for (let z = -1.0; z < -0.001; z += 0.2) zs.push(z); zs.push(0);
   const SEG = 96, row = SEG + 1, circ = 2 * Math.PI * 1.9, pos = [], uv = [], uv1 = [], idx = [];
   for (const z of zs) for (let i = 0; i <= SEG; i++) { const th = (i / SEG) * Math.PI * 2, p = nosePt(z, th > Math.PI ? th - Math.PI * 2 : th); pos.push(p.x, p.y, p.z); uv.push((z + 4.6) / 4.6, i / SEG); uv1.push(z, (i / SEG) * circ); }
   for (let j = 0; j < zs.length - 1; j++) for (let i = 0; i < SEG; i++) { const a = j * row + i, c = (j + 1) * row + i; idx.push(a, c, c + 1, a, c + 1, a + 1); }
@@ -1452,19 +1493,17 @@ export function airlinerNoseBuild(color, skinMat) {
   // the glazing is cut out of the skin exactly along the outline (clipGeometry); the glass is the cut-out piece, set
   // in a little
   const P = sk.attributes.position, N = sk.attributes.normal, val = new Float32Array(P.count), neg = new Float32Array(P.count);
-  for (let i = 0; i < P.count; i++) { const z = P.getZ(i), T = nT(z), B = nB(z), mid = (T + B) / 2, dy = P.getY(i) - mid, th = Math.atan2(P.getX(i) / Math.max(1e-4, nW(z)), dy / Math.max(1e-4, dy >= 0 ? T - mid : mid - B)); val[i] = z > -1.5 || z < -4.0 ? -1 : winVal(z, th); neg[i] = -val[i]; }
+  for (let i = 0; i < P.count; i++) { const z = P.getZ(i), T = nT(z), B = nB(z), mid = (T + B) / 2, dy = P.getY(i) - mid, th = Math.atan2(P.getX(i) / Math.max(1e-4, nW(z)), dy / Math.max(1e-4, dy >= 0 ? T - mid : mid - B)); val[i] = z > -1.0 || z < -4.0 ? -1 : winVal(z, th); neg[i] = -val[i]; }
   const skin = new THREE.Mesh(clipGeometry(sk, neg) || sk, skinMat); skin.userData.openOk = 'flight-deck windows: glazed'; g.add(skin);
   const glass = clipGeometry(sk, val);
   if (glass) { const gp = glass.attributes.position, gn = glass.attributes.normal; for (let i = 0; i < gp.count; i++) gp.setXYZ(i, gp.getX(i) - gn.getX(i) * 0.012, gp.getY(i) - gn.getY(i) * 0.012, gp.getZ(i) - gn.getZ(i) * 0.012); g.add(new THREE.Mesh(glass, flightDeckGlass())); }
   // frames: the outline (traced along the cut) and the posts between the six panes, black like an airline's window mask
   const lift = (p, th, d = 0.006) => { const q = nosePt(p.z, th, 1); const n = q.clone().sub(V(0, (nT(p.z) + nB(p.z)) / 2, p.z)).normalize(); return p.clone().addScaledVector(n, d); };
-  const edgeZ = (th) => { let lo = -4.0, hi = WTOP(th); for (let it = 0; it < 30; it++) { const m = (lo + hi) / 2; if (nosePt(m, th).y - SILL(m) > 0) hi = m; else lo = m; } return hi; }; // sill crossing at this azimuth
-  const loop = [], TH = WSIDE - 0.004;
-  for (let i = 0; i <= 30; i++) { const th = -TH + 2 * TH * (i / 30); loop.push(lift(nosePt(edgeZ(th), th), th)); }
-  for (let i = 0; i <= 30; i++) { const th = TH - 2 * TH * (i / 30), z = WTOP(th); loop.push(lift(nosePt(z, th), th)); }
+  const edgeZ = (th) => zOn(th, SILL); // (sill crossing at this azimuth)
+  const loop = winOutline(30).map(([z, th]) => lift(nosePt(z, th), th));
   const fb = new Bag(); // (the window frames: their own mesh, so the seam check can tell them from the skin)
   fb.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(loop, true, 'centripetal'), 220, 0.032, 6, true), black);
-  for (const th of [0, -0.38, 0.38, -0.76, 0.76]) { const z0 = edgeZ(th), z1 = WTOP(th), pts = []; for (let k = 0; k <= 8; k++) { const z = z0 + (z1 - z0) * (k / 8); pts.push(lift(nosePt(z, th), th)); } fb.add(pipe(pts, th ? 0.03 : 0.04, 6, 24), black); }
+  for (const [pi, post] of winPosts().entries()) fb.add(pipe(post.map(([z, th]) => lift(nosePt(z, th), th)), pi ? 0.03 : 0.04, 6, 24), black);
   { const n0 = g.children.length; fb.to(g); for (const m of g.children.slice(n0)) m.userData.trim = 'window frames round the flight-deck glazing'; }
   // wipers parked along the bottom of the two front panes
   for (const sx of [-1, 1]) { const a = sx * 0.06, c = sx * 0.34; nb.add(tube([lift(nosePt(edgeZ(a) - 0.03, a), a, 0.006), lift(nosePt(edgeZ(a) + 0.05, a), a, 0.02), lift(nosePt(edgeZ(c) + 0.08, c), c, 0.02)], 0.012, 4, 8), black); } // (from a pivot on the skin below the glass: they lay on the glass)
@@ -1478,18 +1517,29 @@ export function airlinerNoseBuild(color, skinMat) {
     const sp = lift(nosePt(-2.4, sx * 1.5), sx * 1.5, 0.004), d = new THREE.CircleGeometry(0.05, 12); d.applyMatrix4(new THREE.Matrix4().compose(sp, new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), V(sx, 0.07, 0).normalize()), V(1, 1, 1))); nb.add(d, alu);
   }
   // flight deck (airlinerFlightDeck): lining, window reveals, panel, glare shield, overhead, pedestal, consoles, seats
-  const FLOOR = -0.095, SY = 0.24, SZ = -2.3, SEAT = [0.5, 0.75, 0.48, 0.2]; // (floor top; seatGeo's origin height, z; its dims: a cushion 42 cm over the floor, an airliner seat's height)
-  const deck = airlinerFlightDeck(g, b, nb, { SY, SZ, SEAT, FLOOR, zs });
+  // (the deck is laid out round floor top -0.095 and seats at z -2.3, and set down DY and aft DZ into the nose: its floor
+  // 0.6 under the fuselage axis, like a 737's, the pilots' eyes beside the sliding windows)
+  const DY = -0.5, DZ = 0.4, SEAT = [0.5, 0.75, 0.48, 0.2]; // (seatGeo's dims: a cushion 42 cm over the floor, an airliner seat's height)
+  const deck = airlinerFlightDeck(g, b, nb, { SY: 0.24, SZ: -2.3, SEAT, FLOOR: -0.095, zs, DY, DZ });
+  const FLOOR = -0.095 + DY, SY = 0.24 + DY, SZ = -2.3 + DZ; // (floor top; seatGeo's origin height, z: where they ended up)
   b.to(g); nb.to(g, true);
   // each seat declares its cushion and back (seatGeo's, as placed above), the floor, and the feet on the rudder pedals
   // (drawn by crew.js, hinged on the floor under the panel)
   g.userData.seats = [1, -1].map((sx) => { const p = [sx * 0.55, SY + 0.04, SZ - 0.24];
     return { p, s: 1, fit: { at: [sx * 0.55, SY, SZ], dims: SEAT, floor: FLOOR, feet: 'pedals' }, controls: {
-      pedY: FLOOR - p[1], pedZ: -3.03 - p[2], // rudder pedals under the panel, hinged at the floor
+      pedY: FLOOR - p[1], pedZ: -3.03 + DZ - p[2], // rudder pedals under the panel, hinged at the floor
       colBase: [0, FLOOR - p[1], -0.62], colLen: 0.75, // the column pivots in the floor (the generic one stopped 7 cm over it), the yoke clear of the knees
     }, adjust: { pedZ: [-0.06, 0.08], seatZ: [-0.08, 0.08], seatY: [-0.03, 0.05] } }; }); // (an airliner's pedals adjust, and its seats run on rails, fore and aft and up and down; the yoke doesn't)
   // what each pilot must keep clear of: inside the lining (the nose's sections at 0.97), and the deck's furniture
-  for (const st of g.userData.seats) st.obstacles = [{ name: 'lining', below: 'mirror', inside: insideRows(-4.0, -1.5, 50, (z) => [nW(z) * 0.97, (nT(z) - nB(z)) / 2 * 0.97, (nT(z) + nB(z)) / 2]) }, ...deck];
+  for (const st of g.userData.seats) st.obstacles = [{ name: 'lining', below: 'mirror', inside: insideRows(-4.0, -1.5 + DZ, 50, (z) => [nW(z) * 0.97, (nT(z) - nB(z)) / 2 * 0.97, (nT(z) + nB(z)) / 2]) }, ...deck];
+  g.userData.cabinDeep = true; // (cabinLight: a deep, enclosed deck, lit only through its band of windows)
+  // the deck's own lamps, lit at night (cabinLight bakes them; deck coordinates, set down with it): the dome light aft of the
+  // overhead (a big diffuser: r), the overhead's flood from the glare shield, the panel floods under the glare shield's lip,
+  // the pedestal flood under the overhead's front, and each pilot's map light on the side wall, aimed at the lap and the
+  // yoke's chart clip. [position, aim, cone (cos), strength, size]
+  const lamp = (p, d, cone, k, r) => ({ p: [p[0], p[1] + DY, p[2] + DZ], d: d && V(...d).normalize().toArray(), cone, k, r });
+  g.userData.cabinLamps = [lamp([0, 1.78, -1.62], [0, -1, 0], [-0.2, 0.3], 0.6, 0.6), lamp([0, 0.8, -3.15], [0, 0.8, 0.6], [0.4, 0.8], 0.25, 0.15), lamp([0, 1.2, -2.7], [0, -1, -0.2], [0.6, 0.9], 0.12),
+    ...[-1, 1].flatMap((sx) => [lamp([sx * 0.45, 0.62, -3.1], [0, -0.87, -0.49], [0.3, 0.75], 0.2), lamp([sx * 0.98, 1.1, -2.62], [-sx * 0.43, -0.55, -0.13], [0.75, 0.92], 0.08)])];
   g.userData.tube = { z0: -4.6, z1: 0, sec: (z) => { const T = nT(z), B = nB(z); return [(T + B) / 2, nW(z), (T - B) / 2]; } }; // its section, for skinBlend's seam with the tube behind
   return g;
 }

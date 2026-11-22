@@ -579,7 +579,7 @@ def({ id: 'ck_fighter', cat: 'cockpit', name: 'Fighter Canopy', desc: 'Gold-tint
     const visor = new THREE.Mesh(new THREE.SphereGeometry(0.145, 16, 8, -0.9, 1.8, 1.0, 0.7), M.visor()); visor.position.copy(helmet.position); visor.rotation.y = Math.PI; g.add(visor);
     return g;
   } });
-def({ id: 'ck_airliner', cat: 'cockpit', name: 'Airliner Nose', desc: 'Flight deck with wrap-around windscreen. Bolts to the front of a tube.', mass: 1600, hp: 2500, color: C.white, eye: [0, 0.9, -2.8],
+def({ id: 'ck_airliner', cat: 'cockpit', name: 'Airliner Nose', desc: 'Flight deck with wrap-around windscreen. Bolts to the front of a tube.', mass: 1600, hp: 2500, color: C.white, eye: [0, 0.4, -2.4],
   build: (c, lv) => {
     if (lv) return airlinerNoseBuild(c, PM.skin(c)); // detail: windscreen cut into the skin, flight deck and crew seats
     const g = new THREE.Group();
