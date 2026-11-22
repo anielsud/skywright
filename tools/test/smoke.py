@@ -245,12 +245,13 @@ async def run(args, url, ws_url, shots):
             await cdp.js(f'{S}.audio.init()', gesture=True)
             await cdp.wait_for(f'{S}.audio.ctx && {S}.audio.ctx.state === "running"', 10, 'the AudioContext to run')
             want = json.dumps(sorted(index))
-            try:
-                await cdp.wait_for(f'{want}.every((n) => n in {S}.audio.buffers)', 20, 'clips to decode')  # all decode in ~1 s locally
+            try:  # (all decode in ~1 s locally, 10-20 s on a CI runner, longer when its CPU is busy)
+                await cdp.wait_for(f'{want}.every((n) => n in {S}.audio.buffers)', 40, 'clips to decode')
             except AssertionError:
                 have = await cdp.js(f'Object.keys({S}.audio.buffers)')
                 missing = sorted(set(index) - set(have))
-                raise AssertionError(f'{len(missing)}/{len(index)} clips did not decode: {", ".join(missing[:12])}')
+                if missing:  # (all there by the time we looked: slow, not broken)
+                    raise AssertionError(f'{len(missing)}/{len(index)} clips did not decode: {", ".join(missing[:12])}')
             return f'{len(index)} clips decoded'
 
         await r.step('audio: init + decode clips', audio)
@@ -285,7 +286,12 @@ async def run(args, url, ws_url, shots):
                 return r.results
             names = [args.only]
         k, n = args.shard
-        names = names[k - 1::n]  # (this part's share of the flights)
+        if n > 1:  # this part's share of the flights: each to the least loaded part, the last part starting with the
+            load, part = [0.0] * n, {}  # SR-71's two scripted flights (about two flights' worth)
+            load[-1] = 2.0 if SR71 in names and not args.only else 0.0
+            for nm in names:
+                j = min(range(n), key=lambda i: (load[i], i)); part[nm] = j; load[j] += 1
+            names = [nm for nm in names if part[nm] == k - 1]
 
         for i, name in enumerate(names):
             async def fly(name=name, shoot=(i == 0)):
