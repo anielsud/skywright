@@ -14,6 +14,28 @@ import { PARTS } from './parts.js';
 import { bodyReady, body, person, poseBody, handModel, torsoPoints, bodyDims, spinePose, armRest, headSize, limbRadii } from './body.js';
 const LIP_BONES = /^oris/; // the mouth's ring muscle in the body mesh's skeleton: its skin is the lips
 await bodyReady; // (the people's mesh: loaded once, before any figure is built; without it the procedural figure stands in)
+// Helmet models (assets/people/helmets.*, made by tools/people/helmets.py from three Sketchfab models): unit width, facing
+// -Z, centred on their eye point; parts by role (shell, accent, visor, liner, rubber, metal, baked colours). Without them
+// the procedural helmets stand in.
+const HELMETS = await (async () => {
+  try {
+    const base = new URL('../assets/people/', import.meta.url);
+    const [meta, bin] = await Promise.all([fetch(new URL('helmets.json', base)).then((r) => r.json()), fetch(new URL('helmets.bin', base)).then((r) => r.arrayBuffer())]);
+    const q = new Int16Array(bin, 0, meta.verts * 3), pos = Float32Array.from(q, (v) => (v / 32767) * meta.posScale), co = meta.verts * 6, col = new Uint8Array(bin, co, meta.verts * 3), io = co + meta.verts * 3 + ((4 - ((meta.verts * 9) % 4)) % 4); // (positions stored as 16-bit fractions of posScale)
+    return { meta: meta.helmets, pos, col, idx: new Uint16Array(bin, io, meta.indices) };
+  } catch (e) { console.warn('helmet models unavailable: procedural helmets instead', e); return null; }
+})();
+// one helmet's parts as geometries (model units), each with its role, slot and source colours (linear)
+function helmetParts(name) {
+  const H = HELMETS?.meta[name]; if (!H) return null;
+  return H.parts.map((pt) => {
+    const g = new THREE.BufferGeometry(), c = new THREE.Color(), cs = new Float32Array(pt.nv * 3);
+    for (let i = 0; i < pt.nv; i++) { const k = (pt.v0 + i) * 3; c.setRGB(HELMETS.col[k] / 255, HELMETS.col[k + 1] / 255, HELMETS.col[k + 2] / 255, THREE.SRGBColorSpace); cs[i * 3] = c.r; cs[i * 3 + 1] = c.g; cs[i * 3 + 2] = c.b; }
+    g.setAttribute('position', new THREE.Float32BufferAttribute(HELMETS.pos.slice(pt.v0 * 3, (pt.v0 + pt.nv) * 3), 3)); g.setAttribute('color', new THREE.BufferAttribute(cs, 3));
+    g.setIndex(new THREE.BufferAttribute(new Uint16Array(HELMETS.idx.subarray(pt.i0, pt.i0 + pt.ni)), 1)); g.computeVertexNormals();
+    return { role: pt.role, slot: pt.slot, g };
+  });
+}
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -333,12 +355,13 @@ class Kit {
     const g = geo; if (m) g.applyMatrix4(m);
     const slot = typeof gloss === 'string' ? gloss : gloss ? 'paint' : 'fabric';
     if (g.attributes.skinIndex) { this.p[slot].push(g); return this; } // a loft: brings its own colours + weights
-    for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+    const keep = g.userData.keepColor && g.attributes.color; // (a model's own vertex colours)
+    for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && !(keep && k === 'color')) g.deleteAttribute(k);
     if (!g.attributes.normal) g.computeVertexNormals();
     if (!g.index) { const n = g.attributes.position.count, idx = new Uint32Array(n); for (let i = 0; i < n; i++) idx[i] = i; g.setIndex(new THREE.BufferAttribute(idx, 1)); }
     const n = g.attributes.position.count, c = col(hex), cs = new Float32Array(n * 3), si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
     for (let i = 0; i < n; i++) { cs[i * 3] = c.r; cs[i * 3 + 1] = c.g; cs[i * 3 + 2] = c.b; si[i * 4] = bone; sw[i * 4] = 1; }
-    g.setAttribute('color', new THREE.BufferAttribute(cs, 3)); g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+    if (!keep) g.setAttribute('color', new THREE.BufferAttribute(cs, 3)); g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4)); g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
     this.p[slot].push(g); return this;
   }
   build() { const o = {}; for (const k in this.p) { const l = this.p[k]; for (const g of l) { if (!g.index) { const n = g.attributes.position.count, idx = new Uint32Array(n); for (let i = 0; i < n; i++) idx[i] = i; g.setIndex(new THREE.BufferAttribute(idx, 1)); } for (const a of Object.keys(g.attributes)) if (!['position', 'normal', 'color', 'skinIndex', 'skinWeight'].includes(a)) g.deleteAttribute(a); } o[k] = l.length ? mergeGeometries(l) : null; } return o; }
@@ -1834,7 +1857,37 @@ function figureGeometry(rig) {
       at(B.head, plate(Q, TH, 24, 28), o.helmet2, 'paint');
     }
   };
-  if (BP && o.bulk) spaceHelmet(); else if (BP && o.head === 'fullface') { face(false); buildRefHelmet(o.peak ? 'mx' : 'road'); } else if (o.head === 'helmet' || o.head === 'fullface' || o.head === 'bubble') {
+  // A model helmet (helmetParts) on this head, scaled evenly (its own proportions kept) to the head's width plus the
+  // liner (helmetRadii) and the model's own allowance (MODEL_FIT: the racing helmet's interior is 0.42 of its width
+  // either side, so 1 cm; the dirt bike model is nearly solid, so it is stretched to hide the head within it), its eye
+  // point on the measured eyes, then moved forward if its visor or chin bar would touch the nose or chin. Parts take the outfit's colours by role (shell: helmet, accent: helmet2, visor: visor),
+  // the rest keep the model's.
+  const MODEL_FIT = { road: { pad: 0.01 }, mx: { pad: 0.04, perAxis: true } };
+  const modelHelmet = (name) => {
+    const parts = helmetParts(name), H = HELMETS.meta[name], E = V(...H.eye), fit = MODEL_FIT[name] || { pad: 0.01 }; if (!parts) return false;
+    const eyeAt = V(0, eyeY(), eyeZ()), w = 2 * HS[0] + fit.pad, S = V(w, w, w);
+    if (fit.perAxis) { // (a solid model: stretched so its dome clears the top of the head by 3 cm and the back by 2.6)
+      let top = -Infinity, back = -Infinity, low = Infinity, hTop = -Infinity, hBack = -Infinity, hLow = Infinity;
+      for (const p of parts) if (p.role === 'shell') { const P = p.g.attributes.position; for (let i = 0; i < P.count; i++) { const x = P.getX(i), y = P.getY(i), z = P.getZ(i);
+        if (Math.abs(x) < 0.12 && z > E.z + 0.1 && z < E.z + 0.45) top = Math.max(top, y); if (Math.abs(x) < 0.12 && Math.abs(y - E.y) < 0.15) back = Math.max(back, z); if (z > E.z + 0.25) low = Math.min(low, y); } }
+      for (const q of headPts) { hTop = Math.max(hTop, q.y); hBack = Math.max(hBack, q.z); if (q.z > hc.z) hLow = Math.min(hLow, q.y); }
+      S.y = Math.max(w * 0.9, (hTop + 0.03 - eyeAt.y) / (top - E.y), (eyeAt.y - (hLow - 0.01)) / (E.y - low)); S.z = Math.max(w * 0.9, (hBack + 0.026 - eyeAt.z) / (back - E.z)); // (and its back edge down past the bottom of the skull)
+    }
+    let f = (q) => q.clone().sub(E).multiply(S).add(eyeAt);
+    // the visor / lens and chin bar clear the face: moved forward until the nose tip and the chin are 1.5 cm behind them
+    const noseY = eyeY() - 0.04, nose = V(0, noseY, frontAt(0, noseY)), chin = chinPt.clone(); let shift = 0;
+    for (const p of parts) if (p.role === 'visor' || p.role === 'shell') { const P = p.g.attributes.position; for (let i = 0; i < P.count; i++) { const q = f(V().fromBufferAttribute(P, i)); if (Math.abs(q.x) > 0.02) continue;
+      for (const fp of p.role === 'visor' ? [nose] : [chin]) if (Math.abs(q.y - fp.y) < 0.012 && q.z > fp.z - 0.05) shift = Math.max(shift, q.z - (fp.z - 0.015)); } }
+    if (shift > 0) { const f0 = f; f = (q) => f0(q).add(V(0, 0, -Math.min(shift, 0.03))); }
+    const hexOf = { shell: o.helmet, accent: o.helmet2, visor: o.visor };
+    for (const p of parts) {
+      const P = p.g.attributes.position; for (let i = 0; i < P.count; i++) { const q = f(V().fromBufferAttribute(P, i)); P.setXYZ(i, q.x, q.y, q.z); } p.g.computeVertexNormals();
+      if (hexOf[p.role] == null) p.g.userData.keepColor = true;
+      at(B.head, p.g, hexOf[p.role] ?? 0xffffff, p.slot);
+    }
+    return true;
+  };
+  if (BP && o.bulk) spaceHelmet(); else if (BP && o.head === 'fullface') { face(false); if (!(HELMETS && modelHelmet(o.peak ? 'mx' : 'road'))) buildRefHelmet(o.peak ? 'mx' : 'road'); } else if (o.head === 'helmet' || o.head === 'fullface' || o.head === 'bubble') {
     const big = o.head === 'bubble' ? 1.18 : 1, kind = o.head === 'bubble' ? 'bubble' : o.peak ? 'mx' : o.head === 'fullface' ? 'road' : 'jet';
     if (kind !== 'bubble') face(false);
     const F = kind === 'bubble' ? null : helmetForm(kind), PV = F ? F.PV : 0.15, LINER = 0.012;
@@ -2151,6 +2204,14 @@ function figureGeometry(rig) {
     const bf = bubbleFit(), { t, Rb, rr, nr, M } = bf, put = (g, hex, slot) => { g.applyMatrix4(M); at(B.spine, g, hex, slot); };
     const lathe = (pts, n = 64) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), n);
     put(lathe([[nr + o.bulk * 0.9, -0.05], [rr - 0.012, -0.03], [rr - 0.002, -0.022]]), o.suit, 'fabric'); // collar
+    const SP = HELMETS && helmetParts('space'), best_Rb = () => bf.Rb; if (SP) { if (!k.p.tint) k.p.tint = []; if (!k.p.gold) k.p.gold = []; tintMaterial(); goldFilmMaterial(); }
+    if (SP) { // the space helmet model, sized so its inside clears the head's bubble (2.3 bubble radii wide) and centred on it
+      const sc = 2.3 * best_Rb(), cy = bf.t;
+      for (const p of SP) { const P = p.g.attributes.position; for (let i = 0; i < P.count; i++) P.setXYZ(i, P.getX(i) * sc, P.getY(i) * sc + cy, P.getZ(i) * sc); p.g.computeVertexNormals();
+        if (p.role === 'visor') { put(p.g.clone(), 0x6a5220, 'gold'); put(p.g, 0xd9a83a, 'tint'); continue; } // (the gold sun visor: a gold film and gold reflections)
+        p.g.userData.keepColor = true; put(p.g, 0xffffff, p.slot); }
+      return;
+    }
     put(lathe([[rr - 0.006, 0.006], [rr - 0.006, -0.03], [rr + 0.004, -0.034], [rr + 0.013, -0.028], [rr + 0.015, -0.004], [rr + 0.01, 0.006], [rr - 0.006, 0.006]].reverse()), o.trim, 'metal'); // neck ring
     put(lathe([[rr + 0.0165, -0.02], [rr + 0.0165, -0.011]]), o.helmet2, 'paint'); // its red band
     if (!k.p.clear) k.p.clear = []; if (!k.p.tint) k.p.tint = []; if (!k.p.gold) k.p.gold = []; clearMaterial(); tintMaterial(); goldFilmMaterial();
