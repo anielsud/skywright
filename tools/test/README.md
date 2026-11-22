@@ -407,6 +407,28 @@ python3 tools/test/walls.py --places nyc --no-game
 Run it when you change `wallContacts` in `aircraft.js`, `world.wallBoxes`, or how towns, real places or New York file
 their buildings.
 
+## Restart test
+
+`restart.py` checks that a restart (pause > Restart, or the "try again" button after a crash) keeps the World and
+looks and behaves exactly like a fresh start. `main.js` keeps the World (and its scene) for a restart when its inputs
+are unchanged (`World.key`: place, quality tier, time, weather, moon), and `World.reset()` puts back what the flight
+changed: buildings (`Destruction.reset`: collision heights, the shader's dmg bytes, damage slots, debris, mounds,
+scorch marks, cavities, fires, toppling tops, pending dominoes), flattened trees (`World.flatten`), the stunt sites,
+water park and launch pad, the space view, the clocks, gusts and cloud drift. Everything else the flight added to the
+scene (the vehicle, effects, traffic, missions, debris, other players) is removed and rebuilt. Back to the hangar
+frees the World as before.
+
+At each place (Lauterbrunnen by default) it checks: buildings knocked down and holed through the destruction API, plus
+flattened trees, are all whole after a restart in the same World, with the same spawn; 10 restarts (damage before every
+other one) keep `renderer.info` geometries / textures, the program count and the scene's child count flat; the hangar
+holds no World and a fresh start matches the restarts (spawn, memory); and a restart at every start type (runway, air,
+stunt park, street, marina, water park, launch pad, and the helipad with `--places nyc`) keeps the World, starts the
+same way at the same spot and rides / flies on for 4 s. About 2.5 minutes for one place.
+
+```sh
+python3 tools/test/restart.py [--places lauterbrunnen,nyc] [--restarts 10] [--quality low]
+```
+
 ## Frame benchmark
 
 `bench.py` flies a preset off the runway at each location with the graphics held fixed (no adaptive resolution) and
