@@ -407,6 +407,23 @@ python3 tools/test/walls.py --places nyc --no-game
 Run it when you change `wallContacts` in `aircraft.js`, `world.wallBoxes`, or how towns, real places or New York file
 their buildings.
 
+## Shader check
+
+`shadercheck.py` flies vehicles at several locations one after another in ONE page session (default: the Kestrel and
+the Dirt Bike, each at islands, canyon, nyc and back to islands) and fails if any shader program compiles after a
+flight's loading screen (main.js's `[shaders] N compiled in flight` warning, a visible hitch). It prints how many
+programs each flight compiled behind its loading screen, and the warning's program names on a failure.
+
+```sh
+python3 tools/test/shadercheck.py                                   # ~3 min
+python3 tools/test/shadercheck.py --plane Rocket --loc nyc --loc canyon --quality high
+```
+
+Run it when you change shader warm-up (`warmShaders`, `compileAsync` in `main.js`), material patches that set
+`customProgramCacheKey` (crew, cabin light, heat glow), or the lights, fog or environment a location sets up.
+Note that `window.__inflightCompiles` counts over the whole page session: a test that stages extra vehicles mid-flight
+(stunts.js, waterpark.js screenshots) must count per location, or the next location gets the blame (#145, #187).
+
 ## Frame benchmark
 
 `bench.py` flies a preset off the runway at each location with the graphics held fixed (no adaptive resolution) and
