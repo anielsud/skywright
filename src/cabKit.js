@@ -7,7 +7,7 @@
 // Faces are placed with a matrix whose local +Z points out of the panel towards the viewer (faceM), so a face built in
 // local XY (a PlaneGeometry, a CircleGeometry) lies flat on the panel.
 import * as THREE from 'three';
-import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { V, ringLoft, pipe, bar } from './partDetail.js';
 
 const cache = new Map();
@@ -249,3 +249,19 @@ export function pad(bag, a, b, r, mat = foam()) {
   g.applyMatrix4(new THREE.Matrix4().compose(a.clone().add(b).multiplyScalar(0.5), new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), d.normalize()), V(1, 1, 1))); bag.add(g, mat);
 }
 export { mergeGeometries, pipe };
+// leather upholstery (light aircraft and helicopter seats): a soft sheen, a fine grain from the roughness
+export const leather = (c = 0x8d9096) => cached('ckLeather' + c, () => new THREE.MeshPhysicalMaterial({ color: c, metalness: 0, roughness: 0.55, sheen: 0.4, sheenRoughness: 0.5, sheenColor: new THREE.Color(0.35, 0.35, 0.35), clearcoat: 0.15, clearcoatRoughness: 0.4 }));
+// An upholstered cushion: a rounded box (corner radius r) whose faces bulge out by `bulge`, with `pleats` channels sewn
+// across its front (-z) face. Centred on the origin, w x h x d. (As the boats' cushions.)
+export function cushion(w, h, d, r = 0.04, bulge = 0.015, pleats = 0) {
+  const g = new THREE.BoxGeometry(w, h, d, 12, 10, 8), p = g.attributes.position, hw = w / 2, hh = h / 2, hd = d / 2, q = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    q.fromBufferAttribute(p, i); c.set(THREE.MathUtils.clamp(q.x, -hw + r, hw - r), THREE.MathUtils.clamp(q.y, -hh + r, hh - r), THREE.MathUtils.clamp(q.z, -hd + r, hd - r));
+    const n = q.clone().sub(c); const L = n.length() || 1; n.divideScalar(L); q.copy(c).addScaledVector(n, r);
+    const ux = q.x / hw, uy = q.y / hh, uz = q.z / hd;
+    q.addScaledVector(n, bulge * Math.max(0, 1 - ux * ux) * Math.max(0, 1 - uy * uy) * Math.max(0, 1 - uz * uz) * 4);
+    if (pleats && n.z < -0.5) { const t = (q.y / h + 0.5) * (pleats + 1); q.z += 0.01 * Math.exp(-(((t - Math.round(t)) / 0.08) ** 2)) * (Math.round(t) > 0 && Math.round(t) <= pleats ? 1 : 0); }
+    p.setXYZ(i, q.x, q.y, q.z);
+  }
+  g.deleteAttribute('normal'); g.deleteAttribute('uv'); const m = mergeVertices(g, 1e-4); m.computeVertexNormals(); return m;
+}
