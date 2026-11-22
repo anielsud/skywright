@@ -184,11 +184,24 @@ for name, cfg in ([] if INSPECT else MODELS.items()):
                 nv_tot += len(Ps); ni_tot += Fs2.size
     allQ = np.vstack([q for lst in groups.values() for q, _, _ in lst])
     meta['bounds'] = [np.round(allQ.min(0), 4).tolist(), np.round(allQ.max(0), 4).tolist()]
-    if name == 'space':  # its neck ring (the chrome round its lower half, tilted on the model): plane by PCA, centre, radius
-        met = np.vstack([q[np.unique(F)] for q, F, _ in groups['metal']]); r0 = np.hypot(met[:, 0], met[:, 2]); ring = met[(met[:, 1] < -0.12) & (r0 > 0.3)]
-        cen = ring.mean(0); _, _, Vt = np.linalg.svd(ring - cen); nrm = Vt[2] * (1 if Vt[2][1] > 0 else -1)
-        d = ring - cen; rad = np.linalg.norm(d - np.outer(d @ nrm, nrm), axis=1)
-        meta['ring'] = dict(c=np.round(cen, 4).tolist(), n=np.round(nrm, 4).tolist(), r=float(np.median(rad)), lo=float(((ring - cen) @ nrm).min()), hi=float(((ring - cen) @ nrm).max()), count=int(len(ring)))
+    if name == 'space':  # its neck ring: the lowest of the flat open-edge loops round its bottom (the ring's lower lip)
+        allQ2 = np.vstack([q for lst in groups.values() for q, _, _ in lst]); allF = []; off = 0
+        for lst in groups.values():
+            for q, F, _ in lst: allF.append(F + off); off += len(q)
+        F = np.vstack(allF); key = np.round(allQ2 / 1e-5).astype(np.int64); _, inv = np.unique(key, axis=0, return_inverse=True); inv = inv.ravel()
+        Vw = np.zeros((inv.max() + 1, 3)); Vw[inv] = allQ2; Fw = inv[F]
+        e = np.sort(np.vstack([Fw[:, [0, 1]], Fw[:, [1, 2]], Fw[:, [2, 0]]]), axis=1); ue, cnt = np.unique(e, axis=0, return_counts=True); bd = ue[cnt == 1]
+        par = np.arange(len(Vw))
+        def find(a):
+            while par[a] != a: par[a] = par[par[a]]; a = par[a]
+            return a
+        for a2, b2 in bd: par[find(a2)] = find(b2)
+        roots = np.array([find(v) for v in bd[:, 0]]); best = None
+        for rt in np.unique(roots):
+            vs = np.unique(bd[roots == rt]); P = Vw[vs]; c = P.mean(0); _, _, Vt = np.linalg.svd(P - c); n = Vt[2] * (1 if Vt[2][1] > 0 else -1)
+            d = P - c; r = float(np.median(np.linalg.norm(d - np.outer(d @ n, n), axis=1))); flat = float(np.abs(d @ n).max())
+            if flat < 0.005 and r > 0.35 and (best is None or c[1] < best[0][1]): best = (c, n, r)
+        c, n, r = best; meta['ring'] = dict(c=np.round(c, 4).tolist(), n=np.round(n, 4).tolist(), r=r)
     else:  # the eye point: the visor's / lens's middle, set back behind it
         vis = np.vstack([q[np.unique(F)] for q, F, _ in groups['visor']]); front = vis[:, 2].min()
         meta['eye'] = [0.0, float((vis[:, 1].min() + vis[:, 1].max()) / 2), float(front + cfg.get('eyeBack', 0.16))]
@@ -198,6 +211,6 @@ for name, cfg in ([] if INSPECT else MODELS.items()):
 if not INSPECT:
     with open(os.path.join(OUT, 'helmets.bin'), 'wb') as f:
         P = np.concatenate(pos_all); C = np.concatenate(col_all); I = np.concatenate(idx_all)
-        f.write(np.round(P / 0.7 * 32767).astype(np.int16).tobytes()); f.write(C.tobytes()); f.write(b'\0' * ((4 - (P.size * 2 + C.nbytes) % 4) % 4)); f.write(I.tobytes())  # (positions as 16-bit fractions of 0.7)
-    json.dump(dict(verts=int(nv_tot), indices=int(ni_tot), posScale=0.7, helmets=result), open(os.path.join(OUT, 'helmets.json'), 'w'))
+        PS = float(np.abs(P).max()) * 1.001; f.write(np.round(P / PS * 32767).astype(np.int16).tobytes()); f.write(C.tobytes()); f.write(b'\0' * ((4 - (P.size * 2 + C.nbytes) % 4) % 4)); f.write(I.tobytes())  # (positions as 16-bit fractions of their largest coordinate)
+    json.dump(dict(verts=int(nv_tot), indices=int(ni_tot), posScale=PS, helmets=result), open(os.path.join(OUT, 'helmets.json'), 'w'))
     print('wrote', nv_tot, 'verts', ni_tot // 3, 'tris', os.path.getsize(os.path.join(OUT, 'helmets.bin')) // 1024, 'KB')

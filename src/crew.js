@@ -2133,7 +2133,7 @@ function figureGeometry(rig) {
     const rr = Math.sqrt(best.Rb * best.Rb - best.t * best.t);
     const Fw = V(0, 0, -1).applyQuaternion(rig.q[B.head]).applyQuaternion(rig.q[B.spine].clone().invert()); Fw.addScaledVector(A, -Fw.dot(A)).normalize();
     const Z = Fw.clone().negate(), X = V().crossVectors(A, Z).normalize(), M = new THREE.Matrix4().makeBasis(X, A, Z).setPosition(Rc);
-    return (bubbleFit.v = { Rc, A, M, t: best.t, Rb: best.Rb, rr, nr });
+    return (bubbleFit.v = { Rc, A, M, t: best.t, Rb: best.Rb, rr, nr, pts });
   }
   // The suit: the body below the neck ring and above the wrists and boots, 2.4 cm out (more round the torso, less down
   // the forearms and shins), relaxed so it's smooth and full, with soft creases round the limbs and convolute bellows at
@@ -2205,14 +2205,30 @@ function figureGeometry(rig) {
   // flaring from round the neck up under the ring, the ring itself (trim, a red band), and the visor assembly over it.
   function spaceHelmet() {
     meshFace(true);
-    const bf = bubbleFit(), { t, Rb, rr, nr, M } = bf, put = (g, hex, slot) => { g.applyMatrix4(M); at(B.spine, g, hex, slot); };
+    const bf = bubbleFit(), { t, Rb, rr, nr } = bf, SPM = HELMETS && HELMETS.meta.space;
+    // with the helmet model: level (its ring flat to the horizon, whatever the torso's lean in the seat) at the neck: a
+    // frame on the spine whose up is the rig's (the vehicle's) up and whose front is the rig's front; the procedural
+    // bubble follows the head's axis
+    let M = bf.M;
+    if (SPM) { const sq = new THREE.Quaternion(); R(B.spine).decompose(V(), sq, V()); const si = sq.clone().invert(), Y = V(0, 1, 0).applyQuaternion(si), Zr = V(0, 0, 1).applyQuaternion(si);
+      const Z = Zr.addScaledVector(Y, -Zr.dot(Y)).normalize(), X = V().crossVectors(Y, Z).normalize(); M = new THREE.Matrix4().makeBasis(X, Y, Z).setPosition(bf.Rc); }
+    const put = (g, hex, slot) => { g.applyMatrix4(M); at(B.spine, g, hex, slot); };
     const lathe = (pts, n = 64) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), n);
-    put(lathe([[nr + o.bulk * 0.9, -0.05], [rr - 0.012, -0.03], [rr - 0.002, -0.022]]), o.suit, 'fabric'); // collar
+    if (!SPM) put(lathe([[nr + o.bulk * 0.9, -0.05], [rr - 0.012, -0.03], [rr - 0.002, -0.022]]), o.suit, 'fabric'); // collar (the model helmet brings its own, flared to its ring)
     const SP = HELMETS && helmetParts('space'), best_Rb = () => bf.Rb; if (SP) { if (!k.p.tint) k.p.tint = []; if (!k.p.gold) k.p.gold = []; tintMaterial(); goldFilmMaterial(); }
-    if (SP) { // the space helmet model, seated by its neck ring: the ring (tilted on the model) turned flat onto the suit's
-      // ring, scaled to its radius (1 cm over it), its lowest edge on the collar
-      const RG = HELMETS.meta.space.ring, n = V(...RG.n), bot = V(...RG.c).addScaledVector(n, RG.lo), qr = new THREE.Quaternion().setFromUnitVectors(n, V(0, 1, 0)), sc = (rr + 0.01) / RG.r, q = V();
-      for (const p of SP) { const P = p.g.attributes.position; for (let i = 0; i < P.count; i++) { q.fromBufferAttribute(P, i).sub(bot).applyQuaternion(qr).multiplyScalar(sc); q.y -= 0.03; P.setXYZ(i, q.x, q.y, q.z); } p.g.computeVertexNormals();
+    if (SP) { // the space helmet model, seated by its neck ring: the ring's lower lip (tilted 13 degrees on the model) turned
+      // flat onto the suit's ring, scaled to its radius (1 cm over it), its lip on the collar
+      const RG = HELMETS.meta.space.ring, n = V(...RG.n), bot = V(...RG.c), qr = new THREE.Quaternion().setFromUnitVectors(n, V(0, 1, 0)), q = V();
+      // grown (from the ring's own size) until the head as it sits (looking ahead) is 1.5 cm inside the shell: a dome (0.43 of its width round its middle) over a cylinder of that radius down to the ring
+      const toLocal = R(B.spine).invert().premultiply(M.clone().invert()), lq0 = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.08, 0, 0, 'YXZ'));
+      const here = headPts.map((p) => p.clone().applyQuaternion(lq0).add(rig.p[B.head]).applyMatrix4(toLocal)), hb = new THREE.Box3().setFromPoints(here); // (the head as it sits, looking ahead, in the level frame)
+      const hcx = (hb.min.x + hb.max.x) / 2, hcz = (hb.min.z + hb.max.z) / 2, ringY = -0.03; // (the helmet stands over the head's middle, its ring at the collar)
+      const place = (s2) => { const o2 = V().sub(bot).applyQuaternion(qr).multiplyScalar(s2); return V(hcx - o2.x, ringY, hcz - o2.z); }; // (where the ring's lip goes so the dome's middle is over the head)
+      const mid = (s2) => V().sub(bot).applyQuaternion(qr).multiplyScalar(s2).add(place(s2));
+      const inside = (p, c, R2) => (p.y <= c.y && p.y >= ringY ? Math.hypot(p.x - c.x, p.z - c.z) : p.distanceTo(c)) < R2;
+      let sc = (rr + 0.01) / RG.r; for (let it = 0; it < 30; it++) { const c = mid(sc); if (here.every((p) => inside(p, c, 0.43 * sc - 0.015))) break; sc *= 1.02; }
+      const Rring = RG.r * sc, pl = place(sc); put(lathe([[nr + o.bulk * 0.9, -0.075], [nr + o.bulk + 0.02, -0.055], [Rring * 0.92, -0.036], [Rring - 0.003, -0.03]]).translate(pl.x, 0, pl.z), o.suit, 'fabric'); // the suit's collar flaring out to the helmet's ring
+      for (const p of SP) { const P = p.g.attributes.position; for (let i = 0; i < P.count; i++) { q.fromBufferAttribute(P, i).sub(bot).applyQuaternion(qr).multiplyScalar(sc).add(pl); P.setXYZ(i, q.x, q.y, q.z); } p.g.computeVertexNormals();
         if (p.role === 'visor') { put(p.g.clone(), 0x6a5220, 'gold'); put(p.g, 0xd9a83a, 'tint'); continue; } // (the gold sun visor: a gold film and gold reflections)
         p.g.userData.keepColor = true; put(p.g, 0xffffff, p.slot); }
       return;
