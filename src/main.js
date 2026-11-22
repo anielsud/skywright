@@ -4,6 +4,7 @@ import { makePresets, encodeDesign, decodeDesign, cloneDesign, analyze, sizeSlid
 import { Hangar, thumbnailDrawer } from './hangar.js';
 import { preloadTownTextures } from './buildings.js';
 import { preloadFoliage } from './flora.js';
+import { cabinBakesReady } from './cabinLight.js';
 import { Aircraft, REALISM } from './aircraft.js';
 import { World, LOCATIONS, WEATHER } from './world.js';
 import { Traffic, buildStatic, mergeByMaterial } from './traffic.js';
@@ -866,6 +867,7 @@ function collectGpu(root) {
   root.traverse((o) => {
     if (o.geometry) geo.add(o.geometry);
     if (o.skeleton?.boneTexture) tex.add(o.skeleton.boneTexture); // the crew's bones (crew.js), uploaded as a texture
+    if (o.isBatchedMesh) for (const k of ['_matricesTexture', '_indirectTexture', '_colorsTexture']) addTex(o[k]); // a batched plane's per-instance data (acBatch.js)
     for (const m of [].concat(o.material || [])) {
       if (!m) continue; mat.add(m);
       for (const v of Object.values(m)) addTex(v);
@@ -1559,13 +1561,16 @@ async function drawPartThumbs() {
   const later = (f, ms) => (window.requestIdleCallback ? requestIdleCallback(f, { timeout: ms }) : setTimeout(f, 16));
   const step = () => {
     if (state !== 'hangar') { setTimeout(step, 1000); return; } // not during a flight or the wind tunnel
+    // not while the sounds are decoding either: with software WebGL (CI) each picture is heavy CPU work, and drawing them
+    // alongside the 131 clips' decode made the clips take 27-35 s instead of ~10 (#180). (Deployed builds have them baked.)
+    if (audio.samplesLoading) { setTimeout(step, 300); return; }
     const t0 = performance.now();
     do {
       const i = Math.max(0, todo.findIndex((id) => PARTS[id].cat === activeCat)), id = todo.splice(i, 1)[0];
       try { thumbs[id] = drawer.draw(id); } catch (e) { console.warn('part picture failed', id, e); thumbs[id] = ''; }
       const img = document.querySelector(`#part-list .part-card[data-id="${id}"] img`); if (img && thumbs[id]) img.src = thumbs[id];
     } while (todo.length && performance.now() - t0 < 10);
-    if (todo.length) { later(step, 200); return; }
+    if (todo.length) { later(step, 2000); return; } // (idle time first: a forced step only after 2 s)
     drawer.dispose();
     if (COMMIT !== 'dev') LS.set('partThumbs', { key: THUMB_KEY, pics: Object.fromEntries(Object.entries(thumbs).filter(([id]) => !(id in baked))) });
   };
@@ -1594,6 +1599,7 @@ async function boot() {
   const saved = LS.get('current', null);
   await bootStep('vehicle', 'Building your vehicle…', 0.85, 3000);
   preloadTownTextures(); preloadFoliage(); // flight textures: downloaded while the vehicle is built
+  await cabinBakesReady; // (this device's saved cabin lighting, so a vehicle built before isn't baked again)
   hangar.setQuality(qualityTier());
   hangar.load(saved && saved.parts?.length ? saved : presets[0]);
   await bootStep('hangar', 'Opening the hangar…', 1, 800);

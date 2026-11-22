@@ -22,8 +22,17 @@ const ROOM = new THREE.Box3(new THREE.Vector3(-HW + 0.8, -60, -HD + 0.8), new TH
 const OBSTACLES = [new THREE.Box3(new THREE.Vector3(17.2, -1, 26.0), new THREE.Vector3(HW, 7.6, HD))];
 
 // ---------- small helpers ----------
+// A texture straight from the file's bytes as an ImageBitmap: the browser decodes it off the main thread (decoding an
+// <img> into one, as decoded() does, runs on the main thread: ~1.5 s for the hangar's set on a tablet, a freeze just
+// as the hangar opens). Falls back to the plain loader (then decoded()) where that isn't supported.
+function loadBitmapTexture(loader, url, onLoad, onError) {
+  if (typeof createImageBitmap !== 'function' || typeof fetch !== 'function') return loader.load(url, onLoad, undefined, onError);
+  fetch(url).then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`${r.status} ${url}`))))
+    .then((b) => createImageBitmap(b, { imageOrientation: 'flipY', premultiplyAlpha: 'none' }))
+    .then((bm) => { const t = new THREE.Texture(bm); t.flipY = false; t.needsUpdate = true; onLoad(t); }, (e) => onError?.(e));
+}
 // swap a loaded <img> for a decoded, already flipped ImageBitmap (falls back to the <img> where that isn't supported)
-const decoded = (t) => (typeof createImageBitmap !== 'function' ? Promise.resolve() : createImageBitmap(t.image, { imageOrientation: 'flipY', premultiplyAlpha: 'none' })
+const decoded = (t) => (typeof createImageBitmap !== 'function' || (typeof ImageBitmap !== 'undefined' && t.image instanceof ImageBitmap) ? Promise.resolve() : createImageBitmap(t.image, { imageOrientation: 'flipY', premultiplyAlpha: 'none' })
   .then((bm) => { t.image = bm; t.flipY = false; t.needsUpdate = true; }).catch(() => {}));
 const rng = (seed) => () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
 const col = (c) => (c instanceof THREE.Color ? c : new THREE.Color(c));
@@ -891,7 +900,7 @@ export class HangarEnv {
       const sz = px(name), out = {};
       let left = 3; this.loading++;
       for (const [suf, key] of [['c', 'map'], ['n', 'normalMap'], ['r', 'roughnessMap']]) {
-        L.load(`${BASE}${name}_${sz}_${suf}.webp`, (t) => {
+        loadBitmapTexture(L, `${BASE}${name}_${sz}_${suf}.webp`, (t) => {
           t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = name === 'floor' || name === 'apron' ? aniso : Math.min(aniso, 4); t.repeat.setScalar(rep);
           if (suf === 'c') t.colorSpace = THREE.SRGBColorSpace;
           out[key] = t;
@@ -901,7 +910,7 @@ export class HangarEnv {
             for (const m of mats) { for (const k in out) { m[k]?.dispose?.(); m[k] = out[k]; } if (m.normalMap) m.normalScale.setScalar(name === 'floor' ? 0.6 : 1); if (name !== 'floor') m.roughness = 1; m.needsUpdate = true; } // the maps carry the roughness
             this.loading--; this.onChange('tex');
           } });
-        }, undefined, () => { if (--left === 0) this.loading--; });
+        }, () => { if (--left === 0) this.loading--; });
       }
     };
     load('floor', [this.floorMat]); load('cladding', [this.M.clad]); load('door', [this.M.door]); load('plate', [this.M.plate]);

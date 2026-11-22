@@ -659,7 +659,7 @@ class Rig {
     // under the bone line, thumb on the inboard side)
     this.hand = HM ? { G: (k, r) => HM[k].G(r), thumb: { R: HM.R.thumb, L: HM.L.thumb } } : { G: () => V(0, 0.062, -0.016), thumb: { R: -1, L: 1 } };
     this.opts = opts; this.col = C.col ? C.col.clone() : null;
-    this.state = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 };
+    this.state = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0, shift: 0 };
     this.q = Array.from({ length: NB }, () => new THREE.Quaternion());
     this.p = Array.from({ length: NB }, () => V());
     // posture: solved once for this person in this seat at these controls (cached), then only the arms follow the
@@ -1005,15 +1005,23 @@ class Rig {
       const stand = !!this.v?.hy, dy = clamp(-s.sw.y * (stand ? 0.04 : 0.008), stand ? -Math.min(0.13, Math.max(0, this.v.hy - 0.02)) : -0.02, stand ? 0.025 : 0.01); // (a standing rider sinks no lower than just above the saddle)
       if (dy) { this.hipAt.y += dy; this.spinePos.y += dy; this.hipR.y += dy; this.hipL.y += dy; }
     }
+    // the rider's weight (s.shift, the same shift bike.js gives the physics; + back, - forward). Braking hard: hips back
+    // towards the tail and a little lower, the arms straightening to hold the body off the bars. On the gas: hips
+    // forward and the chest down over the bars (below, with the swing), the arms bending.
+    const shift = bars && !this.solving ? s.shift || 0 : 0, stand = !!this.v?.hy;
+    if (Math.abs(shift) > 0.005) {
+      const dz = shift * (shift > 0 ? (stand ? 0.12 : 0.05) : (stand ? 0.06 : 0.02)), dy = -Math.abs(shift) * (stand ? 0.04 : 0.01);
+      for (const v of [this.hipAt, this.spinePos, this.hipR, this.hipL]) { v.z += dz; v.y += dy; }
+    }
     if (bars) p[B.hips].copy(this.hipAt); else p[B.hips].copy(this.base);
     q[B.hips].identity();
     // g-forces: the torso swings about the hips the way the vehicle's acceleration throws it (s.sw: the body's lag, in
     // g, from update's spring; +x right, +z back, +y heavier). Belted into a seat it moves a little (and the canopy
     // is close); a rider on the pegs much more. The shoulders, neck and arms follow the swung spine.
     const sw = s.sw, spQ = _swQ.copy(this.spineQ), spP = _swP.copy(this.spinePos);
-    if (sw && !this.solving && (sw.x || sw.y || sw.z)) {
-      const lim = bars ? 0.3 : 0.1, gain = bars ? 0.16 : 0.07;
-      const pitch = clamp(sw.z * gain - Math.max(0, sw.y) * gain * (!bars ? 0.25 : this.v?.hy ? 0.6 : 0), -lim, lim), roll = clamp(-sw.x * gain, -lim, lim);
+    if (sw && !this.solving && (sw.x || sw.y || sw.z || shift)) {
+      const lim = bars ? 0.3 : 0.1, gain = bars ? 0.16 : 0.07, lunge = Math.max(0, -shift); // (leaning on the gas: the rider is ready for the push back)
+      const pitch = clamp(sw.z * gain * (sw.z > 0 ? 1 - 0.7 * lunge : 1) - Math.max(0, sw.y) * gain * (!bars ? 0.25 : this.v?.hy ? 0.6 : 0) - lunge * (stand ? 0.2 : 0.06), -lim, lim), roll = clamp(-sw.x * gain, -lim, lim);
       _swR.setFromEuler(_swE.set(pitch, 0, roll)); spQ.premultiply(_swR); spP.sub(p[B.hips]).applyQuaternion(_swR).add(p[B.hips]);
     }
     if (sw || !bars) this.joints((x, y, z) => V(x, y, z).applyQuaternion(spQ).add(spP)); // (seated: from the configured spine each frame, so a swing never sticks)
@@ -1484,9 +1492,30 @@ function figureGeometry(rig) {
     for (let f = 0; f < BP.index.length; f += 3) { const [a, b, c] = [BP.index[f], BP.index[f + 1], BP.index[f + 2]]; if (!use(a) || !use(b) || !use(c)) continue; // (each triangle's corners, edge middles and centre: dense enough that no ray slips between)
       const pa = at3(a), pb = at3(b), pc = at3(c); pts.push(pa, pb, pc, pa.clone().lerp(pb, 0.5), pb.clone().lerp(pc, 0.5), pc.clone().lerp(pa, 0.5), pa.clone().add(pb).add(pc).multiplyScalar(1 / 3)); }
     const wear = Math.max(...GF.list.filter((g) => g.slot === 'fabric').map((g) => g.off), 0) + 0.006 + 0.002, q = V(); // (the thickest shell, on the clothes' surface up to 6 mm out)
-    const onto = (P, d, off = wear, r = 0.014) => { let best = 0; for (const p of pts) { q.copy(p).sub(P); const t = q.dot(d); if (t > best && q.addScaledVector(d, -t).lengthSq() < r * r) best = t; }
+    // The points are binned in a grid (cells of G, at least the largest ray radius), so a ray only tests the points in
+    // the cells along it (within one cell of samples every G/2: a superset of those within r of it, so the same answer
+    // as testing them all), and cz only the points in its height's bins (in their original order: the same sum).
+    const G = 0.02, gk = (x, y, z) => ((x + 512) * 1024 + (y + 512)) * 1024 + (z + 512), grid = new Map(), ybin = new Map(), lo = V(Infinity, Infinity, Infinity), hi = V(-Infinity, -Infinity, -Infinity);
+    pts.forEach((p, i) => { const k2 = gk(Math.floor(p.x / G), Math.floor(p.y / G), Math.floor(p.z / G)); let c = grid.get(k2); if (!c) grid.set(k2, (c = [])); c.push(p);
+      const yb = Math.floor(p.y / 0.02); let b = ybin.get(yb); if (!b) ybin.set(yb, (b = [])); b.push(i); lo.min(p); hi.max(p); });
+    const seen = new Set(), cand = [];
+    const onto = (P, d, off = wear, r = 0.014) => {
+      let best = 0;
+      if (r > G) { for (const p of pts) { q.copy(p).sub(P); const t = q.dot(d); if (t > best && q.addScaledVector(d, -t).lengthSq() < r * r) best = t; } } // (a wider ray than the grid allows: all of them)
+      else {
+        // the ray from P while it can still pass within r of the points' box
+        let t1 = 0; for (const c of [lo.x, hi.x]) for (const b of [lo.y, hi.y]) for (const a of [lo.z, hi.z]) t1 = Math.max(t1, (c - P.x) * d.x + (b - P.y) * d.y + (a - P.z) * d.z);
+        seen.clear(); cand.length = 0;
+        for (let t = 0; t <= t1 + G; t += G / 2) {
+          const cx = Math.floor((P.x + d.x * t) / G), cy = Math.floor((P.y + d.y * t) / G), cz2 = Math.floor((P.z + d.z * t) / G);
+          for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) { const k2 = gk(cx + a, cy + b, cz2 + c); if (seen.has(k2)) continue; seen.add(k2); const cl = grid.get(k2); if (cl) cand.push(cl); }
+        }
+        for (const cl of cand) for (const p of cl) { q.copy(p).sub(P); const t = q.dot(d); if (t > best && q.addScaledVector(d, -t).lengthSq() < r * r) best = t; }
+      }
       return best > 0 ? P.clone().addScaledVector(d, best + off) : null; }; // (only ahead of P, which is inside the body)
-    const cz = (y) => { let s2 = 0, m = 0; for (const p of pts) if (Math.abs(p.y - y) < 0.02 && Math.abs(p.x) < 0.1) { s2 += p.z; m++; } return m ? s2 / m : 0; }; // (the torso's middle, front to back)
+    const cz = (y) => { // (the torso's middle, front to back)
+      const b0 = Math.floor(y / 0.02), ids = [...(ybin.get(b0 - 2) || []), ...(ybin.get(b0 - 1) || []), ...(ybin.get(b0) || []), ...(ybin.get(b0 + 1) || []), ...(ybin.get(b0 + 2) || [])].sort((a, b) => a - b);
+      let s2 = 0, m = 0; for (const i of ids) { const p = pts[i]; if (Math.abs(p.y - y) < 0.02 && Math.abs(p.x) < 0.1) { s2 += p.z; m++; } } return m ? s2 / m : 0; };
     return { pts, onto, cz, wear };
   }
   // a run of surface points (each [point, outward direction]) relaxed into a smooth line, then kept on the surface
@@ -2478,7 +2507,7 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
     m.frustumCulled = false; // a few hundred triangles; skinned bounds would otherwise need a refresh as the pose changes
     root.add(m); m.bind(skel, new THREE.Matrix4());
   }
-  const smooth = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 };
+  const smooth = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0, shift: 0 };
   root.userData.crewRig = {
     rig, root,
     eye: eyePoint(rig), // rig space: between the eyes, head straight (cockpit view, stations.js)
@@ -2492,7 +2521,7 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
       const k = Math.min(1, (dt || 0.016) * 12), s = smooth;
       const tgt = { pitch: clamp(c.pitch || 0, -1, 1), roll: clamp(c.roll || 0, -1, 1), yaw: clamp(c.yaw || 0, -1, 1), thr: clamp(c.throttle ?? 0.4, 0, 1), steer: clamp(c.steer || 0, -1.7, 1.7) };
       tgt.look = clamp(-(tgt.roll * 0.35 + tgt.yaw * 0.25) + tgt.steer * 0.25, -0.6, 0.6);
-      if (rig.ctl === 'bars') { tgt.lean = clamp(c.lean || 0, -0.6, 0.6); tgt.tuck = clamp(c.tuck || 0, 0, 1); tgt.foot = clamp(c.foot || 0, 0, 1); tgt.bikeLean = clamp(c.bikeLean || 0, -1, 1); s.hands = c.hands || null; }
+      if (rig.ctl === 'bars') { tgt.lean = clamp(c.lean || 0, -0.6, 0.6); tgt.tuck = clamp(c.tuck || 0, 0, 1); tgt.foot = clamp(c.foot || 0, 0, 1); tgt.bikeLean = clamp(c.bikeLean || 0, -1, 1); tgt.shift = clamp(c.shift || 0, -1, 1); s.hands = c.hands || null; }
       let moving = false;
       for (const a in tgt) { const kk = a === 'look' ? k * 0.35 : k; const v = s[a] + (tgt[a] - s[a]) * kk; if (Math.abs(v - tgt[a]) > 1e-3) moving = true; s[a] = v; }
       // g-forces (c.gf: the specific force in the rig's frame, in g; (0, 1, 0) sitting still): the body lags the

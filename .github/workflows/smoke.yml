@@ -18,7 +18,7 @@ concurrency:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20 # (the full suite passed 10 min as presets were added: runs were stopped mid-way and showed as cancelled, #180)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

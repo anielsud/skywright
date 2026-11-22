@@ -37,6 +37,7 @@ export const LEAN_MAX = 0.62; // rad (~35°): 0.7 g of cornering, inside the tyr
 const LOCK = 0.55; // rad: full lock at walking pace
 const SLIDE = 0.6; // rad: the slide angle a skid holds at full stick (~35°)
 const WHEELIE = 0.42, STOPPIE = -0.28, LOOP = 0.62; // rad (ground-relative pitch): wheelie and stoppie heights, hard limit
+const RIDER = { kg: 70, back: 0.12, down: 0.05, fwd: 0.08 }; // the rider's share of the frame's mass, and how far they shift it (m): bracing for a hard stop, leaning on the gas
 
 // Two in-line wheels on the centreline? wheels: [{ x, z, ...}] in the vehicle frame. Returns { front, rear, L } or null.
 export function bikeLayout(wheels) {
@@ -152,6 +153,21 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
     const lim = b.trick === 'wheelie' ? WHEELIE - 0.04 : 0.05;
     if (rel > lim) ac.driveF *= clamp(1 - (rel - lim) * 12 - Math.max(0, w.x) * 0.8, 0.05, 1);
   }
+  // the rider's weight (every mode): braking hard they push their hips back and down and hold themselves off the bars
+  // with straight arms, keeping their weight behind the front wheel, so the bike can stop harder before the back goes
+  // light; on the gas they lean forward over the bars, keeping the front down so the engine drives the bike on instead
+  // of lifting it; in a wheelie (the trick) they sit back. b.shift (+1 all the way back, -1 forward) moves at a
+  // rider's pace and the crew rig shows the same shift (riderInput). Moving their weight about the centre of mass is
+  // the same as a torque: back and down, nose up (their height out of the stop's pitching moment); forward, nose down.
+  const dv = ((b.vg ?? vg) - vg) / Math.max(dt, 1e-3); b.vg = vg;
+  b.dec = (b.dec || 0) + (clamp(dv, 0, 12) - (b.dec || 0)) * Math.min(1, dt * 10); // (deceleration and acceleration, m/s²)
+  b.acc = (b.acc || 0) + (clamp(-dv, 0, 12) - (b.acc || 0)) * Math.min(1, dt * 10);
+  const up = ground && !fallen, wheelie = b.trick === 'wheelie';
+  const braceT = up && vg > 1.5 ? clamp(Math.max(ac.svcBrake, ctl.hand > 0.5 ? 0.5 : 0), 0, 1) : 0;
+  const lungeT = up && rc && !wheelie && ctl.throttle > 0.6 && vg > -0.5 ? clamp((b.acc - 1.5) / 3, 0, 1) : 0; // (hard on the gas only: cruising they sit normally)
+  b.shift = (b.shift || 0) + ((braceT || (wheelie ? 0.5 : -lungeT)) - (b.shift || 0)) * Math.min(1, dt * 6);
+  if (b.shift > 0.01 && fc && !wheelie) T.x += RIDER.kg * (G * RIDER.back + b.dec * RIDER.down) * b.shift;
+  else if (b.shift < -0.01 && rc && !wheelie) T.x += RIDER.kg * G * RIDER.fwd * b.shift;
   // braking (every mode, like ABS): the brakes ease off before the back wheel goes light (it would slide out and spin
   // the bike), or, in a stoppie, before the back goes higher than the stoppie
   if (ac.svcBrake > 0 && fc) {

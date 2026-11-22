@@ -2,6 +2,28 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.142.0', items: [
+    "The hangar no longer freezes for a moment when it opens",
+  ] },
+  { v: '1.141.0', items: [
+    "Behind the scenes: the game's automatic tests now really drive the cars and boats, so engine problems get caught sooner.",
+  ] },
+  { v: '1.140.0', items: [
+    "Vehicles you've built before open faster",
+  ] },
+  { v: '1.139.0', items: [
+    "Bike riders now lean forward over the bars when you go full gas, and sit back when you pull a wheelie.",
+  ] },
+  { v: '1.138.0', items: [
+    "Bike riders now push their hips back when you brake hard, keeping their weight behind the front wheel, just like real riders.",
+    "Bikes stop a little quicker too.",
+  ] },
+  { v: '1.137.0', items: [
+    "Pilots and drivers get ready twice as fast when the game opens",
+  ] },
+  { v: '1.136.0', items: [
+    "Planes, cars and boats are drawn in far fewer steps, so the game has much less work to do every frame.",
+  ] },
   { v: '1.135.0', items: [
     "Fighter jets have a real head-up display: bright green lines on the glass show your speed, height, heading and g, and the pitch ladder stays on the horizon as you roll and loop.",
     "The fighter's radar screen shows other planes, helicopters and balloons around you, and the other screen shows a moving map.",
