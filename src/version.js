@@ -7,3 +7,5 @@ export const BUILT = '';
 export const SOLVER = 'dev';
 // a hash of the cabin lighting bake (src/cabinLight.js, src/interior.js): saved bakes stay valid until it changes
 export const LIGHT = 'dev';
+// a hash of the cockpit views' code (src/stations.js): which linings cover the windows, saved and baked, stays valid until it changes
+export const VIEWS = 'dev';

@@ -22,6 +22,7 @@ import { clamp, smoothstep } from './noise.js';
 import { Site, THEMES, V, Y, PAINT, DIRT, col, kicker, descent, loopCurve, stuntMaterials, ATLAS } from './stuntKit.js';
 import { findSite } from './stuntSite.js';
 import { EvelJump, planEvel } from './evelJump.js';
+import { COMMIT } from './version.js';
 
 const RT = 30, TW = 7, LANE = 3.5; // turn radius, track half width, lane offset
 const BANK = 26; // the east turn's banking (degrees)
@@ -62,9 +63,40 @@ export function inStuntCut(plan, x, z) {
   return false;
 }
 
+// a placement's layout: the named one, with the placement's own levelling
+export const layoutOf = (cfg) => ({ ...LAYOUTS[cfg.layout || 'classic'], ...(cfg.flat != null ? { flat: cfg.flat, blend: cfg.blend } : {}), ...(cfg.fill != null ? { fill: cfg.fill } : {}) });
+
+// The searched site (findSite) is the same every time at a place (a fixed seed and the place's own data), but the search
+// takes 0.1-0.3 s of every flight's start. So: the deploy works it out for every place (tools/bake/boot.py ->
+// assets/boot/stunts.json, used only for that same build, COMMIT), and a site found here is kept for the visit.
+const SITES = new Map(), siteStats = { baked: 0, kept: 0, found: 0 }; // (siteStats: for tools/test/startbakes.js)
+let bakedSites = null;
+if (COMMIT !== 'dev') fetch(new URL('../assets/boot/stunts.json', import.meta.url)).then((r) => (r.ok ? r.json() : null)).then((j) => { if (j?.key === COMMIT) bakedSites = j.sites; }).catch(() => {});
+const copySite = (r) => r && { ...r, why: r.why && { ...r.why } };
+function siteFor(w, cfg, L) {
+  const id = w.loc.id;
+  if (!SITES.has(id)) {
+    const b = bakedSites?.[id];
+    if (b !== undefined) { SITES.set(id, b); siteStats.baked++; } else { SITES.set(id, findSite(w, cfg, L)); siteStats.found++; return copySite(SITES.get(id)); }
+  } else siteStats.kept++;
+  return copySite(SITES.get(id));
+}
+export { siteStats };
+// Every place's searched site, for the bake (and tools/test/startbakes.js): the real data loaded as the World would
+// (at Low: the search reads heights, the landcover map and the 2048 px imagery copy, the same on every tier).
+export async function bakeStuntSites(locs) {
+  const { loadReal } = await import('./realworld.js'), out = {};
+  for (const loc of Object.values(locs)) {
+    const cfg = loc?.stunts; if (!cfg || cfg.atJump || cfg.x != null) continue;
+    const D = await loadReal(loc, 'low');
+    out[loc.id] = findSite({ loc, real: D, height: (x, z) => loc.height(null, x, z), size: loc.core || 22000, waterLevel: loc.water }, cfg, layoutOf(cfg));
+  }
+  return out;
+}
+
 // Where a location's stunt sites go and the ground they level. Runs before the terrain is built (World constructor).
 export function planStunts(w, cfg) {
-  const t0 = performance.now(), L = { ...LAYOUTS[cfg.layout || 'classic'], ...(cfg.flat != null ? { flat: cfg.flat, blend: cfg.blend } : {}), ...(cfg.fill != null ? { fill: cfg.fill } : {}) };
+  const t0 = performance.now(), L = layoutOf(cfg);
   const evel = cfg.evel ? planEvel(w, cfg.evel) : null;
   if (cfg.evel && !evel) console.warn('[stunts] no gap found for the canyon jump');
   let site;
@@ -72,7 +104,7 @@ export function planStunts(w, cfg) {
     // track runs on through a fork at the east turn, down a link lane, onto the run-up (the park frame turned like the jump's)
     const xe = evel.runStart - LINK - L.XS, { dx, dz } = evel;
     site = { x: evel.x + xe * dx + RT * dz, z: evel.z + xe * dz - RT * dx, yaw: evel.yaw, link: LINK, atJump: true };
-  } else site = cfg.x != null ? { x: cfg.x, z: cfg.z, yaw: cfg.yaw || 0, fixed: true } : findSite(w, cfg, L);
+  } else site = cfg.x != null ? { x: cfg.x, z: cfg.z, yaw: cfg.yaw || 0, fixed: true } : siteFor(w, cfg, L);
   if (!site) { console.warn(`[stunts] no flat, clear site for the stunt park at ${w.loc.id}`); return null; }
   const c = Math.cos(site.yaw), s = Math.sin(site.yaw);
   let sum = 0, n = 0;

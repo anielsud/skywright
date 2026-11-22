@@ -34,6 +34,9 @@ jobs:
           # the cabin lighting bake's version: bakes each device keeps (src/cabinLight.js) stay valid until it changes
           LIGHT="$(cat src/cabinLight.js src/interior.js | sha1sum | cut -c1-10)"
           sed -i "s/^export const LIGHT = .*/export const LIGHT = '${LIGHT}';/" src/version.js
+          # the cockpit views' version: which cabin linings cover the windows (baked below, and kept by each device) stays valid until it changes
+          VIEWS="$(cat src/stations.js | sha1sum | cut -c1-10)"
+          sed -i "s/^export const VIEWS = .*/export const VIEWS = '${VIEWS}';/" src/version.js
           # a fresh offline-cache name per deploy, so installed apps always pick up the new build
           sed -i "s/^const CACHE = .*/const CACHE = 'skywright-${SHA}';/" sw.js
           cat src/version.js
@@ -41,7 +44,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      # Start-up data (part pictures, stock crews' postures) worked out here instead of on every player's device.
+      # Start-up data (part pictures, stock crews' postures, stunt park sites, which cockpit linings cover the windows) worked out here instead of on every player's device.
       # Optional: without it the game works them out itself, as before.
       - name: Bake start-up data
         continue-on-error: true

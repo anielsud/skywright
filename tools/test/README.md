@@ -363,6 +363,28 @@ python3 tools/test/cockpitcheck.py --random 60 --seed 9  # more random builds
 
 Run it when you change cockpit, seat or crew builders, or the camera's cockpit view. Smoke also visits every cockpit
 view of every preset through the camera button's path.
+
+## Start-up bakes check
+
+`startbakes.py` checks that what the deploy bakes into `assets/boot` (`tools/bake/boot.py`) and what the game keeps for
+the visit or on the device is exactly what it would work out itself:
+
+- **cockpit views** (`src/stations.js`: which cabin linings cover the windows) of every stock vehicle: worked out with
+  no cache, from the visit's cache, and from a bake round-tripped through JSON (as `views.json` and localStorage
+  are): the same linings and the same settled eyes for every seat, and the cache really used for every seat that has
+  linings;
+- **stunt park sites** (`src/stuntSite.js` `findSite`) at every place that searches for one: the site the World
+  planned == a fresh search on that World == the bake's (`bakeStuntSites`, as `boot.py` writes it); a second flight
+  at the same place takes it from the visit's cache and gets the same site.
+
+```sh
+python3 tools/test/startbakes.py                                   # ~3 min
+python3 tools/test/startbakes.py --only views --presets Jumbo      # one vehicle
+python3 tools/test/startbakes.py --only stunts --locations islands # one place
+```
+
+Run it when you change `stations.js`, `stuntSite.js`, `stuntPark.js` or what they read, or `tools/bake/boot.py`.
+
 ## Car handling test
 
 `drivecheck.py` drives every stock car (not the bikes) on flat ground through the game's own physics (60 Hz, no
