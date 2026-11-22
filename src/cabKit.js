@@ -20,7 +20,7 @@ export const TILE = {
   gauge: [0, 0, 256, 256], tach: [256, 0, 256, 256], chart: [512, 0, 256, 256], radar: [768, 0, 256, 256],
   engine: [0, 256, 256, 256], switches: [256, 256, 512, 256], vhf: [768, 256, 256, 128], monitor: [768, 384, 256, 128],
   avionics: [0, 512, 256, 512], annun: [256, 512, 256, 64], heliSw: [256, 576, 256, 128], digi: [512, 512, 256, 128],
-  ai: [768, 512, 256, 256], alt: [512, 640, 256, 256], compass: [256, 704, 256, 256], plate: [768, 768, 256, 256],
+  ai: [768, 512, 256, 256], alt: [512, 640, 256, 256], compass: [256, 704, 256, 256], plate: [768, 768, 256, 256], placard: [512, 896, 256, 128],
 };
 function atlasCanvas() {
   const c = document.createElement('canvas'); c.width = c.height = S; const g = c.getContext('2d');
@@ -127,6 +127,10 @@ function atlasCanvas() {
     for (let i = 0; i < 400; i++) { g.fillStyle = `rgba(255,255,255,${Math.random() * 0.05})`; g.fillRect(x, y + Math.random() * h, w, 1); }
     for (const [sx, sy] of [[12, 12], [w - 12, 12], [12, h - 12], [w - 12, h - 12]]) { g.fillStyle = '#888'; g.beginPath(); g.arc(x + sx, y + sy, 5, 0, 7); g.fill(); }
   }
+  { // placards: four 128 x 64 stickers (caution, fire extinguisher, data plate, kill switch)
+    const [x, y] = TILE.placard, P = [['#f2c300', '#111', 'CAUTION', 'KEEP CLEAR'], ['#c8102e', '#fff', 'FIRE', 'EXTINGUISHER'], ['#d9dcdf', '#111', 'MAX 2 PERSONS', 'NO SMOKING'], ['#111', '#f2c300', 'KILL', 'SWITCH']];
+    P.forEach(([bg, fg, a1, a2], k) => { const px = x + (k % 2) * 128, py = y + Math.floor(k / 2) * 64; g.fillStyle = bg; g.fillRect(px + 2, py + 2, 124, 60); g.strokeStyle = fg; g.lineWidth = 2; g.strokeRect(px + 6, py + 6, 116, 52); text(a1, px + 64, py + 24, 15, fg); text(a2, px + 64, py + 44, 11, fg); });
+  }
   return c;
 }
 export const atlasMat = () => cached('atlas', () => {
@@ -155,6 +159,7 @@ export function gauge(bag, m, r, tile = 'gauge', bezel = null) {
   const d = toTile(new THREE.CircleGeometry(r, 24), tile); d.applyMatrix4(at(m, 0, 0, 0.002)); bag.add(d, atlasMat());
   const ring = new THREE.TorusGeometry(r * 1.04, r * 0.12, 6, 24); ring.applyMatrix4(at(m, 0, 0, 0.004)); bag.add(ring, bezel || blackM());
   const can = new THREE.CylinderGeometry(r * 1.1, r * 1.1, 0.012, 20, 1, true); can.rotateX(Math.PI / 2); can.applyMatrix4(at(m, 0, 0, -0.004)); bag.add(can, bezel || blackM());
+  gaugeGlass(bag, m, r * 1.02);
 }
 // a toggle switch: a hex nut on the panel and a short bat lever tilted up
 export function toggle(bag, m, x, y, metal) {
@@ -169,22 +174,22 @@ export function knob(bag, m, x, y, r, mat) {
 export function box(bag, m, c, s, mat) { const g = new THREE.BoxGeometry(...s); g.translate(...c); if (m) g.applyMatrix4(m); bag.add(g, mat); return g; }
 
 // ---------- materials ----------
-export const blackM = () => cached('ckBlack', () => new THREE.MeshStandardMaterial({ color: 0x141518, metalness: 0.2, roughness: 0.55 }));
-export const satinBlack = () => cached('ckSatin', () => new THREE.MeshStandardMaterial({ color: 0x1d1e21, metalness: 0.1, roughness: 0.7 }));
+export const blackM = () => cached('ckBlack', () => kind('powder', new THREE.MeshStandardMaterial({ color: 0x141518, metalness: 0.2, roughness: 0.55 })));
+export const satinBlack = () => cached('ckSatin', () => kind('powder', new THREE.MeshStandardMaterial({ color: 0x2a2c30, metalness: 0.1, roughness: 0.62 })));
 // powder-coated / anodised sheet aluminium (dash panels, door cards, floor plates)
-export const sheetAlu = (c = 0x9aa0a8) => cached('ckAlu' + c, () => new THREE.MeshStandardMaterial({ color: c, metalness: 0.85, roughness: 0.42, roughnessMap: brushed() }));
-export const carbon = () => cached('ckCarbon', () => { const t = carbonTex(); return new THREE.MeshPhysicalMaterial({ color: 0x2a2c30, map: t, metalness: 0.2, roughness: 0.38, clearcoat: 0.9, clearcoatRoughness: 0.12 }); });
+export const sheetAlu = (c = 0x9aa0a8) => cached('ckAlu' + c, () => kind('brushed', new THREE.MeshStandardMaterial({ color: c, metalness: 0.85, roughness: 0.42, roughnessMap: brushed() })));
+export const carbon = () => cached('ckCarbon', () => { const t = carbonTex(); return kind('carbon', new THREE.MeshPhysicalMaterial({ color: 0x2a2c30, map: t, metalness: 0.2, roughness: 0.38, clearcoat: 0.9, clearcoatRoughness: 0.12 })); });
 // suede / race fabric (seat inserts, harness pads)
-export const suede = (c = 0x202124) => cached('ckSuede' + c, () => new THREE.MeshPhysicalMaterial({ color: c, metalness: 0, roughness: 0.95, sheen: 0.6, sheenRoughness: 0.7, sheenColor: new THREE.Color(0.25, 0.25, 0.25) }));
-export const webbing = (c) => cached('ckWeb' + c, () => new THREE.MeshStandardMaterial({ color: c, metalness: 0, roughness: 0.8 }));
-export const foam = (c = 0x1a1b1d) => cached('ckFoam' + c, () => new THREE.MeshStandardMaterial({ color: c, metalness: 0, roughness: 0.98 }));
+export const suede = (c = 0x202124) => cached('ckSuede' + c, () => kind('fabric', new THREE.MeshPhysicalMaterial({ color: c, metalness: 0, roughness: 0.95, sheen: 0.6, sheenRoughness: 0.7, sheenColor: new THREE.Color(0.25, 0.25, 0.25) })));
+export const webbing = (c) => cached('ckWeb' + c, () => kind('fabric', new THREE.MeshStandardMaterial({ color: c, metalness: 0, roughness: 0.8 })));
+export const foam = (c = 0x1a1b1d) => cached('ckFoam' + c, () => kind('foam', new THREE.MeshStandardMaterial({ color: c, metalness: 0, roughness: 0.98 })));
 // diamond tread plate (a race truck's floor): a bump map of raised diamonds on brushed aluminium, box uvs (repeat set per use)
 export const treadPlate = () => cached('ckTread', () => {
   const W = 128, c = document.createElement('canvas'); c.width = c.height = W; const g = c.getContext('2d');
   g.fillStyle = '#000'; g.fillRect(0, 0, W, W); g.fillStyle = '#fff';
   for (const [x, y, a] of [[32, 32, 0.6], [96, 96, 0.6], [96, 32, -0.6], [32, 96, -0.6]]) { g.save(); g.translate(x, y); g.rotate(a); g.beginPath(); g.ellipse(0, 0, 22, 5, 0, 0, 7); g.fill(); g.restore(); }
   const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(30, 30);
-  return new THREE.MeshStandardMaterial({ color: 0xb4b9c0, metalness: 0.9, roughness: 0.35, bumpMap: t, bumpScale: 3, roughnessMap: brushed() });
+  return kind('floor', new THREE.MeshStandardMaterial({ color: 0xb4b9c0, metalness: 0.9, roughness: 0.35, bumpMap: t, bumpScale: 3, roughnessMap: brushed() }));
 });
 function brushed() {
   return cached('ckBrushed', () => {
@@ -217,13 +222,17 @@ export function raceSeat(bag, at, [w, backH, panL, tilt], { prof, top, shell = c
     for (const t of tris) for (const k of [t[0], t[1], t[2], t[0], t[2], t[1]]) { const p = P(q[k][0], s, q[k][1]); pos.push(p.x, p.y, p.z); }
     const cg = new THREE.BufferGeometry(); cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); cg.computeVertexNormals(); bag.add(cg, shell); }
   // the back's padded insert (its face on the declared surface)
-  { const s0 = 0.05, s1 = Math.min(backH + 0.12, top - 0.28), g = new THREE.BoxGeometry(w * 0.62, s1 - s0, 0.02, 1, 1, 1); g.translate(0, (s0 + s1) / 2, 0.01); g.rotateX(tilt); g.translate(ax, ay, az + 0.02); bag.add(g, pad); }
+  { const s0 = 0.05, s1 = Math.min(backH + 0.12, top - 0.28), g = new THREE.BoxGeometry(w * 0.62, s1 - s0, 0.02, 1, 1, 1); g.translate(0, (s0 + s1) / 2, 0.01); g.rotateX(tilt); g.translate(ax, ay, az + 0.02); bag.add(g, pad);
+    // contrast stitching down the insert's edges and across it
+    for (const x of [-w * 0.27, w * 0.27]) bag.add(pipe([P(x, s0 + 0.02, -0.0012), P(x, s1 - 0.02, -0.0012)], 0.0016, 4, 2), stitchM());
+    for (const s of [s0 + (s1 - s0) * 0.35, s0 + (s1 - s0) * 0.62]) bag.add(pipe([P(-w * 0.29, s, -0.0012), P(w * 0.29, s, -0.0012)], 0.0016, 4, 2), stitchM()); }
   // the pan: a shell tub with thigh bolsters, the cushion's top on the declared height
   { const rs = [], hw = prof(0)[0] - 0.01;
     for (let k = 0; k <= 6; k++) { const t = k / 6, z = az + 0.03 - panL * t, bol = 0.05 - 0.03 * t, y0 = pt - 0.095;
       rs.push([V(ax - hw, pt + bol, z), V(ax - hw + 0.065, pt - 0.016, z), V(ax + hw - 0.065, pt - 0.016, z), V(ax + hw, pt + bol, z), V(ax + hw, y0, z), V(ax - hw, y0, z)]); }
     bag.add(ringLoft(rs, true, true), shell);
-    const cu = new THREE.BoxGeometry(2 * hw - 0.14, 0.016, panL * 0.92); cu.translate(ax, pt - 0.008, az + 0.03 - panL * 0.48); bag.add(cu, pad); }
+    const cu = new THREE.BoxGeometry(2 * hw - 0.14, 0.016, panL * 0.92); cu.translate(ax, pt - 0.008, az + 0.03 - panL * 0.48); bag.add(cu, pad);
+    for (const x of [-(hw - 0.08), hw - 0.08]) bag.add(pipe([V(ax + x, pt + 0.0012, az + 0.01), V(ax + x, pt + 0.0012, az + 0.04 - panL * 0.93)], 0.0016, 4, 2), stitchM()); }
   // head pad on the shell behind the helmet, belt slots through the back at shoulder height
   if (headPad) { const g = new THREE.CapsuleGeometry(0.05, 0.1, 4, 10); g.rotateZ(Math.PI / 2); g.scale(1, 1, 0.4); const c = P(0, headPad, 0.0); g.rotateX(tilt); g.translate(c.x, c.y, c.z); bag.add(g, pad); }
   for (const sx of [-1, 1]) { const g = new THREE.BoxGeometry(0.065, 0.016, 0.03); g.rotateX(tilt); const c = P(sx * 0.075, slots, 0.03); g.translate(c.x, c.y, c.z); bag.add(g, blackM()); }
@@ -233,6 +242,7 @@ export function raceSeat(bag, at, [w, backH, panL, tilt], { prof, top, shell = c
   if (s0 != null) { const [hw, f] = prof(top - 0.01), sm = (s0 + top) / 2; for (const sx of [-1, 1]) { const c = P(sx * (hw - th / 2), sm, -f / 2); obs.push({ name: 'head wing', box: c.toArray(), size: [th + 0.01, top - s0, f], rot: [tilt, 0, 0], parts: ['head'] }); } }
   return { panTop: pt, P, obs };
 }
+export const stitchM = () => cached('ckStitch', () => new THREE.MeshStandardMaterial({ color: 0xb8bcc2, metalness: 0, roughness: 0.8 }));
 // a flat belt (webbing) along points, width wd, thickness th, its flat face turned towards `n` (or flat on the way)
 export function strap(bag, pts, wd, th, mat, n = V(0, 0, 1)) {
   const rings = [];
@@ -250,7 +260,7 @@ export function pad(bag, a, b, r, mat = foam()) {
 }
 export { mergeGeometries, pipe };
 // leather upholstery (light aircraft and helicopter seats): a soft sheen, a fine grain from the roughness
-export const leather = (c = 0x8d9096) => cached('ckLeather' + c, () => new THREE.MeshPhysicalMaterial({ color: c, metalness: 0, roughness: 0.55, sheen: 0.4, sheenRoughness: 0.5, sheenColor: new THREE.Color(0.35, 0.35, 0.35), clearcoat: 0.15, clearcoatRoughness: 0.4 }));
+export const leather = (c = 0x8d9096) => cached('ckLeather' + c, () => kind('leather', new THREE.MeshPhysicalMaterial({ color: c, metalness: 0, roughness: 0.55, sheen: 0.4, sheenRoughness: 0.5, sheenColor: new THREE.Color(0.35, 0.35, 0.35), clearcoat: 0.15, clearcoatRoughness: 0.4 })));
 // An upholstered cushion: a rounded box (corner radius r) whose faces bulge out by `bulge`, with `pleats` channels sewn
 // across its front (-z) face. Centred on the origin, w x h x d. (As the boats' cushions.)
 export function cushion(w, h, d, r = 0.04, bulge = 0.015, pleats = 0) {
@@ -265,3 +275,94 @@ export function cushion(w, h, d, r = 0.04, bulge = 0.015, pleats = 0) {
   }
   g.deleteAttribute('normal'); g.deleteAttribute('uv'); const m = mergeVertices(g, 1e-4); m.computeVertexNormals(); return m;
 }
+
+// ---------- surfaces: grain, wear and occlusion from the cab's shape ----------
+// Real cab surfaces are never flat colour: powder coat and moulded plastic have a fine orange-peel and a mottle,
+// brushed aluminium streaks, fabric a weave, foam pores, leather a grain, floors scuffs where feet go. Each kit
+// material carries its kind (userData.cabKind); cabFinish() gives every interior mesh of a cab a variant of its
+// material that adds, from the object-space position (no uvs needed, nothing to load): colour and roughness noise, a
+// bump from the same field, and occlusion from the cab's inner box (corners and the floor's edges darker, the way
+// light dies into a recess; a surface lying on a face of the box isn't darkened by that face). Cost: a few noise
+// lookups per pixel, no textures, no extra draw calls (one variant per material per cab).
+function kind(k, m) { m.userData.cabKind = k; return m; }
+export const surfaceKind = kind;
+const NOISE = /* glsl */`
+  uniform vec3 uCab0; uniform vec3 uCab1; uniform float uCabAO;
+  float cH(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float cN(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(cH(i), cH(i + vec3(1,0,0)), f.x), mix(cH(i + vec3(0,1,0)), cH(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(cH(i + vec3(0,0,1)), cH(i + vec3(1,0,1)), f.x), mix(cH(i + vec3(0,1,1)), cH(i + vec3(1,1,1)), f.x), f.y), f.z); }
+  vec3 cBump(vec3 n, vec3 vp, float h, float k) { vec3 dpx = dFdx(vp), dpy = dFdy(vp); float dhx = dFdx(h), dhy = dFdy(h);
+    vec3 r1 = cross(dpy, n), r2 = cross(n, dpx); float det = dot(dpx, r1); return normalize(abs(det) * n - k * sign(det) * (dhx * r1 + dhy * r2)); }
+  float cFace(float d, float r, float w) { return d < 0.012 ? 1.0 : mix(1.0 - w, 1.0, smoothstep(0.0, r, d)); }
+  float cabOcc(vec3 p) { if (uCabAO <= 0.0) return 1.0; vec3 a = p - uCab0, b = uCab1 - p; if (min(min(a.x, a.y), a.z) < -0.03 || min(min(b.x, b.y), b.z) < -0.03) return 1.0; a = max(a, 0.0); b = max(b, 0.0);
+    return cFace(a.y, 0.22, 0.5 * uCabAO) * cFace(b.y, 0.25, 0.3 * uCabAO) * cFace(a.x, 0.18, 0.35 * uCabAO) * cFace(b.x, 0.18, 0.35 * uCabAO) * cFace(a.z, 0.18, 0.35 * uCabAO) * cFace(b.z, 0.18, 0.35 * uCabAO); }`;
+// per kind: h (bump height field), k (its strength), c (colour factor), r (roughness offset)
+const KIND = {
+  powder: 'float h = (cN(p * 900.0) - 0.5) * 0.25 + (cN(p * 150.0) - 0.5) * 0.2; float k = 0.00035; float c = 1.0 + (cN(p * 55.0) - 0.5) * 0.1 + (cN(p * 7.0) - 0.5) * 0.12; float r = (cN(p * 35.0) - 0.5) * 0.22;',
+  brushed: 'float s = cN(p * vec3(3.0, 420.0, 420.0)); float h = (s - 0.5) * 0.3 + (cN(p * 60.0) - 0.5) * 0.1; float k = 0.00022; float c = 1.0 + (s - 0.5) * 0.16 + (cN(p * 6.0) - 0.5) * 0.12; float r = (s - 0.5) * 0.3 + (cN(p * 9.0) - 0.5) * 0.15;',
+  fabric: 'float fw = clamp(length(fwidth(p)) * 900.0, 0.0, 1.0); float h = mix(sin(p.x * 2600.0 + p.z * 900.0) * sin(p.y * 2600.0 - p.z * 1700.0) * 0.25, 0.0, fw) + (cN(p * 45.0) - 0.5) * 0.5; float k = 0.0006; float c = 1.0 + (cN(p * 30.0) - 0.5) * 0.14 + (cN(p * 5.0) - 0.5) * 0.1; float r = (cN(p * 25.0) - 0.5) * 0.1;',
+  foam: 'float h = (cN(p * 380.0) - 0.5) * 0.8 + (cN(p * 45.0) - 0.5) * 0.5; float k = 0.0007; float c = 1.0 + (cN(p * 22.0) - 0.5) * 0.16; float r = (cN(p * 40.0) - 0.5) * 0.08;',
+  leather: 'float h = (cN(p * 650.0) - 0.5) * 0.55 + (cN(p * 110.0) - 0.5) * 0.3; float k = 0.0004; float c = 1.0 + (cN(p * 14.0) - 0.5) * 0.12 + (cN(p * 70.0) - 0.5) * 0.05; float r = (cN(p * 30.0) - 0.5) * 0.18;',
+  rubber: 'float h = (cN(p * 320.0) - 0.5) * 0.7 + (cN(p * 25.0) - 0.5) * 0.4; float k = 0.0006; float c = 1.0 + (cN(p * 18.0) - 0.5) * 0.14; float r = (cN(p * 20.0) - 0.5) * 0.1;',
+  gel: 'float h = (cN(p * 800.0) - 0.5) * 0.2 + (cN(p * 120.0) - 0.5) * 0.12; float k = 0.0003; float c = 1.0 + (cN(p * 50.0) - 0.5) * 0.035 + (cN(p * 5.0) - 0.5) * 0.05; float r = (cN(p * 30.0) - 0.5) * 0.12;', // gelcoat: orange peel, a faint mottle
+  carbon: 'float h = (cN(p * 400.0) - 0.5) * 0.05; float k = 0.0002; float c = 1.0 + (cN(p * 9.0) - 0.5) * 0.12; float r = (cN(p * 14.0) - 0.5) * 0.12;',
+  // floors: grain plus lighter scuffs where feet go (worn towards the bare material), darker grime patches
+  floor: 'float h = (cN(p * 700.0) - 0.5) * 0.25; float k = 0.0003; float sc = smoothstep(0.55, 0.8, cN(p * vec3(2.2, 1.0, 3.5)) * 0.7 + cN(p * 18.0) * 0.3); float c = 1.0 + sc * 0.28 - smoothstep(0.6, 0.85, cN(p * 4.0 + 7.0)) * 0.18 + (cN(p * 60.0) - 0.5) * 0.1; float r = sc * 0.2 + (cN(p * 30.0) - 0.5) * 0.15;',
+};
+const _variants = new Map(), _noOBC = THREE.Material.prototype.onBeforeCompile, _noKey = THREE.Material.prototype.customProgramCacheKey;
+// a cab's interior meshes onto their surface variants. box: the cab's inner bounds [[x0, y0, z0], [x1, y1, z1]] (part
+// space, as the meshes are); fallback: the kind for materials that carry none (painted moulding, gelcoat)
+export function cabFinish(meshes, box, { ao = 1, fallback = 'powder', key = '', kinds = null } = {}) {
+  for (const m of meshes) {
+    const base = m.material; if (!m.isMesh || !base || Array.isArray(base) || !base.isMeshStandardMaterial || base.transparent || base === atlasMat()) continue;
+    const kd = kinds?.get(base) || base.userData.cabKind || (base.metalness > 0.8 && base.roughness < 0.2 ? null : fallback); if (!kd) continue;
+    const vk = base.uuid + '|' + kd + '|' + key; let v = _variants.get(vk);
+    if (!v) {
+      v = base.clone(); const bob = base.onBeforeCompile, bkey = base.customProgramCacheKey !== _noKey ? base.customProgramCacheKey() : '';
+      const uni = { uCab0: { value: new THREE.Vector3(...box[0]) }, uCab1: { value: new THREE.Vector3(...box[1]) }, uCabAO: { value: ao } };
+      v.onBeforeCompile = (sh, r) => {
+        if (bob && bob !== _noOBC) bob.call(base, sh, r);
+        Object.assign(sh.uniforms, uni);
+        sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCabP;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvCabP = position;');
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vCabP;\n' + NOISE)
+          .replace('#include <color_fragment>', `#include <color_fragment>\n{ vec3 p = vCabP; ${KIND[kd]} diffuseColor.rgb *= c * mix(1.0, cabOcc(p), 0.45); }`)
+          .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\n{ vec3 p = vCabP; ${KIND[kd]} roughnessFactor = clamp(roughnessFactor + r, 0.04, 1.0); }`)
+          .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n{ vec3 p = vCabP; ${KIND[kd]} normal = cBump(normal, -vViewPosition, h, k); }`)
+          .replace('#include <aomap_fragment>', '#include <aomap_fragment>\n{ float o = cabOcc(vCabP); reflectedLight.indirectDiffuse *= o; reflectedLight.indirectSpecular *= o; }');
+      };
+      v.customProgramCacheKey = () => 'cab-' + kd + '-' + bkey;
+      _variants.set(vk, v);
+    }
+    m.material = v;
+  }
+}
+// the meshes added to `parent` while fn runs (to finish a cab's interior and leave its outside alone)
+export function collect(parent, fn) { const n0 = parent.children.length; fn(); return parent.children.slice(n0); }
+
+// ---------- screens, glass, screws, placards ----------
+const screenGlass = () => cached('ckScrGlass', () => new THREE.MeshPhysicalMaterial({ color: 0x0a0c0e, metalness: 0, roughness: 0.05, transparent: true, opacity: 0.14, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.4, depthWrite: false }));
+// a display inset in its bezel: a housing (depth d) whose front is a frame standing proud of the recessed face, the
+// face from the atlas, a glass with a sheen over it, two screws
+export function screen(bag, nb, m, w, h, tile, { d = 0.03, border = 0.014, housing = blackM() } = {}) {
+  const W = w + 2 * border, H = h + 2 * border;
+  box(bag, m, [0, 0, (d - 0.008) / 2], [W, H, d - 0.008], housing);
+  for (const [cx, cy, sw, sh] of [[0, (H - border) / 2, W, border], [0, -(H - border) / 2, W, border], [(W - border) / 2, 0, border, h], [-(W - border) / 2, 0, border, h]]) box(bag, m, [cx, cy, d - 0.004], [sw, sh, 0.008], housing);
+  face(nb, m, w, h, tile, d - 0.0075);
+  const gl = new THREE.PlaneGeometry(w, h); gl.applyMatrix4(at(m, 0, 0, d - 0.005)); nb.add(gl, screenGlass());
+  screws(nb, m, W - border, H - border, d + 0.0005, 2);
+}
+export const screwM = () => cached('ckScrew', () => new THREE.MeshStandardMaterial({ color: 0x9a9fa6, metalness: 1, roughness: 0.35 }));
+// screw heads at a plate's corners: w x h apart, at z off; n: 4 corners or 2 (diagonal)
+export function screws(bag, m, w, h, off = 0.003, n = 4) {
+  for (const [sx, sy] of [[-1, -1], [1, 1], [-1, 1], [1, -1]].slice(0, n)) { const g = new THREE.CylinderGeometry(0.0042, 0.0045, 0.0022, 8); g.rotateX(Math.PI / 2); g.applyMatrix4(at(m, sx * w / 2, sy * h / 2, off)); bag.add(g, screwM()); }
+}
+// a gauge glass: a faint sheen over a dial
+export function gaugeGlass(bag, m, r) { const g = new THREE.CircleGeometry(r, 20); g.applyMatrix4(at(m, 0, 0, 0.0075)); bag.add(g, screenGlass()); }
+// a placard / sticker from the atlas's placard strip (k: 0 caution, 1 fire extinguisher, 2 data plate, 3 kill switch)
+export function placard(bag, m, w, h, k) { const g = new THREE.PlaneGeometry(w, h), [x, y] = TILE.placard, uv = g.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, (x + (k % 2) * 128 + uv.getX(i) * 128) / S, 1 - (y + Math.floor(k / 2) * 64 + (1 - uv.getY(i)) * 64) / S);
+  g.applyMatrix4(at(m, 0, 0, 0.0012)); bag.add(g, atlasMat()); }
+// seam lines: thin dark grooves along points (panel joints, door gaps)
+export function seam(bag, pts, w = 0.003) { for (let i = 0; i < pts.length - 1; i++) bag.add(bar(pts[i], pts[i + 1], w, w), seamM()); }
+export const seamM = () => cached('ckSeam', () => new THREE.MeshStandardMaterial({ color: 0x08090a, metalness: 0, roughness: 0.9 }));

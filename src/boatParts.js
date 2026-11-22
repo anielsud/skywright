@@ -496,8 +496,9 @@ function wheelhouse(c, lv) {
   const fm = (x, s, off = 0) => CK.faceM(A.clone().setX(x).addScaledVector(U, s).addScaledVector(N, off), N, U);
   CK.box(b, fm(0, L / 2, 0.004), [0, 0, 0], [W - 0.25, L - 0.02, 0.008], CK.satinBlack()); // the instrument face: a black panel on the slope
   if (lv) {
-    for (const [x, w, h, t] of [[0.18, 0.3, 0.24, 'radar'], [0.53, 0.3, 0.24, 'chart'], [0.9, 0.22, 0.17, 'engine']]) { const m = fm(x, L / 2, 0.009); CK.box(b, m, [0, 0, 0.012], [w + 0.03, h + 0.03, 0.024], CK.blackM()); CK.face(nb, m, w, h, t, 0.0245); }
-    { const m = fm(-0.2, L / 2 + 0.03, 0.009); CK.box(b, m, [0, 0, 0.02], [0.22, 0.115, 0.04], CK.blackM()); CK.face(nb, m, 0.2, 0.1, 'vhf', 0.0405); // VHF radio and its handset
+    for (const [x, w, h, t] of [[0.18, 0.28, 0.22, 'radar'], [0.53, 0.28, 0.22, 'chart'], [0.9, 0.2, 0.15, 'engine']]) CK.screen(b, nb, fm(x, L / 2, 0.008), w, h, t);
+    CK.screws(nb, fm(0, L / 2, 0.008), W - 0.28, L - 0.05, 0.0005); CK.placard(nb, fm(-0.58, L / 2 + 0.105, 0.0085), 0.08, 0.03, 0); CK.placard(nb, fm(-0.95, L / 2 + 0.105, 0.0085), 0.08, 0.03, 2);
+    { const m = fm(-0.2, L / 2 + 0.03, 0.009); CK.screen(b, nb, m, 0.19, 0.095, 'vhf', { d: 0.04, border: 0.012 }); // VHF radio and its handset
       const hs = new THREE.CapsuleGeometry(0.022, 0.07, 4, 8); hs.applyMatrix4(fm(-0.36, L / 2, 0.035)); nb.add(hs, CK.blackM()); }
     { const m = fm(-0.58, L / 2, 0.009); CK.face(nb, m, 0.26, 0.13, 'monitor'); } // fire monitor panel
     { const m = fm(-0.95, L / 2, 0.009), w = 0.26, h = 0.13; CK.face(nb, m, w, h, 'switches'); for (let i = 0; i < 8; i++) CK.toggle(nb, m, (40 + i * 62) / 512 * w - w / 2, (0.5 - 69 / 256) * h, M.chrome()); }
@@ -517,7 +518,7 @@ function wheelhouse(c, lv) {
       const og = new THREE.ExtrudeGeometry(sh, { depth: 1.8, bevelEnabled: false }); og.rotateY(-Math.PI / 2); og.translate(0.9, 0, 0); b.add(og, gel(0xc9ccd0));
       const oa = V(0, 2.03, -0.86), ob = V(0, 1.9, -1.0), oL = oa.distanceTo(ob), oU = ob.clone().sub(oa).divideScalar(oL), oN = V(0, oU.z, -oU.y);
       const om = (x, s, off = 0.004) => CK.faceM(oa.clone().setX(x).addScaledVector(oU, s).addScaledVector(oN, off), oN, oU.clone().negate());
-      for (const x of [0.4, 0.05]) { CK.box(b, om(x, oL / 2), [0, 0, 0.012], [0.22, 0.12, 0.024], CK.blackM()); CK.face(nb, om(x, oL / 2), 0.2, 0.1, 'vhf', 0.0245); }
+      for (const x of [0.4, 0.05]) CK.screen(b, nb, om(x, oL / 2), 0.19, 0.095, 'vhf', { border: 0.012 });
       CK.face(nb, om(-0.35, oL / 2), 0.24, 0.12, 'switches');
       for (const x of [-0.68, -0.82]) CK.gauge(nb, om(x, oL / 2, 0.006), 0.045, 'gauge');
       CK.knob(nb, om(0.7, oL / 2), 0, 0, 0.03, CK.blackM()); nb.add(bar(V(0, 0, 0.02), V(0, 0, 0.09), 0.012, 0.012, true, 6).applyMatrix4(om(0.7, oL / 2)), M.steel()); }
@@ -527,6 +528,15 @@ function wheelhouse(c, lv) {
         const cap = new THREE.CylinderGeometry(0.02, 0.02, 0.03, 10); cap.rotateX(Math.PI / 2); cap.applyMatrix4(CK.faceM(piv, Ng)); nb.add(cap, CK.blackM());
         nb.add(bar(piv, piv.clone().addScaledVector(dir, 0.45), 0.014, 0.014), CK.blackM());
         nb.add(bar(piv.clone().addScaledVector(dir, 0.04).addScaledVector(Ng, -0.012), piv.clone().addScaledVector(dir, 0.5).addScaledVector(Ng, -0.012), 0.012, 0.02), M.rubber()); } }
+    // the console cabinet's doors (seams, latches) on its vertical face, a rubber mat in the helmsman's footwell
+    for (const [x0, x1] of [[-1.06, -0.6], [-0.54, -0.06], [0.68, 1.06]]) { const z = CON.z1 + 0.0015, y0d = FL + 0.08, y1d = 0.66;
+      CK.seam(nb, [V(x0, y0d, z), V(x1, y0d, z), V(x1, y1d, z), V(x0, y1d, z), V(x0, y0d, z)]); CK.box(nb, null, [x1 - 0.05, y1d - 0.06, z + 0.006], [0.05, 0.016, 0.012], M.steel()); }
+    { const mt = new THREE.BoxGeometry(0.8, 0.006, 0.4); mt.translate(0.4, FL + 0.003, -0.47); b.add(mt, CK.surfaceKind('rubber', mat('whMat', () => new THREE.MeshStandardMaterial({ color: 0x1b1c1e, roughness: 0.9 }))));
+      for (let k = 0; k < 9; k++) { const rb = new THREE.BoxGeometry(0.76, 0.004, 0.012); rb.translate(0.4, FL + 0.007, -0.65 + k * 0.045); b.add(rb, mat('whMat', () => null)); } }
+    CK.placard(nb, CK.faceM(V(-0.25, 1.6, D / 2 - 0.041), V(0, 0, -1)), 0.12, 0.06, 2); // data plate by the door
+    for (const [x0, x1] of [[-1.0, 0.12], [0.68, 1.05]]) { // a stainless grab rail along the console's front, clear of the wheel
+      b.add(pipe([V(x0, 0.78, CON.z1 + 0.045), V(x1, 0.78, CON.z1 + 0.045)], 0.012, 8, 2), M.steel());
+      for (const x of [x0 + 0.03, x1 - 0.03]) b.add(bar(V(x, 0.78, CON.z1), V(x, 0.78, CON.z1 + 0.045), 0.02, 0.02, true, 8), M.steel()); }
     // a bench along the after bulkhead, to port of the door
     { const bs = cushion(0.7, 0.1, 0.4, 0.04, 0.012); bs.translate(-0.78, 0.45, D / 2 - 0.27); b.add(bs, vinyl(0x2b2d31));
       const bb = new THREE.BoxGeometry(0.7, 0.36, 0.38); bb.translate(-0.78, 0.22, D / 2 - 0.27); b.add(bb, gel(0xc9ccd0));
@@ -545,11 +555,12 @@ function wheelhouse(c, lv) {
   const ARM = []; for (const s of [-1, 1]) { const ax = sx0 + s * 0.3, a = new THREE.CapsuleGeometry(0.035, 0.26, 4, 10); a.rotateX(Math.PI / 2); a.translate(ax, 0.685, -0.02); b.add(a, seatM);
     b.add(bar(V(ax, 0.66, 0.07), V(ax, spt - 0.115, 0.07), 0.03, 0.03), CK.blackM()); b.add(bar(V(ax + s * 0.015, spt - 0.1, 0.07), V(sx0 + s * 0.16, spt - 0.1, 0.07), 0.03, 0.03), CK.blackM());
     ARM.push({ name: 'armrest', capsule: [[ax, 0.685, -0.17], [ax, 0.685, 0.13]], r: 0.035, parts: ['arms', 'hands', 'torso'] }); }
-  b.to(g); nb.to(g, true);
+  { const kinds = new Map([[nonSkid(0x33373c), 'floor'], [gel(TEAK), 'brushed'], [vinyl(0x2b2d31), 'leather'], [vinyl(0x1d1e21), 'leather']]);
+    CK.cabFinish(CK.collect(g, () => { b.to(g); nb.to(g, true); }), [[-W / 2 + 0.04, FL, -D / 2 + 0.04], [W / 2 - 0.04, H1 - 0.01, D / 2 - 0.04]], { key: 'wheelhouse', kinds, fallback: 'gel' }); } // (grain, scuffs and occlusion into its corners)
   // the helmsman: on the chair's surfaces, feet on the sole, hands on the wheel on the console's face (seats[0].helm)
   const st = { p: [0.4, 0.47, -0.05], s: 1, ctl: 'wheel', fit: { at: SEAT.at, dims: SEAT.dims, floor: FL }, helm: { col: [0, 0.36, -0.5], tilt: 0.42 } };
   st.obstacles = [{ name: 'console', box: [0, (FL + CON.top) / 2, (CON.z0 + CON.z1) / 2], size: [W - 0.17, CON.top - FL, CON.z1 - CON.z0] },
-    { name: 'overhead', box: [0, 1.995, -1.01], size: [1.8, 0.19, 0.3] }, ...ARM];
+    { name: 'overhead', box: [0, 1.995, -1.01], size: [1.8, 0.19, 0.3] }, { name: 'grab rail', capsule: [[0.68, 0.78, CON.z1 + 0.045], [1.05, 0.78, CON.z1 + 0.045]], r: 0.015 }, { name: 'grab rail', capsule: [[-1.0, 0.78, CON.z1 + 0.045], [0.12, 0.78, CON.z1 + 0.045]], r: 0.015 }, ...ARM];
   g.userData.seats = [st];
   return g;
 }
