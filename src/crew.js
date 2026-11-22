@@ -659,7 +659,7 @@ class Rig {
     // under the bone line, thumb on the inboard side)
     this.hand = HM ? { G: (k, r) => HM[k].G(r), thumb: { R: HM.R.thumb, L: HM.L.thumb } } : { G: () => V(0, 0.062, -0.016), thumb: { R: -1, L: 1 } };
     this.opts = opts; this.col = C.col ? C.col.clone() : null;
-    this.state = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 };
+    this.state = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0, brace: 0 };
     this.q = Array.from({ length: NB }, () => new THREE.Quaternion());
     this.p = Array.from({ length: NB }, () => V());
     // posture: solved once for this person in this seat at these controls (cached), then only the arms follow the
@@ -1004,6 +1004,12 @@ class Rig {
     if (bars && s.sw && !this.solving) {
       const stand = !!this.v?.hy, dy = clamp(-s.sw.y * (stand ? 0.04 : 0.008), stand ? -Math.min(0.13, Math.max(0, this.v.hy - 0.02)) : -0.02, stand ? 0.025 : 0.01); // (a standing rider sinks no lower than just above the saddle)
       if (dy) { this.hipAt.y += dy; this.spinePos.y += dy; this.hipR.y += dy; this.hipL.y += dy; }
+    }
+    // braking hard (s.brace, the same shift bike.js gives the physics): hips back towards the tail and a little lower,
+    // arms straightening to hold the body off the bars, the weight kept behind the front wheel
+    if (bars && s.brace > 0.005 && !this.solving) {
+      const stand = !!this.v?.hy, dz = s.brace * (stand ? 0.12 : 0.05), dy = -s.brace * (stand ? 0.04 : 0.01);
+      for (const v of [this.hipAt, this.spinePos, this.hipR, this.hipL]) { v.z += dz; v.y += dy; }
     }
     if (bars) p[B.hips].copy(this.hipAt); else p[B.hips].copy(this.base);
     q[B.hips].identity();
@@ -2499,7 +2505,7 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
     m.frustumCulled = false; // a few hundred triangles; skinned bounds would otherwise need a refresh as the pose changes
     root.add(m); m.bind(skel, new THREE.Matrix4());
   }
-  const smooth = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0 };
+  const smooth = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0, brace: 0 };
   root.userData.crewRig = {
     rig, root,
     eye: eyePoint(rig), // rig space: between the eyes, head straight (cockpit view, stations.js)
@@ -2513,7 +2519,7 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
       const k = Math.min(1, (dt || 0.016) * 12), s = smooth;
       const tgt = { pitch: clamp(c.pitch || 0, -1, 1), roll: clamp(c.roll || 0, -1, 1), yaw: clamp(c.yaw || 0, -1, 1), thr: clamp(c.throttle ?? 0.4, 0, 1), steer: clamp(c.steer || 0, -1.7, 1.7) };
       tgt.look = clamp(-(tgt.roll * 0.35 + tgt.yaw * 0.25) + tgt.steer * 0.25, -0.6, 0.6);
-      if (rig.ctl === 'bars') { tgt.lean = clamp(c.lean || 0, -0.6, 0.6); tgt.tuck = clamp(c.tuck || 0, 0, 1); tgt.foot = clamp(c.foot || 0, 0, 1); tgt.bikeLean = clamp(c.bikeLean || 0, -1, 1); s.hands = c.hands || null; }
+      if (rig.ctl === 'bars') { tgt.lean = clamp(c.lean || 0, -0.6, 0.6); tgt.tuck = clamp(c.tuck || 0, 0, 1); tgt.foot = clamp(c.foot || 0, 0, 1); tgt.bikeLean = clamp(c.bikeLean || 0, -1, 1); tgt.brace = clamp(c.brace || 0, 0, 1); s.hands = c.hands || null; }
       let moving = false;
       for (const a in tgt) { const kk = a === 'look' ? k * 0.35 : k; const v = s[a] + (tgt[a] - s[a]) * kk; if (Math.abs(v - tgt[a]) > 1e-3) moving = true; s[a] = v; }
       // g-forces (c.gf: the specific force in the rig's frame, in g; (0, 1, 0) sitting still): the body lags the

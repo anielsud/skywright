@@ -4,6 +4,8 @@
 //     it never stretches the skin between forearm and hand);
 //   - nothing flies off: every bone stays within 1.5 m of the hips (rig metres);
 //   - the cost: milliseconds spent posing the crew per frame (min / mean of the run).
+// A hard stop: the rider braces (hips back, arms straight) without letting go or going into the bike, and sits back
+// up once stopped.
 // Then the bikes lose their forks (the fork part breaks off and flies away, as in a crash): the riders must let go and
 // stay in one piece. Physics + rig only, no rendering.
 import * as THREE from 'three';
@@ -52,7 +54,7 @@ export function run(design, { T = 6, mode = 'pilot', breakFork = false, script =
     for (const e of ac.events.splice(0)) if (['msg', 'wreck'].includes(e.type)) out.events.push([+t.toFixed(2), e.type, e.text || '']);
     if (f > 2) (deb ? out.msAfter : out.msBefore).push(tm.ms);
     for (const r of people) { const s = skeletonCheck(r); if (f > 0) { out.gap = Math.max(out.gap, s.gap); out.far = Math.max(out.far, s.far); out.finite &&= s.finite; } }
-    for (const r of people) { const q = r.rig.q, up = V(0, 1, 0), kn = Math.min(...[[7, 8], [9, 10]].map(([a, b]) => 180 - Math.acos(Math.max(-1, Math.min(1, up.clone().applyQuaternion(q[a]).dot(up.clone().applyQuaternion(q[b]))))) * 57.3)); out.knee.push(+kn.toFixed(1));
+    for (const r of people) { const q = r.rig.q, up = V(0, 1, 0), kn = Math.min(...[[7, 8], [9, 10]].map(([a, b]) => 180 - Math.acos(Math.max(-1, Math.min(1, up.clone().applyQuaternion(q[a]).dot(up.clone().applyQuaternion(q[b]))))) * 57.3)); out.knee.push(+kn.toFixed(1)); (out.hipZ ||= []).push(+r.rig.p[0].z.toFixed(4));
       if (r.rig.opts.ride) { const h = r.rig.rideHits(); const hh = Math.max(h.legs, h.torso, h.head); if (out.hitsRest == null) out.hitsRest = hh; if (hh > out.hits) out.hitsBy = Object.fromEntries(Object.entries(h).map(([a, b]) => [a, +(b * 100).toFixed(1)])); out.hits = Math.max(out.hits, hh); } }
     for (const r of people) for (const k of ['R', 'L']) if (r.rig.grab?.[k] && r.rig.grab[k].t < 1) out.letGo++; // (hand-frames off their grips)
     out.held = people.every((r) => ['R', 'L'].every((k) => !r.rig.grab?.[k] || r.rig.grab[k].t >= 1)); // (at the end)
@@ -98,6 +100,19 @@ export function plan(presets) {
     if (Math.abs(k.end - k.rest) > 3) bad.push(`knees did not come back (${k.rest} -> ${k.end} deg)`);
     if (r.hits - (r.hitsRest || 0) > 0.01) bad.push(`rider ${((r.hits - r.hitsRest) * 100).toFixed(1)} cm further into the bike than sitting still (${(r.hitsRest * 100).toFixed(1)} cm)`);
     out.push({ ...r, check: 'landing', ok: !bad.length, why: bad.join('; ') });
+  }
+  // a hard stop from 18 m/s (every bike): the hips go back (a standing rider's by 6 cm or more, a seated one's by 2.5),
+  // the hands keep hold, nothing goes into the bike, and once stopped the rider is back where they started
+  for (const d of presets.filter((d) => d.parts.some((p) => /^b_fork/.test(p.id)))) {
+    const r = run(d, { T: 6, spawn: { speed: 18 }, script: (t, ac) => t < 0.5 ? { throttle: 0.3 } : { rev: Math.abs(ac.groundSpeed) > 0.3 ? 0.9 : 0 } }); if (!r) continue;
+    const bad = [], stand = !!crews(new Aircraft(d, REALISM.pilot))[0]?.rig.v?.hy, z0 = r.hipZ[20], back = Math.max(...r.hipZ) - z0;
+    if (!r.finite) bad.push('NaN in the skeleton');
+    if (r.gap > 0.01) bad.push(`hand ${(r.gap * 100).toFixed(1)} cm off its forearm`);
+    if (r.letGo) bad.push(`a hand let go of the bars (${r.letGo} hand-frames)`);
+    if (back < (stand ? 0.06 : 0.025)) bad.push(`hips went back only ${(back * 100).toFixed(1)} cm`);
+    if (Math.abs(r.hipZ.at(-1) - z0) > 0.01) bad.push(`hips did not come back (${(z0 * 100).toFixed(1)} -> ${(r.hipZ.at(-1) * 100).toFixed(1)} cm)`);
+    if (r.hits - (r.hitsRest || 0) > 0.01) bad.push(`rider ${((r.hits - r.hitsRest) * 100).toFixed(1)} cm further into the bike than riding along (${(r.hitsRest * 100).toFixed(1)} cm)`);
+    out.push({ ...r, back: +back.toFixed(3), check: 'hard stop', ok: !bad.length, why: bad.join('; ') });
   }
   return out;
 }

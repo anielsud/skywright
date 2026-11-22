@@ -37,6 +37,7 @@ export const LEAN_MAX = 0.62; // rad (~35°): 0.7 g of cornering, inside the tyr
 const LOCK = 0.55; // rad: full lock at walking pace
 const SLIDE = 0.6; // rad: the slide angle a skid holds at full stick (~35°)
 const WHEELIE = 0.42, STOPPIE = -0.28, LOOP = 0.62; // rad (ground-relative pitch): wheelie and stoppie heights, hard limit
+const RIDER = { kg: 70, back: 0.12, down: 0.05 }; // the rider's share of the frame's mass, and how far they shift it bracing for a hard stop (m)
 
 // Two in-line wheels on the centreline? wheels: [{ x, z, ...}] in the vehicle frame. Returns { front, rear, L } or null.
 export function bikeLayout(wheels) {
@@ -152,6 +153,15 @@ export function bikeAssist(ac, F, T, ctl, dt, env) {
     const lim = b.trick === 'wheelie' ? WHEELIE - 0.04 : 0.05;
     if (rel > lim) ac.driveF *= clamp(1 - (rel - lim) * 12 - Math.max(0, w.x) * 0.8, 0.05, 1);
   }
+  // bracing (every mode): braking hard, the rider pushes their hips back and down and holds themselves off the bars
+  // with straight arms, keeping their weight behind the front wheel; the bike can stop harder before the back goes
+  // light. b.brace (0-1) moves at a rider's pace and the crew rig shows the same shift (riderInput). The shift moves
+  // the rider's weight about the centre of mass, the same as a nose-up torque: their weight back, their height out of
+  // the stop's pitching moment.
+  const braceT = ground && !fallen && vg > 1.5 ? clamp(Math.max(ac.svcBrake, ctl.hand > 0.5 ? 0.5 : 0), 0, 1) : 0;
+  b.brace = (b.brace || 0) + (braceT - (b.brace || 0)) * Math.min(1, dt * 6);
+  b.dec = (b.dec || 0) + (clamp(((b.vg ?? vg) - vg) / Math.max(dt, 1e-3), 0, 12) - (b.dec || 0)) * Math.min(1, dt * 10); b.vg = vg; // (the stop's deceleration, m/s²)
+  if (b.brace > 0.01 && fc) T.x += RIDER.kg * (G * RIDER.back + b.dec * RIDER.down) * b.brace;
   // braking (every mode, like ABS): the brakes ease off before the back wheel goes light (it would slide out and spin
   // the bike), or, in a stoppie, before the back goes higher than the stoppie
   if (ac.svcBrake > 0 && fc) {
