@@ -31,11 +31,13 @@ function timed(ac) {
   return t;
 }
 
-export function run(design, { T = 6, mode = 'pilot', breakFork = false, script = null } = {}) {
+export function run(design, { T = 6, mode = 'pilot', breakFork = false, script = null, spawn = {} } = {}) {
   const ac = new Aircraft(design, REALISM[mode]), env = flat();
-  ac.spawn(env, V(0, 0, 0), 0, {});
+  ac.spawn(env, V(0, 0, 0), 0, spawn);
+  if (spawn.speed) ac.v.set(0, spawn.vy || 0, -spawn.speed);
+  if (spawn.alt) { ac.x.y = spawn.alt; ac.syncVisual(); }
   const people = crews(ac); if (!people.length) return null;
-  const tm = timed(ac), dt = 1 / 60, out = { name: design.name, people: people.length, gap: 0, far: 0, finite: true, letGo: 0, held: null, msBefore: [], msAfter: [], broke: null, events: [] };
+  const tm = timed(ac), dt = 1 / 60, out = { name: design.name, people: people.length, gap: 0, far: 0, finite: true, letGo: 0, held: null, knee: [], hits: 0, msBefore: [], msAfter: [], broke: null, events: [] };
   let deb = null;
   for (let f = 0; f * dt < T; f++) {
     const t = f * dt;
@@ -50,12 +52,15 @@ export function run(design, { T = 6, mode = 'pilot', breakFork = false, script =
     for (const e of ac.events.splice(0)) if (['msg', 'wreck'].includes(e.type)) out.events.push([+t.toFixed(2), e.type, e.text || '']);
     if (f > 2) (deb ? out.msAfter : out.msBefore).push(tm.ms);
     for (const r of people) { const s = skeletonCheck(r); if (f > 0) { out.gap = Math.max(out.gap, s.gap); out.far = Math.max(out.far, s.far); out.finite &&= s.finite; } }
+    for (const r of people) { const q = r.rig.q, up = V(0, 1, 0), kn = Math.min(...[[7, 8], [9, 10]].map(([a, b]) => 180 - Math.acos(Math.max(-1, Math.min(1, up.clone().applyQuaternion(q[a]).dot(up.clone().applyQuaternion(q[b]))))) * 57.3)); out.knee.push(+kn.toFixed(1));
+      if (r.rig.opts.ride) { const h = r.rig.rideHits(); const hh = Math.max(h.legs, h.torso, h.head); if (out.hitsRest == null) out.hitsRest = hh; if (hh > out.hits) out.hitsBy = Object.fromEntries(Object.entries(h).map(([a, b]) => [a, +(b * 100).toFixed(1)])); out.hits = Math.max(out.hits, hh); } }
     for (const r of people) for (const k of ['R', 'L']) if (r.rig.grab?.[k] && r.rig.grab[k].t < 1) out.letGo++; // (hand-frames off their grips)
     out.held = people.every((r) => ['R', 'L'].every((k) => !r.rig.grab?.[k] || r.rig.grab[k].t >= 1)); // (at the end)
     if (ac.dead) break;
   }
   const stat = (a) => a.length ? { mean: +(a.reduce((x, y) => x + y, 0) / a.length).toFixed(3), p95: +[...a].sort((x, y) => x - y)[Math.floor(a.length * 0.95)].toFixed(3) } : null;
   out.msBefore = stat(out.msBefore); out.msAfter = stat(out.msAfter);
+  const kn = out.knee; out.knee = kn.length ? { rest: kn[0], min: Math.min(...kn), max: Math.max(...kn), end: kn.at(-1) } : null; out.hits = +out.hits.toFixed(3);
   out.gap = +out.gap.toFixed(4); out.far = +out.far.toFixed(3);
   return out;
 }
@@ -81,6 +86,18 @@ export function plan(presets) {
     if (r.held) bad.push('still holding the handlebars that flew away');
     if (r.msAfter && r.msBefore && r.msAfter.mean > r.msBefore.mean * 2 + 0.2) bad.push(`posing cost jumped ${r.msBefore.mean} -> ${r.msAfter.mean} ms after the fork went`);
     out.push({ ...r, check: 'fork lost', ok: !bad.length, why: bad.join('; ') });
+  }
+  // landing a jump (every bike): from 2.5 m at 15 m/s the rider's knees bend to soak it up (a standing rider's by
+  // 15 degrees or more, a seated one's at least a little), come back afterwards, and nothing goes through the bike
+  for (const d of presets.filter((d) => d.parts.some((p) => /^b_fork/.test(p.id)))) {
+    const r = run(d, { T: 5, spawn: { air: true, alt: 2.5, speed: 15, vy: 3, pitch: 0.12 }, script: () => ({ throttle: 0.4 }) }); if (!r) continue;
+    const bad = [], k = r.knee, stand = !!crews(new Aircraft(d, REALISM.pilot))[0]?.rig.v?.hy, flex = k.rest - k.min;
+    if (!r.finite) bad.push('NaN in the skeleton');
+    if (r.gap > 0.01) bad.push(`hand ${(r.gap * 100).toFixed(1)} cm off its forearm`);
+    if (flex < (stand ? 15 : 2)) bad.push(`knees bent only ${flex.toFixed(1)} deg on landing`);
+    if (Math.abs(k.end - k.rest) > 3) bad.push(`knees did not come back (${k.rest} -> ${k.end} deg)`);
+    if (r.hits - (r.hitsRest || 0) > 0.01) bad.push(`rider ${((r.hits - r.hitsRest) * 100).toFixed(1)} cm further into the bike than sitting still (${(r.hitsRest * 100).toFixed(1)} cm)`);
+    out.push({ ...r, check: 'landing', ok: !bad.length, why: bad.join('; ') });
   }
   return out;
 }
