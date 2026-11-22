@@ -3,24 +3,29 @@
 // otherwise takes the whole sky's ambient and reflections (the hemisphere light, the environment map) at full
 // strength wherever it is, which is what made a closed flight deck read as evenly lit, like a sim.
 //
-// Once per build (bakeCabinLight, after the vehicle is assembled and merged), for each crewed part's interior
-// (interior.js: its declared userData.interior, or the space its seats' obstacles keep the crew in, so a kid's own
-// designs get it too):
-//   - the vehicle's opaque geometry around the interior is voxelised (glass and other see-through materials are left
-//     out: light passes them); emissive surfaces (displays, backlit panels) keep their radiance in their voxels
-//   - from every interior surface point (the cockpit's own furniture and walls, anything else facing into it, the crew)
-//     a fixed set of rays over the hemisphere round its normal is marched through the voxels: the cosine-weighted share
-//     that gets out is its sky visibility, what they hit that glows is the light the displays throw on it, and a
-//     linear fit of which directions are open is kept for the sun (see below)
-//   - those go on the mesh as vertex attributes (cabinLight: visibility with a little bounce, glow; cabinSun: the fit)
-//     and the mesh gets a variant of its material that multiplies the ambient and reflected sky light by the
-//     visibility and adds the glow. Direct sun is left to the shadow maps (glass casts none, so it falls through the
-//     windows onto the deck); with shadows off (Low, or shed under load) the fit stands in for them.
-// Outside surfaces never take part (a vertex is interior only if it is in the interior or faces into it from close
-// by), so exteriors look exactly as before. Emissive light is never touched: displays stay as bright as they were.
-// Exposure stays the world's (the renderer's is fixed): the view out is bright and the deck dark, like the photos.
-// Runtime cost: two attributes read in the vertex shader and a few multiplies per pixel on the interior meshes, no extra
-// draw calls (one material variant per material, shared by every vehicle).
+// Once per build (bakeCabinLight, after the vehicle is assembled and merged; not while a builder slider is dragged), for
+// each crewed part's interior (interior.js: its declared userData.interior, or the space its seats' obstacles keep the
+// crew in, so a kid's own designs get it too):
+//   - the vehicle's opaque geometry round the interior is voxelised finely (~3-5 cm), and further out coarsely (so a
+//     ray that leaves down a fuselage is still stopped). Glass and other see-through materials are left out: light
+//     passes them. Emissive surfaces (displays, backlit panels) keep their radiance in their voxels.
+//   - the cabin's air is flooded out from the seats through the empty voxels, never through glass; the outside air is
+//     flooded in from the region's faces. A surface facing the cabin's air is the cabin's (glare shield, posts,
+//     overhead, lining), one facing the outside is not, whatever part it belongs to: exteriors never change.
+//   - from each cabin surface point (deduplicated per few voxels and normal direction) a fixed set of rays over the
+//     hemisphere round its normal is marched: the cosine-weighted share that gets out is its sky visibility (plus a
+//     little bounce off the cabin's own surfaces), what they hit that glows is the light the displays throw on it, and
+//     a linear fit of which directions are open stands in for sun shadows when there are no shadow maps
+//   - the crew: a probe at each bone, all round; each vertex takes its bones' probes as seen along its normal
+//   - it all goes on the mesh as vertex attributes (cabinLight: visibility and glow for the front face and the back,
+//     cabinSun: the fit) and the mesh gets a variant of its material that multiplies the ambient and reflected sky
+//     light (hemisphere light, environment map) by the visibility and adds the glow. Direct sun is left to the shadow
+//     maps (glass casts none, so it falls through the windows onto the deck); with them off (Low, or shed under load)
+//     the fit gates it. Emissive light is never touched: displays stay as bright as they were. Exposure stays the
+//     world's (the renderer's is fixed): the view out is bright and the deck dark, like the photos.
+// An open boat (no interior) gets the same for the space round its seats, at OPEN_K strength.
+// Runtime cost: two attributes read in the vertex shader and a few multiplies per pixel on the cabin's meshes, no extra
+// draw calls (one material variant per material, shared by every vehicle). Bake: ~70-150 ms per cockpit on a desktop.
 import * as THREE from 'three';
 import { interiorOf } from './interior.js';
 
@@ -316,7 +321,7 @@ export function bakeCabinLight(objs, root) {
     let outside = null;
     if (!air.leak) { const sd = []; for (let Z = 0; Z < G.nz; Z++) for (let Y = 0; Y < G.ny; Y++) for (let X = 0; X < G.nx; X += (Y === 0 || Y === G.ny - 1 || Z === 0 || Z === G.nz - 1) ? 1 : G.nx - 1) { const id = X + G.nx * (Y + G.ny * Z); if (!G.occ[id] && !glass[id]) sd.push(id); } outside = flood(G, glass, region, sd, 'out'); }
     stats.tFlood = Math.round(performance.now() - tf);
-    if (globalThis.__cabinKeep) globalThis.__cabinDbg = { G, C, glass, air };
+    if (globalThis.__cabinKeep) globalThis.__cabinDbg = { G, C, glass, air }; // (tools: the grids, for slices)
     stats.tVox += performance.now() - t1; t1 = performance.now();
     // 3. the interior's surface points: per vertex and face side, deduplicated per 3-voxel cell and normal direction
     const ibNear = ibRoot.clone().expandByScalar(near + 0.05), cells = new Map(), sp = [], recv = [], crewMeshes = [], ic = 1 / (2 * h);
@@ -356,7 +361,6 @@ export function bakeCabinLight(objs, root) {
           }
         }
         recv.push({ m, sid, sides });
-        if (globalThis.__cabinKeep) { const w = { reach: 0, outside: 0, none: 0, in: 0 }; for (let i = 0; i < n; i++) { const v = sid[i * 2 + (sides[0] < 0 ? 1 : 0)]; if (v >= 0) w.in++; else if (v === -1) w.none++; else if (v === -2) w.outside++; else w.reach++; } (globalThis.__cabinWhy ||= []).push([m.material.color?.getHexString(), n, w]); }
       }
     }
     stats.tRecv += performance.now() - t1; t1 = performance.now();
