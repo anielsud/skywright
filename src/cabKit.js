@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { V, ringLoft, pipe, bar } from './partDetail.js';
+import { LivePanel, Shape, shapeGeometry } from './liveDisplays.js';
 
 const cache = new Map();
 const cached = (k, make) => { if (!cache.has(k)) cache.set(k, make()); return cache.get(k); };
@@ -22,6 +23,10 @@ export const TILE = {
   avionics: [0, 512, 256, 512], annun: [256, 512, 256, 64], heliSw: [256, 576, 256, 128], digi: [512, 512, 256, 128],
   ai: [768, 512, 256, 256], alt: [512, 640, 256, 256], compass: [256, 704, 256, 256], plate: [768, 768, 256, 256], placard: [512, 896, 256, 128],
 };
+// solid swatches (pixel offsets in the attitude tile's corners): the needles' colours, and white for vertex-tinted pieces
+const SWATCH = { white: [4, 4], orange: [22, 4], hub: [4, 22] };
+const swatchUV = (k) => { const [x, y] = TILE.ai, [u, v] = SWATCH[k]; return [(x + u + 7) / S, 1 - (y + v + 7) / S]; };
+export const WHITE_UV = swatchUV('white');
 function atlasCanvas() {
   const c = document.createElement('canvas'); c.width = c.height = S; const g = c.getContext('2d');
   const font = (px, w = 'bold') => (g.font = `${w} ${px}px Helvetica, Arial, sans-serif`);
@@ -35,13 +40,14 @@ function atlasCanvas() {
     g.strokeStyle = '#eee'; for (let i = 0; i <= n * 2; i++) { const a = a0 + span * (i / (n * 2)), L = i % 2 ? 0.08 : 0.15; g.lineWidth = i % 2 ? w * 0.008 : w * 0.016; g.beginPath(); g.moveTo(cx + Math.cos(a) * R * 0.92, cy + Math.sin(a) * R * 0.92); g.lineTo(cx + Math.cos(a) * R * (0.92 - L), cy + Math.sin(a) * R * (0.92 - L)); g.stroke(); }
     if (o.nums) for (let i = 0; i <= n; i++) { const a = a0 + span * (i / n); text(String(o.nums[0] + i * o.nums[1]), cx + Math.cos(a) * R * 0.6, cy + Math.sin(a) * R * 0.6, w * 0.085); }
     if (o.label) text(o.label, cx, cy + R * 0.42, w * 0.07, '#bbb');
-    const na = a0 + span * (o.at ?? 0.3); g.strokeStyle = o.needle || '#f4f4f0'; g.lineWidth = w * 0.025; g.beginPath(); g.moveTo(cx - Math.cos(na) * R * 0.15, cy - Math.sin(na) * R * 0.15); g.lineTo(cx + Math.cos(na) * R * 0.82, cy + Math.sin(na) * R * 0.82); g.stroke();
-    g.fillStyle = '#222'; g.beginPath(); g.arc(cx, cy, w * 0.04, 0, 7); g.fill();
+    if (o.at != null) { const na = a0 + span * o.at; g.strokeStyle = o.needle || '#f4f4f0'; g.lineWidth = w * 0.025; g.beginPath(); g.moveTo(cx - Math.cos(na) * R * 0.15, cy - Math.sin(na) * R * 0.15); g.lineTo(cx + Math.cos(na) * R * 0.82, cy + Math.sin(na) * R * 0.82); g.stroke();
+      g.fillStyle = '#222'; g.beginPath(); g.arc(cx, cy, w * 0.04, 0, 7); g.fill(); }
   };
   const rr = (x, y, w, h, r, fill, stroke, lw = 2) => { g.beginPath(); g.roundRect(x, y, w, h, r); if (fill) { g.fillStyle = fill; g.fill(); } if (stroke) { g.strokeStyle = stroke; g.lineWidth = lw; g.stroke(); } };
   g.fillStyle = '#1b1c1f'; g.fillRect(0, 0, S, S);
-  dial(TILE.gauge, { red: 0.82, nums: [0, 20], n: 6, label: 'PSI', at: 0.42 });
-  dial(TILE.tach, { red: 0.78, nums: [0, 1], n: 9, label: 'RPM x1000', at: 0.12, needle: '#ff6a1a' });
+  // (the round dials' needles are geometry: gauge() below, moving ones liveDisplays.js)
+  dial(TILE.gauge, { red: 0.82, nums: [0, 20], n: 6, label: 'PSI' });
+  dial(TILE.tach, { red: 0.78, nums: [0, 1], n: 9, label: 'RPM x1000' });
   { // chart plotter: sea, land, depth contours, the boat's track and a menu bar
     const [x, y, w, h] = TILE.chart; g.fillStyle = '#1f5fa8'; g.fillRect(x, y, w, h);
     g.fillStyle = '#2e78c4'; g.beginPath(); g.ellipse(x + w * 0.35, y + h * 0.55, w * 0.42, h * 0.3, 0.4, 0, 7); g.fill();
@@ -116,7 +122,15 @@ function atlasCanvas() {
     g.strokeStyle = '#fff'; g.lineWidth = 3; g.beginPath(); g.moveTo(x, cy + 10); g.lineTo(x + w, cy + 10); g.stroke(); for (const d of [-30, 30]) { g.beginPath(); g.moveTo(cx - 24, cy + 10 + d); g.lineTo(cx + 24, cy + 10 + d); g.stroke(); } g.restore();
     g.strokeStyle = '#f2b705'; g.lineWidth = 6; g.beginPath(); g.moveTo(cx - 60, cy); g.lineTo(cx - 18, cy); g.lineTo(cx, cy + 14); g.lineTo(cx + 18, cy); g.lineTo(cx + 60, cy); g.stroke();
   }
-  dial(TILE.alt, { nums: [0, 1], n: 9, label: 'ALT', at: 0.55 });
+  { // altimeter: 0-9 all the way round (hundreds on the long hand, thousands on the short one), a Kollsman window
+    const [x0, y0, w] = TILE.alt, cx = x0 + w / 2, cy = y0 + w / 2, R = w * 0.46; g.fillStyle = '#060708'; g.fillRect(x0, y0, w, w); g.fillStyle = '#0d0e10'; g.beginPath(); g.arc(cx, cy, R, 0, 7); g.fill();
+    g.strokeStyle = '#eee'; for (let i = 0; i < 50; i++) { const a = -Math.PI / 2 + (i / 50) * Math.PI * 2, L = i % 5 ? 0.08 : 0.16; g.lineWidth = i % 5 ? w * 0.008 : w * 0.018; g.beginPath(); g.moveTo(cx + Math.cos(a) * R * 0.93, cy + Math.sin(a) * R * 0.93); g.lineTo(cx + Math.cos(a) * R * (0.93 - L), cy + Math.sin(a) * R * (0.93 - L)); g.stroke(); }
+    for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + (i / 10) * Math.PI * 2; text(String(i), cx + Math.cos(a) * R * 0.62, cy + Math.sin(a) * R * 0.62, w * 0.1); }
+    text('ALT', cx, cy - R * 0.3, w * 0.065, '#bbb'); text('100 FEET', cx, cy + R * 0.32, w * 0.05, '#bbb');
+    g.fillStyle = '#1b1c1f'; g.fillRect(cx + R * 0.22, cy - R * 0.09, R * 0.42, R * 0.18); text('29.92', cx + R * 0.43, cy, w * 0.05, '#f2f2ee');
+  }
+  { // solid swatches in the attitude tile's corners (outside its round face): what needles and lamps are coloured from
+    const [x, y] = TILE.ai; for (const [k, col] of [['white', '#ffffff'], ['orange', '#ff6a1a'], ['hub', '#222326']]) { const [u, v] = SWATCH[k]; g.fillStyle = col; g.fillRect(x + u, y + v, 14, 14); } }
   { // compass card (a magnetic compass's face)
     const [x, y, w] = TILE.compass; g.fillStyle = '#e8e4d6'; g.fillRect(x, y, w, w);
     for (let i = 0; i < 36; i++) { const xx = x + (i / 36) * w * 2 % w; g.fillStyle = '#111'; g.fillRect(xx, y + w * 0.3, 2, i % 3 ? 20 : 34); }
@@ -155,12 +169,90 @@ export const local = at;
 // a face from the atlas (w x h) at m, standing `off` proud of the panel
 export function face(bag, m, w, h, tile, off = 0.001) { const g = toTile(new THREE.PlaneGeometry(w, h), tile); g.applyMatrix4(at(m, 0, 0, off)); bag.add(g, atlasMat()); return g; }
 // a round instrument: a dial from the atlas inside a bezel ring, with a domed glass rim
-export function gauge(bag, m, r, tile = 'gauge', bezel = null) {
+// Its needle is geometry over the face: fixed at val (0..1 of the sweep; the altimeter: feet) or, given a live panel
+// (livePanel() below), moving with src (a liveDisplays signal name or (S) => the same); an attitude indicator's ball
+// and a live altimeter's hands likewise.
+export function gauge(bag, m, r, tile = 'gauge', bezel = null, { live = null, src = null, val = null } = {}) {
   const d = toTile(new THREE.CircleGeometry(r, 24), tile); d.applyMatrix4(at(m, 0, 0, 0.002)); bag.add(d, atlasMat());
   const ring = new THREE.TorusGeometry(r * 1.04, r * 0.12, 6, 24); ring.applyMatrix4(at(m, 0, 0, 0.004)); bag.add(ring, bezel || blackM());
   const can = new THREE.CylinderGeometry(r * 1.1, r * 1.1, 0.012, 20, 1, true); can.rotateX(Math.PI / 2); can.applyMatrix4(at(m, 0, 0, -0.004)); bag.add(can, bezel || blackM());
   gaugeGlass(bag, m, r * 1.02);
+  dialNeedles(bag, at(m, 0, 0, 0.002), r, tile, live && src != null ? { live, src } : null, val);
 }
+// the dials' sweeps (canvas angles, as atlasCanvas paints them): 270 degrees from 7:30 round to 4:30; the altimeter's
+// hands all the way round from 12 (hundreds: one turn per 1000 ft, thousands: per 10 000)
+const SW = { a0: Math.PI * 0.75, span: Math.PI * 1.5 }, NEEDLE = { gauge: ['white', 0.42], tach: ['orange', 0.12] };
+const TOP = -Math.PI / 2, turn = (f) => TOP + 2 * Math.PI * f;
+function dialNeedles(bag, m, r, tile, L, val) {
+  const R = r * 0.92, z = 0.0011; // (the face's painted radius; just over the face, under the bezel and the glass)
+  const fixed = (shape) => bag.add(shapeGeometry(shape).applyMatrix4(m), atlasMat());
+  const blade = (len, w, col, ang, tail = 0.18) => { const sh = new Shape().needle({ len, w, tail, z, col: WHITE_C, uv: swatchUV(col), hub: 0 }); return rotShape(sh, ang); };
+  const hub = (rr, zz = z + 0.0003) => new Shape().disc(0, 0, rr, zz, WHITE_C, swatchUV('hub'), 12);
+  if (NEEDLE[tile]) {
+    const [col, v0] = NEEDLE[tile], len = R * 0.82, w = r * 0.06, at = (f) => SW.a0 + SW.span * Math.max(-0.02, Math.min(1.03, f));
+    if (L) { L.live.needle(m, { src: L.src, at, len, w, z, color: col === 'orange' ? '#ff6a1a' : '#f4f4f0', hubCol: '#222326', hub: 2.6 }); }
+    else { fixed(blade(len, w, col, at(val ?? v0))); fixed(hub(w * 1.3)); }
+  } else if (tile === 'alt') {
+    const ft = val ?? 550;
+    if (L) {
+      L.live.needle(m, { src: L.src, at: (f) => turn(f / 10000), len: R * 0.5, w: r * 0.1, z, tail: 0.15, damp: 9, hub: 0 });
+      L.live.needle(m, { src: L.src, at: (f) => turn(f / 1000), len: R * 0.84, w: r * 0.055, z: z + 0.0004, damp: 9, hubCol: '#222326', hub: 2.4 });
+    } else { fixed(blade(R * 0.5, r * 0.1, 'white', turn(ft / 10000), 0.15)); fixed(blade(R * 0.84, r * 0.055, 'white', turn(ft / 1000))); fixed(hub(r * 0.07, z + 0.0006)); }
+  } else if (tile === 'ai' && L) L.live.attitude(m, R * 0.96, { sky: '#2f7fd0', ground: '#7a4a22', symbol: '#f2b705' }); // (over the painted ball)
+}
+const WHITE_C = new THREE.Color(1, 1, 1);
+function rotShape(sh, a) { const c = Math.cos(-a), s = Math.sin(-a), p = sh.p; for (let i = 0; i < p.length; i += 3) { const x = p[i], y = p[i + 1]; p[i] = c * x - s * y; p[i + 1] = s * x + c * y; } return sh; }
+// a race truck's digital dash (AiM / MoTeC style), drawn live on a LivePanel screen: shift lights across the top, the
+// gear big on the left, the speed, the revs, a brake light
+export function raceDash(c, S, w, h) {
+  const T = (...a) => _T(c, ...a);
+  c.fillStyle = '#050607'; c.fillRect(0, 0, w, h);
+  const lit = S.running ? Math.round(Math.max(0, Math.min(1, (S.rpmK - 0.45) / 0.5)) * 10) : 0, flash = S.rpmK > 0.97 && (S.t * 8) % 1 < 0.5;
+  for (let i = 0; i < 10; i++) { const on = i < lit && !flash; c.fillStyle = i < 5 ? (on ? '#3ccf6a' : '#0f2a17') : i < 8 ? (on ? '#f2b705' : '#2e2408') : (on ? '#e23b3b' : '#2e0f0f'); c.beginPath(); c.roundRect(14 + i * 23, 7, 18, 11, 3); c.fill(); }
+  T(S.gearNo < 0 ? 'R' : S.gearNo === 0 ? 'N' : String(S.gearNo), 52, 62, 58, S.gearNo === 0 ? '#3ccf6a' : '#ffffff');
+  const [sp, su] = speedTxt(S); T(sp, 172, 52, 40, '#64e0ff'); T(su, 172, 80, 13, '#9a9a9a');
+  T(`${Math.round(S.rpm / 50) * 50} RPM`, 104, 92, 11, '#9a9a9a', 'left');
+  if (S.brake) T('BRAKE', 246, 92, 11, '#e23b3b', 'right');
+}
+// the speed in the driver's units (mph unless the settings say metric)
+const speedTxt = (S) => [String(Math.round(S.metric ? S.kmh : S.mph)), S.metric ? 'KM/H' : 'MPH'];
+const _T = (c, s, x, y, px, col, al = 'center', w = 'bold') => { c.font = `${w} ${px}px Helvetica, Arial, sans-serif`; c.fillStyle = col; c.textAlign = al; c.textBaseline = 'middle'; c.fillText(s, x, y); };
+// a twin-engine monitor (the fireboat's helm): rpm, coolant, oil pressure and volts for both engines, as bars and numbers
+export function engineMonitor(c, S, w, h) {
+  c.fillStyle = '#0b0d10'; c.fillRect(0, 0, w, h);
+  const rows = [['RPM', Math.round(S.rpm / 10) * 10, S.rpmK], ['TEMP', `${Math.round(40 + 45 * S.oilT / 0.6)}°`, S.oilT * 1.2], ['OIL', (S.oilP * 6.5).toFixed(1), S.oilP], ['VOLT', (S.running ? 14.1 : 12.4).toFixed(1), S.running ? 0.7 : 0.5]];
+  for (const [k, nm] of [[0, 'PORT'], [1, 'STBD']]) {
+    const x0 = 10 + k * w / 2, bw = w / 2 - 20; _T(c, nm, x0 + bw / 2, 14, 15, '#9fd0ff');
+    rows.forEach(([lab, val, f], i) => { const y = 32 + i * (h - 40) / 4, ff = Math.max(0, Math.min(1, f * (1 + (k ? -0.01 : 0.01))));
+      c.fillStyle = '#20242a'; c.beginPath(); c.roundRect(x0, y, bw, 13, 3); c.fill(); c.fillStyle = i === 0 && ff > 0.92 ? '#e23b3b' : i === 1 && ff > 0.85 ? '#f2b705' : '#3ccf6a'; c.beginPath(); c.roundRect(x0, y, Math.max(4, bw * ff), 13, 3); c.fill();
+      _T(c, lab, x0, y + 24, 11, '#9a9a9a', 'left'); _T(c, String(val), x0 + bw, y + 24, 14, '#e8e8e2', 'right'); });
+  }
+}
+// a sterndrive / outboard boat's engine display (as Mercury's VesselView or a Garmin gauge page): a tach arc with the
+// revs, the speed big, trim and fuel
+export function boatDash(c, S, w, h) {
+  c.fillStyle = '#080b10'; c.fillRect(0, 0, w, h);
+  const cx = 70, cy = 82, R = 56, a0 = Math.PI * 0.85, a1 = Math.PI * 2.15, f = Math.max(0, Math.min(1, S.rpm / 6000)), at = (v) => a0 + (a1 - a0) * v;
+  c.lineWidth = 9; c.strokeStyle = '#1d2530'; c.beginPath(); c.arc(cx, cy, R, a0, a1); c.stroke();
+  c.strokeStyle = '#2f9bff'; c.beginPath(); c.arc(cx, cy, R, a0, at(Math.min(f, 0.9))); c.stroke(); if (f > 0.9) { c.strokeStyle = '#e23b3b'; c.beginPath(); c.arc(cx, cy, R, at(0.9), at(f)); c.stroke(); }
+  c.strokeStyle = '#e8e8e2'; c.lineWidth = 2; for (let i = 0; i <= 6; i++) { const a = at(i / 6); c.beginPath(); c.moveTo(cx + Math.cos(a) * (R - 14), cy + Math.sin(a) * (R - 14)); c.lineTo(cx + Math.cos(a) * (R - 6), cy + Math.sin(a) * (R - 6)); c.stroke(); _T(c, String(i), cx + Math.cos(a) * (R - 23), cy + Math.sin(a) * (R - 23), 11, '#9a9a9a'); }
+  _T(c, String(Math.round(S.rpm / 10) * 10), cx, cy + 6, 22, '#ffffff'); _T(c, 'RPM', cx, cy + 26, 10, '#9a9a9a');
+  const [sp, su] = speedTxt(S); _T(c, sp, 190, 48, 46, '#ffffff'); _T(c, su, 190, 80, 12, '#9fd0ff');
+  _T(c, 'TRIM', 148, 104, 10, '#9a9a9a', 'left'); for (let i = 0; i < 5; i++) { c.fillStyle = i < 2 ? '#2f9bff' : '#1d2530'; c.fillRect(176 + i * 13, 99, 10, 10); }
+  _T(c, 'FUEL', 148, 119, 10, '#9a9a9a', 'left'); c.fillStyle = '#1d2530'; c.fillRect(176, 115, 62, 8); c.fillStyle = '#3ccf6a'; c.fillRect(176, 115, 62 * S.fuelL, 8);
+}
+// a sport bike's TFT dash: a rev bar sweeping across the top into the red, the speed big, the gear in a box
+export function bikeTFT(c, S, w, h) {
+  c.fillStyle = '#050608'; c.fillRect(0, 0, w, h);
+  const n = 28, f = Math.max(0, Math.min(1, S.rpm / 14000)), lit = Math.round(f * n);
+  for (let i = 0; i < n; i++) { const x = 10 + i * ((w - 20) / n), hh = 8 + i * 0.7, red = i >= n * 0.82; c.fillStyle = i < lit ? (red ? '#ff3b3b' : i >= n * 0.7 ? '#f2b705' : '#e8e8e2') : (red ? '#3a1010' : '#1c1f24'); c.fillRect(x, 34 - hh, (w - 20) / n - 2, hh); }
+  for (let k = 0; k <= 14; k += 2) _T(c, String(k), 10 + (k / 14) * (w - 20), 44, 10, k >= 12 ? '#ff5b5b' : '#8a8f96');
+  const [sp, su] = speedTxt(S); _T(c, sp, 118, 84, 46, '#ffffff', 'right'); _T(c, su, 124, 96, 12, '#9a9a9a', 'left');
+  c.strokeStyle = '#8a8f96'; c.lineWidth = 2; c.strokeRect(186, 56, 52, 58); _T(c, S.gearNo <= 0 ? 'N' : String(S.gearNo), 212, 87, 44, S.gearNo <= 0 ? '#3ccf6a' : '#ffffff');
+  _T(c, `${Math.round(S.rpm / 100) * 100}`, 14, 112, 12, '#8a8f96', 'left');
+}
+// a cab's live panel (liveDisplays.js) on this atlas: one more draw call for all its moving needles and lamps
+export const livePanel = () => new LivePanel(atlasMat(), { white: swatchUV('white'), lamp: swatchUV('white') });
 // a toggle switch: a hex nut on the panel and a short bat lever tilted up
 export function toggle(bag, m, x, y, metal) {
   const nut = new THREE.CylinderGeometry(0.006, 0.006, 0.004, 6); nut.rotateX(Math.PI / 2); nut.applyMatrix4(at(m, x, y, 0.002)); bag.add(nut, metal);
@@ -391,11 +483,14 @@ export function collect(parent, fn) { const n0 = parent.children.length; fn(); r
 const screenGlass = () => cached('ckScrGlass', () => new THREE.MeshPhysicalMaterial({ color: 0x0a0c0e, metalness: 0, roughness: 0.05, transparent: true, opacity: 0.14, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.4, depthWrite: false }));
 // a display inset in its bezel: a housing (depth d) whose front is a frame standing proud of the recessed face, the
 // face from the atlas, a glass with a sheen over it, two screws
-export function screen(bag, nb, m, w, h, tile, { d = 0.03, border = 0.014, housing = blackM() } = {}) {
+// (live: { panel, draw, px, hz }: the face is a canvas display of a LivePanel instead, redrawn while it is watched)
+export function screen(bag, nb, m, w, h, tile, { d = 0.03, border = 0.014, housing = blackM(), live = null, fittings = true } = {}) { // (fittings: the glass and screws)
   const W = w + 2 * border, H = h + 2 * border;
   box(bag, m, [0, 0, (d - 0.008) / 2], [W, H, d - 0.008], housing);
   for (const [cx, cy, sw, sh] of [[0, (H - border) / 2, W, border], [0, -(H - border) / 2, W, border], [(W - border) / 2, 0, border, h], [-(W - border) / 2, 0, border, h]]) box(bag, m, [cx, cy, d - 0.004], [sw, sh, 0.008], housing);
-  face(nb, m, w, h, tile, d - 0.0075);
+  if (live) live.panel.screen(at(m, 0, 0, d - 0.0075), w, h, { px: live.px || [256, Math.round(256 * h / w)], hz: live.hz || 10, draw: live.draw, z: 0 });
+  else face(nb, m, w, h, tile, d - 0.0075);
+  if (!fittings) return;
   const gl = new THREE.PlaneGeometry(w, h); gl.applyMatrix4(at(m, 0, 0, d - 0.005)); nb.add(gl, screenGlass());
   screws(nb, m, W - border, H - border, d + 0.0005, 2);
 }

@@ -416,8 +416,10 @@ function truckInterior(g, S, S0) {
   const fm = (x, s, off = 0) => CK.faceM(V(x, y0, z0).addScaledVector(U, s).addScaledVector(N, off), N, U);
   // the driver's instrument plate: brushed aluminium, a big tach left of the column, four small gauges right of it
   CK.box(b, fm(-0.395, 0.137, 0.003), [0, 0, 0], [0.53, 0.235, 0.005], alu); CK.screws(nb, fm(-0.395, 0.137, 0.003), 0.5, 0.205, 0.003);
-  CK.gauge(nb, fm(-0.585, 0.15, 0.006), 0.058, 'tach');
-  for (const [x, s2] of [[-0.25, 0.19], [-0.175, 0.19], [-0.25, 0.095], [-0.175, 0.095]]) CK.gauge(nb, fm(x, s2, 0.006), 0.031);
+  // (live: the tach and the oil pressure follow the engine, the dash pod shows the gear and the speed: liveDisplays.js)
+  const lp = CK.livePanel();
+  CK.gauge(nb, fm(-0.585, 0.15, 0.006), 0.058, 'tach', null, { live: lp, src: (S) => S.rpm / 9000 });
+  for (const [x, s2, val] of [[-0.25, 0.19, 'oilP'], [-0.175, 0.19, 0.55], [-0.25, 0.095, 0.3], [-0.175, 0.095, 0.62]]) CK.gauge(nb, fm(x, s2, 0.006), 0.031, 'gauge', null, typeof val === 'string' ? { live: lp, src: val } : { val });
   { // the column's collar, where the column (from the wheel's centre, forward and down at its tilt) meets the face
     const W0 = V(-0.4 + TRUCK_COL[0], 0.27 + TRUCK_COL[1], 0.3 + TRUCK_COL[2]), dir = V(0, -Math.sin(0.28), -Math.cos(0.28)), F0 = V(0, y0, z0), t = F0.clone().sub(W0).dot(N) / dir.dot(N), hit = W0.clone().addScaledVector(dir, t);
     const ring = new THREE.TorusGeometry(0.075, 0.009, 6, 24); ring.applyMatrix4(fm(-0.4, hit.clone().sub(F0).dot(U), 0.007)); nb.add(ring, CK.blackM()); }
@@ -431,7 +433,8 @@ function truckInterior(g, S, S0) {
   { const m = fm(0.03, 0.03, 0.003); nb.add(bar(V(0, 0, 0), V(0, 0, 0.04), 0.012, 0.012, true, 8).applyMatrix4(m), chrome); nb.add(bar(V(-0.03, 0, 0.045), V(0.03, 0, 0.045), 0.016, 0.016, true, 8).applyMatrix4(m), M.paint(0xc8102e)); }
   // digital dash pod on the hood, behind the wheel's top, tilted to the driver
   const POD = { c: [-0.4, 0.9, -0.52], s: [0.26, 0.11, 0.07], rx: -0.25 };
-  { const m = new THREE.Matrix4().makeRotationX(POD.rx).setPosition(...POD.c); CK.box(b, m, [0, 0, 0], POD.s, CK.carbon()); CK.face(nb, m.clone().multiply(new THREE.Matrix4().makeTranslation(0, 0, POD.s[2] / 2)), 0.22, 0.085, 'digi', 0.0015); CK.gaugeGlass(nb, m.clone().multiply(new THREE.Matrix4().makeTranslation(0, 0, POD.s[2] / 2 - 0.005)).scale(V(2.4, 0.95, 1)), 0.046); }
+  { const m = new THREE.Matrix4().makeRotationX(POD.rx).setPosition(...POD.c); CK.box(b, m, [0, 0, 0], POD.s, CK.carbon()); lp.screen(m.clone().multiply(new THREE.Matrix4().makeTranslation(0, 0, POD.s[2] / 2)), 0.22, 0.085, { px: [256, 100], z: 0.0015, hz: 12, glow: 0.8, draw: CK.raceDash }); CK.gaugeGlass(nb, m.clone().multiply(new THREE.Matrix4().makeTranslation(0, 0, POD.s[2] / 2 - 0.005)).scale(V(2.4, 0.95, 1)), 0.046); }
+  lp.to(g);
   // seats: composite bucket seats (as a BRIDE / Sparco: hip width 53 cm, wider shoulders, head wings) on side-mount
   // plates and floor rails; harness over the harness bar. prof: the shell's [half-width, side-wall rise] up the back,
   // each change eased (an abrupt step between two loft rings twisted the old shell into slivers)
@@ -653,7 +656,11 @@ function heliNose(c, lv) {
     { const lip = new THREE.CapsuleGeometry(0.014, PAN.s[0] + 0.01, 3, 8); lip.rotateZ(Math.PI / 2); lip.translate(0, HOOD.c[1] - 0.004, PAN.s[2] / 2 + 0.085); lip.applyMatrix4(pm); b.add(lip, CK.satinBlack()); }
     CK.face(nb, CK.local(face, 0, 0.11), 0.26, 0.032, 'annun'); CK.screws(nb, face, PAN.s[0] - 0.025, PAN.s[1] - 0.02, 0.0012); // caution panel, the panel's screws
     CK.placard(nb, CK.local(face, 0.215, -0.112), 0.06, 0.03, 2);
-    for (const [x, y, t] of [[-0.19, 0.045, 'gauge'], [-0.065, 0.045, 'ai'], [0.065, 0.045, 'alt'], [0.19, 0.045, 'gauge'], [-0.19, -0.055, 'tach'], [-0.065, -0.055, 'gauge'], [0.065, -0.055, 'compass'], [0.19, -0.055, 'gauge']]) CK.gauge(nb, CK.local(face, x, y), 0.044, t);
+    // (live: the attitude ball, the altimeter's hands, the tach and an oil pressure follow the aircraft: liveDisplays.js)
+    const lp = CK.livePanel(), LIVE = { ai: 'att', alt: 'alt', tach: (S) => S.rpm / 9000 };
+    for (const [x, y, t, val] of [[-0.19, 0.045, 'gauge', 'oilP'], [-0.065, 0.045, 'ai'], [0.065, 0.045, 'alt'], [0.19, 0.045, 'gauge', 0.58], [-0.19, -0.055, 'tach'], [-0.065, -0.055, 'gauge', 0.36], [0.065, -0.055, 'compass'], [0.19, -0.055, 'gauge', 0.66]])
+      CK.gauge(nb, CK.local(face, x, y), 0.044, t, null, LIVE[t] || typeof val === 'string' ? { live: lp, src: LIVE[t] || val } : { val });
+    lp.to(g);
     CK.face(nb, CK.local(face, 0, -0.112), 0.25, 0.04, 'heliSw');
     for (let i = 0; i < 7; i++) CK.toggle(nb, CK.local(face, 0, -0.112), (22 + i * 35) / 256 * 0.25 - 0.125, 0.004, M.chrome());
     // the pedestal (tapering, its back face leaning forward), the avionics stack on that face

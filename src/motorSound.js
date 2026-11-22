@@ -67,7 +67,7 @@ export function makeMotor(A, v, kind) {
 // faster than the road while they spin, 0 locked; main.js drivenWheels), the clutch slipping when pulling away; with no
 // driven wheel on the ground (a jump) it revs freely to the throttle, up to the rev limiter. Boats: the propeller holds
 // the revs down until the boat gets going, and lets them run away when it comes out of the water (e.bite).
-function motorRpm(v, e, s, dt) {
+export function motorRpm(v, e, s, dt) {
   const M = v.motor, [idle, red] = M.rpm, span = red - idle, thr = e.spoolT || 0;
   let target, coupled = false, shift = 0;
   if (!M.gears) {

@@ -22,6 +22,7 @@ import { mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { M } from './materials.js';
 import { PM } from './planeMaterials.js';
 import { V, mx, bar, pipe, shell, Bag, seatGeo, boxObstacle } from './partDetail.js';
+import { LivePanel, Shape, sweep, color } from './liveDisplays.js';
 
 // the glass (partDetail's dome: half-axes across, up, along)
 const A = 0.45, C = 0.425, BB = 1.0;
@@ -81,7 +82,7 @@ const black = () => M.black(), matte = () => PM.exhaust(); // (kit fittings: one
 const TW = 2048, TH = 1024, PX0 = -0.37, PX1 = 0.37, PY0 = -0.15, PY1 = 0.18, PH = 923;
 const pX = (x) => ((x - PX0) / (PX1 - PX0)) * TW, pY = (y) => ((PY1 - y) / (PY1 - PY0)) * PH, pS = TW / (PX1 - PX0);
 const panelUV = (x, y) => [(x - PX0) / (PX1 - PX0), 1 - (pY(y) / TH)];
-const CELLS = { red: 0, blue: 1, white: 2, yellow: 3, black: 4, green: 5, compass: 6, fuel: 7, trim: 8, quad: 9, chrome: 12 }; // (quad is 3 cells wide)
+const CELLS = { red: 0, blue: 1, white: 2, yellow: 3, black: 4, green: 5, compass: 6, fuel: 7, trim: 8, quad: 9, chrome: 12, lamp: 13 }; // (quad is 3 cells wide; lamp: white, lit in the glow map too)
 const cellRect = (i, w = 1) => [i * 100 + 6, PH + 8, (i + w) * 100 - 6, TH - 6];
 const cellUV = (i, w = 1) => { const [x0, y0, x1, y1] = cellRect(i, w); return { u0: x0 / TW, u1: x1 / TW, v0: 1 - y1 / TH, v1: 1 - y0 / TH }; };
 // the instruments (panel frame, metres): centre, face radius, kind
@@ -95,7 +96,20 @@ const SCREEN = { x0: -0.07, x1: 0.09, y0: -0.025, y1: 0.105 }, RADIO = { x0: -0.
 const TOGGLES = [['MASTER', -0.215], ['ALT', -0.185], ['PUMP', -0.155], ['NAV', -0.125], ['STROBE', -0.095], ['LAND', -0.065], ['AVION', 0.105]].map(([t, x]) => ({ t, x, y: -0.11 }));
 const KNOBS = [['PROP', -0.025, 'blue'], ['MIX', 0.02, 'red'], ['CARB', 0.065, 'white']].map(([t, x, c]) => ({ t, x, y: -0.115, c }));
 const BREAKERS = [5, 10, 5, 5, 10, 15].map((a, i) => ({ a, x: 0.135 + i * 0.029, y: -0.1 }));
-const KEY = { x: -0.265, y: -0.11 }, ANN = [['VOLTS', -0.03, '#e0412b'], ['FUEL P', 0.01, '#f0a020'], ['CANOPY', 0.05, '#e0412b']];
+const KEY = { x: -0.265, y: -0.11 }, ANN = [['VOLTS', -0.03, '#e0412b', 'off'], ['FUEL P', 0.01, '#f0a020', 'off'], ['STALL', 0.05, '#e0412b', 'stall']];
+// the annunciators' lit faces, painted in the atlas's top left corner (outside the panel's arched top), and the gear's
+// three greens under the vertical speed indicator (a retractable's down-and-locked lights: lit with fixed gear too)
+const ANN_LIT = (i) => [4, 4 + i * 36], GEAR = { x: -0.128, y: -0.056, r: 0.0042, at: [[0, 0.007], [-0.009, -0.005], [0.009, -0.005]] };
+// the dials (as painted, and as their needles read them): v from v0 to v1 over the canvas angles a0..a1
+const T0 = -Math.PI / 2;
+const DIAL = {
+  asi: { v0: 40, v1: 200, a0: T0 + 0.35, a1: T0 + 2 * Math.PI - 0.35, major: 20, minor: 5, bands: [[50, 100, '#f2f2ee', 0.74, 0.06], [60, 145, '#2fa84f'], [145, 180, '#f2c300'], [179, 182, '#e0412b', 0.86, 0.2]], title: 'AIRSPEED', sub: 'KNOTS' },
+  vsi: { v0: -20, v1: 20, a0: Math.PI * 0.03 + 0.001, a1: Math.PI * 1.97, major: 5, minor: 1, label: (v) => Math.abs(v), title: 'VERT SPEED', sub: '100 FT/MIN' }, // (0 at 9 o'clock, climb up over the top)
+  tach: { v0: 0, v1: 35, a0: T0 - 2.2, a1: T0 + 2.2, major: 5, minor: 1, bands: [[20, 27, '#2fa84f'], [26.8, 27.4, '#e0412b', 0.86, 0.2]], title: 'RPM', sub: 'X 100' },
+  map: { v0: 10, v1: 35, a0: T0 - 2.2, a1: T0 + 2.2, major: 5, minor: 1, bands: [[15, 29, '#2fa84f'], [29, 29.6, '#e0412b', 0.86, 0.2]], title: 'MAN PRESS', sub: 'IN HG' },
+  g: { v0: -5, v1: 10, a0: T0 - 2.6, a1: T0 + 2.6, major: 5, minor: 1, bands: [[-3, 6, '#2fa84f'], [6, 10, '#e0412b'], [-5, -3, '#e0412b']], title: 'G UNITS' },
+};
+const SMALL = { a0: T0 - 1.0, a1: T0 + 1.0, src: { oilT: 'oilT', oilP: 'oilP', cht: 'cht', fuelL: 'fuelL', fuelR: 'fuelR', amp: 'amp' } };
 
 function panelTextures() {
   const mk = () => { const c = document.createElement('canvas'); c.width = TW; c.height = TH; return c; };
@@ -130,7 +144,7 @@ function panelTextures() {
     for (let i = 0; i < 4; i++) { const a = Math.PI / 4 + (i * Math.PI) / 2, rr = R + 0.0085 * pS; screw(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, R > 60 ? 6 : 4.5); }
     g.fillStyle = '#0d0e10'; g.beginPath(); g.arc(cx, cy, R, 0, 7); g.fill();
     switch (q.k) {
-      case 'asi': scale(cx, cy, R, { v0: 40, v1: 200, a0: T + 0.35, a1: T + 2 * Math.PI - 0.35, major: 20, minor: 5, bands: [[50, 100, '#f2f2ee', 0.74, 0.06], [60, 145, '#2fa84f'], [145, 180, '#f2c300'], [179, 182, '#e0412b', 0.86, 0.2]], val: 108, title: 'AIRSPEED', sub: 'KNOTS' }); break;
+      case 'asi': case 'vsi': case 'tach': case 'map': case 'g': scale(cx, cy, R, DIAL[q.k]); break; // (their needles are live: bubbleInterior)
       case 'ai': {
         g.save(); g.beginPath(); g.arc(cx, cy, R * 0.97, 0, 7); g.clip(); g.translate(cx, cy); g.rotate(-0.08);
         g.fillStyle = '#2f7cc8'; g.fillRect(-R, -R, 2 * R, R + R * 0.06); g.fillStyle = '#7a4f2a'; g.fillRect(-R, R * 0.06, 2 * R, R);
@@ -144,32 +158,23 @@ function panelTextures() {
       }
       case 'alt': {
         scale(cx, cy, R, { v0: 0, v1: 10, a0: T, a1: T + 2 * Math.PI - 1e-3, major: 1, minor: 0.2, label: (v) => (v < 10 ? v : ''), num: 0.64, title: 'ALT', sub: '1000 FT' });
-        g.fillStyle = '#1b1c1f'; g.fillRect(cx + R * 0.32, cy - R * 0.1, R * 0.42, R * 0.2); txt(g, '29.92', cx + R * 0.53, cy, R * 0.13, '#f2f2ee');
-        needle(cx, cy, T + 2 * Math.PI * 0.45, R * 0.5, R * 0.12); needle(cx, cy, T + 2 * Math.PI * 0.12, R * 0.85, R * 0.07); break;
+        g.fillStyle = '#1b1c1f'; g.fillRect(cx + R * 0.32, cy - R * 0.1, R * 0.42, R * 0.2); txt(g, '29.92', cx + R * 0.53, cy, R * 0.13, '#f2f2ee'); break;
       }
       case 'tc': {
         ticks(cx, cy, R * 0.76, R * 0.95, Math.PI - 0.26, Math.PI, 1, R * 0.05); ticks(cx, cy, R * 0.76, R * 0.95, 0, 0.26, 1, R * 0.05);
         txt(g, 'L', cx - R * 0.62, cy + R * 0.32, R * 0.18); txt(g, 'R', cx + R * 0.62, cy + R * 0.32, R * 0.18);
         txt(g, 'TURN COORDINATOR', cx, cy - R * 0.55, R * 0.1); txt(g, '2 MIN', cx, cy - R * 0.4, R * 0.1);
-        g.strokeStyle = '#f4f4f0'; g.lineWidth = R * 0.07; g.beginPath(); g.moveTo(cx - R * 0.66, cy + R * 0.04); g.lineTo(cx + R * 0.66, cy - R * 0.04); g.stroke();
-        g.fillStyle = '#f4f4f0'; g.beginPath(); g.arc(cx, cy, R * 0.1, 0, 7); g.fill(); g.fillRect(cx - R * 0.02, cy - R * 0.25, R * 0.04, R * 0.2);
-        arc(cx, cy - R * 0.2, R * 0.82, Math.PI * 0.36, Math.PI * 0.64, R * 0.13, '#2a2b2e'); g.fillStyle = '#050506'; g.beginPath(); g.arc(cx, cy + R * 0.62, R * 0.065, 0, 7); g.fill();
+        arc(cx, cy - R * 0.2, R * 0.82, Math.PI * 0.36, Math.PI * 0.64, R * 0.13, '#b9b5a6'); // (the inclinometer's tube, its fluid pale; the little aeroplane and the black ball are live)
         g.strokeStyle = '#f4f4f0'; g.lineWidth = R * 0.02; for (const sx of [-1, 1]) { g.beginPath(); g.moveTo(cx + sx * R * 0.09, cy + R * 0.52); g.lineTo(cx + sx * R * 0.09, cy + R * 0.72); g.stroke(); }
         break;
       }
       case 'dg': {
-        g.save(); g.translate(cx, cy); g.rotate(-0.7);
+        g.save(); g.translate(cx, cy); // (north up: the live card turns a copy of it; the aeroplane and lubber line are live too)
         const L = ['N', '3', '6', 'E', '12', '15', 'S', '21', '24', 'W', '30', '33'];
         ticks(0, 0, R * 0.84, R * 0.96, 0, 2 * Math.PI, 72, R * 0.02); ticks(0, 0, R * 0.76, R * 0.96, 0, 2 * Math.PI, 36, R * 0.03);
         for (let i = 0; i < 12; i++) { g.save(); g.rotate((i / 12) * 2 * Math.PI); txt(g, L[i], 0, -R * 0.62, R * (L[i].length > 1 ? 0.16 : 0.2)); g.restore(); }
-        g.restore();
-        g.fillStyle = '#f4f4f0'; g.beginPath(); g.moveTo(cx, cy - R * 0.32); g.lineTo(cx + R * 0.05, cy - R * 0.05); g.lineTo(cx + R * 0.32, cy + R * 0.04); g.lineTo(cx + R * 0.32, cy + R * 0.1); g.lineTo(cx + R * 0.05, cy + R * 0.08); g.lineTo(cx + R * 0.04, cy + R * 0.24); g.lineTo(cx + R * 0.13, cy + R * 0.3); g.lineTo(cx - R * 0.13, cy + R * 0.3); g.lineTo(cx - R * 0.04, cy + R * 0.24); g.lineTo(cx - R * 0.05, cy + R * 0.08); g.lineTo(cx - R * 0.32, cy + R * 0.1); g.lineTo(cx - R * 0.32, cy + R * 0.04); g.lineTo(cx - R * 0.05, cy - R * 0.05); g.closePath(); g.fill();
-        g.fillStyle = '#f29a1f'; g.beginPath(); g.moveTo(cx, cy - R * 0.97); g.lineTo(cx - R * 0.07, cy - R * 1.0 + R * 0.16); g.lineTo(cx + R * 0.07, cy - R * 1.0 + R * 0.16); g.fill(); break;
+        g.restore(); break;
       }
-      case 'vsi': scale(cx, cy, R, { v0: -20, v1: 20, a0: Math.PI * 1.97, a1: Math.PI * 0.03 + 0.001, major: 5, minor: 1, label: (v) => Math.abs(v), val: 0, title: 'VERT SPEED', sub: '100 FT/MIN' }); break; // (0 at 9 o'clock, climb up)
-      case 'tach': scale(cx, cy, R, { v0: 0, v1: 35, a0: T - 2.2, a1: T + 2.2, major: 5, minor: 1, bands: [[20, 27, '#2fa84f'], [26.8, 27.4, '#e0412b', 0.86, 0.2]], val: 24, title: 'RPM', sub: 'X 100' }); break;
-      case 'map': scale(cx, cy, R, { v0: 10, v1: 35, a0: T - 2.2, a1: T + 2.2, major: 5, minor: 1, bands: [[15, 29, '#2fa84f'], [29, 29.6, '#e0412b', 0.86, 0.2]], val: 24, title: 'MAN PRESS', sub: 'IN HG' }); break;
-      case 'g': scale(cx, cy, R, { v0: -5, v1: 10, a0: T - 2.6, a1: T + 2.6, major: 5, minor: 1, bands: [[-3, 6, '#2fa84f'], [6, 10, '#e0412b'], [-5, -3, '#e0412b']], val: 1, title: 'G UNITS' }); break;
       case 'xpdr': {
         g.fillStyle = '#18191c'; g.beginPath(); g.arc(cx, cy, R * 0.98, 0, 7); g.fill();
         const r0 = [cx - R * 0.62, cy - R * 0.35, R * 1.24, R * 0.5]; g.fillStyle = '#16301e'; g.fillRect(...r0); e.fillStyle = '#16301e'; e.fillRect(...r0);
@@ -178,12 +183,12 @@ function panelTextures() {
         break;
       }
       default: { // the small engine gauges: a 100 degree arc over the top
-        const lab = { oilT: 'OIL °F', oilP: 'OIL PSI', cht: 'CHT', fuelL: 'FUEL L', fuelR: 'FUEL R', amp: 'AMPS' }[q.k], val = { oilT: 0.55, oilP: 0.6, cht: 0.5, fuelL: 0.72, fuelR: 0.68, amp: 0.55 }[q.k];
-        const a0 = T - 1.0, a1 = T + 1.0, at = (v) => a0 + (a1 - a0) * v;
+        const lab = { oilT: 'OIL °F', oilP: 'OIL PSI', cht: 'CHT', fuelL: 'FUEL L', fuelR: 'FUEL R', amp: 'AMPS' }[q.k];
+        const a0 = SMALL.a0, a1 = SMALL.a1, at = (v) => a0 + (a1 - a0) * v;
         const bands = q.k.startsWith('fuel') ? [[0, 0.12, '#e0412b'], [0.12, 1, '#2fa84f']] : q.k === 'amp' ? [[0.3, 0.8, '#2fa84f']] : [[0, 0.15, '#f2c300'], [0.15, 0.8, '#2fa84f'], [0.8, 0.95, '#f2c300'], [0.95, 1, '#e0412b']];
         for (const [b0, b1, col] of bands) arc(cx, cy + R * 0.25, R * 0.78, at(b0), at(b1), R * 0.12, col);
         ticks(cx, cy + R * 0.25, R * 0.62, R * 0.9, a0, a1, 4, R * 0.05);
-        txt(g, lab, cx, cy + R * 0.5, R * 0.24); needle(cx, cy + R * 0.25, at(val), R * 0.78, R * 0.09);
+        txt(g, lab, cx, cy + R * 0.5, R * 0.24); // (needle: live)
         if (q.k.startsWith('fuel')) { txt(g, 'E', cx - R * 0.62, cy - R * 0.25, R * 0.2); txt(g, 'F', cx + R * 0.62, cy - R * 0.25, R * 0.2); }
       }
     }
@@ -216,7 +221,11 @@ function panelTextures() {
     for (const ctx of [g, e]) { txt(ctx, '118.300', d[0] + d[2] * 0.27, y0 + h / 2, h * 0.36, '#7cf29a'); txt(ctx, '121.500', d[0] + d[2] * 0.75, y0 + h / 2, h * 0.3, '#5fc07a'); }
     txt(g, 'COM', x0 + w * 0.78, y0 + h * 0.22, h * 0.16, '#c8c8c0'); }
   // annunciator lights over the screen
-  for (const [t, x, col] of ANN) { const cx = pX(x), cy = pY(0.128); g.fillStyle = '#1a1b1e'; g.fillRect(cx - 44, cy - 16, 88, 32); g.fillStyle = col; g.fillRect(cx - 40, cy - 12, 80, 24); txt(g, t, cx, cy, 15, '#1a1b1e'); }
+  const dim = (c, k = 0.3) => '#' + [1, 3, 5].map((i) => Math.round(parseInt(c.slice(i, i + 2), 16) * k).toString(16).padStart(2, '0')).join('');
+  ANN.forEach(([t, x, col], i) => { const cx = pX(x), cy = pY(0.128); g.fillStyle = '#1a1b1e'; g.fillRect(cx - 44, cy - 16, 88, 32); g.fillStyle = dim(col); g.fillRect(cx - 40, cy - 12, 80, 24); txt(g, t, cx, cy, 15, dim(col, 0.12));
+    const [lx, ly] = ANN_LIT(i); for (const ctx of [g, e]) { ctx.fillStyle = col; ctx.fillRect(lx, ly, 80, 24); txt(ctx, t, lx + 40, ly + 12, 15, '#1a1b1e'); } }); // (lit: liveDisplays lamps over the dim ones)
+  { const cx = pX(GEAR.x), cy = pY(GEAR.y), R = GEAR.r * pS; txt(g, 'GEAR', pX(GEAR.x - 0.03), cy, 14);
+    for (const [dx, dy] of GEAR.at) { g.fillStyle = '#18191c'; g.beginPath(); g.arc(cx + dx * pS, cy - dy * pS, R + 4, 0, 7); g.fill(); g.fillStyle = '#16351f'; g.beginPath(); g.arc(cx + dx * pS, cy - dy * pS, R, 0, 7); g.fill(); } }
   // the toggles' and knobs' labels, the circuit breakers, the key switch's positions
   for (const s of TOGGLES) { const cx = pX(s.x), cy = pY(s.y); g.fillStyle = '#5e6268'; g.beginPath(); g.arc(cx, cy, 16, 0, 7); g.fill(); txt(g, s.t, cx, pY(s.y - 0.021), 17); txt(g, 'ON', cx, pY(s.y + 0.017), 13, '#c8c8c0', 'center', 'normal'); }
   for (const k of KNOBS) { const cx = pX(k.x), cy = pY(k.y); g.fillStyle = '#5e6268'; g.beginPath(); g.arc(cx, cy, 20, 0, 7); g.fill(); txt(g, k.t, cx, pY(k.y - 0.022), 18); }
@@ -235,7 +244,7 @@ function panelTextures() {
   const ring = (cx, cy, r0, r1, a) => { const gr = g.createRadialGradient(cx, cy, r0, cx, cy, r1); gr.addColorStop(0, `rgba(0,0,0,${a})`); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; g.beginPath(); g.arc(cx, cy, r1, 0, 7); g.arc(cx, cy, r0, 0, 7, true); g.fill(); };
   for (const q of GAUGES) { const cx = pX(q.x), cy = pY(q.y), R = q.r * pS; ring(cx, cy, R + 0.004 * pS, R + 0.013 * pS, 0.5);
     const gr = g.createRadialGradient(cx, cy - R * 0.1, R * 0.7, cx, cy, R); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,0.75)'); g.fillStyle = gr; g.beginPath(); g.arc(cx, cy, R, 0, 7); g.fill();
-    g.fillStyle = 'rgba(255,255,255,0.07)'; g.beginPath(); g.ellipse(cx - R * 0.3, cy - R * 0.4, R * 0.45, R * 0.18, -0.5, 0, 7); g.fill(); } // (a glint on the glass)
+    if (q.k !== 'dg') { g.fillStyle = 'rgba(255,255,255,0.07)'; g.beginPath(); g.ellipse(cx - R * 0.3, cy - R * 0.4, R * 0.45, R * 0.18, -0.5, 0, 7); g.fill(); } } // (a glint on the glass; not on the heading card, which turns)
   for (const R of [SCREEN, RADIO]) { const x0 = pX(R.x0) - 30, y0 = pY(R.y1) - 30, w = pX(R.x1) - pX(R.x0) + 60, hh = pY(R.y0) - pY(R.y1) + (R === SCREEN ? 110 : 60); g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = 16; g.strokeRect(x0 - 4, y0 - 4, w + 8, hh + 8); }
   for (const k of [...KNOBS, ...TOGGLES.map((t) => ({ ...t, small: 1 })), { ...KEY, big: 1 }]) { const cx = pX(k.x), cy = pY(k.y), R0 = k.big ? 46 : k.small ? 16 : 22;
     ring(cx, cy + 6, R0, R0 + 26, 0.45);
@@ -249,6 +258,7 @@ function panelTextures() {
   // atlas cells: solid colours, the compass card (the band you see through its window), the fuel selector and
   // trim placards, the throttle quadrant's plate
   const fill = (i, col, w = 1) => { const [x0, y0, x1, y1] = cellRect(i, w); g.fillStyle = col; g.fillRect(x0 - 6, y0 - 8, x1 - x0 + 12, y1 - y0 + 14); };
+  { const [x0, y0, x1, y1] = cellRect(CELLS.lamp); for (const ctx of [g, e]) { ctx.fillStyle = '#ffffff'; ctx.fillRect(x0 - 6, y0 - 8, x1 - x0 + 12, y1 - y0 + 14); } }
   fill(CELLS.red, '#c41e1e'); fill(CELLS.blue, '#1f4fa8'); fill(CELLS.white, '#e8e8e4'); fill(CELLS.yellow, '#f2c300'); fill(CELLS.black, '#151618'); fill(CELLS.green, '#2e7d32'); fill(CELLS.chrome, '#c9ccd1');
   { const [x0, y0, x1, y1] = cellRect(CELLS.compass), w = x1 - x0, h = y1 - y0; g.fillStyle = '#0c0c0d'; g.fillRect(x0, y0, w, h);
     g.fillStyle = '#f2f2ee'; g.fillRect(x0 + 4, y0 + h * 0.3, w - 8, h * 0.42); for (const [t, f] of [['33', 0.15], ['N', 0.5], ['3', 0.85]]) txt(g, t, x0 + w * f, y0 + h * 0.52, 22, '#111');
@@ -391,6 +401,34 @@ export function bubbleInterior(g, b, nb, lv = 2) {
     { const z = -0.645, y = gh(z) + 0.027, hs = new THREE.CylinderGeometry(0.022, 0.024, 0.04, 14); hs.rotateX(Math.PI / 2); hs.translate(0, y, z); nb.add(hs, black());
       const ft = new THREE.BoxGeometry(0.03, 0.012, 0.03); ft.translate(0, gh(z) + 0.004, z); nb.add(ft, black());
       const win = new THREE.PlaneGeometry(0.03, 0.02); onCell(win, CELLS.compass); win.translate(0, y, z + 0.0205); nb.add(win, AT); }
+  }
+  // ---- the live instruments (liveDisplays.js): needles, the attitude ball, the heading card, the turn coordinator's
+  // aeroplane and ball, the annunciators and the gear lights, over their painted faces (own aircraft and the hangar)
+  if (hi) {
+    const mid = (c) => [(c.u0 + c.u1) / 2, (c.v0 + c.v1) / 2], lp = new LivePanel(AT, { white: mid(cellUV(CELLS.white)), lamp: mid(cellUV(CELLS.lamp)) });
+    const F = (x, y) => P(mx([x, y, 0.004])), Q = Object.fromEntries(GAUGES.map((q) => [q.k, q])); // (a face's frame: on the panel's face)
+    const dial = (k, src, o = {}) => { const q = Q[k], D = DIAL[k]; return lp.needle(F(q.x, q.y), { src, at: sweep(D.v0, D.v1, D.a0, D.a1), len: q.r * 0.82, w: q.r * 0.075, hub: 2.6, hubCol: '#202124', ...o }); };
+    dial('asi', 'kt'); dial('vsi', (S) => S.vs / 100, { damp: 4 }); dial('tach', (S) => S.rpm / 100, { damp: 8 }); dial('map', 'map', { damp: 8 });
+    for (const k of ['gMin', 'gMax']) dial('g', k, { color: '#f29a1f', w: Q.g.r * 0.05, len: Q.g.r * 0.78, hub: 0, z: 0.0007, damp: 20 }); // (the g meter's drag needles stay at the extremes)
+    dial('g', 'g', { damp: 10 });
+    { const q = Q.alt, f = F(q.x, q.y), R = q.r; // two hands: thousands, hundreds
+      lp.needle(f, { src: 'alt', at: (ft) => T0 + 2 * Math.PI * (ft / 10000), len: R * 0.5, w: R * 0.12, tail: 0.15, hub: 0, damp: 9 });
+      lp.needle(f, { src: 'alt', at: (ft) => T0 + 2 * Math.PI * (ft / 1000), len: R * 0.85, w: R * 0.07, z: 0.0016, hub: 2.4, hubCol: '#202124', damp: 9 }); }
+    lp.attitude(F(Q.ai.x, Q.ai.y), Q.ai.r, { sky: '#2f7cc8', ground: '#7a4f2a', symbol: '#f29a1f' });
+    { const q = Q.tc, f = F(q.x, q.y), R = q.r, wc = color('#f4f4f0'), uv = lp.white, z = 0.0012; // the aeroplane banks with the rate of turn (2 min: the index), the ball with the slip
+      const ac = new Shape().bar(-R * 0.66, 0, R * 0.66, 0, R * 0.07, z, wc, uv).bar(0, R * 0.05, 0, R * 0.25, R * 0.04, z, wc, uv).disc(0, 0, R * 0.1, z + 0.0002, wc, uv, 12);
+      lp.part(f, ac, { src: 'turn', xf: (t) => Math.max(-0.5, Math.min(0.5, (t / 3) * 0.26)), w: 6 });
+      lp.part(f, new Shape().disc(0, -R * 0.82, R * 0.065, 0.0006, color('#050506'), uv, 12), { src: 'slip', xf: (sl) => Math.max(-0.42, Math.min(0.42, -sl * 1.2)), pivot: [0, R * 0.2], w: 5 }); }
+    { const q = Q.dg, f = F(q.x, q.y), R = q.r, wc = color('#f4f4f0'), uv = lp.white, z = 0.0012; // the card turns under a fixed aeroplane and lubber line
+      lp.part(f, new Shape().card(R * 0.975, 0.0004, (x, y) => panelUV(q.x + x, q.y + y)), { src: 'hdg', xf: (h) => -h, wrap: true, w: 6 });
+      const plane = [[0, -0.32], [0.05, -0.05], [0.32, 0.04], [0.32, 0.1], [0.05, 0.08], [0.04, 0.24], [0.13, 0.3], [-0.13, 0.3], [-0.04, 0.24], [-0.05, 0.08], [-0.32, 0.1], [-0.32, 0.04], [-0.05, -0.05]].map(([x, y]) => [x * R, -y * R]);
+      const sym = new Shape().outline(plane, z, wc, uv)
+        .poly([[0, R * 0.97], [-R * 0.07, R * 0.83], [R * 0.07, R * 0.83]], z, color('#f29a1f'), uv);
+      lp.part(f, sym); }
+    for (const k of Object.keys(SMALL.src)) { const q = Q[k]; lp.needle(F(q.x, q.y), { src: SMALL.src[k], at: (v) => SMALL.a0 + (SMALL.a1 - SMALL.a0) * Math.max(-0.03, Math.min(1.03, v)), len: q.r * 0.78, w: q.r * 0.09, pivot: [0, -q.r * 0.25], hub: 2.8, hubCol: '#202124', damp: 6 }); }
+    ANN.forEach(([, x, , src], i) => { const [lx, ly] = ANN_LIT(i); lp.lamp(F(x, 0.128), { src, w: 80 / pS, h: 24 / pS, uv: [lx / TW, 1 - (ly + 24) / TH, (lx + 80) / TW, 1 - ly / TH] }); });
+    for (const [dx, dy] of GEAR.at) lp.lamp(F(GEAR.x + dx, GEAR.y + dy), { src: 'gearDown', r: GEAR.r, color: '#3cdc5a' });
+    lp.to(g);
   }
   // ---- side consoles along the walls at hip height (their outer faces are pressed onto the tub's walls once the
   // canopy is seated: userData.tubFit), the throttle quadrant on the left (the crew's throttle box sits on it)
