@@ -517,6 +517,7 @@ export function wireRiders(objs) {
   }
 }
 const _m4 = new THREE.Matrix4(), _gp = V();
+const attached = (o, root) => { for (let x = o; x; x = x.parent) if (x === root) return true; return false; };
 // The rider's inputs from the bike: hands on the grips (rig space), the extra lean into a turn, the tuck at speed, a
 // foot down when stopped.
 export function riderInput(ac, r) {
@@ -524,7 +525,8 @@ export function riderInput(ac, r) {
   if (b) { out.bikeLean = b.lean; out.lean = clamp(b.lean * 0.5, -0.45, 0.45); out.tuck = b.tuck; out.foot = ac.onGround ? 1 - clamp((Math.abs(ac.groundSpeed) - 0.4) / 1.2, 0, 1) : 0; }
   const g = r.bars?.grips; if (!g) return out;
   _m4.copy(chain(r.root, r.bars.root)).invert();
-  out.hands = g.map((h) => toRoot(h.o, h.p, r.bars.root, V()).applyMatrix4(_m4)); // [left, right]
+  // [left, right]; null for a grip no longer on this vehicle (its fork broke off and flew away): that hand lets go
+  out.hands = g.map((h) => attached(h.o, r.bars.root) ? toRoot(h.o, h.p, r.bars.root, V()).applyMatrix4(_m4) : null);
   return out;
 }
 

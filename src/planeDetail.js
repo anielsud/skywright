@@ -887,6 +887,23 @@ export function kitify(root) {
   return root;
 }
 
+// The specific force on the vehicle (acceleration minus gravity, world frame, in g): (0, 1, 0) at rest on the ground or
+// in level flight. From the change in velocity since the last frame, lightly smoothed (contact forces chatter at 60 Hz).
+const _gf = new THREE.Vector3(), _gq = new THREE.Quaternion();
+function specificForce(ac, dt) {
+  if (!ac.v?.isVector3) return null; // (the hangar's preview: standing still)
+  const st = ac._crewG ||= { v: ac.v.clone(), f: new THREE.Vector3(0, 1, 0) };
+  if (dt > 1e-4 && dt < 0.25 && !ac.dead) {
+    _gf.copy(ac.v).sub(st.v).divideScalar(dt * 9.81); _gf.y += 1;
+    if (_gf.lengthSq() > 400) _gf.setLength(20); // (a crash's one-frame spike; the crew's spring caps it again)
+    st.f.lerp(_gf, Math.min(1, dt * 20));
+  }
+  st.v.copy(ac.v);
+  return st.f;
+}
+// ...in a crew's own frame (the figure may sit at any angle in its part)
+function crewForce(r, gW) { if (!gW) return null; r.root.getWorldQuaternion(_gq).invert(); return gW.clone().applyQuaternion(_gq); }
+
 // ---------- per-frame visual hook (flight and remote planes) ----------
 // Called at the end of Aircraft.updateVisuals: gear doors follow gearT, slats ride out with the flaps, spoilers rise
 // with roll (on the wing whose aileron goes up) and on the ground after landing, gear forks follow the wheels.
@@ -896,13 +913,14 @@ export function updateDetail(ac, dt) {
   const k = Math.min(1, dt * 4), spd = ac.v?.length?.() || 0;
   let crewMoving = false;
   bikeSync(ac); // bike forks steer and slide, swingarms swing (before the riders reach for the bars)
+  const gW = specificForce(ac, dt); // (what the seat pushes the crew with, world frame, in g: they sway against it)
   const ground = ac.onGround && (ac.ctl.throttle || 0) < 0.1 && spd > 6 ? 1 : 0;
   for (const p of ac.parts) {
     if (!p.alive) continue;
     const u = p.obj.userData;
     if (u.crew) {
       const c = ac.ctl, steer = ac.isCar && ac.steerAngle ? ac.steerAngle() * 2.6 : ac.crewSteer ?? 0;
-      for (const r of u.crew) if (r.update({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: c.throttle, steer, ...(r.bars ? riderInput(ac, r) : null) }, dt)) crewMoving = true;
+      for (const r of u.crew) if (r.update({ pitch: c.pitch, roll: c.roll, yaw: c.yaw, throttle: c.throttle, steer, gf: crewForce(r, gW), ...(r.bars ? riderInput(ac, r) : null) }, dt)) crewMoving = true;
     }
     if (u.wheelsFixed && u.wheels) { u.wheelsFixed.position.copy(u.wheels.position); u.wheelsFixed.rotation.y = u.wheels.rotation.y; }
     if (u.spike) u.spike.position.z = RAMJET.spikeTravel * smooth(clamp(((ac.mach || 0) - 1.6) / 1.6, 0, 1)); // inlet spike: locked forward to Mach 1.6, fully back by 3.2
