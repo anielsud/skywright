@@ -1859,10 +1859,10 @@ function figureGeometry(rig) {
   };
   // A model helmet (helmetParts) on this head, scaled evenly (its own proportions kept) to the head's width plus the
   // liner (helmetRadii) and the model's own allowance (MODEL_FIT: the racing helmet's interior is 0.42 of its width
-  // either side, so 1 cm; the dirt bike model is nearly solid, so it is stretched to hide the head within it), its eye
+  // either side, so 1 cm; a model that is solid inside can instead be stretched per axis to hide the head), its eye
   // point on the measured eyes, then moved forward if its visor or chin bar would touch the nose or chin. Parts take the outfit's colours by role (shell: helmet, accent: helmet2, visor: visor),
   // the rest keep the model's.
-  const MODEL_FIT = { road: { pad: 0.01 }, mx: { pad: 0.04, perAxis: true } };
+  const MODEL_FIT = { road: { pad: 0.01 }, mx: { pad: 0.01, mouth: true } };
   const modelHelmet = (name) => {
     const parts = helmetParts(name), H = HELMETS.meta[name], E = V(...H.eye), fit = MODEL_FIT[name] || { pad: 0.01 }; if (!parts) return false;
     const eyeAt = V(0, eyeY(), eyeZ()), w = 2 * HS[0] + fit.pad, S = V(w, w, w);
@@ -1880,6 +1880,10 @@ function figureGeometry(rig) {
       for (const fp of p.role === 'visor' ? [nose] : [chin]) if (Math.abs(q.y - fp.y) < 0.012 && q.z > fp.z - 0.05) shift = Math.max(shift, q.z - (fp.z - 0.015)); } }
     if (shift > 0) { const f0 = f; f = (q) => f0(q).add(V(0, 0, -Math.min(shift, 0.03))); }
     const hexOf = { shell: o.helmet, accent: o.helmet2, visor: o.visor };
+    if (fit.mouth) { // the mouthpiece's filter foam: dark, between the mouth and an open-vented chin bar
+      const my = eyeY() - 0.072 * ((eyeY() - chinPt.y) / 0.115), mz = frontAt(0, my) - 0.014;
+      at(B.head, ellipsoid(V(0, my, mz), 0.042, 0.032, 0.012, { w: 24, h: 12 }), 0x161618, 'rubber');
+    }
     for (const p of parts) {
       const P = p.g.attributes.position; for (let i = 0; i < P.count; i++) { const q = f(V().fromBufferAttribute(P, i)); P.setXYZ(i, q.x, q.y, q.z); } p.g.computeVertexNormals();
       if (hexOf[p.role] == null) p.g.userData.keepColor = true;
@@ -2205,9 +2209,10 @@ function figureGeometry(rig) {
     const lathe = (pts, n = 64) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), n);
     put(lathe([[nr + o.bulk * 0.9, -0.05], [rr - 0.012, -0.03], [rr - 0.002, -0.022]]), o.suit, 'fabric'); // collar
     const SP = HELMETS && helmetParts('space'), best_Rb = () => bf.Rb; if (SP) { if (!k.p.tint) k.p.tint = []; if (!k.p.gold) k.p.gold = []; tintMaterial(); goldFilmMaterial(); }
-    if (SP) { // the space helmet model, sized so its inside clears the head's bubble (2.3 bubble radii wide) and centred on it
-      const sc = 2.3 * best_Rb(), cy = bf.t;
-      for (const p of SP) { const P = p.g.attributes.position; for (let i = 0; i < P.count; i++) P.setXYZ(i, P.getX(i) * sc, P.getY(i) * sc + cy, P.getZ(i) * sc); p.g.computeVertexNormals();
+    if (SP) { // the space helmet model, seated by its neck ring: the ring (tilted on the model) turned flat onto the suit's
+      // ring, scaled to its radius (1 cm over it), its lowest edge on the collar
+      const RG = HELMETS.meta.space.ring, n = V(...RG.n), bot = V(...RG.c).addScaledVector(n, RG.lo), qr = new THREE.Quaternion().setFromUnitVectors(n, V(0, 1, 0)), sc = (rr + 0.01) / RG.r, q = V();
+      for (const p of SP) { const P = p.g.attributes.position; for (let i = 0; i < P.count; i++) { q.fromBufferAttribute(P, i).sub(bot).applyQuaternion(qr).multiplyScalar(sc); q.y -= 0.03; P.setXYZ(i, q.x, q.y, q.z); } p.g.computeVertexNormals();
         if (p.role === 'visor') { put(p.g.clone(), 0x6a5220, 'gold'); put(p.g, 0xd9a83a, 'tint'); continue; } // (the gold sun visor: a gold film and gold reflections)
         p.g.userData.keepColor = true; put(p.g, 0xffffff, p.slot); }
       return;

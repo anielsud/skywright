@@ -7,7 +7,10 @@
 Sources (SRC_DIR):
   road  : motorcycle_helmet_-_racing_helmet.glb  "Motorcycle helmet - racing helmet" by ramyouny (Sketchfab Standard
           licence). Its sponsor livery texture is dropped: the shell is repainted in each outfit's colours.
-  mx    : dirtbike_helmet.glb  "Dirtbike helmet" by moto man 135, CC BY 4.0.
+  mx    : fox_x_supreme_helmet.glb  "Fox X Supreme Helmet" by Muhammad Seno Aji, CC BY 4.0. Its brand livery is dropped:
+          each triangle goes by the majority of texture samples over it: red, its white lettering and the grey panels ->
+          shell (logos and panel edges are painted across the triangles, so one colour reads cleanly), dark vent mesh ->
+          rubber. The goggle frame is the accent.
   space : space_helmet.glb  "space helmet" by J4747, CC BY 4.0.
 Each model's node transforms are baked, it is turned to face -Z with +Y up, scaled to unit width (x extent) and
 centred on its eye point (a landmark per model, below). Its parts become roles: 'shell' (the outfit's helmet colour),
@@ -78,8 +81,9 @@ MODELS = {
                roles=[('visorlogo', None), ('INTERIOR PADDING', None), ('RED FABRIC', None), ('Object_14', 'rubber'), ('visor padding', 'rubber'), ('bottom pading', 'liner'), ('interior', 'liner'),
                       ('visor', 'visor'), ('aero back', 'accent'), ('front vent', 'rubber'), ('GRILLS', 'rubber'), ('screws', 'metal'), ('ALUMINIUM', 'metal'), ('main', 'shell')],
                budget=dict(shell=8000, accent=1100, visor=4800, liner=2200, rubber=14000, metal=1200)),
-  'mx': dict(src='dirtbike_helmet.glb', front='-x', eye=None, eyeBack=0.17, orient=True, frameNear=0.05, roles=[('color_-1023419110', 'visor'), ('color_2829873', 'shell')],
-             budget=dict(shell=80000, visor=80000, rubber=80000)),  # (a Tinkercad mesh: it doesn't survive simplifying)
+  'mx': dict(src='fox_x_supreme_helmet.glb', front='-z', eye=None, eyeBack=0.12,
+             roles=[('material_6', 'accent'), ('black_gloss', 'visor'), ('bLACK', 'rubber'), ('Google', 'rubber'), ('Metalicc', 'metal'), ('White', 'rubber'), ('material', 'livery')],
+             budget=dict(shell=20000, accent=20000, rubber=20000, visor=20000, metal=20000)),
   'space': dict(src='space_helmet.glb', front='+z', eye=None, roles=[('', 'baked')], budget=dict(baked=40000, visor=40000, metal=40000)),
 }
 
@@ -127,6 +131,14 @@ for name, cfg in ([] if INSPECT else MODELS.items()):
             C = np.tile([0.93, 0.93, 0.92], (len(Q), 1)) * (0.7 + 0.3 * np.clip(lum / 0.9, 0, 1))[:, None]
             C[np.isin(np.arange(len(Q)), p['F'][kind == 'metal'].ravel())] = (0.62, 0.64, 0.67)
             for k in ('visor', 'metal', 'baked'): groups.setdefault(k, []).append((Q, p['F'][kind == k], C))
+        elif role == 'livery':  # each triangle by the majority of 7 texture samples over it -> shell / accent / rubber
+            img = texture(J, BIN, p['mi']); H, W = img.shape[:2]; uv = p['uv'] % 1.0; U = uv[p['F']]
+            bary = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [1 / 3] * 3, [0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6]])
+            pts = np.einsum('kj,tjc->tkc', bary, U); C = img[np.clip((pts[..., 1] * H).astype(int), 0, H - 1), np.clip((pts[..., 0] * W).astype(int), 0, W - 1)]
+            lum = C.mean(-1); red = C[..., 0] - C[..., 1] > 0.18
+            vote = np.where(red | (lum > 0.6), 0, 2)  # (red ground, its white lettering and the grey panels: shell (the panels' edges are painted across the triangles, so one colour reads cleaner); dark mesh: rubber)
+            kind = np.array(['shell', 'accent', 'rubber'])[np.array([np.bincount(v, minlength=3).argmax() for v in vote])]
+            for k in ('shell', 'accent', 'rubber'): groups.setdefault(k, []).append((Q, p['F'][kind == k], None))
         else:
             groups.setdefault(role, []).append((Q, p['F'], None))
     if cfg.get('frameNear'):  # the goggles' frame: the body's triangles next to the lens, black rubber
@@ -172,10 +184,11 @@ for name, cfg in ([] if INSPECT else MODELS.items()):
                 nv_tot += len(Ps); ni_tot += Fs2.size
     allQ = np.vstack([q for lst in groups.values() for q, _, _ in lst])
     meta['bounds'] = [np.round(allQ.min(0), 4).tolist(), np.round(allQ.max(0), 4).tolist()]
-    if name == 'space':  # its neck ring: the chrome in its lower half (a tilted ring): centre, radius, lowest point
-        met = np.vstack([q[np.unique(F)] for q, F, _ in groups['metal']]); ring = met[met[:, 1] < -0.15]
-        cx, cz = float(ring[:, 0].mean()), float(ring[:, 2].mean())
-        meta['ring'] = dict(y=float(ring[:, 1].min()), yTop=float(ring[:, 1].max()), r=float(np.percentile(np.hypot(ring[:, 0] - cx, ring[:, 2] - cz), 90)), cx=cx, cz=cz, n=int(len(ring)))
+    if name == 'space':  # its neck ring (the chrome round its lower half, tilted on the model): plane by PCA, centre, radius
+        met = np.vstack([q[np.unique(F)] for q, F, _ in groups['metal']]); r0 = np.hypot(met[:, 0], met[:, 2]); ring = met[(met[:, 1] < -0.12) & (r0 > 0.3)]
+        cen = ring.mean(0); _, _, Vt = np.linalg.svd(ring - cen); nrm = Vt[2] * (1 if Vt[2][1] > 0 else -1)
+        d = ring - cen; rad = np.linalg.norm(d - np.outer(d @ nrm, nrm), axis=1)
+        meta['ring'] = dict(c=np.round(cen, 4).tolist(), n=np.round(nrm, 4).tolist(), r=float(np.median(rad)), lo=float(((ring - cen) @ nrm).min()), hi=float(((ring - cen) @ nrm).max()), count=int(len(ring)))
     else:  # the eye point: the visor's / lens's middle, set back behind it
         vis = np.vstack([q[np.unique(F)] for q, F, _ in groups['visor']]); front = vis[:, 2].min()
         meta['eye'] = [0.0, float((vis[:, 1].min() + vis[:, 1].max()) / 2), float(front + cfg.get('eyeBack', 0.16))]
