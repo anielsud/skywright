@@ -705,7 +705,7 @@ class Rig {
     }
     parts.legs = c - parts.arms;
     const st = this.opts.seat, leanTo = st ? clamp(st.tilt + 0.05, 0.15, 0.5) : 0.25; // (lying back into a raked seat is relaxed)
-    const c0 = c; c += ((v.lean - leanTo) / 0.15) ** 2 + ((v.flex - 0.4) / 0.3) ** 2 + (v.prot / 0.3) ** 2 + (v.slide / 0.06) ** 2 + (v.splay / 0.1) ** 2; parts.posture = c - c0; // (knees wide apart is no way to sit)
+    const c0 = c; c += ((v.lean - leanTo) / 0.15) ** 2 + ((v.flex - 0.2) / 0.3) ** 2 + (v.prot / 0.3) ** 2 + (v.slide / 0.06) ** 2 + (v.splay / 0.1) ** 2; parts.posture = c - c0; // (knees wide apart is no way to sit)
     if (this.C.adjust) { parts.adjust = this.adjustCost(v); c += parts.adjust; }
     if (this.ctl === 'wheel') {
       c += ((v.colZ || 0) / 0.08) ** 2 + ((v.colY || 0) / 0.08) ** 2; // (a tilt helm adjusts: some cost)
