@@ -1484,9 +1484,30 @@ function figureGeometry(rig) {
     for (let f = 0; f < BP.index.length; f += 3) { const [a, b, c] = [BP.index[f], BP.index[f + 1], BP.index[f + 2]]; if (!use(a) || !use(b) || !use(c)) continue; // (each triangle's corners, edge middles and centre: dense enough that no ray slips between)
       const pa = at3(a), pb = at3(b), pc = at3(c); pts.push(pa, pb, pc, pa.clone().lerp(pb, 0.5), pb.clone().lerp(pc, 0.5), pc.clone().lerp(pa, 0.5), pa.clone().add(pb).add(pc).multiplyScalar(1 / 3)); }
     const wear = Math.max(...GF.list.filter((g) => g.slot === 'fabric').map((g) => g.off), 0) + 0.006 + 0.002, q = V(); // (the thickest shell, on the clothes' surface up to 6 mm out)
-    const onto = (P, d, off = wear, r = 0.014) => { let best = 0; for (const p of pts) { q.copy(p).sub(P); const t = q.dot(d); if (t > best && q.addScaledVector(d, -t).lengthSq() < r * r) best = t; }
+    // The points are binned in a grid (cells of G, at least the largest ray radius), so a ray only tests the points in
+    // the cells along it (within one cell of samples every G/2: a superset of those within r of it, so the same answer
+    // as testing them all), and cz only the points in its height's bins (in their original order: the same sum).
+    const G = 0.02, gk = (x, y, z) => ((x + 512) * 1024 + (y + 512)) * 1024 + (z + 512), grid = new Map(), ybin = new Map(), lo = V(Infinity, Infinity, Infinity), hi = V(-Infinity, -Infinity, -Infinity);
+    pts.forEach((p, i) => { const k2 = gk(Math.floor(p.x / G), Math.floor(p.y / G), Math.floor(p.z / G)); let c = grid.get(k2); if (!c) grid.set(k2, (c = [])); c.push(p);
+      const yb = Math.floor(p.y / 0.02); let b = ybin.get(yb); if (!b) ybin.set(yb, (b = [])); b.push(i); lo.min(p); hi.max(p); });
+    const seen = new Set(), cand = [];
+    const onto = (P, d, off = wear, r = 0.014) => {
+      let best = 0;
+      if (r > G) { for (const p of pts) { q.copy(p).sub(P); const t = q.dot(d); if (t > best && q.addScaledVector(d, -t).lengthSq() < r * r) best = t; } } // (a wider ray than the grid allows: all of them)
+      else {
+        // the ray from P while it can still pass within r of the points' box
+        let t1 = 0; for (const c of [lo.x, hi.x]) for (const b of [lo.y, hi.y]) for (const a of [lo.z, hi.z]) t1 = Math.max(t1, (c - P.x) * d.x + (b - P.y) * d.y + (a - P.z) * d.z);
+        seen.clear(); cand.length = 0;
+        for (let t = 0; t <= t1 + G; t += G / 2) {
+          const cx = Math.floor((P.x + d.x * t) / G), cy = Math.floor((P.y + d.y * t) / G), cz2 = Math.floor((P.z + d.z * t) / G);
+          for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) { const k2 = gk(cx + a, cy + b, cz2 + c); if (seen.has(k2)) continue; seen.add(k2); const cl = grid.get(k2); if (cl) cand.push(cl); }
+        }
+        for (const cl of cand) for (const p of cl) { q.copy(p).sub(P); const t = q.dot(d); if (t > best && q.addScaledVector(d, -t).lengthSq() < r * r) best = t; }
+      }
       return best > 0 ? P.clone().addScaledVector(d, best + off) : null; }; // (only ahead of P, which is inside the body)
-    const cz = (y) => { let s2 = 0, m = 0; for (const p of pts) if (Math.abs(p.y - y) < 0.02 && Math.abs(p.x) < 0.1) { s2 += p.z; m++; } return m ? s2 / m : 0; }; // (the torso's middle, front to back)
+    const cz = (y) => { // (the torso's middle, front to back)
+      const b0 = Math.floor(y / 0.02), ids = [...(ybin.get(b0 - 2) || []), ...(ybin.get(b0 - 1) || []), ...(ybin.get(b0) || []), ...(ybin.get(b0 + 1) || []), ...(ybin.get(b0 + 2) || [])].sort((a, b) => a - b);
+      let s2 = 0, m = 0; for (const i of ids) { const p = pts[i]; if (Math.abs(p.y - y) < 0.02 && Math.abs(p.x) < 0.1) { s2 += p.z; m++; } } return m ? s2 / m : 0; };
     return { pts, onto, cz, wear };
   }
   // a run of surface points (each [point, outward direction]) relaxed into a smooth line, then kept on the surface
