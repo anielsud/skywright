@@ -4,6 +4,7 @@
 // world.waterParks). Physics only: the flight is paused and stepped from here. Positions are in the park's own frame
 // (stuntKit.js Site: x along the course, z across it, y up from the water).
 import { kidBoats } from './boatride.js';
+import { SonicFX } from '../../src/sonic.js'; // (a staged vehicle gets the heat-glow materials, like every vehicle the game shows: no extra shader variants)
 
 const DT = 1 / 60;
 const park = (S) => S.F.world.waterParks.park;
@@ -132,7 +133,7 @@ export function stage(name, cond, T = 40, lane = 0, x0 = null) {
   const S = window.__sky, F = S.F, P = park(S); F.paused = true; F.world.gust.set(0, 0, 0);
   if (S.__stageAc) F.scene.remove(S.__stageAc.root);
   F.ac.root.visible = false;
-  const ac = place(S, preset(S, name), 'pilot', x0 ?? P.Lp(P.start.pos).x, lane); F.scene.add(ac.root); S.__stageAc = ac;
+  const ac = place(S, preset(S, name), 'pilot', x0 ?? P.Lp(P.start.pos).x, lane); F.scene.add(ac.root); new SonicFX(ac, F.scene); S.__stageAc = ac;
   drive(S, ac, { z: lane, T, until: (a) => { const q = P.Lp(a.x); return cond(a, q.x, q.y, q.z); } });
   ac.syncVisual?.();
   const q = P.Lp(ac.x); return [q.x, q.y, q.z];

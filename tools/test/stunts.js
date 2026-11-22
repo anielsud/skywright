@@ -3,6 +3,7 @@
 // fixed 60 Hz, and reports what happened. Needs a flight at a location with stunts (window.__sky.F with world.stunts).
 // Physics only: the flight is paused and stepped from here. Positions are in the site's own frame (stuntKit.js Site:
 // x along the park, z across it), so it works for any placement and heading.
+import { SonicFX } from '../../src/sonic.js'; // (a staged vehicle gets the heat-glow materials, like every vehicle the game shows: no extra shader variants)
 const DT = 1 / 60;
 const park = (S) => S.F.world.stunts.park;
 
@@ -231,7 +232,7 @@ export function stage(name, x, z, dir, v, cond, T = 12, speed = null, which = 'p
   const S = window.__sky, F = S.F, site = which === 'evel' ? F.world.stunts.evel : park(S); F.paused = true; F.world.gust.set(0, 0, 0);
   if (S.__stageAc) F.scene.remove(S.__stageAc.root);
   F.ac.root.visible = false;
-  const ac = place(S, name, 'pilot', x, z, dir, v, site); F.scene.add(ac.root); S.__stageAc = ac;
+  const ac = place(S, name, 'pilot', x, z, dir, v, site); F.scene.add(ac.root); new SonicFX(ac, F.scene); S.__stageAc = ac;
   if (which === 'evel') site.st.phase = 'idle';
   drive(S, ac, { z, dir, T, speed, site, steer, until: (a) => { const q = site.Lp(a.x); return cond(a, q.x, q.z, q.y); } });
   ac.syncVisual?.();
