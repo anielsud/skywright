@@ -307,6 +307,22 @@ export function poseBody(rig, { grip = true, scale = 1.07, seat = { y: -0.09, ba
     const tx = 2 * (-dw * x + dx * w - dy * z + dz * y), ty = 2 * (-dw * y + dx * z + dy * w - dz * x), tz = 2 * (-dw * z - dx * y + dy * x + dz * w);
     p.applyQuaternion(q).add(V(tx, ty, tz));
   };
+  // The knees: MakeHuman's weights there are uneven front to back (the kneecap goes mostly with the thigh), so a knee
+  // bent past a right angle juts its kneecap past the shin in a sharp corner. Near each knee (the leg's vertices within
+  // 12 cm of it) the thigh / shin split is redrawn by distance across the joint, along the bisector of the thigh's and
+  // shin's directions: half each at the joint, all thigh 4.5 cm above, all shin 4.5 cm below, the same front and back,
+  // so the blended transform turns the knee round its joint smoothly (a rounded kneecap).
+  const KR = 0.045, knees = ['R', 'L'].map((s) => { const hp = J('upperleg01.' + s), kn = J('lowerleg01.' + s), an = J('foot.' + s);
+    return { th: segs['thigh' + s], sh: segs['shin' + s], kn, a: kn.clone().sub(hp).normalize().add(an.clone().sub(kn).normalize()).normalize() }; });
+  const sstepK = (x) => { const t = Math.min(1, Math.max(0, (x + KR) / (2 * KR))); return t * t * (3 - 2 * t); };
+  const kneeW = (pv, list) => { // list: [[segment, weight]], adjusted in place for a vertex near a knee
+    for (const K of knees) {
+      let wt = 0; for (const e of list) if (e[0] === K.th || e[0] === K.sh) wt += e[1]; if (wt <= 0) continue;
+      const d = pv.clone().sub(K.kn); if (d.length() > 0.12) continue;
+      const fs = sstepK(d.dot(K.a)); const rest = list.filter((e) => e[0] !== K.th && e[0] !== K.sh);
+      list.length = 0; list.push(...rest, [K.th, wt * (1 - fs)], [K.sh, wt * fs]); return;
+    }
+  };
   for (let i = 0; i < n; i++) {
     v.set(S.pos[i * 3], S.pos[i * 3 + 1], S.pos[i * 3 + 2]).multiplyScalar(scale); acc.set(0, 0, 0);
     let anyF = false; for (let k = 0; k < 4; k++) if (S.bw[i * 4 + k] && dq[S.bi[i * 4 + k]]) anyF = true;
@@ -318,7 +334,9 @@ export function poseBody(rig, { grip = true, scale = 1.07, seat = { y: -0.09, ba
     }
     if (rigid) {
       bl.fill(0); let ref = null; const wsum2 = {}; let best2 = null, bw2 = -1;
-      for (let k = 0; k < 4; k++) { const w = S.bw[i * 4 + k] / 255; if (w <= 0) continue; const g = segOfBone[S.bi[i * 4 + k]], d = g.dq;
+      const list = []; for (let k = 0; k < 4; k++) { const w = S.bw[i * 4 + k] / 255; if (w > 0) list.push([segOfBone[S.bi[i * 4 + k]], w]); }
+      kneeW(v, list); // (the source position: the knee's split is drawn in the rest pose)
+      for (const [g, w] of list) { if (w <= 0) continue; const d = g.dq;
         if (!ref) ref = d; const sg = (d[0] * ref[0] + d[1] * ref[1] + d[2] * ref[2] + d[3] * ref[3]) < 0 ? -w : w; for (let j = 0; j < 8; j++) bl[j] += d[j] * sg;
         wsum2[g.bone] = (wsum2[g.bone] || 0) + w; if (wsum2[g.bone] > bw2) { bw2 = wsum2[g.bone]; best2 = g; } }
       const pv = v.clone(); dqApply(pv); acc.copy(pv);
