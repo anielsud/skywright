@@ -67,14 +67,14 @@ export class Hangar {
     return g;
   }
 
-  activate(on) {
+  activate(on, { rebuild = true } = {}) {
     this.controls.enabled = on; this.needsRender = true; this.preview.enabled = on;
     const cv = this.renderer.domElement;
     if (on) {
       // back from a flight: re-upload the hangar a few textures per frame behind a hidden canvas, then fade it in
       if (this.env.beginRestore()) { cv.style.transition = 'none'; cv.style.opacity = '0'; }
       if (this.env.setHour(flightHour())) this.envDirty = true;
-      this.rebuild();
+      if (rebuild) this.rebuild(); // (not at start-up: load() has just built it)
     } else {
       cv.style.transition = 'none'; cv.style.opacity = ''; // the flight shares the canvas
       this.env.release(); // none of the hangar's GPU memory stays around during the flight
@@ -536,21 +536,28 @@ export function uprightStage(design, root, stats = analyze(design), { floor = 0 
 }
 
 // thumbnails of each part, rendered once
-export function makeThumbnails(size = 96) {
-  const r = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-  r.setSize(size, size); r.setPixelRatio(1); r.toneMapping = THREE.ACESFilmicToneMapping; r.outputColorSpace = THREE.SRGBColorSpace;
-  const scene = new THREE.Scene();
-  const pm = new THREE.PMREMGenerator(r); scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2)); const dl = new THREE.DirectionalLight(0xffffff, 2); dl.position.set(3, 5, 4); scene.add(dl);
-  const cam = new THREE.PerspectiveCamera(30, 1, 0.01, 500);
-  const out = {};
-  for (const id in PARTS) {
-    const o = PARTS[id].build(PARTS[id].color, { detail: 2 }); scene.add(o);
-    const box = new THREE.Box3().setFromObject(o); const c = box.getCenter(new THREE.Vector3()); const s = box.getSize(new THREE.Vector3()).length();
-    cam.position.copy(c).add(new THREE.Vector3(0.9, 0.55, 0.8).normalize().multiplyScalar(s * 1.75)); cam.lookAt(c);
-    r.render(scene, cam); out[id] = r.domElement.toDataURL();
-    scene.remove(o); o.traverse((m) => m.geometry?.dispose());
-  }
-  r.dispose(); r.forceContextLoss?.();
-  return out;
+// Part pictures for the palette, drawn one at a time (main.js draws them after the hangar is up, a few per frame, and
+// keeps them per build). The little renderer and its studio exist only while there are pictures left to draw.
+export function thumbnailDrawer(size = 96) {
+  let r, scene, cam;
+  const setup = () => {
+    r = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    r.setSize(size, size); r.setPixelRatio(1); r.toneMapping = THREE.ACESFilmicToneMapping; r.outputColorSpace = THREE.SRGBColorSpace;
+    scene = new THREE.Scene();
+    const pm = new THREE.PMREMGenerator(r); scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2)); const dl = new THREE.DirectionalLight(0xffffff, 2); dl.position.set(3, 5, 4); scene.add(dl);
+    cam = new THREE.PerspectiveCamera(30, 1, 0.01, 500);
+  };
+  return {
+    draw(id) {
+      if (!r) setup();
+      const o = PARTS[id].build(PARTS[id].color, { detail: 2 }); scene.add(o);
+      const box = new THREE.Box3().setFromObject(o); const c = box.getCenter(new THREE.Vector3()); const s = box.getSize(new THREE.Vector3()).length();
+      cam.position.copy(c).add(new THREE.Vector3(0.9, 0.55, 0.8).normalize().multiplyScalar(s * 1.75)); cam.lookAt(c);
+      r.render(scene, cam); const url = r.domElement.toDataURL('image/webp', 0.9);
+      scene.remove(o); o.traverse((m) => m.geometry?.dispose());
+      return url.startsWith('data:image/webp') ? url : r.domElement.toDataURL(); // (no WebP encoder: PNG)
+    },
+    dispose() { if (r) { r.dispose(); r.forceContextLoss?.(); r = null; } },
+  };
 }

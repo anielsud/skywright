@@ -51,7 +51,9 @@ function loadMats() {
   matReady = Promise.all(matImgs.map((im) => (im.decode ? im.decode() : new Promise((res, rej) => { im.onload = res; im.onerror = rej; })))).then(() => true, () => false);
   return matReady;
 }
-loadMats(); // start downloading as soon as the module loads (long before the first flight)
+// started by main.js while the hangar is being built (long before the first flight), not at import: at import the
+// 4.5 MB would share the connection with the game's own code and hold up the start
+export const preloadTownTextures = () => { loadMats(); };
 const matsLoaded = () => !!matImgs && matImgs.every((im) => im.complete && im.naturalWidth > 0);
 
 const _atlases = new Map();
@@ -59,6 +61,7 @@ const _atlases = new Map();
 export function buildingAtlas(cellPx = 256) {
   if (_atlases.has(cellPx)) return _atlases.get(cellPx);
   const A = { cellPx, map: null, data: null, nrm: null };
+  loadMats(); // (normally already started by main.js)
   const make = () => {
     const cv = paintAtlas(cellPx, matsLoaded());
     if (!A.map) {

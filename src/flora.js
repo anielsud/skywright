@@ -68,8 +68,9 @@ function foliageAtlas(size) {
   img.src = new URL(`../assets/flora/foliage_${size}.webp`, import.meta.url).href;
   return A;
 }
-// started at import so the picture is decoded long before the first flight starts
-foliageAtlas(typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches ? 1024 : 2048);
+// started by main.js while the hangar is being built, so the picture is decoded long before the first flight starts
+// (not at import: it would share the connection with the game's code and hold up the start)
+export const preloadFoliage = () => foliageAtlas(typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches ? 1024 : 2048);
 // if the atlas can't be loaded (offline before it was ever cached): blotchy silhouettes, so trees still read as trees
 function fallbackAtlas() {
   const S = 512, k = S / AT, cv = document.createElement('canvas'); cv.width = cv.height = S;
