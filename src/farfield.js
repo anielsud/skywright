@@ -35,7 +35,7 @@ export class FarField {
     this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
     this.mesh.frustumCulled = false; this.mesh.visible = false;
     world.group.add(this.mesh);
-    this.center = null; this.job = null; this.maskDirty = true;
+    this.center = null; this.job = null; this.maskDirty = true; this.dirty = 0;
     this.templates = new Map();
     this.applyRadius();
   }
@@ -57,6 +57,8 @@ export class FarField {
       this.job = this.rebuild(cam.x / T, cam.z / T, ci, cj);
       if (!this.mesh.visible) while (!this.job.next().done); // first build: all at once (it's part of loading)
     }
+    // cells dropped by invalidate(): one rebuild for them all, at most every 1.5 s, never cutting into one in progress
+    else if (this.dirty && !this.job && performance.now() - this.dirty > 1500) { this.dirty = 0; this.job = this.rebuild(cam.x / T, cam.z / T, ci, cj); }
     if (this.job) { const t0 = performance.now(); while (performance.now() - t0 < budget) if (this.job.next().done) { this.job = null; break; } }
     if (this.maskDirty && this.origin) this.writeMask();
   }
@@ -78,7 +80,8 @@ export class FarField {
     for (const k of this.cells.keys()) if (!used.has(k)) this.cells.delete(k);
     // merge into one geometry (one draw call)
     let nv = 0, ni = 0;
-    const list = want.map((c) => this.cells.get(c.i + ',' + c.j + ',' + c.segs));
+    // (a cell invalidate() dropped while this job was under way is built again here: a few small cells, no hitch)
+    const list = want.map((c) => { const k = c.i + ',' + c.j + ',' + c.segs; let cell = this.cells.get(k); if (!cell) this.cells.set(k, (cell = this.buildCell(c.i, c.j, c.segs))); return cell; });
     const shown = new Map(); for (const c of list) shown.set(c.i + ',' + c.j, c);
     for (const c of list) { nv += c.pos.length / 3; ni += this.template(c.segs).length; }
     // compact attributes (8-bit normals and colours, 16-bit cell index): less to upload each time the field moves
@@ -102,6 +105,12 @@ export class FarField {
     const h = (this.M - 1) / 2;
     this.origin = { i: Math.floor(cx) - h, j: Math.floor(cz) - h }; this.shown = shown;
     this.writeMask();
+  }
+  // the ground under (x0,z0)-(x1,z1) has better data now (tiles.js invalidate): drop the cells there, rebuild soon
+  invalidate(x0, z0, x1, z1) {
+    const T = this.T; let any = false;
+    for (const [k, c] of this.cells) if (!(c.i * T > x1 || (c.i + 1) * T < x0 || c.j * T > z1 || (c.j + 1) * T < z0)) { this.cells.delete(k); any = true; }
+    if (any && !this.dirty) this.dirty = performance.now();
   }
   // Per cell, 2 bits: is it already drawn by the core map or a streamed tile (a tile that is all sea counts: the sea
   // covers it), and is its ground dry land all over (then the water skips it).
@@ -133,6 +142,9 @@ export class FarField {
     const W = this.w, T = this.T, st = T / segs, n = segs + 1, P = n + 2, x0 = i * T, z0 = j * T, wl = W.waterLevel;
     // the ring next to the tiles uses the full (eroded) height function, so it lines up with their edges
     const hf = segs >= 8 ? W.height : this.base;
+    // a real place's streamed data (geostream.js): no finer than this cell needs (z8 ~ 420 m, z6 ~ 1.7 km a pixel), so
+    // the near-camera zoom arriving never rebuilds the far field
+    const RD = W.real; if (RD) RD.zMax = segs >= 4 ? 8 : 6;
     const H = new Float32Array(P * P); // one extra sample all round, for normals that continue across cells
     for (let b = 0; b < P; b++) for (let a = 0; a < P; a++) H[b * P + a] = hf(x0 + (a - 1) * st, z0 + (b - 1) * st);
     const nv = n * n + 4 * n, pos = new Float32Array(nv * 3), nrm = new Int8Array(nv * 3), col = new Uint8Array(nv * 3);
@@ -157,6 +169,7 @@ export class FarField {
         for (let q = 0; q < 3; q++) { nrm[k * 3 + q] = nrm[s * 3 + q]; col[k * 3 + q] = col[s * 3 + q]; }
       }
     });
+    if (RD) RD.zMax = 10;
     return { i, j, segs, pos, nrm, col, land };
   }
   info() { return `${this.cells.size} cells, ${this.mesh.geometry.attributes.position?.count ?? 0} verts, R=${this.R}`; }

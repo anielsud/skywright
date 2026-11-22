@@ -5,6 +5,10 @@ const CACHE = 'skywright-v3';
 const REAL = 'skywright-real-v1';
 // hangar textures and props (assets/hangar/, 3-8 MB by quality): also cached on first use, in a cache that survives releases
 const HANGAR = 'skywright-hangar-v1';
+// geodata streamed past a real place's baked squares (src/geostream.js: elevation and satellite tiles from other hosts):
+// fetched and cached by the game itself in this cache, which also survives releases. Not intercepted here.
+const GEO = 'skywright-geo-v1';
+const GEO_HOSTS = /^https:\/\/(s3\.amazonaws\.com\/elevation-tiles-prod|tiles\.maps\.eox\.at)\//;
 const FILES = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'icon.svg',
   'vendor/three.module.min.js', 'vendor/peerjs.min.js', 'vendor/addons/Sky.js', 'vendor/addons/BufferGeometryUtils.js', 'vendor/addons/OrbitControls.js', 'vendor/addons/RoomEnvironment.js',
   ...[].map((f) => `src/${f}.js`),
@@ -15,10 +19,10 @@ const FILES = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'icon.sv
 // recorded sounds: whatever assets/sfx/index.json lists (built by tools/sfx/process.py), so this list never goes stale
 const sfxFiles = () => fetch('assets/sfx/index.json', { cache: 'reload' }).then((r) => r.json()).then((ix) => ['assets/sfx/index.json', ...Object.keys(ix).map((n) => `assets/sfx/${n}.ogg`)]).catch(() => []);
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then(async (c) => c.addAll([...FILES, ...(await sfxFiles())].map((f) => new Request(f, { cache: 'reload' }))) /* bypass the HTTP cache so a new deploy precaches fresh files */).then(() => self.skipWaiting())); });
-self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE && k !== REAL && k !== HANGAR).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
+self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE && k !== REAL && k !== HANGAR && k !== GEO).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', (e) => {
   const req = e.request; if (req.method !== 'GET') return;
-  if (req.url.includes('/assets/music/')) return; // streamed media uses range requests: leave them to the network + HTTP cache
+  if (req.url.includes('/assets/music/') || GEO_HOSTS.test(req.url)) return; // streamed media uses range requests: leave them to the network + HTTP cache
   const isDoc = req.mode === 'navigate';
   const store = req.url.includes('/assets/real/') ? REAL : req.url.includes('/assets/hangar/') ? HANGAR : CACHE;
   const put = (resp) => { if (resp.ok) { const copy = resp.clone(); caches.open(store).then((c) => c.put(req, copy)); } return resp; };

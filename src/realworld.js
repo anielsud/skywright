@@ -2,7 +2,8 @@
 // heights (AWS Terrain Tiles), imagery (Sentinel-2 cloudless by EOX, CC BY 4.0; in the US, USDA NAIP aerial photos,
 // public domain) and OpenStreetMap data (ODbL).
 // Two nested squares: a detailed one (~20 m heights, ~5-10 m imagery) around the airport, and a coarse one
-// (~230 m heights, ~120 m imagery) out to the haze, so the real mountains carry on to the horizon.
+// (~230 m heights, ~120 m imagery) out to the haze, so the real mountains carry on to the horizon. Past the coarse
+// square the same sources are streamed while flying (src/geostream.js), so a fast jet never reaches an edge.
 // Everything is loaded before the World is built (loadReal), then World asks this module for heights, colours,
 // the vegetation mask, the road network and the minimap. The game frame: metres, origin at the runway centre,
 // -z along the runway, which points to the compass bearing loc.north.
@@ -12,10 +13,19 @@ import { smoothstep, clamp } from './noise.js';
 import { inStuntCut } from './stuntPark.js';
 import { GLTFLoader } from '../vendor/addons/GLTFLoader.js';
 import { MeshoptDecoder } from '../vendor/addons/meshopt_decoder.module.js';
+import { GeoStream } from './geostream.js';
 
 const BASE = 'assets/real/';
 const GAIN = 1.35, DESHADE = 0.3; // imagery brightness (linear, loc.satGain overrides) and how much of its baked-in shading to remove (shaders.js)
 const cache = new Map(); // id -> loaded data (kept for the session: flying here again needs no reload)
+const BAND = 5000; // m: the coarse square's last 5 km fade into the streamed data (geostream.js), heights and colours
+// #152: the World has one water level. At a place whose water is a mountain lake (Jungfrau: 561 m), the real lowlands
+// further out (the Swiss plateau and the Po valley, 100-550 m) would all be under it. Outside the detailed square,
+// ground below LIFT m above the water is lifted to at least LIFT_MIN above it, blended (convex: hills keep their
+// shape, the plains a gentle relief), unless the imagery says it is really water there (a lake, e.g. Maggiore: it
+// stays, drawn at the World's level). LIFT_MIN clears the far field's 'dry land' test (wl + 20 m), so the water isn't
+// drawn under the plains at all: 5 m apart, 50 km away, no depth buffer could keep them apart.
+const LIFT = 100, LIFT_MIN = 25, LIFT_EDGE = 1500;
 
 export const REAL_LOCATIONS = {
   lauterbrunnen: {
@@ -61,7 +71,7 @@ export const REAL_LOCATIONS = {
   canyon: {
     id: 'canyon', name: 'Grand Canyon', real: true,
     desc: 'The real Grand Canyon from aerial photos: the South Rim villages, Phantom Ranch, the Colorado River and the North Rim.',
-    credit: 'Imagery: USDA NAIP via USGS The National Map (public domain) · Heights: AWS Terrain Tiles (USGS 3DEP) · Map data © OpenStreetMap contributors',
+    credit: 'Imagery: USDA NAIP via USGS The National Map (public domain), Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) farther out · Heights: AWS Terrain Tiles (USGS 3DEP) · Map data © OpenStreetMap contributors',
     seed: 37, rwyH: 2002, water: 200, north: 40.5, cloudBase: 4300, trees: 'pine', snowline: 99999, erosion: false, desert: true,
     fogBase: 1300, // haze settles into the canyon
     marina: { river: true, at: [2330, -17474], r: 4000, waves: 0.02 }, // boats: a landing on the Colorado (flat water near Phantom Ranch)
@@ -157,7 +167,7 @@ function pixels(bmp, size) {
 // Load (once) everything a real location needs. quality: the World's tier (smaller imagery textures on low/medium).
 export async function loadReal(loc, quality = 'high', onProgress) {
   const id = loc.id, key = id + ':' + quality;
-  if (cache.get(id)?.key === key) return cache.get(id);
+  if (cache.get(id)?.key === key) { await cache.get(id).stream.prime(1500); return cache.get(id); }
   const dir = BASE + id + '/';
   const files = [get(dir + 'meta.json', 'json'), get(dir + 'hi.bin.gz'), get(dir + 'far.bin.gz'), get(dir + (loc.img?.[quality] || 'hi.jpg'), 'blob'), get(dir + 'far.jpg', 'blob'), get(dir + 'cover.png', 'blob'), get(dir + 'osm.json', 'json')];
   if (loc.city) files.push(get(dir + 'city.bin.gz')); // a city's buildings (realCity.js)
@@ -172,6 +182,7 @@ export async function loadReal(loc, quality = 'high', onProgress) {
     createImageBitmap(farB, texSize < 4096 ? fit : {}), createImageBitmap(coverB, opt),
   ]);
   const D = new RealData(loc, meta, decodeHeights(await gunzip(hiZ), meta.hi.n), decodeHeights(await gunzip(farZ), meta.far.n), hiBmp, farBmp, coverBmp, osm);
+  await D.stream.prime(); // the streamed land the first view reaches past the coarse square (a few seconds at most; never fails)
   if (cityZ) D.city = decodeCity(await gunzip(cityZ));
   if (statueB) try { D.statue = (await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(statueB, '')).scene; } catch (e) { console.warn('[landmarks] statue model', e); }
   D.key = key;
@@ -244,7 +255,39 @@ class RealData {
     coverBmp.close?.();
     this.edge = 1500; // blend from the detailed heights to the coarse ones over the last 1.5 km of the detailed square
     this.buildRivers(osm.rivers || []);
+    // past the coarse square: streamed tiles (geostream.js). zMax: the finest zoom a sample may use (the far field
+    // asks for coarser ones while it builds a distant cell, World.tiles.far)
+    const F = this.far; this.zMax = 10; this.tmpA = new THREE.Color(); this.tmpB = new THREE.Color(); this.tmpW = new THREE.Color();
+    this.stream = new GeoStream(meta, [F.x0 + BAND, F.z0 + BAND, F.x0 + F.size - BAND, F.z0 + F.size - BAND], this.edgeMeans(), carveFlatSea, meta.water ?? loc.water);
+    this.stream.matchTint = () => this.matchTint();
+    this.lift = loc.water > 5; this.wl = loc.water; // (at sea level the sea is the sea: Terrarium has the sea floor)
   }
+  // the coarse square's mean height and colour along its edge: what ground with no data at all looks like (offline)
+  edgeMeans() {
+    const G = this.far, n = G.n, P = this.farPx, m = P.n; let h = 0, c = [0, 0, 0], k = 0, q = 0;
+    for (let i = 0; i < n; i++) for (const j of [0, n - 1]) { h += G.H[j * n + i] + G.H[i * n + j]; k += 2; }
+    for (let i = 0; i < m; i++) for (const j of [0, m - 1]) for (const p of [j * m + i, i * m + j]) { for (let o = 0; o < 3; o++) c[o] += P.d[p * 4 + o]; q++; }
+    return { h: h / k, c: c.map((v) => v / q / 255) };
+  }
+  // Sentinel-2 straight from EOX isn't exactly the baked imagery (the Grand Canyon's is NAIP aerial photos; a bake can
+  // grade its own): match the stream's mean colour to the coarse square's along a ring inside its fading band, from
+  // the coarse backdrop (z6) once it has arrived. Ground already built from the old tint is rebuilt.
+  matchTint() {
+    const G = this.far, sum = [0, 0, 0], ref = [0, 0, 0], c = this.tmpA; let k = 0;
+    for (let s = 0; s < 4; s++) for (let i = 0; i < 64; i++) {
+      const t = BAND / 2 + (G.size - BAND) * (i + 0.5) / 64, e = s & 1 ? BAND / 2 : G.size - BAND / 2; // (along the side, across it)
+      const x = G.x0 + (s < 2 ? t : e), z = G.z0 + (s < 2 ? e : t);
+      const r = this.stream.rawColor(x, z, 6); if (!r) continue;
+      this.samplePx(this.farPx, x, z, c);
+      for (let o = 0; o < 3; o++) { sum[o] += r[o] / 255; } ref[0] += c.r / this.gainS; ref[1] += c.g / this.gainS; ref[2] += c.b / this.gainS; k++;
+    }
+    if (k < 128) return;
+    this.stream.tint = sum.map((v, o) => clamp(ref[o] / Math.max(1e-3, v), 0.7, 1.4));
+    this.stream.tintDone = true; this.stream.invalidateAll();
+  }
+  // the World this data is building (one at a time): streamed tiles that arrive rebuild its ground
+  attach(w) { this.stream.reset(); this.stream.onInvalidate = (x0, z0, x1, z1) => w.invalidateArea(x0, z0, x1, z1); this.stream.radius = () => w.tiles?.far.viewDist() ?? 130000; }
+  detach() { this.stream.onInvalidate = null; }
   // Rivers far above the World's water level (the Colorado in the Grand Canyon): the bake carved a bed under a
   // downhill water surface. Kept where the detailed heights are used unblended. Segments go in a 100 m hash.
   buildRivers(list) {
@@ -295,12 +338,33 @@ class RealData {
   }
   // distance (m) inside the detailed square (negative outside)
   inHi(x, z) { const G = this.hi; return Math.min(x - G.x0, G.x0 + G.size - x, z - G.z0, G.z0 + G.size - z); }
+  // distance (m) inside the coarse square (negative outside)
+  inFar(x, z) { const G = this.far; return Math.min(x - G.x0, G.x0 + G.size - x, z - G.z0, G.z0 + G.size - z); }
   height(x, z) {
     const e = this.inHi(x, z);
     if (e >= this.edge) return this.sampleH(this.hi, x, z);
-    const f = this.sampleH(this.far, x, z);
-    if (e <= 0) return f;
-    return f + (this.sampleH(this.hi, x, z) - f) * smoothstep(0, this.edge, e);
+    const f = this.farHeight(x, z);
+    if (e > 0) return f + (this.sampleH(this.hi, x, z) - f) * smoothstep(0, this.edge, e);
+    return this.lift && f < this.wl + LIFT ? this.lifted(x, z, f, e) : f;
+  }
+  // the coarse square's heights, fading into the streamed ones over its last BAND m, and the streamed ones past it
+  farHeight(x, z) {
+    const ef = this.inFar(x, z);
+    if (ef >= BAND) return this.sampleH(this.far, x, z);
+    const s = this.stream.height(x, z, this.zMax);
+    return ef <= 0 ? s : s + (this.sampleH(this.far, x, z) - s) * smoothstep(0, BAND, ef);
+  }
+  // #152: ground below the lake level outside the detailed square, out of the water unless the imagery shows water
+  lifted(x, z, h, e) {
+    const k = LIFT - LIFT_MIN, up = this.wl + LIFT_MIN + k * Math.exp((h - this.wl - LIFT) / k); // (>= h, equal at wl + LIFT with the same slope)
+    const w = smoothstep(0, LIFT_EDGE, -e) * (1 - this.wetness(this.color(x, z, this.tmpW)));
+    return h + (up - h) * w;
+  }
+  // how much a (graded, sRGB) imagery colour looks like open water: well bluer than red, about as blue as green, and
+  // dark (tuned on Sentinel-2 over Geneva, Thun, Maggiore and Lugano against the Swiss plateau and the Po valley's fields)
+  wetness(c) {
+    const L = c.r * 0.3 + c.g * 0.59 + c.b * 0.11;
+    return smoothstep(1.3, 1.5, c.b / (c.r + 0.01)) * smoothstep(0.84, 0.9, c.b / (c.g + 0.01)) * (1 - smoothstep(0.42, 0.56, L));
   }
   // imagery colour (sRGB 0..1, like the baked albedo) at (x,z)
   // nothing grows here (buildings, roads, water; in a city everything but the parks): Flora's bare mask
@@ -316,11 +380,17 @@ class RealData {
   }
   color(x, z, c) {
     const e = this.inHi(x, z);
-    if (e <= 0) return this.samplePx(this.farPx, x, z, c);
+    if (e <= 0) return this.farColor(x, z, c);
     const r = this.samplePx(this.hiPx, x, z, c);
     if (e >= 300) return r;
-    const f = this.samplePx(this.farPx, x, z, new THREE.Color());
-    return r.lerp(f, 1 - e / 300);
+    return r.lerp(this.farColor(x, z, this.tmpA), 1 - e / 300);
+  }
+  // like farHeight: the coarse imagery, fading into the streamed imagery (graded and tinted the same way)
+  farColor(x, z, c) {
+    const ef = this.inFar(x, z);
+    if (ef >= BAND) return this.samplePx(this.farPx, x, z, c);
+    this.stream.color(x, z, c, this.gainS, this.zMax);
+    return ef <= 0 ? c : c.lerp(this.samplePx(this.farPx, x, z, this.tmpB), smoothstep(0, BAND, ef));
   }
   // forest density 0..1 from the mapped forests (OSM), for Flora.setForestMask; 0 on houses, roads, water and
   // glaciers; null outside the data (Flora falls back to its own forest noise there)
@@ -339,7 +409,7 @@ class RealData {
     const h = this.meta.hi, f = this.meta.far;
     return {
       satHi: { value: this.tex.hi }, satFar: { value: this.tex.far },
-      satHiR: { value: new THREE.Vector4(h.x0, h.z0, 1 / h.size, 0) }, satFarR: { value: new THREE.Vector4(f.x0, f.z0, 1 / f.size, 0) },
+      satHiR: { value: new THREE.Vector4(h.x0, h.z0, 1 / h.size, 0) }, satFarR: { value: new THREE.Vector4(f.x0, f.z0, 1 / f.size, BAND / f.size) }, // (w: the fading band, shaders.js satColor)
       satSun: { value: this.captureSun() }, satGain: { value: this.gain }, satDeshade: { value: this.loc.sat?.deshade ?? DESHADE }, satDetail: { value: this.loc.sat?.detail ?? 1 },
       satCliff: { value: new THREE.Vector4(...(this.loc.cliff || [0.15, 0.14, 0.125, 0.75])) }, // colour of steep rock the photo can't see, and how much
     };
@@ -407,5 +477,5 @@ class RealData {
     g.fillStyle = '#222'; for (const r of runways) g.fillRect(s / 2 + (r.x / w.size) * s - 1.5, s / 2 - (rwyLen / w.size) * s / 2, 3, (rwyLen / w.size) * s);
     return c;
   }
-  dispose() { this.tex?.hi.dispose(); this.tex?.far.dispose(); this.tex = null; }
+  dispose() { this.tex?.hi.dispose(); this.tex?.far.dispose(); this.tex = null; this.stream.dispose(); }
 }

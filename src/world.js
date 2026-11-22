@@ -101,6 +101,7 @@ export class World {
     this.real = this.loc.real ? realData(this.loc) : null;
     if (this.loc.real && !this.real) throw new Error('location data not loaded');
     if (this.real) Object.assign(this.detailU, this.real.uniforms());
+    this.real?.attach(this); // land past its baked squares streams in while flying (src/geostream.js) and rebuilds what it changes
     this.landUniforms(); // no bake on real places: rivers/lakes off (and compiled out of the terrain shader)
     this.size = this.loc.core || 22000; // (a real place can ask for a bigger detailed core: New York's reaches the Statue of Liberty)
     this.coreK = this.size / 22000; // grid and bake resolutions scale with it, so the spacing stays the same
@@ -1127,6 +1128,7 @@ export class World {
     FOG.uTime.value = this.t;
     // endless world: stream terrain tiles (and the far terrain), keep the sea and clouds centred on the camera
     const cp = camera.position;
+    this.real?.stream.update(cp);
     this.tiles?.update(cp);
     this.roadGroup?.userData.cull?.(cp);
     this.updatePatch(cp);
@@ -1192,7 +1194,14 @@ export class World {
     for (const u of Object.values(this.detailU)) if (u?.value?.isTexture && !u.value.image) return false;
     return !this.flora || (!!this.flora.captured && !!this.flora.rockCaptured); // (the tree impostors too: captured after the warm-up, their textured shader would compile mid-flight)
   }
+  // The ground under (x0,z0)-(x1,z1) (world metres) has better data than it was built from (a real place's streamed
+  // geodata arrived): rebuild the streamed tiles and far-field cells there, and the minimap's tiles. Time-sliced.
+  invalidateArea(x0, z0, x1, z1) {
+    this.tiles?.invalidate(x0, z0, x1, z1);
+    this.mapTiles?.invalidate(x0, z0, x1, z1);
+  }
   dispose() {
+    this.real?.detach();
     this.cascades?.dispose(this.scene);
     this.scene.remove(this.group, this.sky, this.sun, this.sun.target, this.hemi, this.deck, this.deck2, this.clouds.mesh, this.rain, this.snow);
     this.tiles?.dispose(); this.space.dispose(); this.stunts?.dispose(); this.waterParks?.dispose(); this.helipads?.dispose();
