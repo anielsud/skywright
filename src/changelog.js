@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.123.0', items: [
+    "Bike riders bend their knees when they land a jump, sinking down to soak up the bump and then standing back up.",
+  ] },
   { v: '1.122.0', items: [
     "Look inside! Cockpits and cabins are built like the real thing now: an airliner flight deck with its screens and throttles, a fighter cockpit with an ejection seat and a head-up display, the SR-71's two seats, a sport-plane cockpit under the bubble canopy, the Chomper's race cab, the Fireboat's wheelhouse and the Dragonfly's cockpit.",
     "Wings, engines and other parts no longer poke through into the cockpit.",
