@@ -453,6 +453,7 @@ function wheelhouse(c, lv) {
     for (const [sx, col] of [[-1, 0xff2020], [1, 0x2050ff]]) { const l = new THREE.SphereGeometry(0.09, 10, 8); l.translate(sx * 0.55, H1 + 1.42, 0.5); b.add(l, PM.light(col)); } }
   b.to(g);
   g.userData.seats = [{ p: [0.4, 0.47, -0.05], s: 1, ctl: 'wheel', fit: { at: [0.4, 0.42, 0.1], dims: [0.5, 0.55, 0.46, 0.2], floor: 0.02 }, helm: { col: [0, 0.36, -0.5], tilt: 0.42 } }]; // (fit: the helm chair's seatGeo, feet on the deck; the wheel on the helm's back face)
+  g.userData.interior = [{ box: [0, (0.12 + H1) / 2, 0], size: [W - 0.16, H1 - 0.12, D - 0.16] }]; // the cabin, inside its walls and glass, from 12 cm over its base (the deck it stands on is its floor): nothing else shows in it (interior.js)
   return g;
 }
 // Water cannon (a fire monitor): a pedestal, a swivel body and a nozzle aimed forward and up. The smoke button turns

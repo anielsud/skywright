@@ -2583,3 +2583,4 @@ export function addCrew(design, objs) {
   });
   return rigs;
 }
+export { prepObstacle, obstacleClear }; // (interior.js reads the seats' containing obstacles as each cockpit's interior)

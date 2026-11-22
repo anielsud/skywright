@@ -340,6 +340,7 @@ function seatCanopy(ck, U, bodyColor, addTo, rivets) {
 export function addTubObstacle(cobj, rings, inv) {
   const well = rings.map((r) => r.filter((_, k) => k % 2 === 0).map((p) => p.clone().applyMatrix4(inv).toArray().map((x) => +x.toFixed(4))));
   for (const st of cobj.userData.seats || []) if (st.obstacles) st.obstacles = [...st.obstacles.filter((o) => o.name !== 'tub'), { name: 'tub', well }];
+  cobj.userData.tubWell = rings.map((r) => r.map((p) => p.clone().applyMatrix4(inv).toArray())); // (every point: interior.js keeps other parts out of it)
 }
 
 // ---------- tubes meeting end to end: one fair skin across the seam ----------
