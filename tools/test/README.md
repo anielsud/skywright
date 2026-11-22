@@ -232,6 +232,11 @@ to full throw, no rendering) and checks each person's skeleton every frame:
   standing, 2.5 sitting) without letting go or going more than 1 cm further into the bike, and is back in place once
   stopped. (The same brace moves the rider's weight in bike.js, so the bike can stop a little harder before the back
   wheel goes light.)
+- **full gas** (every bike, Sim): full gas from a roll. The rider leans forward over the bars (hips forward 3 cm or more
+  standing, 1 sitting) under the same rules, and is back in place once stopped. (In bike.js the lean keeps the front
+  down, so less of the engine goes into lifting it.)
+- **wheelie** (every bike, Arcade): full gas lifts the front and the rider sits back (2 cm or more standing, 1 sitting),
+  keeping hold and staying out of the bike.
 
 It prints how long posing the crew takes per frame (mean and p95, ms) for each vehicle: the number to watch when
 changing the arm solve.

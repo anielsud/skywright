@@ -526,8 +526,8 @@ const attached = (o, root) => { for (let x = o; x; x = x.parent) if (x === root)
 // The rider's inputs from the bike: hands on the grips (rig space), the extra lean into a turn, the tuck at speed, a
 // foot down when stopped.
 export function riderInput(ac, r) {
-  const b = ac.bike, out = { lean: 0, bikeLean: 0, tuck: 0, foot: 0, brace: 0, hands: null };
-  if (b) { out.bikeLean = b.lean; out.lean = clamp(b.lean * 0.5, -0.45, 0.45); out.tuck = b.tuck; out.brace = b.brace || 0; out.foot = ac.onGround ? 1 - clamp((Math.abs(ac.groundSpeed) - 0.4) / 1.2, 0, 1) : 0; }
+  const b = ac.bike, out = { lean: 0, bikeLean: 0, tuck: 0, foot: 0, shift: 0, hands: null };
+  if (b) { out.bikeLean = b.lean; out.lean = clamp(b.lean * 0.5, -0.45, 0.45); out.tuck = b.tuck; out.shift = b.shift || 0; out.foot = ac.onGround ? 1 - clamp((Math.abs(ac.groundSpeed) - 0.4) / 1.2, 0, 1) : 0; }
   const g = r.bars?.grips; if (!g) return out;
   _m4.copy(chain(r.root, r.bars.root)).invert();
   // [left, right]; null for a grip no longer on this vehicle (its fork broke off and flew away): that hand lets go
