@@ -28,10 +28,24 @@ jobs:
           BUILT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           sed -i "s/^export const COMMIT = .*/export const COMMIT = '${SHA}';/" src/version.js
           sed -i "s/^export const BUILT = .*/export const BUILT = '${BUILT}';/" src/version.js
+          # the crew posture solver's version: solved postures (baked below, and kept by each device) stay valid until it changes
+          SOLVER="$(cat src/crew.js src/body.js assets/people/* | sha1sum | cut -c1-10)"
+          sed -i "s/^export const SOLVER = .*/export const SOLVER = '${SOLVER}';/" src/version.js
           # a fresh offline-cache name per deploy, so installed apps always pick up the new build
           sed -i "s/^const CACHE = .*/const CACHE = 'skywright-${SHA}';/" sw.js
           cat src/version.js
           rm -rf native # the Capacitor app projects are not part of the site
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Start-up data (part pictures, stock crews' postures) worked out here instead of on every player's device.
+      # Optional: without it the game works them out itself, as before.
+      - name: Bake start-up data
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          python -m pip install websockets
+          python tools/bake/boot.py
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

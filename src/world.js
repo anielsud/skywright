@@ -643,6 +643,7 @@ export class World {
     const day = smoothstep(-0.12, 0.25, el); // 0 night, 1 day
     const golden = smoothstep(0.45, 0.02, el) * smoothstep(-0.15, 0.02, el);
     this.night = day < 0.25;
+    this.deckNight = 1 - day; // (cabinLight: a flight deck's own lamps come up as the daylight goes)
     this.scene.userData.nightK = clamp(1 - day + dark * 0.6, 0, 1); // running lights (navLights.js): full glow after dark or in murk
     // the atmosphere decides the sky, the horizon haze and the colour of the sunlight
     const atmoKey = `${this.sunDir.x.toFixed(4)},${this.sunDir.y.toFixed(4)},${this.sunDir.z.toFixed(4)},${W.haze ?? 1}`;

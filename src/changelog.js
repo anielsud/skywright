@@ -2,6 +2,25 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.132.0', items: [
+    "The game opens even faster: part pictures and pilots are ready before you arrive",
+  ] },
+  { v: '1.131.0', items: [
+    "Faraway forests are drawn more cleverly, so the game has a bit less work to do every frame.",
+  ] },
+  { v: '1.130.0', items: [
+    "The game opens much faster, with a progress bar showing what it's getting ready",
+  ] },
+  { v: '1.129.0', items: [
+    "The fighter cockpit is painted grey like a real F-16's, and the instrument panel sits right in front of you between your knees, the way real pilots see it.",
+  ] },
+  { v: '1.128.0', items: [
+    "Forests now reach much further into the distance, so valleys and mountains far away are covered in trees too.",
+  ] },
+  { v: '1.127.0', items: [
+    "Fly the Jumbo or Centipede at night: the flight deck lights up warm, with the dome light on and the overhead switches glowing.",
+    "The Centipede's googly eye is back in the right place below the windows.",
+  ] },
   { v: '1.126.0', items: [
     "The Jumbo and Centipede have a real airliner nose now, long and low with a narrow band of cockpit windows, and the flight deck inside is shaded like a real one.",
   ] },

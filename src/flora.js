@@ -29,7 +29,10 @@ const V3 = THREE.Vector3;
 const CELL = 275; // 22000 / 80: cells tile the core map and the 5500 m outer tiles exactly
 const STRIDE = 6; // per instance: x, y, z, scale, variant, yaw
 const IMP_CH = 6; // impostor chunks: 6 x 6 cells (1650 m), each its own draw with a bounding sphere (frustum culled)
-const SMALL_FAR = 1400; // shrubs, logs and stones vanish into the ground texture beyond this
+// Past IMP_FAR a 3 x 3 block of chunks (~5 km) is drawn as one big chunk instead: with trees out to 12+ km the small
+// chunks far away were ~60 draw calls for little culling gain (far chunks are small on screen and mostly in view).
+const IMP_BIG = 3, IMP_FAR = 6000;
+const SMALL_FAR = 2500; // shrubs, logs and stones vanish into the ground texture beyond this
 const AT = 2048; // foliage atlas layout size (the 1024 version is the same layout scaled)
 // atlas regions in AT pixels -- mirrored in tools/flora/build_atlas.py (REG)
 const REG = {
@@ -46,10 +49,10 @@ UV.whiteP = [(1984 + 32) / AT, (1984 + 32) / AT];
 // cand: candidates per dense cell, base: per far cell, dense / far: radii (m), lo: model -> impostor distance,
 // near: shadow-casting model radius, budget: ms per frame, imp: impostor buffer, oct: impostor views per axis, cs: px per view
 const TIER = {
-  low: { cand: 450, base: 40, dense: 1300, far: 5000, lo: 150, near: 90, budget: 2, imp: 60000, oct: 4, cs: 64, atlas: 1024 },
-  medium: { cand: 800, base: 60, dense: 2000, far: 6000, lo: 190, near: 120, budget: 3, imp: 120000, oct: 6, cs: 48, atlas: 1024 },
-  high: { cand: 1700, base: 150, dense: 3200, far: 9500, lo: 270, near: 160, budget: 5, imp: 350000, oct: 8, cs: 80, atlas: 2048 },
-  ultra: { cand: 2400, base: 240, dense: 4200, far: 12000, lo: 380, near: 220, budget: 7, imp: 600000, oct: 8, cs: 112, atlas: 2048 },
+  low: { cand: 450, base: 40, dense: 1300, far: 12000, lo: 150, near: 90, budget: 2, imp: 60000, oct: 4, cs: 64, atlas: 1024 },
+  medium: { cand: 800, base: 60, dense: 2000, far: 13000, lo: 190, near: 120, budget: 3, imp: 120000, oct: 6, cs: 48, atlas: 1024 },
+  high: { cand: 1700, base: 150, dense: 3200, far: 16000, lo: 270, near: 160, budget: 5, imp: 350000, oct: 8, cs: 80, atlas: 2048 },
+  ultra: { cand: 2400, base: 240, dense: 4200, far: 19000, lo: 380, near: 220, budget: 7, imp: 600000, oct: 8, cs: 112, atlas: 2048 },
 };
 const GRASS = { low: null, medium: { R: 60, per: 1 / 1.2, cap: 16000, agl: 120 }, high: { R: 110, per: 1 / 0.55, cap: 110000, agl: 200 }, ultra: { R: 150, per: 1 / 0.4, cap: 240000, agl: 260 } };
 
@@ -68,8 +71,9 @@ function foliageAtlas(size) {
   img.src = new URL(`../assets/flora/foliage_${size}.webp`, import.meta.url).href;
   return A;
 }
-// started at import so the picture is decoded long before the first flight starts
-foliageAtlas(typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches ? 1024 : 2048);
+// started by main.js while the hangar is being built, so the picture is decoded long before the first flight starts
+// (not at import: it would share the connection with the game's code and hold up the start)
+export const preloadFoliage = () => foliageAtlas(typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches ? 1024 : 2048);
 // if the atlas can't be loaded (offline before it was ever cached): blotchy silhouettes, so trees still read as trees
 function fallbackAtlas() {
   const S = 512, k = S / AT, cv = document.createElement('canvas'); cv.width = cv.height = S;
@@ -507,6 +511,10 @@ function upload(m, n) {
 const hash2 = (i, j, s) => ((Math.imul(i, 73856093) ^ Math.imul(j, 19349663) ^ Math.imul(s, 83492791)) >>> 0);
 let lastFlora = null;
 const GN = 12; // per-cell grid of terrain / forest samples (23 m apart) that candidates interpolate
+// Far sparse cells sample a 4 x 4 grid (69 m) instead: the grid was two-thirds of a cell's cost, and the 9x fewer samples
+// are what lets the far forest keep up with a fast plane on the tablet. A cell is regenerated on the fine grid when it
+// goes dense, so the few far trees the coarse grid placed differently change only then, among hundreds of new ones.
+const GN_FAR = 4, FINE_R = 3000; // (fine grid for sparse cells nearer than FINE_R)
 
 export class Flora {
   constructor(world) {
@@ -557,7 +565,7 @@ export class Flora {
     // an empty stand-in chunk, always there, so the impostor shader compiles behind the loading screen with everything
     // else (the real chunks only appear as the forest streams in, a second into the flight: a hitch on the tablet)
     this.impWarm = new THREE.Mesh(this.impBuf(1).g, this.impMat); this.impWarm.frustumCulled = false; this.group.add(this.impWarm);
-    this.impCh = new Map(); this.impDirtyCh = new Set(); this.impN = 0; this.impTmp = { pos: new Float32Array(0), data: new Float32Array(0) };
+    this.impCh = new Map(); this.impBig = new Map(); this.impDirtyCh = new Set(); this.impN = 0; this.impTmp = { pos: new Float32Array(0), data: new Float32Array(0) };
     for (const V of this.vars) V.ext = Math.abs(V.bC.y) + V.bR * 1.42; // reach of a quad from the tree's foot, per unit scale
     if (this.atlas.ready) this.capture();
     // streamed cells
@@ -675,20 +683,37 @@ export class Flora {
   clearTrees() { this.extra.clear(); this.extraN = 0; this.reset(); }
   reset() { for (const c of this.cells.values()) this.cellChanged(c); this.cells.clear(); this.felled.clear(); this.wantAt = null; this.nearDirty = true; }
   // a cell's trees changed (generated, densified, thinned, dropped): its impostor chunk needs a rebuild
-  cellChanged(c) { this.impDirtyCh.add(Math.floor(c.ci / IMP_CH) + ',' + Math.floor(c.cj / IMP_CH)); this.impDirty = true; }
+  cellChanged(c) {
+    const ki = Math.floor(c.ci / IMP_CH), kj = Math.floor(c.cj / IMP_CH), bk = Math.floor(ki / IMP_BIG) + ',' + Math.floor(kj / IMP_BIG);
+    this.impDirtyCh.add(this.impBig.get(bk) ? 'B' + bk : ki + ',' + kj); this.impDirty = true;
+  }
+  // which 3x3 blocks are drawn as one big chunk (far from the camera), with hysteresis; a switch rebuilds the block in
+  // its new form, and the old form is removed only once the new one is in (no gap; at most a frame or two drawn twice)
+  impBlocks(cam) {
+    const S = IMP_BIG * IMP_CH * CELL, seen = new Set();
+    for (const c of this.cells.values()) seen.add(Math.floor(c.ci / IMP_CH / IMP_BIG) + ',' + Math.floor(c.cj / IMP_CH / IMP_BIG));
+    for (const bk of this.impBig.keys()) if (!seen.has(bk)) this.impBig.delete(bk);
+    for (const bk of seen) {
+      const [bi, bj] = bk.split(',').map(Number), d = Math.hypot((bi + 0.5) * S - cam.x, (bj + 0.5) * S - cam.z), cur = !!this.impBig.get(bk);
+      const want = d > IMP_FAR + (cur ? -600 : 600); if (want === cur) continue;
+      this.impBig.set(bk, want); this.impDirty = true;
+      if (want) this.impDirtyCh.add('B' + bk); // its small chunks go when it's built
+      else { for (let a = 0; a < IMP_BIG; a++) for (let b = 0; b < IMP_BIG; b++) this.impDirtyCh.add((bi * IMP_BIG + a) + ',' + (bj * IMP_BIG + b)); this.impDirtyCh.add('X' + bk); }
+    }
+  }
 
   // ------------------------------------------------ placement
   key(i, j) { return i + ',' + j; }
   // coarse samples over the cell: height, forest density, canopy clumping
-  cellGrid(x0, z0) {
-    const W = this.w, n = W.noise, M = GN + 1, h = new Float32Array(M * M), F = new Float32Array(M * M), C = new Float32Array(M * M), st = CELL / GN;
+  cellGrid(x0, z0, gn = GN) {
+    const W = this.w, n = W.noise, M = gn + 1, h = new Float32Array(M * M), F = new Float32Array(M * M), C = new Float32Array(M * M), st = CELL / gn;
     for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) {
       const x = x0 + i * st, z = z0 + j * st, k = j * M + i;
       h[k] = W.sampleGrid(x, z); F[k] = this.forestAt(x, z);
       // clumps of trees and small clearings inside the forest (30-80 m)
       C[k] = smoothstep(-0.45, 0.15, n.n2(x / 70 + 31, z / 70) + 0.5 * n.n2(x / 23, z / 23 + 17));
     }
-    return { h, F, C, st };
+    return { h, F, C, st, gn };
   }
   // the hedgerow / tree-line trees around a farm field
   hedgerow(f, x0, z0, out, r) {
@@ -721,7 +746,7 @@ export class Flora {
     if (ex) for (let k = 0; k < ex.length; k += 4) out.push(ex[k], W.sampleGrid(ex[k], ex[k + 1]) - 0.2, ex[k + 1], ex[k + 2], ex[k + 3], (ex[k] * 1.7 + ex[k + 1]) % 6.283);
     const rh = mulberry32(hash2(cell.ci, cell.cj, 4321));
     for (const f of fields) this.hedgerow(f, x0, z0, out, rh);
-    const G = this.groups, dens = new Float32Array(G.length), grid = this.cellGrid(x0, z0), M = GN + 1;
+    const G = this.groups, dens = new Float32Array(G.length), grid = this.cellGrid(x0, z0, dense || cell.d < FINE_R ? GN : GN_FAR), gn = grid.gn, M = gn + 1;
     const e = { h: 0, s: 0, F: 0, C: 0, E: 0, wl: 0, open: 0, riv: 0 };
     const nFixed = out.length / STRIDE;
     let nBase = 0;
@@ -729,7 +754,7 @@ export class Flora {
       if (i === T.base) nBase = out.length / STRIDE;
       const fx = r(), fz = r(), u = r(), u2 = r(), u3 = r(), u4 = r(), yaw = r() * Math.PI * 2, x = x0 + fx * CELL, z = z0 + fz * CELL;
       // interpolate the coarse grid
-      const gx = fx * GN, gz = fz * GN, ix = Math.min(GN - 1, gx | 0), iz = Math.min(GN - 1, gz | 0), tx = gx - ix, tz = gz - iz, k00 = iz * M + ix;
+      const gx = fx * gn, gz = fz * gn, ix = Math.min(gn - 1, gx | 0), iz = Math.min(gn - 1, gz | 0), tx = gx - ix, tz = gz - iz, k00 = iz * M + ix;
       const bil = (A) => (A[k00] * (1 - tx) + A[k00 + 1] * tx) * (1 - tz) + (A[k00 + M] * (1 - tx) + A[k00 + M + 1] * tx) * tz;
       const hg = bil(grid.h); if (hg < wl + 0.5) continue;
       e.h = W.loc.flora ? W.loc.flora.h(hg) : hg; e.wl = hg - wl + (W.loc.flora?.wl || 0); // real places: altitudes mapped onto the borrowed biome's
@@ -768,7 +793,21 @@ export class Flora {
     cell.data = new Float32Array(out); cell.n = out.length / STRIDE; cell.nBase = nBase; cell.dense = dense;
     let y0 = Infinity, y1 = -Infinity; for (let k = 1; k < out.length; k += STRIDE) { if (out[k] < y0) y0 = out[k]; if (out[k] > y1) y1 = out[k]; }
     cell.y0 = y0; cell.y1 = y1;
-    cell.tile = this.tileOf(cell);
+    cell.tile = this.tileOf(cell); cell.reseat = false;
+  }
+  // The outer tile under a cell was rebuilt at another detail (or re-streamed): instead of generating the cell again,
+  // move each tree by how much the ground moved under it, old tile -> new tile (the old tile's heights stay readable
+  // after its mesh is gone). Generating whole cells again here made the far forest fall behind at speed, ~400 cells at a
+  // time whenever a tile changed level. (All of a cell's trees sit on one tile: 20 cells span a tile exactly.)
+  reseat(cell) {
+    const T = this.w.tiles, old = cell.tile, nw = this.tileOf(cell), d = cell.data, n = cell.n;
+    cell.reseat = false; if (!nw || !old || !d) { cell.data = null; return; }
+    let y0 = Infinity, y1 = -Infinity;
+    for (let k = 0; k < n * STRIDE; k += STRIDE) {
+      const x = d[k], z = d[k + 2]; d[k + 1] += T.sample(x, z, nw) - T.sample(x, z, old);
+      if (d[k + 1] < y0) y0 = d[k + 1]; if (d[k + 1] > y1) y1 = d[k + 1];
+    }
+    cell.y0 = y0; cell.y1 = y1; cell.tile = nw;
   }
   tileOf(cell) { // the outer terrain tile a cell sits on (null inside the core map)
     const T = this.w.tiles; if (!T) return null;
@@ -795,11 +834,12 @@ export class Flora {
       const key = this.key(i, j), dense = d < Rd; let c = this.cells.get(key);
       if (!c) { c = { ci: i, cj: j, key, data: null, n: 0, nBase: 0, dense: false, tile: null }; this.cells.set(key, c); }
       c.mark = this.frame; c.d = d;
-      if (c.data && c.tile !== undefined && c.tile !== this.tileOf(c)) { c.data = null; this.cellChanged(c); } // the ground under it was re-meshed
+      if (c.data && c.tile && c.tile !== this.tileOf(c)) c.reseat = true; // the ground under it was re-meshed: re-seat its trees
       if (c.data && !dense && c.dense) { c.dense = false; c.n = c.nBase; c.data = c.data.slice(0, c.nBase * STRIDE); this.cellChanged(c); }
-      if (!c.data || (dense && !c.dense)) { c.wantDense = dense; want.push(c); }
+      if (!c.data || (dense && !c.dense) || c.reseat) { c.wantDense = dense; want.push(c); }
     }
     for (const [key, c] of this.cells) if (c.mark !== this.frame && c.d > Rf * 1.05) { this.cells.delete(key); this.cellChanged(c); }
+    this.impBlocks(cam);
     // sparse far layer first everywhere close, then densify nearest-first
     this.queue = want.sort((a, b) => a.d - b.d);
   }
@@ -818,6 +858,7 @@ export class Flora {
       if (!this.cells.has(c.key)) continue;
       if (this.tileOf(c) === undefined) continue; // outer tile not built yet: try again when it is
       const t1 = performance.now();
+      if (c.reseat && c.data && !(c.wantDense && !c.dense)) { this.reseat(c); this.cellChanged(c); if (c.d < this.T.lo + 600) this.nearDirty = true; continue; } // (cheap: not counted in cellMs)
       this.genCell(c, c.wantDense); done++;
       this.cellMs += (performance.now() - t1 - this.cellMs) * 0.2; // typical cost of one cell (EMA)
       this.cellChanged(c); if (c.d < this.T.lo + 600) this.nearDirty = true;
@@ -878,15 +919,19 @@ export class Flora {
     this.impDirty = false; this.lastImp = this.frame;
     const vars = this.vars, keys = [...this.impDirtyCh]; this.impDirtyCh.clear();
     let budget = 0;
+    const drop = (k) => { const ch = this.impCh.get(k); if (ch) { this.imp.remove(ch.mesh); ch.B.g.dispose(); this.impN -= ch.n; this.impCh.delete(k); } };
     for (const key of keys) {
-      const [ki, kj] = key.split(',').map(Number), list = [];
+      // 'B'+block: a far block as one chunk; 'X'+block: drop a block's big chunk (its small chunks were just rebuilt); else a small chunk
+      if (key[0] === 'X') { if (!this.impBig.get(key.slice(1))) drop('B' + key.slice(1)); continue; }
+      const big = key[0] === 'B', [ki, kj] = (big ? key.slice(1) : key).split(',').map(Number), list = [], span = big ? IMP_BIG * IMP_CH : IMP_CH;
+      if (big !== !!this.impBig.get(big ? key.slice(1) : Math.floor(ki / IMP_BIG) + ',' + Math.floor(kj / IMP_BIG))) continue; // stale: the block switched form since
       let cnt = 0;
-      for (let i = ki * IMP_CH; i < (ki + 1) * IMP_CH; i++) for (let j = kj * IMP_CH; j < (kj + 1) * IMP_CH; j++) {
+      for (let i = ki * span; i < (ki + 1) * span; i++) for (let j = kj * span; j < (kj + 1) * span; j++) {
         const c = this.cells.get(this.key(i, j)); if (!c || !c.data) continue;
         list.push(c); cnt += c.dense ? c.n : c.nBase;
       }
       let ch = this.impCh.get(key);
-      if (!cnt) { if (ch) { this.imp.remove(ch.mesh); ch.B.g.dispose(); this.impN -= ch.n; this.impCh.delete(key); } continue; }
+      if (!cnt) { drop(key); if (big) for (let a = 0; a < IMP_BIG; a++) for (let b = 0; b < IMP_BIG; b++) drop((ki * IMP_BIG + a) + ',' + (kj * IMP_BIG + b)); continue; }
       if (!ch) { const B = this.impBuf(Math.ceil(cnt * 1.3)), mesh = new THREE.Mesh(B.g, this.impMat); this.imp.add(mesh); this.impCh.set(key, (ch = { B, mesh, n: 0 })); }
       // filled into scratch arrays over several slices, then copied into the chunk's buffers in one go: the chunk keeps
       // drawing (and, if it was off screen, uploading) its old content consistently until then
@@ -915,6 +960,7 @@ export class Flora {
       for (const a of [g.attributes.iPos, g.attributes.iData]) { a.clearUpdateRanges(); a.addUpdateRange(0, n * a.itemSize); a.needsUpdate = true; }
       if (B !== ch.B) { ch.B.g.dispose(); ch.B = B; ch.mesh.geometry = g; }
       this.impN += n - ch.n; ch.n = n; ch.nBig = nBig; ch.far = null; // placeImpostors sets the count
+      if (big) for (let a = 0; a < IMP_BIG; a++) for (let b = 0; b < IMP_BIG; b++) drop((ki * IMP_BIG + a) + ',' + (kj * IMP_BIG + b)); // the block's small chunks, now drawn by this one
       if ((this.impUp += n * 24) > 3e6) yield 'frame'; // spread big re-uploads over frames
     }
   }
