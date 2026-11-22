@@ -2,6 +2,11 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.122.0', items: [
+    "Look inside! Cockpits and cabins are built like the real thing now: an airliner flight deck with its screens and throttles, a fighter cockpit with an ejection seat and a head-up display, the SR-71's two seats, a sport-plane cockpit under the bubble canopy, the Chomper's race cab, the Fireboat's wheelhouse and the Dragonfly's cockpit.",
+    "Wings, engines and other parts no longer poke through into the cockpit.",
+    "Light comes in through the windows: cabins are shaded inside, the screens glow, and at night the instruments light up.",
+  ] },
   { v: '1.121.0', items: [
     "The map in the corner now keeps filling in wherever you fly, even at top speed in the SR-71, and it matches the ground you see below.",
   ] },
