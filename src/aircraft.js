@@ -1,7 +1,7 @@
 // Runtime aircraft: rigid-body flight model built from parts, ground contact, damage & break-up.
 import * as THREE from 'three';
 import { PARTS, partInfo } from './parts.js';
-import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale, partPower, partBurn, isRocketDesign } from './design.js';
+import { partMatrix, partScale, partMass, partHp, subtree, scaleSurface, thrustScale, linScale, partPower, partBurn, isRocketDesign, onRoadWheels } from './design.js';
 import { M } from './materials.js';
 import { clamp, lerp } from './noise.js';
 import { keepHeatPatch } from './sonic.js';
@@ -157,6 +157,10 @@ export class Aircraft {
     this.x = new THREE.Vector3(); this.v = new THREE.Vector3(); this.q = new THREE.Quaternion(); this.w = new THREE.Vector3();
     this.wW = new THREE.Vector3(); this.invIW = new THREE.Matrix3();
     this.stats = { maxSpeed: 0, maxAlt: 0, maxG: 1, time: 0, airTime: 0, landings: 0, bestLanding: null, partsLost: 0, distance: 0 };
+    // crash diagnostics for analytics (main.js flight_end / part_lost): what broke things, and signs the physics misbehaved.
+    // this.cause is set just before a hit, a scrape, a hard landing, an over-G or a wall/tree/bird blow damages a part, so a
+    // part that breaks off says why (the 'debris' event carries it)
+    this.diag = { nanResets: 0, spinClamps: 0, deepPens: 0, maxPen: 0, recovers: 0, gearCollapses: 0 }; this.cause = null;
     this.g = 1; this.alpha = 0; this.stalled = false; this.onGround = false; this.wrecked = false; this.time = 0;
     this.landingLight = null;
     const m = new THREE.Matrix4();
@@ -230,7 +234,7 @@ export class Aircraft {
     this.hasSmoke = this.parts.some((p) => p.smoke);
     this.hasAB = this.parts.some((p) => p.engine?.ab);
     this.isHeli = this.parts.some((p) => p.engine?.type === 'rotor');
-    this.isCar = this.parts.some((p) => p.engine?.type === 'drive');
+    this.isCar = this.parts.some((p) => p.engine?.type === 'drive') || onRoadWheels(design); // (car/bike wheels and no wings: a land vehicle whatever drives it, design.js)
     this.driveF = 0; this.flipT = 0; this.svcBrake = 0; this.reversing = false; this.groundSpeed = 0;
     this.motorCount = this.parts.filter((p) => p.engine?.type === 'drive').length;
     // Rockets (any build with a rocket body) steer like rockets: see rocketControls(). A mixed build (rocket body + main
@@ -345,6 +349,7 @@ export class Aircraft {
     for (let i = 0; i < n; i++) this.substep(dt, env);
     if (!Number.isFinite(this.x.x + this.x.y + this.x.z + this.v.x + this.v.y + this.v.z + this.q.x + this.q.y + this.q.z + this.q.w + this.w.x + this.w.y + this.w.z)) {
       // numerical blow-up (absurd speeds): never let NaN reach the renderer (bloom turns it into a black frame)
+      this.diag.nanResets++;
       this.x.copy(x0); this.v.copy(v0).multiplyScalar(0.9); this.q.copy(q0); this.w.set(0, 0, 0); this.wW.set(0, 0, 0);
     }
     if (this.isCar) this.carRecover(dtFrame);
@@ -422,7 +427,7 @@ export class Aircraft {
     if (this.flipT < (bike ? 1.5 : 2)) return;
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.q); fwd.y = 0;
     this.q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(-fwd.x, -fwd.z));
-    this.x.y += 1.5; this.v.set(0, 0, 0); this.w.set(0, 0, 0); this.wW.set(0, 0, 0); this.flipT = 0;
+    this.x.y += 1.5; this.v.set(0, 0, 0); this.w.set(0, 0, 0); this.wW.set(0, 0, 0); this.flipT = 0; this.diag.recovers++;
     this.emit('msg', { text: 'Back on your wheels!' });
   }
 
@@ -729,8 +734,12 @@ export class Aircraft {
     F.add(_v2.set(0, -gravityAt(alt, this.v.x * this.v.x + this.v.z * this.v.z) * mass, 0).applyQuaternion(_qi));
     // ---- arcade/pilot assistance ----
     T.addScaledVector(Taero, R.aeroTorque);
-    if (this.isBike) bikeAssist(this, F, T, ctl, dt, env); // balance, counter-steering, wheelies, attitude in the air
-    else if (this.isBoat) boatForces(this, F, T, ctl, dt, env); // floating, planing, motors, steering (boat.js)
+    // An amphibian (a car or bike with a boat hull) is both: the hull floats it and the wheels drive it. Afloat (wet and
+    // no wheel on land) the boat's help steers and steadies it; on land the car's or bike's does.
+    const afloat = this.isBoat && this.boat.wet > 0.05 && !this.landWheels;
+    if (this.isBoat) boatForces(this, F, T, ctl, dt, env); // floating, planing, motors, steering (boat.js)
+    if (this.isBike) { if (!afloat) bikeAssist(this, F, T, ctl, dt, env); } // balance, counter-steering, wheelies, attitude in the air
+    else if (this.isBoat && (afloat || !this.isCar)) { /* the hull's help (boatForces) */ }
     else if (this.isHeli) this.heliAssist(F, T, ctl, q, _qi, fwdSpeed);
     else if (this.isCar && this.onGround && R.assist > 0) { // Arcade/Pilot: stability control keeps the wheels down
       const right = _v2.set(1, 0, 0).applyQuaternion(q), bank = Math.asin(clamp(this.stuntUp ? right.dot(this.stuntUp) : right.y, -1, 1)); // level with the ramp/loop/banking the wheels are on
@@ -777,7 +786,7 @@ export class Aircraft {
     const dw = T.sub(gyro).applyMatrix3(this.Iinv);
     this.w.addScaledVector(dw, dt);
     // clamp absurd rates
-    if (this.w.lengthSq() > 400) this.w.setLength(20);
+    if (this.w.lengthSq() > 400) { this.w.setLength(20); this.diag.spinClamps++; }
     // ---- ground contact ----
     this.wW.copy(this.w).applyQuaternion(q);
     this.invIW.copy(this.Iinv);
@@ -809,7 +818,7 @@ export class Aircraft {
         p.overT = ratio > 1 ? (p.overT || 0) + dt : Math.max(0, (p.overT || 0) - dt * 2);
         if (p.overT > 0.25 && !p.strainWarned) { p.strainWarned = true; this.emit('msg', { text: `${p.name} is straining! Ease off!`, bad: true }); this.emit('strain', { part: p.i }); }
         if (p.overT === 0) p.strainWarned = false;
-        if (p.overT > 0.75 || ratio > 1.8) { this.emit('msg', { text: `Over-G! ${p.name} snapped!`, bad: true }); this.breakPart(p.i, 'overload'); }
+        if (p.overT > 0.75 || ratio > 1.8) { this.cause = { why: 'overload', g: this.g }; this.emit('msg', { text: `Over-G! ${p.name} snapped!`, bad: true }); this.breakPart(p.i, 'overload'); this.cause = null; }
       }
     }
   }
@@ -828,7 +837,7 @@ export class Aircraft {
     const cBase = 2 * Math.sqrt(kBase * this.mass / Math.max(2, nW)) * 0.6;
     const top = new THREE.Vector3(), pt = new THREE.Vector3(), rr = new THREE.Vector3(), vpt = new THREE.Vector3();
     const stuntN = new THREE.Vector3(); let nStunt = 0, stuntPen = 0; const stuntPush = new THREE.Vector3();
-    let rollM = 0; const fwdCar = this.D ? _rf.set(0, 0, -1).applyQuaternion(q) : null;
+    let rollM = 0, landWheel = false; const fwdCar = this.D ? _rf.set(0, 0, -1).applyQuaternion(q) : null;
     for (const p of this.parts) {
       if (!p.alive || !p.gear) continue;
       const usable = !p.gear.retract || this.gearT > 0.95;
@@ -839,11 +848,12 @@ export class Aircraft {
         const L = w.len + w.r;
         down.copy(w.dir).applyQuaternion(q);
         const g = groundUnder(env, top, down, L); // the terrain, or a stunt ramp/loop the strut points at (collide.js)
+        if (g.type === 'water' && this.isBoat && !w.float) continue; // an amphibian's hull floats it: the wheels hang in the water (and paddle: boat.js)
         const d = g.d;
         const comp = L - d;
         w.comp = clamp(comp, 0, w.len * 0.6);
         if (comp <= 0) continue;
-        w.contact = true; anyWheel = true;
+        w.contact = true; anyWheel = true; if (g.type !== 'water') landWheel = true;
         if (g.stunt) { stuntN.add(g.n); nStunt++; }
         pt.copy(top).addScaledVector(down, d);
         rr.copy(pt).sub(this.x);
@@ -851,7 +861,7 @@ export class Aircraft {
         const vn = vpt.dot(g.n);
         const water = g.type === 'water';
         const limit = (p.gear.limit || 4) * R.gearMult * (water && !w.float ? 0.5 : 1);
-        if (-vn > limit && !w.float) { this.emit('msg', { text: `Hard landing! ${p.name} collapsed`, bad: true }); this.emit('impact', { pos: pt.clone(), speed: -vn, surf: g.type }); this.breakPart(p.i, 'gear'); break; }
+        if (-vn > limit && !w.float) { this.diag.gearCollapses++; this.cause = { why: 'hard_landing', impact: -vn, limit, surf: g.type, stunt: !!g.stunt }; this.emit('msg', { text: `Hard landing! ${p.name} collapsed`, bad: true }); this.emit('impact', { pos: pt.clone(), speed: -vn, surf: g.type }); this.breakPart(p.i, 'gear'); this.cause = null; break; }
         if (-vn > 1.2 && !w.wasContact) this.emit('touch', { pos: pt.clone(), speed: -vn, water, float: w.float });
         let N = kBase * Math.min(comp, w.len * 0.7) - cBase * vn;
         if (comp > w.len * 0.7) N += kBase * 20 * (comp - w.len * 0.7);
@@ -906,6 +916,7 @@ export class Aircraft {
       }
       for (const w of p.gear.wheels) w.wasContact = w.contact;
     }
+    this.landWheels = landWheel; // (an amphibian with a wheel on land drives; with none, afloat, the hull carries it)
     // Easy and Racer: an invisible hand cancels (part of) the roll the tyres' cornering push puts on the car, so it
     // corners flat and can't tip over in a turn (drive.js antiRoll)
     if (rollM) this.wW.add(_rv.copy(fwdCar).multiplyScalar(-this.D.antiRoll * rollM * dt).applyMatrix3(this.invIW));
@@ -919,33 +930,39 @@ export class Aircraft {
         if (hp.y > this.x.y + 50) continue;
         const g = groundAtPoint(env, hp); // (terrain, or a stunt ramp the point is inside)
         if (hp.y > g.h) continue;
-        const water = g.type === 'water';
+        const water = g.type === 'water', slick = g.type === 'slick'; // (slick: a wet ramp, waterPark.js: a hull slides up it, no scraping)
         if (water && this.isBoat) continue; // (a boat's hull floats: boat.js)
-        const res = contactPoint(this, hp, g, { e: water ? 0 : 0.12, mu: water ? 0.12 : g.type === 'runway' ? 0.4 : 0.55 });
+        const res = contactPoint(this, hp, g, { e: water ? 0 : 0.12, mu: water ? 0.12 : slick ? 0.04 : g.type === 'runway' ? 0.4 : 0.55 });
         if (!res) continue;
         if (g.stunt) { if (res.pen > stuntPen) { stuntPen = res.pen; stuntPush.copy(g.n); } } // pushed out along the face, not up
         else maxPen = Math.max(maxPen, res.pen);
         const impact = -res.vn;
         const thr = (water ? 9 : 4.5) * R.crashMult;
-        if (impact > thr * 0.6 && (!hits.has(p) || hits.get(p).impact < impact)) hits.set(p, { impact, pt: hp.clone(), n: g.n.clone(), thr, surf: g.type });
-        if (res.vt > 4 && !water) {
+        if (impact > thr * 0.6 && (!hits.has(p) || hits.get(p).impact < impact)) hits.set(p, { impact, pt: hp.clone(), n: g.n.clone(), thr, surf: g.type, stunt: !!g.stunt });
+        if (res.vt > 4 && !water && !slick) {
           slide.set(p, Math.max(slide.get(p) || 0, res.vt));
           if (Math.random() < 0.08) this.emit('scrape', { pos: hp.clone(), speed: res.vt, surf: g.type });
         }
-        if (water && (res.vt > 3 || impact > 2) && Math.random() < 0.15) this.emit('spray', { pos: hp.clone(), speed: Math.max(res.vt, impact) });
+        if ((water || slick) && (res.vt > 3 || impact > 2) && Math.random() < 0.15) this.emit('spray', { pos: hp.clone(), speed: Math.max(res.vt, impact) });
         if (water) inWater = true;
       }
     }
-    for (const [p, vt] of slide) this.damage(p, (vt * dt * 2.5) / R.crashMult / (p.i === 0 ? 3 : 1), null);
+    for (const [p, vt] of slide) { this.cause = { why: 'scrape', impact: vt }; this.damage(p, (vt * dt * 2.5) / R.crashMult / (p.i === 0 ? 3 : 1), null); }
+    this.cause = null;
     if (inWater) { this.v.multiplyScalar(1 - 0.9 * dt); this.wW.multiplyScalar(1 - 1.5 * dt); }
     for (const [p, h] of hits) { // one damage event per part per step (not per contact point)
       this.deform(p, h.pt, h.n, Math.min(0.5, (h.impact - h.thr * 0.4) * 0.025));
       if (h.impact > h.thr) {
+        this.cause = { why: 'hit', impact: h.impact, thr: h.thr, surf: h.surf, stunt: !!h.stunt };
         const toughness = p.i === 0 ? 3 : 1; // the core body is extra strong so crashes come apart progressively
         this.damage(p, ((h.impact - h.thr) ** 2 * 22) / toughness, h.pt);
         this.emit('impact', { pos: h.pt, speed: h.impact, surf: h.surf });
       }
     }
+    this.cause = null;
+    // pushed out of a structure from deep inside it: a sign of tunnelling into a ramp or the loop (and of the "glitch" jolts)
+    if (stuntPen > 0.3) this.diag.deepPens++;
+    this.diag.maxPen = Math.max(this.diag.maxPen, stuntPen, maxPen);
     if (maxPen > 0) this.x.y += Math.min(maxPen, 0.5) * 0.3;
     if (stuntPen > 0) this.x.addScaledVector(stuntPush, Math.min(stuntPen, 0.5) * 0.3);
     this.stuntUp = nStunt ? stuntN.normalize() : null; // wheels on a structure: the surface they stand on (assists level with it)
@@ -1088,7 +1105,7 @@ export class Aircraft {
     // world transforms are kept by Debris constructor
     this.root.updateMatrixWorld(true);
     const deb = new Debris(objs, c, v, wW, mass, hull, { burning: why === 'wreck' && burning ? burning : burning * 0.5, smoking: 1, name: names[0] });
-    this.emit('debris', { debris: deb, why, names, pos: c.clone(), speed: v.length() });
+    this.emit('debris', { debris: deb, why, names, ids: idxs.map((k) => this.parts[k].p.id), pos: c.clone(), speed: v.length(), cause: this.cause ? { ...this.cause } : null });
     if (why !== 'wreck') this.emit('msg', { text: `${names[0]} ${why === 'gear' ? 'snapped off' : 'broke off'}!`, bad: true });
     if (this.alive().length === 0) { this.dead = true; return; }
     const before = this.initialMass;

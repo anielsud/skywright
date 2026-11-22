@@ -25,6 +25,7 @@ import { Helipads } from './helipad.js';
 import { StuntParks, planStunts, padsHeight } from './stuntPark.js';
 import { roadStart } from './landStart.js';
 import { Marina } from './marina.js';
+import { WaterParks } from './waterPark.js';
 import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
 
 export const RWY = { len: 1800, width: 45 };
@@ -136,6 +137,9 @@ export class World {
       this.sites.push({ kind: 'marina', name: M.river ? 'the river landing' : 'the marina', fits: (st) => !!st.boat, afloat: true, pos: S.pos, heading: S.heading, y: M.wl, r: 30,
         at: (slot = 0) => S.pos.clone().addScaledVector(right, slot ? (slot % 2 ? -14 : 14) * Math.ceil(slot / 2) : 0) }); // online: side by side, 14 m apart
     }
+    // the water park (src/waterPark.js): ramps, a boost strip and a slalom for boats on open water, clear of the marina
+    this.waterParks = this.loc.waterPark ? WaterParks.create(this, this.loc.waterPark) : null;
+    if (this.waterParks) this.surfs.push(...this.waterParks.sites.map((s) => s.cm));
     this.buildClouds();
     this.buildPrecip();
     this.setWeather(this.weatherId);
@@ -446,7 +450,7 @@ export class World {
   heightAt(x, z) { return this.sampleGrid(x, z); }
   maxGround(x, z) {
     const S = this.roadSurf, deck = S && S.q(x, z, true) ? S.y : -Infinity; // bridge decks count
-    return Math.max(this.sampleGrid(x, z), this.waterLevel, deck, this.pad ? this.pad.maxAt(x, z) : -Infinity, this.stunts ? this.stunts.topAt(x, z) : -Infinity, this.helipads ? this.helipads.topAt(x, z) : -Infinity, this.marina ? this.marina.topAt(x, z) : -Infinity) + (this.inAirportBox(x, z) ? 25 : 0); // (the launch pad, the stunt park's ramps and loop, rooftop helipads)
+    return Math.max(this.sampleGrid(x, z), this.waterLevel, deck, this.pad ? this.pad.maxAt(x, z) : -Infinity, this.stunts ? this.stunts.topAt(x, z) : -Infinity, this.helipads ? this.helipads.topAt(x, z) : -Infinity, this.marina ? this.marina.topAt(x, z) : -Infinity, this.waterParks ? this.waterParks.topAt(x, z) : -Infinity) + (this.inAirportBox(x, z) ? 25 : 0); // (the launch pad, the stunt park's ramps and loop, rooftop helipads)
   }
   // the nearest front-face hit on a structure's collision mesh along o + d*t, t <= len (collide.js), or null
   surfRay(o, d, len) { let best = null; for (const cm of this.surfs) { const r = cm.ray(o, d, best ? best.t : len); if (r) best = r; } return best; }
@@ -1176,7 +1180,7 @@ export class World {
     for (let k = 0; k < 4; k++) { const white = ang > th[k]; cols.setXYZ(k, 1, white ? 1 : 0.1, white ? 1 : 0.1); }
     cols.needsUpdate = true;
     this.space.update(camera, dt);
-    this.stunts?.update(dt, this, camera.position);
+    this.stunts?.update(dt, this, camera.position); this.waterParks?.update(dt, this, camera.position);
     this.helipads?.update(dt, this);
     this.updateEnv();
   }
@@ -1185,12 +1189,12 @@ export class World {
   // re-captured once the rock photo is in): main.js keeps the loading screen up meanwhile (at most a few seconds)
   loaded() {
     for (const u of Object.values(this.detailU)) if (u?.value?.isTexture && !u.value.image) return false;
-    return !this.flora || !this.flora.captured || !!this.flora.rockCaptured;
+    return !this.flora || (!!this.flora.captured && !!this.flora.rockCaptured); // (the tree impostors too: captured after the warm-up, their textured shader would compile mid-flight)
   }
   dispose() {
     this.cascades?.dispose(this.scene);
     this.scene.remove(this.group, this.sky, this.sun, this.sun.target, this.hemi, this.deck, this.deck2, this.clouds.mesh, this.rain, this.snow);
-    this.tiles?.dispose(); this.space.dispose(); this.stunts?.dispose(); this.helipads?.dispose();
+    this.tiles?.dispose(); this.space.dispose(); this.stunts?.dispose(); this.waterParks?.dispose(); this.helipads?.dispose();
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     if (this.envRT) this.envRT.dispose();
     this.pmrem.dispose();

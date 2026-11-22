@@ -554,6 +554,9 @@ export class Flora {
     // impostors live in spatial chunks: off-screen chunks are culled, and a chunk is rebuilt (and re-uploaded) only when
     // one of its cells changes, not the whole forest every time
     this.imp = new THREE.Group(); this.imp.visible = false; this.group.add(this.imp);
+    // an empty stand-in chunk, always there, so the impostor shader compiles behind the loading screen with everything
+    // else (the real chunks only appear as the forest streams in, a second into the flight: a hitch on the tablet)
+    this.impWarm = new THREE.Mesh(this.impBuf(1).g, this.impMat); this.impWarm.frustumCulled = false; this.group.add(this.impWarm);
     this.impCh = new Map(); this.impDirtyCh = new Set(); this.impN = 0; this.impTmp = { pos: new Float32Array(0), data: new Float32Array(0) };
     for (const V of this.vars) V.ext = Math.abs(V.bC.y) + V.bR * 1.42; // reach of a quad from the tree's foot, per unit scale
     if (this.atlas.ready) this.capture();
@@ -941,7 +944,7 @@ export class Flora {
     return null;
   }
   dispose() {
-    this.impRT.dispose(); for (const ch of this.impCh?.values() || []) ch.B.g.dispose(); this.impMat?.dispose(); this.cover?.dispose();
+    this.impRT.dispose(); for (const ch of this.impCh?.values() || []) ch.B.g.dispose(); this.impWarm?.geometry.dispose(); this.impMat?.dispose(); this.cover?.dispose();
     for (const m of Object.values(this.mats || {})) m.dispose();
     for (const V of this.vars || []) V.model.geo.dispose();
   }

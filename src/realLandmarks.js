@@ -2,7 +2,10 @@
 //  - the underside of high bridge decks is solid (the decks themselves are ground: roads.js RoadSurface);
 //  - the big bridges' structure (osm.json 'bridges': towers at the ends of the main span): steel or masonry towers,
 //    main cables hanging between them and down to the anchorages, suspender cables, truss sides on the span;
-//  - the Statue of Liberty (loc.city.statue): a simple model on its pedestal and Fort Wood's star, torch lit at night.
+//  - the Statue of Liberty (loc.city.statue): TT3D's photogrammetry scan of the statue and the top of her pedestal
+//    (Sketchfab, CC BY 4.0; tools/liberty/statue.mjs: assets/landmarks/liberty.glb, three levels of detail) on the
+//    pedestal's base, the foundation and Fort Wood's eleven-pointed star, at their real heights (the torch 93 m up),
+//    the flame lit at night. Without the model (it failed to load): a simple stand-in.
 import * as THREE from 'three';
 import { buildingMaterial, C } from './buildings.js';
 import { MeshW } from './realCity.js';
@@ -152,6 +155,7 @@ export class Landmarks {
     const E = Math.sin(br), N = Math.cos(br), fx = E * Math.cos(th) - N * Math.sin(th), fz = -(E * Math.sin(th) + N * Math.cos(th)); // facing, game frame
     const rx = fz, rz = -fx; // her left hand side... (right of the facing direction seen from above)
     const at = (a, y, f) => [x + rx * a + fx * f, y, z + rz * a + fz * f]; // local: a across (+: her left), f forward
+    if (this.D.statue) return this.statueScan(this.D.statue, x, z, g, fx, fz);
     // Fort Wood's eleven-pointed star, then the granite pedestal
     const S = new MeshW(x, z, 4096); S.seed = 21; S.yg = g;
     S.color(0xd0c8b8);
@@ -199,6 +203,37 @@ export class Landmarks {
     this.statuePos = new THREE.Vector3(x, y0 + 46, z);
   }
 
+  // the scanned statue: Fort Wood's star (walls to 8 m, its parade paved), the foundation in two steps to 19.8 m, the
+  // pedestal's base up to where the scan's pedestal starts, and the scan (the statue's base 46.9 m up: the real figures)
+  statueScan(model, x, z, g, fx, fz) {
+    const W = this.w, info = model.userData || {}, cut = info.cut || { y: -20.87, half: 12.2 }, y0 = g + 46.9;
+    const S = new MeshW(x, z, 4096); S.seed = 21; S.yg = g;
+    S.color(0xc9bfae);
+    const star = []; for (let k = 0; k < 22; k++) { const a = (k / 22) * Math.PI * 2 + Math.atan2(fz, fx), r = k % 2 ? 36 : 52; star.push([x + Math.cos(a) * r, z + Math.sin(a) * r]); }
+    for (let k = 0; k < 22; k++) { const p = star[k], q = star[(k + 1) % 22]; S.wall(q[0], q[1], p[0], p[1], g - 2, g + 8, g, C.CONCRETE, 3, 3); }
+    S.color(0xa29d90); S.roof(star, [], g + 8, C.PAVERS);
+    S.color(0xc4baa8); // the foundation's concrete
+    S.box(x, z, fx, fz, 17, 17, g + 8, g + 10, C.CONCRETE); S.box(x, z, fx, fz, 15.6, 15.6, g + 10, g + 15.5, C.CONCRETE); S.box(x, z, fx, fz, 14.4, 14.4, g + 15.5, g + 19.8, C.CONCRETE);
+    S.color(0xd2c4ae); // the pedestal's granite, up to the scan
+    const h = cut.half + 0.35; S.box(x, z, fx, fz, h + 0.8, h + 0.8, g + 19.8, g + 21.2, C.CONCRETE); S.box(x, z, fx, fz, h, h, g + 21.2, y0 + cut.y + 0.4, C.CONCRETE);
+    this.boxes.push(this.obox(x, z, fx, fz, 17, 17, g, g + 19.8), this.obox(x, z, fx, fz, h, h, g + 19.8, y0 - 1));
+    const sm = S.mesh(this.mat); sm.castShadow = W.qBase === 'high'; sm.receiveShadow = true; this.group.add(sm);
+    // the scan, nearest level of detail first; facing -Z in the model
+    // (at night floodlit: an emissive glow in the scan's own colours, so the copper stays green and the granite pale)
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.66, metalness: 0.06, emissive: 0xffffff, emissiveIntensity: 0 }), lod = new THREE.LOD();
+    mat.onBeforeCompile = (sh) => { THREE.Material.prototype.onBeforeCompile.call(mat, sh); sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance *= diffuseColor.rgb;'); };
+    mat.customProgramCacheKey = () => 'liberty-flood'; this.flood = mat;
+    [0, 450, 1600].forEach((d, i) => { const src = model.getObjectByName('lod' + i); if (!src) return; const m = src.clone(); m.material = mat; m.castShadow = i < 2 && W.qBase === 'high'; m.receiveShadow = true; lod.addLevel(m, d); });
+    lod.position.set(x, y0, z); lod.rotation.y = Math.atan2(-fx, -fz); lod.name = 'liberty'; lod.updateMatrixWorld(true);
+    this.group.add(lod);
+    // the torch's gold flame (the scan's own): lit at night
+    const fsrc = model.getObjectByName('flame');
+    this.flame = new THREE.MeshStandardMaterial({ color: 0xd8a640, metalness: 0.85, roughness: 0.28, emissive: 0xffb040, emissiveIntensity: 0 });
+    if (fsrc) { const f = fsrc.clone(); f.material = this.flame; lod.add(f); } // (rides with the nearest level: it's small)
+    this.boxes.push(this.obox(x, z, fx, fz, 6.5, 6.5, y0, y0 + 47));
+    this.statuePos = new THREE.Vector3(x, y0 + 46, z);
+  }
+
   hit(p) {
     for (const t of this.boxes) {
       if (p.y > t[1] + t[3] || p.y < t[1]) continue;
@@ -213,5 +248,6 @@ export class Landmarks {
   update(dt, cam) {
     const night = this.w.night ? 1 : 0;
     if (this.flame) this.flame.emissiveIntensity = night ? 3 : 0.15;
+    if (this.flood) this.flood.emissiveIntensity = night ? 0.9 : 0;
   }
 }

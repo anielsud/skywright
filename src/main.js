@@ -402,19 +402,22 @@ const MOONS = [['real', 'Tonight’s real moon', null], ['full', 'Full', 14.77],
 if (LOCATIONS[flightCfg.location]?.hidden || !LOCATIONS[flightCfg.location]) flightCfg.location = 'islands'; // hidden/removed places move to Bora Bora
 // the ground start's name in the flight setup: where this vehicle will really start (see buildFlight)
 function groundStartLabel(s, loc) { return s.vertical ? 'On the launch pad' : s.heli && LOCATIONS[loc]?.city?.helipads?.some((h) => h.start) ? 'On the rooftop helipad' : 'On the runway'; }
-const BOAT_STARTS = ['marina', 'water', 'runway']; // boats' start choices (flightCfg.boatStart): afloat at the marina (the default), out on open water, or sat on the runway
+const BOAT_STARTS = ['marina', 'waterpark', 'water', 'runway']; // boats' start choices (flightCfg.boatStart): afloat at the marina (the default), at the water park's start arch (where there is one: waterPark.js), out on open water, or sat on the runway
 function boatChips() {
   const cur = BOAT_STARTS.includes(flightCfg.boatStart) ? flightCfg.boatStart : 'marina';
-  const chip = (id, label) => `<button data-bs="${id}" class="${cur === id ? 'on' : ''}">${label}</button>`;
-  return chip('marina', 'At the marina') + chip('water', 'Out on the water') + chip('runway', 'On the runway');
+  const chip = (id, label, extra = '') => `<button data-bs="${id}" class="${cur === id ? 'on' : ''}"${extra}>${label}</button>`;
+  return chip('marina', 'At the marina') + chip('waterpark', 'At the water park', ` data-wpark${LOCATIONS[flightCfg.location]?.waterPark ? '' : ' hidden'}`) + chip('water', 'Out on the water') + chip('runway', 'On the runway');
 }
 const LAND_STARTS = ['park', 'road', 'evel']; // cars' and bikes' start choices besides the runway (flightCfg.landStart; World.landStart)
 // cars' and bikes' start choices (data-ls: flightCfg.landStart): the stunt park (the default), a street, the runway, and
 // the canyon jump where there is one (shown for the picked location)
-function landChips() {
-  const cur = LAND_STARTS.includes(flightCfg.landStart) || flightCfg.landStart === 'runway' ? flightCfg.landStart : 'park';
+// An amphibian (a car or bike with a boat hull) can also start afloat: at the marina or out on the water.
+const AFLOAT_STARTS = ['marina', 'water'];
+function landChips(amphib = false) {
+  const cur = LAND_STARTS.includes(flightCfg.landStart) || flightCfg.landStart === 'runway' || (amphib && AFLOAT_STARTS.includes(flightCfg.landStart)) ? flightCfg.landStart : 'park';
   const chip = (id, label, extra = '') => `<button data-ls="${id}" class="${cur === id ? 'on' : ''}"${extra}>${label}</button>`;
-  return chip('park', 'At the stunt park') + chip('road', 'On the road') + chip('runway', 'On the runway') + chip('evel', 'Daredevil canyon jump', ` data-evel${LOCATIONS[flightCfg.location]?.stunts?.evel ? '' : ' hidden'}`);
+  return chip('park', 'At the stunt park') + chip('road', 'On the road') + chip('runway', 'On the runway') + chip('evel', 'Daredevil canyon jump', ` data-evel${LOCATIONS[flightCfg.location]?.stunts?.evel ? '' : ' hidden'}`)
+    + (amphib ? chip('marina', 'At the marina') + chip('water', 'Out on the water') : '');
 }
 function flightModal() {
   const s = analyze(hangar.design), kind = vehicleKind(s), W = words(kind);
@@ -438,11 +441,11 @@ function flightModal() {
     <label class="lbl">Mode</label>
     <div class="choice-row">${Object.entries(MODES).map(([k, mo]) => `<button class="opt-card${flightCfg.mode === k ? ' on' : ''}" data-m="${k}"><b>${k === 'free' && isLand(kind) ? 'Free Drive' : mo.name}</b><small>${mo.desc}</small></button>`).join('')}</div>
     <label class="lbl">Start</label>
-    <div class="start-row"><div class="chips">${s.car && !s.heli ? landChips() : s.boat ? boatChips() : `<button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">${groundStartLabel(s, flightCfg.location)}</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}`}</div>
+    <div class="start-row"><div class="chips">${s.car && !s.heli ? landChips(!!s.boat) : s.boat ? boatChips() : `<button data-s="runway" class="${flightCfg.start === 'runway' ? 'on' : ''}">${groundStartLabel(s, flightCfg.location)}</button><button data-s="air" class="${flightCfg.start === 'air' ? 'on' : ''}">In the air</button>${s.floats ? `<button data-s="water" class="${flightCfg.start === 'water' ? 'on' : ''}">On the water</button>` : ''}`}</div>
     <div class="start-go"><button data-close>Back</button><button class="primary big" id="go">${W.go} ▶</button></div></div>`, 'wide');
   const el = m.el;
   const pick = (attr, key) => el.querySelectorAll(`[data-${attr}]`).forEach((b) => b.addEventListener('click', () => { flightCfg[key] = b.dataset[attr]; el.querySelectorAll(`[data-${attr}]`).forEach((x) => x.classList.toggle('on', x === b)); audio.play('click'); }));
-  el.querySelectorAll('[data-loc]').forEach((b) => b.addEventListener('click', () => { const e = el.querySelector('[data-evel]'); if (e) e.hidden = !LOCATIONS[b.dataset.loc]?.stunts?.evel; })); // the canyon jump: only where there is one
+  el.querySelectorAll('[data-loc]').forEach((b) => b.addEventListener('click', () => { const e = el.querySelector('[data-evel]'); if (e) e.hidden = !LOCATIONS[b.dataset.loc]?.stunts?.evel; const p = el.querySelector('[data-wpark]'); if (p) p.hidden = !LOCATIONS[b.dataset.loc]?.waterPark; })); // the canyon jump and the water park: only where there is one
   pick('loc', 'location'); pick('w', 'weather'); pick('r', 'realism'); pick('m', 'mode'); pick('s', 'start'); pick('ls', 'landStart'); pick('bs', 'boatStart'); pick('moon', 'moon');
   el.querySelectorAll('[data-loc]').forEach((b) => b.addEventListener('click', () => { const r = el.querySelector('[data-s="runway"]'); if (r) r.textContent = groundStartLabel(s, flightCfg.location); })); // (a helicopter in New York: the rooftop helipad)
   el.querySelector('#time').addEventListener('input', (e) => { flightCfg.time = +e.target.value; el.querySelector('#tlab').textContent = timeLabel(flightCfg.time); });
@@ -619,7 +622,7 @@ ${isLand(vehicleKind(analyze(hangar.design))) ? `<h4>Drive — keyboard</h4>
   <p>Jungfrau Region and Bora Bora: satellite imagery <a href="https://s2maps.eu" target="_blank" rel="noopener">Sentinel-2 cloudless 2016</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016, CC BY 4.0); elevation from Terrain Tiles on AWS; Bora Bora's lagoon depths are estimated from the imagery; map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</p>
   <p>Grand Canyon: aerial imagery from the USDA National Agriculture Imagery Program (NAIP) via the USGS <a href="https://www.usgs.gov/programs/national-geospatial-program/national-map" target="_blank" rel="noopener">National Map</a> (public domain); elevation from Terrain Tiles on AWS (USGS 3DEP); map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</p>
   <p>Earth from space: NASA Visible Earth (<a href="https://visibleearth.nasa.gov" target="_blank" rel="noopener">Blue Marble Next Generation and Earth at Night</a>, public domain).</p>
-  <p>New York City: aerial imagery from the USGS National Map (NAIP, public domain) and Sentinel-2 cloudless 2016 by EOX (CC BY 4.0); building footprints and heights from <a href="https://opendata.cityofnewyork.us/" target="_blank" rel="noopener">NYC Open Data</a> (NYC OTI Building Footprints); elevation from Terrain Tiles on AWS; map data and building parts © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL).</p>
+  <p>New York City: aerial imagery from the USGS National Map (NAIP, public domain) and Sentinel-2 cloudless 2016 by EOX (CC BY 4.0); building footprints and heights from <a href="https://opendata.cityofnewyork.us/" target="_blank" rel="noopener">NYC Open Data</a> (NYC OTI Building Footprints); elevation from Terrain Tiles on AWS; map data and building parts © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL). The Statue of Liberty: <a href="https://sketchfab.com/3d-models/statue-of-liberty-a66ff5ea231f42e8839d68116dbfec8c" target="_blank" rel="noopener">photogrammetry scan</a> by TT3D (CC BY 4.0), cropped, recoloured and simplified.</p>
   </div><div class="modal-foot"><button data-close class="primary">Got it</button></div>`, 'wide');
 }
 
@@ -686,8 +689,11 @@ function buildFlight(cfg) {
     walls: (x, z, r, out) => world.wallBoxes(x, z, r, out), wallPass: (e, p) => !!e.dk && world.destruct.passes(e, p),
     onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40, p.clone()); },
   };
-  const land = st.car && !st.heli; // cars and bikes have their own start choices (LAND_STARTS), the stunt park by default
-  let start = land ? (LAND_STARTS.includes(cfg.landStart) ? cfg.landStart : 'park') : st.boat ? (BOAT_STARTS.includes(cfg.boatStart) ? cfg.boatStart : 'marina') : cfg.start; let F_approach = null; // (boats: BOAT_STARTS, the marina by default)
+  // cars and bikes have their own start choices (LAND_STARTS), the stunt park by default; an amphibian (with a boat
+  // hull) may pick a boat's start instead (AFLOAT_STARTS), and then starts as a boat does
+  const afloatStart = st.car && st.boat && !st.heli && AFLOAT_STARTS.includes(cfg.landStart);
+  const land = st.car && !st.heli && !afloatStart;
+  let start = land ? (LAND_STARTS.includes(cfg.landStart) ? cfg.landStart : 'park') : afloatStart ? cfg.landStart : st.boat ? (BOAT_STARTS.includes(cfg.boatStart) ? cfg.boatStart : 'marina') : cfg.start; let F_approach = null; // (boats: BOAT_STARTS, the marina by default)
   const gearOK = ac.parts.some((p) => p.gear && (!p.gear.float || p.gear.skid)); // skids can sit on a runway
   if (cfg.mode === 'landing' && !st.boat) start = 'approach';
   else if (start === 'water' || (start === 'runway' && st.floats && !gearOK)) start = 'water';
@@ -705,7 +711,11 @@ function buildFlight(cfg) {
   // a place's own start for this kind of vehicle (world.sites: New York's helicopters on a rooftop helipad), if nobody is on it
   const site = !park && cfg.mode !== 'landing' && ((start === 'runway' && !st.boat) || start === 'marina') ? world.startSite(st) : null; // (boats: the marina, when they pick it)
   if (start === 'marina' && !site) start = 'water'; // (no marina here: any open water)
-  if (site?.afloat) { start = site.kind; ac.spawn(env, site.at(slot), site.heading); } // a boat floats at its waterline (Aircraft.spawn), side by side online
+  const wpark = start === 'waterpark' ? world.waterParks?.start : null; // boats: the water park's start arch (waterPark.js)
+  if (start === 'waterpark' && !wpark) start = world.startSite(st) ? 'marina' : 'water'; // (none here: the marina)
+  if (wpark) ac.spawn(env, wpark.at(slot), wpark.heading); // afloat at the arch, facing the boost strip and the MEGA JUMP
+  else if (start === 'marina' && !site) { const s2 = world.startSite(st); if (s2) { start = s2.kind; ac.spawn(env, s2.at(slot), s2.heading); } else start = 'water'; } // (no water park here: the marina)
+  else if (site?.afloat) { start = site.kind; ac.spawn(env, site.at(slot), site.heading); } // a boat floats at its waterline (Aircraft.spawn), side by side online
   else if (site && !siteBusy(site.pos.x, site.pos.z, site.y, site.r)) { // standing on it (just touching: no first airborne frame to spin a rotor up), engines off
     start = site.kind; ac.spawn(env, site.pos, site.heading); ac.x.y += site.y - env.groundAt(site.pos.x, site.pos.z).h - 0.031; ac.syncVisual();
   } else if (park) { // facing the way to go; online, the others line up behind
@@ -799,7 +809,40 @@ function trackFlightEnd(f, exit) {
     distance_km: +(s.distance / 1000).toFixed(1), landings: s.landings, best_landing_ms: s.bestLanding == null ? null : +s.bestLanding.toFixed(2), parts_lost: s.partsLost,
     fps_avg: f.activeT > 1 ? Math.round(f.frames / f.activeT) : null, fps_low: Number.isFinite(f.fpsLow) ? Math.round(f.fpsLow) : null,
     quality_level: f.maxLevel, res_scale: +perf.scale.toFixed(2), players_max: f.playersMax,
+    end_title: f.endTitle ? f.endTitle.replace(/[^\w !:.-]/g, '').trim().slice(0, 40) : null, // (outcome 'crashed' covers "Crashed!" and "Crash landing!")
+    // physics health: numeric blow-ups reset, spin clamped (substeps), deep pushes out of a ramp/loop (tunnelling), deepest
+    // penetration (m), bikes/cars set back on their wheels, gear/wheels collapsed; frames under 20 fps (the game runs slow
+    // there) and the worst frame
+    diag: { ...f.ac.diag, maxPen: +f.ac.diag.maxPen.toFixed(2), slow_frames: f.slowFrames || 0, worst_frame_ms: Math.round(f.worstMs || 0) },
+    deep_pen_at: f.penAt || null, // (frames with a deep push-out, by stunt feature: where the "glitch" jolts happen)
+    loops_tried: f.loops?.tried || 0, loops_made: f.loops?.made || 0, parts_lost_events: f.partEvents || 0,
   });
+}
+// A part came off (aircraft.js detach -> 'debris'): why (the hit, scrape, hard landing, over-G, wall... that broke it), where
+// (the stunt park feature or the canyon jump phase, StuntSites.where), and the vehicle's state at that moment. A wreck
+// (the core destroyed) sends one event, not one per part; at most 15 a flight.
+function trackPartLost(f, e) {
+  try { partLost(f, e); } catch (err) { console.warn('part_lost', err); } // (analytics never breaks a flight)
+}
+function partLost(f, e) {
+  if (e.why === 'wreck') { if (f.wreckSent) return; f.wreckSent = true; }
+  f.partEvents = (f.partEvents || 0) + 1; if (f.partEvents > 15) return;
+  const ac = f.ac, c = e.cause || {}, w = f.world.stunts?.where?.(ac) || null, kmh = (v) => (v == null ? null : Math.round(v * 3.6));
+  analytics.capture('part_lost', {
+    ...f.track, why: e.why, cause: c.why || 'unknown', part_ids: (e.ids || []).slice(0, 8), part_names: e.names.slice(0, 8),
+    impact_kmh: kmh(c.impact), limit_kmh: kmh(c.limit ?? c.thr), surf: c.surf ?? null, on_structure: c.stunt ?? null,
+    site: w?.site ?? null, feature: w?.feature ?? null, loop_progress: w?.loop_progress ?? null, site_x: w?.x ?? null, site_z: w?.z ?? null,
+    t: +(f.t || 0).toFixed(1), speed_kmh: kmh(ac.v.length()), g: +(ac.g || 0).toFixed(1), up_y: +(ac.up?.y ?? 1).toFixed(2), on_ground: !!ac.onGround,
+    on_ramp: !!ac.stuntUp, parts_left: ac.alive().length, fps: Math.round(perf.fps), frame_ms: Math.round((f.dtReal || 0) * 1000), slowmo: (f.timeScale ?? 1) < 1,
+  });
+}
+// stunt-site analytics (stuntPark.js loopTrack: loop_attempt), counted for flight_end
+function trackStunt(f, t) {
+  try { stuntEvent(f, t); } catch (err) { console.warn('stunt analytics', err); }
+}
+function stuntEvent(f, t) {
+  if (t.event === 'loop_attempt') { const L = (f.loops ||= { tried: 0, made: 0 }); L.tried++; if (t.props.outcome === 'made') L.made++; if (L.tried > 30) return; }
+  analytics.capture(t.event, { ...f.track, ...t.props, fps: Math.round(perf.fps) });
 }
 analytics.onLeave = () => { trackFlightEnd(F, 'closed'); tunnel?.track('closed'); };
 // Geometries, materials and textures reachable from a scene (including material uniforms such as custom shader maps).
@@ -916,7 +959,7 @@ function statsHTML(ac, W = words(F?.kind)) {
 }
 function showEnd(title, extra = '') {
   if (!F || F.shownEnd) return;
-  F.shownEnd = true;
+  F.shownEnd = true; F.endTitle = title;
   F.outcome = /Kaboom/.test(title) ? 'destroyed' : /Splash/.test(title) ? 'splashdown' : /Course/.test(title) ? 'race_done' : /Landing score/.test(title) ? 'landing_done' : 'crashed';
   const m = ui.modal(`<h2>${title}</h2>${extra}<div class="pause-stats">${statsHTML(F.ac)}</div>
     <div class="col-buttons"><button class="primary big" data-a="restart">${words(F.kind).again}</button><button data-a="watch">Keep watching</button><button data-a="hangar">Back to hangar (repair)${net.active ? ' · leaves the game' : ''}</button></div>`, 'sticky');
@@ -937,7 +980,7 @@ function handleEvents(f, dt) {
       case 'strain': audio.strain(ac.x, rig.mode === 'cockpit'); break;
       case 'impact': {
         const p = Math.min(2, e.speed / 18);
-        if (e.surf === 'water') effects.splash(e.pos, e.speed);
+        if (e.surf === 'water' || e.surf === 'slick') effects.splash(e.pos, e.speed); // (slick: a wet water-park ramp)
         else { effects.sparks(e.pos, ac.v, 12); effects.dust(e.pos, ac.v, e.surf, 4); }
         if (!f.lastImpact || f.t - f.lastImpact > 0.15) { audio.play(e.surf === 'water' ? 'splash' : 'impact', p, e.pos); f.lastImpact = f.t; }
         rig.shake(p); if (p > 0.6) post.shock(p * 0.6);
@@ -958,7 +1001,7 @@ function handleEvents(f, dt) {
         if (part && e.speed > thr * 0.6) {
           const give = e.e.dk ? world.destruct.impact(e.e, e.pos, ac, part) : 1;
           ac.deform(part, e.pos, e.n, Math.min(0.5, (e.speed - thr * 0.4) * 0.025));
-          if (e.speed > thr) ac.damage(part, ((e.speed - thr) ** 2 * 22 * give) / (part.i === 0 ? 3 : 1), e.pos);
+          if (e.speed > thr) { ac.cause = { why: 'wall', impact: e.speed, thr }; ac.damage(part, ((e.speed - thr) ** 2 * 22 * give) / (part.i === 0 ? 3 : 1), e.pos); ac.cause = null; }
         }
         break;
       }
@@ -967,6 +1010,7 @@ function handleEvents(f, dt) {
       case 'gear': audio.play('gear'); hud.toast(e.down ? 'Gear down' : 'Gear up'); break;
       case 'rocket': audio.play('rocket'); break;
       case 'debris': {
+        trackPartLost(f, e);
         f.debris.push(e.debris); f.scene.add(e.debris.group);
         audio.play('crack', 1, e.pos); if (e.names.some((n) => /Canopy|Cockpit|Nose/.test(n))) audio.play('glass', 1, e.pos); rig.shake(1.2);
         effects.sparks(e.pos, ac.v, 25);
@@ -1022,6 +1066,8 @@ function stepFlight(dtReal) {
   f.t = (f.t || 0) + dtReal;
   if (f.slowmo > 0) { f.slowmo -= dtReal; f.timeScale = 0.3; } else f.timeScale = Math.min(1, f.timeScale + dtReal * 2);
   const dt = Math.min(dtReal, 1 / 20) * f.timeScale;
+  if (dtReal > 1 / 20) f.slowFrames = (f.slowFrames || 0) + 1; // (under 20 fps the game itself runs slow: physics gets at most 1/20 s a frame)
+  f.worstMs = Math.max(f.worstMs || 0, dtReal * 1000); f.dtReal = dtReal;
   const c = controls.update(dtReal);
   if (ac.isCar || ac.isBoat) { // pedals: the engine starts on the first press of either (it drives you backwards too)
     const want = Math.max(c.gas, c.rev), go = want > 0 ? engineSwitch(f, ac, want, dtReal) / want : (engineSwitch(f, ac, 0, dtReal), 1);
@@ -1035,8 +1081,11 @@ function stepFlight(dtReal) {
   ac.step(dt, f.env);
   if (f.clamp) holdDown(f, ac, world.pad);
   if (f.cfgStart === 'pad') world.pad.update(dtReal, f.eng.on && !ac.dead ? f.thr || 0 : 0, ac.x.y - world.pad.deckY, effects, f.eng.hold > 0 || f.eng.on);
-  const stunt = world.stunts?.drive(ac, dt); // boost pads, big air, loops
-  if (stunt) for (const m of stunt) { if (m.center) hud.center(m.center, 1200); if (m.toast) hud.toast(m.toast, m.good ? 'good' : ''); if (m.slowmo && f.t - f.lastSlowmo > 4) { f.slowmo = m.slowmo; f.lastSlowmo = f.t; } }
+  const s1 = world.stunts?.drive(ac, dt), s2 = world.waterParks?.drive(ac, dt), stunt = s1 && s2 ? s1.concat(s2) : s1 || s2; // boost pads, big air, loops; the water park's ramps
+  if (ac.diag.deepPens !== (f.pens ?? 0)) { // pushed out from deep inside a ramp/loop this frame (aircraft.js diag): which feature, for flight_end
+    f.pens = ac.diag.deepPens; const w = world.stunts?.where?.(ac), k = w?.feature || 'other', P = (f.penAt ||= {}); if (Object.keys(P).length < 12 || P[k]) P[k] = (P[k] || 0) + 1;
+  }
+  if (stunt) for (const m of stunt) { if (m.track) trackStunt(f, m.track); if (m.center) hud.center(m.center, 1200); if (m.toast) hud.toast(m.toast, m.good ? 'good' : ''); if (m.slowmo && f.t - f.lastSlowmo > 4) { f.slowmo = m.slowmo; f.lastSlowmo = f.t; } if (m.splash) effects.splash(m.splash, m.power || 6); }
   // trees
   if (!ac.dead && (ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), 0) < 30 || world.towns.tall)) { // (a city's towers reach far higher)
     for (const p of ac.parts) {
@@ -1049,7 +1098,7 @@ function stepFlight(dtReal) {
         const give = t.dk ? world.destruct.impact(t, wp, ac, p) : 1; // a building that gives way takes some of the blow (never more than a wall would)
         if (t.solid) effects.dust(wp, { x: 0, z: 0 }, 'rock', 6); else effects.leaves(wp);
         audio.play('impact', 0.5, wp.clone()); rig.shake(0.5);
-        ac.damage(p, ac.v.length() * 8 / ac.R.crashMult * give, wp);
+        ac.cause = { why: t.solid ? 'building' : 'tree', impact: ac.v.length() }; ac.damage(p, ac.v.length() * 8 / ac.R.crashMult * give, wp); ac.cause = null;
         ac.v.multiplyScalar(give < 1 ? 0.95 : 0.92);
         if (!t.solid) t[3] = 0; // flatten the tree so we don't hit it forever (walls stay)
       }
@@ -1061,7 +1110,7 @@ function stepFlight(dtReal) {
     for (const h of hits) {
       effects.feathers(h); audio.play('bird', 1, h);
       let best = null, bd = 1e9; for (const p of ac.parts) { if (!p.alive) continue; const d = ac.worldPoint(p.center).distanceTo(h); if (d < bd) { bd = d; best = p; } }
-      if (best) { ac.damage(best, best.engine ? best.hp * 0.35 : best.hp * 0.08, h); hud.toast(best.engine ? `Bird strike! ${best.name} damaged` : 'Bird strike!', 'bad'); }
+      if (best) { ac.cause = { why: 'bird' }; ac.damage(best, best.engine ? best.hp * 0.35 : best.hp * 0.08, h); hud.toast(best.engine ? `Bird strike! ${best.name} damaged` : 'Bird strike!', 'bad'); ac.cause = null; }
     }
   }
   handleEvents(f, dt);

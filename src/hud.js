@@ -71,7 +71,7 @@ export class HUD {
   update(ac, world, mission, camera, others) {
     if (!this.visible) return;
     const U = this.units;
-    const spd = ac.airspeed || 0;
+    const spd = ac.isCar || ac.isBoat ? ac.v.length() : ac.airspeed || 0; // (cars, bikes, boats: a speedo, over the ground; airspeed would read the wind when stopped)
     this.$('h-spd').textContent = Math.round(spd * U.spd);
     const agl = ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), world.waterLevel);
     // up high: kilometres (metric) or miles above 100,000 ft, so the numbers stay readable on the way to space

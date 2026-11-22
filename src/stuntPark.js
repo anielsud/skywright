@@ -24,6 +24,7 @@ import { findSite } from './stuntSite.js';
 import { EvelJump, planEvel } from './evelJump.js';
 
 const RT = 30, TW = 7, LANE = 3.5; // turn radius, track half width, lane offset
+const BANK = 26; // the east turn's banking (degrees)
 const LINK = 70; // where the park feeds the canyon jump: the link lane from the end of straight 1 to the run-up
 
 // s: metres along a straight from its start. pad: the dirt pad's half size; flat: ground levelled this far beyond it,
@@ -41,7 +42,7 @@ export const LAYOUTS = {
     kickers: [[40, 0.6, 16, 6.5], [58, 1.1, 19, 6.5]], tabletop: null, boost: 96, loop: 124, rumble: 172,
     jump: { boost: 6, mesa: 24, whoops: 122, n: 4 }, berms: [[1, 40, 120], [1, 174, 186], [2, 2, 22], [2, 112, 186]],
     flags: [-80, 80, 20], stands: [[-40, 1, 34], [62, 1, 30], [20, -1, 34]],
-    towers: [[-80, 62], [85, 62], [-75, -62], [70, -62], [-132, 0], [132, 0]],
+    towers: [[-80, 62], [85, 62], [-75, -62], [70, -62], [-140, 0], [140, 0]], // (the end ones well outside the bowl's fence and the banked turn's barrier: 45 m from the bends' centres)
   },
 };
 
@@ -113,6 +114,8 @@ export class StuntParks {
     for (const s of this.sites) s.update(night, cam, dt);
   }
   drive(ac, dt) { let out = null; for (const s of this.sites) { const m = s.drive(ac, dt); if (m) out = out ? out.concat(m) : m; } return out; }
+  // which feature a vehicle is at, for analytics (main.js part_lost): { feature, x, z } in the site's own frame, or null
+  where(ac) { for (const s of this.sites) { const w = s.where?.(ac); if (w) return w; } return null; }
   dispose() {
     for (const s of this.sites) s.dispose();
     for (const m of Object.values(this.mats)) { if (m.map && m.map !== this.mats.pool.map) m.map.dispose(); m.dispose(); }
@@ -185,10 +188,10 @@ export class StuntPark extends Site {
       this.sign(p1(s0 - 6).p.add(V(0, 0, w + 6)), 'tabletop', 3.5, -1);
     }
     // the boost pad and the loop
-    this.boost(lane(p1, LANE), L.boost, 16, 26.5, 0, false, 5.5); // (wide: you can't miss it; enough for a coasting bike in thick air too)
+    this.boost(lane(p1, LANE), L.boost, 16, 26.5, 0, false, 5.5, false, { cap: false }); // (wide: you can't miss it; enough for a coasting bike in thick air too. It never holds you back: a long run-up keeps its speed)
     this.loop(lane(p1, 0), L.loop);
     // a rumble strip after it: out of the loop flat out, it slows you to a speed the banked turn can take
-    this.boost(p1, L.rumble, 14, 20, 0, true, TW, true);
+    this.boost(p1, L.rumble, 14, 20, 0, true, TW, true, { cap: !this.link }); // (with the fork to the canyon jump it only rumbles: flat out to the jump; the banked turn's guide still slows you for the bend)
   }
 
   straight2() {
@@ -255,6 +258,7 @@ export class StuntPark extends Site {
     this.loopInfo.exitXpark = this.loopInfo.entryX + this.loopInfo.exitX;
     // the frame: two lattice towers either side and a beam over the top
     const tp = this.loopInfo.top, mid = pts.reduce((a, p) => (p.y > a.y ? p : a), pts[0]);
+    this.loopInfo.topI = this.loopInfo.lead + pts.indexOf(mid); // (the guide frame at the top: loop_attempt's top speed)
     const cx = base.p.x + mid.x;
     for (const side of [-1, 1]) {
       const z = base.p.z + side * (LANE + w + 2.2);
@@ -267,14 +271,17 @@ export class StuntPark extends Site {
     this.sign(V(cx, tp + 2.2, base.p.z), 'loop', 4, 0, true);
   }
 
-  // the east turn: a berm banked at up to 20 degrees, red and white kerbs, a barrier outside
+  // the east turn: a dirt berm banked at up to 26 degrees, red and white kerbs, tyres and a barrier along its top (on the
+  // berm, not at its foot: a car that rides up the bank meets them there, not 5 m below as it flies over). Arcade and
+  // Pilot steer you round it (bankGuide: kids come off the loop flat out and hardly steer); bankCatch keeps everything in.
   bankedTurn(pth) {
     const E = this.G.earth, T = this.T, B = T.bank.map(col), L = Math.PI * RT, f0 = this.link ? 30 : 0; // (a fork: the banking starts after it)
-    const bank = (s) => (20 * Math.PI / 180) * smoothstep(f0, f0 + 16, s) * (1 - smoothstep(L - 16, L, s));
-    const y = (s, a) => (a + TW) * Math.tan(bank(s));
+    const bank = (s) => (BANK * Math.PI / 180) * smoothstep(f0, f0 + 32, s) * (1 - smoothstep(L - 40, L, s)); // (banked up and down gently: a quick twist is a kicker, or drops away under you)
+    const y = (s, a) => (a + TW) * Math.tan(bank(s)), top = (s) => y(s, TW);
     this.sweep(E, { s0: 0, s1: L, n: 60, path: pth, cross: (s) => [[-TW, 0], [-TW + 0.6, y(s, -TW + 0.6)], [TW - 0.6, y(s, TW - 0.6)], [TW, y(s, TW)], [TW + 1.5, y(s, TW)]], color: (s, k) => (k === 0 || k === 2 ? (Math.floor(s / 2.5) % 2 ? B[0] : B[1]) : k === 3 ? B[3] : B[2]), type: (s, k) => (k === 0 || k === 2 ? PAINT : DIRT), depth: 1.5, wallColor: () => B[4], wallType: DIRT });
-    for (let s = f0 + 2; s < L; s += 1.6) { const f = pth(s); this.tyres(f.p.clone().addScaledVector(f.r, TW + 3.3), 2); }
-    this.wallLine(pth, f0, L, TW + 3.3, 1.0);
+    for (let s = f0 + 2; s < L; s += 1.6) { const f = pth(s); this.tyres(f.p.clone().addScaledVector(f.r, TW + 0.9).setY(top(s)), 2); }
+    this.wallLine(pth, f0, L, TW + 0.6, 1.2, top);
+    this.bankInfo = { L, f0, bank, top };
     if (this.link) this.fork();
     this.sign(pth(L / 2).p.addScaledVector(pth(L / 2).r, TW + 6), 'banked', 4, 0, false, pth(L / 2).r);
   }
@@ -304,6 +311,7 @@ export class StuntPark extends Site {
     const conc = col(T.bowl[0]), stripe = T.stripes.map(col);
     this.sweep(Pn, { s0: 0, s1: L, n: 64, path: pth, cross, color: (s, k, yy) => (k === 0 ? col(T.bowl[1]) : k >= 2 && k <= K && k % 4 === 0 ? stripe[(k / 4 - 1) % 3] : k === K + 1 ? col(T.bowl[2]) : conc.clone().multiplyScalar(0.95 + 0.05 * Math.sin(s))), type: () => PAINT, depth: 1.6, wallColor: () => col(T.bowl[3]), wallType: PAINT });
     const a78 = (78 * Math.PI) / 180, rimA = 1 + Rw * Math.sin(a78), rimY = Rw * (1 - Math.cos(a78));
+    this.bowlInfo = { env, L, rimA, rimY };
     let s0 = null, s1 = 0;
     for (let s = 6; s < L - 6; s += 1.6) { const f = pth(s); if (env(s) > 0.995) { this.tyres(f.p.clone().addScaledVector(f.r, rimA + 0.9).add(V(0, rimY, 0)), 2); s0 ??= s; s1 = s; } }
     this.wallLine(pth, s0, s1, rimA + 0.5, 1.5, rimY); // the barrier along the rim stops you riding over the top
@@ -312,6 +320,10 @@ export class StuntPark extends Site {
       this.tube(Pn, f0.p.clone().addScaledVector(f0.r, rimA).add(V(0, h0 + 0.06, 0)), f1.p.clone().addScaledVector(f1.r, rimA).add(V(0, h1 + 0.06, 0)), 0.09, 0.09, 6, col(0xc8ccd2), false);
     }
     this.sign(pth(L / 2).p.addScaledVector(pth(L / 2).r, rimA + 0.9).add(V(0, rimY, 0)), 'wall', 4.5, 0, false, pth(L / 2).r);
+    // a catch fence all along the lip, the lowered ends too (rimCatch() is what it does): posts and three cables
+    const post = col(0x50565e), cable = col(0xd8dce2), FH = 4, fp = (s, yy) => { const f = pth(s); return f.p.addScaledVector(f.r, rimA + 1.6).add(V(0, env(s) * rimY + yy, 0)); };
+    for (let s = 2; s <= L - 2; s += 4) this.tube(Pn, fp(s, 0), fp(s, FH), 0.08, 0.07, 5, post, false);
+    for (let s = 2; s < L - 2; s += 4) for (const yy of [1.6, 2.8, FH]) this.tube(Pn, fp(s, yy), fp(Math.min(L - 2, s + 4), yy), 0.025, 0.025, 4, cable, false);
   }
 
   // ---- the start arch, flags, stands, lights ----
@@ -391,15 +403,53 @@ export class StuntPark extends Site {
     if (!ac.isCar || ac.dead || !this.inside(ac.x.x, ac.x.z, 20)) { this.st.air = 0; return null; }
     const st = this.st, msgs = [], up = ac.up || Y;
     const fwd = V(0, 0, -1).applyQuaternion(ac.q);
+    this.rimCatch(ac, dt); this.bankCatch(ac, dt);
     if (ac.onGround) {
       this.boostPads(ac, dt, fwd, msgs);
-      this.guide(ac, dt); this.bowlGuide(ac, dt);
+      this.guide(ac, dt); this.bowlGuide(ac, dt); this.bankGuide(ac, dt);
       if (st.air > 1.0) msgs.push({ toast: `BIG AIR! ${st.air.toFixed(1)} s`, good: true });
       st.air = 0;
       if (up.y < -0.6 && ac.stuntUp) st.upside = true; // on the wheels, upside down: in the loop
       if (st.upside && up.y > 0.8) { st.upside = false; msgs.push({ center: 'LOOP THE LOOP!' }); }
     } else { st.air += dt; if (st.air > 3) st.upside = false; this.jumpGuide(ac, dt); if (ac.isBike) this.bikeAir(ac, dt); }
+    this.loopTrack(ac, dt, msgs);
     return msgs.length ? msgs : null;
+  }
+  // ---- analytics ----
+  // One loop_attempt per go at the loop (main.js sends { track } messages to PostHog): how far round it got (progress
+  // 0-1 along the deck), the speeds in, over the top and at the slowest, the g, time off the deck, and how it ended:
+  // made (reached the exit), fell_off (wheels off the deck for 0.5 s: too slow over the top, or bounced off), rolled_back,
+  // left_deck (off the side), destroyed, timeout
+  loopTrack(ac, dt, msgs) {
+    const L = this.loopInfo, n = L.guide.length, on = ac.onGround && L.i != null && L.i >= L.lead, spd = ac.v.length();
+    let A = this.la;
+    if (!A) {
+      if (on && L.i < L.topI - 30 && this.Ld(ac.v).dot(L.guide[L.i].t) > 2) this.la = { t: 0, entry: spd, maxI: L.i, top: null, min: spd, maxG: Math.abs(ac.g), air: 0, airT: 0, lost: ac.stats.partsLost, pen: ac.diag.deepPens, ups: 0 };
+      return;
+    }
+    A.t += dt; A.maxG = Math.max(A.maxG, Math.abs(ac.g));
+    if (on) { A.maxI = Math.max(A.maxI, L.i); A.min = Math.min(A.min, spd); if (A.top == null && L.i >= L.topI) A.top = spd; }
+    if (!ac.onGround) { A.air += dt; A.airT += dt; } else A.air = 0;
+    const out = ac.dead ? 'destroyed' : A.maxI >= n - 4 ? 'made' : A.air > 0.5 ? 'fell_off' : on && L.i < A.maxI - 10 ? 'rolled_back'
+      : ac.onGround && L.i == null ? 'left_deck' : A.t > 12 ? 'timeout' : null;
+    if (!out) return;
+    this.la = null;
+    const kmh = (v) => (v == null ? null : Math.round(v * 3.6));
+    msgs.push({ track: { event: 'loop_attempt', props: {
+      outcome: out, progress: +((A.maxI - L.lead) / (n - 1 - L.lead)).toFixed(2), entry_kmh: kmh(A.entry), top_kmh: kmh(A.top), min_kmh: kmh(A.min), exit_kmh: kmh(spd),
+      max_g: +A.maxG.toFixed(1), air_s: +A.airT.toFixed(2), seconds: +A.t.toFixed(1), parts_lost: ac.stats.partsLost - A.lost, deep_pens: ac.diag.deepPens - A.pen,
+      up_y: +(ac.up?.y ?? 1).toFixed(2),
+    } } });
+  }
+  where(ac) {
+    if (!this.inside(ac.x.x, ac.x.z, 20)) return null;
+    const lp = this.Lp(ac.x), L = this.loopInfo, at = { x: Math.round(lp.x), z: Math.round(lp.z), site: 'park' };
+    let bi = -1, bd = 64; for (let i = 0; i < L.guide.length; i++) { const p = L.guide[i].p, d = (p.x - lp.x) ** 2 + (p.y - lp.y) ** 2 + (p.z - lp.z) ** 2; if (d < bd) { bd = d; bi = i; } }
+    if (bi >= L.lead) return { ...at, feature: 'loop', loop_progress: +((bi - L.lead) / (L.guide.length - 1 - L.lead)).toFixed(2) };
+    if (bi >= 0) return { ...at, feature: 'loop_entry' };
+    const J = this.jumpAim; if (J && lp.x <= J.x0 + 10 && lp.x >= J.x1 - 10 && Math.abs(lp.z + RT) < 14) return { ...at, feature: 'mesa_jump' };
+    const bx = lp.x + this.XS, r = Math.hypot(bx, lp.z); if (bx < 0 && r > RT - 2 && r < RT + 18) return { ...at, feature: 'bowl' };
+    return { ...at, feature: lp.y > 0.6 ? 'ramp' : 'track' };
   }
   // Over the mesa jump's gap: the flight is nudged (a little: 6 m/s^2) to come down on the middle of the landing ramp,
   // whatever came off the lip (a light, quick bike flies higher and further than a buggy)
@@ -438,6 +488,97 @@ export class StuntPark extends Site {
     ac.q.premultiply(turn).normalize(); ac.v.applyQuaternion(turn);
     ac.x.addScaledVector(this.Wd(f.b), -e * Math.min(1, 5 * dt));
   }
+  // The catch fence along the bowl's lip: whatever comes up the wall too fast (a motorbike flat out rides right up to
+  // the lip, and the wall is lowered under you at the exit) loses its speed outwards and upwards there instead of
+  // flying over the top. Every mode: it's a fence. Only for what came in from the bowl's side of it.
+  rimCatch(ac, dt) {
+    const B = this.bowlInfo, lp = this.Lp(ac.x), x = lp.x + this.XS, z = lp.z, r = Math.hypot(x, z), d = r - RT; // (d: out from the lane's middle)
+    if (x > 1 || d < -TW - 2) { ac.bowlIn = false; return; }
+    if (d < B.rimA - 3) ac.bowlIn = true;
+    if (!ac.bowlIn) return;
+    const psi = Math.atan2(z, x), s = clamp((psi < 0 ? -Math.PI / 2 - psi : 1.5 * Math.PI - psi) * RT, 0, B.L), lip = B.env(s) * B.rimY;
+    // Arcade and Pilot: no faster than the banking here can carry you round (the wall is lowered towards the exit, and
+    // what's left of it can't hold a motorbike flat out): eased off like a rider braking for the bend
+    if (ac.R.assist > 0 && ac.onGround && d > -TW) {
+      const e = B.env(s), vmax = Math.sqrt((RT + 5) * 9.81 * (e * 1.73 + 1)), v = ac.v.length(); // (banked at 60 degrees, half way up: plus the tyres' grip)
+      if (v > vmax) ac.v.multiplyScalar(Math.max(vmax, v - 14 * dt) / v);
+    }
+    if (lp.y > lip + 5) return; // (over the fence)
+    const k = smoothstep(B.rimA - 1, B.rimA, d); if (k <= 0) return; // (riding the wall below the lip: left alone)
+    const rad = this.Wd(V(x / r, 0, z / r)), vr = ac.v.dot(rad), f = k >= 1 ? 1 : Math.min(1, k * 12 * dt);
+    const back = lp.y > lip + 0.3 && d > B.rimA - 0.6 ? -3 : 0; // (up on the rim's top: back in over the lip, not along it)
+    if (vr > back) ac.v.addScaledVector(rad, (back - vr) * f);
+    if (ac.v.y > 0 && lp.y > lip + 0.5 && d > B.rimA - 0.4) ac.v.y *= 1 - f; // (no climbing up the barrier, or on over the lowered lip)
+    if (d > B.rimA) ac.x.addScaledVector(rad, B.rimA - d); // (held at the fence)
+  }
+  // Where a car is on the east turn (park x, z): along it (s, from the end of straight 1), out from the lane's middle (d),
+  // the outward and the forward directions (site frame)
+  bankAt(x, z) {
+    const cx = x - this.XS, r = Math.hypot(cx, z), psi = Math.atan2(z, cx);
+    return { cx, r, d: r - RT, s: (Math.PI / 2 - psi) * RT, rad: V(cx / r, 0, z / r), t: V(z / r, 0, -cx / r) };
+  }
+  // The barrier on top of the east turn's berm, as a catch fence (every mode): what comes up the bank too fast loses its
+  // speed outwards and upwards at the top instead of flying over it. Only for what is riding the turn (not the link lane
+  // to the canyon jump, which runs on straight from its start).
+  bankCatch(ac, dt) {
+    const B = this.bankInfo, lp = this.Lp(ac.x), k0 = this.bankAt(lp.x, lp.z), { d, s } = k0;
+    if (k0.cx < -1 || s > B.L + 2 || d < -TW - 3 || d > TW + 6) { ac.bankIn = false; return; }
+    if (s >= B.f0 && d < TW - 2) ac.bankIn = true;
+    if (!ac.bankIn || s < B.f0) return;
+    const top = B.top(clamp(s, 0, B.L)), edge = TW - 0.3; // (the vehicle's middle stops short of the barrier)
+    if (lp.y > top + 5) return; // (over it: too late)
+    const k = smoothstep(edge - 1.5, edge, d); if (k <= 0) return;
+    const rad = this.Wd(k0.rad), vr = ac.v.dot(rad), f = k >= 1 ? 1 : Math.min(1, k * 12 * dt);
+    if (vr > 0) ac.v.addScaledVector(rad, -vr * f);
+    if (ac.v.y > 0 && lp.y > top - 0.5) ac.v.y *= 1 - f; // (no riding up off the top)
+    if (d > edge) ac.x.addScaledVector(rad, edge - d);
+  }
+  // Arcade and Pilot: round the east turn for you. Off the loop flat out with little steering, nothing gets round a 30 m
+  // bend by steering alone (the tyres' grip, the steering's speed limit), so like the bowl: the car is turned to run
+  // round it, at a line up the bank that suits its speed, no faster than the bank and the tyres could carry it (eased off
+  // like a rider braking for the bend). Where the track forks to the canyon jump, holding the steering towards the jump
+  // (right) takes the link lane instead.
+  bankGuide(ac, dt) {
+    if (!(ac.R.assist > 0)) return;
+    const B = this.bankInfo, lp = this.Lp(ac.x), k0 = this.bankAt(lp.x, lp.z), { d, s, r } = k0;
+    const fwd = this.Ld(V(0, 0, -1).applyQuaternion(ac.q));
+    if (this.link) { // the fork: a held steer towards the jump (from the end of the straight on) picks the link lane
+      const fork = k0.cx > -12 && s < B.f0 && Math.abs(lp.z - RT) < TW + 2 && fwd.x > 0.5;
+      if (!fork) { if (k0.cx < -12 || s >= B.f0 + 8) ac.forkJump = false; ac.forkHold = 0; }
+      else { ac.forkHold = ac.ctl.roll > 0.3 ? (ac.forkHold || 0) + dt : 0; if (ac.forkHold > 0.2) ac.forkJump = true; }
+      if (ac.forkJump) return;
+    }
+    if (k0.cx < 0 || s > B.L || d < -TW - 2 || d > TW + 2) return;
+    const nW = ac.stuntUp || Y, n = this.Ld(nW), t = k0.t.clone();
+    if (fwd.dot(t) < 0.3) return; // (not going round it, or the wrong way)
+    const v = ac.v.length(), bank = B.bank(s), mu = 1.0;
+    // no faster than the bank and the tyres can carry you round
+    const tb = Math.tan(bank), vmax = Math.sqrt(r * 9.81 * (tb + mu) / Math.max(0.2, 1 - mu * tb));
+    if (v > vmax) ac.v.multiplyScalar(Math.max(vmax, v - 14 * dt) / v);
+    // aim along the bend, towards a line up the bank that suits the speed (slow: low down, fast: higher up), and come
+    // back down to the middle for the exit
+    // (the bend goes on to the very end: easing off the turn early sends you straight up the bank as it flattens out)
+    const late = smoothstep(B.L - 50, B.L - 30, s), dT = clamp((v - 14) / 4, -2, 3) * (1 - late), end = 1 - smoothstep(B.L - 3, B.L, s);
+    t.addScaledVector(k0.rad, -clamp((d - dT) * 0.12, -0.3, 0.3));
+    t.addScaledVector(n, -t.dot(n)).normalize();
+    // (a bike also gets the bend's own turn rate here: bike.js keeps its yaw rate to its steering, and nobody steers)
+    const ff = ac.isBike ? (v / r) * end * dt : 0;
+    const err = Math.asin(clamp(fwd.clone().cross(t).dot(n), -1, 1)), turn = new THREE.Quaternion().setFromAxisAngle(nW, err * Math.min(1, 4 * dt * ac.R.assist / 0.45) + ff);
+    ac.q.premultiply(turn).normalize(); ac.v.applyQuaternion(turn);
+    // held on the bank as it rises under you (no taking off from it like a kicker)
+    const vn = ac.v.dot(nW); if (vn > 0) ac.v.addScaledVector(nW, -vn * Math.min(1, 10 * dt));
+    // the velocity too: turned to run along the car (no sliding wide off the bank)
+    const fw = V(0, 0, -1).applyQuaternion(ac.q), vf = ac.v.dot(fw), side = ac.v.clone().addScaledVector(fw, -vf).addScaledVector(nW, -ac.v.dot(nW));
+    ac.v.addScaledVector(side, -Math.min(1, 6 * dt));
+    // and turning at the rate the bend needs (cars: bike.js keeps its own yaw rate)
+    if (!ac.isBike) {
+      const qi = ac.q.clone().invert(), wn = ac.w.clone().applyQuaternion(ac.q).dot(nW), want = (vf / r) * end; ac.w.add(nW.clone().multiplyScalar((want - wn) * Math.min(1, 6 * dt)).applyQuaternion(qi));
+      // and kept flat on the bank (no rolling over sideways, tall trucks!)
+      const up = V(0, 1, 0).applyQuaternion(ac.q), rollErr = Math.asin(clamp(up.clone().cross(nW).dot(fw), -1, 1));
+      ac.q.premultiply(new THREE.Quaternion().setFromAxisAngle(fw, rollErr * Math.min(1, 5 * dt))).normalize();
+      ac.w.z *= Math.max(0, 1 - 5 * dt);
+    }
+  }
   // Arcade and Pilot: on the bowl's wall the car is turned to run round it (the bowl is a 180-degree turn you'd have
   // to steer hard into at full speed; kids hit it flat out). How high you ride is still your speed.
   bowlGuide(ac, dt) {
@@ -455,7 +596,10 @@ export class StuntPark extends Site {
     const err = Math.asin(clamp(fwd.clone().cross(t).dot(n), -1, 1)), turn = new THREE.Quaternion().setFromAxisAngle(nW, err * Math.min(1, 4 * dt * ac.R.assist / 0.45));
     ac.q.premultiply(turn).normalize(); ac.v.applyQuaternion(turn);
     // turning at the rate the bend needs (and not at all as you leave it: no slide off sideways at the exit)
-    const qi = ac.q.clone().invert(), wn = ac.w.clone().applyQuaternion(ac.q).dot(nW), want = (ac.v.length() / r) * (1 - out);
+    // (the bend goes on to the end of the bowl: easing off the turn early sends a fast car straight up the lowered wall
+    // and over its lip, so only let go in the last few degrees)
+    const late = z > 0 && psi < Math.PI ? smoothstep(0.3, 0.05, psi - Math.PI / 2) : 0;
+    const qi = ac.q.clone().invert(), wn = ac.w.clone().applyQuaternion(ac.q).dot(nW), want = (ac.v.length() / r) * (1 - late);
     ac.w.add(nW.clone().multiplyScalar((want - wn) * Math.min(1, 6 * dt)).applyQuaternion(qi));
     // and it keeps you flat on the wall (no tipping over sideways, tall trucks!), coming level with it as it flattens out
     const up = V(0, 1, 0).applyQuaternion(ac.q), f2 = V(0, 0, -1).applyQuaternion(ac.q), rollErr = Math.asin(clamp(up.clone().cross(nW).dot(f2), -1, 1));

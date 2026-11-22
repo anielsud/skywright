@@ -2,12 +2,14 @@
 // gap at a matching landing ramp on the far rim. Found from the terrain (stuntSite.js findGap: the narrowest crossing
 // near the hint that is a real gap, with level rim ground both sides, clear of roads and buildings).
 //
-// The run: a stars-and-stripes run-up strip with a rocket-boost section (a big boost pad: it takes you to exactly the
-// speed the jump needs), the launch ramp (16 m high, 25 degrees at the lip), the flight (about 6 s, slow motion over
-// the top), the landing ramp (its top follows the flight path, so you touch down along it, then curves down to the
-// run-out) and a brake parachute that stops you on the run-out. Kid-friendly: on the strip and the ramp the car is
-// held in the lane, and in the air a helper nudges you onto the landing ramp (it can't make up for a car that missed the
-// boost: then a rescue parachute lowers you into the canyon). Dressing: a sign gantry, flags, grandstands, a TV
+// The run: a stars-and-stripes run-up with a rocket strip down its middle (a steady push on top of your own speed: from
+// the start line it gives you the speed the jump needs; flat out from the stunt park, through the fork, more: a bigger
+// jump; ride beside it and you go without, too slow for the gap), the launch ramp (16 m high, 25 degrees at the lip),
+// the flight (about 6 s, slow motion over the top), the landing ramp (its top follows the flight path, so you touch down
+// along it, then curves down to the run-out) and a brake parachute that stops you on the run-out. Kid-friendly: the
+// run-up keeps you on its deck and pointed down it (your line is yours), the ramp holds you in its middle, and in the
+// air a helper nudges you onto the planned flight (a faster one: a bigger flight, kept short of the run-out's end and
+// caught softly); it can't make up for a car that missed the boost: then a rescue parachute lowers you into the canyon. Dressing: a sign gantry, flags, grandstands, a TV
 // camera tower on each rim, floodlights.
 //
 // Frame (stuntKit.js Site): x along the jump from the launch rim's edge (x = 0), z across it, y up from the launch
@@ -19,6 +21,8 @@ import { findGap } from './stuntSite.js';
 
 const G = 9.81, HK = 16, THETA = (25 * Math.PI) / 180, LIP = -8, RL = 260; // launch ramp height, lip angle, lip x; landing curve radius
 const STRIP = 170, SPAWN = 30; // the rocket strip's length, and the start's distance before it
+const SW = 2.8, OVER = 1.25; // the rocket strip's half-width (down the middle: ride beside it to go without), and how much faster
+// than the plan it can send you (on top of your own speed: a long run-up's speed is kept)
 
 // Where the jump goes, its flight and the ground it levels.
 export function planEvel(w, cfg) {
@@ -35,9 +39,10 @@ export function planEvel(w, cfg) {
   const v = (lo + hi) / 2, f = fly(v), phi = Math.atan(-f.slope(xT)), yT = f.y(xT);
   const v0 = Math.sqrt(v * v + 2 * G * HK) + 2; // the strip's speed: up the ramp you lose some (and a little to drag)
   const pad = (x0, x1, h) => ({ x: g.x + g.dx * (x0 + x1) / 2, z: g.z + g.dz * (x0 + x1) / 2, c: Math.cos(g.yaw), s: Math.sin(g.yaw), hx: (x1 - x0) / 2, hz: 60, blend: 50, h, fill: 12 }); // (wide and long: flat under the decks at every terrain resolution)
+  const add = (1.15 * v0 * v0) / (2 * STRIP); // the strip's push: from a standstill at its start to past the planned speed at its end (a slow bike too)
   const runStart = ramp0 - STRIP - SPAWN - 15; // (findGap checked 300 m behind the rim and 230 m beyond the far one: clear and level)
   return {
-    ...g, yB, xT, yT, v, v0, phi, k, ramp0, runStart, runEnd: g.gap + 222, top: f.y(LIP + (v * v * Math.sin(2 * THETA)) / (2 * G)) ,
+    ...g, yB, xT, yT, v, v0, add, phi, k, ramp0, runStart, runEnd: g.gap + 222, top: f.y(LIP + (v * v * Math.sin(2 * THETA)) / (2 * G)) ,
     fly: f, jump: xT - LIP, pads: [pad(runStart - 10, -2, g.hA), pad(g.gap + 6, g.gap + 290, g.hB)],
   };
 }
@@ -72,7 +77,7 @@ export class EvelJump extends Site {
     this.sweep(Pn, { s0: landEnd, s1: outEnd, n: Math.ceil((outEnd - landEnd) / 6), path, cross: () => deckX(P.yB), color: deckC, type: () => PAINT, depth: 1, wallColor: () => steel, wallType: PAINT, floor: P.yB - 3, flat: true });
     // stars down the middle of the run-up, the rocket strip, the start line
     for (let s = P.runStart + 4; s < P.ramp0 - STRIP - 8; s += 6) this.signQuad([V(s, 0.07, -2.5), V(s, 0.07, 2.5), V(s + 5, 0.07, 2.5), V(s + 5, 0.07, -2.5)].map((v) => V(v.x, v.y, -v.z)), ATLAS.stars);
-    this.boost(path, P.ramp0 - STRIP - 3, STRIP, P.v0, 0.05, true, 6.2, false, { tex: 'rocket', tile: 6, push: 30, msg: 'ROCKET BOOST!' });
+    this.boost(path, P.ramp0 - STRIP - 3, STRIP, P.v0 * OVER, 0.05, false, SW, false, { tex: 'rocket', tile: 6, add: P.add, msg: 'ROCKET BOOST!' }); // (on top of your speed: come in faster, jump further)
     { const x = P.ramp0 - STRIP - SPAWN + 4; this.signQuad([V(x - 1.5, 0.09, -6.6), V(x - 1.5, 0.09, 6.6), V(x + 1.5, 0.09, 6.6), V(x + 1.5, 0.09, -6.6)], ATLAS.check); }
     // the launch ramp: red and white stripes down a 16 m kicker, blue parapets with stars, held in the lane
     const k = P.k, deck = (h, rim) => [[-7.6, h + rim], [-6.4, h + 0.05], [-6, h], [-4, h], [-2, h], [0, h], [2, h], [4, h], [6, h], [6.4, h + 0.05], [7.6, h + rim]];
@@ -155,6 +160,8 @@ export class EvelJump extends Site {
   }
 
   // ---- per frame ----
+  // for analytics (StuntSites.where): which part of the jump a vehicle is at
+  where(ac) { if (!this.inside(ac.x.x, ac.x.z)) return null; const lp = this.Lp(ac.x); return { site: 'evel', feature: `evel_${this.st.phase}`, x: Math.round(lp.x), z: Math.round(lp.z) }; }
   reset() { const st = this.st; if (st.phase !== 'idle') { st.phase = 'idle'; st.chute = null; } }
   // A car at the jump: the rocket strip, the lane, the flight, the landing, the parachutes. Messages for the HUD.
   drive(ac, dt) {
@@ -174,11 +181,12 @@ export class EvelJump extends Site {
       if ((st.phase === 'run' && onRun) || (st.phase === 'landed' && onOut)) this.lane(ac, dt, fl, lp);
       if (st.phase === 'landed') { // the brake parachute: pulls you down to a crawl on the run-out
         const s = ac.v.length();
-        if (s > 5) ac.v.multiplyScalar(Math.max(5, s - 22 * dt) / s); // (more than any engine can push against)
+        const room = Math.max(8, P.runEnd - 25 - lp.x), dec = Math.max(22, (s * s) / (2 * room)); // (harder when a big jump came down far along it)
+        if (s > 5) ac.v.multiplyScalar(Math.max(5, s - dec * dt) / s); // (more than any engine can push against)
         else if (st.chute === 'brake') { st.chute = null; st.phase = 'done'; msgs.push({ toast: 'Stopped by the parachute. What a jump!', good: true }); }
       }
     } else {
-      if (st.phase === 'run' && lp.x > LIP - 6 && vl.x > 5) { st.phase = 'air'; st.x0 = lp.x; st.vy = vl.y; st.peak = false; }
+      if (st.phase === 'run' && lp.x > LIP - 6 && vl.x > 5) { st.phase = 'air'; st.x0 = lp.x; st.vy = vl.y; st.peak = false; st.k = vl.length() / P.v; st.vt = this.flightSpeed(st.k); } // (k: the launch speed against the plan's; vt: the flight it's guided along)
       if (st.phase === 'air') {
         if (!st.peak && st.vy > 0 && vl.y <= 0) { st.peak = true; msgs.push({ slowmo: 1.8, center: 'DAREDEVIL!' }); } // over the top: slow motion
         st.vy = vl.y;
@@ -191,21 +199,48 @@ export class EvelJump extends Site {
     return msgs.length ? msgs : null;
   }
   // the rails of the run-up, the ramp and the run-out: pointed along the lane and eased back to its middle
+  // (on the run-up you pick your line, on the rocket strip or beside it: only kept on the deck and, unless you're steering,
+  // pointed down it; on the ramp and the run-out, held straight and eased in to the middle)
   lane(ac, dt, fl, lp) {
     if (fl.x < 0.5 || ac.v.length() < 6) return;
-    const err = Math.asin(clamp(fl.clone().cross(V(1, 0, 0)).y, -1, 1)), turn = new THREE.Quaternion().setFromAxisAngle(Y, err * Math.min(1, 4 * dt));
+    const P = this.P, ramp = lp.x > P.ramp0 - 8 || lp.x > P.gap, funnel = !ramp && lp.x > P.ramp0 - 60, steer = Math.abs(ac.ctl?.roll || 0), free = !ramp && !funnel && steer > 0.15;
+    const err = Math.asin(clamp(fl.clone().cross(V(1, 0, 0)).y, -1, 1)), turn = new THREE.Quaternion().setFromAxisAngle(Y, err * Math.min(1, (free ? 0 : ramp || funnel ? 4 : 2.5) * dt));
     ac.q.premultiply(turn).normalize(); ac.v.applyQuaternion(turn);
-    ac.x.addScaledVector(this.Wd(V(0, 0, 1)), -lp.z * Math.min(1, 2 * dt));
+    // kept on the deck; over the last 60 m funnelled in to the ramp (no sliding wide into its side at full speed)
+    const keep = ramp ? (lp.x > P.gap ? 0 : 3.5) : 7 - 2.5 * clamp((lp.x - P.ramp0 + 60) / 50, 0, 1), over = Math.sign(lp.z) * Math.max(0, Math.abs(lp.z) - keep);
+    const side = this.Wd(V(0, 0, 1)), k = ramp || funnel ? 6 : 2;
+    ac.x.addScaledVector(side, -over * Math.min(1, k * dt));
+    if (over !== 0) { const vs = ac.v.dot(side); if (vs * over > 0) ac.v.addScaledVector(side, -vs * Math.min(1, k * dt)); } // (and no drifting further out)
   }
   // In the air: nudge the flight back onto the planned path (its height, climb and speed at this point of the jump),
   // which comes down along the landing ramp, and keep the car level and pointed along its flight path, wheels down.
   // Limited (7 m/s^2, 4.5 in Simulator): a car that missed the rocket strip still falls short.
+  // Faster than the plan (a long run-up): a free, bigger flight, only kept off the far end of the run-out and caught
+  // softly as it comes down. Much slower (you rode beside the rocket strip): no help, into the canyon.
+  // the flight from the lip at speed v: its height at x (in the jump's frame)
+  flyY(v, x) { const c = Math.cos(THETA); return HK + (x - LIP) * Math.tan(THETA) - (G * (x - LIP) ** 2) / (2 * v * v * c * c); }
+  flySlope(v, x) { const c = Math.cos(THETA); return Math.tan(THETA) - (G * (x - LIP)) / (v * v * c * c); }
+  // the flight a launch is guided along: the plan's (down along the landing ramp) near the planned speed, a bigger one
+  // when faster, but coming down on the run-out no further than 130 m from its end (room for the parachute)
+  flightSpeed(k) {
+    const P = this.P; if (k < 1.09) return P.v;
+    const xMax = P.runEnd - 130, c = Math.cos(THETA), lands = (v) => { const a = (G / (2 * v * v * c * c)), b = Math.tan(THETA), d = HK - P.yB; return LIP + (b + Math.sqrt(b * b + 4 * a * d)) / (2 * a); };
+    let lo = P.v, hi = k * P.v; if (lands(hi) <= xMax) return hi;
+    for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (lands(m) > xMax) hi = m; else lo = m; }
+    return lo;
+  }
   airGuide(ac, dt, lp, vl) {
-    const P = this.P;
-    if (lp.x < P.xT - 2) {
-      const vx = P.v * Math.cos(THETA), vy = P.fly.slope(lp.x) * vx + 1.5 * (P.fly.y(lp.x) + 0.9 - lp.y);
-      const dvx = vx - vl.x, dvy = vy - vl.y, dvz = -0.8 * lp.z - vl.z, m = Math.hypot(dvx, dvy, dvz), lim = (ac.R.assist > 0 ? 7 : 4.5) * dt, k = m > lim ? lim / m : 1;
+    const P = this.P, st = this.st, k0 = st.k ?? 1, vt = st.vt ?? P.v, lim = (ac.R.assist > 0 ? 7 : 4.5) * dt;
+    const ys = (x) => (x < this.landEnd ? this.landY(x) : P.yB), far = lp.x > P.gap + 3, h = far ? lp.y - ys(lp.x) : Infinity;
+    if (k0 > 0.8 && (vt === P.v ? lp.x < P.xT - 2 : h > 22)) {
+      const vx = vt * Math.cos(THETA), vy = this.flySlope(vt, lp.x) * vx + 1.5 * (this.flyY(vt, lp.x) + 0.9 - lp.y);
+      const dvx = vx - vl.x, dvy = vy - vl.y, dvz = -0.8 * lp.z - vl.z, m = Math.hypot(dvx, dvy, dvz), k = m > lim ? lim / m : 1;
       ac.v.add(this.Wd(V(dvx * k, dvy * k, dvz * k)));
+    }
+    // a bigger flight's soft catch: the last 25 m down onto the landing ramp or the run-out, no faster than it can take
+    if (vt > P.v && far && vl.y < 0 && h < 25) {
+      const sl = (ys(lp.x + 1) - ys(lp.x - 1)) / 2, ok = sl * vl.x - (3 + 0.8 * Math.max(0, h));
+      if (vl.y < ok) ac.v.y += (ok - vl.y) * Math.min(1, 5 * dt);
     }
     const f = ac.v.clone().normalize(), up = Y.clone().addScaledVector(f, -f.y).normalize(), right = f.clone().cross(up);
     const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, f.clone().negate()));

@@ -65,7 +65,11 @@ export class TerrainTiles {
     // mesh heights first: a tile that's all sea needs nothing else
     const H = new Float32Array(n * n);
     let anyLand = false;
-    for (let b = 0; b < n; b++) { for (let a = 0; a < n; a++) { const h = W.shoreSnap(W.height(x0 + a * 2 * st, z0 + b * 2 * st)); H[b * n + a] = h; if (h > W.waterLevel + 0.5) anyLand = true; } if (b % 8 === 7) yield; }
+    // real rivers narrower than the vertex spacing (Low: ~115 m) would fall between vertices and fill in: a vertex within
+    // one step of one is cut down below its water, so every triangle over the river is too: the channel is always there
+    // to see and to float in (at Low it reads wider than it is)
+    const rv = W.real?.riverHash?.size ? W.real : null, cut = 2 * st; // (2 st: the vertex spacing)
+    for (let b = 0; b < n; b++) { for (let a = 0; a < n; a++) { const x = x0 + a * 2 * st, z = z0 + b * 2 * st; let h = W.shoreSnap(W.height(x, z)); const rw = rv && rv.waterAt(x, z, cut); if (rw != null && h > rw - 1) h = rw - 1; H[b * n + a] = h; if (h > W.waterLevel + 0.5) anyLand = true; } if (b % 8 === 7) yield; }
     let minH = Infinity; for (let k = 0; k < H.length; k++) if (H[k] < minH) minH = H[k];
     const tile = { i, j, lod, segs, H, st: 2 * st, x0, z0, n, mesh: null, trees: [], hit: new Map(), land: minH > W.waterLevel + 20 };
     if (!anyLand) return tile; // open water: nothing to draw, the sea plane covers it

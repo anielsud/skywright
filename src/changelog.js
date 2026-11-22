@@ -2,6 +2,58 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.116.0', items: [
+    "The Statue of Liberty is now the real thing: a 3D scan of the actual statue, with her face, crown, torch and tablet. At night she's lit up and her torch glows!",
+  ] },
+  { v: '1.116.0', items: [
+    "The Statue of Liberty is now the real thing: a 3D scan of the actual statue, with her face, crown, torch and tablet. At night she's lit up and her torch glows!",
+  ] },
+  { v: '1.115.0', items: [
+    "The stunt park and the water park are now right next to each other at the Swiss lake, in Bora Bora and in New York, so you can drive straight from the ramps to the water!",
+    "New York's stunt park and water park moved to Liberty State Park, right across the water from the Statue of Liberty.",
+  ] },
+  { v: '1.114.0', items: [
+    "At the Grand Canyon jump, a long run-up now counts: drive flat out from the stunt park, through the loop, onto the rocket strip and you fly way further over the canyon!",
+    "The rocket strip is now a narrow stripe down the middle. Ride beside it if you dare: without the boost you won't make it across, and the rescue parachute lowers you into the canyon.",
+  ] },
+  { v: '1.113.0', items: [
+    "Boat water parks! Take a boat to the new water park in Bora Bora, New York or the Swiss lake: hit the boost and fly the MEGA JUMP over an island, a container barge or a log raft, jump through the hoop, weave the buoy slalom and zoom through the waterfall.",
+  ] },
+  { v: '1.112.0', items: [
+    "Bikes and cars don't snap their wheels any more when they ride over a step or the edge of a ramp.",
+  ] },
+  { v: '1.112.0', items: [
+    "Bikes and cars don't snap their wheels any more when they ride over a step or the edge of a ramp.",
+  ] },
+  { v: '1.111.0', items: [
+    "Bikes and cars now zoom round the dirt banked turn after the loop instead of flying over the top, even flat out without steering.",
+    "At the Grand Canyon the turn is the way to go: hold right at the end of the straight if you want the canyon jump instead.",
+  ] },
+  { v: '1.110.0', items: [
+    "Flights start smoother: no more little freeze a second after take-off while the forest loads.",
+  ] },
+  { v: '1.109.0', items: [
+    "Put a boat hull on your car or motorbike and it becomes amphibious: drive into the water and it floats, the wheels paddle you along, and you can start it at the marina!",
+    "Boats at the Grand Canyon now float on the river instead of getting stuck on the bank.",
+  ] },
+  { v: '1.108.0', items: [
+    "The big floodlight poles moved out of the bowl and the dirt turn, so you won't crash into a lamp in the middle of the track.",
+  ] },
+  { v: '1.107.0', items: [
+    "No more strange jolts when you ride up the jumps in the stunt parks or the canyon jump run-up.",
+  ] },
+  { v: '1.106.0', items: [
+    "Behind the scenes: when something breaks off in a crash, the game now writes down what happened, so bike and loop problems can be found and fixed.",
+  ] },
+  { v: '1.105.0', items: [
+    "The speedometer on cars, bikes and boats reads 0 when you stop (it used to count the wind).",
+  ] },
+  { v: '1.104.0', items: [
+    "Motorbikes stay in the wall-ride bowl now, even flat out: a catch fence along the top holds you in instead of flinging you over the lip.",
+  ] },
+  { v: '1.103.0', items: [
+    "Took the engine off your motorbike or car? Now it stays on the ground and rolls down the ramps instead of turning into a glider in the sky.",
+  ] },
   { v: '1.102.0', items: [
     "Riders and pilots look like real people now: smooth arms and legs that bend at the elbows and knees, proper shoulders and hands, and no more twitchy, jagged arms on the motorbikes.",
   ] },

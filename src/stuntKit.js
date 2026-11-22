@@ -231,10 +231,12 @@ export class Site {
       }
     }
   }
-  // an invisible barrier wall (collision only) along a path at lateral offset `a`
+  // an invisible barrier wall (collision only) along a path at lateral offset `a`, from height y0 (or y0(s): along a
+  // rising berm's top)
   wallLine(pth, s0, s1, a, h, y0 = 0) {
+    const yb = typeof y0 === 'function' ? y0 : () => y0;
     for (let s = s0; s < s1; s += 2) {
-      const f0 = pth(s), f1 = pth(Math.min(s1, s + 2)), p0 = this.W(f0.p.clone().addScaledVector(f0.r, a).setY(y0)), p1 = this.W(f1.p.clone().addScaledVector(f1.r, a).setY(y0));
+      const sb = Math.min(s1, s + 2), f0 = pth(s), f1 = pth(sb), p0 = this.W(f0.p.clone().addScaledVector(f0.r, a).setY(yb(s))), p1 = this.W(f1.p.clone().addScaledVector(f1.r, a).setY(yb(sb)));
       const A = p0, B = p1, C = p1.clone().add(V(0, h, 0)), D = p0.clone().add(V(0, h, 0)), out = this.Wd(f0.r.clone().negate());
       const fn = faceN(A, B, C); if (fn.dot(out) < 0) { this.cm.tri(A, C, B, PAINT, 0.6); this.cm.tri(A, D, C, PAINT, 0.6); } else { this.cm.tri(A, B, C, PAINT, 0.6); this.cm.tri(A, C, D, PAINT, 0.6); }
     }
@@ -257,12 +259,13 @@ export class Site {
 
   // ---- boost pads ----
   // glowing chevrons on the ground; drive over it and you are pushed up to `target` m/s
-  // exact: sets the speed both ways (a jump that needs just the right speed); rumble: a slowing strip; push: m/s^2
+  // exact: sets the speed both ways (a jump that needs just the right speed); rumble: a slowing strip; push: m/s^2;
+  // o.add: instead a steady push (m/s^2) on top of your own speed, up to target; o.cap = false: never holds you back
   boost(pth, s0, L, target, y = 0, exact = false, w = 2.4, rumble = false, o = {}) {
     const f0 = pth(s0), h = y + 0.08, n = Math.max(1, Math.round(L / (o.tile || 4))), q = (ss, a) => { const f = pth(ss); return f.p.addScaledVector(f.r, a).setY(h); };
     if (rumble) for (let i = 0; i < L / 1.2; i++) this.quad(this.G.paint, q(s0 + i * 1.2, -w), q(s0 + i * 1.2, w), q(s0 + i * 1.2 + 1.2, w), q(s0 + i * 1.2 + 1.2, -w), i % 2 ? col(0xf2f2f2) : col(0xe0262a), null, Y);
     else for (let i = 0; i < n; i++) { const sa = s0 + (L * i) / n, sb = s0 + (L * (i + 1)) / n; this.signQuad([q(sa, -w), q(sa, w), q(sb, w), q(sb, -w)], ATLAS[o.tex || 'chev']); }
-    this.boosts.push({ a: this.W(f0.p.clone().setY(y)), t: this.Wd(f0.t), r: this.Wd(f0.r), L, w: w + 0.6, target, y, exact, rumble, push: o.push || 26, msg: o.msg || 'BOOST!' });
+    this.boosts.push({ a: this.W(f0.p.clone().setY(y)), t: this.Wd(f0.t), r: this.Wd(f0.r), L, w: w + 0.6, target, y, exact, rumble, push: o.push || 26, msg: o.msg || 'BOOST!', add: o.add || 0, cap: o.cap !== false });
   }
   // the boost pads under a car on the ground: push or hold it back (messages for the HUD into msgs)
   boostPads(ac, dt, fwd, msgs) {
@@ -271,8 +274,9 @@ export class Site {
       if (s < 0 || s > b.L || Math.abs(l) > b.w || Math.abs(d.y) > 3) continue;
       const v = ac.v.dot(fwd);
       if (fwd.dot(b.t) < 0.7) continue;
+      if (b.add) { if (v < b.target) { ac.v.addScaledVector(fwd, Math.min(b.target - v, b.add * dt)); if (!b.glow || b.glow < 0.2) msgs.push({ center: b.msg }); b.glow = 1; } continue; } // (a steady push on top of your own speed, up to a ceiling: the faster you come in, the faster you go out)
       if (v < b.target && !b.rumble) { ac.v.addScaledVector(fwd, Math.min(b.target - v, b.push * dt)); if (!b.glow || b.glow < 0.2) msgs.push({ center: b.msg }); b.glow = 1; }
-      else if (v > b.target + (b.exact ? 0 : 1)) ac.v.addScaledVector(fwd, -Math.min(v - b.target - (b.exact ? 0 : 1), (b.exact ? 30 : 12) * dt)); // too fast for what's next: it holds you back
+      else if (b.cap && v > b.target + (b.exact ? 0 : 1)) ac.v.addScaledVector(fwd, -Math.min(v - b.target - (b.exact ? 0 : 1), (b.exact ? 30 : 12) * dt)); // too fast for what's next: it holds you back
     }
   }
 
@@ -426,7 +430,7 @@ const STYLE = {
 };
 function atlasTexture(theme) {
   const S = 1024, c = document.createElement('canvas'); c.width = c.height = S; const g = c.getContext('2d');
-  const st = STYLE[theme.signs.style] || STYLE.classic, words = { name: theme.signs.name, start: 'START', loop: 'LOOP', jump: theme.signs.jump, wall: theme.signs.wall, banked: 'BANKED TURN', tabletop: 'TABLETOP', whoops: 'WHOOPS!' };
+  const st = STYLE[theme.signs.style] || STYLE.classic, words = { name: theme.signs.name, start: 'START', loop: 'LOOP', jump: theme.signs.jump, wall: theme.signs.wall, banked: 'BANKED TURN', tabletop: 'TABLETOP', whoops: 'WHOOPS!', ...theme.signs.words }; // (signs.words: a park's own boards, e.g. the water park's)
   const rnd = mulberry32(17);
   const box = (r, bg, fg, text, size, edge = '#ffffff') => {
     const x = r[0] * S, y = (1 - r[3]) * S, w = (r[2] - r[0]) * S, h = (r[3] - r[1]) * S;

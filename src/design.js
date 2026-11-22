@@ -142,6 +142,11 @@ const RHO = 1.225, G = 9.81;
 // rolls) and, without main wings, launches standing up.
 const ROCKET_BODIES = new Set(['fus_rocket']);
 export const isRocketDesign = (design) => design.parts.some((p) => ROCKET_BODIES.has(p.id));
+// Car or bike wheels and no wings: it is a land vehicle (aircraft.js isCar, analyze().car) whatever else it carries,
+// even with no Car/Bike Engine: no engine at all (it rolls downhill), jets or rockets (they push it along the ground),
+// a boat hull (an amphibian: boat.js floats it on water). Not a rocket body (it launches standing up) or a helicopter.
+export const onRoadWheels = (design) => { const ds = design.parts.map((p) => PARTS[p.id]).filter(Boolean);
+  return ds.some((d) => d.gear && !d.gear.float && (d.cat === 'car' || d.cat === 'bike')) && !ds.some((d) => d.cat === 'wing' || d.engine?.type === 'rotor') && !isRocketDesign(design); };
 export const launchesVertical = (design) => !!design.vertical || (isRocketDesign(design) && !design.parts.some((p) => PARTS[p.id]?.cat === 'wing'));
 
 export function analyze(design) {
@@ -190,7 +195,7 @@ export function analyze(design) {
     }
   }
   if (rotorLift > 0) { rotorAt.divideScalar(rotorLift); rotorOff = Math.hypot(rotorAt.x - com.x, rotorAt.z - com.z); }
-  const hover = mass > 0 ? rotorLift / (mass * G) : 0, heli = rotors > 0, car = motors > 0 && !heli;
+  const hover = mass > 0 ? rotorLift / (mass * G) : 0, heli = rotors > 0, car = (motors > 0 || onRoadWheels(design)) && !heli;
   const grip = mass > 0 ? drivePower / (mass * G) : 0;
   const bike = car && bikeLayout(wheelAt); // two in-line wheels on the centreline: it rides like a motorbike (bike.js)
   const boat = !heli && design.parts.some((p) => PARTS[p.id]?.boatHull) ? boatLayout(design, mass, partMatrix) : null; // a boat hull: it floats (boat.js)
@@ -213,25 +218,32 @@ export function analyze(design) {
       if (hover >= 1.05 && rotorAt.y >= com.y && rotorOff <= 0.4 && (tailRotors || Math.abs(twist) <= rotorLift * 0.2)) warnings.push(['good', 'Ready to hover! Throttle to the middle to hold height.']);
     }
     else if (bike) {
-      if (!driveWheels) warnings.push(['bad', 'The engine needs a wheel to push on. Use a Swingarm Wheel at the back.']);
+      if (!motors && thrust > 0) warnings.push(['info', 'Its ' + (rockets && !jets && !props ? 'rockets' : jets && !rockets && !props ? 'jets' : 'engines') + ' push it along and the wheels just roll. Add an engine from the Bike tab to drive the wheels.']);
+      else if (!motors && !marine) warnings.push(['warn', 'No engine: it can only roll downhill. Add an engine from the Bike tab.']);
+      else if (motors && !driveWheels) warnings.push(['bad', 'The engine needs a wheel to push on. Use a Swingarm Wheel at the back.']);
       if (!bike.front.d.steer) warnings.push(['warn', 'The front wheel doesn’t steer. Use a Fork Wheel at the front.']);
-      if (grip < 0.25 && driveWheels) warnings.push(['warn', 'Heavy for its engine: it will be slow. Add Power or a bigger engine.']);
-      if (driveWheels && bike.front.d.steer) warnings.push(['good', 'Ready to ride! Gas to go, brake to stop, steer to lean into the turns. Full gas for a wheelie!']);
-    }
-    else if (boat) {
-      if (boat.sinks) warnings.push(['bad', 'Too heavy for its hull: it will sink! Use a bigger hull or fewer heavy parts.']);
-      if (!marine) warnings.push(['bad', 'No motor. Add an Outboard Motor, a Prop & Rudder or a Water Jet from the Boat tab.']);
-      for (const m of boat.motors) if (!m.wet) warnings.push(['warn', `The ${PARTS[m.id].name}'s propeller is out of the water. Put it at the back, down low.`]);
-      if (marine && !boat.sinks && boat.motors.some((m) => m.wet)) warnings.push(['good', 'Ready to go boating! Gas to go, brake to slow down (keep holding it to reverse), stick to steer.']);
+      if (motors && grip < 0.25 && driveWheels) warnings.push(['warn', 'Heavy for its engine: it will be slow. Add Power or a bigger engine.']);
+      if (motors && driveWheels && bike.front.d.steer) warnings.push(['good', 'Ready to ride! Gas to go, brake to stop, steer to lean into the turns. Full gas for a wheelie!']);
     }
     else if (car) {
-      if (!driveWheels) warnings.push(['bad', 'The Car Engine needs Car Wheels to push on. Add some from the Car tab.']);
+      if (!motors && thrust > 0) warnings.push(['info', 'Its ' + (rockets && !jets && !props ? 'rockets' : jets && !rockets && !props ? 'jets' : 'engines') + ' push it along and the wheels just roll. Add a Car Engine from the Car tab to drive the wheels.']);
+      else if (!motors && !marine) warnings.push(['warn', 'No engine: it can only roll downhill. Add a Car Engine from the Car tab.']);
+      else if (motors && !driveWheels) warnings.push(['bad', 'The Car Engine needs Car Wheels to push on. Add some from the Car tab.']);
       else if (wheels < 3) warnings.push(['warn', 'Fewer than 3 wheels: it will tip over. Use 4.']);
       if (driveWheels && !design.parts.some((q) => PARTS[q.id]?.gear?.steer)) warnings.push(['warn', 'Nothing steers. Use Steering Wheels at the front.']);
-      if (grip < 0.25 && driveWheels) warnings.push(['warn', 'Heavy for its engine: it will be slow. Add Power or another engine.']);
-      if (driveWheels && wheels >= 3) warnings.push(['good', 'Ready to drive! Gas to go, brake to stop (keep holding it to reverse), stick to steer.']);
+      if (motors && grip < 0.25 && driveWheels) warnings.push(['warn', 'Heavy for its engine: it will be slow. Add Power or another engine.']);
+      if (motors && driveWheels && wheels >= 3) warnings.push(['good', 'Ready to drive! Gas to go, brake to stop (keep holding it to reverse), stick to steer.']);
     }
-    else if (!engines) warnings.push(['info', 'No engines: it’s a glider. It will start in the air.']);
+    else if (!engines && !boat) warnings.push(['info', 'No engines: it’s a glider. It will start in the air.']);
+    // a boat hull floats it, whatever else it is: a car or bike with one is an amphibian (drives on land, floats on water)
+    if (boat && !heli) {
+      const amphib = car, paddle = amphib && motors > 0;
+      if (boat.sinks) warnings.push(['bad', 'Too heavy for its hull: it will sink! Use a bigger hull or fewer heavy parts.']);
+      if (!marine && !paddle) warnings.push(['bad', 'No motor. Add an Outboard Motor, a Prop & Rudder or a Water Jet from the Boat tab.']);
+      for (const m of boat.motors) if (!m.wet) warnings.push(['warn', `The ${PARTS[m.id].name}'s propeller is out of the water. Put it at the back, down low.`]);
+      if (amphib && !boat.sinks) warnings.push(['good', paddle && !marine ? 'Amphibious! It floats: in the water its wheels paddle it along slowly. Add an Outboard Motor to go faster.' : 'Amphibious! It drives on land and floats on the water.']);
+      else if (marine && !boat.sinks && boat.motors.some((m) => m.wet)) warnings.push(['good', 'Ready to go boating! Gas to go, brake to slow down (keep holding it to reverse), stick to steer.']);
+    }
     if (rocket && !vertical) warnings.push(['info', 'Rocket plane: it steers like a rocket when the nose is up or the rockets are burning, and like a plane when the wings carry it.']);
     const plane = !heli && !(car && wingArea < 0.5) && !vertical && !boat; // rockets launch standing up
     if (vertical && engines) warnings.push(tw > 1.1 ? ['good', 'Rocket ready! It launches standing up: full throttle, keep the nose pointing at the sky.'] : ['bad', 'Not enough thrust to lift off. Add rockets or more Power.']);

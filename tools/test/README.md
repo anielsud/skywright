@@ -138,6 +138,10 @@ location it fails unless:
 - coasting into the loop at the boost pad's speed still makes it round, and far too slow it rolls back down;
 - the mesa jump clears the gap and lands upright;
 - the bowl is ridden at 14, 20 and 26 m/s, up the wall and back out upright on its wheels;
+- from the start arch at full gas, hands off after the loop (as a kid rides it), every car and bike gets round the
+  banked east turn, never over the barrier on its berm, and out upright onto straight 2; at the Grand Canyon that
+  hands-off run takes the turn, not the link lane to the canyon jump, and one steered right at the fork goes down the
+  link lane onto the canyon jump's run-up;
 - at the Grand Canyon: a Kestrel set down on a mesa stands on it and one flown into a cliff hits it; the canyon jump's
   start is at its run-up; a scripted run (full gas, no steering) clears the real gap, lands upright on the far ramp and
   is stopped by the parachute; and a car too slow for it is lowered into the canyon by the rescue parachute.
@@ -150,6 +154,39 @@ python3 tools/test/stunts.py --shots DIR                  # also screenshots of 
 
 Run it when you change ground contact (`collide.js`, the contact code in `aircraft.js`), car or bike physics, the
 parks, or the real-world data a site is found from.
+
+## Water park check
+
+`waterpark.py` visits the water park at every location with one (`src/waterPark.js`: Bora Bora's lagoon, the Hudson
+off the Upper West Side, Lake Brienz; the Grand Canyon's Colorado is too narrow for one) and drives every stock boat,
+and a kid's random boat builds, through it on the real flight model (paused flight, stepped at a fixed 60 Hz from
+`waterpark.js`, with scripted inputs: full gas plus a lane-keeping steer; gusts zeroed). At each location it fails
+unless:
+
+- the park's site is open water: deep enough over the whole course, water in the margin round it, nothing built on it
+  (overwater bungalows, piers), no bridge over it, and well clear of the marina and its channel;
+- every stock boat that picks 'At the water park' starts at its arch, afloat and facing down the course, nothing
+  compiles a shader mid-flight, and the park stays within 6 draw calls and 32k triangles;
+- the MEGA JUMP from the start (Arcade and Pilot): the boost strip carries it up the ramp at its speed, it gets real
+  air (over a second, more than 4 m up), clears the island / container barge / log raft, splashes down upright and
+  keeps every part; the same for 8 random kid's boat builds (any hull, resized, any motor, extras) from the boost strip;
+- the kickers' lane at each boat's own speed (a short boost before each kicker): over both and through the hoop,
+  upright, nothing broken;
+- the slalom (a boat following a line through the five gates) says PERFECT SLALOM, and the waterfall SPLASH!;
+- flat out the wrong way into the back and the side of the MEGA JUMP ramp: nothing breaks off, it isn't wrecked.
+
+Sim is flown too and reported, not judged (there's no help in the air: a nose-heavy boat can dive and capsize).
+At a location without a water park a boat that picks it starts at the marina.
+
+```sh
+python3 tools/test/waterpark.py                              # all four locations, ~6 min
+python3 tools/test/waterpark.py --locations nyc --boats "Jet Ski,Fireboat"
+python3 tools/test/waterpark.py --shots DIR                  # also screenshots of each park and boats mid-jump
+python3 tools/test/waterpark.py --shots DIR --shots-only     # just the site checks and the screenshots
+```
+
+Run it when you change `src/waterPark.js`, boat physics (`src/boat.js`), hull contacts in `src/aircraft.js`,
+`src/collide.js`, or the real-world water data a site is found from.
 
 ## Bike ride test
 
