@@ -27,9 +27,10 @@ import { prepObstacle, obstacleClear } from './crew.js';
 
 const MARGIN = 0.006; // (part metres: geometry lying on the interior's boundary, like the skin cut along the glass, is left alone)
 const WELL_SLACK = 0.007; // a tub's own walls hide what is behind them: the cut reaches this far past them (part metres; the tub is kept 1 cm inside the skin)
-const H_MIN = 0.025; // triangles crossing the boundary are split down to this size (part metres) before cutting
+const H_MIN = 0.04; // triangles crossing the boundary are split down to this size (part metres) before cutting
 const H_STEP = 0.004; // ... and down to this where the depth steps (a coaming lip over a wider footwell), so the cut lands on the step
-const SAFE = 1.6; // the shapes' distances are approximate: a triangle is only judged wholly in or out with this much slack
+const SAFE = 1.6; // the shapes' depths are only roughly distances: the slope seen along a triangle's edges is trusted this far ...
+const K0 = 1.2; // ... and never less than this (a triangle is only judged wholly in or out with this much slack)
 
 const CONTAIN = (o) => o && (o.inside || o.well || o.plane);
 
@@ -50,8 +51,11 @@ function shapeDepth(d, bottom) {
 // A well's depth, exactly: its section at the point's height is the polygon through each wall line's point there (a
 // line's top point above it: the wall goes on straight up), the depth the signed distance to that polygon's edges
 function wellDepth(rings) {
-  const n = rings[0].length, y0 = Math.min(...rings.at(-1).map((p) => p[1])), xs = new Float64Array(n), zs = new Float64Array(n);
+  const n = rings[0].length, y0 = Math.min(...rings.at(-1).map((p) => p[1])), xs = new Float64Array(n), zs = new Float64Array(n), all = rings.flat();
+  const x0 = Math.min(...all.map((q) => q[0])), x1 = Math.max(...all.map((q) => q[0])), z0 = Math.min(...all.map((q) => q[2])), z1 = Math.max(...all.map((q) => q[2]));
   return (p) => {
+    const ox = Math.max(x0 - p.x, p.x - x1, 0), oz = Math.max(z0 - p.z, p.z - z1, 0);
+    if (ox > 0.02 || oz > 0.02 || p.y < y0 - 0.02) return -Math.max(Math.hypot(ox, oz), y0 - p.y) + WELL_SLACK; // (well clear of it: the distance to its bounds, never more than the real one)
     for (let k = 0; k < n; k++) {
       let x = rings[0][k][0], z = rings[0][k][2];
       if (p.y < rings[0][k][1]) for (let j = 1; j < rings.length; j++) { const a = rings[j - 1][k], b = rings[j][k]; if (p.y >= b[1] || j === rings.length - 1) { const t = Math.min(1, Math.max(0, (a[1] - p.y) / (a[1] - b[1] || 1))); x = a[0] + (b[0] - a[0]) * t; z = a[2] + (b[2] - a[2]) * t; break; } }
@@ -95,7 +99,7 @@ export function interiorOf(obj) {
 // number of triangles taken out (whole or in part), 0 if it was untouched.
 function cutMesh(mesh, owner, I) {
   const geo = mesh.geometry, P = geo.attributes.position;
-  if (!P || P.isInterleavedBufferAttribute || geo.groups.length > 1) return 0;
+  if (!P || P.isInterleavedBufferAttribute || geo.groups.length > 1 || Array.isArray(mesh.material) || Object.keys(geo.morphAttributes).length) return 0;
   const toPart = new THREE.Matrix4().multiplyMatrices(owner.matrixWorld.clone().invert(), mesh.matrixWorld);
   const n = P.count, lp = new Float64Array(n * 3), v = new THREE.Vector3();
   for (let i = 0; i < n; i++) { v.fromBufferAttribute(P, i).applyMatrix4(toPart); lp[i * 3] = v.x; lp[i * 3 + 1] = v.y; lp[i * 3 + 2] = v.z; }
@@ -109,10 +113,21 @@ function cutMesh(mesh, owner, I) {
     if (x1 >= B.min.x && x0 <= B.max.x && y1 >= B.min.y && y0 <= B.max.y && z1 >= B.min.z && z0 <= B.max.z) { near[t] = 1; anyNear = true; }
   }
   if (!anyNear) return 0;
+  // most meshes near a cockpit only pass by it: settle that from the corners' depths before copying anything
+  const d0 = new Float64Array(n).fill(NaN);
+  { const dv = (i) => (Number.isNaN(d0[i]) ? (d0[i] = I.f(v.set(lp[i * 3], lp[i * 3 + 1], lp[i * 3 + 2]))) : d0[i]);
+    const ln = (a, b) => Math.hypot(lp[a * 3] - lp[b * 3], lp[a * 3 + 1] - lp[b * 3 + 1], lp[a * 3 + 2] - lp[b * 3 + 2]);
+    let touch = false;
+    for (let t = 0; t < nt && !touch; t++) {
+      if (!near[t]) continue; const a = vi(t, 0), b = vi(t, 1), c = vi(t, 2), da = dv(a), db = dv(b), dc = dv(c), lab = ln(a, b), lbc = ln(b, c), lca = ln(c, a);
+      const K = Math.max(K0, SAFE * Math.max(Math.abs(da - db) / (lab || 1), Math.abs(db - dc) / (lbc || 1), Math.abs(dc - da) / (lca || 1)));
+      if (!(Math.min(da, db, dc) < -Math.max(lab, lbc, lca) * K)) touch = true;
+    }
+    if (!touch) return 0; }
   // vertices as growable arrays: every attribute, plus the part-space position and its depth
   const names = Object.keys(geo.attributes).filter((k) => !geo.attributes[k].isInterleavedBufferAttribute), src = names.map((k) => geo.attributes[k]);
   const arr = src.map((a) => Array.from(a.array)), sz = src.map((a) => a.itemSize), nrm = names.indexOf('normal');
-  const pos = Array.from(lp), dep = new Array(n).fill(NaN), w = new THREE.Vector3(), _e = [0, 0, 0];
+  const pos = Array.from(lp), dep = Array.from(d0), w = new THREE.Vector3(), _e = [0, 0, 0];
   const depth = (i) => { if (Number.isNaN(dep[i])) dep[i] = I.f(w.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2])); return dep[i]; };
   let count = n; const mids = new Map();
   const mix = (a, b, t) => { // a new vertex between a and b (cached per edge and t)
@@ -127,7 +142,7 @@ function cutMesh(mesh, owner, I) {
   // interpolated (a depth that steps, at a coaming lip, would put the cut anywhere along the edge), then a little outward
   const crossing = (p, q, dp, dq) => {
     let lo = 0, hi = 1; const pin = dp > 0;
-    for (let it = 0; it < 7; it++) { const t = (lo + hi) / 2; for (let j = 0; j < 3; j++) _e[j] = pos[p * 3 + j] + (pos[q * 3 + j] - pos[p * 3 + j]) * t; if ((I.f(w.set(_e[0], _e[1], _e[2])) > 0) === pin) lo = t; else hi = t; }
+    for (let it = 0; it < 6; it++) { const t = (lo + hi) / 2; for (let j = 0; j < 3; j++) _e[j] = pos[p * 3 + j] + (pos[q * 3 + j] - pos[p * 3 + j]) * t; if ((I.f(w.set(_e[0], _e[1], _e[2])) > 0) === pin) lo = t; else hi = t; }
     return pin ? hi : lo;
   };
   const out = []; let removed = 0;
@@ -135,7 +150,7 @@ function cutMesh(mesh, owner, I) {
     const da = depth(a), db = depth(b), dc = depth(c), lab = len(a, b), lbc = len(b, c), lca = len(c, a);
     // (how far the depth can change across it: the shapes' depths are only roughly distances, steeper near the ends of
     // an elliptical section, so the slope seen along its own edges counts too)
-    const K = SAFE * Math.max(1.25, Math.abs(da - db) / (lab || 1), Math.abs(db - dc) / (lbc || 1), Math.abs(dc - da) / (lca || 1)), L = Math.max(lab, lbc, lca) * K;
+    const K = Math.max(K0, SAFE * Math.max(Math.abs(da - db) / (lab || 1), Math.abs(db - dc) / (lbc || 1), Math.abs(dc - da) / (lca || 1))), L = Math.max(lab, lbc, lca) * K;
     if (Math.min(da, db, dc) < -L) { out.push(a, b, c); return 0; } // wholly outside (every point within L of each corner)
     if (Math.max(da, db, dc) > L) return 1; // wholly inside
     if (L / K > (K > 4 * SAFE ? H_STEP : H_MIN) && lvl < 24) { // split the longest edge and look again (and keep it whole if no piece of it was inside)
@@ -178,12 +193,11 @@ function cutMesh(mesh, owner, I) {
 // Returns { cut: triangles cut per cockpit part index, ms }.
 export function keepOut(objs) {
   const t0 = performance.now(), cut = {};
-  if (globalThis.__noKeepOut) return { cut, ms: 0 };
+  if (globalThis.__noKeepOut) return { cut, ms: 0 }; // (off: for before/after measurements)
   objs.forEach((owner, i) => {
     if (!owner || !(owner.userData.interior?.length || owner.userData.seats?.length)) return;
     owner.updateMatrixWorld(true);
     const I = interiorOf(owner); if (!I) return;
-    if (globalThis.__keepOutDebug) owner.userData._interior = I;
     const wbox = I.box.clone().applyMatrix4(owner.matrixWorld);
     let n = 0;
     objs.forEach((o, j) => {

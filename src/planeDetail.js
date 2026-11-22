@@ -824,7 +824,7 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
   try { out.rig = T('car', () => assembleCar(design, objs, root, { valid, isBody, cast, solidMeshes, addTo, structure, near, ids: parts.map((p) => p.id), rootW: root.matrixWorld.clone() })); } catch (e) { console.warn('carDetail', e); }
   for (const [obj, bag] of nearBags) ctx.flush(bag, obj, true);
   // interiors are inviolate: every other part's geometry cut away inside each cockpit's or cabin's interior (interior.js)
-  try { root.updateMatrixWorld(true); out.keptOut = T('interior', () => keepOut(objs)).cut; } catch (e) { console.warn('interior', e); }
+  if (!quick) try { root.updateMatrixWorld(true); out.keptOut = T('interior', () => keepOut(objs)).cut; } catch (e) { console.warn('interior', e); } // (not while a slider is dragged: the full rebuild after it does it)
   if (near) try { T('crew', () => { addCrew(design, objs); wireRiders(objs); }); } catch (e) { console.warn('crew', e); } // pilots and drivers on the declared seats (crew.js), riders' hands on the bars
   // near-only items: everything tagged near anywhere in the plane
   const items = [];
