@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
+import { LivePanel } from './liveDisplays.js';
 import { revolve, airfoil } from './parts.js'; // (circular, used at build time only)
 import { bubbleInterior } from './bubbleCockpit.js'; // (circular, used at build time only)
 import { fighterInterior } from './jetCockpit.js'; // (circular too: build time only)
@@ -818,6 +819,10 @@ export function openCockpitBuild(color) {
   // the deck, its ends in the footwell's sides; under a plane's coaming it is the instrument panel)
   const pf = mx([0, -0.19, -0.5], [-0.15, 0, 0]), dash = new THREE.BoxGeometry(0.47, 0.2, 0.025); dash.applyMatrix4(pf); b.add(dash, M.black());
   const nb = new Bag(); for (let i = 0; i < 3; i++) { const d = new THREE.CircleGeometry(0.03, 12); d.applyMatrix4(pf.clone().multiply(mx([-0.12 + i * 0.12, 0.02, 0.0135]))); nb.add(d, PM.dial()); }
+  { // their needles (liveDisplays.js): the revs, the speed, and a fuel gauge that stays put
+    const lp = new LivePanel(null, { basic: true }), at = (f) => Math.PI * 0.75 + Math.PI * 1.5 * Math.max(-0.02, Math.min(1.03, f)), F = (i) => pf.clone().multiply(mx([-0.12 + i * 0.12, 0.02, 0.0135]));
+    for (const [i, src, col] of [[0, 'rpmK', '#ff6a1a'], [1, (S) => S.spd / 50, '#f2f2f2'], [2, () => 0.7, '#f2f2f2']]) lp.needle(F(i), { src, at, len: 0.022, w: 0.0024, z: 0.0008, color: col, hub: 2.4, hubCol: '#2a2b2e' });
+    lp.to(g); }
   b.to(g); nb.to(g, true);
   g.userData.fit = [{ kind: 'seat', p: [0, -0.393, 0.18], w: 0.22, d: 0.2 }];
   // the pilot or driver (crew.js) on that seat, the seat point where the hips settle; pedals on the well's floor

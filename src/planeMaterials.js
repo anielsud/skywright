@@ -348,7 +348,7 @@ function dialTexture() {
     g.fillStyle = '#0c0d0f'; g.fillRect(0, 0, S, S);
     g.strokeStyle = '#d8d8d0'; g.lineWidth = 3; g.beginPath(); g.arc(32, 32, 28, 0, 7); g.stroke();
     g.lineWidth = 2; for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2; g.beginPath(); g.moveTo(32 + Math.cos(a) * 20, 32 + Math.sin(a) * 20); g.lineTo(32 + Math.cos(a) * 26, 32 + Math.sin(a) * 26); g.stroke(); }
-    g.strokeStyle = '#f2f2f2'; g.lineWidth = 3; g.beginPath(); g.moveTo(32, 32); g.lineTo(46, 20); g.stroke();
+    // (the needle is geometry: partDetail.openCockpitBuild, liveDisplays.js)
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
   });
 }

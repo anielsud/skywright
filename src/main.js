@@ -30,6 +30,7 @@ import { Streaks } from './streaks.js';
 import { WindTunnel } from './windTunnel.js';
 import { BoatFX } from './boatFX.js';
 import { cabinSun, CABIN } from './cabinLight.js';
+import { updateLive } from './liveDisplays.js';
 import { initThumbs, renderThumb, designKey, presetSlug, savedThumbs, storeThumb, stockThumbs, STOCK_SIZE } from './thumbs.js';
 installFog();
 
@@ -1216,6 +1217,7 @@ function stepFlight(dtReal) {
   spaceMilestones(f, ac);
   flightCam.userData.ladder = rig.mode === 'chase' || rig.mode === 'cockpit';
   hud.update(ac, world, f.mission, flightCam, net.markers());
+  updateLive(ac, { dt: dtReal, cockpit, world, wheelV: drive?.v ?? null, stallWarn: f.stallWarn }); // the cockpit's needles and lamps (liveDisplays.js: only ours, only seen from the cockpit)
   if (f.debug) $('#debug').textContent = `α ${(ac.alpha * 57.3).toFixed(1)}° g ${ac.g.toFixed(2)} V ${ac.airspeed?.toFixed(1)} m=${Math.round(ac.mass)} com=${ac.com.toArray().map((v) => v.toFixed(2))} w=${ac.w.toArray().map((v) => v.toFixed(2))}`;
   $('#debug').style.display = f.debug ? '' : 'none';
 }

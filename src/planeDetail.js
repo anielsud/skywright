@@ -856,7 +856,7 @@ export function mergeStatic(objs, root) {
     for (const r of rigid) {
       const inv = r.matrixWorld.clone().invert(), m = new THREE.Matrix4(), buckets = new Map(), victims = [];
       const walk = (o) => {
-        if (skip.has(o) || (o !== r && rigid.has(o)) || o.userData.isDisc || o.isSkinnedMesh) return; // crew: skinned, posed every frame
+        if (skip.has(o) || (o !== r && rigid.has(o)) || o.userData.isDisc || o.userData.live || o.isSkinnedMesh) return; // crew: skinned, posed every frame; live instruments (liveDisplays.js): rewritten every frame
         if (o.isMesh && o.visible && !o.isInstancedMesh) {
           const slot = kitSlot(o.material), mat = slot >= 0 ? kitMaterial() : o.material;
           const key = mat.uuid + (o.castShadow ? 's' : '') + (o.userData.near ? 'n' : '') + (o.userData.planeLight ? 'l' : '');
