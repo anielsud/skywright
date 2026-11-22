@@ -1148,7 +1148,7 @@ function figureGeometry(rig) {
   const route = (hex, gloss) => (typeof gloss === 'string' ? gloss : gloss ? (hex === o.visor ? 'glass' : 'paint') : hex === skin ? 'skin' : hex === hair ? 'hair' : (hex === o.glove || hex === o.boot || hex === 0x1d1d1f || hex === 0x15161a) ? 'rubber' : 'fabric');
   const at = (i, geo, hex, gloss = false) => k.add(geo, hex, i, route(hex, gloss), geo.attributes.skinIndex ? null : R(i)); // (a loft is built in rig space)
   // ---- the body: the skinned human mesh posed onto this rig (body.js), coloured by what the outfit covers ----
-  const BP = rig.body ? poseBody({ p: rig.p, q: rig.q, B, DIM: rig.D, grips: glovedGrips(rig), spine: rig.spine, body: rig.body, footFlat: rig.floorY != null }, { seat: rig.ctl === 'bars' ? { y: rig.rideSeatY ?? -0.08, back: null } : rig.seatY != null ? { y: rig.seatY - 0.012, back: null } : { y: -0.09, back: 0.125 } }) : null;
+  const BP = rig.body ? poseBody({ p: rig.p, q: rig.q, B, DIM: rig.D, grips: glovedGrips(rig), spine: rig.spine, body: rig.body, footFlat: rig.floorY != null }, { seat: rig.ctl === 'bars' ? { y: rig.rideSeatY ?? -0.08, back: null, over: rig.opts.ride ? (x, z) => { const sc = loftAt(rig.opts.ride.saddle, z); return !!sc && Math.abs(x - (sc.cx || 0)) < sc.hw; } : null } : rig.seatY != null ? { y: rig.seatY - 0.012, back: null } : { y: -0.09, back: 0.125 } }) : null;
   const GF = BP ? garmentFields() : null; // (what's worn where on the body: garmentFields below)
   // lips: the skin the mouth's ring muscle carries (by the mesh's own weights), shading from the skin to a lip tone
   const SRC = rig.body, lipBone = SRC ? SRC.bones.map((b) => LIP_BONES.test(b.name)) : [], LIP = new THREE.Color(0x9a4f4a);

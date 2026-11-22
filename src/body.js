@@ -361,12 +361,15 @@ export function poseBody(rig, { grip = true, scale = 1.07, seat = { y: -0.09, ba
   }
   // contact with the seat: the rig's hip point sits on the cushion (procedural figures' pelvis reached 9 cm under it).
   // Flesh below the cushion flattens onto it, and (seated in a chair) the back flattens against the seat back, the
-  // way a real body squashes into a seat instead of passing through it.
+  // way a real body squashes into a seat instead of passing through it. Only flesh over the seat (seat.over(x, z), when
+  // given: a saddle's outline; a rider's thighs hang down beside it) and only near its surface: the squash (to 15 % of
+  // the depth) fades out between 3 and 8 cm down, so a thigh hanging past the cushion's edge keeps its shape.
+  const squash = (d) => (d < 0.03 ? d * 0.15 : d < 0.08 ? 0.0045 + (d - 0.03) * (0.08 - 0.0045) / 0.05 : d);
   if (seat) {
     const sp = rig.p[B.spine], sinv = new THREE.Matrix4().compose(sp, rig.q[B.spine], V(1, 1, 1)).invert(), sM = new THREE.Matrix4().compose(sp, rig.q[B.spine], V(1, 1, 1));
     for (let i = 0; i < n; i++) {
       const g = seg[i]; if (!(g === 'hips' || g === 'spine' || g.startsWith('thigh'))) continue;
-      if (g !== 'spine' && pos[i * 3 + 1] < seat.y) { const d = seat.y - pos[i * 3 + 1]; pos[i * 3 + 1] = seat.y - d * 0.15; if (g.startsWith('thigh')) pos[i * 3 + 2] -= d * 0.1; }
+      if (g !== 'spine' && pos[i * 3 + 1] < seat.y && (!seat.over || seat.over(pos[i * 3], pos[i * 3 + 2]))) { const d = seat.y - pos[i * 3 + 1], d2 = squash(d); pos[i * 3 + 1] = seat.y - d2; if (g.startsWith('thigh')) pos[i * 3 + 2] -= (d - d2) * 0.12; }
       if (seat.back != null && (g === 'spine' || g === 'hips')) { tmp.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).applyMatrix4(sinv); if (tmp.z > seat.back && tmp.y > -0.05) { tmp.z = seat.back + (tmp.z - seat.back) * 0.15; tmp.applyMatrix4(sM); pos[i * 3] = tmp.x; pos[i * 3 + 1] = tmp.y; pos[i * 3 + 2] = tmp.z; } }
     }
   }
