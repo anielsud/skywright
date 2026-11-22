@@ -200,6 +200,9 @@ Pilot and Sim, with the controls a player would use:
   wheel, then puts the front down and gets going.
 - **stoppie** (Arcade, Pilot): a full stop from 18 m/s lifts the back wheel, the nose stays within limits, it lands.
 - **jump** (every mode): launched at 2.5 m and 15 m/s with a little nose-up, it lands upright on both wheels.
+- **skid** (every mode): at 20 m/s the handbrake (SKID on a touch screen) locks the back wheel. Held straight it
+  slows in a straight line and stays up; with the stick held over the tail swings out (Arcade/Pilot: a 20-50 degree
+  slide, nose turned the way the stick pushes), it stays up (Sim may lean hard) and stops sooner than a straight skid.
 - **a kid's own bikes**: hangar-placed random bike builds (`meshcheck.js` `bikeBuilds`, some on car wheels and a car
   engine, the wheels moved down until they are the lowest things on it) must be detected as bikes and ride without
   falling over; a build whose wheels don't both reach the ground is reported as SKIP.

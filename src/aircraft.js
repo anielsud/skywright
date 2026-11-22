@@ -877,7 +877,7 @@ export class Aircraft {
         const vf = vpt.dot(fwdW), vl = vpt.dot(latW);
         let muRoll = 0.025, muLat = 0.9;
         if (g.type === 'grass') muRoll = 0.05;
-        if (w.brake) muRoll += Math.max(this.brake, this.svcBrake) * 0.65;
+        if (w.brake) muRoll += Math.max(this.brake, this.svcBrake) * (this.isBike ? 0.95 : 0.65); // (a bike's brakes can stop it at about 1 g; its rider stops it tipping over the front)
         const hand = this.isCar && this.ctl.hand > 0 && w.top.z > this.com.z ? this.ctl.hand : 0; // handbrake locks the back wheels: slide!
         // a car's driving mode (drive.js): its tyres' side grip; Easy and Racer's handbrake drift lets the tail out but
         // keeps the gas pushing; with no ABS (Pro) a hard brake locks the wheel and it slides instead of steering
@@ -913,6 +913,7 @@ export class Aircraft {
           w.locked = lock || (hand > 0.5 && !drift) ? 1 : 0;
         }
         if (water && Math.abs(vf) > 3 && Math.random() < 0.3) this.emit('spray', { pos: pt.clone(), speed: Math.abs(vf) });
+        else if (!water && w.locked && Math.abs(vf) > 2 && Math.random() < 0.35) this.emit('skid', { pos: pt.clone(), speed: Math.abs(vf), surf: g.type }); // (a locked wheel: tyre smoke or a dust trail)
         else if (!water && g.type !== 'runway' && Math.abs(vf) > 8 && Math.random() < 0.06) this.emit('dust', { pos: pt.clone(), speed: Math.abs(vf), surf: g.type });
       }
       for (const w of p.gear.wheels) w.wasContact = w.contact;
