@@ -9,6 +9,7 @@ import { OutputPass } from '../vendor/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from '../vendor/addons/postprocessing/ShaderPass.js';
 import { SMAAPass } from '../vendor/addons/postprocessing/SMAAPass.js';
 import { Pass, FullScreenQuad } from '../vendor/addons/postprocessing/Pass.js';
+import { renderHudOverlay } from './liveHud.js';
 
 const GradeShader = {
   uniforms: { tDiffuse: { value: null }, vignette: { value: 0.32 }, saturation: { value: 1.12 }, contrast: { value: 1.06 }, shock: { value: 0 }, warmth: { value: 0 }, time: { value: 0 }, grain: { value: 0.025 },
@@ -178,6 +179,11 @@ const COMP_FRAG = /* glsl */`
     gl_FragColor = c;
   }`;
 
+// the fighter's HUD seen from its cockpit (liveHud.js), drawn after the tone mapping: its green light as is
+class HudPass extends Pass {
+  constructor() { super(); this.needsSwap = false; this.camera = null; }
+  render(renderer, writeBuffer, readBuffer) { if (this.camera) renderHudOverlay(renderer, this.camera, this.renderToScreen ? null : readBuffer); }
+}
 class AtmosPass extends Pass {
   constructor() {
     super();
@@ -242,7 +248,8 @@ export class Post {
     this.output = new OutputPass();
     this.smaa = new SMAAPass(size.x, size.y); this.smaa.enabled = false;
     this.grade = new ShaderPass(GradeShader);
-    for (const p of [this.renderPass, this.atmos, this.bloom, this.output, this.smaa, this.grade]) this.composer.addPass(p);
+    this.hud = new HudPass();
+    for (const p of [this.renderPass, this.atmos, this.bloom, this.output, this.hud, this.smaa, this.grade]) this.composer.addPass(p);
     this.enabled = true; this.ultra = false;
   }
   setSamples(n) { for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) { if (rt.samples !== n) { rt.samples = n; rt.dispose(); } } }
@@ -262,8 +269,8 @@ export class Post {
   setSMAA(on) { this.smaa.enabled = on; }
   setSharpen(v) { this.grade.uniforms.sharpen.value = v; }
   render(scene, camera, dt = 0.016) {
-    if (!this.enabled) { this.renderer.render(scene, camera); return; }
-    this.renderPass.scene = scene; this.renderPass.camera = camera; this.atmos.camera = camera;
+    if (!this.enabled) { this.renderer.render(scene, camera); renderHudOverlay(this.renderer, camera, null); return; }
+    this.renderPass.scene = scene; this.renderPass.camera = camera; this.atmos.camera = camera; this.hud.camera = camera;
     const g = this.grade.uniforms; g.time.value = (g.time.value + dt) % 100; g.shock.value *= Math.max(0, 1 - dt * 3);
     this.composer.render(dt);
   }

@@ -8,6 +8,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { M } from './materials.js';
 import { PM, lightGeometry } from './planeMaterials.js';
 import { LivePanel } from './liveDisplays.js';
+import { airlinerPFD, airlinerND, airlinerENG, airlinerGear } from './liveScreens.js';
 import { revolve, airfoil } from './parts.js'; // (circular, used at build time only)
 import { bubbleInterior } from './bubbleCockpit.js'; // (circular, used at build time only)
 import { fighterInterior } from './jetCockpit.js'; // (circular too: build time only)
@@ -1384,7 +1385,13 @@ function airlinerFlightDeck(g, bR, nbR, { SY, SZ, SEAT, FLOOR, zs, DY, DZ }) {
   const glassM = fdGlassMat(), screenAt = (cx, cy, w, h, r) => { // (the screen sunk 6 mm in its bezel, glass over it)
     const W = w / 0.87, H = h / 0.83, bz = fdBezel(W, H, w, h, 0.006, 0.044); bz.applyMatrix4(P(cx, cy, 0)); b.add(bz, A);
     const s = fdUV(new THREE.PlaneGeometry(w, h), r); s.applyMatrix4(P(cx, cy, 0.038)); b.add(s, A); const gl = new THREE.PlaneGeometry(w, h); gl.applyMatrix4(P(cx, cy, 0.0395)); nb.add(gl, glassM); };
-  screenAt(-0.51, 0.025, 0.26, 0.2, FDA.pfd); screenAt(-0.215, 0.025, 0.26, 0.2, FDA.nd); screenAt(0.215, 0.025, 0.26, 0.2, FDA.eng); screenAt(0.51, 0.025, 0.26, 0.2, FDA.pfd);
+  // the displays are live (liveDisplays.js, liveScreens.js): the PFDs, the ND and the engine display redrawn ~12 times a
+  // second while the deck is watched, on one canvas (the first officer's PFD shows the captain's); the gear's lights
+  const lp = new LivePanel(null), live = (cx, cy, w, h, draw, same = null) => lp.screen(SH.clone().multiply(P(cx, cy, 0.0382)), w, h, { px: [320, 256], hz: 12, z: 0, dark: true, glow: 0.95, draw, same });
+  for (const cx of [-0.51, -0.215, 0.215, 0.51]) { const W = 0.26 / 0.87, H = 0.2 / 0.83, bz = fdBezel(W, H, 0.26, 0.2, 0.006, 0.044); bz.applyMatrix4(P(cx, 0.025, 0)); b.add(bz, A);
+    const gl = new THREE.PlaneGeometry(0.26, 0.2); gl.applyMatrix4(P(cx, 0.025, 0.0395)); nb.add(gl, glassM); }
+  const pfdL = live(-0.51, 0.025, 0.26, 0.2, airlinerPFD); live(-0.215, 0.025, 0.26, 0.2, airlinerND); live(0.215, 0.025, 0.26, 0.2, airlinerENG); live(0.51, 0.025, 0.26, 0.2, null, pfdL);
+  lp.screen(SH.clone().multiply(P(0, 0.04, 0.0309)), 0.06, 0.024, { px: [120, 48], hz: 6, z: 0, dark: true, glow: 0.95, draw: airlinerGear });
   screenAt(0, 0.09, 0.07, 0.07, FDA.isfd);
   { const s = fdUV(new THREE.PlaneGeometry(0.1, 0.14), FDA.gear); s.applyMatrix4(P(0, -0.0, 0.0305)); b.add(s, A);
     nb.add(bar(V(0, 0, 0).applyMatrix4(P(0.022, -0.035, 0.03)), V(0, 0, 0).applyMatrix4(P(0.022, -0.02, 0.1)), 0.012, 0.012, true, 6), kit.alu); // the gear lever and its wheel-shaped knob
@@ -1477,6 +1484,7 @@ function airlinerFlightDeck(g, bR, nbR, { SY, SZ, SEAT, FLOOR, zs, DY, DZ }) {
     const r0 = nosePt(z0f(sx * th0), sx * th0, k + 0.005), r1 = nosePt(z0f(sx * th1), sx * th1, k + 0.005); nbR.add(bar(r0, r1, 0.012, 0.012, true, 6), kit.dark); };
   const zTop = (th) => zOn(th, WTOPY);
   for (const sx of [-1, 1]) { visor(sx, WPOST1 + 0.04, 0.72, (th) => zTop(th) + 0.005, (th) => zTop(th) - 0.14, K - 0.03); visor(sx, 0.12, 0.45, (th) => zTop(th) + 0.03, (th) => zTop(th) + 0.2, K - 0.012); }
+  lp.to(g); // (the live displays: one draw call)
   // what the crew must keep clear of
   const tb =new THREE.Matrix4().compose(toe.a.clone().add(toe.b).multiplyScalar(0.5).add(V(0, 0, -0.012)), new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), toe.b.clone().sub(toe.a).normalize()), V(1, 1, 1));
   return [boxObstacle('panel', pf, [1.6, 0.42, 0.06]), boxObstacle('panel L', wings[0], [0.26, 0.42, 0.06]), boxObstacle('panel R', wings[1], [0.26, 0.42, 0.06]),

@@ -1228,7 +1228,7 @@ function stepFlight(dtReal) {
   spaceMilestones(f, ac);
   flightCam.userData.ladder = rig.mode === 'chase' || rig.mode === 'cockpit';
   hud.update(ac, world, f.mission, flightCam, net.markers());
-  updateLive(ac, { dt: dtReal, cockpit, world, wheelV: drive?.v ?? null, stallWarn: f.stallWarn, metric: settings.units === 'metric' }); // the cockpit's needles and lamps (liveDisplays.js: only ours, only seen from the cockpit)
+  updateLive(ac, { dt: dtReal, cockpit, world, wheelV: drive?.v ?? null, stallWarn: f.stallWarn, metric: settings.units === 'metric', traffic, net }); // the cockpit's needles and lamps (liveDisplays.js: only ours, only seen from the cockpit)
   if (f.debug) $('#debug').textContent = `α ${(ac.alpha * 57.3).toFixed(1)}° g ${ac.g.toFixed(2)} V ${ac.airspeed?.toFixed(1)} m=${Math.round(ac.mass)} com=${ac.com.toArray().map((v) => v.toFixed(2))} w=${ac.w.toArray().map((v) => v.toFixed(2))}`;
   $('#debug').style.display = f.debug ? '' : 'none';
 }
