@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.133.0', items: [
+    "The instruments work! In the cockpit view the needles move: speed, height, the tilting horizon, the compass, the rev counter, and the gear lights go green when the wheels are down.",
+    "The Speedboat and the Sport Bike have their own little dashboards showing your speed, revs and gear.",
+  ] },
   { v: '1.132.0', items: [
     "The game opens even faster: part pictures and pilots are ready before you arrive",
   ] },
