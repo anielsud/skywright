@@ -31,9 +31,9 @@ import { MOTOR, isMotor, motorRpm } from './motorSound.js';
 export const REST = Object.freeze({
   spd: 0, kt: 0, mph: 0, kmh: 0, alt: 0, vs: 0, hdg: 0, pitch: 0, roll: 0, turn: 0, slip: 0,
   rpm: 0, rpmK: 0, thr: 0, map: 29.9, g: 1, gMax: 1, gMin: 1, oilP: 0, oilT: 0.1, cht: 0.1, egt: 0.1, fuelL: 0.72, fuelR: 0.68, amp: 0.35,
-  gearDown: 1, gearMove: 0, stall: 0, running: 0, off: 1, brake: 1, ab: 0, gearNo: 0, rev: 0, t: 0, metric: 0,
+  gearDown: 1, gearMove: 0, stall: 0, running: 0, off: 1, brake: 1, ab: 0, gearNo: 0, rev: 0, t: 0, metric: 0, mach: 0, fpmAz: 0, fpmEl: 0, north: 0, flaps: 0, n1: 0.2, egtJ: 0.05,
 });
-const _f = new THREE.Vector3(), _u = new THREE.Vector3(), _r = new THREE.Vector3();
+const _f = new THREE.Vector3(), _u = new THREE.Vector3(), _r = new THREE.Vector3(), _q = new THREE.Quaternion();
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const wrapPi = (a) => a - 2 * Math.PI * Math.floor((a + Math.PI) / (2 * Math.PI));
 // The signals, in the units real instruments show: knots, feet, feet per minute, degrees per second, rpm...
@@ -81,6 +81,12 @@ export function signals(ac, ctx, S, dt) {
   S.stall = ac.stalled && ctx.stallWarn !== false ? 1 : 0;
   S.brake = ac.brake > 0.5 || ac.svcBrake > 0.5 || ac.ctl?.hand > 0.5 ? 1 : 0;
   S.metric = ctx.metric ? 1 : 0; // (digital displays: km/h instead of mph)
+  S.mach = ac.mach || 0; S.north = ctx.world?.loc?.north || 0; S.flaps = ac.flaps || 0; S.x = ac.x.x; S.y = ac.x.y; S.z = ac.x.z;
+  { const v = _r.copy(ac.v).applyQuaternion(_q.copy(ac.q).invert()), L = Math.hypot(v.x, v.z); // the flight path in the aircraft's frame (degrees off the nose)
+    const sp = ac.v.length(); S.fpmAz = sp > 3 ? THREE.MathUtils.radToDeg(Math.atan2(v.x, -v.z)) : 0; S.fpmEl = sp > 3 ? THREE.MathUtils.radToDeg(Math.atan2(v.y, L)) : 0; }
+  { let n = 0, k = 0; for (const p of ac.parts) if (p.alive && p.engine && (p.engine.type === 'jet' || p.engine.type === 'rocket')) { n += p.engine.spoolT || 0; k++; } // jets: N1 and EGT follow the spool
+    S.n1 = k ? (run ? 0.2 + 0.8 * n / k : Math.max(0, (S.n1 || 0) - dt * 0.1)) : S.rpmK; S.egtJ = k ? (run ? 0.3 + 0.55 * n / k + (ab ? 0.12 : 0) : 0.05) : S.egt; }
+  S.env = ctx; // (screens that draw the world: the map tiles, other aircraft)
   return S;
 }
 
@@ -142,7 +148,7 @@ export class LivePanel {
   // base: the atlas material the faces are drawn with (null: plain colours); white / lamp: uvs of a white texel (lamp:
   // one lit in the emissive map too); basic: unlit (for faces drawn with MeshBasicMaterial)
   constructor(base = null, { white = [0, 0], lamp = null, basic = false } = {}) {
-    this.base = base; this.white = white; this.lampUV = lamp || white; this.basic = basic; this.items = []; this.screens = [];
+    this.base = base; this.white = white; this.lampUV = lamp || white; this.basic = basic; this.items = []; this.screens = []; this.hooks = [];
   }
   // anything that moves on a face: shape (in the face's frame, round the pivot); src: a signal name or (S) => value;
   // xf(value, out): out = [turn (canvas radians), dx, dy, scale] (or a number: just the turn); w: the damping (rad/s:
@@ -215,7 +221,11 @@ export class LivePanel {
   }
   // a canvas display: w x h on the face (its centre at m's origin, z above it); px: its canvas size; draw(ctx, S, w, h)
   // is called hz times a second while it is watched. All a panel's screens share one canvas and one material.
-  screen(m, w, h, { px = [256, 128], hz = 10, draw, z = 0.0005, glow = 0.9 }) { const sc = { m: m.clone(), w, h, px, hz, draw, z, glow, y: 0, t: 1e9 }; this.screens.push(sc); return sc; }
+  // (same: another screen of this panel whose picture this one shows too, as a second PFD; dark: no diffuse, the
+  // picture only glows, as a real display's black glass)
+  screen(m, w, h, { px = [256, 128], hz = 10, draw, z = 0.0005, glow = 0.9, same = null, dark = false }) { const sc = { m: m.clone(), w, h, px, hz, draw, z, glow, same, y: 0, t: 1e9 }; if (dark) this.dark = true; this.screens.push(sc); return sc; }
+  // anything else to do each frame while watched (fn(S, dt)): a HUD's uniforms and canvas (liveHud.js)
+  hook(fn) { this.hooks.push(fn); return this; }
 
   // build the mesh(es) and add them to the part's group
   to(parent) {
@@ -245,17 +255,17 @@ export class LivePanel {
     return parent;
   }
   buildScreens(parent) {
-    const cw = Math.max(...this.screens.map((s) => s.px[0])); let ch = 0; for (const s of this.screens) { s.y = ch; ch += s.px[1]; }
+    const own = this.screens.filter((s) => !s.same), cw = Math.max(...own.map((s) => s.px[0])); let ch = 0; for (const s of own) { s.y = ch; ch += s.px[1]; }
     const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch; const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
     const geos = [];
     for (const s of this.screens) {
       const pg = new THREE.PlaneGeometry(s.w, s.h), uv = pg.attributes.uv;
-      for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * s.px[0]) / cw, 1 - (s.y + (1 - uv.getY(i)) * s.px[1]) / ch);
+      const r = s.same || s; for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * r.px[0]) / cw, 1 - (r.y + (1 - uv.getY(i)) * r.px[1]) / ch);
       pg.translate(0, 0, s.z); pg.applyMatrix4(s.m); geos.push(pg);
-      s.ctx = cv.getContext('2d'); this.drawScreen(s, REST);
+      if (!s.same) { s.ctx = cv.getContext('2d'); this.drawScreen(s, REST); }
     }
     const geo = geos.length > 1 ? mergeAll(geos) : geos[0];
-    const mat = new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: Math.max(...this.screens.map((s) => s.glow)), roughness: 0.6, metalness: 0 }); // (an anti-glare finish: the screen's glass gives the sheen)
+    const mat = new THREE.MeshStandardMaterial({ map: this.dark ? null : tex, color: this.dark ? 0x000000 : 0xffffff, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: Math.max(...this.screens.map((s) => s.glow)), roughness: 0.6, metalness: 0 }); // (an anti-glare finish: the screen's glass gives the sheen)
     const mesh = new THREE.Mesh(geo, mat); mesh.userData.live = this; mesh.userData.near = true; mesh.userData.keepShape = true; mesh.castShadow = false; mesh.receiveShadow = true;
     this.screenTex = tex; this.screenMesh = mesh; this.canvas = cv; tex.needsUpdate = true; parent.add(mesh);
   }
@@ -293,7 +303,8 @@ export class LivePanel {
     const pa = this.mesh?.geometry.attributes.position; // (cabinLight gives the mesh a new geometry on the same attributes; a
     if (pa && pa !== this.pos) { if (pa.count === this.pos.count) this.pos = pa; else this.items.length = 0; } // part cut away round another's interior is left as it is)
     if (this.items.length) this.step(S, dt);
-    if (this.screens.length) { let dirty = false; for (const s of this.screens) { s.t += dt; if (s.t >= 1 / s.hz) { s.t = 0; this.drawScreen(s, S); dirty = true; } } if (dirty) this.screenTex.needsUpdate = true; }
+    for (const h of this.hooks) h(S, dt);
+    if (this.screens.length) { let dirty = false; for (const s of this.screens) { if (s.same) continue; s.t += dt; if (s.t >= 1 / s.hz) { s.t = 0; this.drawScreen(s, S); dirty = true; } } if (dirty) this.screenTex.needsUpdate = true; }
   }
 }
 // a critically damped spring (a needle settling on its value: no overshoot, ~1/w seconds)

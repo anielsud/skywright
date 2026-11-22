@@ -19,6 +19,9 @@ import { mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
 import { M } from './materials.js';
 import { PM } from './planeMaterials.js';
 import { V, mx, bar, pipe, ringLoft, seatGeo, Bag, shell, capHoles, boxObstacle, hoodObstacle, insideRows, fighterGlassR, FIGHTER_GLASS } from './partDetail.js';
+import { LivePanel, Shape, color as liveColor } from './liveDisplays.js';
+import { collimatedHud } from './liveHud.js';
+import { fighterRadar, fighterMap, cautionLamps, gearLamps, sr71Triple } from './liveScreens.js';
 
 const cache = new Map(), cached = (k, f) => { if (!cache.has(k)) cache.set(k, f()); return cache.get(k); };
 // cockpit paint (matt, a little sheen)
@@ -66,13 +69,13 @@ const GF = '#5f6367', GREY = new Set(['gauges', 'ped', 'aux', 'aux2', 'wingFL', 
 // round instruments on the big panels, cell-normalised (u, v; r a fraction of the cell's width): drawn into the atlas,
 // and their bezels built where they are
 const DIALS = {
-  sr71: [{ u: 0.5, v: 0.3, r: 0.1, k: 'adi' }, { u: 0.5, v: 0.66, r: 0.095, k: 'hsi' }, { u: 0.21, v: 0.38, r: 0.075 }, { u: 0.21, v: 0.62, r: 0.075 }, { u: 0.21, v: 0.85, r: 0.058 },
+  sr71: [{ u: 0.5, v: 0.3, r: 0.1, k: 'adi' }, { u: 0.5, v: 0.66, r: 0.095, k: 'hsi', live: 1 }, { u: 0.21, v: 0.38, r: 0.075, live: 1 }, { u: 0.21, v: 0.62, r: 0.075, live: 1 }, { u: 0.21, v: 0.85, r: 0.058 },
     { u: 0.07, v: 0.3, r: 0.045 }, { u: 0.07, v: 0.5, r: 0.045 }, { u: 0.07, v: 0.7, r: 0.045 }, { u: 0.07, v: 0.88, r: 0.04 }, { u: 0.34, v: 0.86, r: 0.045 },
     { u: 0.79, v: 0.2, r: 0.06 }, { u: 0.79, v: 0.42, r: 0.06 }, { u: 0.79, v: 0.64, r: 0.06 }, { u: 0.79, v: 0.86, r: 0.055 }, { u: 0.66, v: 0.86, r: 0.045 },
     { u: 0.93, v: 0.2, r: 0.045 }, { u: 0.93, v: 0.38, r: 0.045 }, { u: 0.93, v: 0.56, r: 0.045 }, { u: 0.93, v: 0.74, r: 0.045 }, { u: 0.66, v: 0.36, r: 0.042 }],
   rso: [{ u: 0.5, v: 0.56, r: 0.15, k: 'scope' }, { u: 0.12, v: 0.32, r: 0.055 }, { u: 0.12, v: 0.56, r: 0.055 }, { u: 0.12, v: 0.8, r: 0.055 }, { u: 0.26, v: 0.38, r: 0.05 },
     { u: 0.26, v: 0.66, r: 0.05 }, { u: 0.88, v: 0.32, r: 0.055 }, { u: 0.88, v: 0.56, r: 0.055 }, { u: 0.88, v: 0.8, r: 0.055 }, { u: 0.74, v: 0.38, r: 0.05 }, { u: 0.74, v: 0.66, r: 0.05 }],
-  gauges: [{ u: 0.5, v: 0.42, r: 0.17, k: 'adi' }, { u: 0.16, v: 0.32, r: 0.12 }, { u: 0.84, v: 0.32, r: 0.12 }, { u: 0.16, v: 0.78, r: 0.09 }, { u: 0.84, v: 0.78, r: 0.09 }, { u: 0.5, v: 0.86, r: 0.08, k: 'hsi' }],
+  gauges: [{ u: 0.5, v: 0.42, r: 0.17, k: 'adi' }, { u: 0.16, v: 0.32, r: 0.12, live: 1 }, { u: 0.84, v: 0.32, r: 0.12, live: 1 }, { u: 0.16, v: 0.78, r: 0.09 }, { u: 0.84, v: 0.78, r: 0.09 }, { u: 0.5, v: 0.86, r: 0.08, k: 'hsi', live: 1 }],
   wingFL: [{ u: 0.3, v: 0.36, r: 0.19, k: 'scope' }], // (the threat warning's azimuth scope)
   wingFR: [{ u: 0.19, v: 0.3, r: 0.135 }, { u: 0.5, v: 0.3, r: 0.135 }, { u: 0.81, v: 0.3, r: 0.135 }, { u: 0.19, v: 0.73, r: 0.135 }, { u: 0.5, v: 0.73, r: 0.135 }, { u: 0.81, v: 0.73, r: 0.135 }], // (fuel flow, oil, nozzle, rpm, FTIT, hydraulics)
 };
@@ -123,9 +126,9 @@ function drawAtlas() {
     for (const [a, b] of [[x + 6, y + 6], [x + w - 6, y + 6], [x + 6, y + h - 6], [x + w - 6, y + h - 6]]) dzus(a, b);
   };
   // a round instrument: a black face, white ticks and numbers, a needle (or an attitude ball, a compass card, a scope)
-  const dial = (x, y, r, k = 'gauge', seed = 1) => { dialFace(x, y, r, k, seed); gloss(x, y, r, 0, 0.1, true);
+  const dial = (x, y, r, k = 'gauge', seed = 1, live = 0) => { dialFace(x, y, r, k, seed, live); gloss(x, y, r, 0, 0.1, true);
     g.strokeStyle = 'rgba(255,255,255,0.22)'; g.lineWidth = Math.max(1, r * 0.08); g.beginPath(); g.arc(x, y, r * 0.8, Math.PI * 1.1, Math.PI * 1.45); g.stroke(); }; // (the glass over it catches the light)
-  const dialFace = (x, y, r, k, seed) => {
+  const dialFace = (x, y, r, k, seed, live) => { // (live: its needle, or the heading card's lubber line, is geometry: liveDials)
     const R = rnd(seed * 97 + 13); halo(x, y, r + 2);
     circ(g, x, y, r + 2); g.fillStyle = '#3a3d41'; g.fill();
     if (k === 'adi') {
@@ -150,7 +153,9 @@ function drawAtlas() {
     const a0 = k === 'hsi' ? 0 : -Math.PI * 1.25, a1 = k === 'hsi' ? Math.PI * 2 : Math.PI * 0.25, N = k === 'hsi' ? 36 : 10 + Math.floor(R() * 8);
     for (let i = 0; i <= N; i++) { const a = a0 + (a1 - a0) * (i / N), L = i % (k === 'hsi' ? 3 : 2) ? 0.12 : 0.22; g.beginPath(); g.moveTo(x + Math.cos(a) * r * 0.92, y + Math.sin(a) * r * 0.92); g.lineTo(x + Math.cos(a) * r * (0.92 - L), y + Math.sin(a) * r * (0.92 - L)); g.stroke(); }
     if (r > 14) for (let i = 0; i <= (k === 'hsi' ? 11 : 5); i++) { const a = k === 'hsi' ? (i / 12) * Math.PI * 2 - Math.PI / 2 : a0 + (a1 - a0) * (i / 5); txt(g, k === 'hsi' ? ['N', '3', '6', 'E', '12', '15', 'S', '21', '24', 'W', '30', '33'][i] : String(i * 2), x + Math.cos(a) * r * 0.58, y + Math.sin(a) * r * 0.58, Math.max(6, r * 0.2)); }
+    if (k === 'hsi' && live) return;
     if (k === 'hsi') { g.strokeStyle = '#f2c300'; g.lineWidth = Math.max(2, r * 0.06); g.beginPath(); g.moveTo(x, y - r * 0.7); g.lineTo(x, y + r * 0.7); g.stroke(); g.fillStyle = '#f2f2f2'; g.fillRect(x - r * 0.25, y - 1, r * 0.5, 3); return; }
+    if (live) return;
     const a = a0 + (a1 - a0) * (0.2 + R() * 0.6); g.strokeStyle = '#f4f4f0'; g.lineWidth = Math.max(1.5, r * 0.07); g.beginPath(); g.moveTo(x - Math.cos(a) * r * 0.15, y - Math.sin(a) * r * 0.15); g.lineTo(x + Math.cos(a) * r * 0.8, y + Math.sin(a) * r * 0.8); g.stroke();
     circ(g, x, y, Math.max(1.5, r * 0.08)); g.fillStyle = '#555'; g.fill();
   };
@@ -179,8 +184,9 @@ function drawAtlas() {
     for (let i = 0; i < 18; i++) { const x = 8 + (i % 6) * 41, y = 6 + Math.floor(i / 6) * 24; g.fillStyle = '#3a2a12'; g.fillRect(x, y, 36, 20); const L = LEGENDS[(i * 7) % LEGENDS.length]; txt(g, L, x + 18, y + 10, 8, '#8a7550');
       gloss(x, y, 36, 20, 0.12); if (lit[i]) { e.shadowColor = lit[i]; e.shadowBlur = 8; both((c) => { c.fillStyle = lit[i]; c.fillRect(x, y, 36, 20); }); e.shadowBlur = 0; both((c) => txt(c, L, x + 18, y + 10, 8, '#1a1200')); } } });
   SWATCHES.forEach((c, i) => { g.fillStyle = '#' + c.toString(16).padStart(6, '0'); g.fillRect(768 + 16 * i, 240, 16, 16); gloss(768 + 16 * i, 240, 16, 16, [0.62, 0.66, 0.55, 0.6, 0.62, 0.6, 0.95, 0.85, 0.95, 0.97, 0.5, 0.45, 0.4, 0.6, 0.64, 0.48][i]); });
+  g.fillStyle = '#ffffff'; g.fillRect(736, 224, 32, 32); // (white: what liveDials' needles and symbols are tinted from)
   // the F-16's standby instruments between the MFDs
-  at('gauges', (w, h) => { plate(0, 0, w, h, GF); DIALS.gauges.forEach((d, i) => dial(d.u * w, d.v * h, d.r * w, d.k, i + 3)); });
+  at('gauges', (w, h) => { plate(0, 0, w, h, GF); DIALS.gauges.forEach((d, i) => dial(d.u * w, d.v * h, d.r * w, d.k, i + 3, d.live)); });
   // the F-16's centre pedestal under the standby instruments: fuel quantity and flow over a caution block, the
   // oxygen and cabin-pressure gauges, a row of push buttons at the bottom
   at('ped', (w, h) => { plate(0, 0, w, 104, GF); dial(w * 0.5, 36, 27, 'gauge', 61); both((c) => { c.fillStyle = '#05070a'; c.fillRect(18, 74, w - 36, 16); }); inset(18, 74, w - 36, 16);
@@ -200,7 +206,7 @@ function drawAtlas() {
   // the SR-71 pilot's panel: black, dense with round gauges; the triple display (speed, Mach, altitude) top left
   at('sr71', (w, h) => { g.fillStyle = '#111214'; g.fillRect(0, 0, w, h); for (let i = 1; i < 4; i++) { g.fillStyle = '#060607'; g.fillRect((w * i) / 4 + (i === 2 ? 0 : 0), 0, 2, h); }
     for (const [x, y] of [[8, 8], [w - 8, 8], [8, h - 8], [w - 8, h - 8], [w / 2, 8], [w / 2, h - 8]]) dzus(x, y);
-    DIALS.sr71.forEach((d, i) => dial(d.u * w, d.v * h, d.r * w, d.k, i + 11));
+    DIALS.sr71.forEach((d, i) => dial(d.u * w, d.v * h, d.r * w, d.k, i + 11, d.live));
     g.fillStyle = '#222428'; g.fillRect(w * 0.08, h * 0.06, w * 0.28, h * 0.13); both((c) => { ['KEAS 310', 'MACH 3.17', 'ALT 78500'].forEach((s, i) => { c.fillStyle = '#05070a'; c.fillRect(w * 0.1, h * 0.07 + i * 18, w * 0.24, 15); c.font = 'bold 12px monospace'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#ffd36a'; c.fillText(s, w * 0.22, h * 0.07 + i * 18 + 8); }); }); gloss(w * 0.1, h * 0.07, w * 0.24, 52, 0.1); inset(w * 0.08, h * 0.06, w * 0.28, h * 0.13);
     for (let i = 0; i < 6; i++) { const x = w * 0.37 + i * 26, y = h * 0.06; g.fillStyle = '#2a1d0c'; g.fillRect(x, y, 22, 14); if (i === 2) both((c) => { c.fillStyle = '#ffb020'; c.fillRect(x, y, 22, 14); }); }
     for (let i = 0; i < 9; i++) lit(['FUEL', 'OIL', 'HYD A', 'HYD B', 'INLET', 'EGT', 'RPM', 'NOZ', 'CIT'][i], w * (0.6 + (i % 3) * 0.1), h * (0.96 - Math.floor(i / 3) * 0.02 - 0.02), 8); });
@@ -268,18 +274,7 @@ export const panelMat = () => cached('panelMat', () => {
   m.customProgramCacheKey = () => 'jetSurf1';
   return m;
 });
-// the HUD's symbology, glowing on the combiner glass
-export const hudMat = () => cached('hudMat', () => {
-  const c = document.createElement('canvas'); c.width = c.height = 256; const g = c.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, 256, 256);
-  g.strokeStyle = g.fillStyle = '#ffffff'; g.lineWidth = 2.2; g.font = 'bold 13px monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  for (let i = -2; i <= 2; i++) if (i) { const y = 128 - i * 38; g.setLineDash(i < 0 ? [8, 6] : []); g.beginPath(); g.moveTo(60, y); g.lineTo(106, y); g.moveTo(150, y); g.lineTo(196, y); g.stroke(); g.setLineDash([]); g.fillText(String(Math.abs(i) * 5), 44, y); g.fillText(String(Math.abs(i) * 5), 212, y); }
-  g.beginPath(); g.moveTo(40, 128); g.lineTo(108, 128); g.moveTo(148, 128); g.lineTo(216, 128); g.stroke();
-  g.beginPath(); g.arc(128, 132, 7, 0, 7); g.moveTo(121, 132); g.lineTo(108, 132); g.moveTo(135, 132); g.lineTo(148, 132); g.moveTo(128, 125); g.lineTo(128, 117); g.stroke();
-  for (let i = 0; i < 9; i++) { const x = 72 + i * 14; g.beginPath(); g.moveTo(x, 20); g.lineTo(x, i % 2 ? 26 : 32); g.stroke(); } g.fillText('27', 128, 42);
-  g.strokeRect(10, 112, 34, 18); g.fillText('350', 27, 121); g.strokeRect(212, 112, 40, 18); g.fillText('8500', 232, 121); g.fillText('G 1.0', 30, 210); g.fillText('ARM', 226, 210);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
-  return new THREE.MeshBasicMaterial({ map: t, color: 0x6dff8e, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
-});
+// (the HUD's symbology: liveHud.js)
 
 // the combiner: clear glass with a faint green-gold tint (the canopy glass mirrored the sky: it read as a white card)
 export const combinerMat = () => cached('combiner', () => new THREE.MeshStandardMaterial({ color: 0x9fdcb4, metalness: 0, roughness: 0.05, transparent: true, opacity: 0.16, envMapIntensity: 0.25, depthWrite: false, side: THREE.DoubleSide }));
@@ -327,6 +322,25 @@ function bezels(nb, cell, m, w, h, minR = 0.05) {
     const r = d.r * (CELLS[cell][2] / CELLS[cell][3]) * h, x = (d.u - 0.5) * w, y = (0.5 - d.v) * h; // (r: a fraction of the cell's width)
     const rim = new THREE.TorusGeometry(r * 1.07, 0.0045, 3, 18); rim.translate(x, y, 0.002); rim.applyMatrix4(m); nb.add(rim, M.darkMetal());
   }
+}
+
+// ---------- live instruments (liveDisplays.js) ----------
+// a panel on the atlas (needles and symbols tinted from its white swatch), and its dials made live by index: a needle
+// (spec: a signal, or (S) => 0..1 of the 270 degree sweep), the attitude ball ('adi'), the heading card ('hsi')
+const livePanel = () => new LivePanel(panelMat(), { white: [752 / S, 1 - 240 / SH] });
+function liveDials(lp, cell, m, w, h, spec) {
+  const [cx, cy, cw, ch] = CELLS[cell];
+  DIALS[cell].forEach((d, i) => {
+    const sp = spec[i]; if (!sp) return;
+    const r = d.r * w, f = m.clone().multiply(mx([(d.u - 0.5) * w, (0.5 - d.v) * h, 0]));
+    if (sp === 'adi') lp.attitude(f, r, { sky: '#3d7fc4', ground: '#6b4a2b', symbol: '#f6a01a', z: 0.0006 });
+    else if (sp === 'hsi') {
+      const uvAt = (x, y) => [(cx + (d.u + x / w) * cw) / S, 1 - (cy + (d.v - y / h) * ch) / SH], wc = liveColor('#f2f2f2'), uv = lp.white;
+      lp.part(f, new Shape().card(r * 0.97, 0.0005, uvAt), { src: 'hdg', xf: (hd) => -hd, wrap: true, w: 6 });
+      lp.part(f, new Shape().bar(0, -r * 0.55, 0, r * 0.35, r * 0.08, 0.0012, wc, uv).bar(-r * 0.3, r * 0.05, r * 0.3, r * 0.05, r * 0.07, 0.0012, wc, uv).bar(-r * 0.14, -r * 0.48, r * 0.14, -r * 0.48, r * 0.06, 0.0012, wc, uv)
+        .poly([[0, r * 0.95], [-r * 0.08, r * 1.08], [r * 0.08, r * 1.08]], 0.0012, liveColor('#f2c300'), uv));
+    } else lp.needle(f, { src: sp, at: (v) => -Math.PI * 1.25 + Math.PI * 1.5 * Math.max(-0.02, Math.min(1.02, v)), len: r * 0.8, w: r * 0.08, z: 0.0012, hub: 2.4, hubCol: '#2a2b2e', damp: 8 });
+  });
 }
 
 // ---------- the ejection seat ----------
@@ -428,12 +442,18 @@ export function fighterInterior(g, b0, nb, paint) {
     for (const [x, y, w2, h2] of [[0, 0.057, 0.12, 0.006], [0, -0.057, 0.12, 0.006], [0.057, 0, 0.006, 0.12], [-0.057, 0, 0.006, 0.12]]) { const lip = new THREE.BoxGeometry(w2, h2, 0.005); lip.applyMatrix4(on(sx * 0.165 + x, -0.035 + y, 0.0328)); nb.add(lip, black); } } // (a lip round the screen: it sits in the bezel)
   { const u = new THREE.BoxGeometry(0.14, 0.0875, 0.06); u.applyMatrix4(on(0, 0.07, 0.036)); b.add(u, black); quad(b, 'ufc', on(0, 0.07, 0.0663), 0.14, 0.0875); }
   quad(b, 'gauges', on(0, -0.06, 0.0068), 0.15, 0.1125); bezels(nb, 'gauges', on(0, -0.06, 0.0068), 0.15, 0.1125, 0.08);
+  // live (liveDisplays.js): the standby attitude, airspeed (hundreds of knots), altitude (ten thousands of feet) and
+  // heading; the MFDs (radar on the left, a moving map and the engine on the right), the master caution and AB lights
+  const lp = livePanel(); liveDials(lp, 'gauges', on(0, -0.06, 0.0068), 0.15, 0.1125, { 0: 'adi', 1: (S) => S.kt / 1000, 2: (S) => S.alt / 100000, 5: 'hsi' });
+  for (const sx of [-1, 1]) lp.screen(on(sx * 0.165, -0.035, 0.0312), 0.1078, 0.1078, { px: [256, 256], hz: 10, z: 0, dark: true, draw: sx < 0 ? fighterRadar : fighterMap });
+  lp.screen(on(-0.086, 0.083, 0.0072), 0.026, 0.04, { px: [64, 96], hz: 8, z: 0, dark: true, draw: cautionLamps });
   for (const sx of [-1, 1]) quad(b, 'warn', on(sx * 0.165, 0.08, 0.0068), 0.13, 0.049);
   // side wings angled in towards the pilot under the glare shield, the landing-gear handle on the left one
   const wings = [-1, 1].map((sx) => mx([sx * 0.325, -0.03, -0.545 + PZ], [0, -sx * 0.71, 0]));
   wings.forEach((wm, i) => { const sx = i ? 1 : -1, bx = new THREE.BoxGeometry(0.17, 0.14, 0.02); bx.applyMatrix4(wm.clone().multiply(mx([0, 0, -0.01]))); b.add(bx, dark);
     const fm = wm.clone().multiply(mx([0, 0, 0.0008])), cell = sx < 0 ? 'wingFL' : 'wingFR'; quad(b, cell, fm, 0.16, 0.12); bezels(nb, cell, fm, 0.16, 0.12, 0.1);
-    if (sx < 0) { const k0 = V(0.045, 0.035, 0).applyMatrix4(wm), k1 = V(0.045, 0.035, 0.04).applyMatrix4(wm); nb.add(bar(k0, k1, 0.008, 0.008, true, 6), M.steel());
+    if (sx < 0) { lp.screen(wm.clone().multiply(mx([0.05, -0.006, 0.0016])), 0.026, 0.02, { px: [64, 48], hz: 8, z: 0, dark: true, draw: gearLamps }); // (the gear's three greens, under its handle)
+      const k0 = V(0.045, 0.035, 0).applyMatrix4(wm), k1 = V(0.045, 0.035, 0.04).applyMatrix4(wm); nb.add(bar(k0, k1, 0.008, 0.008, true, 6), M.steel());
       const kn = new THREE.CylinderGeometry(0.014, 0.014, 0.018, 10); kn.rotateX(Math.PI / 2); kn.applyMatrix4(wm.clone().multiply(mx([0.045, 0.035, 0.045]))); nb.add(kn, M.pilot()); } });
   // glare shield over the panel (a part-cylinder hood, open behind), its padded lip along the rear edge
   const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.18, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.6); gl.rotateY(Math.PI); gl.translate(0, 0.14, -0.6 + PZ); b.add(shellOf(gl), coam);
@@ -445,13 +465,15 @@ export function fighterInterior(g, b0, nb, paint) {
     for (let j = 0; j <= 8; j++) { const u = j / 8, row = []; for (let i = 0; i <= 10; i++) { const sx = -1 + 2 * (i / 10); let x = sx * 0.44, z = 0; for (let k = 0; k < 3; k++) { z = -0.95 + u * (zr(x) + 0.95); x = sx * W(z); } row.push(V(x, 0.045, z)); } rows.push(row); }
     b.add(shell(gridSurf(rows, V(0, 1, 0)), 0.006), coam); }
   // the HUD: its body on the glare shield, the combiner glass in a frame on top, the symbology glowing on it
-  const hf = mx([0, 0.33, -0.62 + PZ], [-0.35, 0, 0]);
+  const hf = mx([0, 0.33, -0.62 + PZ], [-0.35, 0, 0]), HUDG = [0.19, 0.16]; // (the combiner glass: about 15 x 13 degrees from the pilot's eye)
   { const hb = roundBox(0.13, 0.035, 0.1, 0.008); hb.translate(0, 0.2535, -0.635 + PZ); b.add(hb, black);
-    const hud = new THREE.PlaneGeometry(0.15, 0.13); hud.applyMatrix4(hf); nb.add(hud, combinerMat());
-    const sym = new THREE.PlaneGeometry(0.13, 0.11); sym.applyMatrix4(hf.clone().multiply(mx([0, 0.005, 0.002]))); nb.add(sym, hudMat());
-    const c = (x, y) => V(x, y, 0).applyMatrix4(hf);
-    for (const sx of [-1, 1]) nb.add(bar(c(sx * 0.079, -0.07), c(sx * 0.079, 0.068), 0.009, 0.009, true, 6), black);
-    nb.add(bar(c(-0.083, 0.068), c(0.083, 0.068), 0.009, 0.009, true, 6), black); }
+    const hud = new THREE.PlaneGeometry(HUDG[0], HUDG[1]); hud.applyMatrix4(hf); nb.add(hud, combinerMat());
+    // the symbology (liveHud.js): collimated, drawn at infinity through the combiner
+    const sym = new THREE.PlaneGeometry(HUDG[0] - 0.008, HUDG[1] - 0.008); sym.applyMatrix4(hf.clone().multiply(mx([0, 0, 0.002]))); collimatedHud(lp, g, sym);
+    const c = (x, y) => V(x, y, 0).applyMatrix4(hf), hx = HUDG[0] / 2 + 0.004, hy = HUDG[1] / 2;
+    for (const sx of [-1, 1]) nb.add(bar(c(sx * hx, -hy - 0.005), c(sx * hx, hy - 0.002), 0.009, 0.009, true, 6), black);
+    nb.add(bar(c(-hx - 0.004, hy - 0.002), c(hx + 0.004, hy - 0.002), 0.009, 0.009, true, 6), black); }
+  lp.to(g);
   // Round 2, the F-16's density (photos: F-16C cockpit, F-16 right console and side-stick, F-16 cockpits on Commons):
   // the centre pedestal under the panel down to the floor (its own pictures: fuel quantity and flow, a caution block,
   // oxygen and cabin gauges, buttons), the knee panels (the auxiliary consoles: each console's forward end rising to
@@ -541,7 +563,7 @@ export function fighterInterior(g, b0, nb, paint) {
     ...[-1, 1].map((sx) => ({ name: 'console', box: [sx * 0.335, -0.3725, 0.02], size: [0.21, 0.415, 0.84] })), { name: 'armrest', box: [0.29, -0.15, 0.15], size: [0.13, 0.06, 0.34], parts: ['legs', 'torso'] },
     boxObstacle('panel', on(0, 0, -0.009), [0.52, 0.24, 0.03]), boxObstacle('UFC', on(0, 0.07, 0.036), [0.14, 0.0875, 0.06]),
     ...[-1, 1].map((sx) => boxObstacle('MFD', on(sx * 0.165, -0.035, 0.018), [0.155, 0.155, 0.024])), ...wings.map((wm) => boxObstacle('panel wing', wm.clone().multiply(mx([0, 0, 0.005])), [0.17, 0.14, 0.05])),
-    hoodObstacle('glare shield', 0.3, 0.6, 1.3, 0.14, -0.6 + PZ, 0.18), boxObstacle('HUD', hf, [0.17, 0.15, 0.02]), { name: 'HUD body', box: [0, 0.2535, -0.635 + PZ], size: [0.13, 0.035, 0.1] }, panHandle(SEAT.at, SEAT.dims[2]),
+    hoodObstacle('glare shield', 0.3, 0.6, 1.3, 0.14, -0.6 + PZ, 0.18), boxObstacle('HUD', hf, [0.21, 0.18, 0.02]), { name: 'HUD body', box: [0, 0.2535, -0.635 + PZ], size: [0.13, 0.035, 0.1] }, panHandle(SEAT.at, SEAT.dims[2]),
     { name: 'pedestal', box: [0, (PED.y0 + PED.y1) / 2, (PED.z0 + PED.z1) / 2 + 0.004], size: [PED.x * 2, PED.y1 - PED.y0, PED.z1 - PED.z0 + 0.008] },
     { name: 'pedestal foot', box: [0, (STEM.y1 + STEM.floor) / 2, (STEM.z0 + STEM.z1) / 2 + 0.01], size: [STEM.x * 2 + 0.01, STEM.y1 - STEM.floor, STEM.z1 - STEM.z0 + 0.04] },
     ...[-1, 1].map((sx) => ({ name: 'knee panel', box: [sx * 0.335, -0.31, -0.48 + PZ], size: [0.21, 0.4, 0.16] })), ...[-1, 1].map((sx) => ({ name: 'indexer', box: [sx * 0.12, 0.252, -0.665 + PZ], size: [0.05, 0.03, 0.026] })),
@@ -572,7 +594,11 @@ export function tandemInterior(g, b0, nb, { T, tcPt, split, paint }) {
   { const ped = new THREE.BoxGeometry(0.12, 0.28, 0.16); ped.translate(0, -0.59, -1.5); b.add(ped, panel); }
   // the panel: black, dense with round gauges (the picture, bezels on the big ones); the glare shield over it with its lip
   { const body = new THREE.BoxGeometry(0.5, 0.554, 0.15); body.translate(0, -0.183, -1.485); b.add(body, panel); // (its top up under the glare shield's lid, which it carries)
-    const pm = mx([0, -0.19, -1.4095]); quad(b, 'sr71', pm, 0.48, 0.42); bezels(nb, 'sr71', pm, 0.48, 0.42, 0.055); quad(b, 'warn', mx([0, 0.058, -1.4095]), 0.2, 0.0625); }
+    const pm = mx([0, -0.19, -1.4095]); quad(b, 'sr71', pm, 0.48, 0.42); bezels(nb, 'sr71', pm, 0.48, 0.42, 0.055); quad(b, 'warn', mx([0, 0.058, -1.4095]), 0.2, 0.0625);
+    // live (liveDisplays.js): the attitude ball, the heading card, airspeed (hundreds of knots) and altitude (ten
+    // thousands of feet), the triple display's KEAS / Mach / altitude
+    const lp = livePanel(); liveDials(lp, 'sr71', pm, 0.48, 0.42, { 0: 'adi', 1: 'hsi', 2: (S) => S.kt / 1000, 3: (S) => S.alt / 100000 });
+    lp.screen(pm.clone().multiply(mx([-0.1344, 0.1575, 0.0006])), 0.1344, 0.0546, { px: [256, 104], hz: 8, z: 0, dark: true, draw: sr71Triple }); lp.to(g); }
   const gl = new THREE.CylinderGeometry(0.3, 0.3, 0.16, 18, 1, true, -1.3, 2.6); gl.scale(1, 1, 0.55); gl.rotateY(Math.PI); gl.translate(0, 0.02, -1.5); b.add(shellOf(gl), coam);
   const glTop = new THREE.CylinderGeometry(0.3, 0.3, 0.012, 18, 1, false, -1.3, 2.6); glTop.scale(1, 1, 0.55); glTop.rotateY(Math.PI); glTop.translate(0, 0.1, -1.5); b.add(capOf(glTop), coam);
   b.add(pipe([V(-0.288, 0.1, -1.544), V(-0.14, 0.1, -1.52), V(0, 0.1, -1.5), V(0.14, 0.1, -1.52), V(0.288, 0.1, -1.544)], 0.011, 6, 30), coam);
