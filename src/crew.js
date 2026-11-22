@@ -2382,6 +2382,15 @@ function figureGeometry(rig) {
     at(i, boxG(0.085, 0.16, 0.018, V(0, 0.07, 0)), rig.ctl === 'wheel' && i === B.pedR ? 0x9aa0a6 : 0x2b2d31);
     at(i, capAB(V(0, 0.0, 0.02), V(0, 0.14, 0.1), 0.01, 0.01, { seg: 5 }), 0x2b2d31);
   }
+  // toe brakes (a light plane's rudder pedals, controls.toeBrakes): each pedal on an arm down to its pivot on the
+  // floor, the brake cylinder from the pedal's top forward to the floor, rubber treads across the pad
+  if (C.toeBrakes && rig.ctl !== 'bars' && rig.floorY == null) for (const i of [B.pedR, B.pedL]) {
+    at(i, capAB(V(0, -0.015, -0.02), V(0, 0.13, -0.02), 0.011, 0.011, { seg: 6 }), 0x8b9097, true); // pedal arm
+    at(i, capAB(V(-0.055, -0.015, -0.02), V(0.055, -0.015, -0.02), 0.012, 0.012, { seg: 6 }), 0x2b2d31); // pivot
+    at(i, capAB(V(0, 0.12, -0.035), V(0, 0.0, -0.17), 0.014, 0.012, { seg: 8 }), 0x15161a); // brake cylinder
+    at(i, capAB(V(0, 0.125, -0.025), V(0, 0.105, -0.06), 0.005, 0.005, { seg: 5 }), 0xc9ccd1, true); // its rod
+    for (let k = 0; k < 4; k++) at(i, boxG(0.08, 0.008, 0.006, V(0, 0.03 + k * 0.032, 0.011)), 0x15161a); // treads
+  }
   return k.build();
 }
 
@@ -2567,6 +2576,7 @@ export function addCrew(design, objs) {
         if (st.ground != null) groundY = (st.ground - st.p[1]) * ps.y / sc;
         ride = rideGeometry(st, obj, objs, ps, sc);
       }
+      if (st.harness && ctl !== 'bars' && OUTFITS[outfit] && OUTFITS[outfit].harness === undefined) colors = { ...(colors || {}), harness: true }; // (a seat with its own harness: whoever sits in it wears it)
       // a seat built with seatGeo declares it (fit: { at: where its geometry was placed, dims: seatGeo's arguments }), so
       // the figure can sit on its actual surfaces
       const seat = st.fit && ctl !== 'bars' ? seatSurfaces(st.fit, st.p, st.s || 1) : null, ctlSet = seatAdjust(st, st.s || 1, seatControls(st, st.s || 1));
