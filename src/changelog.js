@@ -5,6 +5,9 @@ export const CHANGELOG = [
   { v: '1.116.0', items: [
     "The Statue of Liberty is now the real thing: a 3D scan of the actual statue, with her face, crown, torch and tablet. At night she's lit up and her torch glows!",
   ] },
+  { v: '1.116.0', items: [
+    "The Statue of Liberty is now the real thing: a 3D scan of the actual statue, with her face, crown, torch and tablet. At night she's lit up and her torch glows!",
+  ] },
   { v: '1.115.0', items: [
     "The stunt park and the water park are now right next to each other at the Swiss lake, in Bora Bora and in New York, so you can drive straight from the ramps to the water!",
     "New York's stunt park and water park moved to Liberty State Park, right across the water from the Statue of Liberty.",
