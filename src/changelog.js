@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.115.0', items: [
+    "The stunt park and the water park are now right next to each other at the Swiss lake, in Bora Bora and in New York, so you can drive straight from the ramps to the water!",
+    "New York's stunt park and water park moved to Liberty State Park, right across the water from the Statue of Liberty.",
+  ] },
   { v: '1.114.0', items: [
     "At the Grand Canyon jump, a long run-up now counts: drive flat out from the stunt park, through the loop, onto the rocket strip and you fly way further over the canyon!",
     "The rocket strip is now a narrow stripe down the middle. Ride beside it if you dare: without the boost you won't make it across, and the rescue parachute lowers you into the canyon.",
