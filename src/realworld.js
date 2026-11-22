@@ -24,12 +24,13 @@ export const REAL_LOCATIONS = {
     // the alpine tree palette, with real altitudes mapped onto the fictional valley's (tree line ~2000 m, beech below ~1200 m)
     // wl: the valley floor (towns, the airport) is only a few metres above the lakes: no riverside woods across it
     flora: { biome: 'alpine', snowline: 1250, h: (h) => (h - 540) * 0.68, wl: 25 },
-    // the stunt park: wooden ramps, hay bales and cowbell flags in a flat field of the valley near the airfield (stuntSite.js)
+    // the stunt park: wooden ramps, hay bales and cowbell flags in a meadow at the west tip of Lake Brienz (stuntSite.js), the
+    // water park just offshore: an amphibious build can drive from one to the other
     roadStart: { place: 'Wilderswil', maxClass: 3 }, // 'On the road': the village street of Wilderswil, by the airfield (landStart.js)
-    stunts: { theme: 'alpine', layout: 'compact', near: [0, 0], r: 3500, maxForest: 0.15, seed: 117 },
+    stunts: { theme: 'alpine', layout: 'compact', near: [-1095, -1243], r: 400, distW: 8, maxForest: 0.15, seed: 117 },
     waterColors: { deep: 0x0d4a52, shallow: 0x2f8f8a, sand: 0x6b6a55 }, // glacial-milk turquoise lakes
     marina: { at: [-1700, 3900], r: 2600, waves: 0.04 }, // boats start at a marina on Lake Thun, by Interlaken (marina.js finds the spot)
-    waterPark: { theme: 'alpine', near: [400, -5000], r: 3000 }, // the water park (waterPark.js): on Lake Brienz, past the end of the runway
+    waterPark: { theme: 'alpine', near: [-1095, -1243], r: 1500 }, // the water park (waterPark.js): off the stunt park's meadow at the west tip of Lake Brienz
     colors: { grass: [0x4a6b2a, 0x5f7f35, 0x3f5d27], rock: 0x6b6660, snow: 0xf4f6f8, sand: 0x9a8d6a, dirt: 0x6f5a3c },
     height(n, x, z) { const D = cache.get(this.id); return D ? D.height(x, z) : this.rwyH; },
   },
@@ -43,11 +44,11 @@ export const REAL_LOCATIONS = {
     seed: 23, rwyH: 2.5, water: 0, north: 124.6, cloudBase: 1100, trees: 'palm', snowline: 99999, erosion: false, boats: true,
     waterStart: [800, -2300], // seaplanes start in the lagoon off the airport, facing south-east along it
     marina: { at: [5300, -3900], r: 2400, waves: 0.05 }, // boats: a marina in the lagoon off Vaitape
-    waterPark: { theme: 'tropical', near: [1300, -3000], r: 4000, shallow: 5, distW: 1.5 }, // the water park (waterPark.js): in the deep lagoon between the main island and the motus
+    waterPark: { theme: 'tropical', near: [4540, 580], r: 1200, shallow: 5, distW: 6 }, // the water park (waterPark.js): in the turquoise lagoon off the stunt park's shore
     padBlend: 160, // the airport sits on a narrow reef islet: its apron meets the sea within ~160 m
-    // the stunt park: a palm-lined sand track with a tiki arch, on dry flat land of a motu or the main island (stuntSite.js)
+    // the stunt park: a palm-lined sand track with a tiki arch on the island's east shore (stuntSite.js), the water park in the lagoon beside it
     roadStart: { place: 'Vaitape', maxClass: 1 }, // 'On the road': the island's ring road at Vaitape (landStart.js)
-    stunts: { theme: 'tropical', layout: 'compact', near: [0, 0], r: 5000, maxForest: 1, minAbove: 1.0, forestW: 0, seed: 117 },
+    stunts: { theme: 'tropical', layout: 'compact', near: [4540, 580], r: 400, distW: 8, maxForest: 1, minAbove: 1.0, forestW: 0, seed: 117 },
     townScale: 0.45, // small villages strung along the coast road: keep the palms between the houses
     osmStyle: 'tropical', // realBuildings.js: painted houses under metal roofs, thatched resorts, overwater bungalows
     waterColors: { deep: 0x0b3474, shallow: 0x12bcc8, sand: 0x9ae8dc }, waterReef: 0.15, // sapphire ocean, turquoise lagoon over pale sand
@@ -81,21 +82,21 @@ export const REAL_LOCATIONS = {
   },
   nyc: {
     id: 'nyc', name: 'New York City', real: true,
-    desc: 'Take off from LaGuardia and fly the Hudson: the Statue of Liberty, the skyscrapers, Central Park and the bridges.',
+    desc: 'Take off from LaGuardia and fly the Hudson: the Statue of Liberty, the skyscrapers, Central Park and the bridges. Stunt park and water park side by side in Liberty State Park.',
     credit: 'Imagery: USGS NAIP (public domain), Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) · Buildings: NYC Open Data, © OpenStreetMap contributors · Heights: AWS Terrain Tiles',
     seed: 53, rwyH: 6, water: 0, north: 32, cloudBase: 1800, trees: 'pine', snowline: 99999, erosion: false, boats: true,
     core: 33000, // the detailed core reaches from LaGuardia to the Statue of Liberty (16 km)
     marina: { at: [-700, 600], r: 2600, waves: 0.1 }, // boats: a marina on Flushing Bay, beside LaGuardia
-    waterPark: { theme: 'urban', near: { lat: 40.783, lon: -73.99 }, r: 2500 }, // the water park (waterPark.js): on the Hudson off the Upper West Side, the skyline behind it
+    waterPark: { theme: 'urban', near: [-7600, 14300], r: 1200 }, // the water park (waterPark.js): between Liberty State Park and Ellis Island, the Statue of Liberty and Lower Manhattan round it
     roads: { maxClass: 1, maxClassLow: 0, step: 16, chunk: 2500 }, // highways and avenues (medium / low: highways only; the photo shows the side streets, NYC's full grid is ~25k ways), meshes per 2.5 km
     // deciduous parks and street trees: the alpine palette's valley floor, with no rocks or shrubs on the pavement
     flora: { biome: 'alpine', snowline: 99999, h: (h) => h * 0.5, wl: 0, bare: true },
     waterColors: { deep: 0x1c3a44, shallow: 0x3a6a6a, sand: 0x5a5a50 }, // the harbour: green-grey, silty
     colors: { grass: [0x4f6b35, 0x5d7a3c, 0x46612f], rock: 0x6a6866, snow: 0xf4f6f8, sand: 0x8a8270, dirt: 0x6a5a48 },
-    // the stunt park: concrete, containers and graffiti on an open lawn of Central Park (no buildings, roads, water or
-    // tree canopy: stuntSite.js findSite searches the park)
+    // the stunt park: concrete, containers and graffiti on the open lawns of Liberty State Park, Jersey City (no buildings,
+    // roads, water or tree canopy: stuntSite.js findSite), beside the water park; about lat 40.7044, lon -74.0452
     roadStart: { near: { lat: 40.7587, lon: -73.9787 }, maxClass: 1 }, // 'On the road': a Midtown Manhattan avenue (landStart.js)
-    stunts: { theme: 'urban', layout: 'compact', near: { lat: 40.7813, lon: -73.9665 }, r: 2600, canopy: true, maxCanopy: 0.2, maxForest: 0.2, seed: 117 },
+    stunts: { theme: 'urban', layout: 'compact', near: [-7650, 14350], r: 500, distW: 8, canopy: true, maxCanopy: 0.2, maxForest: 0.2, seed: 117 },
     satGain: 1.0, sat: { deshade: 0.2, detail: 0.3 }, // aerial photos (NAIP): little photo grass on top of them, less de-shading
     city: {
       // antenna masts / spires (top above the ground, m) on the tallest building at that point

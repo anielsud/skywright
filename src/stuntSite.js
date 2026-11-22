@@ -4,7 +4,7 @@
 //
 // findSite: a stunt park's pad. First a map of open ground round a centre (loc.stunts.near): every cell tested for dry
 // land well above the water, no buildings, roads, rails, rivers or lakes (the landcover map marks all of those, with a
-// margin round each building), not in a mapped wood, not under tree canopy where the imagery shows it (Central Park's
+// margin round each building), not in a mapped wood, not under tree canopy where the imagery shows it (a city park's
 // trees), clear of the airfield; and how far each open cell is from blocked ground. The roomiest spots (ties broken by a
 // fixed seed) are tried at every heading on a grid over the pad and a clearance margin, with no water where the
 // levelling reaches. The flattest wins (height range and spread over the pad), a little in favour of the centre; then
@@ -28,7 +28,7 @@ export function findSite(w, cfg, L) {
   const hx = L.pad[0] + 12, hz = L.pad[1] + 12; // the pad and a margin: clear land
   const ox = L.pad[0] + L.flat + L.blend * 0.6, oz = L.pad[1] + L.flat + L.blend * 0.6; // and no water this far out (it would be levelled)
   const lim = w.size / 2 - 300, wl = w.waterLevel, above = cfg.minAbove ?? 0.8, maxF = cfg.maxForest ?? 0.25;
-  const _c = { r: 0, g: 0, b: 0, setRGB(r, g, b) { this.r = r; this.g = g; this.b = b; return this; } };
+  const _c = { r: 0, g: 0, b: 0, setRGB(r, g, b) { this.r = r; this.g = g; this.b = b; return this; }, lerp(o, t) { this.r += (o.r - this.r) * t; this.g += (o.g - this.g) * t; this.b += (o.b - this.b) * t; return this; } }; // (lerp: RealData.color blends near the imagery's edge)
   const canopy = (x, z) => { R.color(x, z, _c); const s = _c.r + _c.g + _c.b, exg = (2 * _c.g - _c.r - _c.b) / (s || 1); return s / 3 < 0.315 && exg > 0.08; }; // dark green in the photo: trees
   const wet = (x, z) => w.height(x, z) < wl + above || (R && R.waterAt(x, z, 8) != null);
   const why = { edge: 0, airport: 0, water: 0, built: 0, wood: 0, canopy: 0, shore: 0 }; // (why candidates failed: the report)
