@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.124.0', items: [
+    "The Chomper has a proper racing bucket seat now, with big side bolsters and harness slots, and the Dragonfly's seats look like real helicopter seats.",
+  ] },
   { v: '1.123.0', items: [
     "Bike riders bend their knees when they land a jump, sinking down to soak up the bump and then standing back up.",
   ] },
