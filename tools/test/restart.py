@@ -9,15 +9,19 @@ quality tier, time, weather, moon) are unchanged, and World.reset() puts back ev
    trees; after a restart it is the same World, every building is whole again (collision heights, the shader's dmg
    bytes, damage slots), no debris, mounds, scorch marks, fires or toppling tops are left, the trees stand, and the
    vehicle starts exactly where it started the first time
-2. memory: 10 restarts (damage before every other one): renderer.info geometries and textures, the shader program
-   count and the scene's child count stay flat
+2. memory: 6 restarts (damage before every other one): renderer.info geometries and textures, the shader program
+   count and the scene's child count stay flat (a leak of one a restart shows over the last five)
 3. fresh: back to the hangar frees the kept World; a new start builds a new one, with the same spawn and about the same
    GPU memory as the restarted flights
 4. start types: runway, air, the stunt park, a street, the marina, the water park, the launch pad (and New York's
-   helipad, if nyc is in --places): restart, same World, same start and spawn as the fresh start, and it rides / flies
-   on for 4 s (alive, finite, moving where it has throttle)
+   helipad, if nyc is in --places), each swapped into the World of 3 (__sky.swapVehicle: no World built per start):
+   restart, same World, same start and spawn as when it was swapped in, and it rides / flies on for 4 s (alive, finite,
+   moving where it has throttle)
 
-Run from anywhere:  python3 tools/test/restart.py [--places lauterbrunnen,nyc] [--restarts 10]
+The game's own time is stepped with __sky.advance (no frames drawn) wherever the test waits for the game: buildings
+coming down, flying on.
+
+Run from anywhere:  python3 tools/test/restart.py [--places lauterbrunnen,nyc] [--restarts 6]
 Same requirements as smoke.py (Chrome + the websockets package). See tools/test/README.md.
 """
 import argparse, asyncio, json, os, sys, tempfile, shutil, time
@@ -44,14 +48,38 @@ async def start(cdp, loc, preset, cfg, quality):
     pick = f"{S}.presets.find((d) => {S}.analyze(d).vertical)" if preset == 'rocket' else f"{S}.presets.find((d) => d.name === {json.dumps(preset)})"
     await cdp.js(f"""(() => {{ Object.assign({S}.flightCfg, {{ location: {json.dumps(loc)}, online: false, mode: 'free', time: 11, weather: 'clear', realism: 'pilot', ...{json.dumps(cfg)} }});
         {S}.settings.quality = {json.dumps(quality)}; {S}.controls.setThrottle(0); {S}.controls.pedal.gas = 0;
-        {S}.hangar.load({pick}); {S}.startFlight(); return 1; }})()""")
-    await cdp.wait_for(f'{S}.F && {S}.F.t > 1', 180, f'{preset} at {loc} to start')
+        window.__oldF = {S}.F; {S}.hangar.load({pick}); {S}.startFlight(); return 1; }})()""")
+    await running(cdp, 180, f'{preset} at {loc} to start')
+    # a new World streams textures in over its first real second or so (async loads and uploads): let that settle on the
+    # real loop before measuring, as the old real-time waits did
+    await cdp.js(f"""(async () => {{ const m = () => {S}.renderer.info.memory, t0 = performance.now(); let last = '', since = performance.now();
+        while (performance.now() - t0 < 6000) {{ const k = m().textures + '/' + m().geometries; if (k !== last) {{ last = k; since = performance.now(); }} else if (performance.now() - since > 600) break;
+          await new Promise((r) => setTimeout(r, 50)); }} return 1; }})()""", timeout=15)
     return await snap(cdp)
+
+
+async def swap(cdp, preset, cfg):
+    """Fly another vehicle (and start choice) in the same World: a restart with a new design (__sky.swapVehicle)."""
+    pick = f"{S}.presets.find((d) => {S}.analyze(d).vertical)" if preset == 'rocket' else f"{S}.presets.find((d) => d.name === {json.dumps(preset)})"
+    await cdp.js(f"""(() => {{ Object.assign({S}.F.cfg, {{ landStart: undefined, boatStart: undefined, start: 'runway', ...{json.dumps(cfg)} }});
+        {S}.controls.setThrottle(0); {S}.controls.pedal.gas = 0; window.__oldF = {S}.F; {S}.swapVehicle({pick}); return 1; }})()""")
+    await running(cdp, 120, f'{preset} to be swapped in')
+    return await snap(cdp)
+
+
+async def running(cdp, timeout, what):
+    """The new flight's clock runs and its loading screen is gone; then one game second stepped (advance), as the old
+    real-time wait for F.t > 1 did."""
+    await cdp.wait_for(f'{S}.F && {S}.F !== window.__oldF && {S}.F.t > 0 && !{S}.F.warm', timeout, what)
+    await cdp.js(f'{S}.advance(1); 1')
+    # and 15 frames drawn: what the snapshot measures (GPU textures) is what drawing uploads. With none drawn the texture
+    # count wanders by a block of 15 a few restarts in, depending on how many frames each flight drew (seen with 0 and 4)
+    await cdp.js('(async () => { for (let i = 0; i < 15; i++) await new Promise((r) => requestAnimationFrame(r)); return 1; })()')
 
 
 async def restart(cdp):
     await cdp.js(f'{S}.controls.setThrottle(0); {S}.controls.pedal.gas = 0; window.__oldF = {S}.F; {S}.restartFlight(); 1')
-    await cdp.wait_for(f'{S}.F && {S}.F !== window.__oldF && {S}.F.t > 1', 120, 'the restarted flight')
+    await running(cdp, 120, 'the restarted flight')
     return await snap(cdp)
 
 
@@ -72,7 +100,7 @@ async def place(cdp, loc, a, add):
     # 1. damage, restart, whole again
     s0 = await start(cdp, loc, 'Kestrel', {'start': 'runway'}, a.quality)
     d = json.loads(await cdp.js(f'{M}.then((m) => JSON.stringify(m.damage({S})))'))
-    await asyncio.sleep(3)  # (the game loop brings them down: debris, dust, fires)
+    await cdp.js(f'{S}.advance(3); 1')  # (the game brings them down: debris, dust, fires; stepped, not drawn)
     dd = json.loads(await cdp.js(f'{M}.then((m) => JSON.stringify(m.damaged({S})))'))
     add(f'{loc}: buildings damaged before the restart', d['buildings'] > 0 and dd['buildings'] > 0 and dd['cut'] > 0 and dd['chunks'] > 1,
         f"{d['buildings']} hit, {dd['cut']} cut down, {dd['chunks']} debris, {dd['fires']} fires, {d['trees']} trees flattened")
@@ -86,7 +114,7 @@ async def place(cdp, loc, a, add):
     snaps = []
     for k in range(a.restarts):
         if k % 2 == 0:
-            await cdp.js(f'{M}.then((m) => m.damage({S}))'); await asyncio.sleep(1.5)
+            await cdp.js(f'{M}.then((m) => m.damage({S}))'); await cdp.js(f'{S}.advance(1.5); 1')
         snaps.append(await restart(cdp))
     tail = snaps[1:] or snaps  # (the first restart may still compile a shader the first flight hadn't drawn)
     for key, tol in (('geometries', 3), ('textures', 1), ('programs', 2), ('kids', 0)):
@@ -101,25 +129,25 @@ async def place(cdp, loc, a, add):
     add(f'{loc}: fresh start builds a new World with the same spawn', s2['world'] != s0['world'] and same_spawn(s2, s1))
     add(f'{loc}: restarted GPU memory as a fresh start', abs(last['geometries'] - s2['geometries']) <= max(8, s2['geometries'] * 0.05) and abs(last['textures'] - s2['textures']) <= 3,
         f"geometries {last['geometries']} vs {s2['geometries']}, textures {last['textures']} vs {s2['textures']}, kids {last['kids']} vs {s2['kids']}")
-    await to_hangar(cdp)
-    # 4. every start type: restart and ride on
+    # 4. every start type, swapped into this World (a restart with that vehicle and start), then restarted: the same
+    # World, start and spawn as when it was swapped in, and it rides / flies on for 4 game seconds
     for label, preset, cfg, thr in STARTS:
         if label == 'helipad' and loc != 'nyc':
             continue
-        f = await start(cdp, loc, preset, cfg, a.quality)
+        f = await swap(cdp, preset, cfg)
         r = await restart(cdp)
-        ok = r['world'] == f['world'] and r['start'] == f['start'] and same_spawn(f, r)
+        ok = r['world'] == f['world'] == s2['world'] and r['start'] == f['start'] and same_spawn(f, r)
         if thr == 'plane':
             await cdp.js(f'{S}.controls.setThrottle(1); 1')
         elif thr == 'gas':
             await cdp.js(f'{S}.controls.pedal.gas = 1; 1')
-        await asyncio.sleep(4)
+        await cdp.js(f'{S}.advance(4); 1')
         e = await snap(cdp)
         moved = sum((x - y) ** 2 for x, y in zip(e['pos'], r['pos'])) ** 0.5
         go = e['alive'] and e['finite'] and (thr is None or moved > 3)
-        add(f"{loc}: {label} ({f['start']}): restart as fresh, then on", ok and go,
-            f"world {'kept' if r['world'] == f['world'] else 'NEW'}, start {f['start']}/{r['start']}, moved {moved:.0f} m{'' if e['alive'] else ', DEAD'}")
-        await to_hangar(cdp)
+        add(f"{loc}: {label} ({f['start']}): restart as swapped in, then on", ok and go,
+            f"world {'kept' if r['world'] == f['world'] == s2['world'] else 'NEW'}, start {f['start']}/{r['start']}, moved {moved:.0f} m{'' if e['alive'] else ', DEAD'}")
+    await to_hangar(cdp)
 
 
 async def main(a):
@@ -163,7 +191,7 @@ async def main(a):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--places', default='lauterbrunnen', help='locations (default: lauterbrunnen; nyc adds the helipad start)')
-    ap.add_argument('--restarts', type=int, default=10)
+    ap.add_argument('--restarts', type=int, default=6, help='restarts in the memory check (default 6: a leak of one geometry, texture or program a restart shows over the last 5)')
     ap.add_argument('--quality', default='low')
     ap.add_argument('--port', type=int, default=0); ap.add_argument('--cdp-port', type=int, default=0)
     ap.add_argument('--url', help='test a running server instead of serving the repo')

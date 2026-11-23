@@ -85,11 +85,12 @@ export function kidBoats(n = 10, seed = 5) {
 }
 
 // ---------- amphibians: a stock car or bike with a boat hull bolted underneath (just clear of the ground) ----------
-export function amphibians(all) {
+export const AMPHIBIANS = ['Dirt Bike', 'Sport Bike', 'Dune Buggy'].flatMap((name) => ['h_speed', 'h_pontoon'].map((hid) => [name, hid]));
+export function amphibians(all, only = null) { // only: [base name, hull id]
   const out = [];
   for (const name of ['Dirt Bike', 'Sport Bike', 'Dune Buggy']) {
     const base = all.find((d) => d.name === name); if (!base) continue;
-    for (const hid of ['h_speed', 'h_pontoon']) {
+    for (const hid of ['h_speed', 'h_pontoon']) { if (only && (only[0] !== name || only[1] !== hid)) continue;
       const d = JSON.parse(JSON.stringify(base)); d.name = `${name} + ${PARTS[hid].name}`; d.parts.push(newPart(hid, [0, 0, 0], { parent: 0 }));
       const probe = new Aircraft(d, REALISM.arcade), hullP = probe.parts.at(-1); // put its keel 12 cm above the tyres' bottoms
       const keel = Math.min(...hullP.hull.map((h) => h.y)), tyres = Math.min(...probe.parts.filter((p) => p.gear).flatMap((p) => p.gear.wheels.map((w) => w.top.y - w.len - w.r)));
@@ -100,9 +101,9 @@ export function amphibians(all) {
   return out;
 }
 // afloat: it floats upright and level, its wheels paddle it along slowly and it turns; on land: it drives like the car or bike
-export function amphibRides(all) {
+export function amphibRides(all, only = null) {
   const out = [];
-  for (const d of amphibians(all)) {
+  for (const d of amphibians(all, only)) {
     const st = analyze(d);
     const w = run(d, 'pilot', (t) => (t < 8 ? { throttle: 1 } : { throttle: 1, roll: 1 }), { T: 14 });
     const floats = !w.dead && between(w, 2, 14).every((s) => s.wet > 0.02 && s.up > 0.9), turned = -(at(w, 14).turn - at(w, 8).turn);
@@ -114,27 +115,36 @@ export function amphibRides(all) {
   return out;
 }
 
-export function flat(presets, others = []) {
-  const out = [];
-  for (const d of presets) for (const mode of ['arcade', 'pilot', 'sim']) out.push(judge(`${d.name} ${mode}: plane, turn, stop`, d, run(d, mode, RIDE(), { T: 30 })));
+// Open water, one row each (flat() runs them all in order; the Node tier runs them as cases)
+export const OPEN = {
+  // the standard ride on open water with a swell
+  ride: (d, mode) => judge(`${d.name} ${mode}: plane, turn, stop`, d, run(d, mode, RIDE(), { T: 30 })),
   // capsized: dropped in upside down, Arcade and Pilot put it back the right way up
-  for (const d of presets) for (const mode of ['arcade', 'pilot']) {
+  capsized(d, mode) {
     const r = run(d, mode, () => ({}), { T: 6, setup: (ac) => { ac.q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI * 0.97); ac.x.y += 1; } });
-    out.push({ name: `${d.name} ${mode}: capsized, self-rights`, ok: !r.dead && r.final.up > 0.97 && r.final.wet > 0.05, why: `up ${r.final.up}, wet ${r.final.wet}`, minUp: +r.minUp.toFixed(2) });
-  }
+    return { name: `${d.name} ${mode}: capsized, self-rights`, ok: !r.dead && r.final.up > 0.97 && r.final.wet > 0.05, why: `up ${r.final.up}, wet ${r.final.wet}`, minUp: +r.minUp.toFixed(2) };
+  },
   // on land: it just sits (no thrust, no damage, no explosion)
-  for (const d of presets) {
+  land(d) {
     const r = run(d, 'arcade', (t) => ({ throttle: 1, roll: t > 3 ? 1 : 0 }), { T: 8, env: land(5) });
-    out.push({ name: `${d.name}: on land, full gas`, ok: !r.dead && !r.partsLost && r.maxSpeed < 1.5 && r.final.spd < 0.2 && r.final.up > 0.8, why: `dead ${!!r.dead}, parts lost ${r.partsLost}, top ${r.maxSpeed.toFixed(2)} m/s, up ${r.final.up}` });
-  }
-  // a kid's boats: they float upright; with the motor in the water they go and turn
-  for (const d of kidBoats(10, 5)) {
+    return { name: `${d.name}: on land, full gas`, ok: !r.dead && !r.partsLost && r.maxSpeed < 1.5 && r.final.spd < 0.2 && r.final.up > 0.8, why: `dead ${!!r.dead}, parts lost ${r.partsLost}, top ${r.maxSpeed.toFixed(2)} m/s, up ${r.final.up}` };
+  },
+  // a kid's boat: it floats upright; with the motor in the water it goes and turns
+  kid(d) {
     const st = analyze(d), wetMotor = st.warnings.every((w) => !/out of the water/.test(w[1])), r = run(d, 'arcade', (t) => (t < 8 ? { throttle: 1 } : t < 12 ? { throttle: 0.7, roll: -1 } : {}), { T: 14 });
     const floats = !r.dead && r.final.up > 0.9 && between(r, 2, 14).every((s) => s.wet > 0.02 && s.y > -3); // (one that tips over is set upright again)
     const moves = !wetMotor || r.maxSpeed > 3;
-    out.push({ name: d.name, ok: floats && moves && r.isBoat, why: `${r.isBoat ? '' : 'not a boat; '}floats ${floats} (min up ${r.minUp.toFixed(2)}), motor ${wetMotor ? 'in the water' : 'out of the water (warned)'}, top ${r.maxSpeed.toFixed(1)} m/s`, top: +r.maxSpeed.toFixed(1) });
-  }
-  for (const d of others) { const ac = new Aircraft(d, REALISM.arcade); out.push({ name: `${d.name}: not a boat`, ok: !ac.isBoat, why: ac.isBoat ? 'detected as a boat' : '' }); }
+    return { name: d.name, ok: floats && moves && r.isBoat, why: `${r.isBoat ? '' : 'not a boat; '}floats ${floats} (min up ${r.minUp.toFixed(2)}), motor ${wetMotor ? 'in the water' : 'out of the water (warned)'}, top ${r.maxSpeed.toFixed(1)} m/s`, top: +r.maxSpeed.toFixed(1) };
+  },
+  notBoat(d) { const ac = new Aircraft(d, REALISM.arcade); return { name: `${d.name}: not a boat`, ok: !ac.isBoat, why: ac.isBoat ? 'detected as a boat' : '' }; },
+};
+export function flat(presets, others = []) {
+  const out = [];
+  for (const d of presets) for (const mode of ['arcade', 'pilot', 'sim']) out.push(OPEN.ride(d, mode));
+  for (const d of presets) for (const mode of ['arcade', 'pilot']) out.push(OPEN.capsized(d, mode));
+  for (const d of presets) out.push(OPEN.land(d));
+  for (const d of kidBoats(10, 5)) out.push(OPEN.kid(d));
+  for (const d of others) out.push(OPEN.notBoat(d));
   return out;
 }
 
@@ -153,7 +163,7 @@ export function marina(F, presets, all = []) {
     out.push(judge(`${loc} ${d.name} ${mode}`, d, r, [[fromDock < 120, `started ${fromDock.toFixed(0)} m from the marina`]], { river, sim: mode === 'sim' }));
   }
   // an amphibious bike starts afloat at the marina's start too and paddles off (it is a bike that floats)
-  const ab = amphibians(all).find((d) => /Dirt Bike \+ Speedboat/.test(d.name));
+  const ab = amphibians(all, ['Dirt Bike', 'h_speed'])[0]; // (Dirt Bike + Speedboat Hull)
   if (ab) {
     const r = run(ab, 'pilot', (t) => ({ throttle: 1 }), { T: 8, env: F.env, pos: s.pos, heading: s.heading });
     out.push({ name: `${loc}: an amphibious bike paddles off from the marina`, ok: !r.dead && r.final.up > 0.9 && r.final.wet > 0.02 && r.maxSpeed > 1, why: `dead ${!!r.dead}, up ${r.final.up}, wet ${r.final.wet}, top ${r.maxSpeed.toFixed(2)} m/s` });
@@ -167,4 +177,38 @@ export function marina(F, presets, all = []) {
     out.push({ name: `${loc}: a car drives out on the pier`, ok: !r.dead && lz > 8 && r.ac.x.y > deckY - 0.2, why: `got ${lz.toFixed(1)} m out, ${(r.ac.x.y - deckY).toFixed(2)} m above the deck` });
   }
   return out;
+}
+
+// Node tier (tools/test/node/run.mjs), headless, all of it:
+//  - open water (flat() and amphibRides()) on the stand-in water and land envs above: one case per boat and mode for
+//    the 30 s ride; each boat's capsize (Arcade, Pilot) and land check together; the kid's boats in pairs; one case
+//    per amphibian; one for everything that must not be a boat;
+//  - the marinas: one case per World (every marina at Low, the tablet's setting with the coarsest terrain; the Grand
+//    Canyon's river landing at High too), built in Node (node/world.mjs: the browser's ground, water and docks, with
+//    no rendering), each running marina() on it. boatride.py --browser runs them in Chrome instead, to compare.
+export const MARINAS = [['islands', 'low'], ['nyc', 'low'], ['lauterbrunnen', 'low'], ['canyon', 'low'], ['canyon', 'high']];
+export const nodeSuite = { files: ['src/boat.js', 'src/boatParts.js', 'src/aircraft.js', 'src/design.js', 'src/parts.js', 'src/marina.js', 'src/world.js', 'src/realworld.js', 'tools/test/boatride.js', 'tools/test/node/world.mjs'], headless: true };
+const isBoat = (d) => !!analyze(d).boat;
+const strip = ({ ac, ...r }) => r;
+export function cases({ presets }) {
+  const boats = presets.filter(isBoat), kids = kidBoats(10, 5).map((d) => d.name), out = [];
+  for (const [loc, q] of MARINAS) out.push({ id: `marina ${loc} [${q}]`, marina: [loc, q], cost: 6 }); // (a World to build: ~2-4 s, then ~2.5 s of rides)
+  for (const d of boats) for (const mode of ['arcade', 'pilot', 'sim']) out.push({ id: `${d.name} ${mode}: ride`, ride: d.name, mode });
+  for (const d of boats) out.push({ id: `${d.name}: capsized, on land`, upset: d.name });
+  for (let i = 0; i < kids.length; i += 2) out.push({ id: `kid boats ${i}-${i + 1}`, kids: [i, i + 1].filter((k) => k < kids.length) });
+  for (const a of AMPHIBIANS) out.push({ id: `amphibian ${a.join(' + ')}`, amphib: a });
+  out.push({ id: 'not boats', others: true });
+  return out;
+}
+export async function runCase(c, { presets }) {
+  const by = (n) => presets.find((d) => d.name === n);
+  if (c.marina) {
+    const [loc, q] = c.marina, { nodeWorld } = await import('./node/world.mjs'), { world, env } = await nodeWorld(loc, q);
+    try { return marina({ world, env }, presets.filter(isBoat), presets).map((r) => ({ ...strip(r), name: `[${q}] ${r.name}` })); } finally { world.dispose(); }
+  }
+  if (c.ride) return [strip(OPEN.ride(by(c.ride), c.mode))];
+  if (c.upset) { const d = by(c.upset); return [OPEN.capsized(d, 'arcade'), OPEN.capsized(d, 'pilot'), OPEN.land(d)]; }
+  if (c.kids) { const k = kidBoats(10, 5); return c.kids.map((i) => OPEN.kid(k[i])); }
+  if (c.amphib) return amphibRides(presets, c.amphib).map(strip);
+  return presets.filter((d) => !isBoat(d)).map(OPEN.notBoat);
 }

@@ -4,6 +4,7 @@
 // world.waterParks). Physics only: the flight is paused and stepped from here. Positions are in the park's own frame
 // (stuntKit.js Site: x along the course, z across it, y up from the water).
 import { kidBoats } from './boatride.js';
+import { analyze } from '../../src/design.js';
 import { SonicFX } from '../../src/sonic.js'; // (a staged vehicle gets the heat-glow materials, like every vehicle the game shows: no extra shader variants)
 
 const DT = 1 / 60;
@@ -128,6 +129,101 @@ export function run(opts = {}) {
   for (const d of kidBoats(opts.kids ?? 8, opts.seed ?? 11)) for (const rl of modes) out.kids.push(megaRun(S, d, rl, { from: 'boost', T: 40 }));
   return out;
 }
+// [name, ok, why] for every assertion on a report (run()'s shape: site, mega, kids, kick, slalom, wrong; any may be left out)
+export const MAX_DRAWS = 6, MAX_TRIS = 32000;
+export function judge(r, loc) {
+  const out = [], add = (name, ok, why = '') => out.push([`${loc}: ${name}`, !!ok, why]), s = r.site;
+  if (s) {
+    add('site: open, deep water, nothing built, no bridge, clear of the marina', s.dry === 0 && s.shallow === 0 && s.built === 0 && s.bridge === 0 && s.marinaDist > 300,
+      `(${s.site.x.toFixed(0)}, ${s.site.z.toFixed(0)}), ${s.n} points: ${s.dry} dry, ${s.shallow} too shallow, ${s.built} built, ${s.bridge} under a bridge; shallowest ${s.minDepth} m; marina ${s.marinaDist} m away; found in ${s.site.ms ?? 0} ms`);
+    const st = s.stats;
+    add('draw calls and triangles', st.draws <= MAX_DRAWS && st.tris <= MAX_TRIS, `${st.draws} draw calls, ${st.tris} triangles, ${st.collTris} collision triangles, built in ${st.buildMs} ms`);
+  }
+  for (const m of r.mega || []) {
+    const n = `${m.name} (${m.realism}) MEGA JUMP`;
+    add(`${n}: boost and ramp`, m.reached && m.lipSpeed > 18, `${m.toeSpeed} m/s at the foot, ${m.lipSpeed} m/s at the lip`);
+    add(`${n}: real air, clears the obstacle`, m.air > 1.2 && m.maxY > 4 && m.cleared, `${m.air} s in the air, up to ${m.maxY} m, lowest over the obstacle ${m.overMinY} m (top ${m.obstTop} m), from x ${m.from} to ${m.to}`);
+    add(`${n}: splashes down upright, all parts`, m.landUp > 0.8 && m.endUp > 0.9 && m.alive === m.parts && !m.dead && m.msgs.includes('SPLASHDOWN!'), `lowest up after landing ${m.landUp}, end ${m.endUp}, pitch ${m.minPitch}..${m.maxPitchUp}, ${m.alive}/${m.parts} parts; ${m.msgs.join(', ')}`);
+  }
+  for (const m of r.sim || []) add(`${m.name} (sim) MEGA JUMP (reported, not judged)`, true, `${m.air} s air, lowest up after landing ${m.landUp}, end ${m.endUp}, ${m.alive}/${m.parts} parts`);
+  for (const m of r.kids || []) add(`${m.name} (${m.realism}): MEGA JUMP from the boost strip`, m.reached && m.air > 1.0 && m.cleared && m.landUp > 0.7 && m.endUp > 0.9 && m.alive === m.parts && !m.dead,
+    `lip ${m.lipSpeed} m/s, ${m.air} s air, up to ${m.maxY} m, over the obstacle ${m.overMinY} m; lowest up after ${m.landUp}, end ${m.endUp}, ${m.alive}/${m.parts} parts`);
+  for (const k of r.kick || []) add(`${k.name} (${k.realism}) kickers' lane to the hoop`, k.reachedHoop && k.minUp > 0.6 && k.endUp > 0.9 && k.alive === k.parts && !k.dead, `${k.air} s air, lowest up ${k.minUp}, ${k.alive}/${k.parts} parts; ${k.msgs.join(', ')}`);
+  for (const k of r.slalom || []) add(`${k.name} (${k.realism}) slalom and waterfall`, k.msgs.includes('PERFECT SLALOM!') && k.msgs.includes('SPLASH!') && k.alive === k.parts && k.minUp > 0.7, k.msgs.join(', '));
+  for (const k of r.wrong || []) add(`${k.name} (${k.realism}) flat out into the ${k.what} of the MEGA JUMP`, k.alive === k.parts && !k.dead && k.endUp > 0.7, `${k.alive}/${k.parts} parts, lowest up ${k.minUp}, end up ${k.endUp}, got past ${k.past}`);
+  return out;
+}
+// A boat started the way main.js starts one that picks 'At the water park' (afloat at the arch), left a second with the
+// throttle closed: how far from the start, which way it faces, afloat and upright
+export function startAt(S, design) {
+  const W = S.F.world.waterParks, s = W.start, ac = new S.Aircraft(JSON.parse(JSON.stringify(design)), S.REALISM.pilot);
+  ac.spawn(S.F.env, s.at(0), s.heading);
+  for (let i = 0; i < 60; i++) { ac.setControls({ pitch: 0, roll: 0, yaw: 0, throttle: 0, rev: 0, hand: 0 }); ac.step(DT, S.F.env); }
+  const f = new S.THREE.Vector3(0, 0, -1).applyQuaternion(ac.q), ax = new S.THREE.Vector3(-Math.sin(s.heading), 0, -Math.cos(s.heading));
+  return { d: Math.hypot(ac.x.x - s.pos.x, ac.x.z - s.pos.z), fx: f.dot(ax), wet: ac.boat ? ac.boat.wet : 0, up: ac.up.y };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Node tier (tools/test/node/run.mjs): the same runs on real Worlds built in Node (node/world.mjs), headless.
+//
+// What differs per location (loc.waterPark, findWaterSite): the course (C above) is the same everywhere, in the park's
+// own frame. A place changes: the site (found from its water, depths, buildings and bridges, and its marina), the
+// water level (Lake Brienz is at 561 m: thinner air), the swell (loc.marina.waves: New York's harbour is twice as
+// rough as the lakes), the wind, and the theme (the MEGA JUMP's obstacle: an island, a container barge, a log raft).
+// So:
+//   ref:      the full set, once, at the reference park (Bora Bora's): every stock boat's MEGA JUMP from the start
+//             (Arcade, Pilot; Sim reported), the kickers' lane, flat out into the back and side of the MEGA JUMP; the
+//             slalom and waterfall; the kid's boat builds from the boost strip;
+//   location: at every place with a water park: the site is open, deep water, nothing built on it, no bridge, clear of
+//             the marina; the park within its draw-call and triangle budget (the number of merged meshes it builds:
+//             the same count the browser draws); every stock boat starts at the arch, afloat, facing down the course;
+//             every stock boat's MEGA JUMP from the start in Arcade and Pilot (the place's swell and obstacle); no
+//             water park warnings. At the Grand Canyon (no water park): none is built, and a boat's start there is the
+//             marina (main.js falls back to it: its own path is checked in the browser, waterpark.py).
+export const LOCS = ['islands', 'nyc', 'lauterbrunnen', 'canyon'], REF = 'islands';
+export const nodeSuite = { files: ['src/waterPark.js', 'src/stuntKit.js', 'src/boat*.js', 'src/aircraft.js', 'src/collide.js', 'src/world.js', 'src/realworld.js', 'src/marina.js', 'tools/test/waterpark.js', 'tools/test/boatride.js', 'tools/test/node/world.mjs'], headless: true };
+const boatsOf = (presets) => presets.filter((d) => analyze(d).boat);
+export function cases({ presets }) {
+  return [
+    ...LOCS.map((loc) => ({ id: `${loc} site, starts${loc !== REF && loc !== 'canyon' ? ', MEGA JUMP' : ''}`, kind: 'location', loc, world: loc })),
+    ...[0, 1].map((k) => ({ id: `ref ${boatsOf(presets).filter((d, i) => i % 2 === k).map((d) => d.name).join(', ')}, kid's boats ${k + 1}/2`, kind: 'ref', loc: REF, world: REF, part: k })), // (half the boats and half the kid's builds each)
+  ];
+}
+export async function runCase(c, { presets }) {
+  const { worldAt, skyOf } = await import('./node/world.mjs');
+  const w = await worldAt(c.loc), S = skyOf(w, presets), W = w.world, out = [], judged = (r, where) => judge(r, where).map(([name, ok, why]) => ({ name, ok, why }));
+  W.reset(); W.gust.set(0, 0, 0); W.gustT.set(0, 0, 0);
+  const boats = boatsOf(presets), modes = ['arcade', 'pilot'], r = { mega: [], sim: [], kick: [], slalom: [], wrong: [], kids: [] };
+  if (c.kind === 'ref') {
+    for (const d of boats.filter((b, i) => i % 2 === c.part)) {
+      for (const rl of modes) r.mega.push(megaRun(S, d, rl));
+      r.sim.push(megaRun(S, d, 'sim'));
+      r.kick.push(kickerRun(S, d, 'arcade'));
+      if (['Jet Ski', 'Pontoon'].includes(d.name)) r.slalom.push(slalomRun(S, d, 'arcade'));
+      r.wrong.push(...wrongWay(S, d, 'pilot'));
+    }
+    // a kid's own boats: random hulls, resized, motors and extras where the hangar would put them; from the boost strip
+    kidBoats(8, 11).forEach((d, i) => { if (i % 2 === c.part) for (const rl of modes) r.kids.push(megaRun(S, d, rl, { from: 'boost', T: 40 })); });
+    return judged(r, `ref (${c.loc})`);
+  }
+  const add = (name, ok, why = '') => out.push({ name: `${c.loc}: ${name}`, ok: !!ok, why }), WP = W.waterParks;
+  add('no water park warnings', !w.warns.some((m) => m.includes('[waterpark]')), w.warns.filter((m) => m.includes('[waterpark]')).join('; '));
+  if (!W.loc.waterPark) {
+    const st = analyze(boats[0]), site = W.startSite(st);
+    add('no water park here: a boat that picks it starts at the marina', !WP && site?.kind === 'marina', `water park ${!!WP}, a boat's start site: ${site?.kind ?? 'none'}`);
+    return out;
+  }
+  if (!WP) { add('a water park is built', false, 'none'); return out; }
+  r.site = siteCheck(S);
+  for (const d of boats) {
+    const st = startAt(S, d);
+    add(`${d.name} starts at the water park, afloat, facing down the course`, st.d < 3 && st.fx > 0.95 && st.wet > 0.05 && st.up > 0.95, `${st.d.toFixed(1)} m from the start, heading ${st.fx.toFixed(2)}, wet ${st.wet.toFixed(2)}, up ${st.up.toFixed(2)}`);
+    if (c.loc !== REF) { for (const rl of modes) r.mega.push(megaRun(S, d, rl)); r.sim.push(megaRun(S, d, 'sim')); }
+  }
+  out.push(...judged(r, c.loc));
+  return out;
+}
+
 // screenshots: a fresh boat (added to the scene, the flight's own hidden) driven down the main lane until cond(ac) holds
 export function stage(name, cond, T = 40, lane = 0, x0 = null) {
   const S = window.__sky, F = S.F, P = park(S); F.paused = true; F.world.gust.set(0, 0, 0);

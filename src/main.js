@@ -15,6 +15,7 @@ import { Audio, MIX_DEFAULTS, OLD_MIX_DEFAULTS } from './audio.js';
 import { WorldSound } from './worldsound.js';
 import { Callouts } from './callouts.js';
 import { vehicleKind, isLand, words, modeChoice, startMessage } from './vehicleKind.js';
+import { chooseStart, findWater, BOAT_STARTS, LAND_STARTS, AFLOAT_STARTS } from './startChoice.js';
 import { Controls } from './controls.js';
 import { HUD } from './hud.js';
 import { CameraRig } from './cameras.js';
@@ -419,17 +420,13 @@ const MOONS = [['real', 'Tonight’s real moon', null], ['full', 'Full', 14.77],
 if (LOCATIONS[flightCfg.location]?.hidden || !LOCATIONS[flightCfg.location]) flightCfg.location = 'islands'; // hidden/removed places move to Bora Bora
 // the ground start's name in the flight setup: where this vehicle will really start (see buildFlight)
 function groundStartLabel(s, loc) { return s.vertical ? 'On the launch pad' : s.heli && LOCATIONS[loc]?.city?.helipads?.some((h) => h.start) ? 'On the rooftop helipad' : 'On the runway'; }
-const BOAT_STARTS = ['marina', 'waterpark', 'water', 'runway']; // boats' start choices (flightCfg.boatStart): afloat at the marina (the default), at the water park's start arch (where there is one: waterPark.js), out on open water, or sat on the runway
 function boatChips() {
   const cur = BOAT_STARTS.includes(flightCfg.boatStart) ? flightCfg.boatStart : 'marina';
   const chip = (id, label, extra = '') => `<button data-bs="${id}" class="${cur === id ? 'on' : ''}"${extra}>${label}</button>`;
   return chip('marina', 'At the marina') + chip('waterpark', 'At the water park', ` data-wpark${LOCATIONS[flightCfg.location]?.waterPark ? '' : ' hidden'}`) + chip('water', 'Out on the water') + chip('runway', 'On the runway');
 }
-const LAND_STARTS = ['park', 'road', 'evel']; // cars' and bikes' start choices besides the runway (flightCfg.landStart; World.landStart)
 // cars' and bikes' start choices (data-ls: flightCfg.landStart): the stunt park (the default), a street, the runway, and
 // the canyon jump where there is one (shown for the picked location)
-// An amphibian (a car or bike with a boat hull) can also start afloat: at the marina or out on the water.
-const AFLOAT_STARTS = ['marina', 'water'];
 function landChips(amphib = false) {
   const cur = LAND_STARTS.includes(flightCfg.landStart) || flightCfg.landStart === 'runway' || (amphib && AFLOAT_STARTS.includes(flightCfg.landStart)) ? flightCfg.landStart : 'park';
   const chip = (id, label, extra = '') => `<button data-ls="${id}" class="${cur === id ? 'on' : ''}"${extra}>${label}</button>`;
@@ -657,17 +654,6 @@ const rig = new CameraRig(flightCam, canvas);
 const net = new Net({ ui, hud, audio, LS, getDesign: () => hangar.design, getCfg: () => flightCfg });
 $('#hud').addEventListener('click', (e) => { if (e.target.id === 'h-cam') onAction('camera'); if (e.target.id === 'h-pause') onAction('pause'); });
 
-function findWater(world) {
-  const ws = world.loc.waterStart; // a location's own seaplane spot (e.g. in a lagoon, not out in the surf)
-  if (ws && world.heightAt(ws[0], ws[1]) < world.waterLevel - 2) return new THREE.Vector3(ws[0], 0, ws[1]);
-  const rs = world.real?.waterStart?.(); if (rs) return rs; // a real river high above the water level (the Colorado)
-  for (let r = 300; r < 6000; r += 150) for (let a = 0; a < Math.PI * 2; a += 0.25) {
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    let ok = true; for (let k = -6; k <= 6; k++) if (world.heightAt(x, z + k * 60) > world.waterLevel - 2) { ok = false; break; }
-    if (ok) return new THREE.Vector3(x, 0, z + 200);
-  }
-  return null;
-}
 
 function startFlight(cfgOverride) {
   const cfg = { ...flightCfg, ...cfgOverride };
@@ -746,43 +732,25 @@ function buildFlight(cfg) {
     walls: (x, z, r, out) => world.wallBoxes(x, z, r, out), wallPass: (e, p) => !!e.dk && world.destruct.passes(e, p),
     onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40, p.clone()); },
   };
-  // cars and bikes have their own start choices (LAND_STARTS), the stunt park by default; an amphibian (with a boat
-  // hull) may pick a boat's start instead (AFLOAT_STARTS), and then starts as a boat does
-  const afloatStart = st.car && st.boat && !st.heli && AFLOAT_STARTS.includes(cfg.landStart);
-  const land = st.car && !st.heli && !afloatStart;
-  let start = land ? (LAND_STARTS.includes(cfg.landStart) ? cfg.landStart : 'park') : afloatStart ? cfg.landStart : st.boat ? (BOAT_STARTS.includes(cfg.boatStart) ? cfg.boatStart : 'marina') : cfg.start; let F_approach = null; // (boats: BOAT_STARTS, the marina by default)
+  // where it starts (startChoice.js): the start picked in the flight setup, as this vehicle gets it at this place
   const gearOK = ac.parts.some((p) => p.gear && (!p.gear.float || p.gear.skid)); // skids can sit on a runway
-  if (cfg.mode === 'landing' && !st.boat) start = 'approach';
-  else if (start === 'water' || (start === 'runway' && st.floats && !gearOK)) start = 'water';
-  if (start === 'runway' && !ac.hasEngine && !st.boat) start = 'air';
-  if (st.boat && (start === 'water' || (start === 'marina' && !world.startSite(st))) && !findWater(world)) start = 'runway'; // no water here at all: it sits on the runway
-  if (st.car && st.wingArea < 0.5 && (start === 'air' || start === 'approach')) start = 'runway'; // cars without wings start on the ground
   // the launch pad's stand is fitted to a rocket that is about to fly (anything else: to the stock Rocket, so it's never bare)
   const padStand = world.pad?.setStand(st.vertical ? design : stockRocket());
-  if (st.vertical && start !== 'water') start = padStand && !padBusy(world.pad) ? 'pad' : 'runway'; // rockets launch standing on their tail
+  const pick = chooseStart(st, cfg, { gearOK, hasEngine: ac.hasEngine, water: () => findWater(world), site: (s) => world.startSite(s), siteBusy: (s) => siteBusy(s.pos.x, s.pos.z, s.y, s.r),
+    padOK: () => padStand && !padBusy(world.pad), landStart: (s) => world.landStart(s), waterPark: () => world.waterParks?.start ?? null });
+  let start = pick.start, F_approach = null; const { site, park, wpark } = pick;
   const slot = cfg.mpSlot || 0, slotX = slot ? (slot % 2 ? 1 : -1) * Math.ceil(slot / 2) * 70 : 0; // multiplayer: side by side, stepped up
   const vApp = clamp(Number.isFinite(st.stall) ? st.stall * 1.45 : 45, 32, 110);
   const rwy = world.runways[net.active ? net.freeRunway(world) : cfg.rwy || 0] || world.runway; // online: a runway nobody is on
-  const park = land && start !== 'runway' && cfg.mode !== 'landing' ? world.landStart(start) : null; // cars and bikes: the stunt park's arch, a street or the canyon jump (World.landStart)
-  if (!park && LAND_STARTS.includes(start)) start = 'runway'; // (none here: the runway)
-  // a place's own start for this kind of vehicle (world.sites: New York's helicopters on a rooftop helipad), if nobody is on it
-  const site = !park && cfg.mode !== 'landing' && ((start === 'runway' && !st.boat) || start === 'marina') ? world.startSite(st) : null; // (boats: the marina, when they pick it)
-  if (start === 'marina' && !site) start = 'water'; // (no marina here: any open water)
-  const wpark = start === 'waterpark' ? world.waterParks?.start : null; // boats: the water park's start arch (waterPark.js)
-  if (start === 'waterpark' && !wpark) start = world.startSite(st) ? 'marina' : 'water'; // (none here: the marina)
-  if (wpark) ac.spawn(env, wpark.at(slot), wpark.heading); // afloat at the arch, facing the boost strip and the MEGA JUMP
-  else if (start === 'marina' && !site) { const s2 = world.startSite(st); if (s2) { start = s2.kind; ac.spawn(env, s2.at(slot), s2.heading); } else start = 'water'; } // (no water park here: the marina)
-  else if (site?.afloat) { start = site.kind; ac.spawn(env, site.at(slot), site.heading); } // a boat floats at its waterline (Aircraft.spawn), side by side online
-  else if (site && !siteBusy(site.pos.x, site.pos.z, site.y, site.r)) { // standing on it (just touching: no first airborne frame to spin a rotor up), engines off
-    start = site.kind; ac.spawn(env, site.pos, site.heading); ac.x.y += site.y - env.groundAt(site.pos.x, site.pos.z).h - 0.031; ac.syncVisual();
-  } else if (park) { // facing the way to go; online, the others line up behind
+  if (pick.spawn === 'waterpark') ac.spawn(env, wpark.at(slot), wpark.heading); // afloat at the arch, facing the boost strip and the MEGA JUMP
+  else if (pick.spawn === 'afloat') ac.spawn(env, pick.at.at(slot), pick.at.heading); // a boat floats at its waterline (Aircraft.spawn), side by side online
+  else if (pick.spawn === 'stand') { // standing on it (just touching: no first airborne frame to spin a rotor up), engines off
+    ac.spawn(env, site.pos, site.heading); ac.x.y += site.y - env.groundAt(site.pos.x, site.pos.z).h - 0.031; ac.syncVisual();
+  } else if (pick.spawn === 'park') { // facing the way to go; online, the others line up behind
     ac.spawn(env, park.at(slot), park.heading); if (park.msg) setTimeout(() => F?.ac === ac && hud.center(park.msg, 3500), 3800);
-  } else if (start === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0, st.vertical ? { pitch: Math.PI / 2 } : {}); }
-  else if (start === 'pad') padSpawn(ac, world.pad, env);
-  else if (start === 'water') {
-    const w = findWater(world);
-    if (w) ac.spawn(env, w.pos || w, w.heading || 0); else { start = 'air'; }
-  }
+  } else if (pick.spawn === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0, st.vertical ? { pitch: Math.PI / 2 } : {}); }
+  else if (pick.spawn === 'pad') padSpawn(ac, world.pad, env);
+  else if (pick.spawn === 'water') { const w = pick.at; ac.spawn(env, w.pos || w, w.heading || 0); }
   if (start === 'air') { // on the extended centreline of whichever runway end has room, high enough to clear the hills ahead
     const sp = planAirStart(world, rwy, st.heli ? 120 : 450);
     ac.spawn(env, new THREE.Vector3(rwy.x + slotX, 0, sp.s * (rwy.len / 2 + 1200 + slot * 40)), sp.heading, { air: true, alt: sp.alt + slot * 30, speed: st.heli ? 0 : vApp * 1.1 });
@@ -845,7 +813,7 @@ function buildFlight(cfg) {
   world.updateEnv();
   renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null);
   const seats = warmStations(ac.stations); // (the cockpit views' own cabins and linings, hidden until you sit there)
-  renderer.compileAsync(scene, flightCam).catch(() => {}).then(compiled);
+  compileAsync(scene, flightCam).catch(() => {}).then(compiled);
   seats();
   renderer.setRenderTarget(null);
   onResize();
@@ -1526,11 +1494,18 @@ function frame(now) {
 // Compile the scene's shaders as they'd be with one more light in it, holding the loading screen (warm.pending) until
 // they're done: a compile left running stalls the frames after it. renderer.compile sets up the lights it sees, so a
 // last pass without the light puts them back for the next frame's shadow maps.
+// renderer.compileAsync, but a material freed while it waits (the flight ended or restarted mid-warm-up: its program is
+// gone) counts as done instead of throwing from three's polling timer ('reading isReady' of undefined)
+function compileAsync(scene, cam) {
+  const mats = renderer.compile(scene, cam);
+  if (!renderer.extensions.has('KHR_parallel_shader_compile')) return Promise.resolve(scene);
+  return new Promise((res) => { const poll = () => { mats.forEach((m) => { const p = renderer.properties.get(m)?.currentProgram; if (!p || p.isReady()) mats.delete(m); }); if (mats.size) setTimeout(poll, 10); else res(scene); }; poll(); });
+}
 function compileWith(scene, light, warm) {
   const target = () => renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null);
   warm.pending = true;
   const had = !!light.parent; // the explosion light now lives in the scene permanently: don't take it out again
-  target(); if (!had) scene.add(light); const done = renderer.compileAsync(scene, flightCam); if (!had) scene.remove(light); renderer.setRenderTarget(null);
+  target(); if (!had) scene.add(light); const done = compileAsync(scene, flightCam); if (!had) scene.remove(light); renderer.setRenderTarget(null);
   const finish = () => { if (!warm.pending) return; target(); renderer.compile(scene, flightCam); renderer.setRenderTarget(null); warm.pending = false; warm.t = performance.now(); };
   done.catch(() => {}).then(finish); setTimeout(finish, 15000);
 }
@@ -1683,6 +1658,13 @@ async function boot() {
     addEventListener('online', autoCheckUpdate);
     addEventListener('focus', autoCheckUpdate);
   }
-  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, restartFlight, get kept() { return kept; }, get tunnel() { return tunnel; }, gvis, openTunnel, closeTunnel, net, presets, settings, flightCfg, controls, rig, analytics, hud };
+  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, restartFlight, get kept() { return kept; },
+    // tests (tools/test): advance(s) steps the flight s seconds at a fixed dt with no rendering (physics, world, effects,
+    // traffic, missions: everything stepFlight does), ~50x faster than waiting for frames; streaming that works to a
+    // time budget per frame (terrain tiles, flora, map tiles) gets less done per game second, so let it settle first
+    // when a check depends on it. swapVehicle(design): fly another vehicle in the same World (a restart with a new
+    // design, so the World is kept); wait for F.t > 0 afterwards.
+    advance(seconds, dt = 1 / 60) { for (let n = Math.round(seconds / dt); n > 0 && F && !F.paused && !F.warm?.pending; n--) stepFlight(dt); return F?.t ?? 0; },
+    swapVehicle(design) { hangar.load(design); if (F) restartFlight(); }, get tunnel() { return tunnel; }, gvis, openTunnel, closeTunnel, net, presets, settings, flightCfg, controls, rig, analytics, hud };
 }
 boot();

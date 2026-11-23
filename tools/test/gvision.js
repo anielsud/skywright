@@ -76,12 +76,22 @@ function stir(design) {
   return { check: 'stick stir', name: design.name, eyeMax: +m.toFixed(4), still: +still.toFixed(4), ok: m < still + 0.004 };
 }
 
-export function plan(presets) {
-  const out = model();
-  for (const d of presets) {
-    let r = null; try { r = pull(d); } catch (err) { out.push({ check: 'pull', name: d.name, ok: false, why: String(err?.stack || err).slice(0, 300) }); continue; }
-    if (r) out.push({ check: 'pull', ...r });
-    try { const q = stir(d); if (q) out.push(q); } catch (err) { out.push({ check: 'stick stir', name: d.name, ok: false, why: String(err?.stack || err).slice(0, 300) }); }
-  }
+// one vehicle's cockpit-eye rows: its hard pull and its stick stir (none if it seats no crew)
+export function vehicle(d) {
+  const out = [];
+  let r = null; try { r = pull(d); } catch (err) { out.push({ check: 'pull', name: d.name, ok: false, why: String(err?.stack || err).slice(0, 300) }); return out; }
+  if (r) out.push({ check: 'pull', ...r });
+  try { const q = stir(d); if (q) out.push(q); } catch (err) { out.push({ check: 'stick stir', name: d.name, ok: false, why: String(err?.stack || err).slice(0, 300) }); }
   return out;
 }
+
+// the whole test, as gvision.py prints it (the browser path)
+export function plan(presets) { return [...model(), ...presets.flatMap(vehicle)]; }
+
+// Node tier (tools/test/node/run.mjs): the haze model in one case (it only does arithmetic on numbers: the overlay's
+// page elements are stand-ins in Node, and no check reads them back), then one case per vehicle. Not headless: the
+// cockpit eye follows the crew rig's head, which the visual pass builds and poses.
+export const nodeSuite = { files: ['src/gvision.js', 'src/stations.js', 'src/crew.js', 'src/cameras.js', 'src/aircraft.js', 'tools/test/gvision.js'], headless: false };
+export function cases({ presets }) { return [{ id: 'haze model', model: true }, ...presets.map((d) => ({ id: d.name, name: d.name, key: 'crew:' + d.name, cost: 2 }))]; } // (key: riders builds the same crews)
+const row = (r) => { const { check, ok, name, why, ...info } = r; return { name: `${check}${name ? ' ' + name : ''}`, ok, why: why || (ok ? '' : JSON.stringify(info)), info }; };
+export function runCase(c, { presets }) { return (c.model ? model() : vehicle(presets.find((d) => d.name === c.name))).map(row); }

@@ -148,6 +148,10 @@ export class Debris {
 }
 
 // ---------------- Aircraft ----------------
+// Tests of physics only (tools/test/node, suites with nodeSuite.headless): skip the purely visual detail, i.e. the
+// assembly pass (fillets, pylons, doors, the crew and the cabin light) and its per-frame update (crew posing, gear
+// doors, slats). Nothing the simulation reads comes from either. Never on in the game.
+export const HEADLESS = { on: false };
 export class Aircraft {
   constructor(design, realism = REALISM.pilot) {
     this.design = design; this.R = realism;
@@ -230,7 +234,7 @@ export class Aircraft {
       }
       this.parts.push(part);
     });
-    { const objs = []; for (const p of this.parts) objs[p.i] = p.obj; assemble(design, objs, this.root); try { this.cabin = bakeCabinLight(objs, this.root); } catch (e) { console.warn('cabinLight', e); } mergeStatic(objs, this.root); } // fillets, pylons, doors, skin furniture (visual only); light into the cockpits and cabins only through their glass (cabinLight.js: baked on the same meshes as the hangar's copy, so its saved bake applies, no second bake); then one mesh per material per part (the cabin light's values merge with them)
+    if (!HEADLESS.on) { const objs = []; for (const p of this.parts) objs[p.i] = p.obj; assemble(design, objs, this.root); try { this.cabin = bakeCabinLight(objs, this.root); } catch (e) { console.warn('cabinLight', e); } mergeStatic(objs, this.root); } // fillets, pylons, doors, skin furniture (visual only); light into the cockpits and cabins only through their glass (cabinLight.js: baked on the same meshes as the hangar's copy, so its saved bake applies, no second bake); then one mesh per material per part (the cabin light's values merge with them)
     this.hasEngine = this.parts.some((p) => p.engine);
     this.hasRetract = this.parts.some((p) => p.gear?.retract);
     this.hasSmoke = this.parts.some((p) => p.smoke);
@@ -1185,7 +1189,7 @@ export class Aircraft {
       }
     }
     if (this.landingLight) this.landingLight.intensity = env.night ? 4000 : 0;
-    updateDetail(this, dt); // gear doors, slats, spoilers
+    if (!HEADLESS.on) updateDetail(this, dt); // gear doors, slats, spoilers
     if (this.isBoat) boatVisuals(this);
     if (this.normalsDirty) {
       this.normalsDirty = false;

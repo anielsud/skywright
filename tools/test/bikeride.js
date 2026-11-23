@@ -44,7 +44,7 @@ const sample = (r, t) => r.samples.reduce((a, s) => (Math.abs(s.t - t) < Math.ab
 const unwrapYaw = (r, t0, t1) => { let tot = 0, prev = sample(r, t0).yaw; for (const s of r.samples) if (s.t > t0 && s.t <= t1) { let d = s.yaw - prev; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI; tot += d; prev = s.yaw; } return tot; };
 
 // The test plan: presets = the stock bikes, others = every other stock vehicle. Returns [{ name, ok, why, ...numbers }]
-export function plan(presets, others = []) {
+export function plan(presets, others = [], { kids: withKids = true } = {}) {
   const out = [], check = (name, r, conds) => { const bad = conds.filter(([ok]) => !ok).map(([, why]) => why); out.push({ name, ok: !bad.length, why: bad.join('; '), maxLean: +r.maxLean.toFixed(2), minUp: +r.minUp.toFixed(2), maxSpeed: +r.maxSpeed.toFixed(1), maxPitch: +r.maxPitch.toFixed(2), minPitch: +r.minPitch.toFixed(2), flips: r.flips, final: r.final, events: r.events.slice(0, 6) }); return r; };
   for (const d of presets) for (const mode of ['arcade', 'pilot', 'sim']) {
     // the ride: 0-4 s gas, 4-9 s left turn on part gas, 9-13 s right turn, 13-15 s straight, 15-23 s brake to a stop, then wait
@@ -95,7 +95,7 @@ export function plan(presets, others = []) {
   // line on the centreline is a bike, whatever the wheels are (car wheels too), and whatever angle it sits at. They must be
 // detected and ride without falling over.
   const kids = [...bikeBuilds(8, 91, { fit: true }), ...bikeBuilds(3, 93, { forks: ['c_wheel_steer'], rears: ['c_wheel'], engines: ['c_motor'], bodies: ['fus_pod', 'b_dirt', 'fus_buggy'], fit: true })];
-  for (const d of kids) {
+  for (const d of withKids ? kids : []) {
     // (a random build whose wheels don't both reach the ground, so it sits on its frame, isn't a bike anyone could ride)
     const rest = run(d, 'arcade', () => ({}), { T: 1.5 });
     if (!(rest.final.fc && rest.final.rc)) { out.push({ name: `kid ${d.name}: skipped`, ok: true, skip: true, why: 'its wheels don\'t both reach the ground' }); continue; }
@@ -115,4 +115,14 @@ export function plan(presets, others = []) {
   // and everything else stays what it was
   for (const d of others) { const ac = new Aircraft(d, REALISM.arcade); out.push({ name: `${d.name}: not a bike`, ok: !ac.isBike, why: ac.isBike ? 'detected as a bike' : '' }); }
   return out;
+}
+
+// Node tier (tools/test/node/run.mjs): one case per stock bike, one for the kid's builds, one for everything else
+export const nodeSuite = { files: ['src/bike.js', 'src/bikeParts.js', 'src/aircraft.js', 'src/design.js', 'src/parts.js', 'src/drive.js', 'tools/test/bikeride.js'], headless: true };
+const isBike = (d) => analyze(d).bike;
+export function cases({ presets }) { return [...presets.filter(isBike).map((d) => ({ id: d.name })), { id: 'kid builds', kids: true }, { id: 'not bikes', others: true }]; }
+export function runCase(c, { presets }) {
+  if (c.kids) return plan([], [], { kids: true });
+  if (c.others) return plan([], presets.filter((d) => !isBike(d)), { kids: false });
+  return plan([presets.find((d) => d.name === c.id)], [], { kids: false });
 }
