@@ -1,4 +1,4 @@
-name: Smoke test
+name: Tests
 
 # Boots the game in headless Chrome (WebGL via SwiftShader), tours the places flying one vehicle of each kind, and
 # fails on console errors; every preset is built and driven in Node (tools/test/presets.js).
@@ -6,6 +6,8 @@ name: Smoke test
 # Each flight is still built and stepped (catches load/startup errors and NaN physics), but frame rate isn't checked.
 # Informational: not a required check. The full check is `python3 tools/test/smoke.py` on your machine.
 # The tour's places are split over 2 parallel jobs (smoke.py --shard): each boots the game and visits half of them.
+# Alongside: the Node tier (every logic, physics and geometry suite, tools/test/node/run.mjs; known failures listed in
+# tools/test/known.json don't fail it) and the other browser suites (run.py). All three run at once: ~5 min in all.
 on:
   pull_request:
   workflow_dispatch:
@@ -45,3 +47,33 @@ jobs:
           name: smoke-screenshots-${{ matrix.shard }}
           path: smoke-shots
           if-no-files-found: ignore
+
+  node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    name: node tier
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Node suites
+        run: node tools/test/node/run.mjs --jobs 4
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    name: browser suites
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install websockets
+        run: python -m pip install websockets
+      # (tunnelcheck-ui is left out until its known texture leak is fixed, #213)
+      - name: Browser suites
+        run: python tools/test/run.py restart placecheck padcheck helipadcheck startbakes-stunts

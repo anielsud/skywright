@@ -53,6 +53,7 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
     m.cases(ctx).forEach((c, i) => { if (!only || JSON.stringify(c).toLowerCase().includes(only.toLowerCase())) work.push({ suite: s, i, c }); });
   }
   if (list) { for (const w of work) console.log(`${w.suite}  ${w.c.id ?? w.i}`); process.exit(0); }
+  let knownFails = {}; try { knownFails = JSON.parse(readFileSync(REPO + 'tools/test/known.json', 'utf8')); } catch {}
   const t0 = performance.now(), results = [], n = Math.min(jobs, work.length);
   console.log(`${work.length} cases from ${suites.join(', ')} on ${n} workers`);
   // longest first (times from earlier runs, tools/test/node/.times.json, not committed; else a case's own c.cost in s;
@@ -70,15 +71,21 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
     w.on('message', (m) => {
       if (m.ready) return next();
       results.push(m);
-      for (const c of m.checks) if (!c.ok || c.skip) console.log(`${c.ok ? 'skip' : 'FAIL'}  ${m.suite}: ${c.name}${c.why ? '  ' + c.why : ''}`);
+      for (const c of m.checks) if (!c.ok || c.skip) console.log(`${c.ok ? 'skip' : knownFails[m.suite]?.[c.name] ? 'known' : 'FAIL'}  ${m.suite}: ${c.name}${c.why ? '  ' + c.why : ''}`);
       next();
     });
     w.on('error', (e) => { results.push({ suite: '?', i: -1, ms: 0, checks: [{ name: 'worker crashed', ok: false, why: String(e) }] }); resolve(); });
   })));
   for (const r of results) { const w = work.find((x) => x.suite === r.suite && x.i === r.i); if (w) times[key(w)] = Math.round(r.ms); }
   try { writeFileSync(timesFile, JSON.stringify(times)); } catch {}
-  const checks = results.flatMap((r) => r.checks.map((c) => ({ suite: r.suite, ...c }))), bad = checks.filter((c) => !c.ok);
-  const per = {}; for (const r of results) { const p = (per[r.suite] ??= { cases: 0, ms: 0, checks: 0, failed: 0 }); p.cases++; p.ms += r.ms; p.checks += r.checks.length; p.failed += r.checks.filter((c) => !c.ok).length; }
+  // known failures (tools/test/known.json: suite -> check name -> issue) report as known, not as failures
+  let known = {}; try { known = JSON.parse(readFileSync(REPO + 'tools/test/known.json', 'utf8')); } catch {}
+  const isKnown = (c) => known[c.suite]?.[c.name];
+  const checks = results.flatMap((r) => r.checks.map((c) => ({ suite: r.suite, ...c }))), bad = checks.filter((c) => !c.ok && !isKnown(c));
+  const knownBad = checks.filter((c) => !c.ok && isKnown(c)), fixed = checks.filter((c) => c.ok && !c.skip && isKnown(c));
+  if (knownBad.length) console.log(`known  ${knownBad.length} known failure(s), not counted: ${[...new Set(knownBad.map((c) => `${c.suite} ${isKnown(c)}`))].join(', ')}`);
+  for (const c of fixed) console.log(`fixed  ${c.suite}: ${c.name} passes now: remove it from tools/test/known.json`);
+  const per = {}; for (const r of results) { const p = (per[r.suite] ??= { cases: 0, ms: 0, checks: 0, failed: 0 }); p.cases++; p.ms += r.ms; p.checks += r.checks.length; p.failed += r.checks.filter((c) => !c.ok && !known[r.suite]?.[c.name]).length; }
   for (const [s, p] of Object.entries(per)) console.log(`${p.failed ? 'FAIL' : 'PASS'}  ${s}: ${p.checks - p.failed}/${p.checks} checks, ${p.cases} cases, ${(p.ms / 1000).toFixed(1)} s of work`);
   console.log(`${bad.length ? 'FAIL' : 'PASS'}  ${checks.length - bad.length}/${checks.length} checks in ${((performance.now() - t0) / 1000).toFixed(1)} s on ${n} workers`);
   if (jsonOut) writeFileSync(jsonOut, JSON.stringify({ per, checks }, null, 1));

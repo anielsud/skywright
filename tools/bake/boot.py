@@ -12,6 +12,10 @@ pictures and stunt sites for that same COMMIT, the postures for that same SOLVER
 so a stale or missing file just means the device works them out itself, as before. Locally (COMMIT 'dev') the game ignores these files; the outputs are
 not committed (.gitignore). Same requirements as tools/test/smoke.py (Chrome + websockets).
 
+In CI the postures and views of the last deploy with the same SOLVER / VIEWS are restored into assets/boot first
+(deploy.yml, actions/cache): the game takes postures.json before building anything, the bake takes views.json, so only
+what changed is solved again, and only views worked out now are checked again.
+
 Then it checks its own output, read back from the files (tools/test/startbakes.js verifyBake): every stock vehicle's
 cockpit views taken from views.json alone must equal the views worked out with no cache (and no seat may be missing
 from it), and every stunt site in stunts.json must be exactly the site findSite finds. If not, it removes those two
@@ -26,26 +30,26 @@ from smoke import ROOT, CDP, free_port, start_server, launch_chrome  # noqa: E40
 import websockets  # noqa: E402
 
 OUT = os.path.join(ROOT, 'assets', 'boot')
-JS = """(async () => {
-  const S = window.__sky, { thumbnailDrawer, buildDesign } = await import('./src/hangar.js');
+JS = """(async (prevViews) => {
+  const S = window.__sky, { thumbnailDrawer } = await import('./src/hangar.js');
   const crew = await import('./src/crew.js'), V = await import('./src/version.js'), { PARTS } = await import('./src/parts.js');
+  const T = { t: performance.now() }, lap = (k) => { const n = performance.now(); T[k] = Math.round(n - T.t); T.t = n; };
   const dr = thumbnailDrawer(), pics = {};
   for (const id in PARTS) try { pics[id] = dr.draw(id); } catch (e) { console.warn('picture failed', id, e); }
-  dr.dispose();
-  for (const d of S.presets) {
-    const g = new S.THREE.Group();
-    try { buildDesign(d, g, { quick: false, near: true }); } catch (e) { console.warn('build failed', d.name, e); }
-    g.traverse((o) => { o.geometry?.dispose(); o.skeleton?.dispose(); });
-  }
+  dr.dispose(); lap('pictures');
+  // (the crews' postures are solved by the flight builds below: the same 21 + 3 as building each preset for the hangar
+  // too, value for value, so that pass is gone)
   const { Aircraft } = await import('./src/aircraft.js'), { cloneDesign } = await import('./src/design.js'), views = await import('./src/stations.js');
+  views.takeViews(prevViews); // (an earlier deploy's views, restored from the CI cache for this VIEWS: only new seats are worked out)
   for (const d of S.presets) { // the flight's copy: its cockpit views (stations.js) look at the meshes really built
     try { const ac = new Aircraft(cloneDesign(d)); void ac.stations; ac.root.traverse((o) => { o.geometry?.dispose(); o.skeleton?.dispose(); }); } catch (e) { console.warn('views failed', d.name, e); }
   }
+  lap('flight builds (postures, views)');
   const { bakeStuntSites } = await import('./src/stuntPark.js'), { LOCATIONS } = await import('./src/world.js');
-  const sites = await bakeStuntSites(LOCATIONS);
+  const sites = await bakeStuntSites(LOCATIONS); lap('stunt sites'); delete T.t;
   return { parts: { key: V.COMMIT, pics }, postures: { solver: V.SOLVER, ...crew.solvedPostures() },
-    stunts: { key: V.COMMIT, sites }, views: { stamp: V.VIEWS, ...views.solvedViews() } };
-})()"""
+    ms: T, stunts: { key: V.COMMIT, sites }, views: { stamp: V.VIEWS, ...views.solvedViews() } };
+})(PREV)"""
 
 
 async def run(url, ws_url):
@@ -54,13 +58,26 @@ async def run(url, ws_url):
         await cdp.send('Page.enable'); await cdp.send('Runtime.enable')
         await cdp.send('Page.navigate', url=url)
         await cdp.wait_for('window.__sky && window.__sky.presets.length', 120, 'window.__sky')
-        r = await cdp.js(JS, timeout=900)
+        prev = load('views')  # (restored by deploy.yml from the CI cache, for this same VIEWS stamp; else none)
+        r = await cdp.js(JS.replace('PREV', json.dumps(prev)), timeout=900)
         write(r)
+        # only views worked out now need checking: the rest come from an earlier bake, checked when it was made
+        old = {json.dumps(k) for k, _ in (prev or {}).get('list', [])} if prev and prev.get('stamp') == r['views']['stamp'] else set()
+        new_views = [k for k, _ in r['views']['list'] if json.dumps(k) not in old]
+        print(f"views: {len(r['views']['list']) - len(new_views)} from the cache, {len(new_views)} worked out now; ms per stage {r['ms']}")
         # check the bake as written: read back from its files, it must be what the game works out itself
         # (tools/test/startbakes.js verifyBake)
         back = {n: json.load(open(os.path.join(OUT, f'{n}.json'))) for n in ('views', 'stunts')}
-        bad = await cdp.js(f"import('./tools/test/startbakes.js').then((m) => m.verifyBake({json.dumps(back)}, window.__sky.presets))", timeout=900)
+        opts = {'views': bool(new_views), 'fresh': r['stunts']['sites']}
+        bad = await cdp.js(f"import('./tools/test/startbakes.js').then((m) => m.verifyBake({json.dumps(back)}, window.__sky.presets, {json.dumps(opts)}))", timeout=900)
         return r, bad
+
+
+def load(name):
+    try:
+        return json.load(open(os.path.join(OUT, f'{name}.json')))
+    except (OSError, ValueError):
+        return None
 
 
 def write(r):

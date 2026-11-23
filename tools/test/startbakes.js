@@ -87,8 +87,11 @@ export async function stuntsAt(locId) {
 
 // boot.py: the bake as written (parsed back from its JSON) against what the game works out itself. Returns a list of
 // problems (empty: good).
-export async function verifyBake(bake, presets) {
+// (opts.views false: skip the views, all taken from an earlier, checked bake; opts.fresh: the sites the bake itself just
+// found, to compare against instead of searching again)
+export async function verifyBake(bake, presets, opts = {}) {
   const bad = [];
+  if (opts.views !== false)
   // cockpit views: for every stock vehicle, with only the bake to go on, every seat with linings takes them from it,
   // and every seat ends up with the same linings and eye as worked out with no cache at all
   for (const d of presets) {
@@ -101,7 +104,7 @@ export async function verifyBake(bake, presets) {
     } catch (e) { bad.push(`views: ${d.name}: ${e?.stack || e}`); } finally { globalThis.__viewsNoCache = false; }
   }
   // stunt sites: the World takes the baked site as it is (stuntPark.js siteFor): the round trip must not change it
-  const fresh = await bakeStuntSites((await import('../../src/world.js')).LOCATIONS);
+  const fresh = opts.fresh ?? await bakeStuntSites((await import('../../src/world.js')).LOCATIONS);
   for (const [id, site] of Object.entries(fresh)) {
     const b = bake.stunts?.sites?.[id];
     if (!identical(noMs(site), noMs(b))) bad.push(`stunts: ${id}: baked ${JSON.stringify(b)} != found ${JSON.stringify(site)}`);

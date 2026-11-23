@@ -45,6 +45,7 @@ export async function fly(secs = 2, more = 3) {
   go(true);
   const t0 = F.t, w0 = performance.now();
   await sleep(secs * 1000);
+  for (let i = 0; i < 300 && S.F === F && F.t === t0; i++) await sleep(100); // (software WebGL on a CI runner can take seconds per frame: wait up to 30 s for the first one)
   const ran = F.t - t0, wall = (performance.now() - w0) / 1000;
   // cars, bikes and boats have their own synthesized engine voice (src/motorSound.js): it must be running and audible
   const e = F.ac.parts.find((p) => p.alive && p.engine && S.audio.voices[p.engine.sound]?.motor);
