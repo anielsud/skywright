@@ -185,9 +185,8 @@ export const nodeSuite = { files: ['src/waterPark.js', 'src/stuntKit.js', 'src/b
 const boatsOf = (presets) => presets.filter((d) => analyze(d).boat);
 export function cases({ presets }) {
   return [
-    ...LOCS.map((loc) => ({ id: `${loc} site, starts${loc !== REF && loc !== 'canyon' ? ', MEGA JUMP' : ''}`, kind: 'location', loc })),
-    ...boatsOf(presets).map((d) => ({ id: `ref ${d.name}`, kind: 'ref', loc: REF, boat: d.name })),
-    ...[0, 1].map((k) => ({ id: `ref kid's boats ${k + 1}/2`, kind: 'kids', loc: REF, part: k })),
+    ...LOCS.map((loc) => ({ id: `${loc} site, starts${loc !== REF && loc !== 'canyon' ? ', MEGA JUMP' : ''}`, kind: 'location', loc, world: loc })),
+    ...[0, 1].map((k) => ({ id: `ref ${boatsOf(presets).filter((d, i) => i % 2 === k).map((d) => d.name).join(', ')}, kid's boats ${k + 1}/2`, kind: 'ref', loc: REF, world: REF, part: k })), // (half the boats and half the kid's builds each)
   ];
 }
 export async function runCase(c, { presets }) {
@@ -196,15 +195,14 @@ export async function runCase(c, { presets }) {
   W.reset(); W.gust.set(0, 0, 0); W.gustT.set(0, 0, 0);
   const boats = boatsOf(presets), modes = ['arcade', 'pilot'], r = { mega: [], sim: [], kick: [], slalom: [], wrong: [], kids: [] };
   if (c.kind === 'ref') {
-    const d = boats.find((b) => b.name === c.boat);
-    for (const rl of modes) r.mega.push(megaRun(S, d, rl));
-    r.sim.push(megaRun(S, d, 'sim'));
-    r.kick.push(kickerRun(S, d, 'arcade'));
-    if (['Jet Ski', 'Pontoon'].includes(d.name)) r.slalom.push(slalomRun(S, d, 'arcade'));
-    r.wrong.push(...wrongWay(S, d, 'pilot'));
-    return judged(r, `ref (${c.loc})`);
-  }
-  if (c.kind === 'kids') { // a kid's own boats: random hulls, resized, motors and extras where the hangar would put them; from the boost strip
+    for (const d of boats.filter((b, i) => i % 2 === c.part)) {
+      for (const rl of modes) r.mega.push(megaRun(S, d, rl));
+      r.sim.push(megaRun(S, d, 'sim'));
+      r.kick.push(kickerRun(S, d, 'arcade'));
+      if (['Jet Ski', 'Pontoon'].includes(d.name)) r.slalom.push(slalomRun(S, d, 'arcade'));
+      r.wrong.push(...wrongWay(S, d, 'pilot'));
+    }
+    // a kid's own boats: random hulls, resized, motors and extras where the hangar would put them; from the boost strip
     kidBoats(8, 11).forEach((d, i) => { if (i % 2 === c.part) for (const rl of modes) r.kids.push(megaRun(S, d, rl, { from: 'boost', T: 40 })); });
     return judged(r, `ref (${c.loc})`);
   }

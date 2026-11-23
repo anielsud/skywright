@@ -166,7 +166,7 @@ export const STANDINS = {
 export const nodeSuite = { files: ['src/aircraft.js', 'src/world.js', 'src/buildings.js', 'src/realBuildings.js', 'src/realCity.js', 'src/towns.js', 'src/destruction.js', 'src/bike*.js', 'src/drive.js', 'tools/test/walls.js', 'tools/test/node/world.mjs'], headless: true };
 export function cases() {
   return [
-    ...PLACES.map((loc) => ({ id: `${loc} buildings`, kind: 'place', loc })),
+    ...PLACES.map((loc) => ({ id: `${loc} buildings`, kind: 'place', loc, world: loc })),
     ...VEHICLES.flatMap((name) => Object.keys(STANDINS).map((box) => ({ id: `contact ${name} ${box}`, kind: 'contact', name, box }))),
   ];
 }

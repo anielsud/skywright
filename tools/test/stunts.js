@@ -350,8 +350,8 @@ export const LOCS = ['canyon', 'nyc', 'lauterbrunnen', 'islands'], CARS = ['Dune
 export const nodeSuite = { files: ['src/stunt*.js', 'src/evelJump.js', 'src/aircraft.js', 'src/bike*.js', 'src/drive.js', 'src/collide.js', 'src/world.js', 'src/realworld.js', 'src/landStart.js', 'tools/test/stunts.js', 'tools/test/node/world.mjs'], headless: true };
 export function cases() {
   return [
-    ...CARS.map((car) => ({ id: `canyon ${car}`, kind: 'canyon', loc: 'canyon', car })),
-    ...LOCS.map((loc) => ({ id: `${loc} site, starts, runs`, kind: 'location', loc })),
+    ...[[CARS[0], CARS[2]], [CARS[1], CARS[3]]].map((cars) => ({ id: `canyon ${cars.join(', ')}`, kind: 'canyon', loc: 'canyon', world: 'canyon', cars })), // (a car and a bike each: about the same work)
+    ...LOCS.map((loc) => ({ id: `${loc} site, starts, runs`, kind: 'location', loc, world: loc })),
     ...CARS.flatMap((car) => MODES.map((rl) => ({ id: `ref ${car} ${rl}`, kind: 'ref', loc: 'ref', car, rl }))),
   ];
 }
@@ -384,10 +384,10 @@ export async function runCase(c, { presets }) {
     return judged(r, 'ref');
   }
   if (c.kind === 'canyon') {
-    for (const rl of MODES) {
-      r.loop.push(loopRun(S, c.car, rl)); r.jump.push(jumpRun(S, c.car, rl)); r.turn.push(turnRun(S, c.car, rl)); r.fork.push(forkRun(S, c.car, rl));
-      r.evel.push(evelRun(S, c.car, rl)); r.longRun.push(longRun(S, c.car, rl, 0));
-      if (c.car === CARS[0]) r.longRun.push(longRun(S, c.car, rl, 5.6));
+    for (const car of c.cars) for (const rl of MODES) {
+      r.loop.push(loopRun(S, car, rl)); r.jump.push(jumpRun(S, car, rl)); r.turn.push(turnRun(S, car, rl)); r.fork.push(forkRun(S, car, rl));
+      r.evel.push(evelRun(S, car, rl)); r.longRun.push(longRun(S, car, rl, 0));
+      if (car === CARS[0]) r.longRun.push(longRun(S, car, rl, 5.6));
     }
     return judged(r, c.loc);
   }

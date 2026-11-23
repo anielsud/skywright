@@ -7,7 +7,8 @@
 // A suite module exports:
 //   export const nodeSuite = { files: ['src/bike.js', ...], headless: true }   // the sources it covers (run.py --changed
 //     uses this); headless: physics only, Aircraft skips its visual detail (aircraft.js HEADLESS; SKY_VISUALS=1 to compare)
-//   export function cases(ctx) { return [{ id: 'Dirt Bike', ... }, ...] }   // plain, serialisable case descriptors
+//   export function cases(ctx) { return [{ id: 'Dirt Bike', ... }, ...] }   // plain, serialisable case descriptors (world: the
+//     node/world.mjs World it builds, if any: cases needing the same World go to the same worker where they can)
 //   export async function runCase(c, ctx) { return [{ name, ok, why, ...extra }, ...] }   // one case's checks
 // ctx = { presets: makePresets() } (each worker makes its own). Cases run in any order, on any worker: a case must not
 // depend on another having run first. Keep cases a few seconds each so the pool balances.
@@ -52,10 +53,13 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
   const t0 = performance.now(), results = [], n = Math.min(jobs, work.length);
   console.log(`${work.length} cases from ${suites.join(', ')} on ${n} workers`);
   // longest first would balance better; without a history, keep the suites' own order and hand out one at a time
-  const queue = [...work];
+  // (a case may name the World it needs, c.world (node/world.mjs keeps one per worker): a worker is handed a case for a
+  // World it has built if there is one, else one for a World no worker has started, else one that needs none, else the next)
+  const queue = [...work], started = new Set();
   await Promise.all(Array.from({ length: n }, () => new Promise((resolve) => {
-    const w = new Worker(fileURLToPath(import.meta.url));
-    const next = () => { const job = queue.shift(); if (job) w.postMessage(job); else { w.terminate(); resolve(); } };
+    const w = new Worker(fileURLToPath(import.meta.url)), mine = new Set();
+    const pick = () => { let k = queue.findIndex((j) => mine.has(j.c.world)); if (k < 0) k = queue.findIndex((j) => j.c.world && !started.has(j.c.world)); if (k < 0) k = queue.findIndex((j) => !j.c.world); return queue.splice(Math.max(0, k), 1)[0]; };
+    const next = () => { const job = pick(); if (job) { if (job.c.world) { mine.add(job.c.world); started.add(job.c.world); } w.postMessage(job); } else { w.terminate(); resolve(); } };
     w.on('message', (m) => {
       if (m.ready) return next();
       results.push(m);

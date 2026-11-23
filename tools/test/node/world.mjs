@@ -32,6 +32,7 @@ export async function worldAt(id, { time = 11 } = {}) {
   world.gust.set(0, 0, 0); world.gustT.set(0, 0, 0); // (the same wind every run: gusts are random)
   const out = { world, env: envOf(world), warns, ms: Math.round(performance.now() - t0) };
   worlds.set(id, out);
+  if (process.env.SKY_WORLD_LOG) console.log(`  [world] ${id} built in ${out.ms} ms`); // (how often, and how long: SKY_WORLD_LOG=1)
   return out;
 }
 // main.js's flight env for a World (the parts the flight model reads)
