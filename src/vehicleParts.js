@@ -683,6 +683,10 @@ function heliNose(c, lv) {
     const hoodM = pm.clone().multiply(new THREE.Matrix4().makeTranslation(HOOD.c[0], HOOD.c[1], HOOD.c[2] + 0.04));
     for (const st of g.userData.seats) st.obstacles = [{ name: 'bubble', below: 'mirror', inside: insideRows(-R * 1.45, -R * 1.45 * Math.cos(Math.PI * 0.62), 48, (z) => { const k = Math.sqrt(Math.max(0, 1 - (z / (R * 1.45)) ** 2)); return [R * 0.95 * k, R * 1.08 * k, 0]; }) },
       boxObstacle('panel', pm, PAN.s), boxObstacle('hood', hoodM, HOOD.s), { name: 'pedestal', box: [0, (FL - 0.215) / 2, -0.81], size: [0.17, -0.215 - FL, 0.17] }, ...st.obstacles];
+    // the interior other parts are kept out of (interior.js): the bubble up to its rim at the cabin (z = 0). The glass
+    // runs on 46 cm into the cabin (hidden in it), and its sections there are nearly the cabin's own: kept out to there,
+    // the cabin's skin was cut away round the doorway, a hole 16 cm deep behind the door frame
+    g.userData.interior = [{ below: 'mirror', inside: insideRows(-R * 1.45, 0, 40, (z) => { const k = Math.sqrt(Math.max(0, 1 - (z / (R * 1.45)) ** 2)); return [R * 0.95 * k, R * 1.08 * k, 0]; }) }];
     return g;
   }
   const console_ = new THREE.BoxGeometry(0.9, 0.22, 0.35); console_.rotateX(-0.5); console_.translate(0, -0.12, -0.55); b.add(console_, M.black());
