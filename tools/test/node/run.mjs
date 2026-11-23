@@ -13,7 +13,7 @@
 // depend on another having run first. Keep cases a few seconds each so the pool balances.
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { availableParallelism } from 'node:os';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url)), REPO = fileURLToPath(new URL('../../../', import.meta.url));
@@ -51,8 +51,11 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
   if (list) { for (const w of work) console.log(`${w.suite}  ${w.c.id ?? w.i}`); process.exit(0); }
   const t0 = performance.now(), results = [], n = Math.min(jobs, work.length);
   console.log(`${work.length} cases from ${suites.join(', ')} on ${n} workers`);
-  // longest first would balance better; without a history, keep the suites' own order and hand out one at a time
-  const queue = [...work];
+  // longest first (times from earlier runs, tools/test/node/.times.json, not committed; unknown cases count as long),
+  // handed out one at a time, so a slow case doesn't start last and leave the other workers idle
+  const timesFile = here + '.times.json', key = (w) => `${w.suite}|${w.c.id ?? w.i}`;
+  let times = {}; try { times = JSON.parse(readFileSync(timesFile, 'utf8')); } catch {}
+  const queue = [...work].sort((a, b) => (times[key(b)] ?? 1e9) - (times[key(a)] ?? 1e9));
   await Promise.all(Array.from({ length: n }, () => new Promise((resolve) => {
     const w = new Worker(fileURLToPath(import.meta.url));
     const next = () => { const job = queue.shift(); if (job) w.postMessage(job); else { w.terminate(); resolve(); } };
@@ -64,6 +67,8 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
     });
     w.on('error', (e) => { results.push({ suite: '?', i: -1, ms: 0, checks: [{ name: 'worker crashed', ok: false, why: String(e) }] }); resolve(); });
   })));
+  for (const r of results) { const w = work.find((x) => x.suite === r.suite && x.i === r.i); if (w) times[key(w)] = Math.round(r.ms); }
+  try { writeFileSync(timesFile, JSON.stringify(times)); } catch {}
   const checks = results.flatMap((r) => r.checks.map((c) => ({ suite: r.suite, ...c }))), bad = checks.filter((c) => !c.ok);
   const per = {}; for (const r of results) { const p = (per[r.suite] ??= { cases: 0, ms: 0, checks: 0, failed: 0 }); p.cases++; p.ms += r.ms; p.checks += r.checks.length; p.failed += r.checks.filter((c) => !c.ok).length; }
   for (const [s, p] of Object.entries(per)) console.log(`${p.failed ? 'FAIL' : 'PASS'}  ${s}: ${p.checks - p.failed}/${p.checks} checks, ${p.cases} cases, ${(p.ms / 1000).toFixed(1)} s of work`);
