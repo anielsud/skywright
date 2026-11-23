@@ -77,7 +77,10 @@ assembly pass), and fails on:
 - **open shells**: a connected, non-flat piece of an opaque one-sided mesh with a hole you could look into (a duct,
   nozzle, tyre or cowl with no inside surface, a missing end cap). Flat sheets (dials, decals) and double-sided or
   transparent materials are fine; a mesh whose hole is covered by design can say so with `userData.openOk = 'why'`
-  (e.g. a cockpit opening closed by its tub and sill). Landing gear is skipped for now.
+  (e.g. a cockpit opening closed by its tub and sill). A rim lying against another opaque surface (within 1 cm, the
+  same reach the floating-parts check calls touching) is closed by it and doesn't count: a bezel standing on its panel,
+  a gauge's can sunk into it. Glass never closes a rim: a hole behind glass is one you can see. Landing gear is
+  skipped for now.
 - **exhausts through glass**: each car engine's chosen exhaust path (`userData.exhaustPaths`) against the vehicle's glass.
 - **floating parts**: every connected piece of every mesh (each instance of an instanced suspension link) must touch
   another piece, to within 1 cm, and all of them must hang together as one vehicle. Checked on every stock vehicle, on

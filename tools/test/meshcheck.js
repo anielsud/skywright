@@ -405,8 +405,56 @@ const skipMesh = (m) => {
   return !m.isMesh || m.isSkinnedMesh || !m.visible || m.userData.isDisc || m.userData.cosmetic || m.userData.planeLight || m.userData.openOk ||
     !mt || Array.isArray(mt) || mt.transparent || mt.side !== THREE.FrontSide || mt.blending !== THREE.NormalBlending || mt.colorWrite === false;
 };
-// visible-from-inside holes of one geometry, in world metres (welded positions, connected pieces)
-export function openShells(mesh) {
+// A hole's rim that lies against another opaque surface is closed by it: a bezel ring standing on its instrument panel,
+// a gauge's can sunk into the panel, a cup pressed onto a wall. Such boundary edges don't count towards the hole. An
+// edge is closed when its ends and middle are all within SEAL_TOL of an opaque, visible triangle that is not part of the
+// same connected piece (any mesh of the vehicle, the same mesh's other pieces included). Glass never closes anything:
+// a hole behind glass is a hole you can see. (1 cm: the reach the floating-parts check calls touching.)
+const SEAL_TOL = 0.01;
+const opaqueSurface = (m) => {
+  const mt = m.material; if (!m.isMesh || m.isSkinnedMesh || m.userData.isDisc || !mt || Array.isArray(mt) || mt.transparent || mt.colorWrite === false || mt.blending !== THREE.NormalBlending) return false;
+  for (let o = m; o; o = o.parent) if (!o.visible) return false;
+  return true;
+};
+// the vehicle's opaque surfaces for openShells' rim test: near(box) gathers the triangles in a region, close(p, ...)
+// says whether p is within tol of one of them (the meshes listed on first use)
+export function sealer(root) {
+  let meshes = null;
+  const list = () => { if (!meshes) { meshes = []; root.updateMatrixWorld(true); root.traverse((m) => { if (opaqueSurface(m) && m.geometry?.attributes.position) { m.geometry.computeBoundingBox(); meshes.push(m); } }); } return meshes; };
+  const M4 = new THREE.Matrix4(), tri = new THREE.Triangle(), cp = new THREE.Vector3();
+  // [{ T: Float32Array of world corners, mesh, t: triangle index, box }]
+  const near = (box) => {
+    const out = [], v = new THREE.Vector3(), tb = new THREE.Box3();
+    for (const m of list()) {
+      const inst = m.isInstancedMesh ? m.count : 1;
+      for (let k = 0; k < inst; k++) {
+        const W = m.isInstancedMesh ? (m.getMatrixAt(k, M4), M4.clone().premultiply(m.matrixWorld)) : m.matrixWorld;
+        if (!m.geometry.boundingBox.clone().applyMatrix4(W).intersectsBox(box)) continue;
+        const P = m.geometry.attributes.position, ix = m.geometry.index?.array, nt = (ix ? ix.length : P.count) / 3;
+        for (let t = 0; t < nt; t++) {
+          const T = new Float32Array(9); tb.makeEmpty();
+          for (let c = 0; c < 3; c++) { v.fromBufferAttribute(P, ix ? ix[t * 3 + c] : t * 3 + c).applyMatrix4(W); T[c * 3] = v.x; T[c * 3 + 1] = v.y; T[c * 3 + 2] = v.z; tb.expandByPoint(v); }
+          if (tb.intersectsBox(box)) out.push({ T, mesh: m, t, box: tb.clone() });
+        }
+      }
+    }
+    return out;
+  };
+  // is point p within tol of one of the triangles `cand` that `skip` doesn't exclude?
+  const close = (p, cand, skip, tol) => {
+    for (const c of cand) {
+      if (p.x < c.box.min.x - tol || p.x > c.box.max.x + tol || p.y < c.box.min.y - tol || p.y > c.box.max.y + tol || p.z < c.box.min.z - tol || p.z > c.box.max.z + tol || skip(c)) continue;
+      tri.a.fromArray(c.T, 0); tri.b.fromArray(c.T, 3); tri.c.fromArray(c.T, 6);
+      if (tri.closestPointToPoint(p, cp).distanceToSquared(p) <= tol * tol) return true;
+    }
+    return false;
+  };
+  return { near, close };
+}
+
+// visible-from-inside holes of one geometry, in world metres (welded positions, connected pieces); with a sealer (see
+// above), rims lying against another opaque surface are closed by it
+export function openShells(mesh, seal = null) {
   const g = mesh.geometry, P = g.attributes.position, n = P.count, W = mesh.matrixWorld, v = new THREE.Vector3();
   const key = new Map(), id = new Int32Array(n), wp = [];
   for (let i = 0; i < n; i++) {
@@ -425,7 +473,7 @@ export function openShells(mesh) {
   for (const [k, c] of edges) {
     if (c !== 1) continue;
     const a = Math.floor(k / 1e7), b = k % 1e7, r = find(a);
-    if (!comp.has(r)) comp.set(r, { len: 0 }); comp.get(r).len += wp[a].distanceTo(wp[b]);
+    if (!comp.has(r)) comp.set(r, { len: 0, edges: [] }); const o = comp.get(r); o.len += wp[a].distanceTo(wp[b]); o.edges.push([a, b]);
   }
   const out = [];
   for (const [r, c] of comp) {
@@ -438,7 +486,14 @@ export function openShells(mesh) {
       const c2 = new THREE.Vector3().subVectors(pts[i], ctr).cross(new THREE.Vector3().subVectors(pts[j], ctr)); if (c2.length() > size * size * 0.02) nrm = c2.normalize();
     }
     const flat = nrm && pts.every((p) => Math.abs(new THREE.Vector3().subVectors(p, ctr).dot(nrm)) < size * 0.01 + 1e-3);
-    if (!flat) out.push({ loop: +c.len.toFixed(2), size: +size.toFixed(2), at: ctr.toArray().map((x) => +x.toFixed(2)) });
+    if (flat) continue;
+    let len = c.len;
+    if (seal) { // take away the rim lying against other surfaces
+      const cand = seal.near(box.clone().expandByScalar(SEAL_TOL)), skip = (q) => q.mesh === mesh && find(id[idx ? idx[q.t * 3] : q.t * 3]) === r, mid = new THREE.Vector3();
+      for (const [a, b] of c.edges) if (seal.close(wp[a], cand, skip, SEAL_TOL) && seal.close(wp[b], cand, skip, SEAL_TOL) && seal.close(mid.addVectors(wp[a], wp[b]).multiplyScalar(0.5), cand, skip, SEAL_TOL)) len -= wp[a].distanceTo(wp[b]);
+      if (len < MIN_LOOP) continue;
+    }
+    out.push({ loop: +len.toFixed(2), size: +size.toFixed(2), at: ctr.toArray().map((x) => +x.toFixed(2)) });
   }
   return out;
 }
@@ -623,8 +678,8 @@ export async function run({ presets = [], random = 20, placed = 20, fittings = 1
     const root = new THREE.Group(); let res;
     try {
       const det = buildDesign(d, root, { quick: false, near: true }); root.updateMatrixWorld(true);
-      const open = [];
-      det.parts.forEach((o, i) => { if (!o || SKIP_CATS.has(PARTS[d.parts[i].id]?.cat)) return; o.traverse((m) => { if (skipMesh(m)) return; for (const s of openShells(m)) open.push({ part: d.parts[i].id, mat: m.material.name || m.material.type, ...s }); }); });
+      const open = [], seal = sealer(root);
+      det.parts.forEach((o, i) => { if (!o || SKIP_CATS.has(PARTS[d.parts[i].id]?.cat)) return; o.traverse((m) => { if (skipMesh(m)) return; for (const s of openShells(m, seal)) open.push({ part: d.parts[i].id, mat: m.material.name || m.material.type, ...s }); }); });
       res = { name: d.name, open, exhaust: exhaustHits(root), nav: navLightIssues(d, det, root), seams: tubeSeams(d, det, root) };
       if (floatCheck.has(d)) { // no floating parts: at rest, and with the wheels pushed up and steered (the rig must follow)
         const rest = floatingParts(root, det, d), moves = det.parts.some((o) => o?.userData.corner); // (nothing moves without car corners)
