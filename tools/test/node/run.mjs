@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Node test runner: runs the Node-tier suites (tools/test/<name>.js modules that export a nodeSuite) on a pool of
 // worker threads, one case at a time, and reports them together. Usage (from anywhere):
-//   node tools/test/node/run.mjs [suite ...] [--jobs N] [--only TEXT] [--json out.json] [--list]
+//   node tools/test/node/run.mjs [suite ...] [--jobs N] [--shard K/N] [--only TEXT] [--json out.json] [--list]
 // With no suite named it runs every registered suite (SUITES below). Exits non-zero on any failed check.
 //
 // A suite module exports:
@@ -42,6 +42,7 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
 } else {
   const args = process.argv.slice(2), opt = (k, d) => { const i = args.indexOf(k); if (i < 0) return d; const v = args[i + 1]; args.splice(i, 2); return v; };
   const jobs = +opt('--jobs', Math.max(1, availableParallelism() - 2)), only = opt('--only', null), jsonOut = opt('--json', null);
+  const [shardK, shardN] = (opt('--shard', '1/1')).split('/').map(Number); // (part K of N: every Nth case, longest first, for parallel CI jobs)
   const list = args.includes('--list'), files = args.includes('--files'), names = args.filter((a) => !a.startsWith('--'));
   const suites = names.length ? names : SUITES;
   await import(pathToFileURL(here + 'setup.mjs').href);
@@ -54,8 +55,6 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
   }
   if (list) { for (const w of work) console.log(`${w.suite}  ${w.c.id ?? w.i}`); process.exit(0); }
   let knownFails = {}; try { knownFails = JSON.parse(readFileSync(REPO + 'tools/test/known.json', 'utf8')); } catch {}
-  const t0 = performance.now(), results = [], n = Math.min(jobs, work.length);
-  console.log(`${work.length} cases from ${suites.join(', ')} on ${n} workers`);
   // longest first (times from earlier runs, tools/test/node/.times.json, not committed; else a case's own c.cost in s;
   // unknown cases count as long), handed out one at a time. A case may name what it shares with others, c.world (a
   // place's World, node/world.mjs keeps one per worker) or c.key (e.g. a vehicle's built crew): a worker is handed a case
@@ -63,7 +62,9 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
   const timesFile = here + '.times.json', key = (w) => `${w.suite}|${w.c.id ?? w.i}`, aff = (j) => j.c.world ?? j.c.key;
   let times = {}; try { times = JSON.parse(readFileSync(timesFile, 'utf8')); } catch {}
   const est = (w) => times[key(w)] ?? (w.c.cost != null ? w.c.cost * 1000 : 1e9);
-  const queue = [...work].sort((a, b) => est(b) - est(a)), started = new Set();
+  const queue = [...work].sort((a, b) => est(b) - est(a)).filter((w, i) => i % shardN === shardK - 1), started = new Set();
+  const t0 = performance.now(), results = [], n = Math.min(jobs, queue.length);
+  console.log(`${queue.length} cases${shardN > 1 ? ` (part ${shardK}/${shardN} of ${work.length})` : ''} from ${suites.join(', ')} on ${n} workers`);
   await Promise.all(Array.from({ length: n }, () => new Promise((resolve) => {
     const w = new Worker(fileURLToPath(import.meta.url)), mine = new Set();
     const pick = () => { let k = queue.findIndex((j) => aff(j) != null && mine.has(aff(j))); if (k < 0) k = queue.findIndex((j) => aff(j) != null && !started.has(aff(j))); if (k < 0) k = queue.findIndex((j) => aff(j) == null); return queue.splice(Math.max(0, k), 1)[0]; };

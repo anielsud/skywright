@@ -233,6 +233,7 @@ TOUR = [  # (place, [(step, preset, flight config over smoke.js BASE)])
     ('nyc', [('fly', 'Dragonfly', {}), ('fly', 'Rocket', {})]),
     ('islands', [('sr71-climb', SR71, {}), ('sr71-land', SR71, {}), ('fly', 'Dirt Bike', {'landStart': 'park'})]),
 ]
+LEG_COST = [16, 11, 20, 18]  # (seconds per TOUR leg locally, for --shard balancing)
 M = "import('/tools/test/smoke.js')"
 
 
@@ -246,7 +247,13 @@ def plan(args, names):
         if args.only == SR71:
             legs = [('islands', [('sr71-climb', SR71, {}), ('sr71-land', SR71, {})])]
     k, n = args.shard
-    return [l for i, l in enumerate(legs) if i % n == k - 1]
+    if n == 1 or args.only: return [l for i, l in enumerate(legs) if i % n == k - 1]
+    # each leg to the least loaded part, longest first (the legs' times, seconds on a fast machine; a new place's World
+    # costs most), so no part ends up with the two heaviest
+    load, part = [0.0] * n, {}
+    for i in sorted(range(len(legs)), key=lambda i: -LEG_COST[i]):
+        j = min(range(n), key=lambda j: (load[j], j)); part[i] = j; load[j] += LEG_COST[i]
+    return [l for i, l in enumerate(legs) if part[i] == k - 1]
 
 
 async def node_presets(only):
