@@ -72,9 +72,11 @@ async def running(cdp, timeout, what):
     real-time wait for F.t > 1 did."""
     await cdp.wait_for(f'{S}.F && {S}.F !== window.__oldF && {S}.F.t > 0 && !{S}.F.warm', timeout, what)
     await cdp.js(f'{S}.advance(1); 1')
-    # and 15 frames drawn: what the snapshot measures (GPU textures) is what drawing uploads. With none drawn the texture
-    # count wanders by a block of 15 a few restarts in, depending on how many frames each flight drew (seen with 0 and 4)
-    await cdp.js('(async () => { for (let i = 0; i < 15; i++) await new Promise((r) => requestAnimationFrame(r)); return 1; })()')
+    # then what the snapshot measures (GPU textures) must all be uploaded: one frame drawn (it sets up the shadow maps and
+    # post-processing targets) and every texture the scene's materials use uploaded directly. Drawing 15 frames did the
+    # same by brute force (with none drawn the texture count wandered by a block of 15 a few restarts in), but on a CI
+    # runner's software WebGL a frame of Lauterbrunnen takes 2-4 s: 15 per start were 11 of the suite's 15 minutes.
+    await cdp.js(UPLOAD)
 
 
 async def restart(cdp):
@@ -90,6 +92,12 @@ async def snap(cdp):
 async def to_hangar(cdp):
     await cdp.js(f'{S}.endFlight(); 1')
     await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 30, 'the hangar')
+
+
+UPLOAD = '''(async () => { const S = window.__sky, r = S.renderer, seen = new Set(), up = (t) => { if (t?.isTexture && !seen.has(t) && t.image !== undefined) { seen.add(t); r.initTexture(t); } };
+  await new Promise((res) => requestAnimationFrame(res));
+  S.F.scene.traverse((o) => { for (const m of [].concat(o.material || [])) { for (const k in m) up(m[k]); for (const k in m.uniforms || {}) up(m.uniforms[k]?.value); } });
+  return seen.size; })()'''
 
 
 def same_spawn(a, b, tol=1e-3):
@@ -119,7 +127,9 @@ async def place(cdp, loc, a, add):
     tail = snaps[1:] or snaps  # (the first restart may still compile a shader the first flight hadn't drawn)
     for key, tol in (('geometries', 3), ('textures', 1), ('programs', 2), ('kids', 0)):
         vals = [s[key] for s in tail]
-        add(f'{loc}: {key} flat over {a.restarts} restarts', max(vals) - min(vals) <= tol and vals[-1] - vals[0] <= tol, ' '.join(map(str, [s[key] for s in snaps])))
+        # (a leak grows restart after restart; a count may drop, e.g. a block of 15 textures the streaming lets go a few
+        # restarts in, and that's no leak)
+        add(f'{loc}: {key} never grows over {a.restarts} restarts', max(vals) - vals[0] <= tol, ' '.join(map(str, [s[key] for s in snaps])))
     add(f'{loc}: one World through every restart', all(s['world'] == s0['world'] for s in snaps))
     # 3. back to the hangar frees it; a fresh start matches the restarts
     await to_hangar(cdp)
