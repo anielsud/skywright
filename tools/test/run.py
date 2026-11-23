@@ -25,6 +25,11 @@ BROWSER = {
     'startbakes-stunts': (['startbakes.py', '--only', 'stunts'], ['src/stuntPark.js', 'src/stuntSite.js', 'src/realworld.js', 'src/world.js', 'tools/bake/*', 'tools/test/startbakes.*']),  # (its views: the Node suite startbakes)
     'tunnelcheck-ui': (['tunnelcheck.py', '--ui'], ['src/windTunnel.js', 'src/tunnel*.js', 'src/main.js', 'tools/test/tunnelcheck.*']),  # (its lift curves and forces: the Node suite tunnelcheck)
 }
+# extra arguments on a CI runner (--ci; software WebGL: seconds a frame, so smaller windows, fewer repeats, no frame-time limits)
+CI_ARGS = {
+    'restart': ['--size', '480x300', '--restarts', '3'],
+    'tunnelcheck-ui': ['--size', '480x300', '--max-ms', '1e9', '--max-cpu', '1e9'],
+}
 HARNESS = ['tools/test/run.py', 'tools/test/node/*', 'tools/test/smoke.py']  # changing these runs everything
 
 
@@ -45,7 +50,7 @@ def covers(globs, f):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('suites', nargs='*'); ap.add_argument('--changed', action='store_true'); ap.add_argument('--list', action='store_true')
+    ap.add_argument('suites', nargs='*'); ap.add_argument('--changed', action='store_true'); ap.add_argument('--ci', action='store_true', help='CI runner settings (CI_ARGS)'); ap.add_argument('--list', action='store_true')
     ap.add_argument('--jobs', type=int, help='Node workers (default: cores - 2)')
     a = ap.parse_args()
     node = node_suites()
@@ -69,7 +74,7 @@ def main():
     for k in pick:
         if allsuites.get(k, ('',))[0] != 'browser': continue
         print(f'\n=== {k}', flush=True)
-        if subprocess.run([sys.executable, os.path.join(ROOT, 'tools/test', BROWSER[k][0][0]), *BROWSER[k][0][1:]], cwd=ROOT).returncode: failed.append(k)
+        if subprocess.run([sys.executable, os.path.join(ROOT, 'tools/test', BROWSER[k][0][0]), *BROWSER[k][0][1:], *(CI_ARGS.get(k, []) if a.ci else [])], cwd=ROOT).returncode: failed.append(k)
     print(f"\n{'FAIL' if failed else 'PASS'}  {len(pick)} suites in {time.time() - t0:.0f} s" + (f": failed {', '.join(failed)}" if failed else ''))
     return 1 if failed else 0
 

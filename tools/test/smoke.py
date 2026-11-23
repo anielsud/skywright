@@ -119,7 +119,7 @@ class CDP:
         return m.get('result', {})
 
     async def js(self, expr, timeout=None, gesture=False):
-        timeout = timeout or float(os.environ.get('SKY_CDP_TIMEOUT', 30))  # (CI sets it longer: software WebGL takes seconds per frame)
+        timeout = max(timeout or 30, float(os.environ.get('SKY_CDP_TIMEOUT') or 0))  # (CI sets a floor: software WebGL takes seconds per frame)
         """Evaluate an expression (awaiting promises) and return its value; page exceptions raise."""
         r = await self.send('Runtime.evaluate', _timeout=timeout + 5, expression=expr, awaitPromise=True,
                             returnByValue=True, userGesture=gesture, timeout=int(timeout * 1000))

@@ -159,7 +159,7 @@ async def main(a):
     try:
         for loc in a.places.split(','):
             profile = tempfile.mkdtemp(prefix='skyrestart-')
-            proc, ws_url = launch_chrome(a.cdp_port or free_port(), profile, '1000,700')
+            proc, ws_url = launch_chrome(a.cdp_port or free_port(), profile, a.size.replace('x', ','))
             try:
                 async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:
                     cdp = CDP(ws)
@@ -193,6 +193,7 @@ if __name__ == '__main__':
     ap.add_argument('--places', default='lauterbrunnen', help='locations (default: lauterbrunnen; nyc adds the helipad start)')
     ap.add_argument('--restarts', type=int, default=6, help='restarts in the memory check (default 6: a leak of one geometry, texture or program a restart shows over the last 5)')
     ap.add_argument('--quality', default='low')
+    ap.add_argument('--size', default='1000x700', help='window size WxH (CI: smaller, software WebGL)')
     ap.add_argument('--port', type=int, default=0); ap.add_argument('--cdp-port', type=int, default=0)
     ap.add_argument('--url', help='test a running server instead of serving the repo')
     sys.exit(asyncio.run(main(ap.parse_args())))

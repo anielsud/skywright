@@ -81,4 +81,4 @@ jobs:
       - name: Install websockets
         run: python -m pip install websockets
       - name: ${{ matrix.suite }}
-        run: python tools/test/run.py ${{ matrix.suite }}
+        run: python tools/test/run.py --ci ${{ matrix.suite }}
