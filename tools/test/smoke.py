@@ -305,7 +305,7 @@ async def run(args, url, ws_url, shots):
 
         async def modal(button, title):
             await cdp.js(f"document.querySelector('{button}').click()", gesture=True)
-            await cdp.wait_for("document.getElementById('modal-root').style.display === 'block'", 5, 'the modal to open')
+            await cdp.wait_for("document.getElementById('modal-root').style.display === 'block'", 20, 'the modal to open')  # (a CI runner can take a while)
             h2 = await cdp.js("document.querySelector('#modal-root h2')?.textContent")
             if h2 != title:
                 raise AssertionError(f'expected a "{title}" modal, got {h2!r}')

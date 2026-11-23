@@ -813,7 +813,7 @@ function buildFlight(cfg) {
   world.updateEnv();
   renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null);
   const seats = warmStations(ac.stations); // (the cockpit views' own cabins and linings, hidden until you sit there)
-  renderer.compileAsync(scene, flightCam).catch(() => {}).then(compiled);
+  compileAsync(scene, flightCam).catch(() => {}).then(compiled);
   seats();
   renderer.setRenderTarget(null);
   onResize();
@@ -1494,11 +1494,18 @@ function frame(now) {
 // Compile the scene's shaders as they'd be with one more light in it, holding the loading screen (warm.pending) until
 // they're done: a compile left running stalls the frames after it. renderer.compile sets up the lights it sees, so a
 // last pass without the light puts them back for the next frame's shadow maps.
+// renderer.compileAsync, but a material freed while it waits (the flight ended or restarted mid-warm-up: its program is
+// gone) counts as done instead of throwing from three's polling timer ('reading isReady' of undefined)
+function compileAsync(scene, cam) {
+  const mats = renderer.compile(scene, cam);
+  if (!renderer.extensions.has('KHR_parallel_shader_compile')) return Promise.resolve(scene);
+  return new Promise((res) => { const poll = () => { mats.forEach((m) => { const p = renderer.properties.get(m)?.currentProgram; if (!p || p.isReady()) mats.delete(m); }); if (mats.size) setTimeout(poll, 10); else res(scene); }; poll(); });
+}
 function compileWith(scene, light, warm) {
   const target = () => renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null);
   warm.pending = true;
   const had = !!light.parent; // the explosion light now lives in the scene permanently: don't take it out again
-  target(); if (!had) scene.add(light); const done = renderer.compileAsync(scene, flightCam); if (!had) scene.remove(light); renderer.setRenderTarget(null);
+  target(); if (!had) scene.add(light); const done = compileAsync(scene, flightCam); if (!had) scene.remove(light); renderer.setRenderTarget(null);
   const finish = () => { if (!warm.pending) return; target(); renderer.compile(scene, flightCam); renderer.setRenderTarget(null); warm.pending = false; warm.t = performance.now(); };
   done.catch(() => {}).then(finish); setTimeout(finish, 15000);
 }
