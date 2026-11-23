@@ -10,8 +10,10 @@ in varied places, resized and mirrored) in headless Chrome, the way the hangar s
   - tube seams (every vehicle, plus 16 seeded random tube-to-tube builds): where two tubes meet end to end, the skin
     across the seam has no inward dip and no crease in the shading.
 
-Run from anywhere:  python3 tools/test/meshcheck.py [--random 20] [--json out.json]
-Same requirements as smoke.py (Chrome + the websockets package). See tools/test/README.md.
+Run from anywhere:  python3 tools/test/meshcheck.py [--only TEXT] [--jobs N] [--json out.json]
+By default it runs in Node on a pool of workers (tools/test/node/run.mjs meshcheck: about a minute; --only matches a
+design's name or any part id in it, e.g. --only ck_bubble). --chrome runs the old way, in headless Chrome, one design
+after another (same results, several times slower; needs Chrome + the websockets package). See tools/test/README.md.
 """
 import argparse, asyncio, json, os, sys, tempfile, shutil
 import websockets
@@ -71,8 +73,20 @@ async def main(a):
     return 1 if bad else 0
 
 
+def node(a):
+    import subprocess
+    cmd = ['node', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'node', 'run.mjs'), 'meshcheck']
+    if a.only: cmd += ['--only', a.only]
+    if a.jobs: cmd += ['--jobs', str(a.jobs)]
+    if a.json: cmd += ['--json', a.json]
+    return subprocess.call(cmd)
+
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--chrome', action='store_true', help='run in headless Chrome, one design at a time (the old way; same results)')
+    ap.add_argument('--only', help='Node: only designs whose name or parts contain this text')
+    ap.add_argument('--jobs', type=int, help='Node: worker threads (default: cores - 2)')
     ap.add_argument('--random', type=int, default=20, help='number of random player builds (default 20)')
     ap.add_argument('--placed', type=int, default=20, help='number of random builds re-placed the way the hangar places parts, checked for floating parts (default 20)')
     ap.add_argument('--cars', type=int, default=16, help='number of random car builds checked for floating parts (default 16)')
@@ -82,4 +96,5 @@ if __name__ == '__main__':
     ap.add_argument('--json', help='write the full report here')
     ap.add_argument('--url', help='check an already running server (e.g. http://127.0.0.1:8000) instead of serving the repo')
     ap.add_argument('--port', type=int), ap.add_argument('--cdp-port', type=int)
-    sys.exit(asyncio.run(main(ap.parse_args())))
+    a = ap.parse_args()
+    sys.exit(asyncio.run(main(a)) if a.chrome else node(a))

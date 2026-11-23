@@ -145,7 +145,7 @@ function cutMesh(mesh, owner, I) {
     for (let it = 0; it < 6; it++) { const t = (lo + hi) / 2; for (let j = 0; j < 3; j++) _e[j] = pos[p * 3 + j] + (pos[q * 3 + j] - pos[p * 3 + j]) * t; if ((I.f(w.set(_e[0], _e[1], _e[2])) > 0) === pin) lo = t; else hi = t; }
     return pin ? hi : lo;
   };
-  const out = []; let removed = 0;
+  const out = [], edge = []; let removed = 0; // (edge: the vertices along the cut)
   const tri = (a, b, c, lvl) => {
     const da = depth(a), db = depth(b), dc = depth(c), lab = len(a, b), lbc = len(b, c), lca = len(c, a);
     // (how far the depth can change across it: the shapes' depths are only roughly distances, steeper near the ends of
@@ -165,7 +165,7 @@ function cutMesh(mesh, owner, I) {
     if (!k) { out.push(a, b, c); return 0; }
     if (k === 3) return 1;
     const poly = [];
-    for (let e = 0; e < 3; e++) { const p = t3[e], q = t3[(e + 1) % 3]; if (!ins[e]) poly.push(p); if (ins[e] !== ins[(e + 1) % 3]) poly.push(mix(p, q, crossing(p, q, d3[e], d3[(e + 1) % 3]))); }
+    for (let e = 0; e < 3; e++) { const p = t3[e], q = t3[(e + 1) % 3]; if (!ins[e]) poly.push(p); if (ins[e] !== ins[(e + 1) % 3]) { const m = mix(p, q, crossing(p, q, d3[e], d3[(e + 1) % 3])); poly.push(m); edge.push(m); } }
     for (let j = 1; j < poly.length - 1; j++) out.push(poly[0], poly[j], poly[j + 1]);
     return 1;
   };
@@ -175,6 +175,21 @@ function cutMesh(mesh, owner, I) {
     removed += tri(a, b, c, 0);
   }
   if (!removed) return 0;
+  // Line what the cut opened. It leaves the mesh open along the interior's boundary, and where that boundary is glass
+  // (or open air past a tub's rim) the opening shows: you would see through the part (a wing's root behind a bubble
+  // canopy, a cowl through a windscreen). So every connected piece the cut opened gets its inside as well: its
+  // triangles again, wound the other way with their normals turned in, and it reads solid from any side.
+  if (edge.length) {
+    const key = new Map(), root = new Int32Array(count), find = (a) => { while (root[a] !== a) a = root[a] = root[root[a]]; return a; };
+    for (let i = 0; i < count; i++) { const k = Math.round(pos[i * 3] * 1e5) + ',' + Math.round(pos[i * 3 + 1] * 1e5) + ',' + Math.round(pos[i * 3 + 2] * 1e5), j = key.get(k); root[i] = i; if (j === undefined) key.set(k, i); else root[i] = j; } // (welded: uv seams)
+    for (let k = 0; k < out.length; k += 3) { const a = find(out[k]); root[find(out[k + 1])] = a; root[find(out[k + 2])] = a; }
+    const opened = new Set(edge.map(find)), inner = new Map(), flip = (v) => { // (the same vertex, its normal turned in)
+      if (inner.has(v)) return inner.get(v); const c = count++;
+      arr.forEach((d, k) => { const s = sz[k]; for (let j = 0; j < s; j++) d.push(k === nrm ? -d[v * s + j] : d[v * s + j]); });
+      for (let j = 0; j < 3; j++) pos.push(pos[v * 3 + j]); dep.push(dep[v]); inner.set(v, c); return c;
+    };
+    for (let k = 0, n0 = out.length; k < n0; k += 3) if (opened.has(find(out[k]))) out.push(flip(out[k]), flip(out[k + 2]), flip(out[k + 1]));
+  }
   // only the vertices still used (the splits of triangles kept whole are dropped)
   const map = new Int32Array(count).fill(-1); let m = 0;
   for (let k = 0; k < out.length; k++) { const a = out[k]; if (map[a] < 0) map[a] = m++; out[k] = map[a]; }

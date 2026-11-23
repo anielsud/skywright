@@ -13,6 +13,8 @@ import { PARTS } from '../../src/parts.js';
 import { newPart, mirroredOf } from '../../src/design.js';
 import { partInfo } from '../../src/parts.js';
 import { buildDesign, placePart } from '../../src/hangar.js';
+import { chunked, srcOf, floatingParts } from './meshfast.js';
+export { floatingParts };
 
 const MIN_LOOP = 0.3; // metres of boundary: a smaller hole (a 5 cm tube end, a wire) is too small to look into
 const SKIP_CATS = new Set(['gear']); // landing gear, floats and skids: their builders are being reworked separately (TODO: include)
@@ -262,116 +264,8 @@ export function speedBuilds(n = 10, seed = 71) {
 // a piece (or a group of pieces) not connected to the main body is floating. Touch = a vertex within tol of the other's
 // triangle, or an edge through it. Crew (skinned, posed at runtime), prop discs and glows are left out, and so is
 // anything under userData.floatOk = 'why' (a deliberate gap, with its reason).
-const _tri = new THREE.Triangle(), _p = new THREE.Vector3(), _q = new THREE.Vector3(), _e1 = new THREE.Vector3(), _e2 = new THREE.Vector3(), _h = new THREE.Vector3(), _s = new THREE.Vector3(), _qq = new THREE.Vector3(), _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3();
-function segTri(p0, p1, a, b, c) { // segment p0-p1 through triangle abc?
-  _e1.subVectors(b, a); _e2.subVectors(c, a); const d = _q.subVectors(p1, p0); _h.crossVectors(d, _e2); const det = _e1.dot(_h);
-  if (Math.abs(det) < 1e-12) return false; const f = 1 / det; _s.subVectors(p0, a); const u = f * _s.dot(_h); if (u < 0 || u > 1) return false;
-  _qq.crossVectors(_s, _e1); const v = f * d.dot(_qq); if (v < 0 || u + v > 1) return false; const t = f * _e2.dot(_qq); return t >= 0 && t <= 1;
-}
-const vtx = (T, i, k, out) => out.set(T[i * 9 + k * 3], T[i * 9 + k * 3 + 1], T[i * 9 + k * 3 + 2]);
-function triTouch(TA, i, TB, j, tol) {
-  const A = [vtx(TA, i, 0, new THREE.Vector3()), vtx(TA, i, 1, new THREE.Vector3()), vtx(TA, i, 2, new THREE.Vector3())], B = [vtx(TB, j, 0, _a), vtx(TB, j, 1, _b), vtx(TB, j, 2, _c)];
-  _tri.set(B[0], B[1], B[2]); for (const v of A) if (_tri.closestPointToPoint(v, _p).distanceToSquared(v) <= tol * tol) return true;
-  _tri.set(A[0], A[1], A[2]); for (const v of B) if (_tri.closestPointToPoint(v, _p).distanceToSquared(v) <= tol * tol) return true;
-  for (let e = 0; e < 3; e++) { if (segTri(A[e], A[(e + 1) % 3], B[0], B[1], B[2]) || segTri(B[e], B[(e + 1) % 3], A[0], A[1], A[2])) return true; }
-  return false;
-}
-function pieces(mesh, W, out) {
-  const g = mesh.geometry, P = g.attributes.position, idx = g.index ? g.index.array : null, nt = (idx ? idx.length : P.count) / 3, v = new THREE.Vector3();
-  const wp = new Float32Array(P.count * 3), key = new Map(), id = new Int32Array(P.count);
-  for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i).applyMatrix4(W); wp.set([v.x, v.y, v.z], i * 3); const k = `${Math.round(v.x * 1e4)},${Math.round(v.y * 1e4)},${Math.round(v.z * 1e4)}`; let j = key.get(k); if (j === undefined) key.set(k, j = key.size); id[i] = j; }
-  const par = new Int32Array(key.size).map((_, i) => i), find = (a) => { while (par[a] !== a) a = par[a] = par[par[a]]; return a; };
-  for (let t = 0; t < nt; t++) { const a = id[idx ? idx[t * 3] : t * 3], b = id[idx ? idx[t * 3 + 1] : t * 3 + 1], c = id[idx ? idx[t * 3 + 2] : t * 3 + 2]; par[find(a)] = find(b); par[find(b)] = find(c); }
-  const groups = new Map();
-  for (let t = 0; t < nt; t++) { const r = find(id[idx ? idx[t * 3] : t * 3]); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(t); }
-  for (const ts of groups.values()) {
-    const T = new Float32Array(ts.length * 9), box = new THREE.Box3();
-    ts.forEach((t, n) => { for (let k = 0; k < 3; k++) { const vi = idx ? idx[t * 3 + k] : t * 3 + k; T.set(wp.subarray(vi * 3, vi * 3 + 3), n * 9 + k * 3); box.expandByPoint(v.set(wp[vi * 3], wp[vi * 3 + 1], wp[vi * 3 + 2])); } });
-    out.push({ T, box, mesh });
-  }
-}
-// per piece, cached: triangle bounds grown by tol, and a coarse grid of them (pieces are tested against many others)
-function triBounds(C, tol) {
-  if (C.tb) return C.tb; const n = C.T.length / 9, tb = new Float32Array(n * 6), T = C.T;
-  for (let i = 0; i < n; i++) for (let a = 0; a < 3; a++) { const v0 = T[i * 9 + a], v1 = T[i * 9 + 3 + a], v2 = T[i * 9 + 6 + a]; tb[i * 6 + a] = Math.min(v0, v1, v2) - tol; tb[i * 6 + 3 + a] = Math.max(v0, v1, v2) + tol; }
-  return (C.tb = tb);
-}
-function triGrid(C) {
-  if (C.grid) return C.grid; const tb = C.tb, n = tb.length / 6, sz = C.box.getSize(new THREE.Vector3()), cell = Math.max(0.03, Math.max(sz.x, sz.y, sz.z) / 32), cells = new Map(), o = C.box.min;
-  const at = (p) => [Math.floor((p.x - o.x) / cell), Math.floor((p.y - o.y) / cell), Math.floor((p.z - o.z) / cell)];
-  for (let i = 0; i < n; i++) {
-    const a = at({ x: tb[i * 6], y: tb[i * 6 + 1], z: tb[i * 6 + 2] }), b = at({ x: tb[i * 6 + 3], y: tb[i * 6 + 4], z: tb[i * 6 + 5] });
-    for (let x = a[0]; x <= b[0]; x++) for (let y = a[1]; y <= b[1]; y++) for (let z = a[2]; z <= b[2]; z++) { const k = `${x},${y},${z}`; let l = cells.get(k); if (!l) cells.set(k, l = []); l.push(i); }
-  }
-  return (C.grid = { at, cells });
-}
-function touches(A, B, tol) {
-  const reg = A.box.clone().expandByScalar(tol).intersect(B.box.clone().expandByScalar(tol)); if (reg.isEmpty()) return false;
-  const sel = (C) => { // triangles of C (bounds grown by tol) meeting reg, through C's own coarse grid
-    const o = [], tb = triBounds(C, tol), G = triGrid(C), r = reg, inR = (i) => tb[i * 6] <= r.max.x && tb[i * 6 + 3] >= r.min.x && tb[i * 6 + 1] <= r.max.y && tb[i * 6 + 4] >= r.min.y && tb[i * 6 + 2] <= r.max.z && tb[i * 6 + 5] >= r.min.z;
-    const box = (i) => new THREE.Box3(new THREE.Vector3(tb[i * 6], tb[i * 6 + 1], tb[i * 6 + 2]), new THREE.Vector3(tb[i * 6 + 3], tb[i * 6 + 4], tb[i * 6 + 5]));
-    const c0 = G.at(r.min), c1 = G.at(r.max), nc = (c1[0] - c0[0] + 1) * (c1[1] - c0[1] + 1) * (c1[2] - c0[2] + 1);
-    if (nc * 4 > tb.length / 6) { for (let i = 0; i < tb.length / 6; i++) if (inR(i)) o.push([i, box(i)]); return o; }
-    const seen = new Set();
-    for (let x = c0[0]; x <= c1[0]; x++) for (let y = c0[1]; y <= c1[1]; y++) for (let z = c0[2]; z <= c1[2]; z++) for (const i of G.cells.get(`${x},${y},${z}`) || []) if (!seen.has(i)) { seen.add(i); if (inR(i)) o.push([i, box(i)]); }
-    return o;
-  };
-  const a = sel(A), b = sel(B); if (!a.length || !b.length) return false;
-  const size = reg.getSize(new THREE.Vector3()), cell = Math.max(0.02, Math.max(size.x, size.y, size.z) / 24), grid = new Map(), ck = (x, y, z) => `${x},${y},${z}`;
-  const cells = (bx, f) => { for (let x = Math.floor(bx.min.x / cell); x <= Math.floor(bx.max.x / cell); x++) for (let y = Math.floor(bx.min.y / cell); y <= Math.floor(bx.max.y / cell); y++) for (let z = Math.floor(bx.min.z / cell); z <= Math.floor(bx.max.z / cell); z++) f(ck(x, y, z)); };
-  for (const [j, bx] of b) cells(bx, (k) => { if (!grid.has(k)) grid.set(k, []); grid.get(k).push([j, bx]); });
-  for (const [i, bx] of a) { let hit = false; const seen = new Set(); cells(bx, (k) => { if (hit) return; for (const [j, by] of grid.get(k) || []) { if (seen.has(j)) continue; seen.add(j); if (bx.intersectsBox(by) && triTouch(A.T, i, B.T, j, tol)) { hit = true; return; } } }); if (hit) return true; }
-  return false;
-}
-export function floatingParts(root, det, design, { tol = 0.01, gaps = true, collect = false } = {}) {
-  root.updateMatrixWorld(true);
-  const comps = [], shown = (o) => { for (let x = o; x; x = x.parent) if (!x.visible) return false; return true; }, M4 = new THREE.Matrix4();
-  root.traverse((m) => {
-    if (!m.isMesh || m.isSkinnedMesh || m.userData.isDisc || m.userData.decal || !shown(m)) return; // (decals: stickers a few mm off the skin)
-    for (let x = m; x; x = x.parent) if (x.userData.floatOk) return; // a deliberate gap, with its reason
-    const mt = m.material; if (!mt || Array.isArray(mt) || mt.blending === THREE.AdditiveBlending || mt.colorWrite === false) return;
-    if (m.isInstancedMesh) for (let i = 0; i < m.count; i++) { m.getMatrixAt(i, M4); pieces(m, M4.clone().premultiply(m.matrixWorld), comps); }
-    else pieces(m, m.matrixWorld, comps);
-  });
-  const par = comps.map((_, i) => i), find = (a) => { while (par[a] !== a) a = par[a] = par[par[a]]; return a; };
-  const order = comps.map((_, i) => i).sort((a, b) => comps[a].box.min.x - comps[b].box.min.x);
-  for (let oi = 0; oi < order.length; oi++) {
-    const A = comps[order[oi]];
-    for (let oj = oi + 1; oj < order.length; oj++) {
-      const B = comps[order[oj]]; if (B.box.min.x > A.box.max.x + tol) break;
-      if (find(order[oi]) === find(order[oj])) continue;
-      if (touches(A, B, tol)) par[find(order[oi])] = find(order[oj]);
-    }
-  }
-  const sets = new Map(); comps.forEach((c, i) => { const r = find(i); sets.set(r, (sets.get(r) || 0) + c.T.length); });
-  const main = [...sets.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-  const partOf = (m) => { for (let o = m; o; o = o.parent) { const i = det.parts.indexOf(o); if (i >= 0) return `#${i} ${design.parts[i].id}`; } return 'assembly'; };
-  // how far a floating piece is from the vehicle (nearest vertex to a triangle of the main set, looked for within 0.5 m)
-  const mainC = comps.filter((_, i) => find(i) === main), gapOf = (c) => {
-    let best = Infinity; const reach = c.box.clone().expandByScalar(0.5), v = new THREE.Vector3(), n = c.T.length / 3, step = Math.max(1, Math.floor(n / 150));
-    for (const m of mainC) {
-      if (!m.box.intersectsBox(reach)) continue;
-      for (let t = 0; t < m.T.length / 9; t++) {
-        vtx(m.T, t, 0, _a); vtx(m.T, t, 1, _b); vtx(m.T, t, 2, _c); _tri.set(_a, _b, _c);
-        const tb = new THREE.Box3().setFromPoints([_a, _b, _c]); if (!tb.intersectsBox(reach)) continue;
-        for (let k = 0; k < n; k += step) { v.set(c.T[k * 3], c.T[k * 3 + 1], c.T[k * 3 + 2]); const d = _tri.closestPointToPoint(v, _p).distanceTo(v); if (d < best) best = d; }
-      }
-    }
-    return best;
-  };
-  const out = new Map();
-  comps.forEach((c, i) => {
-    if (find(i) === main) return;
-    const k = partOf(c.mesh) + ' ' + (c.mesh.material.name || c.mesh.material.type) + ' #' + (c.mesh.material.color?.getHexString?.() || '') + (c.mesh.isInstancedMesh ? ' (link)' : '');
-    const sz = c.box.getSize(new THREE.Vector3()).length();
-    if (!out.has(k)) out.set(k, { what: k, n: 0, size: 0, at: null });
-    const o = out.get(k); o.n++; if (sz > o.size) { o.size = +sz.toFixed(3); o.at = c.box.getCenter(new THREE.Vector3()).toArray().map((x) => +x.toFixed(2)); }
-    if (gaps && o.n <= 4) { const g = gapOf(c); o.gap = Math.min(o.gap ?? Infinity, g); }
-  });
-  if (collect) { const fl = comps.filter((_, i) => find(i) !== main), T = new Float32Array(fl.reduce((s, c) => s + c.T.length, 0)); let k = 0; for (const c of fl) { T.set(c.T, k); k += c.T.length; } return { pieces: comps.length, floating: [...out.values()], tris: T }; }
-  for (const o of out.values()) if (o.gap !== undefined) o.gap = Number.isFinite(o.gap) ? +o.gap.toFixed(3) : '>0.5';
-  return { pieces: comps.length, floating: [...out.values()] };
-}
+// The check itself is floatingParts in meshfast.js: every triangle of the vehicle in one grid, each vertex tested
+// against the triangles in its own cell, then the full triangle test for the few pieces still not joined.
 // pose every car corner and bike wheel: wheels pushed up by `comp` of their travel, steered wheels turned `steer` rad;
 // rigs, forks and swingarms follow
 export function poseCar(det, comp, steer) {
@@ -405,8 +299,56 @@ const skipMesh = (m) => {
   return !m.isMesh || m.isSkinnedMesh || !m.visible || m.userData.isDisc || m.userData.cosmetic || m.userData.planeLight || m.userData.openOk ||
     !mt || Array.isArray(mt) || mt.transparent || mt.side !== THREE.FrontSide || mt.blending !== THREE.NormalBlending || mt.colorWrite === false;
 };
-// visible-from-inside holes of one geometry, in world metres (welded positions, connected pieces)
-export function openShells(mesh) {
+// A hole's rim that lies against another opaque surface is closed by it: a bezel ring standing on its instrument panel,
+// a gauge's can sunk into the panel, a cup pressed onto a wall. Such boundary edges don't count towards the hole. An
+// edge is closed when its ends and middle are all within SEAL_TOL of an opaque, visible triangle that is not part of the
+// same connected piece (any mesh of the vehicle, the same mesh's other pieces included). Glass never closes anything:
+// a hole behind glass is a hole you can see. (1 cm: the reach the floating-parts check calls touching.)
+const SEAL_TOL = 0.01;
+const opaqueSurface = (m) => {
+  const mt = m.material; if (!m.isMesh || m.isSkinnedMesh || m.userData.isDisc || !mt || Array.isArray(mt) || mt.transparent || mt.colorWrite === false || mt.blending !== THREE.NormalBlending) return false;
+  for (let o = m; o; o = o.parent) if (!o.visible) return false;
+  return true;
+};
+// the vehicle's opaque surfaces for openShells' rim test: near(box) gathers the triangles in a region, close(p, ...)
+// says whether p is within tol of one of them (the meshes listed on first use)
+export function sealer(root) {
+  let meshes = null;
+  const list = () => { if (!meshes) { meshes = []; root.updateMatrixWorld(true); root.traverse((m) => { if (opaqueSurface(m) && m.geometry?.attributes.position) { m.geometry.computeBoundingBox(); meshes.push(m); } }); } return meshes; };
+  const M4 = new THREE.Matrix4(), tri = new THREE.Triangle(), cp = new THREE.Vector3();
+  // [{ T: Float32Array of world corners, mesh, t: triangle index, box }]
+  const near = (box) => {
+    const out = [], v = new THREE.Vector3(), tb = new THREE.Box3();
+    for (const m of list()) {
+      const inst = m.isInstancedMesh ? m.count : 1;
+      for (let k = 0; k < inst; k++) {
+        const W = m.isInstancedMesh ? (m.getMatrixAt(k, M4), M4.clone().premultiply(m.matrixWorld)) : m.matrixWorld;
+        if (!m.geometry.boundingBox.clone().applyMatrix4(W).intersectsBox(box)) continue;
+        const P = m.geometry.attributes.position, ix = m.geometry.index?.array, nt = (ix ? ix.length : P.count) / 3;
+        for (let t = 0; t < nt; t++) {
+          const T = new Float32Array(9); tb.makeEmpty();
+          for (let c = 0; c < 3; c++) { v.fromBufferAttribute(P, ix ? ix[t * 3 + c] : t * 3 + c).applyMatrix4(W); T[c * 3] = v.x; T[c * 3 + 1] = v.y; T[c * 3 + 2] = v.z; tb.expandByPoint(v); }
+          if (tb.intersectsBox(box)) out.push({ T, mesh: m, t, box: tb.clone() });
+        }
+      }
+    }
+    return out;
+  };
+  // is point p within tol of one of the triangles `cand` that `skip` doesn't exclude?
+  const close = (p, cand, skip, tol) => {
+    for (const c of cand) {
+      if (p.x < c.box.min.x - tol || p.x > c.box.max.x + tol || p.y < c.box.min.y - tol || p.y > c.box.max.y + tol || p.z < c.box.min.z - tol || p.z > c.box.max.z + tol || skip(c)) continue;
+      tri.a.fromArray(c.T, 0); tri.b.fromArray(c.T, 3); tri.c.fromArray(c.T, 6);
+      if (tri.closestPointToPoint(p, cp).distanceToSquared(p) <= tol * tol) return true;
+    }
+    return false;
+  };
+  return { near, close };
+}
+
+// visible-from-inside holes of one geometry, in world metres (welded positions, connected pieces); with a sealer (see
+// above), rims lying against another opaque surface are closed by it
+export function openShells(mesh, seal = null) {
   const g = mesh.geometry, P = g.attributes.position, n = P.count, W = mesh.matrixWorld, v = new THREE.Vector3();
   const key = new Map(), id = new Int32Array(n), wp = [];
   for (let i = 0; i < n; i++) {
@@ -425,7 +367,7 @@ export function openShells(mesh) {
   for (const [k, c] of edges) {
     if (c !== 1) continue;
     const a = Math.floor(k / 1e7), b = k % 1e7, r = find(a);
-    if (!comp.has(r)) comp.set(r, { len: 0 }); comp.get(r).len += wp[a].distanceTo(wp[b]);
+    if (!comp.has(r)) comp.set(r, { len: 0, edges: [] }); const o = comp.get(r); o.len += wp[a].distanceTo(wp[b]); o.edges.push([a, b]);
   }
   const out = [];
   for (const [r, c] of comp) {
@@ -438,7 +380,14 @@ export function openShells(mesh) {
       const c2 = new THREE.Vector3().subVectors(pts[i], ctr).cross(new THREE.Vector3().subVectors(pts[j], ctr)); if (c2.length() > size * size * 0.02) nrm = c2.normalize();
     }
     const flat = nrm && pts.every((p) => Math.abs(new THREE.Vector3().subVectors(p, ctr).dot(nrm)) < size * 0.01 + 1e-3);
-    if (!flat) out.push({ loop: +c.len.toFixed(2), size: +size.toFixed(2), at: ctr.toArray().map((x) => +x.toFixed(2)) });
+    if (flat) continue;
+    let len = c.len;
+    if (seal) { // take away the rim lying against other surfaces
+      const cand = seal.near(box.clone().expandByScalar(SEAL_TOL)), skip = (q) => q.mesh === mesh && find(id[idx ? idx[q.t * 3] : q.t * 3]) === r, mid = new THREE.Vector3();
+      for (const [a, b] of c.edges) if (seal.close(wp[a], cand, skip, SEAL_TOL) && seal.close(wp[b], cand, skip, SEAL_TOL) && seal.close(mid.addVectors(wp[a], wp[b]).multiplyScalar(0.5), cand, skip, SEAL_TOL)) len -= wp[a].distanceTo(wp[b]);
+      if (len < MIN_LOOP) continue;
+    }
+    out.push({ loop: +len.toFixed(2), size: +size.toFixed(2), at: ctr.toArray().map((x) => +x.toFixed(2)) });
   }
   return out;
 }
@@ -530,9 +479,15 @@ export function tubeSeams(design, det, root, { cols = 32, rows = 72, trace = nul
     all.push(m);
   });
   const rc = new THREE.Raycaster(), out = [], nm = new THREE.Matrix3();
-  for (const J of tubeJoins(design, det)) {
+  const joins = tubeJoins(design, det);
+  // (big meshes split into small proxies so the raycaster skips most triangles by bounding sphere, and only the
+  // proxies near each joint are tested; the hits are the same as against the whole meshes)
+  const prox = joins.length ? chunked(all).map((o) => { if (!o.geometry.boundingBox) o.geometry.computeBoundingBox(); return { o, box: o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld) }; }) : null;
+  for (const J of joins) {
     const A = J.axis, u0 = Math.abs(A.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0), e1 = u0.clone().addScaledVector(A, -u0.dot(A)).normalize(), e2 = A.clone().cross(e1);
     const W = Math.min(0.9 * J.R + 0.1, 1.6), far = 3 * J.R + 1, ds = (2 * W) / rows;
+    let cand = all;
+    if (prox) { const reg = new THREE.Box3().setFromCenterAndSize(J.C, new THREE.Vector3(1, 1, 1).multiplyScalar(2 * (far + W) + 0.02)); cand = prox.filter((x) => x.o.isInstancedMesh || x.box.intersectsBox(reg)).map((x) => x.o); }
     let worst = 0, worstN = 0, at = null, atN = null, valid = 0;
     for (let c = 0; c < cols; c++) {
       const th = ((c + 0.37) / cols) * Math.PI * 2, u = e1.clone().multiplyScalar(Math.cos(th)).addScaledVector(e2, Math.sin(th));
@@ -540,8 +495,9 @@ export function tubeSeams(design, det, root, { cols = 32, rows = 72, trace = nul
       for (let k = 0; k < rows; k++) { // (an even count: never exactly on the seam plane, where a ray runs along the end caps)
         const s = -W + (2 * W * (k + 0.5)) / rows, base = J.C.clone().addScaledVector(A, s);
         rc.set(base.clone().addScaledVector(u, far), u.clone().negate()); rc.far = far;
-        const hits = rc.intersectObjects(all, false); let h = null;
+        const hits = rc.intersectObjects(cand, false); let h = null;
         for (const x of hits) { if (x.object.material.transparent) break; if (x.object.userData.trim) continue; h = x; break; }
+        if (h) h = { ...h, object: srcOf(h.object) };
         const pi = h ? owner.get(h.object) : -1;
         if (!h || (pi !== J.i && pi !== J.j)) { col.push(null); continue; }
         const d = h.point.clone().sub(J.C), r = d.addScaledVector(A, -d.dot(A)).length();
@@ -612,30 +568,62 @@ export function seamBuilds(n = 16, seed = 71) {
   return out;
 }
 
-export async function run({ presets = [], random = 20, placed = 20, fittings = 12, cars = 16, bikes = 10, speed = 10, seams = 16, floatOnly = false } = {}) {
-  const cb = [...carBuilds(cars), ...bikeBuilds(bikes)], pb = randomBuilds(placed, 7, { placed: true }), sb = speedBuilds(speed), designs = [...presets, ...randomBuilds(random), ...pb, ...fittingBuilds(fittings), ...cb, ...sb, ...seamBuilds(seams)], report = [];
-  // floating parts: every stock vehicle, the random builds re-placed the way the hangar places parts, the car and bike
-  // builds and the speed builds (the plain random and fitting builds put parts at fixed spots, which can be in mid-air:
-  // the hangar never does that)
-  const floatCheck = new Set([...presets, ...pb, ...cb, ...sb]);
-  for (const d of designs) {
-    if (floatOnly && !floatCheck.has(d)) continue;
-    const root = new THREE.Group(); let res;
-    try {
-      const det = buildDesign(d, root, { quick: false, near: true }); root.updateMatrixWorld(true);
-      const open = [];
-      det.parts.forEach((o, i) => { if (!o || SKIP_CATS.has(PARTS[d.parts[i].id]?.cat)) return; o.traverse((m) => { if (skipMesh(m)) return; for (const s of openShells(m)) open.push({ part: d.parts[i].id, mat: m.material.name || m.material.type, ...s }); }); });
-      res = { name: d.name, open, exhaust: exhaustHits(root), nav: navLightIssues(d, det, root), seams: tubeSeams(d, det, root) };
-      if (floatCheck.has(d)) { // no floating parts: at rest, and with the wheels pushed up and steered (the rig must follow)
-        const rest = floatingParts(root, det, d), moves = det.parts.some((o) => o?.userData.corner); // (nothing moves without car corners)
-        poseCar(det, 0.6, 0.45); const moved = moves ? floatingParts(root, det, d) : rest; poseCar(det, 0, 0);
-        res.floating = rest.floating; res.floatingMoved = moved.floating; res.pieces = rest.pieces;
-      }
-    } catch (e) { res = { name: d.name, error: String(e && e.stack || e) }; }
-    root.traverse((m) => m.geometry?.dispose?.());
-    report.push(res);
-  }
+// the designs a run checks, in report order, and which of them are also checked for floating parts: every stock
+// vehicle, the random builds re-placed the way the hangar places parts, the car and bike builds and the speed builds
+// (the plain random and fitting builds put parts at fixed spots, which can be in mid-air: the hangar never does that)
+export function designs({ presets = [], random = 20, placed = 20, fittings = 12, cars = 16, bikes = 10, speed = 10, seams = 16 } = {}) {
+  const cb = [...carBuilds(cars), ...bikeBuilds(bikes)], pb = randomBuilds(placed, 7, { placed: true }), sb = speedBuilds(speed);
+  return { list: [...presets, ...randomBuilds(random), ...pb, ...fittingBuilds(fittings), ...cb, ...sb, ...seamBuilds(seams)], floatCheck: new Set([...presets, ...pb, ...cb, ...sb]) };
+}
+// every check on one design
+export function checkDesign(d, float) {
+  const root = new THREE.Group(); let res;
+  try {
+    const det = buildDesign(d, root, { quick: false, near: true }); root.updateMatrixWorld(true);
+    const open = [], seal = sealer(root);
+    det.parts.forEach((o, i) => { if (!o || SKIP_CATS.has(PARTS[d.parts[i].id]?.cat)) return; o.traverse((m) => { if (skipMesh(m)) return; for (const s of openShells(m, seal)) open.push({ part: d.parts[i].id, mat: m.material.name || m.material.type, ...s }); }); });
+    res = { name: d.name, open, exhaust: exhaustHits(root), nav: navLightIssues(d, det, root), seams: tubeSeams(d, det, root) };
+    if (float) { // no floating parts: at rest, and with the wheels pushed up and steered (the rig must follow)
+      const rest = floatingParts(root, det, d), moves = det.parts.some((o) => o?.userData.corner); // (nothing moves without car corners)
+      poseCar(det, 0.6, 0.45); const moved = moves ? floatingParts(root, det, d) : rest; poseCar(det, 0, 0);
+      res.floating = rest.floating; res.floatingMoved = moved.floating; res.pieces = rest.pieces;
+    }
+  } catch (e) { res = { name: d.name, error: String(e && e.stack || e) }; }
+  root.traverse((m) => m.geometry?.dispose?.());
+  return res;
+}
+export async function run({ floatOnly = false, ...o } = {}) {
+  const { list, floatCheck } = designs(o), report = [];
+  for (const d of list) { if (floatOnly && !floatCheck.has(d)) continue; report.push(checkDesign(d, floatCheck.has(d))); }
   return report;
+}
+// one design's result: how many problems, a one-line summary and the detail lines (meshcheck.py prints the same)
+export function describe(r) {
+  const ex = r.exhaust || {}, fl = r.floating || [], fm = r.floatingMoved || [], sm = (r.seams || []).filter((j) => j.bad);
+  const n = (r.open || []).length + (ex.hits || []).length + (r.nav || []).length + fl.length + fm.length + sm.length + (r.error ? 1 : 0);
+  const head = `open shells ${(r.open || []).length}  exhaust paths ${ex.paths || 0}, through glass ${(ex.hits || []).length}` + ('floating' in r ? `  floating ${fl.length} at rest, ${fm.length} moved (${r.pieces} pieces)` : '') + (r.seams?.length ? `  tube seams ${r.seams.length - sm.length}/${r.seams.length} smooth` : '');
+  const mm = (x) => (x * 1000).toFixed(1), lines = [];
+  for (const j of sm.slice(0, 8)) lines.push(`tube seam ${j.a} | ${j.b} at ${j.C}: dip ${mm(j.dip)} mm (tol ${mm(j.tol)}) at ${JSON.stringify(j.dipAt)}, normal jump ${j.nrm} deg at ${JSON.stringify(j.nrmAt)}`);
+  for (const o of fl.slice(0, 8)) lines.push(`floating: ${o.what}  ${o.n} piece(s), biggest ${o.size} m at ${o.at}, ${o.gap} m off`);
+  for (const o of fm.slice(0, 8)) lines.push(`floating (wheels up and steered): ${o.what}  ${o.n} piece(s), biggest ${o.size} m at ${o.at}, ${o.gap} m off`);
+  if (r.error) lines.push('error: ' + r.error.slice(0, 400));
+  for (const o of (r.nav || []).slice(0, 8)) lines.push(`position light: part ${o.part}: ${o.issue}`);
+  for (const o of (r.open || []).slice(0, 8)) lines.push(`open: ${o.part} ${o.mat} hole ${o.loop} m round, piece ${o.size} m at ${o.at}`);
+  for (const h of (ex.hits || []).slice(0, 4)) lines.push(`exhaust through glass at ${h.at}`);
+  return { n, head, lines };
+}
+
+// ---------- Node tier (tools/test/node/run.mjs meshcheck) ----------
+// One case per design. A case carries the whole design (plain data), so --only matches part ids as well as names
+// ("--only ck_bubble": every build with a bubble cockpit).
+export const nodeSuite = { files: ['src/parts.js', 'src/partDetail.js', 'src/*Parts.js', 'src/skinBlend.js', 'src/planeDetail.js', 'src/hangar.js', 'src/interior.js', 'src/cabKit.js', 'src/bubbleCockpit.js', 'src/design.js', 'tools/test/meshcheck.js', 'tools/test/meshfast.js'] };
+export function cases({ presets }) {
+  const { list, floatCheck } = designs({ presets });
+  return list.map((d) => ({ id: d.name, design: JSON.parse(JSON.stringify(d)), float: floatCheck.has(d) }));
+}
+export function runCase(c) {
+  const r = checkDesign(c.design, c.float), { n, head, lines } = describe(r);
+  return [{ name: c.id, ok: !n, why: n ? `${n} problem(s): ${head}\n      ${lines.join('\n      ')}` : '', problems: n, report: r }];
 }
 // one part on its own (detail build, no assembly): which of its meshes are open, for debugging
 export function probe(id) {

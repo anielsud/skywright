@@ -464,7 +464,7 @@ function truckInterior(g, S, S0) {
     CK.strap(b, [V(sx * 0.789, 0.6, 0.12), V(sx * 0.765, 0.585, 0.2), V(sx * 0.765, 0.585, 0.3), V(sx * 0.789, 0.6, 0.38)], 0.035, 0.005, CK.webbing(0x15161a), V(sx, 0, 0));
   }
   // window net on the driver's side: a rod frame and a webbing grid, inside the door window
-  { const X = -0.765, ya = 0.92, yb = 1.3, za = -0.02, zb = 0.56, web = CK.webbing(0x15161a);
+  { const X = -0.775, ya = 0.92, yb = 1.3, za = -0.02, zb = 0.56, web = CK.webbing(0x15161a);
     b.add(pipe([V(X, ya, za), V(X, yb, za), V(X, yb, zb), V(X, ya, zb), V(X, ya, za)], 0.007, 6, 40), M.darkMetal());
     for (let k = 1; k < 7; k++) { const z = za + (zb - za) * (k / 7); CK.box(b, null, [X, (ya + yb) / 2, z], [0.004, yb - ya, 0.022], web); }
     for (let k = 1; k < 5; k++) { const y = ya + (yb - ya) * (k / 5); CK.box(b, null, [X + 0.004, y, (za + zb) / 2], [0.004, 0.022, zb - za], web); } }
@@ -477,7 +477,7 @@ function truckInterior(g, S, S0) {
     const vv = new THREE.CylinderGeometry(0.018, 0.018, 0.05, 10); vv.rotateX(Math.PI / 2); vv.translate(0, 0.07, 0.315); nb.add(vv, chrome);
     nb.add(bar(V(0, 0.08, 0.31), V(0, 0.12, 0.27), 0.012, 0.008, false), M.black());
     for (const z of [0.42, 0.58]) { const rg = new THREE.TorusGeometry(0.053, 0.006, 4, 20); rg.translate(0, 0.07, z); nb.add(rg, M.darkMetal()); }
-    CK.box(b, null, [0, 0.008, 0.5], [0.08, 0.008, 0.26], alu); CK.placard(nb, CK.faceM(V(0, 0.121, 0.5), V(0, 1, 0), V(0, 0, -1)), 0.07, 0.035, 1); }
+    CK.box(b, null, [0, 0.008, 0.5], [0.08, 0.008, 0.26], alu); CK.placard(nb, CK.faceM(V(0, 0.1205, 0.5), V(0, 1, 0), V(-1, 0, 0)), 0.07, 0.035, 1); } // (the sticker along the bottle: across it, its corners stood off the curve)
   // pedal hinges: the pedals (crew.js, at controls.pedZ / pedY) pivot on rods on the floor plate
   for (const px of [-0.28, -0.54]) { const pz = px > -0.4 ? -0.46 : -0.44; nb.add(bar(V(px - 0.06, 0.015, pz), V(px + 0.06, 0.015, pz), 0.012, 0.012, true, 6), alu); for (const dx of [-0.06, 0.06]) CK.box(nb, null, [px + dx, 0.012, pz], [0.008, 0.018, 0.035], alu); }
   b.to(g); nb.to(g, true);
@@ -576,7 +576,7 @@ function heliCrewBay(b, fl, sy, sz) {
     { const s0 = 0.03, s1 = bH - 0.05, g = CK.cushion(0.25, s1 - s0, c - 0.004, 0.015, 0, 5, [4, 20, 1]); g.translate(0, (s0 + s1) / 2, (c - 0.004) / 2 + 0.002); g.applyMatrix4(m); b.add(g, lth);
       for (const x of [-0.16, 0.16]) { const rg = roll(0.034, s1 - s0, null); rg.scale(1, 1, 0.9); rg.translate(x, (s0 + s1) / 2, 0.025); b.add(rg.applyMatrix4(m), lth);
         b.add(pipe([P(Math.sign(x) * 0.126, s0 + 0.02, -0.001), P(Math.sign(x) * 0.126, s1 - 0.02, -0.001)], 0.0045, 5, 2), lth2); }
-      const hp = CK.cushion(0.2, 0.12, c - 0.01, 0.02, 0, 0, [4, 4, 2]); hp.translate(0, hr, (c - 0.01) / 2 - 0.006); hp.applyMatrix4(m); b.add(hp, lth); }
+      const hd = c + 0.005, hp = CK.cushion(0.2, 0.12, hd, 0.02, 0, 0, [4, 4, 2]); hp.translate(0, hr, hd / 2 - 0.006); hp.applyMatrix4(m); b.add(hp, lth); }
     // the seat: a base cushion on the box, a channelled centre panel on it between side rolls, a rolled front edge
     { const zf = sz + 0.035 - pL, zb = sz + 0.035, zc = (zf + zb) / 2, base = CK.cushion(w, 0.06, pL, 0.022, 0, 0, [6, 2, 6]); base.translate(sx, pt - 0.042, zc); b.add(base, lth);
       const cen = CK.cushion(0.25, 0.02, pL - 0.08, 0.008, 0, 0, [4, 1, 4]); cen.translate(sx, pt - 0.01, zc + 0.03); b.add(cen, lth);
@@ -641,7 +641,7 @@ function heliNose(c, lv) {
       b.add(pipe(fr, 0.02, 6, 40), paint);
       const top = fr[0], low = fr.at(-1), along = (p0) => { const out = []; for (let k = 0; k <= 8; k++) { const z = p0.z / 1.03 * (1 - k / 8) - 0.02 * (k / 8); const kk = Math.sqrt(Math.max(0, 1 - (z / (R * S[2])) ** 2)), fx = p0.x / 1.03 / (R * S[0] * kD), fy = p0.y / 1.03 / (R * S[1] * kD); out.push(V(fx * R * S[0] * kk, fy * R * S[1] * kk, z).multiplyScalar(1.03)); } return out; };
       b.add(pipe(along(top), 0.018, 6, 24), paint); b.add(pipe(along(low), 0.018, 6, 24), paint);
-      { const kk = Math.sqrt(1 - (0.12 / (R * S[2])) ** 2), xs = sx * Math.sqrt(Math.max(0, 1 - (0.02 / (R * S[1] * kk)) ** 2)) * R * S[0] * kk; nb.add(bar(V(xs * 1.045, 0.02, -0.17), V(xs * 1.045, 0.02, -0.07), 0.016, 0.016, true, 6), M.chrome()); } // handle
+      { const hx = (z) => { const kk = Math.sqrt(1 - (z / (R * S[2])) ** 2); return sx * (Math.sqrt(Math.max(0, 1 - (0.02 / (R * S[1] * kk)) ** 2)) * R * S[0] * kk + 0.005); }; nb.add(bar(V(hx(-0.17), 0.02, -0.17), V(hx(-0.07), 0.02, -0.07), 0.016, 0.016, true, 6), M.chrome()); } // handle, on the glass
     }
     // a deck inside the chin (the crew's feet and the controls stand on it), its edges on the bubble's inside; carpet
     const FL = -0.55, SZ = 0.12, ax = R * 0.95 - 0.025, ay = R * 1.08 - 0.025, az = R * 1.45 - 0.025, halfW = (y, z) => ax * Math.sqrt(Math.max(0, 1 - (y / ay) ** 2 - (z / az) ** 2));
