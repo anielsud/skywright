@@ -290,6 +290,25 @@ function settle(st, soup, box, vbox) {
     if (!best || score(cand) > score(best)) best = cand;
     if (!cand.shut && cand.los >= 3 && cand.clear >= c * 0.9) break; // the lowest good seat (a window post may hide a ray or two)
   }
+  // a canopy sunk into a body (a body a kid made bigger under it, its sill risen round the seat) that leaves only a thin
+  // band of glass above the sill: the seat goes up into that band, closer to the glass than usual (but never so close
+  // that the near plane, at half the clearance, would clip), rather than the head out through the canopy. Of the seats
+  // there that see out, the one with the most room round it.
+  if (box && best && (best.shut || best.los < 3)) {
+    const c2 = Math.min(c, Math.max(0.04, 0.5 * c));
+    let top2 = 0; const p = V();
+    for (let k = 0; k < 8; k++) { p.set(k & 1 ? box.max.x : box.min.x, k & 2 ? box.max.y : box.min.y, k & 4 ? box.max.z : box.min.z); top2 = Math.max(top2, p.sub(e0).dot(st.up) - c2); }
+    top2 = Math.min(top2, 1.2 * st.s);
+    const step = Math.max(0.01 * st.s, top2 / 60); let snug = null;
+    for (let h = 0; h <= top2 + 1e-6; h += step) {
+      const e = pushOut(soup, e0.clone().addScaledVector(st.up, h), c2);
+      if (!box.containsPoint(e)) continue;
+      const los = lineOfSight(soup, e, st.fwd, st.up, reach); if (los < 3) continue;
+      const clear = closest(soup, e).d; if (clear < c2 * 0.9 || (snug && clear <= snug.clear) || enclosed(soup, e)) continue;
+      snug = { e, h, los, shut: false, clear };
+    }
+    if (snug) best = snug;
+  }
   // a canopy sunk so deep into a body that there is no seat inside it that sees out: the head comes up out of it, as
   // far as the top of the vehicle (in 40 steps)
   if (best && (best.shut || best.los < 3)) {

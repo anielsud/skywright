@@ -10,6 +10,7 @@
 // Visual only: nothing here is seen by physics.
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
+import { MeshoptSimplifier } from '../vendor/addons/meshopt_simplifier.module.js';
 import { PARTS } from './parts.js';
 import { COMMIT, SOLVER } from './version.js';
 import { bodyReady, body, person, poseBody, handModel, torsoPoints, bodyDims, spinePose, armRest, headSize, limbRadii } from './body.js';
@@ -1123,7 +1124,8 @@ class Rig {
       // (a grip only reachable past a joint's range, e.g. the stick at full throw: the wide search found nothing better
       // last frame, so refine round that answer and search wide again only every 20 frames)
       const local = prev && !this.solving && (prevC < 500 || (prev.hard > 0 && prevC < prev.c + 200));
-      if (local) { // frame to frame: the answer moves a little, so look just round it (51 tries, not 229)
+      if (local && this.coarse) best = { c: prevC, th: prev.th, ph: prev.ph }; // (far away: the last answer will do; see planeDetail crewPose)
+      else if (local) { // frame to frame: the answer moves a little, so look just round it (51 tries, not 229)
         best = { c: prevC, th: prev.th, ph: prev.ph }; grid(prev.th, prev.ph, 0.06, 5);
         if (Math.abs(best.th - prev.th) > 0.05 || Math.abs(best.ph - prev.ph) > 0.05) grid(best.th, best.ph, 0.25, 9); // (moving fast: a wider look)
         grid(best.th, best.ph, 0.015, 5);
@@ -2490,6 +2492,38 @@ function eyePoint(rig) {
 }
 
 const geoCache = new Map();
+// ---------- distance detail (planeDetail's DetailLOD picks the level) ----------
+// A full figure is 50k-200k triangles in 7 slots, most of it in curves and faces far finer than a pixel a few tens of
+// metres away. A far level of each slot's geometry is the same mesh simplified (meshoptimizer's edge collapse) until
+// its surface would move by up to `err` metres, colour and normals weighed in so the suit's seams, the eyes and the
+// visor's edge keep their shape. It's only a new index buffer over the same vertices (each kept vertex keeps its own
+// skin weights, and separate pieces never weld: a hand never joins the stick it holds), with the same materials and
+// the same skeleton, so swapping it in compiles nothing and uploads one small buffer.
+await MeshoptSimplifier.ready;
+const lodCache = new WeakMap();
+function simplified(g, err) {
+  const P = g.attributes.position, Nn = g.attributes.normal, C = g.attributes.color, n = P.count, attr = new Float32Array(n * 6);
+  for (let i = 0; i < n; i++) { attr[i * 6] = Nn.getX(i); attr[i * 6 + 1] = Nn.getY(i); attr[i * 6 + 2] = Nn.getZ(i); attr[i * 6 + 3] = C.getX(i); attr[i * 6 + 4] = C.getY(i); attr[i * 6 + 5] = C.getZ(i); }
+  const pos = P.array instanceof Float32Array && P.itemSize === 3 && !P.isInterleavedBufferAttribute ? P.array : Float32Array.from({ length: n * 3 }, (_, k) => P.getComponent(Math.floor(k / 3), k % 3));
+  const [ix] = MeshoptSimplifier.simplifyWithAttributes(new Uint32Array(g.index.array), pos, 3, attr, 6, [0.02, 0.02, 0.02, 0.1, 0.1, 0.1], null, 0, err, ['ErrorAbsolute']);
+  const r = new THREE.BufferGeometry();
+  for (const k of Object.keys(g.attributes)) r.setAttribute(k, g.attributes[k]); // (shared: one copy of the vertices on the GPU)
+  r.setIndex(new THREE.BufferAttribute(n > 65535 ? ix : Uint16Array.from(ix), 1));
+  return r;
+}
+// Each level's error (metres, from the full figure: level 0): 2 mm, 6 mm.
+export const CREW_LOD_ERR = [0.002, 0.006];
+// Each crew mesh's geometry per level ([full, lighter...]), cached per source geometry (figures of one build share it).
+export function crewLodGeos(mesh) {
+  const g = mesh.userData.crewGeo0 ||= mesh.geometry;
+  let L = lodCache.get(g);
+  if (!L) { // (each from the one before, by the difference: much quicker than from the full mesh every time)
+    L = [g]; const ok = g.index && g.attributes.normal && g.attributes.color && g.attributes.position.itemSize === 3;
+    CREW_LOD_ERR.forEach((e, k) => L.push(ok ? simplified(L[k], e - (CREW_LOD_ERR[k - 1] || 0)) : g));
+    lodCache.set(g, L);
+  }
+  return L;
+}
 // outfit: OUTFITS key or object; ctl: 'stick' | 'cyclic' | 'yoke' | 'wheel' | 'none'; seed picks skin/hair tones
 const sameHands = (a, b) => a === b || (!!a && !!b && a.length === b.length && a.every((v, i) => v === b[i] || (!!v && !!b[i] && v.distanceToSquared(b[i]) < 1e-8)));
 const sameSig = (a, b) => a === b || (!!a && !!b && a.every((v, i) => Math.abs(v - b[i]) < 1e-4));

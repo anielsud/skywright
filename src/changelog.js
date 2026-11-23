@@ -2,6 +2,15 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.147.0', items: [
+    "Even smoother with lots of friends around: people in faraway planes, or planes you can't see, take a rest from moving so your game stays fast.",
+  ] },
+  { v: '1.146.0', items: [
+    "Flying with friends is smoother: people in other players' planes use simpler shapes when they're far away, so lots of planes together don't slow the game down.",
+  ] },
+  { v: '1.145.0', items: [
+    "In a cockpit sunk deep into a big body, your pilot can see out the window again instead of popping their head through the glass.",
+  ] },
   { v: '1.144.0', items: [
     "Pull really hard in cockpit view and the edges of your screen go grey, like a real pilot feeling the g-force! Push down hard and they go red. Ease off and it clears.",
     "In cockpit view you now feel the pull: your view sways with your pilot's body in tight turns and big pulls.",

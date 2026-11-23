@@ -164,6 +164,9 @@ async def main(a):
             for loc in a.locations.split(','):
                 print(f'--- {loc}', flush=True)
                 add = lambda name, ok, detail='': results.append((f'{loc}: {name}', bool(ok), detail))
+                # window.__inflightCompiles counts over the whole page session: count only this location's flights (the
+                # previous location's driving tests and screenshots stage vehicles mid-flight, which the game never does)
+                c0, w0 = await cdp.js('window.__inflightCompiles || 0'), len(warns)
                 # every stock car and bike starts at the arch
                 for car in cars:
                     st = await start(cdp, loc, car, quality=a.quality)
@@ -173,7 +176,8 @@ async def main(a):
                     st = await start(cdp, loc, car, 'road', quality=a.quality)
                     add(f'{car} starts on the road, in its lane, facing along it', st['d'] < 3 and st['fx'] > 0.95 and st['hit'] == 0 and st['cfgStart'] == 'road', f"{st['d']:.1f} m from the spot {st['road']}, heading {st['fx']:.2f}, ground {st['ground']}, on a drawn road {st['onRoad']}, {st['hit']} parts in a building")
                 st = await start(cdp, loc, cars[0], quality=a.quality)
-                add('no shaders compiled mid-flight', st['compiles'] == 0, f"{st['compiles']} compiled {' '.join(w for w in warns if 'shaders' in w)[:300]}")
+                st['compiles'] -= c0
+                add('no shaders compiled mid-flight', st['compiles'] == 0, f"{st['compiles']} compiled {' '.join(w for w in warns[w0:] if 'shaders' in w)[:300]}")
                 site = await cdp.js(SITE_JS)
                 ok = site['wet'] == 0 and site['range'] < (40 if site['fixed'] else 12) and (site['fixed'] or (site['bare'] == 0 and site['wood'] <= site['woodOK'] and site['canopy'] <= site['canopyOK']))
                 add('site: dry, flat and clear', ok, f"({site['site']['x']:.0f}, {site['site']['z']:.0f}) yaw {math.degrees(site['site']['yaw']):.0f}, {site['dist']/1000:.1f} km from the runway; ground range {site['range']:.1f} m, "

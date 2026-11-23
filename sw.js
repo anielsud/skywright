@@ -10,7 +10,7 @@ const HANGAR = 'skywright-hangar-v1';
 const GEO = 'skywright-geo-v1';
 const GEO_HOSTS = /^https:\/\/(s3\.amazonaws\.com\/elevation-tiles-prod|tiles\.maps\.eox\.at)\//;
 const FILES = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'icon.svg',
-  'vendor/three.module.min.js', 'vendor/peerjs.min.js', 'vendor/addons/Sky.js', 'vendor/addons/BufferGeometryUtils.js', 'vendor/addons/OrbitControls.js', 'vendor/addons/RoomEnvironment.js',
+  'vendor/three.module.min.js', 'vendor/peerjs.min.js', 'vendor/addons/Sky.js', 'vendor/addons/BufferGeometryUtils.js', 'vendor/addons/OrbitControls.js', 'vendor/addons/RoomEnvironment.js', 'vendor/addons/meshopt_simplifier.module.js',
   ...[].map((f) => `src/${f}.js`),
   // CC0 ground textures (keep in sync with TEXTURE_FILES in src/terrainTex.js)
   ...['aerial_grass_rock', 'aerial_rocks_02', 'aerial_beach_01', 'dry_ground_rocks', 'cliff_side'].flatMap((n) => [`tex/${n}_d.jpg`, `tex/${n}_n.jpg`]),
