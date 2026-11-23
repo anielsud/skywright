@@ -238,3 +238,173 @@ export function stage(name, x, z, dir, v, cond, T = 12, speed = null, which = 'p
   ac.syncVisual?.();
   const q = site.Lp(ac.x); return [q.x, q.y, q.z];
 }
+
+// The park's site: dry, flat and clear (no water, buildings, roads, woods or, where the place asks, tree canopy)
+export function siteCheck(S) {
+  const w = S.F.world, P = w.stuntPlan, R = w.real, k = w.stunts.park, L = P.layout; let n = 0, wet = 0, bare = 0, wood = 0, can = 0, lo = Infinity, hi = -Infinity;
+  const c = { r: 0, g: 0, b: 0, setRGB(r, g, b) { this.r = r; this.g = g; this.b = b; return this; }, lerp(o, t) { this.r += (o.r - this.r) * t; this.g += (o.g - this.g) * t; this.b += (o.b - this.b) * t; return this; } };
+  for (let x = -L.pad[0]; x <= L.pad[0]; x += 8) for (let z = -L.pad[1]; z <= L.pad[1]; z += 8) {
+    const p = k.W(new S.THREE.Vector3(x, 0, z)), h = w.height(p.x, p.z); n++;
+    lo = Math.min(lo, h); hi = Math.max(hi, h); if (h < w.waterLevel + 0.5 || R.waterAt(p.x, p.z) != null) wet++; if (R.bare(p.x, p.z)) bare++; if ((R.forest(p.x, p.z) ?? 0) > 0.5) wood++;
+    R.color(p.x, p.z, c); const s = c.r + c.g + c.b; if (s / 3 < 0.315 && (2 * c.g - c.r - c.b) / s > 0.08) can++;
+  }
+  const g = w.groundAt(k.start.pos.x, k.start.pos.z), cfg = w.loc.stunts, site = P.site;
+  const fixed = !!(site.fixed || site.atJump), woodOK = (cfg.maxForest ?? 0.25) > 0.5 ? 1e9 : 0, canopyOK = cfg.canopy ? (cfg.maxCanopy ?? 0.12) + 0.03 : 1, range = hi - lo, canopy = can / n;
+  const ok = wet === 0 && range < (fixed ? 40 : 12) && (fixed || (bare === 0 && wood <= woodOK && canopy <= canopyOK));
+  const why = `(${site.x.toFixed(0)}, ${site.z.toFixed(0)}) yaw ${(site.yaw * 57.2958).toFixed(0)}, ${(Math.hypot(k.O.x, k.O.z) / 1000).toFixed(1)} km from the runway; ground range ${range.toFixed(1)} m, water ${wet}, buildings/roads ${bare}, woods ${wood}, canopy ${(canopy * 100).toFixed(0)}% of ${n} points; start ${(g.h - k.O.y).toFixed(2)} m off the pad; planned in ${P.ms} ms`;
+  return { ok, why, site: { x: site.x, z: site.z, yaw: site.yaw }, n, wet, bare, wood, canopy, range, fixed };
+}
+// A car or bike started the way main.js starts one at World.landStart(start) ('park', 'road', 'evel'), left a second
+// with the brake on: where it is, which way it faces, and whether any part of it is in a building or a tree
+export function startAt(S, name, start) {
+  const w = S.F.world, s = w.landStart(start); if (!s) return null;
+  const ac = new S.Aircraft(JSON.parse(JSON.stringify(S.presets.find((d) => d.name === name))), S.REALISM.pilot);
+  const at = s.at ? s.at(0) : s.pos;
+  if (w.flora?.update) for (let i = 0; i < 60; i++) { w.flora.update(at, 100); if (!w.flora.queue?.some((q) => q.d < 400)) break; } // (the trees round it: Flora grows them near the camera)
+  ac.spawn(S.F.env, at, s.heading);
+  for (let i = 0; i < 60; i++) { ac.setControls({ pitch: 0, roll: 0, yaw: 0, throttle: 0, rev: 0, hand: 0 }); ac.brake = 1; ac.step(DT, S.F.env); }
+  const f = new S.THREE.Vector3(0, 0, -1).applyQuaternion(ac.q), ax = new S.THREE.Vector3(-Math.sin(s.heading), 0, -Math.cos(s.heading)), g = w.groundAt(ac.x.x, ac.x.z);
+  let hit = 0; for (const p of ac.parts) for (const h of p.hull) if (w.treeHit(ac.worldPoint(h, new S.THREE.Vector3()))) hit++;
+  return { d: Math.hypot(ac.x.x - s.pos.x, ac.x.z - s.pos.z), fx: f.dot(ax), car: ac.isCar, bike: !!ac.isBike, ground: g.type, onRoad: w.nearRoad ? w.nearRoad(ac.x.x, ac.x.z, 2) : null, hit,
+    evel: start !== 'evel' || s === w.stunts.evel?.start, road: s.id === 'road' ? { x: Math.round(s.pos.x), z: Math.round(s.pos.z), dist: s.dist } : null };
+}
+
+// [name, ok, why] for every assertion on a report of runs (run()'s shape: loop, speeds, jump, bowl, turn, ...)
+export function judge(r, loc) {
+  const out = [], add = (name, ok, why = '') => out.push([`${loc}: ${name}`, !!ok, why]);
+  for (const l of r.loop || []) {
+    const n = `${l.name} (${l.realism})`, tt = l.tabletop, lp = l.loop, ex = l.exit;
+    add(`${n}: ${l.what} jump, lands upright`, tt.air > 0.3 && tt.landUp > 0.8, `air ${tt.air} s, lowest up ${tt.landUp}`);
+    add(`${n}: loop entry speed`, l.entrySpeed > 21, `${l.entrySpeed} m/s`);
+    add(`${n}: over the top of the loop`, lp.topY > 17 && lp.upAtTop < -0.9, `top ${lp.topY} m, up ${lp.upAtTop}`);
+    add(`${n}: upside down on its wheels`, lp.invertedOnWheels >= 8 && lp.invertedOnWheels >= lp.invertedFrames - 2, `${lp.invertedOnWheels}/${lp.invertedFrames} frames`);
+    add(`${n}: out of the loop upright, exit lane`, ex.reached && ex.up > (l.bike ? 0.8 : 0.9) && ex.y < 2.5 && Math.abs(ex.z - 26.5) < 2.5 && ex.minUpAfter > 0.8, `up ${ex.up}, y ${ex.y}, z ${ex.z}, ${ex.v} m/s`);
+    add(`${n}: nothing broke on the loop run`, l.alive === l.parts && !l.dead, `${l.alive}/${l.parts} parts`);
+  }
+  for (const s of r.speeds || []) {
+    const n = `${s.name} (${s.realism})`, c = s.coast, t = s.tooSlow;
+    add(`${n}: coasting from the boost loops`, c.inverted >= 8 && c.exitUp > 0.9 && c.exitX > s.exitXpark + 10 && c.alive === c.parts, `${c.inverted} frames inverted, out at x ${c.exitX}`);
+    add(`${n}: too slow rolls back, stays out of the ground`, t.topY < 12 && t.inverted === 0 && t.finite && t.minY > 0.3, `top ${t.topY} m, lowest ${t.minY} m`);
+  }
+  for (const j of r.jump || []) {
+    const n = `${j.name} (${j.realism})`;
+    add(`${n}: mesa jump clears the gap`, j.gapMinY > 5 && j.air > 1.0, `lip ${j.lipSpeed} m/s, ${j.air} s air, lowest over the gap ${j.gapMinY} m`);
+    add(`${n}: mesa jump lands upright`, j.landUp > 0.8 && j.landed && j.after.up > 0.8 && j.alive === j.parts, `lowest up after landing ${j.landUp}, ${j.alive}/${j.parts} parts`);
+  }
+  for (const b of r.bowl || []) { // (flat out, a motorbike rides right up to the lip: the catch fence holds it there; it must not go over the top)
+    const a = b.after;
+    add(`${b.name} (${b.realism}) bowl at ${b.speed} m/s`, b.onWall > 60 && b.maxBank > 25 && b.maxY < (b.speed > 28 ? 9 : 8) && b.maxD <= b.rimA + 0.05 && a.up > 0.9 && a.wheels >= Math.min(3, a.of) && b.alive === b.parts,
+      `bank up to ${b.maxBank} deg, ${b.maxY} m up the wall, ${b.maxD} m out (lip ${b.rimA}), out: up ${a.up}, ${a.wheels}/${a.of} wheels down`);
+  }
+  for (const t of r.turn || []) {
+    const e = t.end;
+    add(`${t.name} (${t.realism}) loop -> banked turn, hands off: round it, never over the barrier`, t.round && t.maxD <= t.edge && t.minUp > 0.7 && Math.abs(e.z + 30) < 4 && e.up > 0.9 && t.alive === t.parts && !t.dead,
+      `in at ${t.entry} m/s (up to ${t.maxV}), ${t.maxD} m out (kerb ${t.edge}), up to ${t.maxY} m, lowest up ${t.minUp}; out at x ${e.x}, z ${e.z}, up ${e.up}, ${t.alive}/${t.parts} parts`);
+  }
+  for (const f of r.fork || []) add(`${f.name} (${f.realism}) steered onto the link lane at the fork reaches the canyon jump's run-up`, f.onRunUp && f.up > 0.8 && !f.dead, `${f.runUp.x} m along the run-up, ${f.runUp.z} m off its line (park x ${f.park.x}, z ${f.park.z})`);
+  const p = r.planes;
+  if (p) {
+    const la = p.land, cr = p.crash;
+    add(`${p.name} set down on the mesa stands on it`, la.onGround && la.y > la.topY + 0.3 && la.y < la.topY + 4 && !la.dead, `y ${la.y} m (deck ${la.topY} m)`);
+    add(`${p.name} flown into the cliff hits it`, cr.impacts > 0 && cr.speedPast < 20, `${cr.impacts} impacts, ${cr.speedPast} m/s past the face (from ${cr.speed0}), ${cr.alive}/${cr.of} parts`);
+  }
+  for (const e of r.evel || []) {
+    const n = `${e.name} (${e.realism}) canyon jump`;
+    add(`${n}: rocket strip and lip`, e.stripSpeed > e.plannedSpeed - 2 && Math.abs(e.lipZ) < 1.5, `${e.stripSpeed} m/s on the strip, ${e.lipSpeed} m/s at the lip, ${e.lipZ} m off the centreline`);
+    add(`${n}: clears the ${e.gap.toFixed(0)} m gap`, e.air > 4 && e.minYOverGap > 5 && e.touchX > e.gap && e.slowmo, `${e.air} s in the air, up to ${e.peakY} m, lowest over the gap ${e.minYOverGap} m above the rim, down at x ${e.touchX} (far rim ${e.gap})`);
+    add(`${n}: lands upright on the far ramp, parachute stops it`, e.onFarSide && e.landUp > 0.85 && e.minUpAfter > 0.8 && e.chute && e.endX < e.runEnd && e.endV < 6.5 && e.alive === e.parts && !e.dead, `lowest up ${e.minUpAfter}, stopped at x ${e.endX} (run-out ends ${e.runEnd}), ${e.alive}/${e.parts} parts`);
+  }
+  for (const e of r.longRun || []) {
+    const n = `${e.name} (${e.realism}) long run-up from the park`;
+    if (e.zE === 0) add(`${n}: flat out through the fork, on the rocket strip: a bigger jump, lands upright, stopped`, e.vFork > 30 && e.onFarSide && e.landUp > 0.85 && e.alive === e.parts && !e.dead && e.endX < e.runEnd && e.touchX > e.gap,
+      `${e.vFork} m/s at the fork, ${e.vFoot} m/s at the ramp, ${e.vLip} at the lip; ${e.air} s air, up to ${e.peakY} m, down at x ${e.touchX}, stopped at ${e.endX} (run-out ends ${e.runEnd}), up ${e.landUp}, ${e.alive}/${e.parts} parts; ${e.msgs.filter((m) => /canyon/.test(m)).join(', ')}`);
+    else add(`${n}: beside the rocket strip (no boost): too slow, the rescue parachute`, e.msgs.includes('PARACHUTE!') && !e.onFarSide && !e.dead && e.vFoot < e.planned * 0.75, `${e.vFoot} m/s at the ramp (planned ${e.planned}), ${e.zStrip} m off the centreline on the strip, ${e.alive}/${e.parts} parts`);
+  }
+  const es = r.evelShort;
+  if (es) add('too slow for the canyon jump: the rescue parachute lowers it', es.chute && es.touchVy > -9 && es.endUp > 0.5 && !es.dead, `falling at ${es.fastestFall} m/s before it opens, ${es.touchVy} m/s at touchdown, ${es.endY} m down in the canyon, up ${es.endUp}, ${es.alive}/${es.parts} parts`);
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Node tier (tools/test/node/run.mjs): the same runs on real Worlds built in Node (node/world.mjs), headless.
+//
+// What differs per location (src/realworld.js loc.stunts, stuntPark.js planStunts): every place uses the 'compact'
+// layout, so the track, its ramps, the loop and the bowl are the same mesh in the park's own frame everywhere. What a
+// place changes: the site (found from its terrain, water, buildings, woods and, at New York, tree canopy in the
+// imagery; at the Grand Canyon placed right behind the canyon jump's run-up), the ground levelled under and round it,
+// the pad's height (air density: the Grand Canyon's pad is at 2,169 m), the ground type under the track (sand at the
+// Grand Canyon, grass elsewhere), the wind over it, the theme (the mesa jump's surfaces: rock, painted containers,
+// timber, lava), the link lane and fork to the canyon jump (the Grand Canyon only: there the rumble strip doesn't slow
+// you for the banked turn), the road start and the canyon jump. So:
+//   ref:      the full set of runs (loop, coasting / too slow, mesa jump, bowl at four speeds, banked turn) for every car
+//             and mode, once, on the reference park: the compact layout without a link, on a flat lot (flatWorld);
+//   location: at every place: the site is dry, flat and clear; every car starts at the arch and on the road (and at the
+//             Grand Canyon at the canyon jump) facing the right way; the loop run from the arch (the run-up on the
+//             place's own ground, out into the exit lane) and the mesa jump (its theme's surfaces), in Pilot;
+//   canyon:   the Grand Canyon's own, both modes: its loop and mesa jump, its link and fork (the hands-off run takes the
+//             banked turn, a steered one the link lane), the canyon jump and the long run-up from the park; the rescue
+//             parachute.
+// New York's site needs the imagery (tree canopy), which Node can't read: the browser tier checks it (stunts.py), and
+// drives the loop run there. In Node, New York's park stands where the search puts it without the canopy rule.
+export const LOCS = ['canyon', 'nyc', 'lauterbrunnen', 'islands'], CARS = ['Dune Buggy', 'Chomper', 'Dirt Bike', 'Sport Bike'], MODES = ['pilot', 'arcade'];
+export const nodeSuite = { files: ['src/stunt*.js', 'src/evelJump.js', 'src/aircraft.js', 'src/bike*.js', 'src/drive.js', 'src/collide.js', 'src/world.js', 'src/realworld.js', 'src/landStart.js', 'tools/test/stunts.js', 'tools/test/node/world.mjs'], headless: true };
+export function cases() {
+  return [
+    ...CARS.map((car) => ({ id: `canyon ${car}`, kind: 'canyon', loc: 'canyon', car })),
+    ...LOCS.map((loc) => ({ id: `${loc} site, starts, runs`, kind: 'location', loc })),
+    ...CARS.flatMap((car) => MODES.map((rl) => ({ id: `ref ${car} ${rl}`, kind: 'ref', loc: 'ref', car, rl }))),
+  ];
+}
+// The reference park: just the park (the compact layout, no link) on a flat, calm lot of grass at sea level, with
+// main.js's flight env over it: no terrain, roads or buildings to build (the places' own ground is what the location
+// runs are for)
+let flat = null;
+async function flatWorld() {
+  if (flat) return flat;
+  const THREE = await import('three'), { StuntParks, layoutOf } = await import('../../src/stuntPark.js'), { THEMES } = await import('../../src/stuntKit.js');
+  const { makeNoise } = await import('../../src/noise.js'), { World } = await import('../../src/world.js'), { envOf } = await import('./node/world.mjs');
+  const cfg = { layout: 'compact', theme: 'tropical' }, up = new THREE.Vector3(0, 1, 0);
+  const w = { loc: { id: 'flat', stunts: cfg, rwyH: 0 }, noise: makeNoise(1), real: null, flora: null, group: new THREE.Group(), night: false, W: { dark: 0 }, waterLevel: -50, gust: new THREE.Vector3(), gustT: new THREE.Vector3() };
+  w.stuntPlan = { cfg, layout: layoutOf(cfg), theme: THEMES[cfg.theme], site: { x: 0, z: 0, yaw: 0, fixed: true }, park: { x: 0, z: 0, yaw: 0, h: 0, link: 0, linkDy: 0 }, pads: [] };
+  w.stunts = new StuntParks(w, w.stuntPlan); w.surfs = w.stunts.sites.map((s) => s.cm);
+  Object.assign(w, { surfRay: World.prototype.surfRay, surfPoint: World.prototype.surfPoint, groundAt: () => ({ h: 0, n: up.clone(), type: 'grass' }), maxGround: (x, z) => Math.max(0, w.stunts.topAt(x, z)), windAt: () => new THREE.Vector3(), wallBoxes: (x, z, r, o = []) => ((o.length = 0), o), reset() {} });
+  return (flat = { world: w, env: envOf(w), ms: 0 });
+}
+export async function runCase(c, { presets }) {
+  const { worldAt, skyOf } = await import('./node/world.mjs');
+  const w = c.kind === 'ref' ? await flatWorld() : await worldAt(c.loc), S = skyOf(w, presets), out = [], judged = (r, where) => judge(r, where).map(([name, ok, why]) => ({ name, ok, why }));
+  w.world.reset(); w.world.gust.set(0, 0, 0); w.world.gustT.set(0, 0, 0);
+  const park0 = w.world.stunts.park; park0.st = { air: 0, upside: false }; park0.la = null;
+  const r = { loop: [], speeds: [], jump: [], bowl: [], turn: [], fork: [], planes: null, evel: [], evelShort: null, longRun: [] };
+  if (c.kind === 'ref') { // the whole set, one car and mode
+    r.loop.push(loopRun(S, c.car, c.rl)); r.speeds.push(loopSpeeds(S, c.car, c.rl)); r.jump.push(jumpRun(S, c.car, c.rl));
+    for (const v of [14, 20, 26, 34]) r.bowl.push(bowlRun(S, c.car, c.rl, v));
+    r.turn.push(turnRun(S, c.car, c.rl));
+    if (park(S).L.tabletop != null) r.planes = planeRuns(S);
+    return judged(r, 'ref');
+  }
+  if (c.kind === 'canyon') {
+    for (const rl of MODES) {
+      r.loop.push(loopRun(S, c.car, rl)); r.jump.push(jumpRun(S, c.car, rl)); r.turn.push(turnRun(S, c.car, rl)); r.fork.push(forkRun(S, c.car, rl));
+      r.evel.push(evelRun(S, c.car, rl)); r.longRun.push(longRun(S, c.car, rl, 0));
+      if (c.car === CARS[0]) r.longRun.push(longRun(S, c.car, rl, 5.6));
+    }
+    return judged(r, c.loc);
+  }
+  const add = (name, ok, why = '') => out.push({ name: `${c.loc}: ${name}`, ok: !!ok, why }), W = w.world, st = W.stunts.stats;
+  if (c.loc === 'nyc') out.push({ name: 'nyc: site: dry, flat and clear', ok: true, skip: true, why: 'needs the imagery (tree canopy): checked in the browser (stunts.py)' });
+  else { const s = siteCheck(S); add('site: dry, flat and clear', s.ok, s.why); }
+  add('no stunt site warnings', !w.warns.some((m) => m.includes('[stunts]')), w.warns.filter((m) => m.includes('[stunts]')).join('; '));
+  add('park built', W.stunts.park && st.collTris > 0, `${st.draws} draw calls, ${st.tris} triangles, ${st.collTris} collision triangles (World built in ${w.ms} ms)`);
+  for (const car of CARS) {
+    const p = startAt(S, car, 'park');
+    add(`${car} starts at the start arch, facing the first kicker`, p && p.car && p.d < 3 && p.fx > 0.95 && p.hit === 0, p ? `${p.d.toFixed(1)} m from the arch, heading ${p.fx.toFixed(2)}${p.bike ? ' (bike)' : ''}, ${p.hit} parts in something` : 'no park start');
+    const q = startAt(S, car, 'road');
+    add(`${car} starts on the road, in its lane, facing along it`, q && q.d < 3 && q.fx > 0.95 && q.hit === 0, q ? `${q.d.toFixed(1)} m from the spot ${JSON.stringify(q.road)}, heading ${q.fx.toFixed(2)}, ground ${q.ground}, on a drawn road ${q.onRoad}, ${q.hit} parts in a building or tree` : 'no road start');
+    if (W.stunts.evel) { const e = startAt(S, car, 'evel'); add(`${car} picks the canyon jump start: at its run-up, facing the ramp`, e && e.d < 3 && e.fx > 0.95 && e.evel, e ? `${e.d.toFixed(1)} m from it, heading ${e.fx.toFixed(2)}` : 'no canyon jump start'); }
+    if (c.loc !== 'canyon') { r.loop.push(loopRun(S, car, 'pilot')); r.jump.push(jumpRun(S, car, 'pilot')); }
+  }
+  if (W.stunts.evel) r.evelShort = evelShort(S);
+  out.push(...judged(r, c.loc));
+  return out;
+}
