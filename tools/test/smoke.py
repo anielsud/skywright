@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Skywright smoke test: boot the game in headless Chrome and fly every preset.
+"""Skywright smoke test: boot the game in headless Chrome, open its windows, decode its sounds, and tour the places
+flying one vehicle of each kind (plane, boat, bike, car, helicopter, rocket) on the real game loop, with no console
+errors, no NaN, audible engines, every cockpit view drawn, and no shader compiled mid-flight. The SR-71 flies its
+scripted climb to Mach 3 and its landing. Every stock vehicle is also built and driven by the Node suite
+tools/test/presets.js, run alongside.
 
-Run from anywhere:  python3 tools/test/smoke.py [--only Kestrel] [--keep] [--port 8774] [--jobs 3]
-Split the flights over several browsers with --jobs N (here) or --shard I/N (one part: CI runs the parts as parallel
-jobs). Every part boots the game and checks audio; the Settings/Help modals and the hangar shot are in part 1, the
-SR-71's scripted flights in the last part.
-Needs Python 3.9+, the `websockets` package (pip install websockets) and Chrome/Chromium.
+Run from anywhere:  python3 tools/test/smoke.py [--only Kestrel] [--keep] [--quality medium] [--shard 1/2]
+--shard I/N runs part I of the tour's legs (CI runs the parts as parallel jobs); every part boots the game and checks
+audio, part 1 also opens the windows, takes the hangar shot and runs the Node suite.
+Needs Python 3.9+, the `websockets` package (pip install websockets), Chrome/Chromium and Node 22.15+.
 Exits non-zero if any step fails. See tools/test/README.md.
 """
 import argparse, asyncio, base64, functools, http.server, json, os, platform, shutil, socket, subprocess
@@ -17,7 +20,7 @@ except ImportError:
     sys.exit("smoke.py needs the 'websockets' package: pip install websockets")
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-FLIGHT_SECONDS = 4.0
+FLIGHT_SECONDS = 2.0
 
 
 def free_port():
@@ -214,12 +217,56 @@ class Runner:
         return ok
 
 
+# ---------- the tour ----------
+# One vehicle of each kind flown on the real game loop (frames drawn, engines heard: 'fly'), spread over the places, one
+# World built per place and the next vehicle swapped into it (__sky.swapVehicle: the World is kept); the start paths no
+# tour flight takes (open water, an air start) as quick in-page steps ('quick': stepped with __sky.advance, not drawn).
+# Visiting the places in one session is also the shader check (formerly shadercheck.py, #187): no shader program may
+# compile mid-flight on a tour flight, so a later place must not compile what an earlier one showed (the crew), and the
+# first place, built again at the end, compiles nothing new in flight either.
+# Every stock vehicle is built and driven by the Node suite tools/test/presets.js (run alongside, below).
+SR71 = 'SR-71 Blackbird'
+TOUR = [  # (place, [(step, preset, flight config over smoke.js BASE)])
+    ('islands', [('fly', 'Kestrel', {}), ('quick', 'Albatross', {}), ('quick', 'Kite', {}), ('fly', 'Speedboat', {'boatStart': 'marina'})]),
+    ('canyon', [('fly', 'Dirt Bike', {'landStart': 'park'}), ('fly', 'Dune Buggy', {'landStart': 'park'})]),
+    ('nyc', [('fly', 'Dragonfly', {}), ('fly', 'Rocket', {})]),
+    ('islands', [('sr71-climb', SR71, {}), ('sr71-land', SR71, {}), ('fly', 'Dirt Bike', {'landStart': 'park'})]),
+]
+M = "import('/tools/test/smoke.js')"
+
+
+def plan(args, names):
+    """This run's legs: the tour, or with --only the one step for that preset (a 'fly' at the first place if no leg has
+    it; the SR-71: both scripted flights), split --shard ways (leg k to part k mod N)."""
+    legs = TOUR
+    if args.only:
+        legs = [(loc, [s for s in steps if s[1] == args.only]) for loc, steps in TOUR]
+        legs = [l for l in legs if l[1]][:1] or [('islands', [('fly', args.only, {})])]
+        if args.only == SR71:
+            legs = [('islands', [('sr71-climb', SR71, {}), ('sr71-land', SR71, {})])]
+    k, n = args.shard
+    return [l for i, l in enumerate(legs) if i % n == k - 1]
+
+
+async def node_presets(only):
+    """tools/test/presets.js (every stock vehicle built and driven in Node), started before Chrome boots."""
+    cmd = ['node', os.path.join(ROOT, 'tools', 'test', 'node', 'run.mjs'), 'presets'] + (['--only', only] if only else [])
+    try:
+        return await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, cwd=ROOT)
+    except OSError as e:
+        return e
+
+
 async def run(args, url, ws_url, shots):
     origin = url.rstrip('/')
+    node = None if args.no_node or args.shard[0] != 1 else await node_presets(args.only)
     async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:
         cdp = CDP(ws)
         problems = Problems(origin)
         cdp.handlers.append(problems.on)
+        shader_warns = []
+        cdp.handlers.append(lambda m, p: shader_warns.append(' '.join(str(x.get('value', '')) for x in p.get('args', [])))
+                            if m == 'Runtime.consoleAPICalled' and p.get('type') == 'warning' and '[shaders]' in str(p.get('args')) else None)
         for d in ('Page', 'Runtime', 'Log', 'Network'):
             await cdp.send(f'{d}.enable')
         await cdp.send('Network.setCacheDisabled', cacheDisabled=True)
@@ -262,125 +309,107 @@ async def run(args, url, ws_url, shots):
             h2 = await cdp.js("document.querySelector('#modal-root h2')?.textContent")
             if h2 != title:
                 raise AssertionError(f'expected a "{title}" modal, got {h2!r}')
-            await asyncio.sleep(0.3)
             await cdp.js("document.querySelector('#modal-root [data-close]').click()", gesture=True)
             await cdp.wait_for("document.getElementById('modal-root').style.display === 'none'", 5, 'the modal to close')
 
-        first, last = args.shard[0] == 1, args.shard[0] == args.shard[1]
-        if first:
-            await r.step('modal: Settings', lambda: modal('#btn-settings', 'Settings'))
-            await r.step('modal: Help', lambda: modal('#btn-help', 'How to play'))
-
         async def hangar_shot():
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
             await cdp.screenshot(os.path.join(shots, 'hangar.png'))
 
-        if first:
+        if args.shard[0] == 1 and not args.only:
+            await r.step('modal: Settings', lambda: modal('#btn-settings', 'Settings'))
+            await r.step('modal: Help', lambda: modal('#btn-help', 'How to play'))
             await r.step('screenshot: hangar', hangar_shot)
 
-        names = all_names = await cdp.js(f'{S}.presets.map((d) => d.name)')
-        if args.only:
-            if args.only not in names:
-                print(f'FAIL  no preset named {args.only!r}; have: {", ".join(names)}')
-                r.results.append((f'preset {args.only}', False, 0))
-                return r.results
-            names = [args.only]
-        k, n = args.shard
-        if n > 1:  # this part's share of the flights: each to the least loaded part, the last part starting with the
-            load, part = [0.0] * n, {}  # SR-71's two scripted flights (about two flights' worth)
-            load[-1] = 2.0 if SR71 in names and not args.only else 0.0
-            for nm in names:
-                j = min(range(n), key=lambda i: (load[i], i)); part[nm] = j; load[j] += 1
-            names = [nm for nm in names if part[nm] == k - 1]
+        names = await cdp.js(f'{S}.presets.map((d) => d.name)')
+        if args.only and args.only not in names:
+            print(f'FAIL  no preset named {args.only!r}; have: {", ".join(names)}')
+            r.results.append((f'preset {args.only}', False, 0))
+            return r.results
 
-        for i, name in enumerate(names):
-            async def fly(name=name, shoot=(i == 0)):
-                # a previous step that failed mid-flight may have left its flight running: never measure that one
-                if await cdp.js(f'!!{S}.F'):
-                    await cdp.js(f'{S}.endFlight()')
-                await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 30, 'the hangar')
-                ts = time.time()
-                await cdp.js(f'{S}.hangar.load({S}.presets.find((d) => d.name === {json.dumps(name)})); {S}.startFlight()')
-                await cdp.wait_for(f'{S}.F && {S}.F.ac && {S}.F.t > 0', 90, 'the flight to start')
-                t_start = time.time() - ts
-                await cdp.js(f'{S}.controls.setThrottle(1)')
-                bike = await cdp.js(f'!!{S}.F.ac.isBike')
-                if bike:  # a motorbike rides off on the gas (W) and must still be on its wheels at the end
-                    await cdp.js(f"{S}.controls.keys.add('w')")
-                elif await cdp.js(f"{S}.controls.vehicle === 'car'"):  # cars and boats: the gas pedal (setThrottle is the plane slider)
-                    await cdp.js(f'{S}.controls.pedal.gas = 1')
-                t0, w0 = await cdp.js(f'{S}.F.t'), time.time()
-                a0 = await cdp.js(f'{S}.audio.ctx?.currentTime ?? 0')
-                await asyncio.sleep(FLIGHT_SECONDS)
-                # cars, bikes and boats have their own synthesized engine voice (src/motorSound.js): it must be running and audible
-                motor = await cdp.js(f'''(() => {{ const a = {S}.F.ac, e = a.parts.find((p) => p.alive && p.engine && {S}.audio.voices[p.engine.sound]?.motor);
-                    return e ? {{ kind: e.engine.sound, gain: {S}.audio.voices[e.engine.sound].out.gain.value }} : null; }})()''')
-                # a stalled audio clock (no output device, e.g. a Mac whose speakers went away) freezes every ramped gain:
-                # that's the machine, not the engine, so say so instead of failing the vehicle (#180)
-                stalled = (await cdp.js(f'{S}.audio.ctx?.currentTime ?? 0')) - a0 < FLIGHT_SECONDS * 0.25
-                if motor and motor['gain'] < 0.01 and not stalled:
-                    raise AssertionError(f"its {motor['kind']} engine is silent at full throttle")
-                note = ' (audio clock stalled: engine sound not checked)' if motor and stalled else ''
-                if shoot:
-                    await cdp.screenshot(os.path.join(shots, f'flight-{name}.png'))
-                # every cockpit view (one per seat, src/stations.js), the way the camera button steps through them
-                views = await cdp.js(f'(() => {{ const a = {S}.F.ac; {S}.rig.set("cockpit", a); return a.stations.length; }})()')
-                for _ in range(views):
-                    await asyncio.sleep(0.3)
-                    await cdp.js(f'{S}.rig.next({S}.F.ac)')
-                await asyncio.sleep(0.2)
-                if await cdp.js(f'{S}.rig.mode') == 'cockpit':
-                    raise AssertionError('the camera button did not leave the cockpit after every seat')
-                await cdp.js(f'{S}.rig.set("chase")')
-                s = await cdp.js(f"""(() => {{ const F = {S}.F; if (!F) return null; const a = F.ac;
-                    const n = (v) => [v.x, v.y, v.z].every(Number.isFinite);
-                    return {{ t: F.t, pos: n(a.x), vel: n(a.v), alive: a.parts.filter((p) => p.alive).length,
-                             parts: a.parts.length, speed: a.v.length(), alt: a.x.y, thr: {S}.controls.throttle, up: a.up.y }}; }})()""")
-                if bike:
-                    await cdp.js(f"{S}.controls.keys.delete('w')")
-                await cdp.js(f'{S}.controls.pedal.gas = 0')
-                wall = time.time() - w0
-                if s is None:
-                    raise AssertionError('the flight ended on its own')
-                if not s['pos'] or not s['vel']:
-                    raise AssertionError(f'non-finite position/velocity: {s}')
-                if not s['parts']:
-                    raise AssertionError('the plane has no parts')
-                ran = s['t'] - t0
-                if bike and s['up'] < 0.7:
-                    raise AssertionError(f"the bike fell over (up {s['up']:.2f})")
-                if bike and s['speed'] < 3 and ran > 2:
-                    raise AssertionError(f"the bike didn't ride off ({s['speed']:.1f} m/s)")
-                if ran <= 0 or ran < wall * args.min_realtime:
-                    raise AssertionError(f'frame loop stalled: flight clock moved {ran:.2f} s in {wall:.1f} s')
-                te = time.time()
-                await cdp.js(f'{S}.endFlight()')
-                await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 30, 'the hangar')  # (ending a flight takes up to ~14 s on a CI runner)
-                t_end = time.time() - te
-                return (f"start {t_start:.1f} s, end {t_end:.1f} s; {s['speed']:.0f} m/s, alt {s['alt']:.0f} m, {s['alive']}/{s['parts']} parts, "
-                        f"{ran / wall * 100:.0f}% realtime, {views} cockpit view(s){note}")
-            await r.step(f'fly: {name}', fly, timeout=150)
+        async def start(name, loc, cfg):
+            s = await cdp.js(f'{M}.then((m) => m.start({json.dumps(name)}, {json.dumps(loc)}, {json.dumps(cfg)}))', timeout=200)
+            return s, f"{s['how']} in {s['ms'] / 1000:.1f} s, start {s['start']}"
 
-        if last and (SR71 in names or (SR71 in all_names and not args.only)):  # (also with --only 'SR-71 Blackbird')
-            await r.step('SR-71: Mach 2.5+ above 60k ft', lambda: sr71_climb(cdp, shots), timeout=420)
-            await r.step('SR-71: land from the approach', lambda: sr71_land(cdp, shots), timeout=300)
+        shot_taken = False
+
+        async def fly(name, loc, cfg):
+            nonlocal shot_taken
+            n0 = len(shader_warns)
+            s, said = await start(name, loc, cfg)
+            f = await cdp.js(f'{M}.then((m) => m.fly({args.flight_seconds}, 3))', timeout=120)
+            if not shot_taken:
+                await cdp.screenshot(os.path.join(shots, f'flight-{name}.png')); shot_taken = True
+            e, ride = f['end'], f['ride']
+            if e is None or ride is None:
+                raise AssertionError('the flight ended on its own')
+            if not (ride['pos'] and ride['vel'] and e['pos'] and e['vel']):
+                raise AssertionError(f'non-finite position/velocity: {ride} / {e}')
+            if not e['parts']:
+                raise AssertionError('the vehicle has no parts')
+            if f['ran'] <= 0 or f['ran'] < f['wall'] * args.min_realtime:
+                raise AssertionError(f"frame loop stalled: flight clock moved {f['ran']:.2f} s in {f['wall']:.1f} s")
+            if s['kind'] == 'bike' or name in ('Dirt Bike', 'Sport Bike'):
+                if ride['up'] < 0.7:
+                    raise AssertionError(f"the bike fell over (up {ride['up']:.2f})")
+                if ride['speed'] < 3:
+                    raise AssertionError(f"the bike didn't ride off ({ride['speed']:.1f} m/s)")
+            m = f['motor']
+            if m and m['gain'] < 0.01 and not f['stalled']:
+                raise AssertionError(f"its {m['kind']} engine is silent at full throttle")
+            if not f['leftCockpit']:
+                raise AssertionError(f"the camera button did not leave the cockpit after every seat ({', '.join(f['names'])})")
+            if f['compiles']:
+                raise AssertionError(f"{f['compiles']} shader programs compiled mid-flight: {'; '.join(shader_warns[n0:])[:600]}")
+            note = ' (audio clock stalled: engine sound not checked)' if m and f['stalled'] else ''
+            return (f"{said}; {ride['speed']:.0f} m/s, alt {ride['alt']:.0f} m, {e['alive']}/{e['parts']} parts, {f['ran'] / f['wall'] * 100:.0f}% realtime, "
+                    f"{f['views']} cockpit view(s)" + (f", engine {m['gain']:.2f}" if m else '') + note)
+
+        async def quick(name, loc, cfg):
+            s, said = await start(name, loc, cfg)
+            q = await cdp.js(f'{M}.then((m) => m.quick(2))')
+            if q is None:
+                raise AssertionError('the flight ended on its own')
+            if not q['pos'] or not q['vel']:
+                raise AssertionError(f'non-finite position/velocity: {q}')
+            return f"{said}; after 2 s {q['speed']:.0f} m/s, alt {q['alt']:.0f} m, {q['alive']}/{q['parts']} parts"
+
+        for loc, steps in plan(args, names):
+            for kind, name, cfg in steps:
+                if kind == 'fly':
+                    await r.step(f'{loc}: fly {name}', lambda n=name, c=cfg: fly(n, loc, c), timeout=240)
+                elif kind == 'quick':
+                    await r.step(f'{loc}: start {name}', lambda n=name, c=cfg: quick(n, loc, c), timeout=240)
+                elif kind == 'sr71-climb':
+                    await r.step('SR-71: Mach 2.5+ above 60k ft', lambda: sr71_climb(cdp, shots, loc), timeout=420)
+                elif kind == 'sr71-land':
+                    await r.step('SR-71: land from the approach', lambda: sr71_land(cdp, shots, loc), timeout=300)
+
+        if node:
+            async def presets():
+                if isinstance(node, Exception):
+                    raise AssertionError(f'could not run node: {node}')
+                out = (await node.communicate())[0].decode(errors='replace').splitlines()
+                for line in out:
+                    if line.startswith('FAIL'):
+                        print(f'      {line}')
+                if node.returncode:
+                    raise AssertionError(f'tools/test/presets.js failed: {out[-1] if out else "no output"}')
+                return (out[-1] if out else '').replace('PASS  ', '')
+            await r.step('every preset built and driven (Node)', presets, timeout=180)
         return r.results
 
 
 # ---------- the SR-71's scripted flights (tools/test/sr71flight.js) ----------
 # The game starts the flight as a player would (runway or approach start, Pilot mode, the real world), then the game loop
 # is paused and an autopilot flies the aircraft headless through Aircraft.step, much faster than real time.
-SR71 = 'SR-71 Blackbird'
 MACH_MIN, ALT_MIN_FT = 2.5, 60000
 
 
-async def sr71_start(cdp, cfg):
+async def sr71_start(cdp, cfg, loc):
     S = 'window.__sky'
-    if await cdp.js(f'!!{S}.F'):
-        await cdp.js(f'{S}.endFlight()')
-    await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 30, 'the hangar')
-    await cdp.js(f'{S}.hangar.load({S}.presets.find((d) => d.name === {json.dumps(SR71)})); {S}.startFlight({json.dumps(cfg)})')
-    await cdp.wait_for(f'{S}.F && {S}.F.ac && {S}.F.t > 0.5', 90, 'the flight to start')
+    await cdp.js(f'{M}.then((m) => m.start({json.dumps(SR71)}, {json.dumps(loc)}, {json.dumps(cfg)}))', timeout=200)
+    await cdp.js(f'{S}.advance(0.5); 1')  # (settled half a second)
     await cdp.js(f'(async () => {{ {S}.F.paused = true; {S}.F.eng.on = true; {S}.F.ac.engineRunning = true; window.__srMod = await import("/tools/test/sr71flight.js"); return 1; }})()')
 
 
@@ -407,9 +436,9 @@ async def sr71_show(cdp, path, seconds):
     await cdp.js(f'{S}.F.paused = true; 1')
 
 
-async def sr71_climb(cdp, shots):
+async def sr71_climb(cdp, shots, loc):
     S = 'window.__sky'
-    await sr71_start(cdp, {'realism': 'pilot', 'start': 'runway', 'mode': 'free'})
+    await sr71_start(cdp, {'realism': 'pilot', 'start': 'runway', 'mode': 'free'}, loc)
     states = await sr71_run(cdp, f'window.__srGen = window.__srMod.climb({S}.F.ac, {S}.F.env, {{ ground: {S}.F.world.loc.rwyH, chunk: 60, maxTime: 1200 }}); 1', 300)
     if not states:
         raise AssertionError('the scripted flight did not run')
@@ -428,9 +457,9 @@ async def sr71_climb(cdp, shots):
             f"(now Mach {last['mach']:.2f} at {last['altFt']} ft, {last['t']:.0f} s), skin {last['skinC']} C, {last['alive']}/{last['parts']} parts")
 
 
-async def sr71_land(cdp, shots):
+async def sr71_land(cdp, shots, loc):
     S = 'window.__sky'
-    await sr71_start(cdp, {'realism': 'pilot', 'mode': 'landing'})
+    await sr71_start(cdp, {'realism': 'pilot', 'mode': 'landing'}, loc)
     rwy = f'''(() => {{ const F = {S}.F, m = F.mission, w = F.world, L = w.runway.len; return {{ x: m.rwyX, h: w.loc.rwyH, s: m.side, aimZ: m.side * (L / 2 - 380), len: L, width: w.runway.width }}; }})()'''
     v_app = f'Math.min(110, Math.max(32, {S}.analyze({S}.F.ac.design).stall * 1.45))'
     states = await sr71_run(cdp, f'window.__srGen = window.__srMod.land({S}.F.ac, {S}.F.env, {rwy}, {{ chunk: 4, vApp: {v_app} }}); 1', 200)
@@ -448,9 +477,6 @@ async def sr71_land(cdp, shots):
     return f"touchdown {td['vs']} m/s down at {td['V']} m/s, {td['x']} m off the centreline; stopped on the runway"
 
 
-
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--only', metavar='NAME', help='fly just this preset (e.g. Kestrel)')
@@ -466,6 +492,8 @@ def main():
     ap.add_argument('--size', default='1280x800', help='window size WxH')
     ap.add_argument('--shard', default='1/1', metavar='I/N', help='run part I of N (the flights split N ways; CI runs the parts in parallel)')
     ap.add_argument('--jobs', type=int, default=1, metavar='N', help='run all N parts at once, each in its own browser, and report them together')
+    ap.add_argument('--flight-seconds', type=float, default=FLIGHT_SECONDS, metavar='S', help=f'wall seconds each tour flight flies on the real game loop (default {FLIGHT_SECONDS})')
+    ap.add_argument('--no-node', action='store_true', help="don't run the Node suite tools/test/presets.js alongside (run.py runs it itself)")
     args = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)  # keep step lines in order when piped (CI logs)
     try:
