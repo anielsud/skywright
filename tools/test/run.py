@@ -18,10 +18,9 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 BROWSER = {
     'smoke': (['smoke.py', '--quality', 'low'], ['src/*', 'index.html', 'style.css', 'sw.js', 'assets/*', 'vendor/*']),
     'restart': (['restart.py'], ['src/main.js', 'src/world.js', 'src/destruction.js', 'src/stuntPark.js', 'src/waterPark.js', 'src/launchpad.js', 'src/helipad.js', 'src/flora.js']),
-    'stunts': (['stunts.py'], ['src/stunt*.js', 'src/aircraft.js', 'src/bike*.js', 'src/drive.js', 'src/collide.js', 'src/world.js', 'src/realworld.js']),
-    'waterpark': (['waterpark.py'], ['src/waterPark.js', 'src/boat*.js', 'src/aircraft.js', 'src/world.js', 'src/realworld.js']),
+    # (stunts, waterpark, walls: Node suites; their browser part, at New York and the Grand Canyon, is placecheck)
+    'placecheck': (['placecheck.py'], ['src/main.js', 'src/stunt*.js', 'src/evelJump.js', 'src/waterPark.js', 'src/landStart.js', 'src/world.js', 'src/realworld.js', 'src/realCity.js', 'src/destruction.js', 'src/aircraft.js', 'tools/test/placecheck.py', 'tools/test/stunts.js', 'tools/test/waterpark.js', 'tools/test/walls.js']),
     'boatride': (['boatride.py'], ['src/boat*.js', 'src/marina.js', 'src/aircraft.js', 'src/world.js']),
-    'walls': (['walls.py'], ['src/aircraft.js', 'src/world.js', 'src/buildings.js', 'src/realBuildings.js', 'src/destruction.js', 'src/bike*.js', 'src/drive.js']),
     'padcheck': (['padcheck.py'], ['src/launchpad.js', 'src/main.js', 'src/aircraft.js', 'src/world.js']),
     'helipadcheck': (['helipadcheck.py'], ['src/helipad.js', 'src/main.js', 'src/aircraft.js', 'src/world.js', 'src/nyc*.js']),
     'cockpitcheck': (['cockpitcheck.py'], ['src/stations.js', 'src/crew.js', 'src/body.js', 'src/partDetail.js', 'src/parts.js', 'src/cockpit*.js', 'src/interior.js']),

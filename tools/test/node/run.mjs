@@ -7,7 +7,8 @@
 // A suite module exports:
 //   export const nodeSuite = { files: ['src/bike.js', ...], headless: true }   // the sources it covers (run.py --changed
 //     uses this); headless: physics only, Aircraft skips its visual detail (aircraft.js HEADLESS; SKY_VISUALS=1 to compare)
-//   export function cases(ctx) { return [{ id: 'Dirt Bike', ... }, ...] }   // plain, serialisable case descriptors
+//   export function cases(ctx) { return [{ id: 'Dirt Bike', ... }, ...] }   // plain, serialisable case descriptors (world: the
+//     node/world.mjs World it builds, if any: cases needing the same World go to the same worker where they can)
 //   export async function runCase(c, ctx) { return [{ name, ok, why, ...extra }, ...] }   // one case's checks
 // ctx = { presets: makePresets() } (each worker makes its own). Cases run in any order, on any worker: a case must not
 // depend on another having run first. Keep cases a few seconds each so the pool balances.
@@ -17,7 +18,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url)), REPO = fileURLToPath(new URL('../../../', import.meta.url));
-export const SUITES = ['bikeride']; // (tools/test/<name>.js; add a suite here once it exports nodeSuite)
+export const SUITES = ['bikeride', 'stunts', 'waterpark', 'walls']; // (tools/test/<name>.js; add a suite here once it exports nodeSuite)
 const modUrl = (name) => pathToFileURL(`${REPO}tools/test/${name}.js`).href;
 
 async function context() { const { makePresets } = await import(pathToFileURL(REPO + 'src/design.js').href); return { presets: makePresets() }; }
@@ -51,14 +52,18 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
   if (list) { for (const w of work) console.log(`${w.suite}  ${w.c.id ?? w.i}`); process.exit(0); }
   const t0 = performance.now(), results = [], n = Math.min(jobs, work.length);
   console.log(`${work.length} cases from ${suites.join(', ')} on ${n} workers`);
-  // longest first (times from earlier runs, tools/test/node/.times.json, not committed; unknown cases count as long),
-  // handed out one at a time, so a slow case doesn't start last and leave the other workers idle
-  const timesFile = here + '.times.json', key = (w) => `${w.suite}|${w.c.id ?? w.i}`;
+  // longest first (times from earlier runs, tools/test/node/.times.json, not committed; else a case's own c.cost in s;
+  // unknown cases count as long), handed out one at a time. A case may name what it shares with others, c.world (a
+  // place's World, node/world.mjs keeps one per worker) or c.key (e.g. a vehicle's built crew): a worker is handed a case
+  // for something it already has if there is one, else one for something no worker has started, else one needing none.
+  const timesFile = here + '.times.json', key = (w) => `${w.suite}|${w.c.id ?? w.i}`, aff = (j) => j.c.world ?? j.c.key;
   let times = {}; try { times = JSON.parse(readFileSync(timesFile, 'utf8')); } catch {}
-  const queue = [...work].sort((a, b) => (times[key(b)] ?? 1e9) - (times[key(a)] ?? 1e9));
+  const est = (w) => times[key(w)] ?? (w.c.cost != null ? w.c.cost * 1000 : 1e9);
+  const queue = [...work].sort((a, b) => est(b) - est(a)), started = new Set();
   await Promise.all(Array.from({ length: n }, () => new Promise((resolve) => {
-    const w = new Worker(fileURLToPath(import.meta.url));
-    const next = () => { const job = queue.shift(); if (job) w.postMessage(job); else { w.terminate(); resolve(); } };
+    const w = new Worker(fileURLToPath(import.meta.url)), mine = new Set();
+    const pick = () => { let k = queue.findIndex((j) => aff(j) != null && mine.has(aff(j))); if (k < 0) k = queue.findIndex((j) => aff(j) != null && !started.has(aff(j))); if (k < 0) k = queue.findIndex((j) => aff(j) == null); return queue.splice(Math.max(0, k), 1)[0]; };
+    const next = () => { const job = pick(); if (job) { const a = aff(job); if (a != null) { mine.add(a); started.add(a); } w.postMessage(job); } else { w.terminate(); resolve(); } };
     w.on('message', (m) => {
       if (m.ready) return next();
       results.push(m);

@@ -80,10 +80,9 @@ function setUp(S, ac, f, v, a) {
   ac.v.set(-dx * v, 0, -dz * v); ac.engineRunning = true;
   return start;
 }
-export function physicsRun(S, design, f, v, a, realism = 'pilot', T = 2.5) {
+export function physicsRun(S, design, f, v, a, realism = 'pilot', T = 2.5, near = buildings(S.F.world, f.cx, f.cz, 60)) {
   const F = S.F, ac = new S.Aircraft(JSON.parse(JSON.stringify(design)), S.REALISM[realism]);
   setUp(S, ac, f, v, a);
-  const near = buildings(F.world, f.cx, f.cz, 60);
   let maxPen = 0, closest = Infinity, wallEvents = 0;
   for (let i = 0; i < T / DT; i++) {
     ac.setControls({ pitch: 0, roll: 0, yaw: 0, throttle: 1, rev: 0, hand: 0 }); ac.brake = 0;
@@ -94,12 +93,18 @@ export function physicsRun(S, design, f, v, a, realism = 'pilot', T = 2.5) {
   }
   return { maxPen: +maxPen.toFixed(3), closest: +closest.toFixed(2), wallEvents, up: +ac.up.y.toFixed(2), dead: !!ac.dead };
 }
-// the game loop: the flight's own vehicle, the pedal held down; resolves when done
+// the game loop: the flight's own vehicle, the pedal held down; resolves when done. With __sky.advance the game's own
+// frame step runs a frame at a time from here (no drawing, no waiting for frames), else in real time
 export function gameRun(S, f, v, a, T = 2.5) {
   const F = S.F, ac = F.ac, near = buildings(F.world, f.cx, f.cz, 60);
   setUp(S, ac, f, v, a); F.paused = false; F.eng.on = true; ac.engineRunning = true;
   S.controls.pedal.gas = 1; S.controls.setThrottle?.(1);
   let maxPen = 0, closest = Infinity; const t0 = performance.now();
+  if (S.advance) {
+    for (let i = 0; i < T * 60 && !ac.dead; i++) { S.advance(1 / 60); maxPen = Math.max(maxPen, penetration(S, ac, near)); closest = Math.min(closest, Math.hypot(ac.x.x - f.cx, ac.x.z - f.cz)); }
+    S.controls.pedal.gas = 0; S.controls.setThrottle?.(0); F.paused = true;
+    return Promise.resolve({ maxPen: +maxPen.toFixed(3), closest: +closest.toFixed(2), up: +ac.up.y.toFixed(2), dead: !!ac.dead });
+  }
   return new Promise((res) => {
     const tick = () => {
       maxPen = Math.max(maxPen, penetration(S, ac, near)); closest = Math.min(closest, Math.hypot(ac.x.x - f.cx, ac.x.z - f.cz));
@@ -120,4 +125,87 @@ export function run(S, names, { speeds = SPEEDS, angles = ANGLES, max = 3, reali
     fs.forEach((f, k) => { for (const v of speeds) for (const a of angles) out.push({ name, face: k, v, a, ...physicsRun(S, d, f, v, a, realism) }); });
   }
   return { faces: fs.map((f) => ({ x: +f.cx.toFixed(1), z: +f.cz.toFixed(1), h: +(f.B.y1 - f.B.y0).toFixed(1), size: [+(2 * f.B.hl).toFixed(1), +(2 * f.B.hw).toFixed(1)] })), runs: out };
+}
+
+// Does world.wallBoxes give a car every building, with its own box? For every building in the place's collision grids
+// (read directly, as buildings() does): asked at its centre, and 1 m out from the middle of each face with a car's
+// reach (1.5 m), the building must be among the boxes, with the same footprint, base and top.
+export function registered(W) {
+  const all = buildings(W, 0, 0, 1e9).filter((B) => B.e[3] > 0.3), out = [];
+  let bad = 0, missing = 0, n = 0;
+  const has = (B, x, z, r) => { const got = W.wallBoxes(x, z, r).find((q) => q.e === B.e); if (!got) return 'missing'; for (const k of ['x', 'z', 'ux', 'uz', 'hl', 'hw', 'y0', 'y1']) if (Math.abs(got[k] - B[k]) > 1e-6) return `${k} ${got[k]} vs ${B[k]}`; return null; };
+  for (const B of all) {
+    n++;
+    const at = [[B.x, B.z, 0.5]];
+    for (const [s, alongU] of [[1, true], [-1, true], [1, false], [-1, false]]) { const nx = alongU ? B.ux * s : -B.uz * s, nz = alongU ? B.uz * s : B.ux * s, d = (alongU ? B.hl : B.hw) + 1; at.push([B.x + nx * d, B.z + nz * d, 1.5]); }
+    for (const [x, z, r] of at) { const why = has(B, x, z, r); if (why) { why === 'missing' ? missing++ : bad++; if (out.length < 4) out.push(`(${x.toFixed(0)}, ${z.toFixed(0)}): ${why}`); break; } }
+  }
+  return { n, missing, bad, examples: out };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Node tier (tools/test/node/run.mjs). What the test must prove: the wall-contact code (aircraft.js wallContacts) keeps
+// cars and bikes out of buildings, at any speed and angle; and each place's buildings reach it (world.wallBoxes gives
+// every building, with its own box). So:
+//   contact:  stand-in buildings on flat ground (one like a town's or a village's, square to the street; one turned
+//             27 degrees, like an OpenStreetMap footprint; a New York tower whose box starts 1.5 m above the street),
+//             driven into by the Dune Buggy and the Dirt Bike at 5, 15, 30 and 45 m/s, straight on, at 35 degrees and at
+//             60 degrees the other way, full gas: every hull point and wheel checked against the box every frame, none
+//             more than 0.1 m inside, and the straight-on runs reach the wall;
+//   place:    New York (its city boxes), Lauterbrunnen (OpenStreetMap buildings) and the Alpine Valley town (generated):
+//             every building is among world.wallBoxes, with its own box; building faces with a clear, flat run-up near
+//             the start, and both vehicles driven into each at 30 m/s straight on and 15 m/s at 35 degrees on the
+//             place's real ground and buildings, staying out and reaching the wall.
+// The game loop's own runs (the flight's vehicle, its pedal, building damage) are in the browser (walls.py).
+export const PLACES = ['nyc', 'lauterbrunnen', 'alpine'], VEHICLES = ['Dune Buggy', 'Dirt Bike'], TOL = 0.1;
+export const STANDINS = {
+  street: { x: 0, z: 0, yaw: 0, hl: 12, hw: 8, y0: 0, h: 20 },
+  osm: { x: 400, z: 0, yaw: 0.47, hl: 9, hw: 6, y0: 0, h: 9 },
+  tower: { x: 800, z: 0, yaw: 0, hl: 15, hw: 15, y0: 1.5, h: 120 },
+};
+export const nodeSuite = { files: ['src/aircraft.js', 'src/world.js', 'src/buildings.js', 'src/realBuildings.js', 'src/realCity.js', 'src/towns.js', 'src/destruction.js', 'src/bike*.js', 'src/drive.js', 'tools/test/walls.js', 'tools/test/node/world.mjs'], headless: true };
+export function cases() {
+  return [
+    ...PLACES.map((loc) => ({ id: `${loc} buildings`, kind: 'place', loc, world: loc })),
+    ...VEHICLES.flatMap((name) => Object.keys(STANDINS).map((box) => ({ id: `contact ${name} ${box}`, kind: 'contact', name, box }))),
+  ];
+}
+// flat ground with the stand-in buildings, and main.js's env over it
+async function standInWorld() {
+  const THREE = await import('three'), up = new THREE.Vector3(0, 1, 0), boxes = {};
+  for (const [k, s] of Object.entries(STANDINS)) { const e = [s.x, s.y0, s.z, s.h]; e.solid = true; boxes[k] = { x: s.x, z: s.z, ux: Math.cos(s.yaw), uz: -Math.sin(s.yaw), hl: s.hl, hw: s.hw, y0: s.y0, y1: s.y0 + s.h, e }; }
+  const env = {
+    groundAt: () => ({ h: 0, n: up.clone(), type: 'runway' }), maxGround: () => 0, windAt: () => new THREE.Vector3(), night: false, groundHeightAtSpawn: 0,
+    walls: (x, z, r, out = []) => { out.length = 0; for (const B of Object.values(boxes)) if (Math.hypot(B.x - x, B.z - z) < r + Math.hypot(B.hl, B.hw)) out.push(B); return out; },
+  };
+  return { boxes, env };
+}
+const faceOf = (B) => { const nx = B.ux, nz = B.uz; return { B, nx, nz, tx: -nz, tz: nx, cx: B.x + nx * B.hl, cz: B.z + nz * B.hl, gy: 0 }; }; // (its +u face: hl out from the middle)
+export async function runCase(c, { presets }) {
+  const { Aircraft, REALISM } = await import('../../src/aircraft.js'), THREE = await import('three'), d = presets.find((p) => p.name === c.name), out = [];
+  const add = (name, ok, why = '') => out.push({ name, ok: !!ok, why });
+  const judgeRuns = (where, name, runs) => {
+    const worst = runs.reduce((a, x) => (x.maxPen > (a?.maxPen ?? -1) ? x : a), null), far = runs.filter((x) => x.a === 0 && x.v >= 15 && x.closest > 4);
+    add(`${where}: ${name} stays out of the buildings (${runs.length} runs)`, runs.length && worst.maxPen <= TOL, worst ? `deepest ${worst.maxPen} m (${worst.face != null ? `face ${worst.face}, ` : ''}${worst.v} m/s, ${worst.a} deg)` : 'no runs');
+    add(`${where}: ${name} reaches the wall`, runs.length && !far.length, far.length ? `${far.length} straight-on runs stopped short` : 'every straight-on run hit it');
+  };
+  if (c.kind === 'contact') {
+    const { boxes, env } = await standInWorld(), B = boxes[c.box], S = { F: { env, world: null }, THREE, Aircraft, REALISM, presets }, runs = [];
+    for (const v of SPEEDS) for (const a of ANGLES) runs.push({ v, a, ...physicsRun(S, d, faceOf(B), v, a, 'pilot', 2.5, [B]) });
+    judgeRuns(`stand-in ${c.box} building`, c.name, runs);
+    return out;
+  }
+  const { worldAt, skyOf } = await import('./node/world.mjs'), w = await worldAt(c.loc), W = w.world, S = skyOf(w, presets);
+  W.reset(); W.gust.set(0, 0, 0); W.gustT.set(0, 0, 0);
+  const reg = registered(W);
+  add(`${c.loc}: every building is a wall box, with its own box`, reg.n > 0 && !reg.missing && !reg.bad, `${reg.n} buildings: ${reg.missing} missing, ${reg.bad} with another box${reg.examples.length ? '; ' + reg.examples.join('; ') : ''}`);
+  const near = W.landStart('park')?.pos ?? new THREE.Vector3(W.runway.x, 0, W.runway.len / 2 - 60); // (where the old browser test's Dune Buggy started: the stunt park's arch, or the runway)
+  const fs = faces(S, near, { max: 3 });
+  add(`${c.loc}: clear building faces found`, fs.length >= 1, `${fs.length}: ` + fs.map((f) => `${(2 * f.B.hl).toFixed(1)}x${(2 * f.B.hw).toFixed(1)} m, ${(f.B.y1 - f.B.y0).toFixed(1)} m tall`).join(', '));
+  for (const name of VEHICLES) {
+    const dd = presets.find((p) => p.name === name), runs = [];
+    fs.forEach((f, k) => { for (const [v, a] of [[30, 0], [15, 35]]) runs.push({ face: k, v, a, ...physicsRun(S, dd, f, v, a) }); });
+    judgeRuns(c.loc, name, runs);
+  }
+  return out;
 }

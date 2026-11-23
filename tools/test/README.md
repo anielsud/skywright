@@ -39,6 +39,14 @@ Tests are in two tiers.
 `bikeride` is the reference Node suite: 77 checks in about 2.5 s, against 28 s in Chrome. Its results are identical
 with and without `headless`.
 
+A suite that drives through a place builds its real World in Node (`node/world.mjs` `worldAt(id)`: the real data
+loaded and the World built as main.js does, with a stand-in renderer and main.js's flight env; offline: the land
+streamed in past the baked squares is left out). Everything found from heights, OpenStreetMap and the landcover map is
+the same as in the browser (PNGs decode in Node: `setup.mjs`); the imagery's colours (JPEGs) don't, so nothing in Node
+may depend on them (only New York's stunt site search does: its tree-canopy rule). A World takes 1–5 s to build and is
+kept per worker; a case that needs one says so (`world: 'nyc'`) and the runner hands it to a worker that has it where
+it can. `SKY_WORLD_LOG=1` prints each build.
+
 ## Run it
 
 ```sh
@@ -156,33 +164,46 @@ Run it when you change the pad, the launch stand (`uprightStage` in `hangar.js`)
 
 ## Stunt park check
 
-`stunts.py` visits every location's stunt park (`src/stuntPark.js`; sites found by `src/stuntSite.js`) and the Grand
-Canyon's daredevil canyon jump (`src/evelJump.js`), and drives the stock Dune Buggy, Chomper, Dirt Bike and Sport Bike
-through them on the real flight model (paused flight, stepped at a fixed 60 Hz from `stunts.js`, with scripted inputs:
-gas plus a simple lane-keeping steer; gusts are zeroed so every run is the same), in Pilot and Arcade. At each
-location it fails unless:
+`stunts.py` checks every location's stunt park (`src/stuntPark.js`; sites found by `src/stuntSite.js`) and the Grand
+Canyon's daredevil canyon jump (`src/evelJump.js`), driving the stock Dune Buggy, Chomper, Dirt Bike and Sport Bike
+through them on the real flight model (stepped at a fixed 60 Hz from `stunts.js`, scripted inputs: gas plus a simple
+lane-keeping steer; gusts zeroed so every run is the same), in Pilot and Arcade.
 
-- the park's site is dry, flat and clear (no water, buildings, roads, woods, or tree canopy where the location asks
-  for that);
-- every car and bike starts at the start arch ("At the stunt park") and on a street ("On the road"), facing the right
-  way, and no shader compiles mid-flight;
-- the loop run (kickers or tabletop, boost, loop) gets air off the last jump and lands upright, goes over the top of
-  the loop upside down with its wheels on the deck, and comes out upright in the exit lane, all parts intact;
-- coasting into the loop at the boost pad's speed still makes it round, and far too slow it rolls back down;
-- the mesa jump clears the gap and lands upright;
-- the bowl is ridden at 14, 20 and 26 m/s, up the wall and back out upright on its wheels;
-- from the start arch at full gas, hands off after the loop (as a kid rides it), every car and bike gets round the
-  banked east turn, never over the barrier on its berm, and out upright onto straight 2; at the Grand Canyon that
-  hands-off run takes the turn, not the link lane to the canyon jump, and one steered right at the fork goes down the
-  link lane onto the canyon jump's run-up;
-- at the Grand Canyon: a Kestrel set down on a mesa stands on it and one flown into a cliff hits it; the canyon jump's
-  start is at its run-up; a scripted run (full gas, no steering) clears the real gap, lands upright on the far ramp and
-  is stopped by the parachute; and a car too slow for it is lowered into the canyon by the rescue parachute.
+Every place uses the same layout ('compact'), so the track, ramps, loop and bowl are the same mesh in the park's own
+frame everywhere. What a place changes is its site, the ground levelled under it, the pad's height (the Grand Canyon's
+is at 2,169 m: thinner air), the ground under the track (sand at the Grand Canyon), the wind, the theme (the mesa
+jump's surfaces), the road start, and at the Grand Canyon the link lane and fork to the canyon jump. So the full set of
+runs is driven once, and per place only what depends on the place. It is a Node suite (real Worlds built in Node:
+`node/world.mjs`) plus a short browser check (`placecheck.py`):
+
+- **reference park** (the compact layout on a flat lot), every car and bike, Pilot and Arcade: the loop run (kickers,
+  boost, loop) gets air off the last kicker and lands upright, goes over the top upside down with its wheels on the
+  deck, and comes out upright in the exit lane, all parts intact; coasting into the loop at the boost pad's speed
+  still makes it round, and far too slow it rolls back down; the mesa jump clears the gap and lands upright; the bowl
+  at 14, 20, 26 and 34 m/s, up the wall and back out upright on its wheels; from the start arch at full gas, hands off
+  after the loop, round the banked east turn, never over the barrier on its berm, and out upright onto straight 2;
+- **every place**: the site is dry, flat and clear (no water, buildings, roads, woods, or tree canopy where the place
+  asks for that); every car and bike starts at the arch ('At the stunt park') and on a street ('On the road'), facing
+  the right way, nothing of it in a building or a tree; the loop run from the arch (the run-up on the place's own
+  ground, out into the exit lane) and the mesa jump (its theme's surfaces), in Pilot; no stunt site warnings;
+- **the Grand Canyon**, Pilot and Arcade: the loop run and the mesa jump; hands off after the loop it takes the banked
+  turn, not the link lane, and steered right at the fork it goes down the link lane onto the canyon jump's run-up; every
+  car picks the canyon jump start at its run-up; the canyon jump (full gas, no steering) clears the real gap, lands
+  upright on the far ramp and is stopped by the parachute; the long run-up from the park through the fork does too
+  (and beside the rocket strip it is too slow: the rescue parachute); a car too slow for it is lowered into the canyon by
+  the rescue parachute;
+- **in the browser, at New York** (`placecheck.py`): New York's site with its tree canopy (the imagery, which doesn't
+  decode in Node) and the loop run from its real arch; main.js starts a car and a bike at the arch and on the road;
+  nothing compiles a shader mid-flight there (the other places: the shader check, `shadercheck.py` / `smoke.py`); no page errors.
+
+New York's park in Node stands where the site search puts it without the canopy rule (a few tens of metres from the
+game's): the park-frame runs there are the same, and the real site is checked in the browser.
 
 ```sh
-python3 tools/test/stunts.py                              # all four locations, ~4 min
-python3 tools/test/stunts.py --locations canyon --cars "Dune Buggy,Dirt Bike"
-python3 tools/test/stunts.py --shots DIR                  # also screenshots of each park, the jump, cars mid-stunt
+python3 tools/test/stunts.py                         # Node tier + the browser check, ~30 s
+python3 tools/test/stunts.py --node-only --only canyon
+node tools/test/node/run.mjs stunts --only "Dirt Bike"
+python3 tools/test/stunts.py --shots DIR --shots-only # screenshots of each park, the jump, cars mid-stunt
 ```
 
 Run it when you change ground contact (`collide.js`, the contact code in `aircraft.js`), car or bike physics, the
@@ -190,32 +211,32 @@ parks, or the real-world data a site is found from.
 
 ## Water park check
 
-`waterpark.py` visits the water park at every location with one (`src/waterPark.js`: Bora Bora's lagoon, the Hudson
-off the Upper West Side, Lake Brienz; the Grand Canyon's Colorado is too narrow for one) and drives every stock boat,
-and a kid's random boat builds, through it on the real flight model (paused flight, stepped at a fixed 60 Hz from
-`waterpark.js`, with scripted inputs: full gas plus a lane-keeping steer; gusts zeroed). At each location it fails
-unless:
+`waterpark.py` checks the water park at every location with one (`src/waterPark.js`: Bora Bora's lagoon, the Hudson
+off Liberty State Park, Lake Brienz; the Grand Canyon's Colorado is too narrow for one), driving every stock boat, and
+a kid's random boat builds, through it on the real flight model (stepped at a fixed 60 Hz from `waterpark.js`, full gas
+plus a lane-keeping steer; gusts zeroed). The course is the same everywhere; a place changes the site, the water level
+(Lake Brienz is at 561 m), the swell (New York's harbour is twice as rough as the lakes), the wind and the MEGA JUMP's
+obstacle (an island, a container barge, a log raft). A Node suite plus a short browser check (`placecheck.py`):
 
-- the park's site is open water: deep enough over the whole course, water in the margin round it, nothing built on it
-  (overwater bungalows, piers), no bridge over it, and well clear of the marina and its channel;
-- every stock boat that picks 'At the water park' starts at its arch, afloat and facing down the course, nothing
-  compiles a shader mid-flight, and the park stays within 6 draw calls and 32k triangles;
-- the MEGA JUMP from the start (Arcade and Pilot): the boost strip carries it up the ramp at its speed, it gets real
-  air (over a second, more than 4 m up), clears the island / container barge / log raft, splashes down upright and
-  keeps every part; the same for 8 random kid's boat builds (any hull, resized, any motor, extras) from the boost strip;
-- the kickers' lane at each boat's own speed (a short boost before each kicker): over both and through the hoop,
-  upright, nothing broken;
-- the slalom (a boat following a line through the five gates) says PERFECT SLALOM, and the waterfall SPLASH!;
-- flat out the wrong way into the back and the side of the MEGA JUMP ramp: nothing breaks off, it isn't wrecked.
-
-Sim is flown too and reported, not judged (there's no help in the air: a nose-heavy boat can dive and capsize).
-At a location without a water park a boat that picks it starts at the marina.
+- **reference park** (Bora Bora's): every stock boat's MEGA JUMP from the start (Arcade and Pilot): the boost strip
+  carries it up the ramp at its speed, it gets real air (over a second, more than 4 m up), clears the obstacle,
+  splashes down upright and keeps every part (Sim is flown too and reported, not judged: there's no help in the air);
+  the same for 8 random kid's boat builds from the boost strip; the kickers' lane at each boat's own speed, over both
+  and through the hoop; the slalom says PERFECT SLALOM and the waterfall SPLASH!; flat out the wrong way into the back
+  and the side of the MEGA JUMP ramp: nothing breaks off, it isn't wrecked;
+- **every place with a water park**: the site is open water (deep enough over the whole course, water in the margin
+  round it, nothing built on it, no bridge over it, well clear of the marina and its channel); the park stays within 6
+  draw calls and 32k triangles (the merged meshes it builds: the browser draws the same count); every stock boat that
+  picks 'At the water park' starts at its arch, afloat and facing down the course; every stock boat's MEGA JUMP in
+  Arcade and Pilot (the place's swell and obstacle); no water park warnings. At the Grand Canyon none is built and a
+  boat's start site is the marina;
+- **in the browser** (`placecheck.py`): main.js starts a boat that picks the water park at New York's arch, afloat, and
+  at the Grand Canyon at the marina; nothing compiles a shader mid-flight at New York; no page errors.
 
 ```sh
-python3 tools/test/waterpark.py                              # all four locations, ~6 min
-python3 tools/test/waterpark.py --locations nyc --boats "Jet Ski,Fireboat"
-python3 tools/test/waterpark.py --shots DIR                  # also screenshots of each park and boats mid-jump
-python3 tools/test/waterpark.py --shots DIR --shots-only     # just the site checks and the screenshots
+python3 tools/test/waterpark.py                      # Node tier + the browser check, ~25 s
+node tools/test/node/run.mjs waterpark --only nyc
+python3 tools/test/waterpark.py --shots DIR --shots-only
 ```
 
 Run it when you change `src/waterPark.js`, boat physics (`src/boat.js`), hull contacts in `src/aircraft.js`,
@@ -440,22 +461,38 @@ Run it when you change car physics (`steerAngle`, the tyres in `contacts`, `carA
 
 ## Wall test
 
-`walls.py` drives cars and bikes into buildings and fails if anything of theirs gets inside one. At New York (its city
-boxes), Lauterbrunnen (a real village's OpenStreetMap buildings) and the Alpine Valley town (generated towns) it picks
-building faces with a clear, flat run-up near the start and drives the Dune Buggy and the Dirt Bike into each at 5, 15,
-30 and 45 m/s, straight on, at 35° and at 60° the other way, full gas, on the game's physics at 60 Hz
-(`tools/test/walls.js`). Every hull point and wheel is checked against every building box nearby, every frame: none
-may get more than 0.1 m inside (`--tol`), and the straight-on runs must reach the wall. A few runs then go through the
-real game loop (the flight's own vehicle, the pedal held down, building damage and all). The buildings are read from
-the world's own collision grids, not through `world.wallBoxes`, so the test doesn't trust the code it tests.
+`walls.py` checks that cars and bikes driven into buildings stay out of them. What it must prove: the wall-contact code
+(`wallContacts` in `aircraft.js`) keeps a vehicle out at any speed and angle, and every place's buildings reach it
+(`world.wallBoxes`). A Node suite plus a short browser check (`placecheck.py`):
+
+- **contact**: stand-in buildings on flat ground (square to the street like a town's; turned 27° like an OpenStreetMap
+  footprint; a New York tower whose box starts 1.5 m above the street), the Dune Buggy and the Dirt Bike into each at 5,
+  15, 30 and 45 m/s, straight on, at 35° and at 60° the other way, full gas, on the game's physics at 60 Hz. Every hull
+  point and wheel is checked against the box every frame: none may get more than 0.1 m inside, and the straight-on runs
+  must reach the wall;
+- **New York** (its city boxes), **Lauterbrunnen** (a real village's OpenStreetMap buildings) and the **Alpine Valley**
+  town (generated), on real Worlds built in Node: every building in the place's collision grids is among
+  `world.wallBoxes`, with its own box, asked at its middle and just outside each face; building faces with a clear,
+  flat run-up near the start, and both vehicles into each at 30 m/s straight on and 15 m/s at 35°, staying out and
+  reaching the wall. The buildings are read from the world's own collision grids, not through `world.wallBoxes`, so
+  the test doesn't trust the code it tests;
+- **in the browser** (`placecheck.py`): two runs through the real game loop at New York (the flight's own Dune Buggy,
+  its pedal held down, building damage and all, stepped with `__sky.advance`) stay out too.
 
 ```sh
-python3 tools/test/walls.py                      # ~70 s
-python3 tools/test/walls.py --places nyc --no-game
+python3 tools/test/walls.py                          # Node tier + the browser check, ~20 s
+node tools/test/node/run.mjs walls --only contact
 ```
 
 Run it when you change `wallContacts` in `aircraft.js`, `world.wallBoxes`, or how towns, real places or New York file
 their buildings.
+
+## Place check (browser)
+
+`placecheck.py` is the browser part of the stunt park, water park and wall tests, in one headless Chrome and one New
+York World (it has the stunt park, the water park and the city), then the Grand Canyon: what needs the real page or the
+imagery (see each test above). `run.py` runs it as its own browser suite; `stunts.py`, `waterpark.py` and `walls.py`
+run their part of it (`--only stunts|waterpark|walls`).
 
 ## Restart test
 
