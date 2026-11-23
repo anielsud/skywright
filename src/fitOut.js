@@ -60,6 +60,7 @@ function fitCockpit(obj, h) {
     return null;
   };
   for (const f of obj.userData.fit) {
+    if (f.noTub && obj.userData.tubWell) continue; // (held by the tub's walls)
     const p = V(...f.p), from = p.clone().add(V(0, 0.05, 0)).applyMatrix4(W);
     const hit = castKept(from, down, 2.5 * s);
     const mat = f.kind === 'seat' ? M.darkMetal() : M.black();
