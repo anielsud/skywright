@@ -5,11 +5,24 @@
 1. the page boots (WebGL context, `window.__sky`, splash gone)
 2. audio initialises and every clip in `assets/sfx/index.json` decodes
 3. the Settings and Help modals open and close
-4. every preset in the hangar flies for 4 s at full throttle: the plane exists, its position and velocity are finite, the frame loop keeps running, and the flight ends cleanly back in the hangar (a motorbike rides off on the gas and must still be on its wheels)
-5. screenshots of the hangar and of the first flight
+4. a tour of the places, one vehicle of each kind flown on the real game loop (`tools/test/smoke.js`): Bora Bora
+   (Kestrel; the Albatross's water start and the Kite's air start as quick stepped checks; the Speedboat from the
+   marina), the Grand Canyon (Dirt Bike, Dune Buggy from the stunt park), New York (the Dragonfly from the rooftop
+   helipad, the Rocket from the pad), and Bora Bora built again (the SR-71's scripted flights, the Dirt Bike). Each
+   place's World is built once and the next vehicle swapped into it (`__sky.swapVehicle`). A tour flight flies 2 s at
+   full power on the real loop (frame loop keeps running, the engine of a car, bike or boat audible), 3 game seconds
+   more stepped with `__sky.advance` (finite, in one piece, a bike upright and riding off), then draws every cockpit
+   view as the camera button steps through them, and must leave the cockpit after the last seat.
+5. **no shader compiles mid-flight** on a tour flight (main.js's `[shaders] N compiled in flight`; formerly
+   `shadercheck.py`): visiting the places in one session, a later place must not compile what an earlier one showed
+   (the crew, #187), and the first place built again compiles nothing new either
+6. every stock vehicle built and driven in Node (`tools/test/presets.js`, run alongside Chrome): built with its cockpit
+   views, 6 s at full power on flat ground (water for a boat), finite and in one piece, a bike upright and moving, its
+   engine voices known to the audio (a car's, bike's or boat's own motor voice), every cockpit view cycling
+7. screenshots of the hangar and of the first flight
 
 Any console error, uncaught exception, or failed/404 request for a file of ours fails the step it happened in.
-It prints PASS/FAIL per step with timings, and exits non-zero on any failure. A full run takes about 2 minutes.
+It prints PASS/FAIL per step with timings, and exits non-zero on any failure. A full run takes about 70 s.
 
 ## Running the tests: run.py, the Node tier and the browser tier
 
@@ -48,17 +61,19 @@ python3 tools/test/smoke.py     # serves the repo root itself on a free port; no
 
 | Flag | |
 |---|---|
-| `--only Kestrel` | fly just one preset (quick check, ~30 s) |
+| `--only Kestrel` | fly just one preset (quick check, ~15 s): its tour step, or a flight at Bora Bora if the tour doesn't fly it |
 | `--keep` | keep the screenshots and print where they are (they are always kept on failure, with one per failed step) |
 | `--out DIR` | write screenshots to DIR (implies `--keep`) |
 | `--quality low` | graphics setting for the flights |
 | `--min-realtime R` | fail a flight whose clock runs slower than R × realtime (default 0.25; 0 = any frame) |
+| `--flight-seconds S` | wall seconds each tour flight flies on the real loop (default 2) |
+| `--no-node` | don't run the Node suite `presets` alongside (`run.py` runs it itself) |
 | `--port N` / `--cdp-port N` | fixed ports for the static server / Chrome debugger (default: free ones) |
-| `--shard I/N` | run part I of N: every Nth flight (each part boots and checks audio; part 1 also does the modals and hangar shot, the last part the SR-71 flights). CI runs 6 parts as parallel jobs |
+| `--shard I/N` | run part I of N: the tour's legs (places) k with k mod N = I - 1 (each part boots and checks audio; part 1 also does the modals, the hangar shot and the Node suite). CI runs 2 parts as parallel jobs |
 | `--jobs N` | run all N parts at once, each in its own browser. Only faster on a quiet machine: with other sessions' tests running it is slower and flakier |
 
-Each flight's line shows how long the flight took to start and end (`start 8.7 s, end 0.6 s`): starting it (building the
-world, the stunt parks, the crew) is most of a step, the flying itself 4 s.
+Each flight's line shows how it started (`new World in 4.5 s` or `swapped in in 1.3 s`, and the start it got): building
+a place is most of the run, the flying itself 2 s.
 
 Chrome is found at the usual macOS path, or `google-chrome` / `chromium` on Linux. Set `CHROME=/path/to/chrome` to override.
 On Linux it uses SwiftShader for WebGL (no GPU needed), which is how it runs in CI.
@@ -70,11 +85,13 @@ origin/main, right before `gh pr merge`. A FAIL means don't merge: fix it, or if
 
 It also runs on every pull request (`.github/workflows/smoke.yml`, not a required check; screenshots are attached to
 the run). That is a **reduced** check: GitHub's runners have no GPU, and software WebGL (SwiftShader) draws about one
-flight frame every few seconds, so CI flies at `--quality low --min-realtime 0`. It still catches boot errors, missing
+flight frame every few seconds, so CI flies at `--quality low --min-realtime 0`, in 2 parts (`--shard`), which also
+splits the tour's places between two sessions. It still catches boot errors, missing
 files, clips that don't decode, and presets that throw when a flight starts, but it doesn't really fly them. A green CI
 run is not a substitute for running it locally.
 
-When you add a preset, a sound clip or a modal, the test picks presets and clips up automatically.
+When you add a preset or a sound clip, the test picks it up automatically (the Node suite builds and drives every
+preset); a new kind of vehicle wants a tour flight (`TOUR` in smoke.py).
 
 It also flies the **SR-71 Blackbird** with an autopilot (`sr71flight.js`), in Pilot mode, through the real flight model
 and world: the game starts the flight as a player would, then pauses its loop while the autopilot steps the aircraft
@@ -84,7 +101,7 @@ headless, much faster than real time (about 10 s for 10 minutes of flight).
   Leaves `sr71-mach3.png` (the game running at Mach 3 for a moment, afterburners lit).
 - *land*: Landing Challenge start (on final approach), fly the glide path, flare, touch down and brake. Fails unless it
   stops on the runway with nothing broken.
-`--only 'SR-71 Blackbird'` runs just these (and its 4 s flight).
+`--only 'SR-71 Blackbird'` runs just these.
 
 ## Landing gear check
 
@@ -144,15 +161,32 @@ Run it when you change part builders (`parts.js`, `partDetail.js`, `vehicleParts
 Rocket and checks that it stands upright on the pad's stand, on its axis, held by the hold-down clamps with the engines
 off; that it doesn't move, leave the deck or touch anything for 5 s; and that at full throttle the clamps let go once
 the swing arm is clear and it climbs past the service tower without touching it (no hull point inside it, a gap kept),
-without damage and standing straight. Then it starts every other preset and checks none of them is put on the pad;
-with `--ref URL` (a server of main) their spawn poses must match main's exactly.
+without damage and standing straight (the hold and the burn are stepped 1/60 s at a time with `__sky.advance`, every
+step checked). Then it asks the game's start rule (`src/startChoice.js` `chooseStart`, which `buildFlight` runs) with
+that place's real answers where every stock vehicle would start for every start choice: only rockets on the pad; and
+a plane and a car really start (swapped into the first place's World) where the rule says. The rule itself is tested
+over every vehicle, choice and kind of place in Node (`startchoice`). With `--ref URL` (a server of main) the real
+spawn poses must match main's exactly.
 
 ```sh
-python3 tools/test/padcheck.py                                   # ~3 min
-python3 tools/test/padcheck.py --ref http://127.0.0.1:9000 --all-spawns   # every preset at every location vs main
+python3 tools/test/padcheck.py                                   # ~40 s
+python3 tools/test/padcheck.py --ref http://127.0.0.1:9000 --all-spawns   # every preset started at every location vs main
 ```
 
 Run it when you change the pad, the launch stand (`uprightStage` in `hangar.js`) or the spawn code in `main.js`.
+
+## Start choice test
+
+`startchoice` (Node tier) runs the start rule `buildFlight` uses (`src/startChoice.js` `chooseStart`) for every stock
+vehicle (its `analyze()` and its built Aircraft's gear and engines), every start choice the flight setup offers (start,
+mode, a car's land start, a boat's boat start) and every combination of what a place has (a rooftop helipad, a marina,
+the pad free, a water park, a stunt park, a street start, the canyon jump, open water, someone online on the site).
+Only rockets go on the pad and only helicopters on a helipad; rockets and helicopters do get them when they are free;
+planes start on the runway; no wingless car starts in the air; boats start afloat or on the runway. About 2 s.
+
+```sh
+python3 tools/test/run.py startchoice      # or: node tools/test/node/run.mjs startchoice
+```
 
 ## Stunt park check
 
@@ -360,11 +394,15 @@ deck, engines off, and that the building under the pad has no damage key. In cal
 - it lifts off to a steady hover 25 m up with no collision;
 - it lands back on the pad gently (no hard landing) and rests there stably on both skids.
 
-It then starts every other preset at NYC, and the Dragonfly at other locations, and checks that none starts on the
-helipad. With `--ref URL` (a server of main) their spawn poses must match main's exactly.
+The flight is stepped with `__sky.advance`, every step checked; Arcade is swapped into the same New York. It then asks
+the start rule (as padcheck does) with New York's real answers: only helicopters on the helipad, for every stock
+vehicle and start choice; and a plane and a car really start where the rule says. (The Dragonfly elsewhere: padcheck
+asks the rule at every place, and the Node suite `startchoice` over every kind of place. Shaders compiled mid-flight
+at New York: smoke flies the Dragonfly there on the real loop.) With `--ref URL` (a server of main) the real spawn
+poses must match main's exactly.
 
 ```sh
-python3 tools/test/helipadcheck.py --ref http://127.0.0.1:9000   # ~6 min
+python3 tools/test/helipadcheck.py --ref http://127.0.0.1:9000   # ~20 s
 ```
 
 Run it when you change the helipads, the city's building pipeline (`realCity.js`), ground contact or the spawn code.
@@ -469,17 +507,23 @@ scene (the vehicle, effects, traffic, missions, debris, other players) is remove
 frees the World as before.
 
 At each place (Lauterbrunnen by default) it checks: buildings knocked down and holed through the destruction API, plus
-flattened trees, are all whole after a restart in the same World, with the same spawn; 10 restarts (damage before every
-other one) keep `renderer.info` geometries / textures, the program count and the scene's child count flat; the hangar
-holds no World and a fresh start matches the restarts (spawn, memory); and a restart at every start type (runway, air,
-stunt park, street, marina, water park, launch pad, and the helipad with `--places nyc`) keeps the World, starts the
-same way at the same spot and rides / flies on for 4 s. About 2.5 minutes for one place.
+flattened trees, are all whole after a restart in the same World, with the same spawn; 6 restarts (damage before every
+other one) keep `renderer.info` geometries / textures, the program count and the scene's child count flat (a leak of
+one a restart shows over the last five); the hangar holds no World and a fresh start matches the restarts (spawn,
+memory); and every start type (runway, air, stunt park, street, marina, water park, launch pad, and the helipad with
+`--places nyc`), swapped into that fresh World, restarts in the same World, the same way at the same spot, and rides /
+flies on for 4 s. The game's time is stepped with `__sky.advance` wherever the test waits for the game (buildings
+coming down, flying on); each start also draws 15 frames before it is measured (the texture count is what drawing
+uploads). About 40 s for one place.
 
 ```sh
-python3 tools/test/restart.py [--places lauterbrunnen,nyc] [--restarts 10] [--quality low]
+python3 tools/test/restart.py [--places lauterbrunnen,nyc] [--restarts 6] [--quality low]
 ```
 
 ## Shader check
+
+The smoke test's tour is the shader check now (no shader compiled mid-flight on any tour flight, over four places in
+one session); `run.py` no longer runs `shadercheck.py`. It still works for a closer look at given vehicles and places:
 
 `shadercheck.py` flies vehicles at several locations one after another in ONE page session (default: the Kestrel and
 the Dirt Bike, each at islands, canyon, nyc and back to islands) and fails if any shader program compiles after a

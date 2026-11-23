@@ -16,19 +16,18 @@ import argparse, fnmatch, json, os, subprocess, sys, time
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 # browser-tier suites: their command and the files they cover (globs, repo-relative)
 BROWSER = {
-    'smoke': (['smoke.py', '--quality', 'low'], ['src/*', 'index.html', 'style.css', 'sw.js', 'assets/*', 'vendor/*']),
-    'restart': (['restart.py'], ['src/main.js', 'src/world.js', 'src/destruction.js', 'src/stuntPark.js', 'src/waterPark.js', 'src/launchpad.js', 'src/helipad.js', 'src/flora.js']),
+    'smoke': (['smoke.py', '--quality', 'medium', '--no-node'], ['src/*', 'index.html', 'style.css', 'sw.js', 'assets/*', 'vendor/*', 'tools/test/smoke.js', 'tools/test/sr71flight.js']),  # (also the shader check; medium: shadows on)
+    'restart': (['restart.py'], ['src/main.js', 'src/startChoice.js', 'tools/test/restart.js', 'src/world.js', 'src/destruction.js', 'src/stuntPark.js', 'src/waterPark.js', 'src/launchpad.js', 'src/helipad.js', 'src/flora.js']),
     'stunts': (['stunts.py'], ['src/stunt*.js', 'src/aircraft.js', 'src/bike*.js', 'src/drive.js', 'src/collide.js', 'src/world.js', 'src/realworld.js']),
     'waterpark': (['waterpark.py'], ['src/waterPark.js', 'src/boat*.js', 'src/aircraft.js', 'src/world.js', 'src/realworld.js']),
     'boatride': (['boatride.py'], ['src/boat*.js', 'src/marina.js', 'src/aircraft.js', 'src/world.js']),
     'walls': (['walls.py'], ['src/aircraft.js', 'src/world.js', 'src/buildings.js', 'src/realBuildings.js', 'src/destruction.js', 'src/bike*.js', 'src/drive.js']),
-    'padcheck': (['padcheck.py'], ['src/launchpad.js', 'src/main.js', 'src/aircraft.js', 'src/world.js']),
-    'helipadcheck': (['helipadcheck.py'], ['src/helipad.js', 'src/main.js', 'src/aircraft.js', 'src/world.js', 'src/nyc*.js']),
+    'padcheck': (['padcheck.py'], ['src/launchpad.js', 'src/main.js', 'src/startChoice.js', 'tools/test/padcheck.js', 'src/aircraft.js', 'src/world.js']),
+    'helipadcheck': (['helipadcheck.py'], ['src/helipad.js', 'src/main.js', 'src/startChoice.js', 'tools/test/padcheck.js', 'tools/test/helipadcheck.js', 'src/aircraft.js', 'src/world.js', 'src/nyc*.js']),
     'cockpitcheck': (['cockpitcheck.py'], ['src/stations.js', 'src/crew.js', 'src/body.js', 'src/partDetail.js', 'src/parts.js', 'src/cockpit*.js', 'src/interior.js']),
     'meshcheck': (['meshcheck.py'], ['src/parts.js', 'src/partDetail.js', 'src/*Parts.js', 'src/skinBlend.js', 'src/planeDetail.js', 'src/hangar.js', 'src/interior.js']),
     'gearcheck': (['gearcheck.py'], ['src/gear*.js', 'src/parts.js', 'src/partDetail.js', 'src/planeDetail.js', 'src/hangar.js']),
     'startbakes': (['startbakes.py'], ['src/stations.js', 'src/stuntPark.js', 'src/stuntSite.js', 'tools/bake/*']),
-    'shadercheck': (['shadercheck.py'], ['src/main.js', 'src/crew.js', 'src/cabinLight.js', 'src/planeMaterials.js', 'src/world.js', 'src/post.js']),
     'riders': (['riders.py'], ['src/crew.js', 'src/body.js', 'src/bikeParts.js', 'src/planeDetail.js', 'src/bike.js']),
     'drivecheck': (['drivecheck.py'], ['src/drive.js', 'src/aircraft.js', 'src/carRig.js', 'src/parts.js']),
     'rocketcheck': (['rocketcheck.py'], ['src/aircraft.js', 'src/rocket*.js', 'src/parts.js']),

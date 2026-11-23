@@ -13,7 +13,7 @@ import { Aircraft, REALISM } from '../../src/aircraft.js';
 import { analyze } from '../../src/design.js';
 import { chooseStart, LAND_STARTS, BOAT_STARTS } from '../../src/startChoice.js';
 
-export const nodeSuite = { files: ['src/startChoice.js', 'src/design.js'], headless: true };
+export const nodeSuite = { files: ['src/startChoice.js', 'src/design.js', 'tools/test/startchoice.js'], headless: true };
 
 const STARTS = new Set(['runway', 'air', 'approach', 'water', 'pad', 'helipad', 'marina', 'waterpark', ...LAND_STARTS]);
 const BITS = ['helipad', 'marina', 'pad', 'wpark', 'park', 'road', 'evel', 'water', 'busy'];

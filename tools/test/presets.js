@@ -11,7 +11,7 @@ import { analyze } from '../../src/design.js';
 import { MOTOR, isMotor } from '../../src/motorSound.js';
 import { CameraRig } from '../../src/cameras.js';
 
-export const nodeSuite = { files: ['src/aircraft.js', 'src/design.js', 'src/parts.js', 'src/partDetail.js', 'src/stations.js', 'src/cameras.js', 'src/motorSound.js', 'src/bike*.js', 'src/boat*.js', 'src/carRig.js', 'src/rocket*.js'], headless: true };
+export const nodeSuite = { files: ['src/aircraft.js', 'src/design.js', 'src/parts.js', 'src/partDetail.js', 'src/stations.js', 'src/cameras.js', 'src/motorSound.js', 'src/bike*.js', 'src/boat*.js', 'src/carRig.js', 'src/rocket*.js', 'tools/test/presets.js'], headless: true };
 
 // the engine voices audio.js plays (Audio.update: the voice kinds it starts and silences), and main.js engSound
 const VOICES = new Set(['piston', 'radial', 'turboprop', 'electric', 'jet', 'fan', 'rocket', 'rotor', ...Object.keys(MOTOR)]);
