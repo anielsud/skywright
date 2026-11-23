@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import { PARTS } from './parts.js';
 import { M } from './materials.js';
 import { V, bar } from './partDetail.js';
+import { interiorOf } from './interior.js';
 
 const opaque = (m) => m.isMesh && m.visible && !m.userData.isDisc && !m.material?.transparent && m.material?.blending !== THREE.AdditiveBlending;
 
@@ -44,9 +45,24 @@ function pedestal(obj, p, yBot, w, d) {
 function fitCockpit(obj, h) {
   const W = obj.matrixWorld, inv = W.clone().invert(), s = Math.cbrt(Math.abs(W.determinant())), targets = targetsFor(obj, h);
   const down = V(0, -1, 0).transformDirection(W).normalize(), fwd = V(0, 0, -1).transformDirection(W).normalize();
+  // Another part's skin inside this cockpit's interior is no floor: interior.js keepOut cuts it away once everything is
+  // built (a cockpit seated on a body that isn't its own, a shallow tub), and a seat stood on it would be left hanging.
+  // The cast goes on through it to the first surface that stays (this part's own tub and joints always do).
+  const own = new Set(); obj.traverse((m) => own.add(m));
+  let I = null; if (!h.quick) try { I = interiorOf(obj); } catch (e) { console.warn('fitOut interior', e); }
+  const stays = (hit) => !I || own.has(hit.m) || I.f(hit.p.clone().applyMatrix4(inv)) <= 0;
+  const castKept = (from, dir, far) => {
+    let o = from.clone(), left = far;
+    for (let k = 0; k < 8; k++) {
+      const hit = h.cast(targets, o, dir, left, true); if (!hit || stays(hit)) return hit && { ...hit, d: far - left + hit.d };
+      o = hit.p.clone().addScaledVector(dir, 0.002); left -= hit.d + 0.002; if (left <= 0) return null;
+    }
+    return null;
+  };
   for (const f of obj.userData.fit) {
+    if (f.noTub && obj.userData.tubWell) continue; // (held by the tub's walls)
     const p = V(...f.p), from = p.clone().add(V(0, 0.05, 0)).applyMatrix4(W);
-    const hit = h.cast(targets, from, down, 2.5 * s, true);
+    const hit = castKept(from, down, 2.5 * s);
     const mat = f.kind === 'seat' ? M.darkMetal() : M.black();
     if (hit) {
       const yHit = hit.p.clone().applyMatrix4(inv).y; if (yHit >= p.y - 0.004) continue; // it already stands on (or in) it
@@ -55,7 +71,7 @@ function fitCockpit(obj, h) {
     }
     if (f.kind !== 'panel') continue;
     // nothing under the panel (a cockpit over a gap): a shelf forward from it to the skin ahead
-    const fh = h.cast(targets, p.clone().applyMatrix4(W), fwd, 1.5 * s, true); if (!fh) continue;
+    const fh = castKept(p.clone().applyMatrix4(W), fwd, 1.5 * s); if (!fh) continue;
     const q = fh.p.clone().applyMatrix4(inv);
     h.addTo(obj, bar(p, V(p.x, p.y, q.z - 0.01), f.w, 0.02).applyMatrix4(W), mat, { shadow: false });
   }

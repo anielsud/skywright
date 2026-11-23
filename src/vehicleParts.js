@@ -807,7 +807,11 @@ def({ id: 'fus_rocket', cat: 'fuselage', name: 'Rocket Stage', desc: 'Tall fuel 
     // climb (they sat upright before, back to the wall, in mid-air). Couch and deck are drawn here too; the feet rest
     // in the foot restraints (crew.js's pedals) on the deck.
     const b2 = new Bag(), cc = capsuleCouch(L), st = seatGeo(...cc.dims); st.translate(...cc.at); b2.add(st, PM.seat());
-    const deck = new THREE.BoxGeometry(0.7, 0.03, 1.0); deck.translate(0, cc.floor - 0.015, cc.at[2] - 0.4); b2.add(deck, M.paint(0x3a3e45, 'matte'));
+    // the deck spans the cabin wall to wall (the capsule lining above: radius 0.86 at z -5 to 0.88 at -2.6), so it rests
+    // on the lining at its widest; it was a 0.7 m plank, couch and all hanging in mid-cabin
+    const dz0 = cc.at[2] - 0.9, dz1 = cc.at[2] + 0.1, rIn = (z) => 0.86 + ((Math.min(-2.6, Math.max(-5, z)) + 5) / 2.4) * 0.02, fy = cc.floor - 0.015;
+    const hw = Math.max(...[dz0, dz1].map((z) => Math.sqrt(Math.max(0, rIn(z) ** 2 - fy * fy))));
+    const deck = new THREE.BoxGeometry(2 * hw, 0.03, dz1 - dz0); deck.translate(0, fy, (dz0 + dz1) / 2); b2.add(deck, M.paint(0x3a3e45, 'matte'));
     b2.to(g);
     const p = [0, cc.at[1] + 0.108, cc.at[2] - 0.05]; // (where the hips go: the couch's declared surfaces (fit) seat the suited astronaut on the cushion and against the back, and its posture is solved there, crew.js)
     g.userData.seats = [{ p, s: 0.85, ctl: 'none', fit: { at: cc.at, dims: cc.dims, floor: cc.floor, feet: 'pedals' }, controls: { pedY: cc.floor - p[1], pedZ: -0.56 } }];

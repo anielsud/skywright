@@ -23,7 +23,7 @@ import { addCrew, crewLodGeos, CREW_LOD_ERR } from './crew.js';
 import { routeGear, routeStruts } from './gearRoute.js';
 import { assembleCar } from './carDetail.js';
 import { fitOut } from './fitOut.js';
-import { keepOut } from './interior.js';
+import { keepOut, interiorOf } from './interior.js';
 import { bikeSync, wireRiders, riderInput } from './bikeParts.js';
 import { TANDEM_SHAPE, TANDEM_VOL, RAMJET } from './supersonicParts.js';
 
@@ -798,7 +798,7 @@ export function assemble(design, objs, root, { near = true, quick = false } = {}
   const t0 = performance.now(); let seated = new Set();
   // (the canopy's rivet row is found on the blended skin's field: each rivet is snapped onto the built skin, or left out)
   let skins = null; const skinOf = () => skins || (skins = objs.flatMap((o, j) => (valid(j) && isBody(parts[j].id) ? solidMeshes(o) : [])));
-  try { seated = blendSkins(design, objs, { pods: POD, addTo, quick, rivets: (obj, pts, n) => { const bag = nearBag(obj), m = skinOf().filter((x) => !obj.children.includes(x)); pts.forEach((p, k) => { const h = snap(m, p, n[k]); if (h) rivet(bag, h.p, h.n, 0.008); }); } }); } catch (e) { console.warn('skinBlend', e); }
+  try { seated = blendSkins(design, objs, { pods: POD, addTo, quick, rivets: (obj, pts, n) => { const bag = nearBag(obj), m = skinOf().filter((x) => !obj.children.includes(x)), I = quick ? null : (() => { try { return interiorOf(obj); } catch (e) { return null; } })(), inv = obj.matrixWorld.clone().invert(); pts.forEach((p, k) => { const h = snap(m, p, n[k]); if (h && !(I && I.f(h.p.clone().applyMatrix4(inv)) > -0.01)) rivet(bag, h.p, h.n, 0.008); }); } }); } catch (e) { console.warn('skinBlend', e); }
   const tSkin = performance.now() - t0;
   const fw = V(0, 0, -1).transformDirection(root.matrixWorld).normalize(), right = V(1, 0, 0).transformDirection(root.matrixWorld).normalize(), up = V(0, 1, 0).transformDirection(root.matrixWorld).normalize();
   const gearSet = new Set();

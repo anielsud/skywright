@@ -454,7 +454,8 @@ export function bubbleInterior(g, b, nb, lv = 2) {
   // the quadrant's slotted plate on the crew's throttle box (crew.js: 0.1 x 0.06 x 0.34 rig units round thrBase, the
   // figure at 0.8 scale), the fuel selector forward of it, the trim wheel and its indicator aft
   const THR = [-0.325, -0.38, 0.1];
-  { const pl = new THREE.PlaneGeometry(0.27, 0.075); onCell(pl, CELLS.quad, 3); pl.rotateX(-Math.PI / 2); pl.rotateY(Math.PI / 2); pl.translate(THR[0], -0.3708, THR[2] - 0.016); b.add(pl, AT); }
+  { const pl = new THREE.PlaneGeometry(0.27, 0.075); onCell(pl, CELLS.quad, 3); pl.rotateX(-Math.PI / 2); pl.rotateY(Math.PI / 2); pl.translate(THR[0], -0.3708, THR[2] - 0.016);
+    const plm = new THREE.Mesh(pl, AT); plm.userData.floatOk = 'on the crew\'s throttle quadrant (crew.js, part of the pilot\'s mesh)'; g.add(plm); }
   { const z = -0.2, x = -0.34, pc = new THREE.CircleGeometry(0.03, 20); onCell(pc, CELLS.fuel); pc.rotateX(-Math.PI / 2); pc.translate(x, CON.top + 0.0008, z); b.add(pc, AT);
     if (hi) { const hub = new THREE.CylinderGeometry(0.009, 0.01, 0.012, 10); hub.translate(x, CON.top + 0.006, z); nb.add(hub, black());
       const hd = new THREE.BoxGeometry(0.012, 0.012, 0.05); hd.translate(0, 0, -0.012); hd.rotateY(0.5); hd.translate(x, CON.top + 0.016, z); nb.add(solid(hd, CELLS.red), AT); } }
@@ -493,7 +494,10 @@ export function bubbleInterior(g, b, nb, lv = 2) {
     controls: { stickBase: at(0, -0.655, -0.12), stickLen: 0.42, thrBase: at(...THR), pedY: at(0, -0.66, 0)[1], pedZ: at(0, 0, -0.28)[2], toeBrakes: 1 },
     adjust: { pedZ: [-0.04, 0.08], seatZ: [-0.12, 0.04], seatY: [-0.04, 0.02] } }; // (the rudder pedals adjust 4 cm forward to 8 cm aft, the seat runs on rails 12 cm forward to 4 cm back and 4 cm down to 2 cm up: set once for whoever flies it)
   g.userData.seats = [seat];
-  g.userData.fit = [{ kind: 'seat', p: [0, -0.573, 0.25], w: 0.2, d: 0.28 }]; // (the seat's rails: the riser runs under its whole travel; the panel is held by the walls)
+  g.userData.fit = [{ kind: 'seat', p: [0, -0.573, 0.25], w: 0.2, d: 0.28 }, // (the seat's rails: the riser runs under its whole travel; the panel is held by the walls)
+    // the consoles: pressed onto the tub's walls where the canopy gets one (tubFit); on a body that gives it no tub (a
+    // car's) they stand on boxes down to the floor instead
+    { kind: 'console', p: [-0.375, -0.525, 0.08], w: 0.17, d: 0.7, noTub: true }, { kind: 'console', p: [0.375, -0.525, 0.08], w: 0.17, d: 0.7, noTub: true }];
   // what the pilot must keep clear of: inside the dome (and its skirt's walls down into the tub), the panel with what
   // stands off it, the glareshield, both consoles (the armrest on the right), and the floor mat
   const insideDome = []; for (let i = 0; i <= 40; i++) { const z = -BB + 2 * BB * (i / 40), k = dk(z); insideDome.push([+z.toFixed(4), +(A * k).toFixed(4), +(C * k).toFixed(4), 0]); }

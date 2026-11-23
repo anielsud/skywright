@@ -215,7 +215,7 @@ function speedHull(c, lv) {
     for (const cx of [-0.63, 0, 0.63]) {
       const sc = cushion(0.61, 0.16, 0.54, 0.055, 0.018); sc.translate(cx, 0.74, 2.04); b.add(sc, seatM);
       b.add(piping(0.6, 0.53, 0.055, 0.81).translate(cx, 0, 2.04), seatM2);
-      const bk = cushion(0.61, 0.46, 0.13, 0.05, 0.016, 2); bk.rotateX(-0.12); bk.translate(cx, 1.08, 2.31); b.add(bk, seatM2);
+      const bk = cushion(0.61, 0.46, 0.13, 0.05, 0.016, 2); bk.rotateX(-0.12); bk.translate(cx, 1.05, 2.31); b.add(bk, seatM2); // (its lower edge on the seat cushion's back)
     }
   }
   // rub rail along the gunwale, bow rails, cleats
@@ -241,10 +241,12 @@ function speedHull(c, lv) {
     for (const sx of [1, -1]) {
       const bl = cushion(0.09, 0.2, 2.25, 0.04, 0.012); bl.translate(sx * 0.975, 0.74, 0.63); b.add(bl, seatM);
       b.add(piping(0.09, 2.25, 0.04, 0.84).translate(sx * 0.975, 0, 0.63), seatM2);
-      for (const z of [0.25, 1.45]) { const ring = new THREE.TorusGeometry(0.045, 0.008, 8, 24); ring.rotateX(Math.PI / 2); ring.translate(sx * 1.05, 0.905, z); nb.add(ring, chrome);
-        const cup = new THREE.CylinderGeometry(0.042, 0.04, 0.012, 20); cup.translate(sx * 1.05, 0.9, z); nb.add(cup, M.black()); }
-      for (const z of [0.55, 1.45]) { const g2 = new THREE.CylinderGeometry(0.075, 0.075, 0.01, 28); g2.rotateZ(Math.PI / 2); g2.translate(sx * 0.985, 0.54, z); nb.add(g2, M.black());
-        const r2 = new THREE.TorusGeometry(0.078, 0.008, 6, 28); r2.rotateY(Math.PI / 2); r2.translate(sx * 0.98, 0.54, z); nb.add(r2, chrome); }
+      for (const z of [0.25, 1.45]) { const ys = stationAt(SPEED, z).ys; // (on the gunwale top, which falls towards the stern)
+        const ring = new THREE.TorusGeometry(0.045, 0.008, 8, 24); ring.rotateX(Math.PI / 2); ring.translate(sx * 1.05, ys + 0.007, z); nb.add(ring, chrome);
+        const cup = new THREE.CylinderGeometry(0.042, 0.04, 0.012, 20); cup.translate(sx * 1.05, ys + 0.002, z); nb.add(cup, M.black()); }
+      for (const z of [0.55, 1.45]) { const s = stationAt(SPEED, z), wx = s.hg - s.t; // (flush on the inner side panel, wherever the hull puts it)
+        const g2 = new THREE.CylinderGeometry(0.075, 0.075, 0.01, 28); g2.rotateZ(Math.PI / 2); g2.translate(sx * (wx - 0.005), 0.54, z); nb.add(g2, M.black());
+        const r2 = new THREE.TorusGeometry(0.078, 0.008, 6, 28); r2.rotateY(Math.PI / 2); r2.translate(sx * (wx - 0.007), 0.54, z); nb.add(r2, chrome); }
     }
     { const hpts = []; for (let k = 0; k <= 10; k++) { const t = k / 10; hpts.push(V(-1.02, 0.905 + Math.sin(t * Math.PI) * 0.07, -0.55 + t * 0.32)); } b.add(pipe(hpts, 0.013, 8, 30), chrome); } // grab handle
     // spray strakes along the bottom (each half sunk into the skin)
@@ -381,7 +383,11 @@ function outboard(c, lv) {
     sb.add(loft(0.08, 0.78, (t) => wUp(t) * 0.86, () => 0.26, () => -0.02, 2.4), black); // lower cowl
     for (const sx of [1, -1]) {
       for (let k = 0; k < 3; k++) { const v = new THREE.BoxGeometry(0.012, 0.018, 0.1); v.rotateZ(sx * 0.5); v.translate(sx * 0.13, 0.7, 0.58 + k * 0.045 - OB.pivotZ); sb.add(v, black); } // vents
-      const dec = new THREE.BoxGeometry(0.004, 0.05, 0.5); dec.translate(sx * 0.226, 0.46, 0.5 - OB.pivotZ); sb.add(dec, gel(0xf2f2ee)); // stripe decal
+      // stripe decal, laid on the top cowl 1.5 mm proud of it (the same superellipse as its loft): it was a flat strip at
+      // a fixed width, standing off the cowl where it narrows towards both ends
+      { const pos = [], idx = [], Z = 14, xAt = (t, y) => { const top = 0.75 - 0.07 * (1 - t) ** 2, bot = 0.24, cy = (top + bot) / 2, hh = (top - bot) / 2, d = (y - cy) / hh, sa = Math.min(1, Math.abs(d) ** ((d > 0 ? 2.6 * 1.3 : 2.6) / 2)); return Math.sqrt(1 - sa * sa) ** (2 / 2.6) * wUp(t) + 0.0015; };
+        for (let j = 0; j <= Z; j++) { const z = 0.25 + 0.5 * (j / Z), t = (z - 0.02) / 0.82; for (const y of [0.435, 0.485]) pos.push(sx * xAt(t, y), y, z - OB.pivotZ); if (j) { const a = (j - 1) * 2; if (sx > 0) idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); else idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } }
+        const dec = new THREE.BufferGeometry(); dec.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); dec.setIndex(idx); dec.computeVertexNormals(); sb.add(dec, gel(0xf2f2ee)); }
     }
   } else { const cowl = new THREE.CapsuleGeometry(0.24, 0.32, 6, 16); cowl.rotateX(Math.PI / 2); cowl.scale(0.95, 1.25, 1); cowl.translate(0, 0.42, 0.42 - OB.pivotZ); sb.add(cowl, paint);
     const cap = new THREE.BoxGeometry(0.36, 0.08, 0.5); cap.translate(0, 0.73, 0.44 - OB.pivotZ); sb.add(cap, black);
