@@ -105,6 +105,7 @@ class CDP:
                     h(m['method'], m.get('params', {}))
 
     async def send(self, method, _timeout=30, **params):
+        _timeout = max(_timeout, float(os.environ.get('SKY_CDP_TIMEOUT') or 0))  # (the CI floor: screenshots too)
         self.n += 1
         fut = asyncio.get_event_loop().create_future()
         self.pending[self.n] = fut

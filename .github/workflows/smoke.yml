@@ -29,6 +29,8 @@ jobs:
       matrix:
         shard: [1, 2, 3]
     name: smoke (part ${{ matrix.shard }}/3)
+    env:
+      SKY_CDP_TIMEOUT: '120' # (software WebGL: a screenshot or a step can take long)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
