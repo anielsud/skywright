@@ -64,7 +64,7 @@ async def main(a):
     origin = f'http://127.0.0.1:{port}'
     rows = []
     try:
-        async with websockets.connect(ws_url, max_size=None) as ws:
+        async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:
             cdp = CDP(ws)
             await cdp.send('Runtime.enable'); await cdp.send('Page.enable')
             await cdp.send('Page.addScriptToEvaluateOnNewDocument', source=HOOK)

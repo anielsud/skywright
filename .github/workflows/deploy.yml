@@ -37,6 +37,7 @@ jobs:
           # the cockpit views' version: which cabin linings cover the windows (baked below, and kept by each device) stays valid until it changes
           VIEWS="$(cat src/stations.js | sha1sum | cut -c1-10)"
           sed -i "s/^export const VIEWS = .*/export const VIEWS = '${VIEWS}';/" src/version.js
+          echo "SOLVER=${SOLVER}" >> "$GITHUB_ENV"; echo "VIEWS=${VIEWS}" >> "$GITHUB_ENV" # (the bake's caches below)
           # a fresh offline-cache name per deploy, so installed apps always pick up the new build
           sed -i "s/^const CACHE = .*/const CACHE = 'skywright-${SHA}';/" sw.js
           cat src/version.js
@@ -46,6 +47,19 @@ jobs:
           python-version: '3.12'
       # Start-up data (part pictures, stock crews' postures, stunt park sites, which cockpit linings cover the windows) worked out here instead of on every player's device.
       # Optional: without it the game works them out itself, as before.
+      # The last deploy's solved postures and cockpit views for the same SOLVER / VIEWS (both are keyed by what they're
+      # worked out from, so they stay right): the bake then only solves what changed, about two thirds of its time.
+      # Each deploy saves its own (run_id) and the next restores the newest.
+      - uses: actions/cache@v4
+        with:
+          path: assets/boot/postures.json
+          key: boot-postures-${{ env.SOLVER }}-${{ github.run_id }}
+          restore-keys: boot-postures-${{ env.SOLVER }}-
+      - uses: actions/cache@v4
+        with:
+          path: assets/boot/views.json
+          key: boot-views-${{ env.VIEWS }}-${{ github.run_id }}
+          restore-keys: boot-views-${{ env.VIEWS }}-
       - name: Bake start-up data
         continue-on-error: true
         timeout-minutes: 10

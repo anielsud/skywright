@@ -273,7 +273,11 @@ export class LivePanel {
     const mat = new THREE.MeshStandardMaterial({ map: this.dark ? null : tex, color: this.dark ? 0x000000 : 0xffffff, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: Math.max(...this.screens.map((s) => s.glow)), roughness: 0.6, metalness: 0 }); // (an anti-glare finish: the screen's glass gives the sheen)
     const mesh = new THREE.Mesh(geo, mat); mesh.userData.live = this; mesh.userData.near = true; mesh.userData.keepShape = true; mesh.castShadow = false; mesh.receiveShadow = true;
     this.screenTex = tex; this.screenMesh = mesh; this.canvas = cv; tex.needsUpdate = true; parent.add(mesh);
+
   }
+  // this panel's own screen texture and material (everything else it uses is shared): whoever drops a vehicle without
+  // collecting its textures calls this (the hangar's rebuild); left behind, every rebuild leaked one texture (#213)
+  dispose() { this.screenTex?.dispose(); this.screenMesh?.material.dispose(); this.screenTex = null; }
   // redraw the screens that are due (at their rate, scaled down when frames are tight: liveStats.rate) and whose picture
   // changed (key), and upload just those (their rows of the shared canvas: texSubImage, not the whole texture)
   updateScreens(S, dt) {

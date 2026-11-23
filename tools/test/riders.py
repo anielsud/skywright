@@ -23,7 +23,7 @@ async def main(a):
     origin = (a.url or f'http://127.0.0.1:{port}').rstrip('/')
     only = json.dumps(a.only or '')
     try:
-        async with websockets.connect(ws_url, max_size=None) as ws:
+        async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:
             cdp = CDP(ws)
             probs = Problems(origin)
             cdp.handlers.append(probs.on)

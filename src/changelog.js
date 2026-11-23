@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.156.0', items: [
+    "The game uses less memory when you fly lots of times in a row or keep changing your vehicle in the hangar, so it stays smooth for longer.",
+  ] },
   { v: '1.155.0', items: [
     "Crashes don't squash your driver anymore: after you restart, they're back in one piece.",
   ] },

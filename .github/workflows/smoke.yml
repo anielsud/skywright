@@ -1,11 +1,14 @@
-name: Smoke test
+name: Tests
 
 # Boots the game in headless Chrome (WebGL via SwiftShader), tours the places flying one vehicle of each kind, and
 # fails on console errors; every preset is built and driven in Node (tools/test/presets.js).
 # Reduced check: the runner has no GPU, so software WebGL draws only about one flight frame every few seconds.
 # Each flight is still built and stepped (catches load/startup errors and NaN physics), but frame rate isn't checked.
 # Informational: not a required check. The full check is `python3 tools/test/smoke.py` on your machine.
-# The tour's places are split over 2 parallel jobs (smoke.py --shard): each boots the game and visits half of them.
+# The tour's places are split over 3 parallel jobs (smoke.py --shard): each boots the game and visits a third of them.
+# Alongside: the Node tier in 2 halves (every logic, physics and geometry suite, tools/test/node/run.mjs; known failures
+# listed in tools/test/known.json don't fail it), and the browser suites covering what the PR changed (run.py --changed;
+# all of them run nightly on main: nightly.yml). Everything at once: ~4 min.
 on:
   pull_request:
   workflow_dispatch:
@@ -24,8 +27,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
-    name: smoke (part ${{ matrix.shard }}/2)
+        shard: [1, 2, 3]
+    name: smoke (part ${{ matrix.shard }}/3)
+    env:
+      SKY_CDP_TIMEOUT: '120' # (software WebGL: a screenshot or a step can take long)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,7 +42,7 @@ jobs:
       - name: Install websockets
         run: python -m pip install websockets
       - name: Smoke test
-        run: python tools/test/smoke.py --out smoke-shots --quality low --size 512x320 --min-realtime 0 --shard ${{ matrix.shard }}/2
+        run: python tools/test/smoke.py --out smoke-shots --quality low --size 512x320 --min-realtime 0 --shard ${{ matrix.shard }}/3
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -45,3 +50,40 @@ jobs:
           name: smoke-screenshots-${{ matrix.shard }}
           path: smoke-shots
           if-no-files-found: ignore
+
+  node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    name: node tier (part ${{ matrix.shard }}/2)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Node suites
+        run: node tools/test/node/run.mjs --jobs 4 --shard ${{ matrix.shard }}/2
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30 # (a change to the harness itself runs every browser suite here, one after another)
+    name: browser suites (changed)
+    env:
+      SKY_CDP_TIMEOUT: '120' # (software WebGL on the runner: a frame can take seconds)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # (run.py --changed compares with origin/main)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install websockets
+        run: python -m pip install websockets
+      - name: Browser suites covering the changes
+        run: python tools/test/run.py --ci --changed --tier browser --exclude smoke --exclude restart # (smoke: its own jobs above; restart: ~15 min on a runner, nightly only)

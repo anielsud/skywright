@@ -802,6 +802,7 @@ function buildFlight(cfg) {
   state = 'flight';
   F.track = { location: cfg.location, realism: cfg.realism, mode: cfg.mode, start, time_of_day: cfg.time, weather: cfg.weather, online: !!net.active, plane: planeLabel(design), kind: planeKind(st), engine: ac.hasEngine };
   Object.assign(F, { t0: performance.now(), frames: 0, activeT: 0, fpsLow: Infinity, maxLevel: perf.level, playersMax: net.count });
+  F.spawnPose = { x: F.ac.x.toArray(), q: F.ac.q.toArray(), v: F.ac.v.toArray() }; // (where it started, before any step: tools/test padcheck/helipadcheck)
   const dsum = designSummary(design, st, buildStats.base); F.track.design_hash = dsum.design_hash; F.track.base = dsum.base; // flight_end carries these too
   analytics.capture('flight_start', { ...F.track, design: dsum, build: buildStats.take(), parts: design.parts.length, part_types: [...new Set(design.parts.map((p) => p.id))], quality: settings.quality, touch: showTouch, control_mode: settings.controlMode });
   // The loading screen stays up while every shader compiles (the hidden things' too: tree LODs, night lights, far town

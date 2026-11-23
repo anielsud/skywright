@@ -34,13 +34,13 @@ async def ui_tier(a):
     port = a.port or free_port()
     srv = None if a.url else start_server(port)
     profile = tempfile.mkdtemp(prefix='skytunnel-')
-    proc, ws_url = launch_chrome(a.cdp_port or free_port(), profile, '1280,800')
+    proc, ws_url = launch_chrome(a.cdp_port or free_port(), profile, a.size.replace('x', ','))
     origin = (a.url or f'http://127.0.0.1:{port}').rstrip('/')
     if a.shots:
         os.makedirs(a.shots, exist_ok=True)
     fails = 0
     try:
-        async with websockets.connect(ws_url, max_size=None) as ws:
+        async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:
             cdp = CDP(ws)
             probs = Problems(origin)
             cdp.handlers.append(probs.on)
@@ -93,10 +93,12 @@ async def ui_tier(a):
                         await cdp.js("__sky.tunnel.exit(); 1")
                         mem2 = await cdp.js('__tc.settle()', timeout=60)
                         r['reopen'] = {'programs': [progs_open, progs2], 'mem': mem2}
-                        if progs2 > progs_open:
+                        if progs2 > progs_open and not a.no_compile_check:
                             r['problems'].append(f'reopening compiled {progs2 - progs_open} new shader programs')
-                        if mem2['geo'] != mem1['geo'] or mem2['tex'] != mem1['tex']:
-                            r['problems'].append(f'leak on the second visit: geometries {mem1["geo"]} -> {mem2["geo"]}, textures {mem1["tex"]} -> {mem2["tex"]}')
+                        # (against before the first visit: a leak grows visit after visit, while a slow machine's hangar
+                        # textures coming back can wobble the count by one either way between visits)
+                        if mem2['geo'] > mem0['geo'] or mem2['tex'] > mem0['tex']:
+                            r['problems'].append(f'leak after two visits: geometries {mem0["geo"]} -> {mem1["geo"]} -> {mem2["geo"]}, textures {mem0["tex"]} -> {mem1["tex"]} -> {mem2["tex"]}')
                     if await cdp.js("!!__sky.tunnel || !!document.getElementById('tunnel-ui')"):
                         r['problems'].append('the tunnel did not close')
                 except Exception as e:  # noqa: BLE001
@@ -141,5 +143,7 @@ if __name__ == '__main__':
     ap.add_argument('--max-ms', type=float, default=50, help='slowest acceptable average frame time, ms (default 50)')
     ap.add_argument('--max-cpu', type=float, default=12, help='most tunnel work per frame (physics, smoke tracing, readouts), ms (default 12)')
     ap.add_argument('--url', help='check an already running server instead of serving the repo (browser tier)')
+    ap.add_argument('--no-compile-check', action='store_true', help="don't fail on a shader compiled when reopening (CI: software WebGL draws different frames, a hitch check means nothing there)")
+    ap.add_argument('--size', default='1280x800', help='window size WxH (CI: smaller, software WebGL)')
     ap.add_argument('--port', type=int), ap.add_argument('--cdp-port', type=int)
     sys.exit(main(ap.parse_args()))
