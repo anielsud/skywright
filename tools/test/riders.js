@@ -137,13 +137,33 @@ export const CHECKS = {
     intoBike(r, bad, 'riding along');
     return { ...r, back: +back.toFixed(3), check: 'wheelie', ok: !bad.length, why: bad.join('; ') };
   },
+  // (every vehicle with people in it) a crash dents the part they sit in, hard, right where they are: the people are
+  // not dented (their body mesh is shared by every build of that figure, so a dent would stay on the next flight's
+  // driver after a restart), the part itself still is, and a fresh build's people match the first ones
+  dented(d) {
+    const ac = new Aircraft(d, REALISM.pilot); ac.spawn(flat(), V(0, 0, 0), 0, {}); const people = crews(ac); if (!people.length) return null;
+    const snap = (rs) => rs.flatMap((r) => { const a = []; r.root.traverse((o) => { if (o.isMesh) a.push(o.geometry.attributes.position.array.slice()); }); return a; });
+    const before = snap(people), bad = []; let dented = 0;
+    for (const p of ac.parts) {
+      const rs = p.obj.userData.crew || []; if (!rs.length) continue;
+      const own = []; p.obj.traverse((o) => { if (o.isMesh && !o.userData.crew && !o.userData.isDisc) { let c = o; while (c && c !== p.obj && !c.userData.crewRig) c = c.parent; if (!c?.userData.crewRig) own.push([o, o.geometry.attributes.position.array.slice()]); } });
+      for (const r of rs) { const at = V().setFromMatrixPosition(r.root.matrixWorld); for (const n of [V(0, -1, 0), V(1, 0, 0), V(0, 0, 1)]) ac.deform(p, at, n, 0.5); }
+      for (const [o, a] of own) { const b = o.geometry.attributes.position.array; if (b.length !== a.length || b.some((x, i) => x !== a[i])) { dented++; break; } }
+    }
+    const moved = (a, b) => { let m = 0; a.forEach((x, k) => x.forEach((v, i) => { m = Math.max(m, Math.abs(v - b[k][i])); })); return m; };
+    const m = moved(before, snap(people)); if (m > 0) bad.push(`a person dented by ${(m * 100).toFixed(1)} cm`);
+    if (!dented) bad.push('the part they sit in was not dented either');
+    const ac2 = new Aircraft(d, REALISM.pilot); ac2.spawn(flat(), V(0, 0, 0), 0, {}); const m2 = moved(before, snap(crews(ac2)));
+    if (m2 > 0) bad.push(`the next build's people dented by ${(m2 * 100).toFixed(1)} cm`);
+    return { name: d.name, people: people.length, gap: 0, far: 0, check: 'dented', ok: !bad.length, why: bad.join('; ') };
+  },
 };
 const BIKE_ONLY = ['fork lost', 'landing', 'hard stop', 'full gas', 'wheelie'];
 
 // the whole test, as riders.py prints it (the browser path): rows in the old order
 export function plan(presets) {
   const out = [];
-  for (const k of ['ride', ...BIKE_ONLY]) for (const d of k === 'ride' ? presets : presets.filter(isBike)) { const r = CHECKS[k](d); if (r) out.push(r); }
+  for (const k of ['ride', 'dented', ...BIKE_ONLY]) for (const d of k === 'ride' ? presets : presets.filter(isBike)) { const r = CHECKS[k](d); if (r) out.push(r); }
   return out;
 }
 
@@ -155,7 +175,7 @@ export const nodeSuite = { files: ['src/crew.js', 'src/body.js', 'src/bikeParts.
 export function cases({ presets }) { return presets.map((d) => ({ id: d.name, name: d.name, bike: isBike(d), key: 'crew:' + d.name, cost: 2 })); } // (key: gvision builds the same crews)
 export function runCase(c, { presets }) {
   const d = presets.find((x) => x.name === c.name);
-  return ['ride', ...(c.bike ? BIKE_ONLY : [])].map((k) => CHECKS[k](d)).filter(Boolean).map((r) => {
+  return ['ride', 'dented', ...(c.bike ? BIKE_ONLY : [])].map((k) => CHECKS[k](d)).filter(Boolean).map((r) => {
     const pose = r.msBefore ? `pose ${r.msBefore.mean} ms (p95 ${r.msBefore.p95})${r.msAfter ? `, after ${r.msAfter.mean}` : ''}` : '';
     return { name: `${r.check} ${r.name} x${r.people}`, ok: r.ok, why: r.why, info: `hand gap ${(r.gap * 100).toFixed(2)} cm, far ${r.far} m, ${pose}${r.check === 'landing' ? `, knees ${r.knee.rest}->${r.knee.min}->${r.knee.end}` : ''}${r.back != null ? `, hips back ${(r.back * 100).toFixed(1)} cm` : ''}`, msBefore: r.msBefore, msAfter: r.msAfter };
   });
