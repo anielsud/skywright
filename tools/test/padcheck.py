@@ -7,8 +7,14 @@
   3. goes to full throttle: the clamps must let go once the swing arm is clear, and it must rise past the service
      tower with no part or hull point ever inside it (and keep a gap to it), no damage, no impact or scrape, standing
      up straight below the tower top, and be well up after 10 s;
-  4. checks that planes and cars are not moved to the pad: every other preset starts as before. With --ref URL (a
-     server of the main branch) their spawn poses (position, attitude, velocity) must match it exactly.
+  4. checks that planes and cars are not moved to the pad: the game's start rule (src/startChoice.js chooseStart, what
+     buildFlight runs) with this place's real answers puts nothing but a rocket on the pad, for every stock vehicle and
+     every start choice; and at the first location a plane and a car really start (swapped into the same World) where
+     the rule says, not on the pad. With --ref URL (a server of the main branch) their spawn poses (position, attitude,
+     velocity) must match it exactly; --all-spawns starts every other preset at every location.
+
+The flight's own time is stepped with __sky.advance (no frames drawn). The rule itself is tested over every vehicle,
+choice and kind of place in Node (tools/test/startchoice.js).
 
 Run from anywhere:  python3 tools/test/padcheck.py [--ref http://127.0.0.1:9000] [--only islands] [--port N]
 Same requirements as smoke.py (Chrome + the websockets package). Exits non-zero on any failure.
@@ -41,21 +47,43 @@ async def session(origin, fn):
         proc.kill(); proc.wait(); shutil.rmtree(profile, ignore_errors=True)
 
 
-async def spawns(cdp, locs, names):
+async def spawns(cdp, loc, names, module='padcheck'):
+    """Each preset started at loc (swapped into the World already there), its spawn pose before the first step."""
     out = {}
-    for loc in locs:
-        for n in names:
-            r = await cdp.js(f"import('/tools/test/padcheck.js').then((m) => m.spawn({json.dumps(n)}, {json.dumps(loc)}))", timeout=180)
-            out[f'{loc}/{n}'] = r
-    await cdp.js('window.__sky.F && window.__sky.endFlight(); 1')
+    for n in names:
+        out[f'{loc}/{n}'] = await cdp.js(f"import('/tools/test/{module}.js').then((m) => m.spawn({json.dumps(n)}, {json.dumps(loc)}))", timeout=180)
     return out
+
+
+def default_start(pred, name):
+    """The rule's start for a preset with the default choices (runway start, free flight, no land / boat choice)."""
+    return next((p['start'] for p in pred if p['name'] == name and p['cfg'].get('start') == 'runway' and p['cfg'].get('mode') == 'free'
+                 and p['cfg'].get('landStart') is None and p['cfg'].get('boatStart') is None), None)
+
+
+def check_predicted(check, predicted, where, kind, flag):
+    """Every (vehicle, start choice) the start rule put at `where` (pad / helipad) must be of its kind."""
+    for loc, pred in predicted.items():
+        on = [p for p in pred if p['start'] == where]
+        check(all(p[flag] for p in on), f"{loc}: the start rule puts {sorted({p['name'] for p in on if not p[flag]})} on the {where}")
+        print(f"{loc}: the start rule over {len({p['name'] for p in pred})} vehicles x their start choices ({len(pred)} in all): "
+              f"on the {where} only {sorted({p['name'] for p in on}) or 'nothing'}")
+
+
+def check_spawns(check, spawns, predicted, where):
+    for k, v in spawns.items():
+        loc, n = k.split('/', 1)
+        check(v['start'] != where, f'{k} started on the {where}')
+        want = default_start(predicted[loc], n)
+        check(v['start'] == want, f"{k} started at {v['start']}, the start rule said {want}")
+    print(f"{len(spawns)} other spawns ({', '.join(k + ': ' + v['start'] for k, v in spawns.items())}): none on the {where}, each where the rule said")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--only', action='append', help='just this location (repeatable)')
     ap.add_argument('--ref', help='a server of the main branch: other vehicles must spawn exactly as there')
-    ap.add_argument('--all-spawns', action='store_true', help='every other preset at every location (default: every preset at the first location, a plane and a car at the others)')
+    ap.add_argument('--all-spawns', action='store_true', help='start every other preset at every location (default: a plane and a car at the first location; the start rule covers every preset everywhere)')
     ap.add_argument('--url', help='check an already running server instead of serving this checkout')
     ap.add_argument('--port', type=int)
     ap.add_argument('--json', help='write the full report here')
@@ -74,21 +102,21 @@ def main():
         return ok
 
     async def target(cdp, probs):
-        res = {'rockets': [], 'problems': []}
-        for loc in locs:
-            r = await cdp.js(f"import('/tools/test/padcheck.js').then((m) => m.rocket({json.dumps(loc)}))", timeout=300)
-            res['rockets'].append(r)
-            res['problems'] += probs.take()
-        await cdp.js('window.__sky.F && window.__sky.endFlight(); 1')
+        res = {'rockets': [], 'problems': [], 'spawns': {}, 'predicted': {}, 'plan': []}
         names = await cdp.js("window.__sky.presets.filter((d) => !window.__sky.analyze(d).vertical).map((d) => d.name)")
         plane = next(n for n in names if not any(w in n.lower() for w in ('buggy', 'truck', 'car', 'monster')))
         car = next((n for n in names if any(w in n.lower() for w in ('buggy', 'truck', 'car', 'monster'))), names[-1])
-        plan = [(l, names) for l in locs] if a.all_spawns else [(locs[0], names)] + [(l, [plane, car]) for l in locs[1:]]
-        res['spawns'] = {}
-        for l, ns in plan:
-            res['spawns'].update(await spawns(cdp, [l], ns))
+        for i, loc in enumerate(locs):
+            r = await cdp.js(f"import('/tools/test/padcheck.js').then((m) => m.rocket({json.dumps(loc)}))", timeout=300)
+            res['rockets'].append(r)
+            res['predicted'][loc] = await cdp.js("import('/tools/test/padcheck.js').then((m) => m.predict())", timeout=60)
+            if i == 0 or a.all_spawns:
+                ns = names if a.all_spawns else [plane, car]
+                res['plan'].append((loc, ns))
+                res['spawns'].update(await spawns(cdp, loc, ns))
+            res['problems'] += probs.take()
+        await cdp.js('window.__sky.F && window.__sky.endFlight(); 1')
         res['problems'] += probs.take()
-        res['plan'] = plan
         return res
 
     try:
@@ -118,10 +146,10 @@ def main():
             check(b['height'] > b['towerHeight'] + 100, 'did not climb clear')
             check(b['arm'] == 1, 'swing arm did not retract')
         print(f"shader programs compiled in flight (all flights): {res['rockets'][-1]['inflightCompiles'] if res['rockets'] else 0}")
+        check_predicted(check, res['predicted'], 'pad', 'rocket', 'vertical')
+        check(all(any(p['start'] == 'pad' for p in pred) for pred in res['predicted'].values()), 'the start rule puts no rocket on the pad somewhere')
         sp = res['spawns']
-        for k, v in sp.items():
-            check(v['start'] != 'pad', f'{k} started on the pad')
-        print(f'{len(sp)} other spawns: none on the pad')
+        check_spawns(check, sp, res['predicted'], 'pad')
         if a.ref:
             ref = asyncio.run(session(a.ref.rstrip('/'), lambda cdp, probs: _ref(cdp, res['plan'])))
             report['ref'] = ref
@@ -146,6 +174,7 @@ async def _ref(cdp, plan):
     out = {}
     for l, ns in plan:
         out.update(await spawns_ref(cdp, l, ns))
+    await cdp.js('window.__sky.F && window.__sky.endFlight(); 1')
     return out
 
 

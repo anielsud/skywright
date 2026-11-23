@@ -1,30 +1,12 @@
-// Rooftop helipad check (run in the page by helipadcheck.py). See helipadcheck.py for what it checks.
+// Rooftop helipad check (run in the page by helipadcheck.py). See helipadcheck.py for what it checks. The flight's own
+// time is stepped with __sky.advance (no frames drawn), one 1/60 s step at a time so every step can be checked.
+import { start as startOn, running, steps } from './padcheck.js';
+export { spawn, predict } from './padcheck.js';
 const S = window.__sky;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const frame = () => new Promise((r) => requestAnimationFrame(r));
 
-// end any flight, load a preset and start a flight; resolves as soon as the flight exists (before its first step)
-async function start(name, location, realism = 'pilot', time = 10) {
-  if (S.F) S.endFlight();
-  for (let i = 0; i < 100 && S.F; i++) await sleep(50);
-  const d = S.presets.find((p) => p.name === name); if (!d) throw new Error(`no preset ${name}`);
-  S.hangar.load(d); S.controls.setThrottle(0);
-  S.startFlight({ location, online: false, start: 'runway', mode: 'free', weather: 'clear', time, realism });
-  for (let i = 0; i < 3000 && !S.F; i++) await sleep(10);
-  if (!S.F) throw new Error('the flight did not start');
-  return S.F;
-}
-async function running(F, wall = 120000) { const t0 = performance.now(); while (!(F.t > 0) || F.warm) { if (performance.now() - t0 > wall) throw new Error('the flight clock never started'); await frame(); } }
-async function frames(each, wall = 90000) { const t0 = performance.now(); while (!each()) { if (performance.now() - t0 > wall) return false; await frame(); } return true; }
-
-// the spawn pose exactly as buildFlight left it (no physics step has run yet)
-export async function spawn(name, location) {
-  const F = await start(name, location);
-  if (F.t) throw new Error('the flight stepped before the spawn pose was read');
-  const r = { name, location, start: F.cfgStart, x: F.ac.x.toArray(), q: F.ac.q.toArray(), v: F.ac.v.toArray() };
-  await running(F);
-  return r;
-}
+// load a preset and start a flight (swapped into the World already there when it is the same place); resolves as soon
+// as the flight exists (before its first step)
+const start = (name, location, realism = 'pilot', time = 10) => startOn(name, location, { realism, time });
 
 // how the same vehicle rests on the runway (a fresh one, stepped at 60 Hz on the flight's own ground for 6 s): its
 // resting attitude on its skids (up.y) and how far it settles. The pad must hold it exactly the same way.
@@ -72,20 +54,20 @@ export async function heli(name = 'Dragonfly', realism = 'pilot', { location = '
   S.controls.setThrottle(0);
   const a0 = rotorAngle(), ts = F.t; let rot = 0, offG = 0, n = 0, minSkids = 99, settleSink = 0;
   ev.length = 0; hits = 0;
-  await frames(() => { rot = Math.max(rot, rotor()); hitCheck(); return F.t - ts >= 2; });
+  steps(F, () => { rot = Math.max(rot, rotor()); hitCheck(); return F.t - ts >= 2; });
   settleSink = r.spawn.y - ac.x.y;
   const x0 = ac.x.clone(), q0 = ac.q.clone(), t0 = F.t; let drift = 0, tilt = 0, vmax = 0;
-  await frames(() => { drift = Math.max(drift, ac.x.distanceTo(x0)); tilt = Math.max(tilt, ac.q.angleTo(q0)); vmax = Math.max(vmax, ac.v.length()); if (!ac.onGround) offG++; rot = Math.max(rot, rotor()); minSkids = Math.min(minSkids, gearLow(ac).skidsDown); hitCheck(); n++; return F.t - t0 >= hold; });
+  steps(F, () => { drift = Math.max(drift, ac.x.distanceTo(x0)); tilt = Math.max(tilt, ac.q.angleTo(q0)); vmax = Math.max(vmax, ac.v.length()); if (!ac.onGround) offG++; rot = Math.max(rot, rotor()); minSkids = Math.min(minSkids, gearLow(ac).skidsDown); hitCheck(); n++; return F.t - t0 >= hold; });
   const g1 = gearLow(ac), turned = rotorAngle().reduce((a, x, i) => Math.max(a, Math.abs(x - a0[i])), 0);
   r.hold = { seconds: F.t - t0, settle: F.t - ts - (F.t - t0), settleSink, frames: n, drift, tilt, vmax, offGround: offG, rotor: rot, rotorTurned: turned, engines: F.eng.on, minSkidsDown: minSkids, skids: g1.skids, contact: g1.contact, points: g1.n, gearAboveDeck: g1.lo - pad.y, up: up(), events: [...new Set(ev.map((e) => e.type))], hits, dmg: dmg() };
   // 2. lift off to a hover 25 m up, hold it 4 s
   ev.length = 0; hits = 0;
   let t1 = F.t, maxOff = 0, minUp = 1, liftT = null;
   S.controls.setThrottle(0.8);
-  await frames(() => { hitCheck(); maxOff = Math.max(maxOff, off()); minUp = Math.min(minUp, up()); if (liftT == null && !ac.onGround) liftT = F.t - t1; return ac.x.y - pad.y > 25 || F.t - t1 > 30 || ac.dead; });
+  steps(F, () => { hitCheck(); maxOff = Math.max(maxOff, off()); minUp = Math.min(minUp, up()); if (liftT == null && !ac.onGround) liftT = F.t - t1; return ac.x.y - pad.y > 25 || F.t - t1 > 30 || ac.dead; });
   S.controls.setThrottle(0.5);
   const th = F.t; let hy0 = ac.x.y, hyMin = Infinity, hyMax = -Infinity;
-  await frames(() => { hitCheck(); maxOff = Math.max(maxOff, off()); minUp = Math.min(minUp, up()); if (F.t - th > 1.5) { hyMin = Math.min(hyMin, ac.x.y); hyMax = Math.max(hyMax, ac.x.y); } return F.t - th > 5.5 || ac.dead; });
+  steps(F, () => { hitCheck(); maxOff = Math.max(maxOff, off()); minUp = Math.min(minUp, up()); if (F.t - th > 1.5) { hyMin = Math.min(hyMin, ac.x.y); hyMax = Math.max(hyMax, ac.x.y); } return F.t - th > 5.5 || ac.dead; });
   if (shots) { window.__heliShot = { x: ac.x.toArray() }; }
   r.lift = { liftoffAfter: liftT, height: ac.x.y - pad.y, hoverBand: hyMax - hyMin, maxOff, minUp, events: [...new Set(ev.map((e) => e.type))], hits, dmg: dmg(), alive: alive(), parts: ac.parts.length, engines: F.eng.on, dead: !!ac.dead };
   void hy0;
@@ -93,7 +75,7 @@ export async function heli(name = 'Dragonfly', realism = 'pilot', { location = '
   ev.length = 0; hits = 0;
   const t2 = F.t; let touch = null, vy = 0;
   S.controls.setThrottle(0.3);
-  await frames(() => {
+  steps(F, () => {
     hitCheck(); maxOff = Math.max(maxOff, off()); minUp = Math.min(minUp, up());
     if (ac.x.y - pad.y < 7) S.controls.setThrottle(0.44);
     if (touch == null && ac.onGround) { touch = { t: F.t - t2, vy: vy, off: off() }; }
@@ -102,7 +84,7 @@ export async function heli(name = 'Dragonfly', realism = 'pilot', { location = '
   });
   S.controls.setThrottle(0);
   const t3 = F.t; let x1 = null, q1 = null, settleDrift = 0, settleTilt = 0, offG2 = 0, minSkids2 = 99;
-  await frames(() => { hitCheck(); if (F.t - t3 > 2 && !x1) { x1 = ac.x.clone(); q1 = ac.q.clone(); } if (x1) { settleDrift = Math.max(settleDrift, ac.x.distanceTo(x1)); settleTilt = Math.max(settleTilt, ac.q.angleTo(q1)); if (!ac.onGround) offG2++; minSkids2 = Math.min(minSkids2, gearLow(ac).skidsDown); } return F.t - t3 > 6 || ac.dead; });
+  steps(F, () => { hitCheck(); if (F.t - t3 > 2 && !x1) { x1 = ac.x.clone(); q1 = ac.q.clone(); } if (x1) { settleDrift = Math.max(settleDrift, ac.x.distanceTo(x1)); settleTilt = Math.max(settleTilt, ac.q.angleTo(q1)); if (!ac.onGround) offG2++; minSkids2 = Math.min(minSkids2, gearLow(ac).skidsDown); } return F.t - t3 > 6 || ac.dead; });
   const g2 = gearLow(ac);
   r.land = { touch, off: off(), level: up(), gearAboveDeck: g2.lo - pad.y, contact: g2.contact, points: g2.n, skids: g2.skids, minSkidsDown: minSkids2, v: ac.v.length(), settleDrift, settleTilt, offGround: offG2,
     events: [...new Set(ev.map((e) => e.type))], hardLanding: ev.some((e) => e.type === 'msg' && /Hard landing/.test(e.text || '')), hits, dmg: dmg(), alive: alive(), parts: ac.parts.length, dead: !!ac.dead, onDeck: pad.onDeck(ac.x.x, ac.x.z, -1) };

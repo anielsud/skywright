@@ -1,17 +1,32 @@
 // Where a flight starts: the start choice (the flight setup's start, land start and boat start) turned into the start
-// this vehicle really gets at this place, and how it is put there. Pure: everything it needs to know about the place
-// comes in as `w` (main.js buildFlight passes the World's answers), so the rule can be tested over every vehicle and
-// every choice without building a World (tools/test/startchoice.js).
+// this vehicle really gets at this place, and how it is put there. chooseStart is pure: what it needs to know about the
+// place comes in as `w` (main.js buildFlight passes the World's answers), so the rule can be tested over every vehicle
+// and every choice without building a World (tools/test/startchoice.js).
+import * as THREE from 'three';
 
 export const BOAT_STARTS = ['marina', 'waterpark', 'water', 'runway']; // boats' start choices (flightCfg.boatStart): afloat at the marina (the default), at the water park's start arch (where there is one: waterPark.js), out on open water, or sat on the runway
 export const LAND_STARTS = ['park', 'road', 'evel']; // cars' and bikes' start choices besides the runway (flightCfg.landStart; World.landStart)
 // An amphibian (a car or bike with a boat hull) can also start afloat: at the marina or out on the water.
 export const AFLOAT_STARTS = ['marina', 'water'];
 
+// Open water to start on (the water start, a boat with no marina): a place's own seaplane spot, a real river, else the
+// nearest open stretch, or null
+export function findWater(world) {
+  const ws = world.loc.waterStart; // a location's own seaplane spot (e.g. in a lagoon, not out in the surf)
+  if (ws && world.heightAt(ws[0], ws[1]) < world.waterLevel - 2) return new THREE.Vector3(ws[0], 0, ws[1]);
+  const rs = world.real?.waterStart?.(); if (rs) return rs; // a real river high above the water level (the Colorado)
+  for (let r = 300; r < 6000; r += 150) for (let a = 0; a < Math.PI * 2; a += 0.25) {
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    let ok = true; for (let k = -6; k <= 6; k++) if (world.heightAt(x, z + k * 60) > world.waterLevel - 2) { ok = false; break; }
+    if (ok) return new THREE.Vector3(x, 0, z + 200);
+  }
+  return null;
+}
+
 // st: analyze(design). cfg: the flight config (start, landStart, boatStart, mode). w: the place and the vehicle:
 //   gearOK         it has wheels or skids that can stand on a runway (not only floats)
 //   hasEngine      it has an engine (a glider starts in the air)
-//   water()        open water to start on (main.js findWater), or null
+//   water()        open water to start on (findWater), or null
 //   site(st)       the place's own start for this kind of vehicle (World.startSite: a rooftop helipad, the marina), or null
 //   siteBusy(site) online: someone is already on that site
 //   padOK()        the launch pad's stand fits this vehicle and nobody is on the pad

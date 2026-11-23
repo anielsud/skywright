@@ -15,7 +15,7 @@ import { Audio, MIX_DEFAULTS, OLD_MIX_DEFAULTS } from './audio.js';
 import { WorldSound } from './worldsound.js';
 import { Callouts } from './callouts.js';
 import { vehicleKind, isLand, words, modeChoice, startMessage } from './vehicleKind.js';
-import { chooseStart, BOAT_STARTS, LAND_STARTS, AFLOAT_STARTS } from './startChoice.js';
+import { chooseStart, findWater, BOAT_STARTS, LAND_STARTS, AFLOAT_STARTS } from './startChoice.js';
 import { Controls } from './controls.js';
 import { HUD } from './hud.js';
 import { CameraRig } from './cameras.js';
@@ -654,17 +654,6 @@ const rig = new CameraRig(flightCam, canvas);
 const net = new Net({ ui, hud, audio, LS, getDesign: () => hangar.design, getCfg: () => flightCfg });
 $('#hud').addEventListener('click', (e) => { if (e.target.id === 'h-cam') onAction('camera'); if (e.target.id === 'h-pause') onAction('pause'); });
 
-function findWater(world) {
-  const ws = world.loc.waterStart; // a location's own seaplane spot (e.g. in a lagoon, not out in the surf)
-  if (ws && world.heightAt(ws[0], ws[1]) < world.waterLevel - 2) return new THREE.Vector3(ws[0], 0, ws[1]);
-  const rs = world.real?.waterStart?.(); if (rs) return rs; // a real river high above the water level (the Colorado)
-  for (let r = 300; r < 6000; r += 150) for (let a = 0; a < Math.PI * 2; a += 0.25) {
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    let ok = true; for (let k = -6; k <= 6; k++) if (world.heightAt(x, z + k * 60) > world.waterLevel - 2) { ok = false; break; }
-    if (ok) return new THREE.Vector3(x, 0, z + 200);
-  }
-  return null;
-}
 
 function startFlight(cfgOverride) {
   const cfg = { ...flightCfg, ...cfgOverride };

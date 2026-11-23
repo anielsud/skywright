@@ -11,9 +11,15 @@
      over the pad;
   4. lands back on the pad (sinking ~2 m/s, ~0.8 m/s for the last metres): touches down gently (no hard landing), on
      the deck, and then rests there still for 4 s with both skids on the deck, in its runway resting attitude;
-  5. checks that every other preset at New York (and the Dragonfly elsewhere) starts as before: nothing else on the
-     helipad. With --ref URL (a server of the main branch) their spawn poses (position, attitude, velocity) must
-     match it exactly.
+  5. checks that nothing else is moved to the helipad: the game's start rule (src/startChoice.js chooseStart, what
+     buildFlight runs) with New York's real answers puts nothing but a helicopter on it, for every stock vehicle and
+     every start choice; and a plane and a car really start (swapped into the same World) where the rule says. With
+     --ref URL (a server of the main branch) their spawn poses (position, attitude, velocity) must match it exactly.
+     (The Dragonfly elsewhere, on the runway: padcheck.py runs the rule with every place's real answers, and
+     tools/test/startchoice.js runs it over every kind of place in Node.)
+
+The flight's own time is stepped with __sky.advance (no frames drawn); the second realism is swapped into the same
+World. Shaders compiled mid-flight at New York: smoke.py flies the Dragonfly there on the real game loop.
 
 Run from anywhere:  python3 tools/test/helipadcheck.py [--ref http://127.0.0.1:9000] [--port N] [--shots DIR]
 Same requirements as smoke.py (Chrome + the websockets package). Exits non-zero on any failure.
@@ -22,9 +28,9 @@ import argparse, asyncio, json, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smoke import free_port, start_server  # noqa: E402
-from padcheck import session, spawns_ref  # noqa: E402
+from padcheck import session, spawns_ref, spawns, check_predicted, check_spawns  # noqa: E402
 
-OTHER_LOCS = ['islands', 'canyon']  # the Dragonfly elsewhere: still the runway
+OTHERS = ['Kestrel', 'Dune Buggy']  # really started at New York: where the start rule says, not on the helipad
 
 
 def main():
@@ -53,12 +59,9 @@ def main():
             r = await cdp.js(f"import('/tools/test/helipadcheck.js').then((m) => m.heli('Dragonfly', {json.dumps(rl)}))", timeout=400)
             res['heli'].append(r)
             res['problems'] += probs.take()
-        names = await cdp.js("window.__sky.presets.map((d) => d.name)")
-        res['plan'] = [('nyc', [n for n in names if n != 'Dragonfly'])] + [(l, ['Dragonfly']) for l in OTHER_LOCS]
-        res['spawns'] = {}
-        for loc, ns in res['plan']:
-            for n in ns:
-                res['spawns'][f'{loc}/{n}'] = await cdp.js(f"import('/tools/test/helipadcheck.js').then((m) => m.spawn({json.dumps(n)}, {json.dumps(loc)}))", timeout=180)
+        res['predicted'] = {'nyc': await cdp.js("import('/tools/test/helipadcheck.js').then((m) => m.predict())", timeout=60)}
+        res['plan'] = [('nyc', OTHERS)]
+        res['spawns'] = await spawns(cdp, 'nyc', OTHERS, 'helipadcheck')
         await cdp.js('window.__sky.F && window.__sky.endFlight(); 1')
         res['problems'] += probs.take()
         return res
@@ -104,11 +107,10 @@ def main():
             check(abs(L['level'] - rw['up']) < 0.003 and L['minSkidsDown'] == L['skids'] and abs(L['gearAboveDeck']) < 0.03 and L['offGround'] == 0, 'not resting on the deck after landing')
             check(L['settleDrift'] < min(0.05, rw['drift'] * 1.3 + 0.005) and L['settleTilt'] < min(0.01, rw['tilt'] * 1.3 + 0.002) and L['v'] < 0.05, 'not stable after landing (more than on the runway)')
             check(L['hits'] == 0 and L['dmg'] == 0 and L['alive'] == L['parts'] and not ({'impact', 'scrape', 'debris', 'wreck'} & set(L['events'])), 'collision or damage on landing')
-            check(r['inflightCompiles'] == 0, f"{r['inflightCompiles']} shader programs compiled in flight")
+        check_predicted(check, res['predicted'], 'helipad', 'helicopter', 'heli')
+        check(any(p['start'] == 'helipad' for p in res['predicted']['nyc']), 'the start rule puts no helicopter on the helipad')
         sp = res['spawns']
-        for k, v in sp.items():
-            check(v['start'] != 'helipad', f'{k} started on the helipad')
-        print(f'{len(sp)} other spawns: none on the helipad')
+        check_spawns(check, sp, res['predicted'], 'helipad')
         if a.ref:
             ref = asyncio.run(session(a.ref.rstrip('/'), lambda cdp, probs: _ref(cdp, res['plan'])))
             report['ref'] = ref
@@ -133,6 +135,7 @@ async def _ref(cdp, plan):
     out = {}
     for loc, ns in plan:
         out.update(await spawns_ref(cdp, loc, ns))
+    await cdp.js('window.__sky.F && window.__sky.endFlight(); 1')
     return out
 
 
