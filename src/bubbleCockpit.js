@@ -475,9 +475,9 @@ export function bubbleInterior(g, b, nb, lv = 2) {
       for (const sx of [-1, 1]) {
         const x = sx * 0.062, f = (yb, dz) => sf(yb, dz).setX(x);
         sb.add(strap([f(0.5, 0.019), f(0.6, 0.0185), f(0.655, 0.0185)], n), M.rubber()); // down the cushion's face from the slot
-        sb.add(strap([f(0.655, 0.064), f(0.6, 0.066), f(0.45, 0.068), f(0.3, 0.07)], nb2), M.rubber()); // out of the back to the anchor
+        sb.add(strap([f(0.655, 0.052), f(0.6, 0.052), f(0.45, 0.052), f(0.3, 0.052)], nb2), M.rubber()); // out of the back and down it to the anchor (lying on the shell: its back is 5 cm behind the face here)
         const slot = new THREE.BoxGeometry(0.046, 0.012, 0.004); slot.rotateX(tilt); const sp = f(0.655, 0.0185); slot.translate(sp.x, sp.y, sp.z); sb.add(slot, black());
-        const anc = new THREE.BoxGeometry(0.03, 0.03, 0.008); anc.rotateX(tilt); const ap = f(0.3, 0.075); anc.translate(ap.x, ap.y, ap.z); sb.add(anc, M.steel());
+        const anc = new THREE.BoxGeometry(0.03, 0.03, 0.008); anc.rotateX(tilt); const ap = f(0.3, 0.055); anc.translate(ap.x, ap.y, ap.z); sb.add(anc, M.steel());
         const br = new THREE.BoxGeometry(0.006, 0.05, 0.03); br.translate(sx * 0.152, SA[1] + 0.06, SA[2] - 0.06); sb.add(br, M.steel()); // lap belt anchor bracket
         sb.add(strap([V(sx * 0.149, SA[1] + 0.07, SA[2] - 0.05), V(sx * 0.149, SA[1] + 0.07, SA[2] - 0.15), V(sx * 0.14, SA[1] + 0.068, SA[2] - 0.24)], V(sx, 0, 0), 0.034), M.rubber());
         const adj = new THREE.BoxGeometry(0.006, 0.04, 0.03); adj.translate(sx * 0.152, SA[1] + 0.07, SA[2] - 0.2); sb.add(adj, M.chrome());
