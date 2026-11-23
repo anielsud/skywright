@@ -50,9 +50,22 @@ function triangles(root, skip) {
 }
 const near = (tris, e, R) => tris.filter((t) => Math.min(t.a.x, t.b.x, t.c.x) < e.x + R && Math.max(t.a.x, t.b.x, t.c.x) > e.x - R && Math.min(t.a.y, t.b.y, t.c.y) < e.y + R && Math.max(t.a.y, t.b.y, t.c.y) > e.y - R && Math.min(t.a.z, t.b.z, t.c.z) < e.z + R && Math.max(t.a.z, t.b.z, t.c.z) > e.z - R);
 const ray = new THREE.Ray(), hit = V();
+// (each triangle's box, grown by a micrometre: a ray that misses the box can't meet the triangle, so the slab test only
+// skips work. Same triangles, same order, same intersectTriangle: the same crossings as testing every triangle.)
+const box = (t) => { if (t.lo) return; const E = 1e-6; t.lo = [Math.min(t.a.x, t.b.x, t.c.x) - E, Math.min(t.a.y, t.b.y, t.c.y) - E, Math.min(t.a.z, t.b.z, t.c.z) - E]; t.hi = [Math.max(t.a.x, t.b.x, t.c.x) + E, Math.max(t.a.y, t.b.y, t.c.y) + E, Math.max(t.a.z, t.b.z, t.c.z) + E]; };
+function slab(t, o, inv) { // does the ray (from o, 1/direction inv) pass through t's box?
+  let t0 = 0, t1 = Infinity;
+  for (let k = 0; k < 3; k++) {
+    const ok = k === 0 ? o.x : k === 1 ? o.y : o.z, ik = inv[k];
+    if (!Number.isFinite(ik)) { if (ok < t.lo[k] || ok > t.hi[k]) return false; continue; }
+    let a = (t.lo[k] - ok) * ik, b = (t.hi[k] - ok) * ik; if (a > b) { const x = a; a = b; b = x; }
+    if (a > t0) t0 = a; if (b < t1) t1 = b; if (t0 > t1 * (1 + 1e-9) + 1e-9) return false;
+  }
+  return true;
+}
 function hits(tris, o, d) { // every crossing along the ray: [{ t, tri }], nearest first
-  ray.set(o, d); const out = [];
-  for (const t of tris) if (ray.intersectTriangle(t.a, t.b, t.c, false, hit)) out.push({ t: hit.distanceTo(o), tri: t });
+  ray.set(o, d); const out = [], inv = [1 / d.x, 1 / d.y, 1 / d.z];
+  for (const t of tris) { box(t); if (slab(t, o, inv) && ray.intersectTriangle(t.a, t.b, t.c, false, hit)) out.push({ t: hit.distanceTo(o), tri: t }); }
   return out.sort((x, y) => x.t - y.t);
 }
 function clearance(tris, e) { let d = Infinity; const tr = new THREE.Triangle(), p = V(); for (const t of tris) { tr.set(t.a, t.b, t.c); tr.closestPointToPoint(e, p); const k = p.distanceTo(e); if (k < d) d = k; } return d; }
@@ -169,4 +182,35 @@ export function run({ presets, random = 20, seed = 7 } = {}) {
     try { out.push({ name: d.name, stations: check(d) }); } catch (e) { out.push({ name: d.name, error: String(e.stack || e) }); }
   }
   return out;
+}
+
+// ---------- Node tier (tools/test/node/run.mjs) ----------
+// Building a vehicle (crew postures, cockpit views, the assembly pass, the cabin light) is ~90% of the work; the eye
+// checks the rest (their ray casts only test triangles within 3 m of the eye, and skip any whose box the ray misses).
+// A stock vehicle's three builds (as is, resized, mirrored) are one case, in that order, as before: what the game
+// keeps from one build (crew postures, figures, the cabin light bake: its own caches) serves the next where it
+// applies. Every other build is a case of its own. SKY_COCKPIT_RANDOM / SKY_COCKPIT_SEED: cockpitcheck.py's
+// --random / --seed.
+export const nodeSuite = { files: ['src/stations.js', 'src/crew.js', 'src/body.js', 'src/partDetail.js', 'src/parts.js', 'src/cockpit*.js', 'src/interior.js', 'src/aircraft.js', 'src/planeDetail.js', 'src/cabinLight.js', 'tools/test/cockpitcheck.js', 'tools/test/meshcheck.js'], headless: false };
+const opts = () => ({ random: +(process.env.SKY_COCKPIT_RANDOM ?? 20), seed: +(process.env.SKY_COCKPIT_SEED ?? 7) });
+let list = null;
+const designList = (presets) => (list ??= designs(presets, opts().random, opts().seed));
+export function cases({ presets }) {
+  const all = designList(presets), out = [];
+  presets.forEach((p, k) => out.push({ id: `${p.name} (as is, resized, mirrored)`, is: [3 * k, 3 * k + 1, 3 * k + 2], names: all.slice(3 * k, 3 * k + 3).map((d) => d.name) }));
+  for (let i = 3 * presets.length; i < all.length; i++) out.push({ id: all[i].name, is: [i], names: [all[i].name] });
+  return out;
+}
+function checkOne(d) {
+  let sts;
+  try { sts = check(d); } catch (e) { return [{ name: `${d.name}: builds`, ok: false, why: String(e?.stack || e).split('\n').slice(0, 4).join(' | '), vehicle: d.name, error: true }]; }
+  if (!sts.length) return [{ name: `${d.name}: no cockpit views`, ok: true, vehicle: d.name, station: null }]; // (as before: nothing to check)
+  return sts.map((s) => ({ name: `${d.name}: ${s.name}`, ok: !s.issues.length, why: s.issues.join('; ') || undefined, vehicle: d.name, station: s }));
+}
+export function runCase(c, { presets }) {
+  return c.is.flatMap((i, k) => {
+    const d = designList(presets)[i];
+    if (d.name !== c.names[k]) throw new Error(`design ${i} is ${d.name}, not ${c.names[k]}`);
+    return checkOne(d);
+  });
 }

@@ -24,16 +24,14 @@ BROWSER = {
     'walls': (['walls.py'], ['src/aircraft.js', 'src/world.js', 'src/buildings.js', 'src/realBuildings.js', 'src/destruction.js', 'src/bike*.js', 'src/drive.js']),
     'padcheck': (['padcheck.py'], ['src/launchpad.js', 'src/main.js', 'src/aircraft.js', 'src/world.js']),
     'helipadcheck': (['helipadcheck.py'], ['src/helipad.js', 'src/main.js', 'src/aircraft.js', 'src/world.js', 'src/nyc*.js']),
-    'cockpitcheck': (['cockpitcheck.py'], ['src/stations.js', 'src/crew.js', 'src/body.js', 'src/partDetail.js', 'src/parts.js', 'src/cockpit*.js', 'src/interior.js']),
     'meshcheck': (['meshcheck.py'], ['src/parts.js', 'src/partDetail.js', 'src/*Parts.js', 'src/skinBlend.js', 'src/planeDetail.js', 'src/hangar.js', 'src/interior.js']),
-    'gearcheck': (['gearcheck.py'], ['src/gear*.js', 'src/parts.js', 'src/partDetail.js', 'src/planeDetail.js', 'src/hangar.js']),
-    'startbakes': (['startbakes.py'], ['src/stations.js', 'src/stuntPark.js', 'src/stuntSite.js', 'tools/bake/*']),
+    'startbakes-stunts': (['startbakes.py', '--only', 'stunts'], ['src/stuntPark.js', 'src/stuntSite.js', 'src/realworld.js', 'src/world.js', 'tools/bake/*', 'tools/test/startbakes.*']),  # (its views: the Node suite startbakes)
     'shadercheck': (['shadercheck.py'], ['src/main.js', 'src/crew.js', 'src/cabinLight.js', 'src/planeMaterials.js', 'src/world.js', 'src/post.js']),
     'riders': (['riders.py'], ['src/crew.js', 'src/body.js', 'src/bikeParts.js', 'src/planeDetail.js', 'src/bike.js']),
     'drivecheck': (['drivecheck.py'], ['src/drive.js', 'src/aircraft.js', 'src/carRig.js', 'src/parts.js']),
     'rocketcheck': (['rocketcheck.py'], ['src/aircraft.js', 'src/rocket*.js', 'src/parts.js']),
     'gvision': (['gvision.py'], ['src/gvision.js', 'src/stations.js', 'src/crew.js', 'src/cameras.js']),
-    'tunnelcheck': (['tunnelcheck.py'], ['src/windTunnel.js', 'src/aircraft.js', 'src/aero*.js']),
+    'tunnelcheck-ui': (['tunnelcheck.py', '--ui'], ['src/windTunnel.js', 'src/tunnel*.js', 'src/main.js', 'tools/test/tunnelcheck.*']),  # (its lift curves and forces: the Node suite tunnelcheck)
 }
 HARNESS = ['tools/test/run.py', 'tools/test/node/*', 'tools/test/smoke.py']  # changing these runs everything
 

@@ -93,8 +93,9 @@ export class WindTunnel {
   }
 
   // ---------- open ----------
-  open(design) {
-    const r = this.renderer;
+  // the flight model's side of opening: the design's Aircraft as the tunnel holds it, and a sensible starting state
+  // (open() builds the scene round it; tools/test/tunnelcheck.js uses this alone, in Node, with no renderer)
+  setup(design) {
     this.design = design; this.stats = analyze(design);
     const ac = (this.ac = new Aircraft(design, REALISM[this.st.air]));
     ac.ce = ac.ctl; ac.trim = 0; ac.gearDown = true; ac.gearT = 1;
@@ -104,6 +105,15 @@ export class WindTunnel {
       if (e.prop?.userData.disc) e.prop.userData.disc.visible = false;
       if (e.flame) { e.flame.visible = false; e.flameCore.visible = false; }
     }
+    // a comfortable cruise for planes, a fast drive for cars
+    const st = this.st, S = this.stats;
+    st.V = S.car && S.wingArea < 0.5 ? 30 : Number.isFinite(S.stall) && S.stall > 0 ? clamp(S.stall * 1.6, 15, 260) : 60;
+    st.aoa = S.wingArea > 0.5 ? 4 : 0;
+    this.piv.th = st.aoa * D2R;
+    return ac;
+  }
+  open(design) {
+    const r = this.renderer, ac = this.setup(design);
     // scale model: fits the test section with room to swing round on the pivot
     const fit = 4.2 / ac.radius, n = fit >= 1 ? 1 : SCALES.find((k) => 1 / k <= fit) || Math.ceil(1 / fit);
     this.scaleN = n; this.s = 1 / n;
@@ -130,11 +140,7 @@ export class WindTunnel {
     this.controls = new OrbitControls(cam, r.domElement);
     this.controls.target.set(0, Y0, 0.8); this.controls.enableDamping = true; this.controls.minDistance = 3; this.controls.maxDistance = 34; this.controls.maxPolarAngle = Math.PI * 0.62;
     this.controls.update();
-    // a sensible starting point: a comfortable cruise for planes, a fast drive for cars
-    const st = this.st, S = this.stats;
-    st.V = S.car && S.wingArea < 0.5 ? 30 : Number.isFinite(S.stall) && S.stall > 0 ? clamp(S.stall * 1.6, 15, 260) : 60;
-    st.aoa = S.wingArea > 0.5 ? 4 : 0;
-    this.piv.th = st.aoa * D2R;
+    const st = this.st;
     this.buildUI();
     this.onResize = () => this.resize(innerWidth, innerHeight); addEventListener('resize', this.onResize);
     this.onKey = (e) => { if (e.key === 'Escape') this.exit(); }; addEventListener('keydown', this.onKey);

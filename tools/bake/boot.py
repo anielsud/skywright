@@ -12,6 +12,11 @@ pictures and stunt sites for that same COMMIT, the postures for that same SOLVER
 so a stale or missing file just means the device works them out itself, as before. Locally (COMMIT 'dev') the game ignores these files; the outputs are
 not committed (.gitignore). Same requirements as tools/test/smoke.py (Chrome + websockets).
 
+Then it checks its own output, read back from the files (tools/test/startbakes.js verifyBake): every stock vehicle's
+cockpit views taken from views.json alone must equal the views worked out with no cache (and no seat may be missing
+from it), and every stunt site in stunts.json must be exactly the site findSite finds. If not, it removes those two
+files and exits non-zero, failing the deploy step loudly.
+
   python3 tools/bake/boot.py
 """
 import asyncio, json, os, shutil, sys, tempfile, time
@@ -49,7 +54,19 @@ async def run(url, ws_url):
         await cdp.send('Page.enable'); await cdp.send('Runtime.enable')
         await cdp.send('Page.navigate', url=url)
         await cdp.wait_for('window.__sky && window.__sky.presets.length', 120, 'window.__sky')
-        return await cdp.js(JS, timeout=900)
+        r = await cdp.js(JS, timeout=900)
+        write(r)
+        # check the bake as written: read back from its files, it must be what the game works out itself
+        # (tools/test/startbakes.js verifyBake)
+        back = {n: json.load(open(os.path.join(OUT, f'{n}.json'))) for n in ('views', 'stunts')}
+        bad = await cdp.js(f"import('./tools/test/startbakes.js').then((m) => m.verifyBake({json.dumps(back)}, window.__sky.presets))", timeout=900)
+        return r, bad
+
+
+def write(r):
+    os.makedirs(OUT, exist_ok=True)
+    for name in ('parts', 'postures', 'stunts', 'views'):
+        with open(os.path.join(OUT, f'{name}.json'), 'w') as f: json.dump(r[name], f, separators=(',', ':'))
 
 
 def main():
@@ -59,16 +76,21 @@ def main():
     profile = tempfile.mkdtemp(prefix='sky-bake-')
     proc, ws_url = launch_chrome(cdp_port, profile, '800,600')
     try:
-        r = asyncio.run(run(f'http://127.0.0.1:{port}/', ws_url))
+        r, bad = asyncio.run(run(f'http://127.0.0.1:{port}/', ws_url))
     finally:
         proc.kill(); proc.wait(); srv.shutdown(); shutil.rmtree(profile, ignore_errors=True)
-    os.makedirs(OUT, exist_ok=True)
-    for name in ('parts', 'postures', 'stunts', 'views'):
-        with open(os.path.join(OUT, f'{name}.json'), 'w') as f: json.dump(r[name], f, separators=(',', ':'))
     kb = lambda n: os.path.getsize(os.path.join(OUT, f'{n}.json')) // 1024
     print(f"baked {len(r['parts']['pics'])} part pictures ({kb('parts')} KB, key {r['parts']['key']}), "
           f"{len(r['postures']['list'])} + {len(r['postures']['rides'])} rider postures ({kb('postures')} KB, solver {r['postures']['solver']}), "
           f"{len(r['stunts']['sites'])} stunt sites ({kb('stunts')} KB), {len(r['views']['list'])} cockpit views ({kb('views')} KB, stamp {r['views']['stamp']}) in {time.time() - t0:.0f} s")
+    if bad:  # a bake the game would get wrong: take the bad files away (the game then works it out itself) and fail the step
+        for n in ('views', 'stunts'):
+            os.remove(os.path.join(OUT, f'{n}.json'))
+        print(f'\nBAKE CHECK FAILED: {len(bad)} problem(s); views.json and stunts.json removed', file=sys.stderr)
+        for b in bad[:20]:
+            print('  ' + b[:600], file=sys.stderr)
+        sys.exit(1)
+    print(f"bake checked: every stock vehicle's cockpit views from views.json alone, and {len(r['stunts']['sites'])} stunt sites from stunts.json, == worked out")
 
 
 if __name__ == '__main__':
