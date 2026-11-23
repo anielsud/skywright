@@ -20,7 +20,6 @@ BROWSER = {
     'restart': (['restart.py'], ['src/main.js', 'src/world.js', 'src/destruction.js', 'src/stuntPark.js', 'src/waterPark.js', 'src/launchpad.js', 'src/helipad.js', 'src/flora.js']),
     'stunts': (['stunts.py'], ['src/stunt*.js', 'src/aircraft.js', 'src/bike*.js', 'src/drive.js', 'src/collide.js', 'src/world.js', 'src/realworld.js']),
     'waterpark': (['waterpark.py'], ['src/waterPark.js', 'src/boat*.js', 'src/aircraft.js', 'src/world.js', 'src/realworld.js']),
-    'boatride': (['boatride.py'], ['src/boat*.js', 'src/marina.js', 'src/aircraft.js', 'src/world.js']),
     'walls': (['walls.py'], ['src/aircraft.js', 'src/world.js', 'src/buildings.js', 'src/realBuildings.js', 'src/destruction.js', 'src/bike*.js', 'src/drive.js']),
     'padcheck': (['padcheck.py'], ['src/launchpad.js', 'src/main.js', 'src/aircraft.js', 'src/world.js']),
     'helipadcheck': (['helipadcheck.py'], ['src/helipad.js', 'src/main.js', 'src/aircraft.js', 'src/world.js', 'src/nyc*.js']),
@@ -29,10 +28,6 @@ BROWSER = {
     'gearcheck': (['gearcheck.py'], ['src/gear*.js', 'src/parts.js', 'src/partDetail.js', 'src/planeDetail.js', 'src/hangar.js']),
     'startbakes': (['startbakes.py'], ['src/stations.js', 'src/stuntPark.js', 'src/stuntSite.js', 'tools/bake/*']),
     'shadercheck': (['shadercheck.py'], ['src/main.js', 'src/crew.js', 'src/cabinLight.js', 'src/planeMaterials.js', 'src/world.js', 'src/post.js']),
-    'riders': (['riders.py'], ['src/crew.js', 'src/body.js', 'src/bikeParts.js', 'src/planeDetail.js', 'src/bike.js']),
-    'drivecheck': (['drivecheck.py'], ['src/drive.js', 'src/aircraft.js', 'src/carRig.js', 'src/parts.js']),
-    'rocketcheck': (['rocketcheck.py'], ['src/aircraft.js', 'src/rocket*.js', 'src/parts.js']),
-    'gvision': (['gvision.py'], ['src/gvision.js', 'src/stations.js', 'src/crew.js', 'src/cameras.js']),
     'tunnelcheck': (['tunnelcheck.py'], ['src/windTunnel.js', 'src/aircraft.js', 'src/aero*.js']),
 }
 HARNESS = ['tools/test/run.py', 'tools/test/node/*', 'tools/test/smoke.py']  # changing these runs everything

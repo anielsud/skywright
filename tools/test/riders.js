@@ -39,7 +39,8 @@ export function run(design, { T = 6, mode = 'pilot', breakFork = false, script =
   if (spawn.speed) ac.v.set(0, spawn.vy || 0, -spawn.speed);
   if (spawn.alt) { ac.x.y = spawn.alt; ac.syncVisual(); }
   const people = crews(ac); if (!people.length) return null;
-  const tm = timed(ac), dt = 1 / 60, out = { name: design.name, people: people.length, gap: 0, far: 0, finite: true, letGo: 0, held: null, knee: [], hits: 0, msBefore: [], msAfter: [], broke: null, events: [] };
+  const stand = !!people[0].rig.v?.hy; // (a standing rider: an attack stance, fitted when the vehicle is built)
+  const tm = timed(ac), dt = 1 / 60, out = { name: design.name, people: people.length, stand, gap: 0, far: 0, finite: true, letGo: 0, held: null, knee: [], hits: 0, msBefore: [], msAfter: [], broke: null, events: [] };
   let deb = null;
   for (let f = 0; f * dt < T; f++) {
     const t = f * dt;
@@ -67,77 +68,95 @@ export function run(design, { T = 6, mode = 'pilot', breakFork = false, script =
   return out;
 }
 
-export function plan(presets) {
-  const out = [];
-  for (const d of presets) {
-    const r = run(d); if (!r) continue;
-    const bad = [];
-    if (!r.finite) bad.push('NaN in the skeleton');
-    if (r.gap > 0.01) bad.push(`hand ${(r.gap * 100).toFixed(1)} cm off its forearm`);
+const isBike = (d) => d.parts.some((p) => /^b_fork/.test(p.id));
+const common = (r, bad) => {
+  if (!r.finite) bad.push('NaN in the skeleton');
+  if (r.gap > 0.01) bad.push(`hand ${(r.gap * 100).toFixed(1)} cm off its forearm`);
+};
+const intoBike = (r, bad, than) => { if (r.hits - (r.hitsRest || 0) > 0.01) bad.push(`rider ${((r.hits - r.hitsRest) * 100).toFixed(1)} cm further into the bike than ${than} (${(r.hitsRest * 100).toFixed(1)} cm)`); };
+// Each check: one run of one vehicle, judged. Returns the row (or null: no crew).
+export const CHECKS = {
+  // every vehicle with people in it, controls sweeping
+  ride(d) {
+    const r = run(d); if (!r) return null;
+    const bad = []; common(r, bad);
     if (r.far > 1.5) bad.push(`a bone ${r.far.toFixed(2)} m from the hips`);
     if (r.letGo) bad.push(`a hand let go of an intact control (${r.letGo} hand-frames)`);
-    out.push({ ...r, check: 'ride', ok: !bad.length, why: bad.join('; ') });
-  }
-  for (const d of presets.filter((d) => d.parts.some((p) => /^b_fork/.test(p.id)))) {
-    const r = run(d, { breakFork: true, T: 4, script: (t) => ({ throttle: 0.5, roll: Math.sin(t * 2) * 0.5 }) }); if (!r) continue;
+    return { ...r, check: 'ride', ok: !bad.length, why: bad.join('; ') };
+  },
+  // (every bike) the fork breaks off mid-ride: the rider lets go and stays in one piece
+  'fork lost'(d) {
+    const r = run(d, { breakFork: true, T: 4, script: (t) => ({ throttle: 0.5, roll: Math.sin(t * 2) * 0.5 }) }); if (!r) return null;
     const bad = [];
     if (!r.broke) bad.push('fork did not break off');
-    if (!r.finite) bad.push('NaN in the skeleton');
-    if (r.gap > 0.01) bad.push(`hand ${(r.gap * 100).toFixed(1)} cm off its forearm`);
+    common(r, bad);
     if (r.far > 1.5) bad.push(`a bone ${r.far.toFixed(2)} m from the hips`);
     if (r.held) bad.push('still holding the handlebars that flew away');
     if (r.msAfter && r.msBefore && r.msAfter.mean > r.msBefore.mean * 2 + 0.2) bad.push(`posing cost jumped ${r.msBefore.mean} -> ${r.msAfter.mean} ms after the fork went`);
-    out.push({ ...r, check: 'fork lost', ok: !bad.length, why: bad.join('; ') });
-  }
+    return { ...r, check: 'fork lost', ok: !bad.length, why: bad.join('; ') };
+  },
   // landing a jump (every bike): from 2.5 m at 15 m/s the rider's knees bend to soak it up (a standing rider's by
   // 15 degrees or more, a seated one's at least a little), come back afterwards, and nothing goes through the bike
-  for (const d of presets.filter((d) => d.parts.some((p) => /^b_fork/.test(p.id)))) {
-    const r = run(d, { T: 5, spawn: { air: true, alt: 2.5, speed: 15, vy: 3, pitch: 0.12 }, script: () => ({ throttle: 0.4 }) }); if (!r) continue;
-    const bad = [], k = r.knee, stand = !!crews(new Aircraft(d, REALISM.pilot))[0]?.rig.v?.hy, flex = k.rest - k.min;
-    if (!r.finite) bad.push('NaN in the skeleton');
-    if (r.gap > 0.01) bad.push(`hand ${(r.gap * 100).toFixed(1)} cm off its forearm`);
-    if (flex < (stand ? 15 : 2)) bad.push(`knees bent only ${flex.toFixed(1)} deg on landing`);
+  landing(d) {
+    const r = run(d, { T: 5, spawn: { air: true, alt: 2.5, speed: 15, vy: 3, pitch: 0.12 }, script: () => ({ throttle: 0.4 }) }); if (!r) return null;
+    const bad = [], k = r.knee, flex = k.rest - k.min; common(r, bad);
+    if (flex < (r.stand ? 15 : 2)) bad.push(`knees bent only ${flex.toFixed(1)} deg on landing`);
     if (Math.abs(k.end - k.rest) > 3) bad.push(`knees did not come back (${k.rest} -> ${k.end} deg)`);
-    if (r.hits - (r.hitsRest || 0) > 0.01) bad.push(`rider ${((r.hits - r.hitsRest) * 100).toFixed(1)} cm further into the bike than sitting still (${(r.hitsRest * 100).toFixed(1)} cm)`);
-    out.push({ ...r, check: 'landing', ok: !bad.length, why: bad.join('; ') });
-  }
+    intoBike(r, bad, 'sitting still');
+    return { ...r, check: 'landing', ok: !bad.length, why: bad.join('; ') };
+  },
   // a hard stop from 18 m/s (every bike): the hips go back (a standing rider's by 6 cm or more, a seated one's by 2.5),
   // the hands keep hold, nothing goes into the bike, and once stopped the rider is back where they started
-  for (const d of presets.filter((d) => d.parts.some((p) => /^b_fork/.test(p.id)))) {
-    const r = run(d, { T: 6, spawn: { speed: 18 }, script: (t, ac) => t < 0.5 ? { throttle: 0.3 } : { rev: Math.abs(ac.groundSpeed) > 0.3 ? 0.9 : 0 } }); if (!r) continue;
-    const bad = [], stand = !!crews(new Aircraft(d, REALISM.pilot))[0]?.rig.v?.hy, z0 = r.hipZ[20], back = Math.max(...r.hipZ) - z0;
-    if (!r.finite) bad.push('NaN in the skeleton');
-    if (r.gap > 0.01) bad.push(`hand ${(r.gap * 100).toFixed(1)} cm off its forearm`);
+  'hard stop'(d) {
+    const r = run(d, { T: 6, spawn: { speed: 18 }, script: (t, ac) => t < 0.5 ? { throttle: 0.3 } : { rev: Math.abs(ac.groundSpeed) > 0.3 ? 0.9 : 0 } }); if (!r) return null;
+    const bad = [], z0 = r.hipZ[20], back = Math.max(...r.hipZ) - z0; common(r, bad);
     if (r.letGo) bad.push(`a hand let go of the bars (${r.letGo} hand-frames)`);
-    if (back < (stand ? 0.06 : 0.025)) bad.push(`hips went back only ${(back * 100).toFixed(1)} cm`);
+    if (back < (r.stand ? 0.06 : 0.025)) bad.push(`hips went back only ${(back * 100).toFixed(1)} cm`);
     if (Math.abs(r.hipZ.at(-1) - z0) > 0.01) bad.push(`hips did not come back (${(z0 * 100).toFixed(1)} -> ${(r.hipZ.at(-1) * 100).toFixed(1)} cm)`);
-    if (r.hits - (r.hitsRest || 0) > 0.01) bad.push(`rider ${((r.hits - r.hitsRest) * 100).toFixed(1)} cm further into the bike than riding along (${(r.hitsRest * 100).toFixed(1)} cm)`);
-    out.push({ ...r, back: +back.toFixed(3), check: 'hard stop', ok: !bad.length, why: bad.join('; ') });
-  }
+    intoBike(r, bad, 'riding along');
+    return { ...r, back: +back.toFixed(3), check: 'hard stop', ok: !bad.length, why: bad.join('; ') };
+  },
   // full gas from a roll (Sim: no wheelie trick): the rider leans forward over the bars (hips forward by 3 cm or more
   // standing, 1 sitting), keeps hold, goes no further into the bike, and sits back in place once stopped
-  for (const d of presets.filter((d) => d.parts.some((p) => /^b_fork/.test(p.id)))) {
-    const r = run(d, { mode: 'sim', T: 9, spawn: { speed: 3 }, script: (t, ac) => t < 0.5 ? { throttle: 0.2 } : t < 3.5 ? { throttle: 1 } : { rev: Math.abs(ac.groundSpeed) > 0.3 ? 0.6 : 0 } }); if (!r) continue;
-    const bad = [], stand = !!crews(new Aircraft(d, REALISM.pilot))[0]?.rig.v?.hy, z0 = r.hipZ[20], fwd = z0 - Math.min(...r.hipZ);
-    if (!r.finite) bad.push('NaN in the skeleton');
-    if (r.gap > 0.01) bad.push(`hand ${(r.gap * 100).toFixed(1)} cm off its forearm`);
+  'full gas'(d) {
+    const r = run(d, { mode: 'sim', T: 9, spawn: { speed: 3 }, script: (t, ac) => t < 0.5 ? { throttle: 0.2 } : t < 3.5 ? { throttle: 1 } : { rev: Math.abs(ac.groundSpeed) > 0.3 ? 0.6 : 0 } }); if (!r) return null;
+    const bad = [], z0 = r.hipZ[20], fwd = z0 - Math.min(...r.hipZ); common(r, bad);
     if (r.letGo) bad.push(`a hand let go of the bars (${r.letGo} hand-frames)`);
-    if (fwd < (stand ? 0.03 : 0.01)) bad.push(`hips went forward only ${(fwd * 100).toFixed(1)} cm`);
+    if (fwd < (r.stand ? 0.03 : 0.01)) bad.push(`hips went forward only ${(fwd * 100).toFixed(1)} cm`);
     if (Math.abs(r.hipZ.at(-1) - z0) > 0.01) bad.push(`hips did not come back (${(z0 * 100).toFixed(1)} -> ${(r.hipZ.at(-1) * 100).toFixed(1)} cm)`);
-    if (r.hits - (r.hitsRest || 0) > 0.01) bad.push(`rider ${((r.hits - r.hitsRest) * 100).toFixed(1)} cm further into the bike than riding along (${(r.hitsRest * 100).toFixed(1)} cm)`);
-    out.push({ ...r, back: +(-fwd).toFixed(3), check: 'full gas', ok: !bad.length, why: bad.join('; ') });
-  }
+    intoBike(r, bad, 'riding along');
+    return { ...r, back: +(-fwd).toFixed(3), check: 'full gas', ok: !bad.length, why: bad.join('; ') };
+  },
   // a wheelie (Arcade: full gas lifts the front): the rider sits back (hips back by 2 cm or more standing, 1 sitting),
   // keeps hold and stays out of the bike
-  for (const d of presets.filter((d) => d.parts.some((p) => /^b_fork/.test(p.id)))) {
-    const r = run(d, { mode: 'arcade', T: 4, spawn: { speed: 3 }, script: (t) => ({ throttle: t < 0.5 ? 0.2 : 1 }) }); if (!r) continue;
-    const bad = [], stand = !!crews(new Aircraft(d, REALISM.pilot))[0]?.rig.v?.hy, back = Math.max(...r.hipZ) - r.hipZ[20];
-    if (!r.finite) bad.push('NaN in the skeleton');
-    if (r.gap > 0.01) bad.push(`hand ${(r.gap * 100).toFixed(1)} cm off its forearm`);
+  wheelie(d) {
+    const r = run(d, { mode: 'arcade', T: 4, spawn: { speed: 3 }, script: (t) => ({ throttle: t < 0.5 ? 0.2 : 1 }) }); if (!r) return null;
+    const bad = [], back = Math.max(...r.hipZ) - r.hipZ[20]; common(r, bad);
     if (r.letGo) bad.push(`a hand let go of the bars (${r.letGo} hand-frames)`);
-    if (back < (stand ? 0.02 : 0.01)) bad.push(`hips went back only ${(back * 100).toFixed(1)} cm`);
-    if (r.hits - (r.hitsRest || 0) > 0.01) bad.push(`rider ${((r.hits - r.hitsRest) * 100).toFixed(1)} cm further into the bike than riding along (${(r.hitsRest * 100).toFixed(1)} cm)`);
-    out.push({ ...r, back: +back.toFixed(3), check: 'wheelie', ok: !bad.length, why: bad.join('; ') });
-  }
+    if (back < (r.stand ? 0.02 : 0.01)) bad.push(`hips went back only ${(back * 100).toFixed(1)} cm`);
+    intoBike(r, bad, 'riding along');
+    return { ...r, back: +back.toFixed(3), check: 'wheelie', ok: !bad.length, why: bad.join('; ') };
+  },
+};
+const BIKE_ONLY = ['fork lost', 'landing', 'hard stop', 'full gas', 'wheelie'];
+
+// the whole test, as riders.py prints it (the browser path): rows in the old order
+export function plan(presets) {
+  const out = [];
+  for (const k of ['ride', ...BIKE_ONLY]) for (const d of k === 'ride' ? presets : presets.filter(isBike)) { const r = CHECKS[k](d); if (r) out.push(r); }
   return out;
+}
+
+// Node tier (tools/test/node/run.mjs): the crew rigs are the subject, so not headless. One case per vehicle: its ride,
+// and for a bike every bike check too (building a vehicle's crew is most of the cost, and a repeat build of the same
+// design is much cheaper, so a bike's checks share one worker). Each row carries the posing cost (msBefore / msAfter:
+// ms per frame, on Node's clock) as information.
+export const nodeSuite = { files: ['src/crew.js', 'src/body.js', 'src/bikeParts.js', 'src/planeDetail.js', 'src/bike.js', 'src/aircraft.js', 'tools/test/riders.js'], headless: false };
+export function cases({ presets }) { return presets.map((d) => ({ id: d.name, name: d.name, bike: isBike(d), key: 'crew:' + d.name, cost: 2 })); } // (key: gvision builds the same crews)
+export function runCase(c, { presets }) {
+  const d = presets.find((x) => x.name === c.name);
+  return ['ride', ...(c.bike ? BIKE_ONLY : [])].map((k) => CHECKS[k](d)).filter(Boolean).map((r) => {
+    const pose = r.msBefore ? `pose ${r.msBefore.mean} ms (p95 ${r.msBefore.p95})${r.msAfter ? `, after ${r.msAfter.mean}` : ''}` : '';
+    return { name: `${r.check} ${r.name} x${r.people}`, ok: r.ok, why: r.why, info: `hand gap ${(r.gap * 100).toFixed(2)} cm, far ${r.far} m, ${pose}${r.check === 'landing' ? `, knees ${r.knee.rest}->${r.knee.min}->${r.knee.end}` : ''}${r.back != null ? `, hips back ${(r.back * 100).toFixed(1)} cm` : ''}`, msBefore: r.msBefore, msAfter: r.msAfter };
+  });
 }

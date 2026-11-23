@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Rocket handling check: boots Skywright in headless Chrome and runs tools/test/rocketcheck.js.
+(The Node tier runs the same checks without a browser, much faster: python3 tools/test/run.py rocketcheck.)
 
 Run from anywhere:  python3 tools/test/rocketcheck.py [--url http://host/]
 Flies the Rocket preset with scripted stick input (no flight scene: flat ground, still air, fixed 1/60 s steps) and
@@ -21,13 +22,12 @@ async def run(url, ws_url):
         await cdp.send('Network.setCacheDisabled', cacheDisabled=True)
         await cdp.send('Page.navigate', url=url)
         await cdp.wait_for('window.__sky && window.__sky.presets.length', 40, 'window.__sky')
-        body = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rocketcheck.js')).read()
-        return await cdp.js(f'(async () => {{ {body}\n}})()', timeout=300)
+        return await cdp.js("import('/tools/test/rocketcheck.js').then((m) => m.plan(window.__sky.presets))", timeout=300)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--url', help='check the game served here instead of this checkout (e.g. a baseline build)')
+    ap.add_argument('--url', help='check the game served here instead of this checkout (it must serve tools/test/rocketcheck.js as a module)')
     args = ap.parse_args()
     port, cdp_port = free_port(), free_port()
     profile = tempfile.mkdtemp(prefix='skywright-chrome-')

@@ -10,14 +10,17 @@
 //   export function cases(ctx) { return [{ id: 'Dirt Bike', ... }, ...] }   // plain, serialisable case descriptors
 //   export async function runCase(c, ctx) { return [{ name, ok, why, ...extra }, ...] }   // one case's checks
 // ctx = { presets: makePresets() } (each worker makes its own). Cases run in any order, on any worker: a case must not
-// depend on another having run first. Keep cases a few seconds each so the pool balances.
+// depend on another having run first. Keep cases a few seconds each so the pool balances. A case may carry a key
+// (c.key, e.g. a vehicle's name): cases with the same key, from any suite, go to the same worker where possible, so
+// what that worker built and cached for the first is warm for the rest. A case may say what it costs (c.cost, seconds
+// of work, roughly): the costly ones go out first, so they are not left running at the end.
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { availableParallelism } from 'node:os';
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url)), REPO = fileURLToPath(new URL('../../../', import.meta.url));
-export const SUITES = ['bikeride']; // (tools/test/<name>.js; add a suite here once it exports nodeSuite)
+export const SUITES = ['bikeride', 'drivecheck', 'rocketcheck', 'riders', 'gvision', 'boatride']; // (tools/test/<name>.js; add a suite here once it exports nodeSuite)
 const modUrl = (name) => pathToFileURL(`${REPO}tools/test/${name}.js`).href;
 
 async function context() { const { makePresets } = await import(pathToFileURL(REPO + 'src/design.js').href); return { presets: makePresets() }; }
@@ -51,11 +54,17 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
   if (list) { for (const w of work) console.log(`${w.suite}  ${w.c.id ?? w.i}`); process.exit(0); }
   const t0 = performance.now(), results = [], n = Math.min(jobs, work.length);
   console.log(`${work.length} cases from ${suites.join(', ')} on ${n} workers`);
-  // longest first would balance better; without a history, keep the suites' own order and hand out one at a time
-  const queue = [...work];
+  // longest first balances best: cases that say what they cost (c.cost) first, the rest in the suites' own order
+  work.sort((a, b) => (b.c.cost || 0) - (a.c.cost || 0));
+  const queue = [...work], held = new Set();
   await Promise.all(Array.from({ length: n }, () => new Promise((resolve) => {
     const w = new Worker(fileURLToPath(import.meta.url));
-    const next = () => { const job = queue.shift(); if (job) w.postMessage(job); else { w.terminate(); resolve(); } };
+    const mine = new Set(); // (case.key: cases sharing a key, e.g. a vehicle whose crew build is costly, go to the worker that has it warm)
+    const next = () => {
+      let k = queue.findIndex((j) => mine.has(j.c.key)); if (k < 0) k = queue.findIndex((j) => j.c.key == null || !held.has(j.c.key)); if (k < 0) k = 0;
+      const job = queue.splice(k, 1)[0]; if (job?.c.key != null) { mine.add(job.c.key); held.add(job.c.key); }
+      if (job) w.postMessage(job); else { w.terminate(); resolve(); }
+    };
     w.on('message', (m) => {
       if (m.ready) return next();
       results.push(m);

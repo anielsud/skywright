@@ -29,7 +29,10 @@ Tests are in two tiers.
   `[{ name, ok, why }]`); `ctx.presets` is `makePresets()`. With `headless: true` the vehicle skips its purely visual
   detail (aircraft.js `HEADLESS`: the assembly pass and the per-frame crew posing). Set `SKY_VISUALS=1` to run with it,
   to prove a suite's results don't change. Nothing drawn is exercised in Node: textures, shaders and frames belong to
-  the browser tier.
+  the browser tier. A case may carry a `key` (cases with the same key, from any suite, go to the worker that ran the
+  first: riders and gvision share `crew:<vehicle>`, so a crew built once is warm for the other) and a `cost` (rough
+  seconds: costly cases go out first). A real location's World can be built in Node too (`node/world.mjs`, used by
+  boatride's marinas; read its header for what differs from the browser's).
 - **Browser tier**: what needs a real page (boot, UI, audio, shader compiles, screenshots, the real game loop). Use
   `window.__sky.advance(seconds)` to step the flight without rendering (about 25–50× faster than waiting for frames;
   streaming that works to a per-frame time budget gets less done per game second, so let it settle when a check
@@ -271,12 +274,19 @@ to full throw, no rendering) and checks each person's skeleton every frame:
 - **wheelie** (every bike, Arcade): full gas lifts the front and the rider sits back (2 cm or more standing, 1 sitting),
   keeping hold and staying out of the bike.
 
-It prints how long posing the crew takes per frame (mean and p95, ms) for each vehicle: the number to watch when
-changing the arm solve.
+Each check carries how long posing the crew takes per frame (`msBefore` / `msAfter`: mean and p95, ms; in Node's
+clock, comparable run to run, not with the browser's): the number to watch when changing the arm solve. `--json` keeps
+them, and `riders.py` (the browser path) prints them.
+
+It is a Node suite, not headless (the crew rig is the subject): one case per vehicle, a bike's six checks together.
+Building a vehicle's crew is most of the cost, and a repeat build of the same design is much cheaper, so its cases
+share a key with gvision's (`crew:<name>`) and run on the worker that has that vehicle warm.
 
 ```sh
-python3 tools/test/riders.py                  # serves the repo itself, ~1 min
-python3 tools/test/riders.py --only "dirt"    # one vehicle
+node tools/test/node/run.mjs riders                   # ~5 s on a quiet Mac (8 workers)
+node tools/test/node/run.mjs riders --only "dirt"     # one vehicle
+node tools/test/node/run.mjs riders --json out.json   # every number, the posing cost too
+python3 tools/test/riders.py                          # the same checks in headless Chrome (~25 s)
 ```
 
 Run it when you change `src/crew.js` (the rig, the arm solve, cockpit obstacles) or how the riders get their grips
@@ -297,9 +307,14 @@ pilot's g sway (`stationEye` in `src/stations.js`):
 - **stick stir**: stirring the controls (the head turns to look round) must not move the view any more than sitting
   still does: the view moves with g only.
 
+It is a Node suite, not headless (the eye follows the crew rig's head): the haze model in one case (arithmetic on
+numbers: no check reads the overlay's page elements back, so Node's stand-ins do), then one case per vehicle (keyed
+with riders', see above). The numbers match the browser's to the last digit.
+
 ```sh
-python3 tools/test/gvision.py                 # ~1 min
-python3 tools/test/gvision.py --only "viper"
+node tools/test/node/run.mjs gvision                  # ~5 s on a quiet Mac
+node tools/test/node/run.mjs gvision --only "viper"
+python3 tools/test/gvision.py                         # the same checks in headless Chrome (~35 s)
 ```
 
 Run it when you change `src/gvision.js`, `stationEye`, or the g swing in `src/crew.js`.
@@ -321,11 +336,22 @@ would use: full gas, a left turn, a right turn, brake (reverse) to a stop, a wai
   with open water ahead of its start, and every stock boat, in Arcade and Sim, starts afloat and level within 120 m of
   it and does the ride in the real world (shore, docks, the docks' collision mesh). On the Colorado (a ~50 m channel)
   the turns are a slow S-bend after getting up on the plane. A Dune Buggy drives out along each harbour's pier.
+  Every marina at Low (the tablet's setting: the coarsest terrain), the Grand Canyon's river landing at High too.
+
+All of it is a headless Node suite. The open water and land are stand-in envs (as bikeride's flat ground); the marinas
+are real Worlds built in Node (`node/world.mjs`: World with a stand-in renderer, and the env main.js gives a flight).
+That World has the browser's heights, water, marinas and docks (the marina rides match a real flight's to the last
+digit, or within a real flight's own run-to-run spread of 0.1°: the swell's phase follows the World's clock), but
+nothing drawn, blank images (a real place's land-cover map reads as empty, so the stunt parks find no site), no
+internet geodata past the baked squares, and some NaN real-place buildings: don't rely on it for those yet.
+`--browser` runs the marinas in real flights in Chrome instead, to compare.
 
 ```sh
-python3 tools/test/boatride.py                     # serves the repo itself, ~3 min
-python3 tools/test/boatride.py --only canyon       # just one marina
-python3 tools/test/boatride.py --json out.json     # full report
+node tools/test/node/run.mjs boatride                # ~10 s on a quiet Mac
+python3 tools/test/boatride.py                       # the same, printed as a table
+python3 tools/test/boatride.py --only canyon         # just one marina
+python3 tools/test/boatride.py --json out.json       # full report
+python3 tools/test/boatride.py --browser             # the marinas in headless Chrome (3 browsers, ~20 s)
 ```
 
 Run it when you change `src/boat.js`, the boat parts (`src/boatParts.js`), `src/marina.js` or water contact in
@@ -429,14 +455,35 @@ rendering) in each driving mode: Easy, Racer and Pro (the Arcade / Pilot / Sim s
 - **a kid's own cars** (`meshcheck.js` `carBuilds`, some tall and narrow): hard turns at 10 and 20 m/s and the fishhook
   keep them on their wheels in Easy and Racer.
 
-It prints the turning-circle table (radius and g per speed, per car and mode).
+It is a headless Node suite: one case per car and mode, the kid's cars in pairs (built once, in the main thread:
+placing their parts the hangar's way costs more than driving them). Each car's first check carries its turning-circle
+table as `info` (`--json`); `drivecheck.py` (the browser path) prints it as a table.
 
 ```sh
-python3 tools/test/drivecheck.py                 # ~20 s
-python3 tools/test/drivecheck.py --json out.json # every number
+node tools/test/node/run.mjs drivecheck                  # ~4 s
+node tools/test/node/run.mjs drivecheck --json out.json  # every number
+python3 tools/test/drivecheck.py                         # the same checks in headless Chrome, with the table (~25 s)
 ```
 
 Run it when you change car physics (`steerAngle`, the tyres in `contacts`, `carAssist` in `aircraft.js`) or `drive.js`.
+
+## Rocket handling check
+
+`rocketcheck.js` flies the Rocket preset on flat ground in still air (fixed 1/60 s steps, scripted stick, steering
+relative to a fixed camera behind it):
+
+- **hold** (Arcade, Pilot): launch, push the stick for 1.2 s (pitch over, then sideways), let go: the nose must turn at
+  least 20°, then stay within 3° of where it settled 0.75 s after letting go for the next 6 s, and not swing back more
+  than 2° towards where it started.
+- **three fins** (Sim): a rocket with three fins copied round the body climbs hands off with no roll (under 2°/s), no
+  lean (under 2°) and no sideways drift.
+
+```sh
+node tools/test/node/run.mjs rocketcheck     # a fraction of a second (headless Node suite)
+python3 tools/test/rocketcheck.py            # the same checks in headless Chrome (~4 s)
+```
+
+Run it when you change the rocket attitude hold or fin aerodynamics in `aircraft.js`.
 
 ## Wall test
 
