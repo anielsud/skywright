@@ -505,6 +505,10 @@ export function tubeSeams(design, det, root, { cols = 32, rows = 72, trace = nul
         col.push({ s, r, n, pi, mesh: h.object });
       }
       if (trace && trace.j === out.length && Math.abs(c - trace.c) < 0.5) trace.rows = col.map((q, k) => (q ? [+q.s.toFixed(3), +q.r.toFixed(4), q.pi, q.mesh.material.type + ":" + (q.mesh.material.color?.getHexString?.() || "") + ":" + q.mesh.geometry.attributes.position.count, k ? +(Math.acos(Math.min(1, Math.max(-1, col[k - 1]?.n.dot(q.n) ?? 1))) * 180 / Math.PI).toFixed(1) : 0] : null));
+      // a sample far below the skin either side of it (more than 10 % of the radius) is no groove: the ray went in through
+      // an opening (a heli cabin's open door at the seam) and met the seat or floor inside. Looked past, like glass.
+      const deep = col.map((q, k) => { if (!q) return false; for (const f of [0.05, 0.1]) { const h = Math.max(1, Math.round((f * J.R) / ds)), a = col[k - h], b = col[k + h]; if (a && b && (a.r + b.r) / 2 - q.r > 0.1 * J.R) return true; } return false; });
+      deep.forEach((x, k) => { if (x) col[k] = null; });
       // dip: below the radius on both sides (within the window); normal jump between neighbours
       for (let k = 0; k < col.length; k++) {
         const q = col[k]; if (!q) continue; valid++;
