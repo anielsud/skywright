@@ -385,6 +385,15 @@ async def run(args, url, ws_url, shots):
                 elif kind == 'sr71-land':
                     await r.step('SR-71: land from the approach', lambda: sr71_land(cdp, shots, loc), timeout=300)
 
+        async def to_hangar():
+            if not await cdp.js(f'!!{S}.F'):
+                return 'no flight'
+            await cdp.js(f'{S}.endFlight(); 1')
+            await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 30, 'the hangar')  # (up to ~14 s on a CI runner)
+            return 'the flight ended cleanly'
+
+        await r.step('back to the hangar', to_hangar, timeout=60)
+
         if node:
             async def presets():
                 if isinstance(node, Exception):
