@@ -11,14 +11,17 @@
 //     node/world.mjs World it builds, if any: cases needing the same World go to the same worker where they can)
 //   export async function runCase(c, ctx) { return [{ name, ok, why, ...extra }, ...] }   // one case's checks
 // ctx = { presets: makePresets() } (each worker makes its own). Cases run in any order, on any worker: a case must not
-// depend on another having run first. Keep cases a few seconds each so the pool balances.
+// depend on another having run first. Keep cases a few seconds each so the pool balances. A case may carry a key
+// (c.key, e.g. a vehicle's name): cases with the same key, from any suite, go to the same worker where possible, so
+// what that worker built and cached for the first is warm for the rest. A case may say what it costs (c.cost, seconds
+// of work, roughly): the costly ones go out first, so they are not left running at the end.
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { availableParallelism } from 'node:os';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url)), REPO = fileURLToPath(new URL('../../../', import.meta.url));
-export const SUITES = ['bikeride', 'stunts', 'waterpark', 'walls']; // (tools/test/<name>.js; add a suite here once it exports nodeSuite)
+export const SUITES = ['bikeride', 'drivecheck', 'rocketcheck', 'riders', 'gvision', 'boatride', 'stunts', 'waterpark', 'walls']; // (tools/test/<name>.js; add a suite here once it exports nodeSuite)
 const modUrl = (name) => pathToFileURL(`${REPO}tools/test/${name}.js`).href;
 
 async function context() { const { makePresets } = await import(pathToFileURL(REPO + 'src/design.js').href); return { presets: makePresets() }; }

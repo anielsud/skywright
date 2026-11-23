@@ -48,3 +48,18 @@ export function envOf(world) {
 }
 // what the browser tests reach through window.__sky, for a World: S.F.world, S.F.env, S.Aircraft, ...
 export const skyOf = (w, presets) => ({ F: { world: w.world, env: w.env, paused: true }, THREE, Aircraft, REALISM, analyze, presets });
+
+// A World at a given quality, not cached (boatride: the Grand Canyon's river landing is also checked at High). Building
+// one logs what it can't place and three.js's notes: kept in `said`, not printed (quiet), any other error prints.
+//   const { world, env } = await nodeWorld('islands', 'low');  ...  world.dispose();
+export async function nodeWorld(location, quality = 'low', { time = 10, weather = 'clear', quiet = true } = {}) {
+  const loc = LOCATIONS[location]; if (!loc) throw new Error(`no location ${location}`);
+  const said = [], { log, warn, error } = console, keep = (...a) => said.push(a.map((x) => (typeof x === 'string' ? x : x?.constructor?.name)).join(' '));
+  if (quiet) { console.log = console.warn = keep; console.error = (...a) => (String(a[0]).startsWith('THREE.') ? keep(...a) : error(...a)); }
+  const fetch0 = globalThis.fetch; globalThis.fetch = (u, o) => (/^https?:/.test(String(u?.url ?? u)) ? Promise.reject(new Error('offline (tests)')) : fetch0(u, o));
+  try {
+    if (loc.real) await loadReal(loc, quality); else await World.prepare(location);
+    const world = new World(renderer, new THREE.Scene(), { location, quality, time, weather });
+    return { world, env: envOf(world), said };
+  } finally { console.log = log; console.warn = warn; console.error = error; globalThis.fetch = fetch0; }
+}
