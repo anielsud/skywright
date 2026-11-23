@@ -11,6 +11,34 @@
 Any console error, uncaught exception, or failed/404 request for a file of ours fails the step it happened in.
 It prints PASS/FAIL per step with timings, and exits non-zero on any failure. A full run takes about 2 minutes.
 
+## Running the tests: run.py, the Node tier and the browser tier
+
+```sh
+python3 tools/test/run.py              # everything
+python3 tools/test/run.py --changed    # only suites covering what changed vs origin/main (and uncommitted files)
+python3 tools/test/run.py bikeride     # named suites;  --list shows each suite's tier and the files it covers
+```
+
+Tests are in two tiers.
+
+- **Node tier** (`tools/test/node/run.mjs`): logic, physics and geometry, with no browser. The game's own modules run
+  in Node (`node/setup.mjs`: `three` resolved to the vendored build, plus small browser stand-ins: no-op canvases,
+  localStorage, and `fetch` reading the repo from disk) on a pool of worker threads (cores − 2), one case at a time.
+  A suite is a `tools/test/<name>.js` module listed in `SUITES` in run.mjs that exports `nodeSuite = { files,
+  headless }`, `cases(ctx)` (plain case descriptors) and `runCase(c, ctx)` (that case's checks:
+  `[{ name, ok, why }]`); `ctx.presets` is `makePresets()`. With `headless: true` the vehicle skips its purely visual
+  detail (aircraft.js `HEADLESS`: the assembly pass and the per-frame crew posing). Set `SKY_VISUALS=1` to run with it,
+  to prove a suite's results don't change. Nothing drawn is exercised in Node: textures, shaders and frames belong to
+  the browser tier.
+- **Browser tier**: what needs a real page (boot, UI, audio, shader compiles, screenshots, the real game loop). Use
+  `window.__sky.advance(seconds)` to step the flight without rendering (about 25–50× faster than waiting for frames;
+  streaming that works to a per-frame time budget gets less done per game second, so let it settle when a check
+  depends on it), and `window.__sky.swapVehicle(design)` to fly another vehicle in the same World (about 1 s instead
+  of building a World).
+
+`bikeride` is the reference Node suite: 77 checks in about 2.5 s, against 28 s in Chrome. Its results are identical
+with and without `headless`.
+
 ## Run it
 
 ```sh

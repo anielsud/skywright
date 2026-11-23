@@ -1683,6 +1683,13 @@ async function boot() {
     addEventListener('online', autoCheckUpdate);
     addEventListener('focus', autoCheckUpdate);
   }
-  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, restartFlight, get kept() { return kept; }, get tunnel() { return tunnel; }, gvis, openTunnel, closeTunnel, net, presets, settings, flightCfg, controls, rig, analytics, hud };
+  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, restartFlight, get kept() { return kept; },
+    // tests (tools/test): advance(s) steps the flight s seconds at a fixed dt with no rendering (physics, world, effects,
+    // traffic, missions: everything stepFlight does), ~50x faster than waiting for frames; streaming that works to a
+    // time budget per frame (terrain tiles, flora, map tiles) gets less done per game second, so let it settle first
+    // when a check depends on it. swapVehicle(design): fly another vehicle in the same World (a restart with a new
+    // design, so the World is kept); wait for F.t > 0 afterwards.
+    advance(seconds, dt = 1 / 60) { for (let n = Math.round(seconds / dt); n > 0 && F && !F.paused && !F.warm?.pending; n--) stepFlight(dt); return F?.t ?? 0; },
+    swapVehicle(design) { hangar.load(design); if (F) restartFlight(); }, get tunnel() { return tunnel; }, gvis, openTunnel, closeTunnel, net, presets, settings, flightCfg, controls, rig, analytics, hud };
 }
 boot();
