@@ -687,15 +687,20 @@ const PARKED = [2, 0, 4, 7]; // the airport's parked planes (presets)
 // Hangar idle time after boot: the first flight's share of the world's session caches (moored boats, parked planes,
 // building atlas), one step per idle slot so the hangar never stalls for long. Later flights reuse them anyway.
 function prewarmWorld() {
-  const idle = (fn) => (window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 3000 }) : setTimeout(fn, 100));
+  // (only in real idle time: not while the player is doing something, a window is open or the hangar is still coming
+  // back, and only in an idle slot the browser offers; a step is one block of work, so a busy device just skips it)
+  let lastInput = performance.now();
+  for (const ev of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart']) addEventListener(ev, () => (lastInput = performance.now()), { capture: true, passive: true });
+  const quiet = () => state === 'hangar' && performance.now() - lastInput > 2000 && !hangar.envDirty && !hangar.env?.restoring && document.getElementById('modal-root')?.style.display !== 'block';
   const parked = PARKED.map((i) => () => parkedStatic(presets[i]));
-  const step = () => {
-    if (state !== 'hangar') return setTimeout(step, 2000);
-    if (prewarmMarina()) return idle(step);
-    const p = parked.shift(); if (p) { p(); return idle(step); }
+  const next = (ms = 250) => setTimeout(() => (window.requestIdleCallback ? requestIdleCallback(step) : step()), ms);
+  const step = (deadline) => {
+    if (!quiet() || (deadline && deadline.timeRemaining() < 40)) return next(1000);
+    if (prewarmMarina()) return next();
+    const p = parked.shift(); if (p) { p(); return next(); }
     prewarmAtlas({ low: 128, medium: 192, ultra: 384 }[qualityTier()] ?? 256); // (the cell size World's buildings use)
   };
-  idle(step);
+  next(1000);
 }
 // A restart keeps the World (and its scene) when what it is built from hasn't changed (World.key): endFlight(true)
 // reset()s it and leaves it here, the next buildFlight takes it. Building one costs 1.3-2.5 s. Only for a restart:
