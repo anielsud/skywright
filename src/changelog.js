@@ -3,6 +3,9 @@
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
   { v: '1.152.0', items: [
+    "Squeeze two cockpits together and they make one big twin cockpit, now without any loose bits floating inside.",
+  ] },
+  { v: '1.152.0', items: [
     "Fixed a rare hiccup when you restart a flight really quickly after starting it.",
   ] },
   { v: '1.151.0', items: [
