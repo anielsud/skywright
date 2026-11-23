@@ -20,6 +20,7 @@ except ImportError:
     sys.exit("smoke.py needs the 'websockets' package: pip install websockets")
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+TRACE = bool(os.environ.get('SKY_TRACE'))  # (print every CDP call over a second: CDP.js / wait_for)
 FLIGHT_SECONDS = 2.0
 
 
@@ -90,7 +91,7 @@ def launch_chrome(cdp_port, profile, size):
 
 class CDP:
     def __init__(self, ws):
-        self.ws, self.n, self.pending, self.handlers = ws, 0, {}, []
+        self.ws, self.n, self.pending, self.handlers, self._waiting = ws, 0, {}, [], False
         self.reader = asyncio.ensure_future(self._read())
 
     async def _read(self):
@@ -120,8 +121,16 @@ class CDP:
         return m.get('result', {})
 
     async def js(self, expr, timeout=None, gesture=False):
+        """Evaluate an expression (awaiting promises) and return its value; page exceptions raise. With SKY_TRACE=1,
+        every call taking over a second is printed with its time (where a suite's time goes)."""
+        t0 = time.time()
+        try:
+            return await self._js(expr, timeout, gesture)
+        finally:
+            if TRACE and time.time() - t0 > 1 and not self._waiting: print(f'  [trace] {time.time() - t0:6.1f} s  js {" ".join(expr.split())[:90]}', flush=True)
+
+    async def _js(self, expr, timeout=None, gesture=False):
         timeout = max(timeout or 30, float(os.environ.get('SKY_CDP_TIMEOUT') or 0))  # (CI sets a floor: software WebGL takes seconds per frame)
-        """Evaluate an expression (awaiting promises) and return its value; page exceptions raise."""
         r = await self.send('Runtime.evaluate', _timeout=timeout + 5, expression=expr, awaitPromise=True,
                             returnByValue=True, userGesture=gesture, timeout=int(timeout * 1000))
         if 'exceptionDetails' in r:
@@ -131,6 +140,14 @@ class CDP:
 
     async def wait_for(self, cond, timeout, what):
         """Poll a JS boolean expression until true."""
+        t0 = time.time(); self._waiting = True
+        try:
+            return await self._wait_for(cond, timeout, what)
+        finally:
+            self._waiting = False
+            if TRACE and time.time() - t0 > 1: print(f'  [trace] {time.time() - t0:6.1f} s  wait for {what}', flush=True)
+
+    async def _wait_for(self, cond, timeout, what):
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:

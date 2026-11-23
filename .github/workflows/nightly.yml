@@ -21,6 +21,7 @@ jobs:
     name: ${{ matrix.suite }}
     env:
       SKY_CDP_TIMEOUT: '120'
+      SKY_TRACE: '1' # (print every CDP call over a second: where the time goes)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
