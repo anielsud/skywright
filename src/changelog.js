@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.152.0', items: [
+    "Fixed a rare hiccup when you restart a flight really quickly after starting it.",
+  ] },
   { v: '1.151.0', items: [
     "Tidier insides everywhere: seats, consoles and decks now sit on the floor instead of floating, the Rocket's astronaut has a proper deck, and the Speedboat's speakers, cup holders and seat backs fit snugly.",
   ] },
