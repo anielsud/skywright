@@ -90,13 +90,15 @@ export class Vehicles {
       park(t.c.clone().addScaledVector(t.dir, along).addScaledVector(side, off), Math.atan2(-t.dir.x, -t.dir.z) + (r() < 0.5 ? Math.PI : 0));
     }
     for (let row = 0; row < 3; row++) for (let k = 0; k < 14; k++) if (r() < 0.75) park(new THREE.Vector3(345 + row * 7, 0, 60 + k * 3.2), Math.PI / 2);
-    // a row of baggage carts by the terminal
-    for (let k = 0; k < 4; k++) this.parked.push({ p: new THREE.Vector3(268, 0, 88 + k * 3.3), yaw: 0, type: 'cart', color: 0xffffff });
-    // airport ground vehicles driving around the apron: the fuel tanker and a yellow follow-me car
+    // two spare baggage carts by the terminal
+    for (let k = 0; k < 2; k++) this.parked.push({ p: new THREE.Vector3(268, 0, 88 + k * 3.3), yaw: 0, type: 'cart', color: 0xffffff });
+    // airport ground vehicles driving around the apron: the fuel tanker, a yellow follow-me car and a tug pulling three
+    // baggage carts (tow: the carts drawn along the path behind it)
     const apron = [[120, -150], [120, 150], [250, 150], [250, -150]].map(([x, z]) => new THREE.Vector3(x, 0, z));
     const ap = { pts: [], speed: 7, kind: 'apron' }; for (let i = 0; i < 4; i++) { const a = apron[i], b = apron[(i + 1) % 4]; for (let t = 0; t < 1; t += 0.02) ap.pts.push(a.clone().lerp(b, t)); }
     ap.len = []; let L = 0; ap.pts.forEach((q, i) => { if (i) L += q.distanceTo(ap.pts[i - 1]); ap.len.push(L); }); ap.total = L + ap.pts.at(-1).distanceTo(ap.pts[0]);
-    this.cars.push({ path: ap, s: 0, v: 6, want: 7, type: 'tanker', color: 0xffffff, brake: 0, roll: 0 }, { path: ap, s: ap.total * 0.5, v: 6, want: 6, type: 'offroad', color: 0xf2b705, brake: 0, roll: 0 });
+    this.cars.push({ path: ap, s: 0, v: 6, want: 7, type: 'tanker', color: 0xffffff, brake: 0, roll: 0 }, { path: ap, s: ap.total * 0.5, v: 6, want: 6, type: 'offroad', color: 0xf2b705, brake: 0, roll: 0 },
+      { path: ap, s: ap.total * 0.25, v: 4, want: 4.5, type: 'tug', color: 0xffffff, brake: 0, roll: 0, tow: 3 });
     for (const c of this.parked) c.p.y = world.sampleGrid(c.p.x, c.p.z) + 0.03;
     this.drawDist = { low: 1200, medium: 1800, high: 3000 }[world.qBase] || 1800;
     this.lod = LOD[world.qBase] || LOD.medium;
@@ -213,6 +215,14 @@ export class Vehicles {
         m4.compose(p, q, one); draw(c, mdl, dd);
         const tail = Math.max(show * 0.5, c.brake ? 1 : 0);
         if (show || tail) { put(mdl.head[0], 1, 0.95, 0.8, show); put(mdl.head[1], 1, 0.95, 0.8, show); put(mdl.tail[0], 1, 0.08, 0.04, tail); put(mdl.tail[1], 1, 0.08, 0.04, tail); }
+        if (c.tow) { // the towed carts, each on the path behind the one ahead (3.3 m apart, drawbar included)
+          const cm = this.model('cart'), cart = (this._cart ??= { type: 'cart', color: 0xffffff, roll: 0 });
+          for (let k = 0; k < c.tow; k++) {
+            this.pathPoint(path, c.s - mdl.L / 2 - 0.4 - cm.L * (k + 0.5) - 0.4 * k, p, d);
+            q.setFromEuler(eu.set(0, Math.atan2(-d.x, -d.z), 0, 'YXZ')); m4.compose(p, q, one);
+            draw(cart, cm, (p.x - (camPos?.x ?? p.x)) ** 2 + (p.z - (camPos?.z ?? p.z)) ** 2);
+          }
+        }
       }
     }
     // hide the instances dealt last frame but not this one

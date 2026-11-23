@@ -4,7 +4,7 @@
 <!-- Every traffic model in a grid, drawn by the game's own loader and material (src/trafficModels.js) in one
      BatchedMesh, one tile each. ?view=three|side|front|rear|top &lod=0|1|2 &paint=1 (random colours) &quality=low (half-size
      atlas) &only=id,id. Screenshots: tools/traffic/preview.py. -->
-<script>const _w = console.warn; console.warn = (...a) => { window.warns = (window.warns || "") + a.map((x) => x?.stack || String(x)).join(" ") + "\n"; _w(...a); }; addEventListener("error", (e) => window.err = String(e.message)); addEventListener("unhandledrejection", (e) => window.err = String(e.reason?.stack || e.reason));</script>
+<script>const _e = console.error; console.error = (...a) => { window.err = (window.err || "") + a.map(String).join(" ").slice(0, 1500); _e(...a); }; const _w = console.warn; console.warn = (...a) => { window.warns = (window.warns || "") + a.map((x) => x?.stack || String(x)).join(" ") + "\n"; _w(...a); }; addEventListener("error", (e) => window.err = String(e.message)); addEventListener("unhandledrejection", (e) => window.err = String(e.reason?.stack || e.reason));</script>
 <script type="module">
 import * as THREE from 'three';
 import { RoomEnvironment } from '../../vendor/addons/RoomEnvironment.js';
@@ -18,7 +18,7 @@ const M = await trafficModels(q.get('quality') || 'high'); if (!M) throw new Err
 const ids = Object.keys(M.meta).filter((id) => !only || only.split(',').includes(id));
 const cols = 6, cell = 40, PAINT = [0xc8102e, 0x1d4e89, 0x2e6b3f, 0xe8a43c, 0xf2f2ee, 0x202326];
 let nv = 0, ni = 0; for (const id of ids) { const g = M.geo[id]; for (const x of [g.lod[lod], ...(lod ? [] : g.wheels)]) { nv += x.attributes.position.count; ni += x.index.count; } }
-const B = new THREE.BatchedMesh(ids.length * 12, nv, ni, M.material);
+const B = new THREE.BatchedMesh(ids.length * 12, nv, ni, M.material); S.add(B);
 const m4 = new THREE.Matrix4(), c = new THREE.Color();
 ids.forEach((id, k) => {
   const x = (k % cols - (cols - 1) / 2) * cell, z = (Math.floor(k / cols)) * cell * 1.1, g = M.geo[id];

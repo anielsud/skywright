@@ -7,7 +7,8 @@
 //   generic_passenger_car_pack/            "Generic passenger car pack" by comrade1280
 //   generic_civil_service_vehicles_pack/   "Generic civil service vehicles pack" by comrade1280
 //   fuel_truck/                            "Fuel Truck" by abdullahjavedyo90 (the Shell livery painted out)
-//   airport_baggage_equipment_cart_lowpoly/ "Airport baggage equipment (cart) lowpoly" by menX1151
+//   aircraft_tractor_lowpoly_model/        "Aircraft tractor lowpoly model" by propmaker1 (menX1151)
+//   airport_baggage_equipment_cart_lowpoly/ "Airport baggage equipment (cart) lowpoly" by propmaker1 (menX1151)
 //
 //   npm i @gltf-transform/core @gltf-transform/functions @gltf-transform/extensions meshoptimizer sharp  (any folder;
 //   link its node_modules here)   then   node tools/traffic/build.mjs SRC_DIR [OUT_DIR=assets/traffic]
@@ -57,6 +58,7 @@ const SPECS = [
   { id: 'towtruck', src: C, node: 'towtruck', kind: 'truck' },
   { id: 'postvan', src: C, node: 'postvan', kind: 'van', turn: true },
   { id: 'tanker', src: 'fuel_truck', node: null, kind: 'truck', turn: true, tiles: { 'Material.003': 768 }, lod0: 14000 },
+  { id: 'tug', src: 'aircraft_tractor_lowpoly_model', node: null, kind: 'airport', length: 4.6, tile: 512, turn: true },
   { id: 'cart', src: 'airport_baggage_equipment_cart_lowpoly', node: null, kind: 'airport', length: 2.9, tile: 256, noWheels: true },
 ];
 const LOD_TRIS = [null, 1400, 450]; // lod0 = the model as it is; lod1/lod2 targets (whole vehicle, wheels merged)
@@ -318,7 +320,7 @@ for (const v of vehicles) {
   const wheels = v.wheels.map((w, k) => { tris.push(mesh(`${id}_wheel${k}`, simplify(merge(w.parts, w.c), 600, 0.02))); return [...w.c.map((x) => +x.toFixed(3)), +w.r.toFixed(3)]; });
   meta[id] = { kind: v.spec.kind, paint: !!v.spec.paint, L: +v.b.size[2].toFixed(3), W: +v.b.size[0].toFixed(3), H: +v.b.size[1].toFixed(3), wheels, head: v.head, tail: v.tail, tris };
 }
-scene.setExtras({ vehicles: meta, atlas: [AW, AH], credits: 'comrade1280, abdullahjavedyo90, menX1151 (Sketchfab, CC BY 4.0)' });
+scene.setExtras({ vehicles: meta, atlas: [AW, AH], credits: 'comrade1280, abdullahjavedyo90, propmaker1/menX1151 (Sketchfab, CC BY 4.0)' });
 const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ 'meshopt.encoder': MeshoptEncoder });
 await doc.transform(dedup(), prune({ keepAttributes: true }), // (the material has no textures in the file: prune would drop the UVs)
    quantize({ quantizePosition: 14, quantizeNormal: 8, quantizeTexcoord: 14 }), meshopt({ encoder: MeshoptEncoder, level: 'medium' }));
