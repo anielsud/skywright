@@ -1211,6 +1211,7 @@ export class World {
     this.scene.remove(this.group, this.sky, this.sun, this.sun.target, this.hemi, this.deck, this.deck2, this.clouds.mesh, this.rain, this.snow);
     this.tiles?.dispose(); this.space.dispose(); this.stunts?.dispose(); this.waterParks?.dispose(); this.helipads?.dispose();
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    this.envScene.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); }); // (the reflection environment's own sky and ground: not in the flight scene, so nothing else frees them, #213)
     if (this.envRT) this.envRT.dispose();
     this.pmrem.dispose();
     this.atmo.dispose(); this.clouds.dispose();

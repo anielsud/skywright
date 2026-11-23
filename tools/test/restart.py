@@ -161,7 +161,7 @@ async def main(a):
             profile = tempfile.mkdtemp(prefix='skyrestart-')
             proc, ws_url = launch_chrome(a.cdp_port or free_port(), profile, '1000,700')
             try:
-                async with websockets.connect(ws_url, max_size=None) as ws:
+                async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:
                     cdp = CDP(ws)
                     probs = Problems(origin)
                     cdp.handlers.append(probs.on)

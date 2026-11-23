@@ -55,7 +55,7 @@ Tests are in two tiers.
 **Known failures:** `tools/test/known.json` lists failing checks that are already tracked (suite → check name →
 issue). The Node runner reports them as `known` and doesn't count them. A listed check that passes is reported as
 `fixed` (take it off the list). **CI** (`.github/workflows/smoke.yml`, "Tests") runs on every PR as three parallel
-jobs: the smoke tour (2 parts), the whole Node tier, and the other browser suites. In all, about 5 minutes.
+jobs: the smoke tour (2 parts), the whole Node tier, and one job per other browser suite. In all, about 6 minutes.
 
 `bikeride` is the reference Node suite: 77 checks in about 2.5 s, against 28 s in Chrome. Its results are identical
 with and without `headless`.

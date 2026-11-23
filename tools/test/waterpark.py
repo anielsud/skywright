@@ -64,7 +64,7 @@ async def photograph(a):
     proc, ws_url = launch_chrome(a.cdp_port or free_port(), profile, '1280,800')
     origin = (a.url or f'http://127.0.0.1:{port}').rstrip('/')
     try:
-        async with websockets.connect(ws_url, max_size=None) as ws:
+        async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:
             cdp = CDP(ws)
             await cdp.send('Runtime.enable')
             await cdp.send('Page.navigate', url=origin + '/')

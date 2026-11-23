@@ -108,7 +108,7 @@ async def main(a):
     results, t0 = [], time.time()
     add = lambda name, ok, detail='': results.append((name, bool(ok), detail))
     try:
-        async with websockets.connect(ws_url, max_size=None) as ws:
+        async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:
             cdp = CDP(ws)
             probs = Problems(origin)
             cdp.handlers.append(probs.on)

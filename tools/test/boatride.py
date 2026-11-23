@@ -36,7 +36,7 @@ async def session(a, origin, worlds):
     proc, ws_url = launch_chrome(free_port(), profile, '1000,700')
     probs = Problems(origin)
     try:
-        async with websockets.connect(ws_url, max_size=None) as ws:
+        async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:
             cdp = CDP(ws)
             cdp.handlers.append(probs.on)
             await cdp.send('Runtime.enable')

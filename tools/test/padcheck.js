@@ -26,8 +26,8 @@ export function steps(F, done, limit = 60) { const t0 = F.t; while (!done()) { i
 // the spawn pose exactly as buildFlight left it (no physics step has run yet)
 export async function spawn(name, location, cfg = {}) {
   const F = await start(name, location, cfg);
-  if (F.t) throw new Error('the flight stepped before the spawn pose was read');
-  const r = { name, location, start: F.cfgStart, x: F.ac.x.toArray(), q: F.ac.q.toArray(), v: F.ac.v.toArray() };
+  const p = F.spawnPose; if (!p) throw new Error('no spawn pose recorded (main.js buildFlight)'); // (recorded before any step: a slow machine may already have stepped it by now)
+  const r = { name, location, start: F.cfgStart, x: p.x, q: p.q, v: p.v };
   await running(F);
   return r;
 }

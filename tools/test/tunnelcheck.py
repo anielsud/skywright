@@ -40,7 +40,7 @@ async def ui_tier(a):
         os.makedirs(a.shots, exist_ok=True)
     fails = 0
     try:
-        async with websockets.connect(ws_url, max_size=None) as ws:
+        async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:
             cdp = CDP(ws)
             probs = Problems(origin)
             cdp.handlers.append(probs.on)
