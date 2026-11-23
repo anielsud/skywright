@@ -23,7 +23,7 @@ import { addCrew, crewLodGeos, CREW_LOD_ERR } from './crew.js';
 import { routeGear, routeStruts } from './gearRoute.js';
 import { assembleCar } from './carDetail.js';
 import { fitOut } from './fitOut.js';
-import { keepOut, interiorOf } from './interior.js';
+import { keepOut, interiorOf, wellDepth, WELL_SLACK } from './interior.js';
 import { bikeSync, wireRiders, riderInput } from './bikeParts.js';
 import { TANDEM_SHAPE, TANDEM_VOL, RAMJET } from './supersonicParts.js';
 
@@ -347,18 +347,23 @@ const CANOPY = {
 // C.floor, replacing the canopy's own tub. (The crew sat inside a solid skin, buried to the chest.)
 function opening(C, cobj, structure, S, up) {
   const inv = cobj.matrixWorld.clone().invert(), v = V(), n = V();
+  const W = cobj.matrixWorld, loc = S.map((p) => p.clone().applyMatrix4(inv));
+  const ring = (k, sx, sz) => loc.map((p) => V(p.x * sx, p.y + (C.floor - p.y) * k, p.z * sz).applyMatrix4(W));
+  const rings = [ring(0, 1, 1), ring(0.55, 0.95, 0.97), ring(1, 0.86, 0.9)];
+  // the skin facing up inside the tub's walls (and above its floor) is cut away, so the cut runs along the tub's wall and
+  // the wall closes it. (It was every upward skin inside the glass's footprint, however deep: a canopy set high on a
+  // body opened the skin far below its tub's floor, round a hole nothing closed.)
+  const wd = wellDepth(rings.map((r) => r.map((p) => p.clone().applyMatrix4(inv).toArray())));
   for (const m of structure) {
     const g = m.geometry, pos = g.attributes.position, nrm = g.attributes.normal; if (!pos || !nrm) continue;
     m.updateMatrixWorld(); const nm = new THREE.Matrix3().getNormalMatrix(m.matrixWorld), val = new Float32Array(pos.count);
     for (let i = 0; i < pos.count; i++) {
       n.fromBufferAttribute(nrm, i).applyMatrix3(nm).normalize(); if (n.dot(up) < 0.2) { val[i] = 1; continue; }
-      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld).applyMatrix4(inv); val[i] = C.vol(v.x, v.y, v.z);
+      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld).applyMatrix4(inv); val[i] = WELL_SLACK - wd(v);
     }
     const g2 = clipGeometry(g, val); if (g2) { m.geometry = g2; g.dispose(); }
   }
-  const W = cobj.matrixWorld, loc = S.map((p) => p.clone().applyMatrix4(inv));
-  const ring = (k, sx, sz) => loc.map((p) => V(p.x * sx, p.y + (C.floor - p.y) * k, p.z * sz).applyMatrix4(W));
-  const rings = [ring(0, 1, 1), ring(0.55, 0.95, 0.97), ring(1, 0.86, 0.9)], tg = ringLoft(rings, false, true), idx = tg.index.array;
+  const tg = ringLoft(rings, false, true), idx = tg.index.array;
   addTubObstacle(cobj, rings, inv); // (the crew keep inside it)
   for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; } // (facing in)
   tg.computeVertexNormals();

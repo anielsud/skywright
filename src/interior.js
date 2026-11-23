@@ -27,7 +27,7 @@ import { prepObstacle, obstacleClear } from './crew.js';
 import { dropOrphans } from './orphans.js';
 
 const MARGIN = 0.006; // (part metres: geometry lying on the interior's boundary, like the skin cut along the glass, is left alone)
-const WELL_SLACK = 0.007; // a tub's own walls hide what is behind them: the cut reaches this far past them (part metres; the tub is kept 1 cm inside the skin)
+export const WELL_SLACK = 0.007; // a tub's own walls hide what is behind them: the cut reaches this far past them (part metres; the tub is kept 1 cm inside the skin)
 const H_MIN = 0.04; // triangles crossing the boundary are split down to this size (part metres) before cutting
 const H_STEP = 0.004; // ... and down to this where the depth steps (a coaming lip over a wider footwell), so the cut lands on the step
 const SAFE = 1.6; // the shapes' depths are only roughly distances: the slope seen along a triangle's edges is trusted this far ...
@@ -51,7 +51,7 @@ function shapeDepth(d, bottom) {
 
 // A well's depth, exactly: its section at the point's height is the polygon through each wall line's point there (a
 // line's top point above it: the wall goes on straight up), the depth the signed distance to that polygon's edges
-function wellDepth(rings) {
+export function wellDepth(rings) {
   const n = rings[0].length, y0 = Math.min(...rings.at(-1).map((p) => p[1])), xs = new Float64Array(n), zs = new Float64Array(n), all = rings.flat();
   const x0 = Math.min(...all.map((q) => q[0])), x1 = Math.max(...all.map((q) => q[0])), z0 = Math.min(...all.map((q) => q[2])), z1 = Math.max(...all.map((q) => q[2]));
   return (p) => {
