@@ -1052,8 +1052,13 @@ export class Aircraft {
     if (amount < 0.01) return;
     const inv = new THREE.Matrix4(), lp = new THREE.Vector3(), ld = new THREE.Vector3(), v = new THREE.Vector3();
     const radius = 0.6 + amount * 3;
-    p.obj.traverse((o) => {
-      if (!o.isMesh || o.userData.isDisc) return;
+    // the people aboard (and the controls they hold) never dent: a skinned body can't take a dent in its rest pose, and
+    // their geometry is shared by every build of that figure (crew.js geoCache), so the dent would stay on the next
+    // flight's driver after a restart
+    const crew = new Set((p.obj.userData.crew || []).map((r) => r.root));
+    const walk = (o, f) => { if (crew.has(o)) return; f(o); for (const c of o.children) walk(c, f); };
+    walk(p.obj, (o) => {
+      if (!o.isMesh || o.userData.isDisc || o.isSkinnedMesh) return;
       o.updateMatrixWorld(true);
       inv.copy(o.matrixWorld).invert();
       lp.copy(worldPt).applyMatrix4(inv);
