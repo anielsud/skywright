@@ -1429,7 +1429,7 @@ function airlinerFlightDeck(g, bR, nbR, { SY, SZ, SEAT, FLOOR, zs, DY, DZ }) {
     const c = { lfb: V(-X, yb(ZF), ZF), rfb: V(X, yb(ZF), ZF), lab: V(-X, yb(ZA), ZA), rab: V(X, yb(ZA), ZA), lft: V(-X, yt(ZF), ZF), rft: V(X, yt(ZF), ZF), lat: V(-X, yt(ZA), ZA), rat: V(X, yt(ZA), ZA) };
     b.add(fdQuad(c.lfb, c.rfb, c.rab, c.lab, FDA.ovh, V(0, -1, 0.2)), A); // (its lettering's top towards the back: upright to a pilot looking up)
     for (const sx of [-1, 1]) { const [f, a2, ft, at] = sx < 0 ? [c.lfb, c.lab, c.lft, c.lat] : [c.rfb, c.rab, c.rft, c.rat]; b.add(fdQuad(a2, f, ft, at, FDA.plateB, V(sx, 0, 0)), A); }
-    b.add(fdQuad(c.lfb, c.rfb, c.rft, c.lft, FDA.plateB, V(0, 0, -1)), A); b.add(fdQuad(c.lab, c.rab, c.rat, c.lat, FDA.plateB, V(0, 0, 1)), A);
+    b.add(fdQuad(c.lfb, c.rfb, c.rft, c.lft, FDA.plateB, V(0, 0, -1)), A); b.add(fdQuad(c.lab, c.rab, c.rat, c.lat, FDA.plateB, V(0, 0, 1)), A); b.add(fdQuad(c.lft, c.rft, c.rat, c.lat, FDA.plateB, V(0, 1, 0)), A); // (its top too, under the crown: the box is closed)
     const L = overheadLayout(), du = c.rfb.clone().sub(c.lfb), dv = c.lab.clone().sub(c.lfb), n = du.clone().cross(dv).normalize(); if (n.y > 0) n.negate();
     for (const [u, v, guard] of L.sw) { const p0 = c.lfb.clone().addScaledVector(du, u).addScaledVector(dv, v), p1 = p0.clone().addScaledVector(n, 0.017).add(V(0, 0, -0.004));
       nb.add(bar(p0, p1, 0.0045, 0.0045, true, 5), kit.chrome); nb.add(fdBox(0.008, 0.008, 0.008, guard ? 'red' : 'cream', mx(p1.toArray())), A); }
@@ -1460,8 +1460,10 @@ function airlinerFlightDeck(g, bR, nbR, { SY, SZ, SEAT, FLOOR, zs, DY, DZ }) {
     b.add(fdBox(0.02, 0.2, 0.62, FDA.leather, mx([sx * (XI - 0.01), 0.17, -2.45])), A); // (a chart pocket on its inner face)
     { const xo = secHW(-2.2, YT) - 0.02; b.add(fdQuad(V(sx * XI, YT + 0.002, -1.97), V(sx * xo, YT + 0.002, -1.97), V(sx * xo, YT + 0.002, -3.1), V(sx * XI, YT + 0.002, -3.1), FDA.side, V(0, 1, 0)), A); }
     b.add(fdBox(0.13, 0.07, 0.17, FDA.shell, mx([sx * 1.02, YT + 0.035, -2.38])), A); b.add(fdBox(0.05, 0.012, 0.03, 'yellow', mx([sx * 0.98, YT + 0.075, -2.32])), A);
-    { const tz = -2.96, ty = YT + 0.03; const tl = new THREE.TorusGeometry(0.055, 0.009, 6, 20); tl.rotateX(Math.PI / 2 - 0.25); tl.translate(sx * 1.0, ty + 0.02, tz); b.add(fdUV(tl, 'knob'), A);
-      nb.add(bar(V(sx * 1.0, ty - 0.03, tz), V(sx * 1.0, ty + 0.02, tz), 0.02, 0.02, true, 8), kit.dark); nb.add(bar(V(sx * 1.045, ty + 0.03, tz), V(sx * 1.045, ty + 0.06, tz), 0.014, 0.014, true, 6), kit.black); }
+    { const tz = -2.96, ty = YT + 0.03, tx = Math.min(1.0, (XI + Math.max(XI + 0.05, secHW(tz, YT) - 0.008)) / 2); // (on the console's top: the nose narrows it this far forward)
+      const tl = new THREE.TorusGeometry(0.055, 0.009, 6, 20); tl.rotateX(Math.PI / 2 - 0.25); tl.translate(sx * tx, ty + 0.02, tz); b.add(fdUV(tl, 'knob'), A);
+      nb.add(bar(V(sx * tx, ty - 0.03, tz), V(sx * tx, ty + 0.02, tz), 0.02, 0.02, true, 8), kit.dark); nb.add(bar(V(sx * tx - 0.05, ty + 0.02, tz), V(sx * tx + 0.05, ty + 0.02, tz), 0.012, 0.012, true, 6), kit.dark); // (the wheel on a spoke across its hub)
+      nb.add(bar(V(sx * (tx + 0.055), ty + 0.02, tz), V(sx * (tx + 0.055), ty + 0.05, tz), 0.014, 0.014, true, 6), kit.black); } // (its knob on the rim)
   }
   // the crew seats: upholstered shells under fleece covers, on a frame over a base on floor tracks; headrest, armrests
   for (const sx of [-1, 1]) {
@@ -1472,7 +1474,8 @@ function airlinerFlightDeck(g, bR, nbR, { SY, SZ, SEAT, FLOOR, zs, DY, DZ }) {
     sb.add(fdBox(0.08, 0.2, 0.05, FDA.shell, mx(up(0.8, 0.12), [tilt, 0, 0])), A); // (the headrest's stem)
     sb.add(fdBox(0.44, 0.07, 0.44, FDA.shell, mx([X, SY - 0.05, SZ - 0.2])), A); // (pan frame)
     for (const side of [-1, 1]) { sb.add(fdBox(0.025, 0.07, 0.42, FDA.leather, mx([X + side * 0.235, SY - 0.02, SZ - 0.2])), A); } // (the cushion's leather sides)
-    for (const side of [-1, 1]) { const ax = X + side * 0.29; sb.add(fdBox(0.05, 0.05, 0.3, FDA.leather, mx([ax, SY + 0.2, SZ - 0.13])), A); sb.add(fdBox(0.03, 0.2, 0.04, FDA.shell, mx([ax, SY + 0.09, SZ + 0.04], [0.15, 0, 0])), A); }
+    for (const side of [-1, 1]) { const ax = X + side * 0.29; sb.add(fdBox(0.05, 0.05, 0.3, FDA.leather, mx([ax, SY + 0.2, SZ - 0.13])), A); sb.add(fdBox(0.03, 0.2, 0.04, FDA.shell, mx([ax, SY + 0.09, SZ + 0.04], [0.15, 0, 0])), A);
+      sb.add(fdBox(0.055, 0.04, 0.12, FDA.shell, mx([X + side * 0.2475, SY + 0.2, SZ + 0.05])), A); } // (and its pivot on the back's shell)
     { const n0 = g.children.length; sb.to(g); for (const m of g.children.slice(n0)) m.userData.seatRail = sx === 1 ? 0 : 1; } // (the seats' order below)
     const bh = SY - 0.09 - FLOOR; b.add(fdBox(0.36, bh, 0.36, FDA.plateC, mx([X, FLOOR + bh / 2, SZ - 0.22])), A);
     for (const dx of [-0.13, 0.13]) b.add(fdBox(0.05, 0.03, 0.42, 'shell', mx([X + dx, FLOOR + 0.03, SZ - 0.22])), A);
@@ -1483,7 +1486,8 @@ function airlinerFlightDeck(g, bR, nbR, { SY, SZ, SEAT, FLOOR, zs, DY, DZ }) {
     for (let i = 0; i <= NU; i++) for (const [j, zf] of [[0, z0f], [1, z1f]]) { const th = sx * (th0 + (th1 - th0) * (i / NU)), p = nosePt(zf(th), th, k); pos.push(p.x, p.y, p.z); uv.push(i / NU, j); }
     for (let i = 0; i < NU; i++) { const a = i * 2, c = a + 2; idx.push(a, c, c + 1, a, c + 1, a + 1, a, c + 1, c, a, a + 1, c + 1); } // (both faces)
     const v = new THREE.BufferGeometry(); v.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); v.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); v.setIndex(idx); v.computeVertexNormals(); nbR.add(fdUV(v, FDA.visor), A);
-    const r0 = nosePt(z0f(sx * th0), sx * th0, k + 0.005), r1 = nosePt(z0f(sx * th1), sx * th1, k + 0.005); nbR.add(bar(r0, r1, 0.012, 0.012, true, 6), kit.dark); };
+    const r0 = nosePt(z0f(sx * th0), sx * th0, k + 0.005), r1 = nosePt(z0f(sx * th1), sx * th1, k + 0.005); nbR.add(bar(r0, r1, 0.012, 0.012, true, 6), kit.dark);
+    for (const th of [th0, th1]) nbR.add(bar(nosePt(z0f(sx * th), sx * th, k + 0.005), nosePt(z0f(sx * th), sx * th, K + 0.004), 0.01, 0.01, true, 6), kit.dark); }; // (the rail's mounts, out to the lining)
   const zTop = (th) => zOn(th, WTOPY);
   for (const sx of [-1, 1]) { visor(sx, WPOST1 + 0.04, 0.72, (th) => zTop(th) + 0.005, (th) => zTop(th) - 0.14, K - 0.03); visor(sx, 0.12, 0.45, (th) => zTop(th) + 0.03, (th) => zTop(th) + 0.2, K - 0.012); }
   lp.to(g); // (the live displays: one draw call)
