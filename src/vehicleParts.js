@@ -676,7 +676,7 @@ function heliNose(c, lv) {
       b.add(bar(V(0, HOOD.c[1] + 0.012, 0.02).applyMatrix4(pm), V(0, HOOD.c[1] + 0.02, 0.02).applyMatrix4(pm), 0.02, 0.02, true, 6), CK.blackM()); }
     lp.to(g); // (the live gauges, the compasses' cards)
     g.userData.seats = heliCrewBay(b, FL, -0.34, SZ);
-    { const ms = CK.collect(g, () => { b.to(g); nb.to(g, true); }); for (const m of ms) m.userData.keepShape = true;
+    { const ms = CK.collect(g, () => { b.to(g); nb.to(g, true); }); for (const m of ms) { m.userData.keepShape = true; if (m.material === paint) m.userData.trim = 'door and chin-window frames: tubes standing proud of the glass, not the skin'; }
       CK.cabFinish(ms, [[-0.8, FL, -1.2], [0.8, 0.9, 0.45]], { key: 'heli', kinds: new Map([[CK.suede(0x55595f), 'floor']]) }); } // (grain, scuffs and occlusion) // (furniture, frames and fittings keep their shapes: skinBlend fairs only the skin into the cabin)
     // what the crew must keep clear of: inside the bubble (the glass's ellipsoid, to where it meets the cabin), the
     // panel with its hood, the pedestal, and (heliCrewBay) the collective's housing

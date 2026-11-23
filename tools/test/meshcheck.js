@@ -13,6 +13,7 @@ import { PARTS } from '../../src/parts.js';
 import { newPart, mirroredOf } from '../../src/design.js';
 import { partInfo } from '../../src/parts.js';
 import { buildDesign, placePart } from '../../src/hangar.js';
+import { interiorOf } from '../../src/interior.js';
 import { chunked, srcOf, floatingParts } from './meshfast.js';
 export { floatingParts };
 
@@ -483,6 +484,9 @@ export function tubeSeams(design, det, root, { cols = 32, rows = 72, trace = nul
   // (big meshes split into small proxies so the raycaster skips most triangles by bounding sphere, and only the
   // proxies near each joint are tested; the hits are the same as against the whole meshes)
   const prox = joins.length ? chunked(all).map((o) => { if (!o.geometry.boundingBox) o.geometry.computeBoundingBox(); return { o, box: o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld) }; }) : null;
+  // a crewed part's interior (interior.js): a hit inside it is the cabin seen through an opening (an open door, a rolled
+  // bubble's doorway along the seam), not skin
+  const inner = new Map(), insideOf = (pi, p) => { if (!inner.has(pi)) { let I = null; try { I = det.parts[pi] && interiorOf(det.parts[pi]); } catch (e) { /* none */ } inner.set(pi, I && { I, inv: det.parts[pi].matrixWorld.clone().invert() }); } const q = inner.get(pi); return !!q && q.I.f(p.clone().applyMatrix4(q.inv)) > 0.005; };
   for (const J of joins) {
     const A = J.axis, u0 = Math.abs(A.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0), e1 = u0.clone().addScaledVector(A, -u0.dot(A)).normalize(), e2 = A.clone().cross(e1);
     const W = Math.min(0.9 * J.R + 0.1, 1.6), far = 3 * J.R + 1, ds = (2 * W) / rows;
@@ -499,6 +503,7 @@ export function tubeSeams(design, det, root, { cols = 32, rows = 72, trace = nul
         for (const x of hits) { if (x.object.material.transparent) break; if (x.object.userData.trim) continue; h = x; break; }
         if (h) h = { ...h, object: srcOf(h.object) };
         const pi = h ? owner.get(h.object) : -1;
+        if (h && pi >= 0 && insideOf(pi, h.point)) { col.push(null); continue; }
         if (!h || (pi !== J.i && pi !== J.j)) { col.push(null); continue; }
         const d = h.point.clone().sub(J.C), r = d.addScaledVector(A, -d.dot(A)).length();
         const n = (h.normal ? h.normal.clone() : h.face.normal.clone()).applyMatrix3(nm.getNormalMatrix(h.object.matrixWorld)).normalize();

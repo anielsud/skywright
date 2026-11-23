@@ -361,7 +361,11 @@ export function ejectionSeat(bag0, nb, { at, dims, kit = false, frame, headUp = 
     for (const a of [0.5, 1.57, 2.64]) { const s2 = new THREE.CylinderGeometry(0.0095, 0.0095, 0.012, 6); s2.rotateZ(a); s2.translate(Math.cos(a) * 0.04, Math.sin(a) * 0.04 + 0.006, 0); s2.applyMatrix4(hm); nb.add(s2, M.black()); } }
   // side plates up the back, and the rails behind it
   for (const sx of [-1, 1]) {
-    const pl = new THREE.BoxGeometry(0.012, backH * 0.92 + headUp, 0.12); pl.applyMatrix4(mx(up((backH * 0.92 + headUp) / 2 + 0.01, 0.03).add(V(sx * (w / 2 + 0.007), 0, 0)).toArray(), [tilt, 0, 0])); bag.add(pl, frame);
+    // (on the back's side wing, following its taper: seatGeo narrows the back 12 % to the top. It stood off the back as
+    // a straight plate at the bottom's width, 1 cm off at the foot and 2.5 at the top)
+    const H = backH * 0.92 + headUp, pl = new THREE.BoxGeometry(0.012, H, 0.12), PP = pl.attributes.position;
+    for (let i = 0; i < PP.count; i++) { const k = Math.min(1, (PP.getY(i) + H / 2 + 0.01) / backH); PP.setX(i, PP.getX(i) + sx * (0.475 * w * (1 - 0.12 * k) + 0.006)); }
+    pl.computeVertexNormals(); pl.applyMatrix4(mx(up(H / 2 + 0.01, 0.03).toArray(), [tilt, 0, 0])); bag.add(pl, frame);
     bag.add(bar(up(-0.02, 0.074).add(V(sx * 0.1, 0, 0)), up(backH + 0.02 + headUp, 0.074).add(V(sx * 0.1, 0, 0)), 0.03, 0.03), M.darkMetal()); // (against the back's rear face)
   }
   // harness webbing: the lap belts' ends lying over the pan's sides with their buckles, the shoulder straps coming out of
