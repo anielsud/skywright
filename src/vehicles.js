@@ -27,6 +27,23 @@ function sideExtrude(pts, width, bevel = 0.06) {
 }
 const DARK = 0x14181d, GLASS = 0x1c2733;
 
+// the contact shadow: a soft rounded rectangle (alpha), darkest under the middle of the car
+let _blobTex = null;
+function blobTexture() {
+  if (_blobTex) return _blobTex;
+  const W = 64, H = 128, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const g = cv.getContext('2d'), img = g.createImageData(W, H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const u = Math.abs((x + 0.5) / W * 2 - 1), v = Math.abs((y + 0.5) / H * 2 - 1); // 0 centre .. 1 edge
+    const d = Math.hypot(Math.max(0, u - 0.5) / 0.5, Math.max(0, v - 0.72) / 0.28); // rounded-rect distance past the core (the core ~ the car's footprint: the patch is 1.8 x its width, 1.3 x its length)
+    const a = Math.max(0, 1 - d) ** 0.9;
+    img.data.set([255, 255, 255, Math.round(a * 255)], (y * W + x) * 4);
+  }
+  g.putImageData(img, 0, 0);
+  _blobTex = new THREE.CanvasTexture(cv); _blobTex.colorSpace = THREE.NoColorSpace;
+  return _blobTex;
+}
+
 // ---------- who drives where ----------
 // relative odds of each model by lane kind; NYC adds its yellow cabs and buses
 const MIX = {
@@ -41,7 +58,7 @@ const PAINTED = new Set(['sedan', 'hatch', 'compact', 'suv', 'wagon', 'minivan',
 function picker(r, odds) { const k = Object.keys(odds), w = k.map((t) => odds[t]), tot = w.reduce((a, b) => a + b, 0); return () => { let x = r() * tot; for (let i = 0; i < k.length; i++) if ((x -= w[i]) < 0) return k[i]; return k[0]; }; }
 // distances (m) where a vehicle switches to lod1 and lod2, per quality
 const LOD = { low: [35, 150], medium: [50, 220], high: [70, 320] };
-const DEFAULT = { L: 4.6, head: [[-0.6, 0.7, -2.3], [0.6, 0.7, -2.3]], tail: [[-0.6, 0.8, 2.3], [0.6, 0.8, 2.3]], wheels: [] }; // (until the models arrive)
+const DEFAULT = { L: 4.6, W: 1.9, head: [[-0.6, 0.7, -2.3], [0.6, 0.7, -2.3]], tail: [[-0.6, 0.8, 2.3], [0.6, 0.8, 2.3]], wheels: [] }; // (until the models arrive)
 
 export class Vehicles {
   constructor(scene, world) {
@@ -121,6 +138,12 @@ export class Vehicles {
     this.slots = []; for (let i = 0; i < bodies + wheels; i++) { const k = B.addInstance(g0); B.setVisibleAt(k, false); this.slots.push(k); }
     this.nBodies = bodies;
     this.group.add(B);
+    // a soft dark patch under each car (one more draw call for all of them): its contact with the road. Without it a
+    // car on Low/Medium (no shadow maps) seems to hover; on High it's lighter, under the real shadow.
+    const blob = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2).translate(0, 0.15, 0); // (15 cm up: road meshes stand a little above the lane line the cars follow; still under every car's floor)
+    const bm = new THREE.MeshBasicMaterial({ map: blobTexture(), color: 0x000000, transparent: true, opacity: q === 'high' ? 0.5 : 0.8, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    const blobs = (this.blobs = new THREE.InstancedMesh(blob, bm, bodies)); blobs.count = 0; blobs.frustumCulled = false; blobs.renderOrder = -1;
+    this.group.add(blobs);
   }
   pathPoint(path, s, out, dirOut) {
     s = ((s % path.total) + path.total) % path.total;
@@ -142,12 +165,14 @@ export class Vehicles {
     let nl = 0; // lights written (packed: only the cars drawn this frame)
     const put = (lp, c0, c1, c2, on) => { const v = lv.set(lp[0], lp[1], lp[2]).applyQuaternion(q).add(p), o = nl * 3; LP[o] = v.x; LP[o + 1] = v.y; LP[o + 2] = v.z; LC[o] = c0 * on; LC[o + 1] = c1 * on; LC[o + 2] = c2 * on; nl++; };
     // instances: bodies from the front of the pool, wheels from the back (so a crowded frame drops wheels, not cars)
+    this.nBlob = 0; this._bs ??= new THREE.Vector3(); this._b4 ??= new THREE.Matrix4();
     let nb = 0, nw = 0; const S = this.slots, NS = S ? S.length : 0, NW = NS - (this.nBodies || 0);
     const draw = (c, mdl, dist2) => {
       if (!B || nb >= NS - NW) return;
       const G = this.gid[c.type]; if (!G) return;
       const lod = dist2 < d1 * d1 ? 0 : dist2 < d2 * d2 ? 1 : 2, k = S[nb++];
       B.setGeometryIdAt(k, G.lod[lod]); B.setMatrixAt(k, m4); B.setColorAt(k, col.set(c.color)); B.setVisibleAt(k, true);
+      if (lod < 2) { this._bs.set(mdl.W * 1.8, 1, mdl.L * 1.3); this._b4.makeScale(this._bs.x, 1, this._bs.z).premultiply(m4); this.blobs.setMatrixAt(this.nBlob++, this._b4); } // (far: too small to matter)
       if (lod === 0) for (let j = 0; j < mdl.wheels.length && nw < NW; j++) {
         const w = mdl.wheels[j], kw = S[NS - 1 - nw++];
         wq.setFromAxisAngle(X, -(c.roll || 0) / w[3]); wp.set(w[0], w[1], w[2]);
@@ -195,6 +220,7 @@ export class Vehicles {
       for (let i = nb; i < (this.nbLast || 0); i++) B.setVisibleAt(S[i], false);
       for (let i = nw; i < (this.nwLast || 0); i++) B.setVisibleAt(S[NS - 1 - i], false);
       this.nbLast = nb; this.nwLast = nw;
+      const bl = this.blobs; bl.count = this.nBlob; if (this.nBlob) { bl.instanceMatrix.clearUpdateRanges(); bl.instanceMatrix.addUpdateRange(0, this.nBlob * 16); bl.instanceMatrix.needsUpdate = true; }
     }
     const lg = this.lights.geometry;
     lg.setDrawRange(0, nl);
@@ -236,5 +262,5 @@ export class Vehicles {
       m.lookAt(p.clone().add(p.clone().sub(p2).setLength(10))); m.rotateY(Math.PI);
     });
   }
-  dispose() { this.disposed = true; this.group.parent?.remove(this.group); this.batch?.dispose(); }
+  dispose() { this.disposed = true; this.group.parent?.remove(this.group); this.batch?.dispose(); this.blobs?.geometry.dispose(); this.blobs?.material.dispose(); this.blobs?.dispose(); }
 }
