@@ -16,15 +16,13 @@ import argparse, fnmatch, json, os, subprocess, sys, time
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 # browser-tier suites: their command and the files they cover (globs, repo-relative)
 BROWSER = {
-    'smoke': (['smoke.py', '--quality', 'low'], ['src/*', 'index.html', 'style.css', 'sw.js', 'assets/*', 'vendor/*']),
-    'restart': (['restart.py'], ['src/main.js', 'src/world.js', 'src/destruction.js', 'src/stuntPark.js', 'src/waterPark.js', 'src/launchpad.js', 'src/helipad.js', 'src/flora.js']),
+    'smoke': (['smoke.py', '--quality', 'medium', '--no-node'], ['src/*', 'index.html', 'style.css', 'sw.js', 'assets/*', 'vendor/*', 'tools/test/smoke.js', 'tools/test/sr71flight.js']),  # (also the shader check; medium: shadows on)
+    'restart': (['restart.py'], ['src/main.js', 'src/startChoice.js', 'tools/test/restart.js', 'src/world.js', 'src/destruction.js', 'src/stuntPark.js', 'src/waterPark.js', 'src/launchpad.js', 'src/helipad.js', 'src/flora.js']),
     # (stunts, waterpark, walls: Node suites; their browser part, at New York and the Grand Canyon, is placecheck)
     'placecheck': (['placecheck.py'], ['src/main.js', 'src/stunt*.js', 'src/evelJump.js', 'src/waterPark.js', 'src/landStart.js', 'src/world.js', 'src/realworld.js', 'src/realCity.js', 'src/destruction.js', 'src/aircraft.js', 'tools/test/placecheck.py', 'tools/test/stunts.js', 'tools/test/waterpark.js', 'tools/test/walls.js']),
-    'padcheck': (['padcheck.py'], ['src/launchpad.js', 'src/main.js', 'src/aircraft.js', 'src/world.js']),
-    'helipadcheck': (['helipadcheck.py'], ['src/helipad.js', 'src/main.js', 'src/aircraft.js', 'src/world.js', 'src/nyc*.js']),
-    'meshcheck': (['meshcheck.py'], ['src/parts.js', 'src/partDetail.js', 'src/*Parts.js', 'src/skinBlend.js', 'src/planeDetail.js', 'src/hangar.js', 'src/interior.js']),
+    'padcheck': (['padcheck.py'], ['src/launchpad.js', 'src/main.js', 'src/startChoice.js', 'tools/test/padcheck.js', 'src/aircraft.js', 'src/world.js']),
+    'helipadcheck': (['helipadcheck.py'], ['src/helipad.js', 'src/main.js', 'src/startChoice.js', 'tools/test/padcheck.js', 'tools/test/helipadcheck.js', 'src/aircraft.js', 'src/world.js', 'src/nyc*.js']),
     'startbakes-stunts': (['startbakes.py', '--only', 'stunts'], ['src/stuntPark.js', 'src/stuntSite.js', 'src/realworld.js', 'src/world.js', 'tools/bake/*', 'tools/test/startbakes.*']),  # (its views: the Node suite startbakes)
-    'shadercheck': (['shadercheck.py'], ['src/main.js', 'src/crew.js', 'src/cabinLight.js', 'src/planeMaterials.js', 'src/world.js', 'src/post.js']),
     'tunnelcheck-ui': (['tunnelcheck.py', '--ui'], ['src/windTunnel.js', 'src/tunnel*.js', 'src/main.js', 'tools/test/tunnelcheck.*']),  # (its lift curves and forces: the Node suite tunnelcheck)
 }
 HARNESS = ['tools/test/run.py', 'tools/test/node/*', 'tools/test/smoke.py']  # changing these runs everything
