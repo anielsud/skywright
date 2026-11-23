@@ -355,7 +355,7 @@ async def run(args, url, ws_url, shots):
                     raise AssertionError(f'frame loop stalled: flight clock moved {ran:.2f} s in {wall:.1f} s')
                 te = time.time()
                 await cdp.js(f'{S}.endFlight()')
-                await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 10, 'the hangar')
+                await cdp.wait_for(f"!{S}.F && document.getElementById('hangar-ui').style.display === ''", 30, 'the hangar')  # (ending a flight takes up to ~14 s on a CI runner)
                 t_end = time.time() - te
                 return (f"start {t_start:.1f} s, end {t_end:.1f} s; {s['speed']:.0f} m/s, alt {s['alt']:.0f} m, {s['alive']}/{s['parts']} parts, "
                         f"{ran / wall * 100:.0f}% realtime, {views} cockpit view(s){note}")

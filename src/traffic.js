@@ -55,6 +55,16 @@ export function buildStatic(design) {
   g.userData.props = []; g.traverse((c) => { if (c.userData.prop) g.userData.props.push(c.userData.prop); });
   return g;
 }
+// buildStatic merged into one mesh per material (the airport's parked planes). Each design is built once per session
+// and later flights get a clone sharing its geometry and materials (World.dispose may dispose that geometry: three.js
+// uploads it again when it is next drawn). Keyed by the whole design, so an edited copy of a stock design gets its own.
+const _parked = new Map();
+export function parkedStatic(design) {
+  const k = JSON.stringify(design);
+  let t = _parked.get(k);
+  if (!t) { if (_parked.size >= 16) _parked.delete(_parked.keys().next().value); _parked.set(k, (t = mergeByMaterial(buildStatic(design)))); }
+  return t.clone();
+}
 
 function colored(geo, c) { const g = geo.index ? geo.toNonIndexed() : geo; const n = g.attributes.position.count, a = new Float32Array(n * 3), cc = new THREE.Color(c); for (let i = 0; i < n; i++) { a[i * 3] = cc.r; a[i * 3 + 1] = cc.g; a[i * 3 + 2] = cc.b; } g.setAttribute('color', new THREE.BufferAttribute(a, 3)); return g; }
 

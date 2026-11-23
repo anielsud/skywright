@@ -3,10 +3,13 @@
 
   assets/boot/parts.json     the palette's part pictures ({ key: COMMIT, pics: { partId: data URL } })
   assets/boot/postures.json  every stock vehicle's crew postures, solved ({ solver: SOLVER, list: [[key, r]] })
+  assets/boot/stunts.json    every place's stunt park site (src/stuntSite.js findSite) ({ key: COMMIT, sites: { locId: site } })
+  assets/boot/views.json     every stock vehicle's cockpit views: which cabin linings cover the windows (src/stations.js)
+                             ({ stamp: VIEWS, list: [[soup fingerprint, lining places]] })
 
-Run by .github/workflows/deploy.yml after it stamps src/version.js (COMMIT, SOLVER): the game only uses the
-pictures for that same COMMIT and the postures for that same SOLVER, so a stale or missing file just means the
-device works them out itself, as before. Locally (COMMIT 'dev') the game ignores both files; the outputs are
+Run by .github/workflows/deploy.yml after it stamps src/version.js (COMMIT, SOLVER, VIEWS): the game only uses the
+pictures and stunt sites for that same COMMIT, the postures for that same SOLVER and the views for that same VIEWS,
+so a stale or missing file just means the device works them out itself, as before. Locally (COMMIT 'dev') the game ignores these files; the outputs are
 not committed (.gitignore). Same requirements as tools/test/smoke.py (Chrome + websockets).
 
   python3 tools/bake/boot.py
@@ -29,7 +32,14 @@ JS = """(async () => {
     try { buildDesign(d, g, { quick: false, near: true }); } catch (e) { console.warn('build failed', d.name, e); }
     g.traverse((o) => { o.geometry?.dispose(); o.skeleton?.dispose(); });
   }
-  return { parts: { key: V.COMMIT, pics }, postures: { solver: V.SOLVER, ...crew.solvedPostures() } };
+  const { Aircraft } = await import('./src/aircraft.js'), { cloneDesign } = await import('./src/design.js'), views = await import('./src/stations.js');
+  for (const d of S.presets) { // the flight's copy: its cockpit views (stations.js) look at the meshes really built
+    try { const ac = new Aircraft(cloneDesign(d)); void ac.stations; ac.root.traverse((o) => { o.geometry?.dispose(); o.skeleton?.dispose(); }); } catch (e) { console.warn('views failed', d.name, e); }
+  }
+  const { bakeStuntSites } = await import('./src/stuntPark.js'), { LOCATIONS } = await import('./src/world.js');
+  const sites = await bakeStuntSites(LOCATIONS);
+  return { parts: { key: V.COMMIT, pics }, postures: { solver: V.SOLVER, ...crew.solvedPostures() },
+    stunts: { key: V.COMMIT, sites }, views: { stamp: V.VIEWS, ...views.solvedViews() } };
 })()"""
 
 
@@ -53,11 +63,12 @@ def main():
     finally:
         proc.kill(); proc.wait(); srv.shutdown(); shutil.rmtree(profile, ignore_errors=True)
     os.makedirs(OUT, exist_ok=True)
-    for name in ('parts', 'postures'):
+    for name in ('parts', 'postures', 'stunts', 'views'):
         with open(os.path.join(OUT, f'{name}.json'), 'w') as f: json.dump(r[name], f, separators=(',', ':'))
     kb = lambda n: os.path.getsize(os.path.join(OUT, f'{n}.json')) // 1024
     print(f"baked {len(r['parts']['pics'])} part pictures ({kb('parts')} KB, key {r['parts']['key']}), "
-          f"{len(r['postures']['list'])} + {len(r['postures']['rides'])} rider postures ({kb('postures')} KB, solver {r['postures']['solver']}) in {time.time() - t0:.0f} s")
+          f"{len(r['postures']['list'])} + {len(r['postures']['rides'])} rider postures ({kb('postures')} KB, solver {r['postures']['solver']}), "
+          f"{len(r['stunts']['sites'])} stunt sites ({kb('stunts')} KB), {len(r['views']['list'])} cockpit views ({kb('views')} KB, stamp {r['views']['stamp']}) in {time.time() - t0:.0f} s")
 
 
 if __name__ == '__main__':

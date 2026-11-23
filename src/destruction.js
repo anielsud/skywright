@@ -51,6 +51,7 @@ export class Destruction {
     this.T = TIER[W.qName] || TIER[W.qBase] || TIER.medium;
     this.group = new THREE.Group(); this.group.name = 'destruction'; W.group.add(this.group);
     this.states = new Map(); // building key (collision entry .dk) -> its damage state
+    this.h0 = new Map(); // collision entry -> its height before any damage (setH; reset puts it back)
     this.time = 0; this.events = []; this.fires = []; this.anims = []; this.proxies = []; this.later = [];
     this.fx = null; this.onImpact = null; // (main.js: the flight's effects; multiplayer relay of our own blows)
     // damage slots (rows of DMG.tex): fresh for every flight
@@ -72,6 +73,34 @@ export class Destruction {
     this.cav = this.cavities(48);
     this.scorch = this.scorches(48);
     this.ready = true;
+  }
+  // A collision entry's height changes (knocked down, cut, a mast lowered with its tower): its first height is kept, so
+  // reset() can put it back
+  setH(e, h) { if (!this.h0.has(e)) this.h0.set(e, e[3]); e[3] = h; }
+  // Everything back as a fresh World had it (main.js keeps the World for a restart): every building whole again, its
+  // collision heights and vertex flags restored, the damage slots free, and no debris, mounds, scorch marks, cavities,
+  // fires, toppling tops or pending dominoes left
+  reset() {
+    for (const B of this.states.values()) if (B.flag) this.setFlag(B, 0);
+    for (const [e, h] of this.h0) e[3] = h;
+    this.h0.clear(); this.states.clear();
+    for (const P of this.proxies) { this.group.remove(P.mesh); P.mesh.geometry.dispose(); }
+    this.proxies = []; this.anims = []; this.fires = []; this.later = []; this.events = [];
+    this.time = 0; this.fx = null; this.onImpact = null;
+    DMG.data.fill(0); for (let s = 0; s < DMG_SLOTS; s++) DMG.data[s * ROW] = 1e9;
+    DMG.tex.needsUpdate = true; this.texDirty = false;
+    this.free = []; for (let s = DMG_SLOTS - 2; s >= 1; s--) this.free.push(s);
+    this.slotOwner.fill(null);
+    for (const P of [this.chunks, this.mounds, this.shards]) {
+      P.i = 0; P.used = 1; P.st.fill(0); P.age.fill(0);
+      const m = P.mesh; for (let k = 0; k < P.n; k++) m.setMatrixAt(k, ZERO);
+      m.setMatrixAt(0, PARK); m.count = 1; m.instanceMatrix.needsUpdate = true;
+    }
+    for (const R of [this.cav, this.scorch]) {
+      R.i = 1; R.used = 1;
+      for (let k = 0; k < R.n; k++) R.m.setMatrixAt(k, ZERO);
+      R.m.setMatrixAt(0, PARK); R.m.count = 1; R.m.instanceMatrix.needsUpdate = true;
+    }
   }
 
   // ---------------- pools ----------------
@@ -253,7 +282,7 @@ export class Destruction {
     B.cut = y; const s = this.slotFor(B); if (!s) return;
     DMG.data[s * ROW] = y; DMG.data[s * ROW + 1] = jag; this.texDirty = true;
     const top = Math.max(y - jag * 0.5, B.rubble); // collisions: down to the jagged stump / the rubble
-    for (const e of B.ents) e[3] = Math.max(0, top - e[1]);
+    for (const e of B.ents) this.setH(e, Math.max(0, top - e[1]));
   }
   addHole(B, x, y, z, r) {
     const s = this.slotFor(B); if (!s) return -1;
@@ -273,7 +302,7 @@ export class Destruction {
     const B = this.states.get(e.dk); if (!B) return;
     const i = B.ents.findIndex((x) => x.dk === e.dk); if (i >= 0) B.ents[i] = e; else B.ents.push(e);
     if (B.flag) for (const [h, s, n] of e.rng || []) (h.dmgW || (h.dmgW = [])).push([s, n, B.flag]);
-    if (B.cut < 1e8) e[3] = Math.max(0, Math.max(B.cut - 1, B.rubble) - e[1]);
+    if (B.cut < 1e8) this.setH(e, Math.max(0, Math.max(B.cut - 1, B.rubble) - e[1]));
   }
   // a point inside a building, but in one of its holes (main.js: no hit there)
   passes(e, p) {
@@ -524,7 +553,7 @@ export class Destruction {
     this.scorchAt(o.x, gy, o.z, r * 1.5 + 4);
     const nf = a.full ? 1 + (B.V > 4000 ? 1 : 0) + (B.V > 30000 ? 1 : 0) : 1;
     for (let k = 0; k < nf; k++) this.fire(o.x + rnd(o.hl * 0.6), a.full ? B.rubble : a.to, o.z + rnd(o.hw * 0.6), 0.8 + Math.random() * 0.8, 70);
-    if (a.full) { B.collapsed = true; for (const e of B.ents) e[3] = Math.max(0, B.rubble - e[1]); }
+    if (a.full) { B.collapsed = true; for (const e of B.ents) this.setH(e, Math.max(0, B.rubble - e[1])); }
     else this.scorchAt(o.x, gy, o.z, r + 6); // (the debris that rained down from the top)
     this.events.push({ type: 'collapse', pos: new THREE.Vector3(o.x, a.to, o.z), size: B.h, phase: 'end' });
   }
@@ -544,7 +573,7 @@ export class Destruction {
     for (const e of this.near(o.x, o.z, Math.hypot(o.hl, o.hw) + 2)) {
       if (e.dk === B.dk || e[1] + e[3] < y + 1) continue;
       const b = this.box(e); if (!inBox(o, b.x, b.z, 1) && !inBox(b, o.x, o.z, 1)) continue;
-      if (!e.dk) { if (e.solid && !e.fixed) e[3] = Math.max(0, y - e[1]); continue; } // (a helipad's tower stays up)
+      if (!e.dk) { if (e.solid && !e.fixed) this.setH(e, Math.max(0, y - e[1])); continue; } // (a helipad's tower stays up)
       const C2 = this.get(e); if (!C2.anim && !C2.collapsed && C2.cut > y + 1) out.push(C2);
     }
     return out;

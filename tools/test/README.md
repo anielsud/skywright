@@ -363,6 +363,28 @@ python3 tools/test/cockpitcheck.py --random 60 --seed 9  # more random builds
 
 Run it when you change cockpit, seat or crew builders, or the camera's cockpit view. Smoke also visits every cockpit
 view of every preset through the camera button's path.
+
+## Start-up bakes check
+
+`startbakes.py` checks that what the deploy bakes into `assets/boot` (`tools/bake/boot.py`) and what the game keeps for
+the visit or on the device is exactly what it would work out itself:
+
+- **cockpit views** (`src/stations.js`: which cabin linings cover the windows) of every stock vehicle: worked out with
+  no cache, from the visit's cache, and from a bake round-tripped through JSON (as `views.json` and localStorage
+  are): the same linings and the same settled eyes for every seat, and the cache really used for every seat that has
+  linings;
+- **stunt park sites** (`src/stuntSite.js` `findSite`) at every place that searches for one: the site the World
+  planned == a fresh search on that World == the bake's (`bakeStuntSites`, as `boot.py` writes it); a second flight
+  at the same place takes it from the visit's cache and gets the same site.
+
+```sh
+python3 tools/test/startbakes.py                                   # ~3 min
+python3 tools/test/startbakes.py --only views --presets Jumbo      # one vehicle
+python3 tools/test/startbakes.py --only stunts --locations islands # one place
+```
+
+Run it when you change `stations.js`, `stuntSite.js`, `stuntPark.js` or what they read, or `tools/bake/boot.py`.
+
 ## Car handling test
 
 `drivecheck.py` drives every stock car (not the bikes) on flat ground through the game's own physics (60 Hz, no
@@ -406,6 +428,28 @@ python3 tools/test/walls.py --places nyc --no-game
 
 Run it when you change `wallContacts` in `aircraft.js`, `world.wallBoxes`, or how towns, real places or New York file
 their buildings.
+
+## Restart test
+
+`restart.py` checks that a restart (pause > Restart, or the "try again" button after a crash) keeps the World and
+looks and behaves exactly like a fresh start. `main.js` keeps the World (and its scene) for a restart when its inputs
+are unchanged (`World.key`: place, quality tier, time, weather, moon), and `World.reset()` puts back what the flight
+changed: buildings (`Destruction.reset`: collision heights, the shader's dmg bytes, damage slots, debris, mounds,
+scorch marks, cavities, fires, toppling tops, pending dominoes), flattened trees (`World.flatten`), the stunt sites,
+water park and launch pad, the space view, the clocks, gusts and cloud drift. Everything else the flight added to the
+scene (the vehicle, effects, traffic, missions, debris, other players) is removed and rebuilt. Back to the hangar
+frees the World as before.
+
+At each place (Lauterbrunnen by default) it checks: buildings knocked down and holed through the destruction API, plus
+flattened trees, are all whole after a restart in the same World, with the same spawn; 10 restarts (damage before every
+other one) keep `renderer.info` geometries / textures, the program count and the scene's child count flat; the hangar
+holds no World and a fresh start matches the restarts (spawn, memory); and a restart at every start type (runway, air,
+stunt park, street, marina, water park, launch pad, and the helipad with `--places nyc`) keeps the World, starts the
+same way at the same spot and rides / flies on for 4 s. About 2.5 minutes for one place.
+
+```sh
+python3 tools/test/restart.py [--places lauterbrunnen,nyc] [--restarts 10] [--quality low]
+```
 
 ## Shader check
 

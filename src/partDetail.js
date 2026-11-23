@@ -14,7 +14,7 @@ import { bubbleInterior } from './bubbleCockpit.js'; // (circular, used at build
 import { fighterInterior } from './jetCockpit.js'; // (circular too: build time only)
 
 export const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
-const KEEP = ['position', 'normal', 'uv', 'uv1'];
+const KEEP = ['position', 'normal', 'uv', 'uv1', 'cabinLight', 'cabinSun', 'cabinLamp']; // (cabin: the cabin light's baked values, cabinLight.js, kept when mergeStatic joins lit meshes)
 const _e = new THREE.Euler(), _q = new THREE.Quaternion();
 export const mx = (p = [0, 0, 0], r = [0, 0, 0], s = [1, 1, 1]) => new THREE.Matrix4().compose(V(...p), _q.setFromEuler(_e.set(...r)), V(...s));
 

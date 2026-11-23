@@ -12,6 +12,7 @@
 // tools/test/cockpitcheck.py checks every view of every stock vehicle and of random builds.
 import * as THREE from 'three';
 import { CapsuleView } from './capsule.js';
+import { VIEWS } from './version.js';
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const _tri = new THREE.Triangle(), _cp = V(), _a = V(), _b = V(), _c = V(), _m = new THREE.Matrix4();
@@ -97,6 +98,51 @@ function liningsOverGlass(soup, e, s) {
       hitMeshes(soup, lin, e, d, dist - 0.3 * s, dist + 0.3 * s, out);
     }
   }
+  return out;
+}
+// Which linings cover the windows (liningsOverGlass) takes a third of a second for an airliner's flight deck, on every
+// flight start, and the answer only depends on the triangles round the eye, which are glass, which are linings, the
+// eye and the seat's scale. So it is kept by a fingerprint of exactly those (soupKey): for the visit; on each device
+// (localStorage, the newest MAX_VIEWS); and for the stock vehicles, worked out by the deploy (tools/bake/boot.py ->
+// assets/boot/views.json). Saved and baked answers are only used while this file is the same (VIEWS, a hash of it
+// stamped by the deploy); locally (VIEWS 'dev') they're only kept for the visit. An answer is the linings' places in
+// the order their meshes first come in the soup.
+const VIEWS_LS = 'skywright.views', MAX_VIEWS = 80, LININGS = new Map(), viewStats = { kept: 0, worked: 0 }; // (viewStats: for tools/test/startbakes.js)
+export { viewStats };
+export const solvedViews = () => ({ list: [...LININGS] }); // (for the bake)
+export function takeViews(s, stamp = VIEWS) { if (s?.stamp !== stamp) return; for (const [k, r] of s.list || []) if (!LININGS.has(k)) LININGS.set(k, r); }
+export function forgetViews() { LININGS.clear(); } // (tools/test)
+const keepViews = () => { if (VIEWS !== 'dev') try { localStorage.setItem(VIEWS_LS, JSON.stringify({ stamp: VIEWS, list: [...LININGS].slice(-MAX_VIEWS) })); } catch { /* full or unavailable */ } };
+if (VIEWS !== 'dev') {
+  try { takeViews(JSON.parse(localStorage.getItem(VIEWS_LS))); } catch { /* storage unavailable */ }
+  fetch(new URL('../assets/boot/views.json', import.meta.url)).then((r) => (r.ok ? r.json() : null)).then((j) => takeViews(j)).catch(() => {});
+}
+const isLining = (soup, i) => { const m = soup.mesh[i], mat = Array.isArray(m.material) ? m.material[0] : m.material; return !soup.glass[i] && mat?.side === THREE.BackSide && !m.isSkinnedMesh && !m.isInstancedMesh; };
+// the fingerprint of everything liningsOverGlass looks at; null when there are no linings at all (nothing to work out)
+function soupKey(soup, e, s) {
+  let any = false; for (let i = 0, n = soup.glass.length; i < n && !any; i++) any = isLining(soup, i);
+  if (!any) return null;
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  const add = (x) => { h1 = Math.imul(h1 ^ x, 16777619); h2 = Math.imul(h2 ^ x, 2246822519) ^ (h2 >>> 13); };
+  const P = soup.p, ord = new Map();
+  for (let i = 0; i < P.length; i++) add(Math.round(P[i] * 1e4) | 0);
+  for (let i = 0, n = soup.glass.length; i < n; i++) {
+    const m = soup.mesh[i]; if (!ord.has(m)) ord.set(m, ord.size);
+    add(ord.get(m) * 4 + (soup.glass[i] ? 1 : 0) + (isLining(soup, i) ? 2 : 0));
+  }
+  add(Math.round(e.x * 1e4) | 0); add(Math.round(e.y * 1e4) | 0); add(Math.round(e.z * 1e4) | 0); add(Math.round(s * 1e4) | 0);
+  return `${(h1 >>> 0).toString(36)}${(h2 >>> 0).toString(36)}:${soup.glass.length}`;
+}
+// the soup's meshes in the order they first come in it
+function soupMeshes(soup) { const out = [], seen = new Set(); for (const m of soup.mesh) if (!seen.has(m)) { seen.add(m); out.push(m); } return out; }
+// liningsOverGlass, kept (see LININGS)
+function liningsKept(soup, e, s) {
+  const key = globalThis.__viewsNoCache ? null : soupKey(soup, e, s);
+  if (!key) return liningsOverGlass(soup, e, s);
+  const r = LININGS.get(key), ms = soupMeshes(soup);
+  if (r && r.every((k) => Number.isInteger(k) && ms[k] && isLining(soup, soup.mesh.indexOf(ms[k])))) { viewStats.kept++; return new Set(r.map((k) => ms[k])); }
+  const out = liningsOverGlass(soup, e, s); viewStats.worked++;
+  LININGS.delete(key); LININGS.set(key, ms.flatMap((m, k) => (out.has(m) ? [k] : []))); keepViews();
   return out;
 }
 // add to `out` the meshes of triangles `list` that the ray meets between t0 and t1
@@ -350,7 +396,7 @@ export function buildStations(ac) {
     st.eye0 = st.eye.clone();
     st.clear0 = THREE.MathUtils.clamp(0.07 * st.s, 0.035, 0.12);
     let soup = nearTriangles(root, st.eye, 4 * Math.max(1, st.s), st.crew);
-    const lin = liningsOverGlass(soup, st.eye, st.s);
+    const lin = liningsKept(soup, st.eye, st.s);
     st.linings = [...lin].map((mesh) => ({ mesh, inside: insideOf(mesh, st.eye, root, inv, made) }));
     if (lin.size) { soup = without(soup, (i) => lin.has(soup.mesh[i])); soup.lined = new Set(st.linings.flatMap((l) => l.inside.map((w) => w.parent))); }
     const box = st.part ? new THREE.Box3().setFromObject(st.part.obj).applyMatrix4(inv) : null;

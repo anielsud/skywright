@@ -2,12 +2,13 @@ import * as THREE from 'three';
 import { PARTS, CATEGORIES, PAINTS } from './parts.js';
 import { makePresets, encodeDesign, decodeDesign, cloneDesign, analyze, sizeSliders, sizeValue, thrustScale, partPower, partBurn, POWER_RANGE, BURN_RANGE } from './design.js';
 import { Hangar, thumbnailDrawer } from './hangar.js';
-import { preloadTownTextures } from './buildings.js';
+import { preloadTownTextures, prewarmAtlas } from './buildings.js';
 import { preloadFoliage } from './flora.js';
 import { cabinBakesReady } from './cabinLight.js';
 import { Aircraft, REALISM } from './aircraft.js';
 import { World, LOCATIONS, WEATHER } from './world.js';
-import { Traffic, buildStatic, mergeByMaterial } from './traffic.js';
+import { Traffic, parkedStatic } from './traffic.js';
+import { prewarmMarina } from './marina.js';
 import { Effects } from './effects.js';
 import { SonicFX } from './sonic.js';
 import { Audio, MIX_DEFAULTS, OLD_MIX_DEFAULTS } from './audio.js';
@@ -672,7 +673,7 @@ function startFlight(cfgOverride) {
   const cfg = { ...flightCfg, ...cfgOverride };
   state = 'loading';
   $('#loading').classList.add('show');
-  const fail = (e) => { console.error(e); $('#loading').classList.remove('show'); state = 'hangar'; ui.hint('Something went wrong: ' + e.message); };
+  const fail = (e) => { console.error(e); freeKept(); $('#loading').classList.remove('show'); state = 'hangar'; ui.hint('Something went wrong: ' + e.message); };
   // real-world places load their baked geodata first (cached by the service worker after the first visit)
   const loc = LOCATIONS[cfg.location], msg = $('#loading p'), msg0 = msg.textContent;
   // the built-in places fetch their offline landscape-evolution bake (src/terrainBake.js; never rejects)
@@ -682,11 +683,49 @@ function startFlight(cfgOverride) {
     try { buildFlight(cfg); } catch (e) { fail(e); }
   }, 50), (e) => { msg.textContent = msg0; fail(new Error(`couldn’t load ${loc.name} (it needs the internet the first time): ${e.message}`)); });
 }
+const PARKED = [2, 0, 4, 7]; // the airport's parked planes (presets)
+// Hangar idle time after boot: the first flight's share of the world's session caches (moored boats, parked planes,
+// building atlas), one step per idle slot so the hangar never stalls for long. Later flights reuse them anyway.
+function prewarmWorld() {
+  // (only in real idle time: not while the player is doing something, a window is open or the hangar is still coming
+  // back, and only in an idle slot the browser offers; a step is one block of work, so a busy device just skips it)
+  let lastInput = performance.now();
+  for (const ev of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart']) addEventListener(ev, () => (lastInput = performance.now()), { capture: true, passive: true });
+  const quiet = () => state === 'hangar' && performance.now() - lastInput > 2000 && !hangar.envDirty && !hangar.env?.restoring && document.getElementById('modal-root')?.style.display !== 'block';
+  const parked = PARKED.map((i) => () => parkedStatic(presets[i]));
+  const next = (ms = 250) => setTimeout(() => (window.requestIdleCallback ? requestIdleCallback(step) : step()), ms);
+  const step = (deadline) => {
+    if (!quiet() || (deadline && deadline.timeRemaining() < 40)) return next(1000);
+    if (prewarmMarina()) return next();
+    const p = parked.shift(); if (p) { p(); return next(); }
+    prewarmAtlas({ low: 128, medium: 192, ultra: 384 }[qualityTier()] ?? 256); // (the cell size World's buildings use)
+  };
+  next(1000);
+}
+// A restart keeps the World (and its scene) when what it is built from hasn't changed (World.key): endFlight(true)
+// reset()s it and leaves it here, the next buildFlight takes it. Building one costs 1.3-2.5 s. Only for a restart:
+// back in the hangar it is freed, so the hangar and a World are never both held (tablets).
+let kept = null; // { key, world, scene, kids: the scene's own children (the World's), the rest is the flight's }
+function freeKept() {
+  if (!kept) return;
+  const k = kept; kept = null;
+  const res = collectGpu(k.scene); k.world.dispose();
+  const keep = collectGpu(hangar.scene);
+  for (const kind of ['geo', 'tex']) for (const r of res[kind]) if (!keep[kind].has(r)) r.dispose();
+  renderer.renderLists.dispose();
+}
 function buildFlight(cfg) {
-  const scene = new THREE.Scene();
-  const world = new World(renderer, scene, { location: cfg.location, quality: qualityTier(), time: cfg.time, weather: cfg.weather });
-  const moonSet = MOONS.find(([k]) => k === cfg.moon)?.[2]; if (moonSet != null) world.setMoonAge(moonSet); // 'real' keeps today's phase
-  world.addParked([2, 0, 4, 7].map((i) => mergeByMaterial(buildStatic(presets[i]))));
+  const key = World.key({ location: cfg.location, quality: qualityTier(), time: cfg.time, weather: cfg.weather, moon: cfg.moon });
+  let scene, world, kids;
+  if (kept?.key === key) { ({ scene, world, kids } = kept); kept = null; } // (already reset by endFlight)
+  else {
+    freeKept();
+    scene = new THREE.Scene();
+    world = new World(renderer, scene, { location: cfg.location, quality: qualityTier(), time: cfg.time, weather: cfg.weather });
+    const moonSet = MOONS.find(([k]) => k === cfg.moon)?.[2]; if (moonSet != null) world.setMoonAge(moonSet); // 'real' keeps today's phase
+    world.addParked(PARKED.map((i) => parkedStatic(presets[i]))); // (kept per design for the session: traffic.js)
+    kids = new Set(scene.children);
+  }
   const realism = REALISM[cfg.realism];
   const design = cloneDesign(hangar.design);
   const ac = new Aircraft(design, realism);
@@ -771,7 +810,8 @@ function buildFlight(cfg) {
     ac.boomed = true; rig.shake(1.4); post.shock(0.45);
   };
   sonic.onMilestone = (n) => { hud.center(`MACH ${n}!`, 1800); audio.play('ring'); };
-  F = { kind: vehicleKind(st), stallWarn: vehicleKind(st) === 'plane', scene, world, ac, nav, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
+  F = { worldKey: key, worldKids: kids, kind: vehicleKind(st), stallWarn: vehicleKind(st) === 'plane', scene, world, ac, nav, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
+  F.spawn = { x: ac.x.clone(), q: ac.q.clone() }; // (where it started: tools/test/restart.py compares restarts with fresh starts)
   if (ac.isRocket) F.streaks = new Streaks(scene); // rockets: air rushing past (a climbing rocket sees only sky)
   if (ac.isBoat) F.boatFx = new BoatFX(scene, ac); // spray and wake (before the shaders compile)
   if (start === 'pad') F.clamp = { x: ac.x.clone(), q: ac.q.clone() }; // held down on the stand until the engines lift it
@@ -891,11 +931,22 @@ function endFlight(restarting = false) {
   // Collect every GPU resource the flight scene holds BEFORE the subsystems detach their groups (anything detached first
   // used to be skipped, and materials/textures were never freed: ~64 geometries + ~18 textures leaked per flight, #80).
   const res = collectGpu(f.scene);
-  f.world.dispose(); f.effects.dispose(); f.sonic.dispose(); post.shimmer(null); f.traffic.dispose(); f.mission?.dispose?.();
+  freeKept();
+  let keepWorld = restarting;
+  if (!keepWorld) f.world.dispose();
+  f.effects.dispose(); f.sonic.dispose(); post.shimmer(null); f.traffic.dispose(); f.mission?.dispose?.();
   f.worldSound?.dispose(); f.boatFx?.dispose();
   // free geometry and textures (the GPU memory), except what the hangar also uses. Materials stay: their compiled shader
   // programs are shared by key and reused by the next flight, so keeping them avoids recompiling ~100 shaders per flight.
   const keep = collectGpu(hangar.scene);
+  if (keepWorld) { // a restart: the World stays, put back as built (World.reset); everything else the flight added to its scene goes
+    try {
+      f.world.reset();
+      for (const o of [...f.scene.children]) if (!f.worldKids.has(o)) f.scene.remove(o);
+      const w = collectGpu(f.scene); for (const kind of ['geo', 'tex']) for (const r of w[kind]) keep[kind].add(r);
+      kept = { key: f.worldKey, world: f.world, scene: f.scene, kids: f.worldKids };
+    } catch (e) { console.error('keeping the world', e); keepWorld = false; kept = null; f.world.dispose(); }
+  }
   for (const kind of ['geo', 'tex']) for (const r of res[kind]) if (!keep[kind].has(r)) r.dispose();
   renderer.renderLists.dispose();
   audio.silence();
@@ -1121,7 +1172,7 @@ function stepFlight(dtReal) {
         audio.play('impact', 0.5, wp.clone()); rig.shake(0.5);
         ac.cause = { why: t.solid ? 'building' : 'tree', impact: ac.v.length() }; ac.damage(p, ac.v.length() * 8 / ac.R.crashMult * give, wp); ac.cause = null;
         ac.v.multiplyScalar(give < 1 ? 0.95 : 0.92);
-        if (!t.solid) t[3] = 0; // flatten the tree so we don't hit it forever (walls stay)
+        if (!t.solid) world.flatten(t); // flatten the tree so we don't hit it forever (walls stay; a restart stands it up again)
       }
     }
   }
@@ -1616,6 +1667,7 @@ async function boot() {
   $('#splash').classList.add('hide');
   setTimeout(() => $('#splash').remove(), 900);
   setTimeout(drawPartThumbs, 1200); // after the splash has faded
+  setTimeout(prewarmWorld, 2500);
   maybeShowWhatsNew();
   analytics.open({ quality: settings.quality, units: settings.units, control_mode: settings.controlMode, saved_planes: LS.get('designs', []).length, gpu: gpuName() });
   document.addEventListener('pointerdown', () => { audio.init(); if (state === 'hangar') audio.music(true); }, { once: true });
@@ -1631,6 +1683,6 @@ async function boot() {
     addEventListener('online', autoCheckUpdate);
     addEventListener('focus', autoCheckUpdate);
   }
-  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, get tunnel() { return tunnel; }, gvis, openTunnel, closeTunnel, net, presets, settings, flightCfg, controls, rig, analytics, hud };
+  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, restartFlight, get kept() { return kept; }, get tunnel() { return tunnel; }, gvis, openTunnel, closeTunnel, net, presets, settings, flightCfg, controls, rig, analytics, hud };
 }
 boot();

@@ -149,6 +149,31 @@ export class World {
     this.tiles = new TerrainTiles(this); // endless land beyond the detailed core
     this.mapTiles = new MapTiles(this, RUNWAYS, RWY.len); // the HUD minimap, built around the plane as it flies
     this.space = new SpaceView(this); // up high: the planet below, a black sky, a sea of cloud (nothing below 5 km)
+    this.flat = new Map(); // trees and other collision entries a flight flattened (flatten), with their first heights
+    this.fresh = { deck: this.deck.material.uniforms.off.value.clone(), deck2: this.deck2.material.uniforms.off.value.clone(), cirrus: this.sky.material.uniforms.cirrusOff.value.clone() };
+  }
+  // the inputs a World is built from: a restart with the same key keeps this World (main.js) and only reset()s it
+  static key(o) { return JSON.stringify([o.location, o.quality, o.time, o.weather, o.moon ?? null]); }
+  // A tree (or any collision entry) hit hard enough to flatten: kept so reset() can stand it up again
+  flatten(t) { if (!this.flat.has(t)) this.flat.set(t, t[3]); t[3] = 0; }
+  // Back to how it was built, for the next flight in the same World (main.js restartFlight): the buildings whole, the
+  // trees standing, the stunt sites, water park and launch pad idle, no space view, the clocks, gusts, lightning and
+  // cloud drift from the start. What only depends on where the camera is (streamed tiles, flora cells, the minimap,
+  // New York's low tiles, the detail patch) stays: it is a cache and follows the next flight's camera.
+  reset() {
+    this.destruct.reset();
+    for (const [t, h] of this.flat) t[3] = h;
+    this.flat.clear(); this.flora.felled?.clear();
+    if (this.space.active) this.space.leave();
+    this.t = 0; this.gust.set(0, 0, 0); this.gustT.set(0, 0, 0); this.cloudAnchor = null;
+    this.deck.material.uniforms.off.value.copy(this.fresh.deck); this.deck2.material.uniforms.off.value.copy(this.fresh.deck2);
+    this.sky.material.uniforms.cirrusOff.value.copy(this.fresh.cirrus);
+    this.nextBolt = 5; this.flash = 0; // (the first update re-lights it, as in a fresh World)
+    const S = this.stunts;
+    if (S) { S.park.st = { air: 0, upside: false }; S.park.la = null; for (const b of S.park.boosts || []) b.glow = 0; if (S.evel) { S.evel.st = { phase: 'idle', chute: null, open: 0 }; if (S.evel.chute) S.evel.chute.visible = false; for (const b of S.evel.boosts || []) b.glow = 0; } }
+    if (this.waterParks) for (const s of this.waterParks.sites) { s.st = new WeakMap(); for (const b of s.boosts || []) b.glow = 0; }
+    if (this.helipads) this.helipads.sway = 0;
+    this.pad?.setStand(null); // (the next flight fits its own)
   }
 
   // Resolves once everything a World for this location loads asynchronously is in (the terrain bake). Never rejects.

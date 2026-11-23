@@ -295,7 +295,7 @@ export class Hangar {
     const now = performance.now(), quick = !full && now - (this.lastRebuild || -1e9) < 140; this.lastRebuild = now;
     clearTimeout(this.fullT); if (quick) this.fullT = setTimeout(() => { this.lastRebuild = -1e9; this.rebuild({ full: true }); }, 200);
     this.designGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); o.skeleton?.dispose(); }); // (skeleton: the crew's bone texture)
-    this.designGroup.clear();
+    this.designGroup.clear(); this.designGroup.position.y = 0; this.designGroup.updateMatrixWorld(true); // (built at the origin, like the flight's copy (aircraft.js): the same meshes to the last bit, so the flight reuses this copy's cabin light bake)
     const t0 = performance.now(), objs = buildDesign(this.design, this.designGroup, { quick, near: !quick }).parts; this.rebuildMs = performance.now() - t0; this.rebuildQuick = quick;
     // rest on the floor: lowest point at y=0 (gear touching); a vertical launcher stands on its tail on a launch stand
     this.stats = analyze(this.design);
