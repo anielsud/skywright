@@ -24,6 +24,7 @@
 // Every interior is also kept within the part's own bounds (its meshes before the crew), less a few millimetres.
 import * as THREE from 'three';
 import { prepObstacle, obstacleClear } from './crew.js';
+import { dropOrphans } from './orphans.js';
 
 const MARGIN = 0.006; // (part metres: geometry lying on the interior's boundary, like the skin cut along the glass, is left alone)
 const WELL_SLACK = 0.007; // a tub's own walls hide what is behind them: the cut reaches this far past them (part metres; the tub is kept 1 cm inside the skin)
@@ -209,8 +210,9 @@ function cutMesh(mesh, owner, I) {
 export function keepOut(objs) {
   const t0 = performance.now(), cut = {};
   if (globalThis.__noKeepOut) return { cut, ms: 0 }; // (off: for before/after measurements)
+  const crewed = (o) => o && (o.userData.interior?.length || o.userData.seats?.length), cutCrewed = new Set();
   objs.forEach((owner, i) => {
-    if (!owner || !(owner.userData.interior?.length || owner.userData.seats?.length)) return;
+    if (!crewed(owner)) return;
     owner.updateMatrixWorld(true);
     const I = interiorOf(owner); if (!I) return;
     const wbox = I.box.clone().applyMatrix4(owner.matrixWorld);
@@ -220,11 +222,14 @@ export function keepOut(objs) {
       o.traverse((m) => {
         if (!m.isMesh || m.isSkinnedMesh || m.isInstancedMesh || !m.geometry) return;
         m.geometry.computeBoundingBox(); if (!m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld).intersectsBox(wbox)) return;
-        n += cutMesh(m, owner, I);
+        const k = cutMesh(m, owner, I); n += k; if (k && crewed(o)) cutCrewed.add(j);
       });
     });
     if (n) cut[i] = n;
   });
+  // two cockpits set into each other: each is cut clean along the other's interior (one wide twin cockpit); whatever
+  // that leaves touching nothing (a strip of a panel whose pedestal was inside the other one) goes (orphans.js)
+  for (const j of cutCrewed) try { dropOrphans(objs[j], objs); } catch (e) { console.warn('orphans', e); }
   return { cut, ms: performance.now() - t0 };
 }
 
