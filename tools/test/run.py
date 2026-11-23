@@ -50,7 +50,7 @@ def covers(globs, f):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('suites', nargs='*'); ap.add_argument('--changed', action='store_true'); ap.add_argument('--ci', action='store_true', help='CI runner settings (CI_ARGS)'); ap.add_argument('--tier', choices=['node', 'browser'], help='only this tier'); ap.add_argument('--list', action='store_true')
+    ap.add_argument('suites', nargs='*'); ap.add_argument('--changed', action='store_true'); ap.add_argument('--ci', action='store_true', help='CI runner settings (CI_ARGS)'); ap.add_argument('--tier', choices=['node', 'browser'], help='only this tier'); ap.add_argument('--exclude', action='append', default=[], help='leave this suite out (repeatable)'); ap.add_argument('--list', action='store_true')
     ap.add_argument('--jobs', type=int, help='Node workers (default: cores - 2)')
     a = ap.parse_args()
     node = node_suites()
@@ -67,6 +67,7 @@ def main():
             pick = [k for k, (_, files) in allsuites.items() if any(covers(files, f) for f in ch)]
             print(f'{len(ch)} changed files -> {", ".join(pick) or "no suites"}')
     if a.tier: pick = [k for k in pick if allsuites.get(k, ('',))[0] == a.tier]
+    pick = [k for k in pick if k not in a.exclude]
     t0, failed = time.time(), []
     nodes = [k for k in pick if allsuites.get(k, ('',))[0] == 'node']
     if nodes:

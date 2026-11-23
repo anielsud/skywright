@@ -67,7 +67,7 @@ jobs:
 
   browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30 # (a change to the harness itself runs every browser suite here, one after another)
     name: browser suites (changed)
     env:
       SKY_CDP_TIMEOUT: '120' # (software WebGL on the runner: a frame can take seconds)
@@ -84,4 +84,4 @@ jobs:
       - name: Install websockets
         run: python -m pip install websockets
       - name: Browser suites covering the changes
-        run: python tools/test/run.py --ci --changed --tier browser
+        run: python tools/test/run.py --ci --changed --tier browser --exclude smoke # (smoke has its own jobs above)
