@@ -104,8 +104,13 @@ dropped on bodies, wings, wingtips, pods and flaps, some resized or rotated, all
 rays that no strut passes through a part (control surfaces included), every leg and brace ends on a solid skin, every
 wheel stands upright, and mirrored gear mirrors. Six more builds drop gear on the speed parts (a Chined Body with a
 thin wing, Spike Ramjets under it; their own seeded stream, `--speed N`). `--seed N --random K` for other builds,
-`--dump` prints failing designs, `--url` checks another server (e.g. a build of main, for a before/after count). About
-4 minutes.
+`--dump` prints failing designs, `--only TEXT` just the builds whose name contains it.
+
+Node tier (`node tools/test/node/run.mjs gearcheck`, or `run.py gearcheck`): one case per build, a few seconds in all.
+The random builds are made up front, in order (each one's placement reads the build so far), the way the hangar
+places parts. The builds it checks leave out the near-only furniture (crew, rivets, the cabin light): the check never
+looks at a near-only mesh and the gear is routed before any of it is built, so every ray meets exactly the same
+surfaces at the same distances (`SKY_GEAR_NEAR=1` builds it all, to compare), at a seventh of the cost.
 
 ## Mesh check
 
@@ -390,18 +395,23 @@ Run it when you change `src/boat.js`, the boat parts (`src/boatParts.js`), `src/
 
 ## Wind tunnel check
 
-`tunnelcheck.py` opens the wind tunnel for every stock vehicle in headless Chrome and fails if any of them: logs an
-error; (planes) has a lift curve that doesn't rise and then stall as the angle of attack is swept from -10 to +30
-degrees; reports forces or moments that differ from what a real flight substep integrates at the same state (a fresh
-`Aircraft` in free flight at the same attitude, airspeed, controls and flaps, gravity and engine thrust taken out;
-subsonic and supersonic, relative error over 1e-6); compiles a shader while it runs; runs slower than `--max-ms`
-(default 50 ms a frame) or does more than `--max-cpu` ms of its own work a frame (default 12) while sweeping the angle
-and swinging on the free pivot; or, when closed, leaves geometries or textures on the GPU (`renderer.info.memory`, no
-higher than in the hangar before; a second visit must end exactly where the first did and compile nothing new).
+`tunnelcheck.py` checks the wind tunnel in two tiers.
+
+- **Node** (`tunnelcheck` suite, every stock vehicle, ~3 s): the tunnel's physics with no scene (`WindTunnel.setup`:
+  the Aircraft and starting state `open()` makes) fails if (planes) the lift curve doesn't rise and then stall as the
+  angle of attack is swept from -10 to +30 degrees, or the forces or moments differ from what a real flight substep
+  integrates at the same state (a fresh `Aircraft` in free flight at the same attitude, airspeed, controls and flaps,
+  gravity and engine thrust taken out; subsonic and supersonic, relative error over 1e-6).
+- **Browser** (`--ui`, `run.py tunnelcheck-ui`; Kestrel, opened twice, and Dragonfly, ~25 s): opens the tunnel in
+  headless Chrome and fails if the page logs an error; it compiles a shader while it runs; it runs slower than
+  `--max-ms` (default 50 ms a frame) or does more than `--max-cpu` ms of its own work a frame (default 12) while
+  sweeping the angle (90 frames) and swinging on the free pivot (60 frames); or, when closed, it leaves geometries or
+  textures on the GPU (`renderer.info.memory`, no higher than in the hangar before; a second visit must end exactly
+  where the first did and compile nothing new). Waits are frames, not seconds.
 
 ```sh
-python3 tools/test/tunnelcheck.py               # serves the repo itself, ~3 min
-python3 tools/test/tunnelcheck.py --only Viper --shots /tmp/tunnel
+python3 tools/test/tunnelcheck.py               # both tiers
+python3 tools/test/tunnelcheck.py --ui --only Viper --shots /tmp/tunnel
 ```
 
 Run it when you change `aircraft.js` (the aero model), `windTunnel.js`, `tunnelFlow.js` or `tunnelScene.js`.
@@ -441,8 +451,13 @@ every cockpit view (`Aircraft.stations`, `src/stations.js`, one per seat) the wa
 
 It prints the stations of each vehicle ("Captain, First officer", "Pilot, Bomb aimer, Top gunner, ...").
 
+It runs on the Node tier (`cockpitcheck` suite): a stock vehicle's three builds are one case (in order, so what the
+game keeps from one build, its crew postures and cabin light bake, serves the next as before), every other build a
+case of its own. Building the vehicles (crew postures, cockpit views, the cabin light) is about 90% of the work; the
+ray tests only look at triangles within 3 m of the eye and skip any whose box the ray misses.
+
 ```sh
-python3 tools/test/cockpitcheck.py                       # ~2 min
+python3 tools/test/cockpitcheck.py                       # ~15 s on a quiet machine
 python3 tools/test/cockpitcheck.py --random 60 --seed 9  # more random builds
 ```
 
@@ -454,16 +469,24 @@ view of every preset through the camera button's path.
 `startbakes.py` checks that what the deploy bakes into `assets/boot` (`tools/bake/boot.py`) and what the game keeps for
 the visit or on the device is exactly what it would work out itself:
 
-- **cockpit views** (`src/stations.js`: which cabin linings cover the windows) of every stock vehicle: worked out with
-  no cache, from the visit's cache, and from a bake round-tripped through JSON (as `views.json` and localStorage
+- **cockpit views** (Node tier, `startbakes` suite; `src/stations.js`: which cabin linings cover the windows) of a
+  sample of the stock vehicles (every one with linings, and three without; `--presets all` for every one): worked out
+  with no cache, from the visit's cache, and from a bake round-tripped through JSON (as `views.json` and localStorage
   are): the same linings and the same settled eyes for every seat, and the cache really used for every seat that has
   linings;
-- **stunt park sites** (`src/stuntSite.js` `findSite`) at every place that searches for one: the site the World
-  planned == a fresh search on that World == the bake's (`bakeStuntSites`, as `boot.py` writes it); a second flight
-  at the same place takes it from the visit's cache and gets the same site.
+- **stunt park sites** (browser, `run.py startbakes-stunts`; `src/stuntSite.js` `findSite`) at every place that
+  searches for one, in that place's World built as a flight builds it (at Low, no vehicle): the site the World planned
+  == a fresh search on that World == the bake's (`bakeStuntSites`, as `boot.py` writes it); planning again there (what
+  a second flight does) takes it from the visit's cache and gets the same site.
+
+The deploy's bake checks every stock vehicle itself: `tools/bake/boot.py` reads its `views.json` and `stunts.json` back
+and, through `startbakes.js` `verifyBake`, requires every stock vehicle's views from the bake alone to equal the views
+worked out with no cache (no seat missing from it) and every stunt site to be exactly what `findSite` finds; otherwise
+it removes those files and fails the deploy step. So the local check is a sample. (The stunt sites stay in the
+browser: New York's search reads the satellite photo as the browser decodes and scales it.)
 
 ```sh
-python3 tools/test/startbakes.py                                   # ~3 min
+python3 tools/test/startbakes.py                                   # ~25 s
 python3 tools/test/startbakes.py --only views --presets Jumbo      # one vehicle
 python3 tools/test/startbakes.py --only stunts --locations islands # one place
 ```

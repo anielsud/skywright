@@ -1,4 +1,4 @@
-// Landing gear geometry check, evaluated in the game page by gearcheck.py (the body of an async function of ARG).
+// Landing gear geometry check: a Node-tier suite (tools/test/node/run.mjs; gearcheck.py runs it).
 // Builds every preset (as is, resized, mirrored) and seeded random player builds (gear, floats and skids dropped on
 // bodies, wings, wingtips, pods and flaps the way the hangar places them; resized, rotated, mirrored), then checks the
 // routed struts (gearRoute.js) against the real built meshes with double-sided rays:
@@ -6,12 +6,16 @@
 //   - every leg and brace ends on a solid surface (not in the air, not on a control surface),
 //   - every wheel stands upright and rolls straight ahead (axle level and square to the flight direction),
 //   - mirrored pairs mirror (to 1 cm: skin triangles are not mirror images), a centreline gear is symmetric,
-//   - no gear part has broken (NaN) geometry, and building raised no warnings.
-// Builds from before gearRoute.js are measured too (legacyRoute), for a before/after count: gearcheck.py --url.
-const S = window.__sky, THREE = S.THREE, PARTS = S.PARTS, V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
-const { buildDesign } = await import('/src/hangar.js');
-const { newPart, mirroredOf } = await import('/src/design.js');
-const seed = ARG?.seed ?? 1, nRandom = ARG?.random ?? 20;
+//   - no gear part has broken (NaN) geometry, and building raised no warnings (the build checked has no near-only
+//     furniture, see check(): crew warnings are cockpitcheck's and riders').
+// A gear part with no gearRoute (a build from before gearRoute.js) is measured as the old code built it (legacyRoute).
+// Cases: one per build. The random builds are made up front, in order, from their seeded streams (each one's placement
+// reads the build so far, so they can't be made apart), and travel to the workers as design JSON.
+import * as THREE from 'three';
+import { PARTS } from '../../src/parts.js';
+import { buildDesign } from '../../src/hangar.js';
+import { newPart, mirroredOf } from '../../src/design.js';
+const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 
 // ---------- double-sided rays against a mesh list ----------
 const _a = V(), _b = V(), _c = V(), _p = V(), _ray = new THREE.Ray(), _inv = new THREE.Matrix4(), _box = new THREE.Box3();
@@ -44,7 +48,10 @@ function legacyRoute(o, gi) {
 function check(d, label) {
   const warns = [], ow = console.warn; console.warn = (...a) => { warns.push(a.map(String).join(' ')); ow(...a); };
   const root = new THREE.Group(); let det;
-  try { det = buildDesign(d, root); } finally { console.warn = ow; }
+  // (built without the near-only furniture: crew, rivets, the cabin light bake. The check never looks at a near-only
+  // mesh and the gear is routed before any of them is built, so every ray meets exactly what it meets with them: same
+  // crossings, same distances, same meshes, for all 118 builds. 7x faster. SKY_GEAR_NEAR=1 builds them, to compare.)
+  try { det = buildDesign(d, root, { near: process.env.SKY_GEAR_NEAR === '1' }); } finally { console.warn = ow; }
   root.updateMatrixWorld(true);
   const objs = det.parts, bad = [], movable = new Set(), gearSet = new Set(), meshes = [], owner = new Map();
   const shown = (m) => { for (let o = m; o && o !== root; o = o.parent) if (!o.visible) return false; return true; };
@@ -163,22 +170,26 @@ function randomBuild(rand, k, { bodies = BODIES, wings = WINGS, pods = ['x_tank'
   return { name: `${tag} ${k} (${fus}, ${wid}: ${placed.join(', ')})`, parts };
 }
 
-const results = [], only = ARG?.only;
-for (const d of S.presets.filter((d) => !only || only.includes(d.name))) {
-  results.push(check(d, d.name), check(resized(d), d.name + ' resized'), check(mirrored(d), d.name + ' mirrored'));
-}
-if (!only) {
+// ---------- Node tier: one case per build ----------
+// SKY_GEAR_RANDOM / SKY_GEAR_SEED / SKY_GEAR_SPEED: as gearcheck.py's --random / --seed / --speed.
+export const nodeSuite = { files: ['src/gear*.js', 'src/parts.js', 'src/partDetail.js', 'src/planeDetail.js', 'src/hangar.js', 'tools/test/gearcheck.js'], headless: false };
+export function cases({ presets }) {
+  const env = process.env, seed = +(env.SKY_GEAR_SEED ?? 1), nRandom = +(env.SKY_GEAR_RANDOM ?? 20), nSpeed = +(env.SKY_GEAR_SPEED ?? 6), out = [];
+  for (const d of presets) out.push({ id: d.name, preset: d.name }, { id: d.name + ' resized', preset: d.name, v: 'resized' }, { id: d.name + ' mirrored', preset: d.name, v: 'mirrored' });
   const rand = rng(seed);
-  for (let k = 0; k < nRandom; k++) {
-    const d = randomBuild(rand, k);
-    results.push(check(d, d.name), check(mirrored(d), d.name + ' mirrored'));
-  }
+  for (let k = 0; k < nRandom; k++) { const d = randomBuild(rand, k); out.push({ id: d.name, design: d }, { id: d.name + ' mirrored', design: d, v: 'mirrored' }); }
   // and gear dropped on the speed parts (a Chined Body with a thin wing, Spike Ramjets hung under it): their own seeded
   // stream, so the builds above stay the same
   const rs = rng(seed + 7100);
-  for (let k = 0; k < (ARG?.speed ?? 6); k++) {
+  for (let k = 0; k < nSpeed; k++) {
     const d = randomBuild(rs, k, { bodies: ['fus_chine'], wings: ['w_delta', 'w_swept'], pods: ['e_ramjet', 'x_tank'], tag: 'speed' });
-    results.push(check(d, d.name), check(mirrored(d), d.name + ' mirrored'));
+    out.push({ id: d.name, design: d }, { id: d.name + ' mirrored', design: d, v: 'mirrored' });
   }
+  return out;
 }
-return results;
+export function runCase(c, { presets }) {
+  let d = c.design || presets.find((p) => p.name === c.preset);
+  if (c.v === 'resized') d = resized(d); else if (c.v === 'mirrored') d = mirrored(d);
+  const r = check(d, c.id);
+  return [{ name: `${c.id} (${r.gear} gear)`, ok: !r.bad.length, why: r.bad.join(' | ') || undefined, label: r.label, gear: r.gear, bad: r.bad, ...(r.design ? { design: r.design } : {}) }];
+}

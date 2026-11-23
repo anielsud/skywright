@@ -22,12 +22,10 @@ BROWSER = {
     'placecheck': (['placecheck.py'], ['src/main.js', 'src/stunt*.js', 'src/evelJump.js', 'src/waterPark.js', 'src/landStart.js', 'src/world.js', 'src/realworld.js', 'src/realCity.js', 'src/destruction.js', 'src/aircraft.js', 'tools/test/placecheck.py', 'tools/test/stunts.js', 'tools/test/waterpark.js', 'tools/test/walls.js']),
     'padcheck': (['padcheck.py'], ['src/launchpad.js', 'src/main.js', 'src/aircraft.js', 'src/world.js']),
     'helipadcheck': (['helipadcheck.py'], ['src/helipad.js', 'src/main.js', 'src/aircraft.js', 'src/world.js', 'src/nyc*.js']),
-    'cockpitcheck': (['cockpitcheck.py'], ['src/stations.js', 'src/crew.js', 'src/body.js', 'src/partDetail.js', 'src/parts.js', 'src/cockpit*.js', 'src/interior.js']),
     'meshcheck': (['meshcheck.py'], ['src/parts.js', 'src/partDetail.js', 'src/*Parts.js', 'src/skinBlend.js', 'src/planeDetail.js', 'src/hangar.js', 'src/interior.js']),
-    'gearcheck': (['gearcheck.py'], ['src/gear*.js', 'src/parts.js', 'src/partDetail.js', 'src/planeDetail.js', 'src/hangar.js']),
-    'startbakes': (['startbakes.py'], ['src/stations.js', 'src/stuntPark.js', 'src/stuntSite.js', 'tools/bake/*']),
+    'startbakes-stunts': (['startbakes.py', '--only', 'stunts'], ['src/stuntPark.js', 'src/stuntSite.js', 'src/realworld.js', 'src/world.js', 'tools/bake/*', 'tools/test/startbakes.*']),  # (its views: the Node suite startbakes)
     'shadercheck': (['shadercheck.py'], ['src/main.js', 'src/crew.js', 'src/cabinLight.js', 'src/planeMaterials.js', 'src/world.js', 'src/post.js']),
-    'tunnelcheck': (['tunnelcheck.py'], ['src/windTunnel.js', 'src/aircraft.js', 'src/aero*.js']),
+    'tunnelcheck-ui': (['tunnelcheck.py', '--ui'], ['src/windTunnel.js', 'src/tunnel*.js', 'src/main.js', 'tools/test/tunnelcheck.*']),  # (its lift curves and forces: the Node suite tunnelcheck)
 }
 HARNESS = ['tools/test/run.py', 'tools/test/node/*', 'tools/test/smoke.py']  # changing these runs everything
 

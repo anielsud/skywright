@@ -1,10 +1,16 @@
-// Wind tunnel check (browser module, driven by tunnelcheck.py). Works on the open tunnel (__sky.tunnel):
-//   liftCurve: sweeps the angle of attack through the tunnel's own state update and returns lift against angle.
+// Wind tunnel check, in two tiers.
+//  Node (this module's nodeSuite, one case per stock vehicle): the tunnel's physics with no scene (WindTunnel.setup,
+//   the same Aircraft and starting state open() makes), checked against the flight model:
+//   liftCurve: sweeps the angle of attack through the tunnel's own state update and returns lift against angle; a
+//     plane's lift must rise and then stall (lift falls away, STALL! shows, the tunnel's own analysis finds the angle).
 //   forceMatch: puts a fresh Aircraft of the same design in free flight at the same state (attitude, airspeed,
 //     controls, flaps), runs one real flight substep, takes out gravity and engine thrust, and compares the aero force
 //     and moment the flight integrated with what the tunnel reports. Simulator air: no assists add forces of their own.
+//  Browser (tunnelcheck.py --ui, ui() below): what needs the page, for two vehicles (see tunnelcheck.py).
 import * as THREE from 'three';
 import { Aircraft, REALISM, gravityAt } from '../../src/aircraft.js';
+import { analyze } from '../../src/design.js';
+import { WindTunnel } from '../../src/windTunnel.js';
 
 const D2R = Math.PI / 180;
 
@@ -65,4 +71,46 @@ export function forceMatch(t) {
   }
   Object.assign(st, keep); t.ac.R = REALISM[st.air]; t.physics(0);
   return out;
+}
+
+export const kindOf = (s) => (s.heli ? 'heli' : s.boat ? 'boat' : s.car && s.wingArea < 0.5 ? 'car' : s.vertical ? 'rocket' : 'plane');
+
+// The lift curve's verdict (a plane's lift rises, then stalls) and the force match's: problems, [] when good.
+export function judge(kind, lc, fm) {
+  const bad = [], cur = lc.curve, L = cur.map((c) => c[1]), A = cur.map((c) => c[0]);
+  let k = 0; for (let j = 1; j < L.length; j++) if (L[j] > L[k]) k = j; // (the first highest: Python's max)
+  if (kind === 'plane') {
+    let i8 = 0; for (let j = 1; j < A.length; j++) if (Math.abs(A[j] - 8) < Math.abs(A[i8] - 8)) i8 = j;
+    let rises = L[k] > L[0] + 0.2 * lc.mass; for (let j = 0; j < Math.max(0, i8); j++) if (!(L[j + 1] >= L[j] - 0.02 * Math.abs(L[k]))) rises = false;
+    const stalls = A[k] < A[A.length - 1] && Math.min(...L.slice(k)) < 0.95 * L[k] && cur.slice(k).some((c) => c[3]) && lc.stallAt !== null && lc.stallAt !== undefined;
+    if (!rises) bad.push(`lift curve does not rise: ${JSON.stringify(A.flatMap((a, j) => (j % 5 ? [] : [[a, Math.round(L[j])]])))}`);
+    if (!stalls) bad.push(`lift curve does not stall: peak ${L[k].toFixed(0)} kg at ${A[k]} deg, ${L[L.length - 1].toFixed(0)} kg at ${A[A.length - 1]} deg`);
+  }
+  const worst = Math.max(0, ...fm.filter((x) => 'errF' in x).map((x) => Math.max(x.errF, x.errT)));
+  if (!(worst <= 1e-6)) bad.push(`forces differ from the flight model (worst relative error ${worst.toExponential(2)}): ${JSON.stringify(fm.filter((x) => x.errF > 1e-6 || x.errT > 1e-6 || Number.isNaN(x.errF) || Number.isNaN(x.errT)).slice(0, 2))}`);
+  return { bad, worst, peak: [A[k], Math.round(L[k])] };
+}
+
+// ---------- Node tier: one case per stock vehicle ----------
+export const nodeSuite = { files: ['src/windTunnel.js', 'src/aircraft.js', 'src/aero*.js', 'tools/test/tunnelcheck.js'], headless: true };
+export function cases({ presets }) { return presets.map((d) => ({ id: d.name })); }
+export function runCase(c, { presets }) {
+  const d = presets.find((p) => p.name === c.id), kind = kindOf(analyze(d));
+  const t = new WindTunnel({ tier: 'low' }); t.setup(JSON.parse(JSON.stringify(d)));
+  t.model = new THREE.Group(); t.flow = {}; // (physics() turns the model; analyse() reads the smoke's span for the yaw verdict only)
+  t.analyse(); // (the stall angle, as the open tunnel's first frame works it out at the starting state)
+  const lc = liftCurve(t), fm = forceMatch(t), { bad, worst, peak } = judge(kind, lc, fm);
+  const info = `${kind}, stall ${lc.stallAt ?? '-'}°, peak ${JSON.stringify(peak)}, force err ${worst.toExponential(1)}`;
+  return [{ name: `${c.id}: lift curve and forces (${info})`, ok: !bad.length, why: bad.join(' | ') || undefined, kind, stallAt: lc.stallAt, peak, force: fm, forceErr: worst }];
+}
+
+// ---------- browser: the open tunnel's page-side checks (tunnelcheck.py --ui) ----------
+// Waits by frames, not seconds: n frames drawn by the page's own loop (rAF).
+export const frames = (n) => new Promise((res) => { let k = 0; const f = () => (++k >= n ? res() : requestAnimationFrame(f)); requestAnimationFrame(f); });
+// the hangar settled (nothing loading or restoring) and what it holds on the GPU
+export async function settle() {
+  const h = window.__sky.hangar;
+  for (let k = 0; k < 600 && (h.env.restoring || h.env.loading); k++) await frames(1);
+  await frames(10);
+  const m = window.__sky.renderer.info.memory; return { geo: m.geometries, tex: m.textures, progs: window.__sky.renderer.info.programs.length };
 }
