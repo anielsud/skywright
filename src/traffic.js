@@ -261,5 +261,5 @@ export class Traffic {
     if (this.boats) this.updateBoats(dt, fx);
     this.updatePattern(dt);
   }
-  dispose() { this.scene.remove(this.group); }
+  dispose() { this.scene.remove(this.group); this.vehicles.dispose(); }
 }

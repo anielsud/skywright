@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.157.0', items: [
+    "Real cars on the roads! Sedans, SUVs, pickups and sports cars in all sorts of colours, plus buses, taxis, police cars, fire engines and garbage trucks, and New York is full of yellow cabs.",
+    "At the airport, a fuel tanker, a follow-me jeep and a little tug pulling baggage carts drive around the apron.",
+  ] },
   { v: '1.156.0', items: [
     "The game uses less memory when you fly lots of times in a row or keep changing your vehicle in the hangar, so it stays smooth for longer.",
   ] },

@@ -37,7 +37,7 @@ const CITY = { nyc: 1 }, LVL_SIREN = 3.5;
 const REAL_RIVER = 0.8; // mapped real rivers carry no size: treat them as big ones
 const LVL_RIVER = 3.8, RIVER_RANGE = 450, RIVER_RINGS = [0, 25, 50, 90, 140, 210, 300, 420];
 const CAR_VOICES = 3, CAR_RANGE = 240, TRAIN_RANGE = 1600, PLANE_VOICES = 3, PLANE_RANGE = 3500, FLOCK_RANGE = 160;
-const HEAVY = { truck: 1, tanker: 1, bus: 1 };
+const HEAVY = { tanker: 1, garbage: 1, citybus: 1, schoolbus: 1, firetruck: 1, towtruck: 1 }; // (traffic model ids: vehicles.js)
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
 // One positional voice: gain -> air absorption -> delay -> panner -> bus. Sources are attached/stopped on demand.

@@ -1,0 +1,49 @@
+<!doctype html><meta charset="utf-8"><title>traffic preview</title>
+<style>html,body{margin:0;background:#9fb4c8}canvas{display:block}</style>
+<script type="importmap">{ "imports": { "three": "../../vendor/three.module.min.js" } }</script>
+<!-- Every traffic model in a grid, drawn by the game's own loader and material (src/trafficModels.js) in one
+     BatchedMesh, one tile each. ?view=three|side|front|rear|top &lod=0|1|2 &paint=1 (random colours) &quality=low (half-size
+     atlas) &only=id,id. Screenshots: tools/traffic/preview.py. -->
+<script>const _e = console.error; console.error = (...a) => { window.err = (window.err || "") + a.map(String).join(" ").slice(0, 1500); _e(...a); }; const _w = console.warn; console.warn = (...a) => { window.warns = (window.warns || "") + a.map((x) => x?.stack || String(x)).join(" ") + "\n"; _w(...a); }; addEventListener("error", (e) => window.err = String(e.message)); addEventListener("unhandledrejection", (e) => window.err = String(e.reason?.stack || e.reason));</script>
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from '../../vendor/addons/RoomEnvironment.js';
+import { trafficModels } from '../../src/trafficModels.js';
+const q = new URLSearchParams(location.search), view = q.get('view') || 'three', lod = +(q.get('lod') || 0), only = q.get('only');
+const R = new THREE.WebGLRenderer({ antialias: true }); R.setSize(innerWidth, innerHeight); document.body.appendChild(R.domElement);
+R.toneMapping = THREE.ACESFilmicToneMapping;
+const S = new THREE.Scene(); S.environment = new THREE.PMREMGenerator(R).fromScene(new RoomEnvironment(), 0.04).texture;
+S.add(new THREE.HemisphereLight(0xdde8ff, 0x665544, 1.2)); const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(-30, 60, 20); S.add(sun);
+const M = await trafficModels(q.get('quality') || 'high'); if (!M) throw new Error('no models: ' + window.warns);
+const ids = Object.keys(M.meta).filter((id) => !only || only.split(',').includes(id));
+const cols = 6, cell = 40, PAINT = [0xc8102e, 0x1d4e89, 0x2e6b3f, 0xe8a43c, 0xf2f2ee, 0x202326];
+let nv = 0, ni = 0; for (const id of ids) { const g = M.geo[id]; for (const x of [g.lod[lod], ...(lod ? [] : g.wheels)]) { nv += x.attributes.position.count; ni += x.index.count; } }
+const B = new THREE.BatchedMesh(ids.length * 12, nv, ni, M.material); S.add(B);
+const m4 = new THREE.Matrix4(), c = new THREE.Color();
+ids.forEach((id, k) => {
+  const x = (k % cols - (cols - 1) / 2) * cell, z = (Math.floor(k / cols)) * cell * 1.1, g = M.geo[id];
+  const put = (geo, mat, col) => { const i = B.addInstance(B.addGeometry(geo)); B.setMatrixAt(i, mat); B.setColorAt(i, c.set(col)); };
+  const col = q.get('paint') ? PAINT[k % PAINT.length] : 0xffffff, base = new THREE.Matrix4().makeTranslation(x, 0, z);
+  put(g.lod[lod], base, col);
+  if (!lod) M.meta[id].wheels.forEach((w, j) => put(g.wheels[j], base.clone().multiply(new THREE.Matrix4().makeTranslation(w[0], w[1], w[2])), col));
+  const lab = document.createElement('div'); lab.textContent = id; lab.style.cssText = 'position:absolute;font:14px sans-serif;color:#000;background:#fff8;padding:1px 4px'; lab.dataset.p = [x, 0, z + 5]; document.body.appendChild(lab);
+});
+// a contact sheet: each vehicle in its own tile, framed by its size (side: from its right, front to the right of the
+// tile; front: from ahead; three: three-quarter front-right, a little above)
+R.setScissorTest(true); R.setClearColor(0x9fb4c8);
+const rows = Math.ceil(ids.length / cols), tw = innerWidth / cols, th = innerHeight / rows;
+const cam = new THREE.PerspectiveCamera(28, tw / th, 0.5, 400);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.MeshStandardMaterial({ color: 0x777b80 })); ground.rotation.x = -Math.PI / 2; S.add(ground);
+ids.forEach((id, k) => {
+  const x = (k % cols - (cols - 1) / 2) * cell, z = Math.floor(k / cols) * cell * 1.1, m = M.meta[id], r = Math.max(m.L, m.H * 1.6) * 0.62;
+  const d = r / Math.tan(THREE.MathUtils.degToRad(14)) * 1.05, h = m.H * 0.45;
+  const dir = view === 'side' ? [1, 0.05, 0] : view === 'front' ? [0, 0.12, -1] : view === 'rear' ? [0, 0.12, 1] : view === 'top' ? [0.001, 1, 0] : [0.75, 0.45, -0.6];
+  const v = new THREE.Vector3(...dir).normalize().multiplyScalar(d); cam.position.set(x + v.x, h + v.y, z + v.z); cam.lookAt(x, h, z);
+  const col = k % cols, row = Math.floor(k / cols);
+  R.setViewport(col * tw, innerHeight - (row + 1) * th, tw, th); R.setScissor(col * tw, innerHeight - (row + 1) * th, tw, th);
+  R.render(S, cam);
+});
+for (const l of document.querySelectorAll('div')) l.remove();
+ids.forEach((id, k) => { const lab = document.createElement('div'); lab.textContent = id; lab.style.cssText = `position:absolute;font:13px sans-serif;background:#fff9;padding:1px 4px;left:${(k % cols) * tw + 4}px;top:${Math.floor(k / cols) * th + 4}px`; document.body.appendChild(lab); });
+window.done = true;
+</script>
