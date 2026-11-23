@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.150.0', items: [
+    "Cockpits are tidier: seat edges, gauges, straps and handles all fit snugly now, with no little gaps or floating bits.",
+  ] },
   { v: '1.149.0', items: [
     "No more peeking through the wings! Parts behind the cockpit now look solid from the pilot's seat, with no strips of sky showing through.",
   ] },

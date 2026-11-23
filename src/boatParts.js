@@ -481,7 +481,7 @@ function wheelhouse(c, lv) {
   pane(V(-0.4 + MW / 2, H0, D / 2), V(0.4 - MW / 2, H0, D / 2), V(0.4 - MW / 2, H1, D / 2), V(-0.4 + MW / 2, H1, D / 2)); // the door's window
   for (const z of [D / 2 - 0.0475, D / 2 + 0.0475]) { // the door in the after bulkhead: its frame strips and handles, inside and out
     for (const x of [-0.38, 0.38]) { const f = new THREE.BoxGeometry(0.04, H0 - 0.03, 0.015); f.translate(x, H0 / 2 - 0.005, z); b.add(f, frame); }
-    b.add(bar(V(0.28, 0.82, z + Math.sign(z - D / 2) * 0.02), V(0.28, 0.97, z + Math.sign(z - D / 2) * 0.02), 0.022, 0.022, true, 8), M.steel()); }
+    b.add(bar(V(0.28, 0.82, z + Math.sign(z - D / 2) * 0.003), V(0.28, 0.97, z + Math.sign(z - D / 2) * 0.003), 0.022, 0.022, true, 8), M.steel()); } // (handles on the door's faces)
   b.add(bar(V(-W / 2, H0 + 0.01, zF(H0)), V(W / 2, H0 + 0.01, zF(H0)), 0.06, 0.04), frame); // front sill
   for (const sx of [-1, 1]) b.add(bar(V(sx * W / 2, H0 + 0.01, -D / 2), V(sx * W / 2, H0 + 0.01, D / 2), 0.04, 0.06), frame);
   b.add(bar(V(-W / 2, H0 + 0.01, D / 2), V(W / 2, H0 + 0.01, D / 2), 0.06, 0.04), frame);
@@ -542,14 +542,14 @@ function wheelhouse(c, lv) {
       CK.seam(nb, [V(x0, y0d, z), V(x1, y0d, z), V(x1, y1d, z), V(x0, y1d, z), V(x0, y0d, z)]); CK.box(nb, null, [x1 - 0.05, y1d - 0.06, z + 0.006], [0.05, 0.016, 0.012], M.steel()); }
     { const mt = new THREE.BoxGeometry(0.8, 0.006, 0.4); mt.translate(0.4, FL + 0.003, -0.47); b.add(mt, CK.surfaceKind('rubber', mat('whMat', () => new THREE.MeshStandardMaterial({ color: 0x1b1c1e, roughness: 0.9 }))));
       for (let k = 0; k < 9; k++) { const rb = new THREE.BoxGeometry(0.76, 0.004, 0.012); rb.translate(0.4, FL + 0.007, -0.65 + k * 0.045); b.add(rb, mat('whMat', () => null)); } }
-    CK.placard(nb, CK.faceM(V(-0.25, 1.6, D / 2 - 0.041), V(0, 0, -1)), 0.12, 0.06, 2); // data plate by the door
+    CK.placard(nb, CK.faceM(V(-0.25, 0.95, D / 2 - 0.041), V(0, 0, -1)), 0.12, 0.06, 2); // data plate on the door, under its window
     for (const [x0, x1] of [[-1.0, 0.12], [0.68, 1.05]]) { // a stainless grab rail along the console's front, clear of the wheel
       b.add(pipe([V(x0, 0.78, CON.z1 + 0.045), V(x1, 0.78, CON.z1 + 0.045)], 0.012, 8, 2), M.steel());
       for (const x of [x0 + 0.03, x1 - 0.03]) b.add(bar(V(x, 0.78, CON.z1), V(x, 0.78, CON.z1 + 0.045), 0.02, 0.02, true, 8), M.steel()); }
     // a bench along the after bulkhead, to port of the door
     { const bs = cushion(0.7, 0.1, 0.4, 0.04, 0.012); bs.translate(-0.78, 0.45, D / 2 - 0.27); b.add(bs, vinyl(0x2b2d31));
       const bb = new THREE.BoxGeometry(0.7, 0.36, 0.38); bb.translate(-0.78, 0.22, D / 2 - 0.27); b.add(bb, gel(0xc9ccd0));
-      const bk = cushion(0.7, 0.36, 0.08, 0.035, 0.01, 2); bk.translate(-0.78, 0.74, D / 2 - 0.1); b.add(bk, vinyl(0x2b2d31)); }
+      const bk = cushion(0.7, 0.36, 0.08, 0.035, 0.01, 2); bk.translate(-0.78, 0.74, D / 2 - 0.08); b.add(bk, vinyl(0x2b2d31)); } // (its back against the bulkhead)
   }
   // the helm chair: a pedestal on a base plate, a slide under the seat, upholstered cushions and armrests
   const SEAT = { at: [0.4, 0.42, 0.1], dims: [0.5, 0.55, 0.46, 0.2] }, [sx0, sy0, sz0] = SEAT.at, [sw, sbH, spL, stl] = SEAT.dims, spt = sy0 + 0.02 + 0.126 * sw;

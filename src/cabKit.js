@@ -177,6 +177,7 @@ export function gauge(bag, m, r, tile = 'gauge', bezel = null, { live = null, sr
   const d = toTile(new THREE.CircleGeometry(r, 24), tile); d.applyMatrix4(at(m, 0, 0, 0.002)); bag.add(d, atlasMat());
   const ring = new THREE.TorusGeometry(r * 1.04, r * 0.12, 6, 24); ring.applyMatrix4(at(m, 0, 0, 0.004)); bag.add(ring, bezel || blackM());
   const can = new THREE.CylinderGeometry(r * 1.1, r * 1.1, 0.012, 20, 1, true); can.rotateX(Math.PI / 2); can.applyMatrix4(at(m, 0, 0, -0.004)); bag.add(can, bezel || blackM());
+  const back = new THREE.CircleGeometry(r * 1.1, 20); back.rotateY(Math.PI); back.applyMatrix4(at(m, 0, 0, -0.01)); bag.add(back, bezel || blackM()); // (the can's back, closed: it is behind the panel's face, or out in the open behind a free-standing pod)
   gaugeGlass(bag, m, r * 1.02);
   dialNeedles(bag, at(m, 0, 0, 0.002), r, tile, live && src != null ? { live, src } : null, val);
 }
@@ -323,7 +324,7 @@ export function shellLoft(bag, frames, { c, t, R = 0.05, Ri = 0.03, bulge = 0.00
     for (let k = 0; k < frames.length - 1; k++) for (let j = 0; j < n - 1; j++) { const a = k * n + j, b = a + 1, cc = b + n, d = a + n; idx.push(a, b, cc, a, cc, d); }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals(); bag.add(g, mat);
   };
-  strip([...Array(13).keys()], outer); strip([...Array(K - 12).keys()].map((i) => (i + 12) % K), inner);
+  strip([...Array(13).keys()], outer); strip([...Array(K - 11).keys()].map((i) => (i + 12) % K), inner); // (round to point 0 again: the inner face meets the outer on both lips)
   for (const [k, k2] of [[0, 1], [frames.length - 1, frames.length - 2]]) {
     const q = secs[k], away = frames[k].o.clone().sub(frames[k2].o), tris = THREE.ShapeUtils.triangulateShape(q.map(([x, n]) => new THREE.Vector2(x, n)), []), pos = [];
     for (const tr of tris) { const [A, B, C] = tr.map((i) => pt(k, i)), flip = B.clone().sub(A).cross(C.clone().sub(A)).dot(away) < 0; for (const p of flip ? [A, C, B] : [A, B, C]) pos.push(p.x, p.y, p.z); }
