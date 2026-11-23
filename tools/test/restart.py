@@ -97,7 +97,7 @@ async def to_hangar(cdp):
 UPLOAD = '''(async () => { const S = window.__sky, r = S.renderer, seen = new Set(), up = (t) => { if (t?.isTexture && !seen.has(t) && t.image !== undefined) { seen.add(t); r.initTexture(t); } };
   await new Promise((res) => requestAnimationFrame(res));
   S.F.scene.traverse((o) => { for (const m of [].concat(o.material || [])) { for (const k in m) up(m[k]); for (const k in m.uniforms || {}) up(m.uniforms[k]?.value); } });
-  await new Promise((res) => requestAnimationFrame(res)); return seen.size; })()'''
+  return seen.size; })()'''
 
 
 def same_spawn(a, b, tol=1e-3):
