@@ -27,7 +27,7 @@ BROWSER = {
 }
 # extra arguments on a CI runner (--ci; software WebGL: seconds a frame, so smaller windows, fewer repeats, no frame-time limits)
 CI_ARGS = {
-    'restart': ['--size', '480x300', '--restarts', '3'],
+    'restart': ['--size', '480x300', '--restarts', '3', '--no-fresh-compare'],
     'tunnelcheck-ui': ['--size', '480x300', '--max-ms', '1e9', '--max-cpu', '1e9', '--no-compile-check'],
 }
 HARNESS = ['tools/test/run.py', 'tools/test/node/*', 'tools/test/smoke.py']  # changing these runs everything

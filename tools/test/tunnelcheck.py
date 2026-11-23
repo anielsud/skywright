@@ -95,8 +95,10 @@ async def ui_tier(a):
                         r['reopen'] = {'programs': [progs_open, progs2], 'mem': mem2}
                         if progs2 > progs_open and not a.no_compile_check:
                             r['problems'].append(f'reopening compiled {progs2 - progs_open} new shader programs')
-                        if mem2['geo'] > mem1['geo'] or mem2['tex'] > mem1['tex']:  # (fewer is fine: a slow machine may still be bringing a hangar texture back)
-                            r['problems'].append(f'leak on the second visit: geometries {mem1["geo"]} -> {mem2["geo"]}, textures {mem1["tex"]} -> {mem2["tex"]}')
+                        # (against before the first visit: a leak grows visit after visit, while a slow machine's hangar
+                        # textures coming back can wobble the count by one either way between visits)
+                        if mem2['geo'] > mem0['geo'] or mem2['tex'] > mem0['tex']:
+                            r['problems'].append(f'leak after two visits: geometries {mem0["geo"]} -> {mem1["geo"]} -> {mem2["geo"]}, textures {mem0["tex"]} -> {mem1["tex"]} -> {mem2["tex"]}')
                     if await cdp.js("!!__sky.tunnel || !!document.getElementById('tunnel-ui')"):
                         r['problems'].append('the tunnel did not close')
                 except Exception as e:  # noqa: BLE001

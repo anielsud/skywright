@@ -84,4 +84,4 @@ jobs:
       - name: Install websockets
         run: python -m pip install websockets
       - name: Browser suites covering the changes
-        run: python tools/test/run.py --ci --changed --tier browser --exclude smoke # (smoke has its own jobs above)
+        run: python tools/test/run.py --ci --changed --tier browser --exclude smoke --exclude restart # (smoke: its own jobs above; restart: ~15 min on a runner, nightly only)
