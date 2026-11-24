@@ -29,6 +29,7 @@ import { VERSION, COMMIT, BUILT } from './version.js';
 import { CHANGELOG, changesSince, newer } from './changelog.js';
 import { Net } from './net.js';
 import { Analytics } from './analytics.js';
+import { Blackbox } from './blackbox.js';
 import { designSummary, trackHangar } from './buildStats.js';
 import { loadReal } from './realworld.js';
 import { trafficModels } from './trafficModels.js';
@@ -52,6 +53,10 @@ const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in win
 const returningPlayer = LS.get('settings', null) !== null || LS.get('current', null) !== null;
 const settings = Object.assign({ callouts: true, quality: 'auto', units: 'imperial', invert: false, controlMode: 'stick', mix: null, touch: 'auto', showFps: false, analytics: true }, LS.get('settings', {}));
 const analytics = new Analytics({ version: VERSION, commit: COMMIT, enabled: settings.analytics !== false });
+const bbox = new Blackbox(); // the last two minutes of a flight, for 🐞 reports (blackbox.js)
+addEventListener('error', (e) => bbox.log('js_error', `${e.message} @${String(e.filename || '').split('/').pop()}:${e.lineno}`));
+addEventListener('unhandledrejection', (e) => bbox.log('js_error', String(e.reason?.message || e.reason)));
+for (const k of ['error', 'warn']) { const o = console[k]; console[k] = (...a) => { try { bbox.log('console_' + k, a.map((x) => (x instanceof Error ? x.message : typeof x === 'object' ? '[obj]' : String(x))).join(' ')); } catch { /* never break logging */ } o.apply(console, a); }; }
 if ((settings.v || 1) < 2) { settings.quality = 'auto'; settings.v = 2; LS.set('settings', settings); } // move everyone onto adaptive quality once
 // 'auto' = medium features on tablets / high on desktops (Ultra is opt-in for now) (set once the renderer
 // exists), plus resolution and effects that adapt to the frame rate
@@ -648,13 +653,15 @@ let state = 'hangar';
 let F = null; // current flight
 const flightUI = $('#flight-ui');
 const hud = new HUD($('#hud'));
+hud.onMessage = (k, t) => bbox.log(k, t);
 const gvis = new GVision($('#flight-ui')); // the grey / red haze of heavy g in the cockpit view (gvision.js)
 const controls = new Controls($('#touch-root'), (a) => onAction(a));
 controls.invert = settings.invert; controls.setMode(settings.controlMode);
 const flightCam = new THREE.PerspectiveCamera(60, 1, 0.2, 60000);
 const rig = new CameraRig(flightCam, canvas);
 const net = new Net({ ui, hud, audio, LS, getDesign: () => hangar.design, getCfg: () => flightCfg });
-$('#hud').addEventListener('click', (e) => { if (e.target.id === 'h-cam') onAction('camera'); if (e.target.id === 'h-pause') onAction('pause'); });
+$('#hud').addEventListener('click', (e) => { if (e.target.id === 'h-cam') onAction('camera'); if (e.target.id === 'h-pause') onAction('pause'); if (e.target.id === 'h-bug') onAction('report'); });
+window.addEventListener('keydown', (e) => { if (e.key === 'F8' && F && state === 'flight') { e.preventDefault(); onAction('report'); } });
 
 
 function startFlight(cfgOverride) {
@@ -804,6 +811,7 @@ function buildFlight(cfg) {
   audio.music(false);
   state = 'flight';
   F.track = { location: cfg.location, realism: cfg.realism, mode: cfg.mode, start, time_of_day: cfg.time, weather: cfg.weather, online: !!net.active, plane: planeLabel(design), kind: planeKind(st), engine: ac.hasEngine };
+  bbox.reset(); bbox.log('start', `${cfg.location} · ${planeLabel(design)}`);
   Object.assign(F, { t0: performance.now(), frames: 0, activeT: 0, fpsLow: Infinity, maxLevel: perf.level, playersMax: net.count });
   F.spawnPose = { x: F.ac.x.toArray(), q: F.ac.q.toArray(), v: F.ac.v.toArray() }; // (where it started, before any step: tools/test padcheck/helipadcheck)
   const dsum = designSummary(design, st, buildStats.base); F.track.design_hash = dsum.design_hash; F.track.base = dsum.base; // flight_end carries these too
@@ -953,6 +961,7 @@ function closeTunnel() {
 }
 
 function onAction(a) {
+  bbox.log('action', a);
   if (!F) return;
   const ac = F.ac;
   audio.init();
@@ -962,9 +971,36 @@ function onAction(a) {
     case 'camera': { const t = rig.next(ac); if (rig.mode === 'cockpit') hud.station(rig.stationName(ac)); else { hud.station(''); hud.toast(t); } break; } // cockpit: one view per seat, named
     case 'smoke': if (ac.hasSmoke) { ac.smokeOn = !ac.smokeOn; hud.toast(ac.smokeOn ? 'Smoke on!' : 'Smoke off'); } else hud.toast('Add a Smoke Generator in the hangar for airshow smoke'); break;
     case 'pause': togglePause(); break;
+    case 'report': if (!F.reporting) { F.reporting = true; F.wasPaused = F.paused; F.paused = true; audio.silence(); F.wantShot = true; } break; // (the picture is taken right after the next frame is drawn: report())
     case 'hud': hud.show(!hud.visible); controls.showTouch(hud.visible && document.body.classList.contains('touch-on')); break;
     case 'debug': F.debug = !F.debug; break;
   }
+}
+// ---- 🐞 Report a problem: a picture of the screen and exactly where you are, sent (with a note) to the game's
+// analytics as a 'bug_report' event. tools/analytics/reports.py fetches them, and puts the camera back where it was to
+// look again. (Nothing personal: the game's own picture and the place in the game.)
+function grabShot() {
+  const src = renderer.domElement, W = 960, H = Math.round((W * src.height) / Math.max(1, src.width)), c = document.createElement('canvas');
+  c.width = W; c.height = H; c.getContext('2d').drawImage(src, 0, 0, W, H);
+  return c.toDataURL('image/jpeg', 0.72);
+}
+function report(shot) {
+  const ac = F.ac, cam = flightCam, d = new THREE.Vector3(); cam.getWorldDirection(d);
+  const r2 = (v) => Math.round(v * 100) / 100, where = {
+    ...F.track, vehicle: F.track?.plane,
+    pos: [r2(ac.x.x), r2(ac.x.y), r2(ac.x.z)], quat: [ac.q.x, ac.q.y, ac.q.z, ac.q.w].map((v) => Math.round(v * 1e4) / 1e4),
+    cam: [r2(cam.position.x), r2(cam.position.y), r2(cam.position.z)], look: [d.x, d.y, d.z].map((v) => Math.round(v * 1e4) / 1e4), fov: cam.fov, cam_mode: rig.mode,
+    quality: settings.quality, tier: qualityTier(), time_of_day: F.world?.time ?? F.cfg?.time, weather: F.cfg?.weather, flight_s: Math.round(F.t || 0),
+  };
+  const done = (sent) => { m.close(); F.reporting = false; F.paused = F.wasPaused; if (sent) hud.toast(analytics.on ? 'Sent, thank you! 🐞' : 'Not sent: analytics is off (Settings)'); };
+  const m = ui.modal(`<h2>🐞 Report a problem</h2>
+    <img src="${shot}" alt="" style="width:100%;border-radius:8px;margin:4px 0 8px">
+    <p style="margin:0 0 6px;opacity:.75">${esc(where.location)} · ${where.pos.map((v) => Math.round(v)).join(', ')}</p>
+    <textarea id="bug-note" rows="3" style="width:100%;box-sizing:border-box" placeholder="What's wrong here? (optional)"></textarea>
+    <div class="modal-actions"><button id="bug-cancel">Cancel</button><button id="bug-send" class="primary">Send</button></div>`);
+  m.el.querySelector('#bug-cancel').onclick = () => done(false);
+  m.el.querySelector('#bug-send').onclick = () => { analytics.capture('bug_report', { ...where, note: m.el.querySelector('#bug-note').value.slice(0, 1000), ...bbox.dump(), screenshot: shot }); analytics.flush(); done(true); };
+  setTimeout(() => m.el.querySelector('#bug-note')?.focus(), 50);
 }
 function togglePause(force) {
   if (!F) return;
@@ -1001,6 +1037,7 @@ function statsHTML(ac, W = words(F?.kind)) {
     <div><label>Top Mach</label><b>${t.maxMach.toFixed(2)}</b></div>` : ''}</div>`;
 }
 function showEnd(title, extra = '') {
+  bbox.log('end', title);
   if (!F || F.shownEnd) return;
   F.shownEnd = true; F.endTitle = title;
   F.outcome = /Kaboom/.test(title) ? 'destroyed' : /Splash/.test(title) ? 'splashdown' : /Course/.test(title) ? 'race_done' : /Landing score/.test(title) ? 'landing_done' : 'crashed';
@@ -1112,6 +1149,7 @@ function stepFlight(dtReal) {
   const dt = Math.min(dtReal, 1 / 20) * f.timeScale;
   if (dtReal > 1 / 20) f.slowFrames = (f.slowFrames || 0) + 1; // (under 20 fps the game itself runs slow: physics gets at most 1/20 s a frame)
   f.worstMs = Math.max(f.worstMs || 0, dtReal * 1000); f.dtReal = dtReal;
+  bbox.step({ t: f.t, x: ac.x.x, y: ac.x.y, z: ac.x.z, speed: ac.v.length(), agl: ac.x.y - world.heightAt(ac.x.x, ac.x.z), ground: !!ac.onGround, parts: ac.alive().length, dead: !!ac.dead, level: perf.level, ms: dtReal * 1000 });
   const c = controls.update(dtReal);
   if (ac.isCar || ac.isBoat) { // pedals: the engine starts on the first press of either (it drives you backwards too)
     const want = Math.max(c.gas, c.rev), go = want > 0 ? engineSwitch(f, ac, want, dtReal) / want : (engineSwitch(f, ac, 0, dtReal), 1);
@@ -1142,7 +1180,7 @@ function stepFlight(dtReal) {
         const give = t.dk ? world.destruct.impact(t, wp, ac, p) : 1; // a building that gives way takes some of the blow (never more than a wall would)
         if (t.solid) effects.dust(wp, { x: 0, z: 0 }, 'rock', 6); else effects.leaves(wp);
         audio.play('impact', 0.5, wp.clone()); rig.shake(0.5);
-        ac.cause = { why: t.solid ? 'building' : 'tree', impact: ac.v.length() }; ac.damage(p, ac.v.length() * 8 / ac.R.crashMult * give, wp); ac.cause = null;
+        bbox.log('hit', `${t.solid ? 'building' : 'tree'} at ${ac.v.length().toFixed(1)} m/s`); ac.cause = { why: t.solid ? 'building' : 'tree', impact: ac.v.length() }; ac.damage(p, ac.v.length() * 8 / ac.R.crashMult * give, wp); ac.cause = null;
         ac.v.multiplyScalar(give < 1 ? 0.95 : 0.92);
         if (!t.solid) world.flatten(t); // flatten the tree so we don't hit it forever (walls stay; a restart stands it up again)
       }
@@ -1484,6 +1522,7 @@ function frame(now) {
       setCrewView(renderer.domElement.height, qualityTier()); // (other players' crews: their detail by size on screen)
       const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene) : null;
       post.render(F.scene, flightCam, dt);
+      if (F.wantShot) { F.wantShot = false; report(grabShot()); } // (🐞: a WebGL canvas can only be read straight after it's drawn)
       // shader programs must all exist before take-off (the warm-up above); flag any compiled mid-flight
       if (!F.warm) { const n = renderer.info.programs.length; if (F.progs != null && n > F.progs) { const names = renderer.info.programs.slice(F.progs).map((p) => p.name || p.cacheKey?.slice(0, 40)).join(', '); console.warn(`[shaders] ${n - F.progs} compiled in flight: ${names}`); window.__inflightCompiles = (window.__inflightCompiles || 0) + n - F.progs; } F.progs = n; }
       if (restore) { restore(); compileWith(F.scene, F.effects.boom, warm); } // and every shader as lit by a crash's explosion flash (effects.js)
