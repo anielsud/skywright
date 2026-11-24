@@ -14,12 +14,14 @@ export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/real
 const PLACES = ['islands', 'canyon', 'lauterbrunnen', 'nyc'];
 const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3;
 
-export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), { id: 'nyc traffic safety', loc: 'nyc', world: 'nyc', safety: true, cost: 12 }, { id: 'nyc posts', loc: 'nyc', world: 'nyc', posts: true, cost: 6 }, { id: 'traffic models face forward', models: true, cost: 0.2 }, ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 }))]; }
+export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), { id: 'nyc traffic safety', loc: 'nyc', world: 'nyc', safety: true, cost: 12 }, { id: 'nyc posts', loc: 'nyc', world: 'nyc', posts: true, cost: 6 }, { id: 'traffic models face forward', models: true, cost: 0.2 }, ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 })), ...PLACES.map((loc) => ({ id: `${loc} ground under the road`, loc, world: loc, bleed: true, cost: loc === 'nyc' ? 30 : 12 }))]; }
 
 // The near-camera ground detail (World.updateDetail) at a few road points: inside, its vertices are the physics ground
-// (sampleGrid) exactly; its edge is the patch's own surface (no seam); rebuilding it stays cheap.
+// (sampleGrid) exactly away from the roads, and never above it (under and beside a road it is let down: it is hidden
+// there, and must not rise through the road's ribbon); its edge is the patch's own surface (no seam); rebuilding it
+// stays cheap.
 export function detailCheck(w) {
-  const roads = w.net.roads.filter((r) => r.kind !== 'rail' && r.pts.length > 10), lim = w.half - 1500, out = { n: 0, inner: 0, edge: 0, times: [], shown: 0 };
+  const roads = w.net.roads.filter((r) => r.kind !== 'rail' && r.pts.length > 10), lim = w.half - 1500, out = { n: 0, inner: 0, above: 0, edge: 0, times: [], shown: 0 };
   const picks = []; for (let k = 0; picks.length < 4 && k < roads.length * 4; k++) { const r = roads[(k * 7) % roads.length], p = r.pts[(k * 13) % r.pts.length]; if (Math.abs(p.x) < lim && Math.abs(p.z) < lim) picks.push(p); }
   for (const p of picks) {
     const cp = { x: p.x, y: w.sampleGrid(p.x, p.z) + 3, z: p.z };
@@ -30,11 +32,57 @@ export function detailCheck(w) {
     const D = w.detailD, n = D + 1, P = w.detail.geometry.attributes.position.array, R = w.hR, st = w.hStep;
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const o = (j * n + i) * 3, x = P[o], y = P[o + 1], z = P[o + 2], e = Math.min(i, j, D - i, D - j); out.n++;
-      if (e >= 4) out.inner = Math.max(out.inner, Math.abs(y - w.sampleGrid(x, z)));
+      if (e >= 4) { const d = y - w.sampleGrid(x, z); out.above = Math.max(out.above, d); let road = 0; for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) road |= w.detailOn[(j + b) * n + i + a]; if (!road) out.inner = Math.max(out.inner, Math.abs(d)); }
       if (e === 0) out.edge = Math.max(out.edge, Math.abs(y - w.triAt(w.Hh, R + 1, (x + w.half) / st, (z + w.half) / st)));
     }
   }
   const T = out.times.sort((a, b) => a - b); out.ms = T.length ? T[T.length >> 1] : 0;
+  return out;
+}
+
+// The ground never shows through the road (#228): over the road surfaces the game draws (roads.js buildRoadMeshes:
+// tarmac, gravel shoulders, a city's pavements; not bridge decks or tunnels), sampled every ~2 m, the ground each of
+// its meshes draws there may not be above them: the coarse core mesh (H, far away), the patch (the baked grid Hh,
+// round the camera) and the detail mesh (World.updateDetail, close up: built at `spots` road points, compared over
+// the road within it). Returns per layer { n samples, over: samples more than OVER above, worst, spots (40 m) }.
+// stride: every stride-th road triangle (New York draws ~9M).
+const OVER = 0.05, BLEED = 0.001; // (metres; the share of the road that may still be under: tunnel mouths, a bridge's abutment in a cutting)
+export function bleedCheck(w, { spots = 6, stride = 1 } = {}) {
+  const G = w.roadGroup, RS = w.roadSurf, lim = w.half - 200, half = w.half, out = {};
+  G.userData.update({ x: 0, y: 0, z: 0 }, 1e9, 1e9);
+  for (const t of G.userData.tiles) if (!t.built) G.userData.update({ x: t.x, y: 0, z: t.z }, 1e9, 1e9); // (a city builds those within ROAD_D of the camera)
+  // the road triangles: [x, y, z] x 3 per triangle
+  const tris = [];
+  G.traverse((m) => {
+    const U = m.isMesh && !m.isInstancedMesh && m.material?.userData?.U; if (!U || m.material.userData === w.patchMat.userData || !(U.rLW || U.gTint || U.sD)) return;
+    const pos = m.geometry.attributes.position.array, idx = m.geometry.index?.array, nt = idx ? idx.length / 3 : pos.length / 9;
+    for (let t = 0; t < nt; t += stride) { const v = []; for (let q = 0; q < 3; q++) { const k = idx ? idx[t * 3 + q] : t * 3 + q; v.push(pos[k * 3], pos[k * 3 + 1], pos[k * 3 + 2]); } if (v[0] !== v[3] || v[2] !== v[5]) tris.push(v); }
+  });
+  // (a tunnel's tube, a bridge deck: not on the ground)
+  const tube = (x, z, y) => { const C = RS.cell, ci = Math.floor((x + RS.half) / C), cj = Math.floor((z + RS.half) / C); if (ci < 0 || cj < 0 || ci >= RS.nC || cj >= RS.nC) return false; const c = cj * RS.nC + ci, S = RS.seg;
+    for (let k = RS.start[c]; k < RS.start[c + 1]; k++) { const o = RS.ids[k] * 9; if (!(S[o + 7] & 8)) continue; const ax = S[o], az = S[o + 1], dx = S[o + 2] - ax, dz = S[o + 3] - az, L2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2));
+      if (Math.hypot(ax + dx * t - x, az + dz * t - z) < S[o + 6] + 1 && Math.abs(S[o + 4] + (S[o + 5] - S[o + 4]) * t - y) < 8) return true; } return false; };
+  const onGround = (x, z, y) => !(RS.q(x, z, true, y + 1) && Math.abs(RS.y - y) < 1.5) && !tube(x, z, y);
+  const each = (v, fn) => { // sample points on a triangle, ~2 m apart: fn(x, z, y)
+    const e = Math.max(Math.hypot(v[3] - v[0], v[5] - v[2]), Math.hypot(v[6] - v[0], v[8] - v[2]), Math.hypot(v[6] - v[3], v[8] - v[5])), k = Math.max(1, Math.ceil(e / 2));
+    for (let a = 0; a <= k; a++) for (let b = 0; a + b <= k; b++) { const wa = (a + 0.33) / (k + 1), wb = (b + 0.33) / (k + 1), wc = 1 - wa - wb; if (wc >= 0) fn(v[0] * wc + v[3] * wa + v[6] * wb, v[2] * wc + v[5] * wa + v[8] * wb, v[1] * wc + v[4] * wa + v[7] * wb); }
+  };
+  const tally = (L, x, z, d) => { const o = (out[L] ??= { n: 0, over: 0, worst: 0, at: null, spots: [] }); o.n++; if (d <= OVER) return; o.over++; if (d > o.worst) { o.worst = d; o.at = [Math.round(x), Math.round(z)]; } if (!o.spots.some((s) => Math.hypot(s[0] - x, s[1] - z) < 40)) o.spots.push([x, z]); };
+  for (const v of tris) {
+    if (Math.abs(v[0]) > lim || Math.abs(v[2]) > lim) continue;
+    each(v, (x, z, y) => { if (!onGround(x, z, y)) return; tally('patch', x, z, w.triAt(w.Hh, w.hR + 1, (x + half) / w.hStep, (z + half) / w.hStep) - y); tally('coarse', x, z, w.sampleCoarse(x, z) - y); });
+  }
+  // the detail mesh, built round a few road points (the most bent part of the busiest roads: junctions, switchbacks)
+  const roads = w.net.roads.filter((r) => r.kind !== 'rail' && r.pts.length > 10 && !r.tunnel), D = w.detailD, DS = w.detailS, n = D + 1, B = 4;
+  for (let s = 0; s < spots && roads.length; s++) {
+    const r = roads[(s * 7919) % roads.length], p = r.pts[(s * 31) % r.pts.length]; if (Math.abs(p.x) > w.half - 1500 || Math.abs(p.z) > w.half - 1500) continue;
+    const cp = { x: p.x, y: w.sampleGrid(p.x, p.z) + 3, z: p.z }; w.detailAt = null; w.patchAt = null; w.updatePatch(cp); w.updateDetail(cp); if (!w.detail.visible) continue;
+    const P = w.detail.geometry.attributes.position.array, x0 = P[0], z0 = P[2];
+    const det = (x, z) => { const fx = (x - x0) / DS, fz = (z - z0) / DS; if (fx < B || fz < B || fx >= D - B || fz >= D - B) return null; const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, vv = fz - j, h = (a, b) => P[((j + b) * n + i + a) * 3 + 1];
+      return u + vv <= 1 ? h(0, 0) + (h(1, 0) - h(0, 0)) * u + (h(0, 1) - h(0, 0)) * vv : h(1, 1) + (h(0, 1) - h(1, 1)) * (1 - u) + (h(1, 0) - h(1, 1)) * (1 - vv); };
+    for (const v of tris) { if (Math.abs(v[0] - p.x) > D * DS / 2 || Math.abs(v[2] - p.z) > D * DS / 2) continue; each(v, (x, z, y) => { const g = det(x, z); if (g != null && onGround(x, z, y)) tally('detail', x, z, g - y); }); }
+  }
+  out.tris = tris.length * stride;
   return out;
 }
 
@@ -247,11 +295,16 @@ export async function runCase(c, ctx) {
       { name: `${c.loc}: ${city ? 'traffic lights hold the cars at red, not for ever' : 'no traffic lights out of town'}`, ok: city ? lights > 100 && still / seen > 0.05 && still / seen < 0.6 : !lights, why: `${lights} signalled junctions; cars standing ${(100 * still / Math.max(1, seen)).toFixed(0)}% of the time` },
     ];
   }
+  if (c.bleed) {
+    const b = bleedCheck(w, { stride: c.loc === 'nyc' ? 8 : 1 }), pc = (o) => `${(100 * o.over / Math.max(1, o.n)).toFixed(3)}%`;
+    return ['detail', 'patch', 'coarse'].map((L) => { const o = b[L] || { n: 0, over: 0, worst: 0, spots: [] };
+      return { name: `${c.loc}: the ${L === 'detail' ? 'near-camera detail' : L === 'patch' ? 'patch' : 'coarse'} ground stays under the road`, ok: o.n > 1000 && o.over / o.n < BLEED, why: `${pc(o)} of ${o.n} road samples under ground by more than ${OVER} m (${o.spots.length} spots${L === 'detail' ? `; ${b.tris} road triangles` : ''})${o.over ? `, worst ${o.worst.toFixed(2)} m at (${o.at})` : ''}` }; });
+  }
   if (c.detail) {
     const d = detailCheck(w);
     return [
       { name: `${c.loc}: ground detail shown at road level`, ok: d.shown > 0, why: `${d.shown} of 4 spots` },
-      { name: `${c.loc}: ground detail is the ground driven on`, ok: d.inner < 0.01, why: `worst ${d.inner.toFixed(3)} m off sampleGrid` },
+      { name: `${c.loc}: ground detail is the ground driven on`, ok: d.inner < 0.01 && d.above < 0.001, why: `away from the roads worst ${d.inner.toFixed(3)} m off sampleGrid; at most ${d.above.toFixed(3)} m above it` },
       { name: `${c.loc}: ground detail meets the patch at its edge`, ok: d.edge < 0.01, why: `worst ${d.edge.toFixed(3)} m` },
       { name: `${c.loc}: ground detail rebuilds in under 50 ms`, ok: d.ms < 50, why: `median ${d.ms.toFixed(1)} ms (Node, Low; a few ms on a laptop: this catches a rebuild gone 10x slower, not a slow machine)` },
     ];
