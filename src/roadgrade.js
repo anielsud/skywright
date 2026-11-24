@@ -326,24 +326,75 @@ export function carveGrid(w, roads, H, R, st, bench = 0.75) {
   }
   pinUnder(w, roads, H, R, st);
 }
-// push grid vertices down wherever the triangulated surface would rise above a road's footprint
+// Push grid vertices down wherever the triangulated surface would rise above a road's footprint. Exact: every
+// footprint quad between two road points (its edges where the road meshes put them, roads.js frame) is checked
+// against every grid triangle it overlaps. Plane and road are both linear over it: under at the quad's four corners,
+// under all over it (nearly always); else the quad is clipped to the triangle and the worst is at a corner of what
+// is left. There the triangle's corners go down, the nearest the most (the least change that brings the worst point
+// under), until it is under everywhere. Lowering never lifts another triangle, so one pass is enough. (#228: three
+// samples across and two along every 8 m missed the triangles' own corners and edges, and the stretch onto a bridge:
+// beyond the detail mesh the ground showed through the road.)
+const PIN = 0.05; // metres the ground stays under a road
+export const PAVE = { main: 4.5, street: 3.5 }; // a city street's pavements: metres out from the tarmac's edge (roads.js)
 function pinUnder(w, roads, H, R, st) {
-  const W = R + 1, half = w.half;
-  const lower = (k, y) => { if (H[k] > y) H[k] = y; };
-  for (const rd of roads) { // (one pass, three samples across: the road's edges and middle)
-    const P = rd.pts, n = P.length, hw = rd.width / 2 + VERGE;
-    for (let i = 0; i < n; i++) {
-      if (rd.bridge?.[i] || rd.tube?.[i]) continue;
-      const p = P[i], a = P[Math.max(0, i - 1)], b = P[Math.min(n - 1, i + 1)];
-      let dx = b.x - a.x, dz = b.z - a.z; const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
-      for (const f of [-1, 0, 1]) for (const al of [-2, 2]) {
-        const x = p.x - dz * hw * f + dx * al, z = p.z + dx * hw * f + dz * al;
-        const fx = (x + half) / st, fz = (z + half) / st; if (fx < 0 || fz < 0 || fx >= R || fz >= R) continue;
-        const ii = fx | 0, j = fz | 0, u = fx - ii, v = fz - j, y = p.y - 0.05;
-        const ka = j * W + ii, kb = ka + W, kc = kb + 1, kd = ka + 1; // triangles (a,b,d) + (b,c,d), as World.triAt
-        const val = u + v <= 1 ? H[ka] + (H[kd] - H[ka]) * u + (H[kb] - H[ka]) * v : H[kc] + (H[kb] - H[kc]) * (1 - u) + (H[kd] - H[kc]) * (1 - v);
-        if (val <= y) continue;
-        if (u + v <= 1) { lower(ka, y); lower(kb, y); lower(kd, y); } else { lower(kb, y); lower(kc, y); lower(kd, y); }
+  const W = R + 1, half = w.half, q = new Float64Array(8), tri = [0, 0, 0], wt = [0, 0, 0];
+  let poly = new Float64Array(32), tmp = new Float64Array(32), np = 0; // (the clipped polygon: np floats, x, z pairs)
+  // clip the polygon to the half plane (x - ax) * nx + (z - az) * nz >= 0
+  const clip = (ax, az, nx, nz) => {
+    let m = 0;
+    for (let k = 0; k < np; k += 2) {
+      const px = poly[k], pz = poly[k + 1], k2 = (k + 2) % np, qx = poly[k2], qz = poly[k2 + 1];
+      const dp = (px - ax) * nx + (pz - az) * nz, dq = (qx - ax) * nx + (qz - az) * nz;
+      if (dp >= 0) { tmp[m++] = px; tmp[m++] = pz; }
+      if ((dp >= 0) !== (dq >= 0)) { const t = dp / (dp - dq); tmp[m++] = px + (qx - px) * t; tmp[m++] = pz + (qz - pz) * t; }
+    }
+    const sw = poly; poly = tmp; tmp = sw; np = m;
+  };
+  for (const rd of roads) {
+    const P = rd.pts, n = P.length, closed = !!rd.closed, hw = rd.width / 2 + (w.loc?.city && (rd.kind === 'main' || rd.kind === 'street') && !rd.baked ? PAVE[rd.kind] : VERGE); // (a city street: out to its pavements' edge, roads.js)
+    const F = new Float64Array(n * 2); // (each point's right vector, as roads.js frame)
+    for (let i = 0; i < n; i++) { const a = P[closed ? (i - 1 + n) % n : Math.max(0, i - 1)], b = P[closed ? (i + 1) % n : Math.min(n - 1, i + 1)], l = Math.hypot(b.x - a.x, b.z - a.z) || 1; F[i * 2] = -(b.z - a.z) / l; F[i * 2 + 1] = (b.x - a.x) / l; }
+    for (let i = 0; i < (closed ? n : n - 1); i++) {
+      const j = (i + 1) % n;
+      if ((rd.bridge?.[i] && rd.bridge?.[j]) || rd.tube?.[i] || rd.tube?.[j]) continue; // (a deck, and a tunnel's tube up to its portal, where the headwall is: not on the ground. A deck's last point is on its abutment)
+      const A = P[i], B = P[j], ax = F[i * 2], az = F[i * 2 + 1], bx = F[j * 2], bz = F[j * 2 + 1];
+      const dx = B.x - A.x, dz = B.z - A.z, L2 = dx * dx + dz * dz; if (L2 < 1e-6) continue;
+      q[0] = A.x - ax * hw; q[1] = A.z - az * hw; q[2] = B.x - bx * hw; q[3] = B.z - bz * hw; q[4] = B.x + bx * hw; q[5] = B.z + bz * hw; q[6] = A.x + ax * hw; q[7] = A.z + az * hw;
+      // the road over the quad: its profile along the centre line, carried straight across (linear: r0 + rx x + rz z)
+      const g = (B.y - A.y) / L2, rx = g * dx, rz = g * dz, r0 = A.y - PIN - rx * A.x - rz * A.z, low = Math.min(A.y, B.y) - PIN;
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (let k = 0; k < 8; k += 2) { x0 = Math.min(x0, q[k]); x1 = Math.max(x1, q[k]); z0 = Math.min(z0, q[k + 1]); z1 = Math.max(z1, q[k + 1]); }
+      const i0 = Math.max(0, Math.floor((x0 + half) / st)), i1 = Math.min(R - 1, Math.floor((x1 + half) / st)), j0 = Math.max(0, Math.floor((z0 + half) / st)), j1 = Math.min(R - 1, Math.floor((z1 + half) / st));
+      for (let gj = j0; gj <= j1; gj++) for (let gi = i0; gi <= i1; gi++) for (let h = 0; h < 2; h++) {
+        // the cell's triangles, as World.triAt: h 0 = (a, b, d), h 1 = (b, c, d); a = (gi, gj), b = (gi, gj+1), c = (gi+1, gj+1), d = (gi+1, gj)
+        const ka = gj * W + gi, kb = ka + W;
+        if (h === 0) { tri[0] = ka; tri[1] = kb; tri[2] = ka + 1; } else { tri[0] = kb; tri[1] = kb + 1; tri[2] = ka + 1; }
+        if (Math.max(H[tri[0]], H[tri[1]], H[tri[2]]) <= low) continue; // (all three corners under the road's lowest end: most of them, carved already)
+        const xa = -half + gi * st, za = -half + gj * st;
+        for (let it = 0; it < 4; it++) {
+          // plane - road, linear: c0 + cx x + cz z
+          const px = h === 0 ? (H[ka + 1] - H[ka]) / st : (H[kb + 1] - H[kb]) / st, pz = h === 0 ? (H[kb] - H[ka]) / st : (H[kb + 1] - H[ka + 1]) / st;
+          const c0 = (h === 0 ? H[ka] : H[kb] + H[ka + 1] - H[kb + 1]) - px * xa - pz * za - r0, cx = px - rx, cz = pz - rz;
+          // under at the quad's four corners: under all over it
+          if (it === 0 && Math.max(c0 + cx * q[0] + cz * q[1], c0 + cx * q[2] + cz * q[3], c0 + cx * q[4] + cz * q[5], c0 + cx * q[6] + cz * q[7]) <= 1e-4) break;
+          // else over the quad clipped to the triangle: the worst is at one of its corners
+          if (it === 0) {
+            for (let k = 0; k < 8; k++) poly[k] = q[k];
+            np = 8;
+            if (h === 0) { clip(xa, za, 1, 0); clip(xa, za, 0, 1); clip(xa + st, za, -1, -1); } // (x >= xa, z >= za, x + z <= xa + za + st)
+            else { clip(xa + st, za, -1, 0); clip(xa, za + st, 0, -1); clip(xa + st, za, 1, 1); } // (x <= xa + st, z <= za + st, x + z >= xa + za + st)
+            if (np < 6) break;
+          }
+          let worst = 1e-4, wx = 0, wz = 0;
+          for (let k = 0; k < np; k += 2) { const d = c0 + cx * poly[k] + cz * poly[k + 1]; if (d > worst) { worst = d; wx = poly[k]; wz = poly[k + 1]; } }
+          if (worst <= 1e-4) break;
+          if (it === 3) { for (let k = 0; k < 3; k++) H[tri[k]] -= worst; break; } // (still above: the whole triangle down)
+          // the least change that brings the worst point under: each corner down in proportion to its weight there
+          const u = (wx - xa) / st, v = (wz - za) / st;
+          if (h === 0) { wt[0] = 1 - u - v; wt[1] = v; wt[2] = u; } else { wt[0] = 1 - u; wt[1] = u + v - 1; wt[2] = 1 - v; }
+          const s2 = wt[0] * wt[0] + wt[1] * wt[1] + wt[2] * wt[2];
+          for (let k = 0; k < 3; k++) H[tri[k]] -= worst * Math.max(0, wt[k]) / s2;
+        }
       }
     }
   }
@@ -354,8 +405,10 @@ function pinUnder(w, roads, H, R, st) {
 // footprint edge is nearest: sets .y (road height there), .e (distance beyond the footprint edge, <= 0 inside),
 // .g (grade along it, signed by dx/dz) and returns true; false when no road is within reach.
 export class RoadSurface {
-  constructor(w, roads, skirt) {
-    this.half = w.half; this.S = skirt; this.cell = 32;
+  // bench: metres of level ground beside the footprint before a cutting rises (World.detailBench: the near-camera
+  // detail mesh samples this surface every DS metres; a cutting rising right at the road's edge reached in over it)
+  constructor(w, roads, skirt, bench = 0) {
+    this.half = w.half; this.S = skirt; this.cell = 32; this.B = bench;
     const C = this.cell, nC = (this.nC = Math.ceil(w.size / C) + 1);
     // ax, az, bx, bz, ay, by, hw, deck, rank (the order the profiles were made in: lower = the major road); and how far
     // out each segment's embankment reaches (its height off the ground / the fill slope: a street at the ground's
@@ -370,7 +423,7 @@ export class RoadSurface {
         // deck flags: 1 = deck, +2 / +4 = the deck carries on before / after (a joint, round; an abutment end is square)
         const isD = (k) => !!((rd.bridge?.[(k + n) % n] && rd.bridge?.[(k + 1 + n) % n]) || (rd.tube?.[(k + n) % n] && rd.tube?.[(k + 1 + n) % n])) && (rd.closed || (k >= 0 && k < n - 1));
         const o = s0 * SEG; S[o] = a.x; S[o + 1] = a.z; S[o + 2] = b.x; S[o + 3] = b.z; S[o + 4] = a.y; S[o + 5] = b.y; S[o + 6] = br ? rd.width / 2 + 1 : rd.width / 2 + VERGE; S[o + 7] = br ? 1 + (isD(i - 1) ? 2 : 0) + (isD(i + 1) ? 4 : 0) + (tu ? 8 : 0) : 0; S[o + 8] = rd.rank ?? ri;
-        reach[s0] = br || !ground ? skirt : Math.min(skirt, Math.max(Math.abs(a.y - ground(a.x, a.z)), Math.abs(b.y - ground(b.x, b.z))) / FILL + 4);
+        reach[s0] = br || !ground ? skirt : Math.min(skirt, Math.max(Math.abs(a.y - ground(a.x, a.z)), Math.abs(b.y - ground(b.x, b.z))) / FILL + 4 + bench);
       }
     });
     const cnt = new Int32Array(nC * nC + 1), cells = (s, fn) => {
@@ -428,10 +481,11 @@ export class RoadSurface {
     this.y = y; this.gx = gx; this.gz = gz;
   }
   // ground height with the road on it: the profile inside the footprint, then the embankment (the base surface
-  // clamped to the side slopes from the footprint edge), fading back to the base surface by the skirt's end
+  // clamped to the side slopes from the footprint edge; a cutting from the bench's edge), fading back to the base
+  // surface by the skirt's end
   over(base) {
     const e = this.e; if (e <= 0) return this.y;
-    const c = clamp(base, this.y - FILL * e, this.y + CUT * e);
+    const c = clamp(base, this.y - FILL * e, this.y + CUT * Math.max(0, e - this.B));
     return c + (base - c) * smoothstep(this.S * 0.6, this.S, e);
   }
 }

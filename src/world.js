@@ -459,8 +459,11 @@ export class World {
   // DS-metre grid, so the ground seen is the ground driven on. Its outer cells blend to the patch's own heights (the
   // seam closes; a skirt hangs from the edge for the cracks between), and the patch discards its pixels inside.
   // Shown while the camera is low enough for it to matter.
+  // the detail mesh's size (cells) and spacing (metres). Beside a road the ground is level for DS * 1.45 m before a
+  // cutting rises (RoadSurface bench): a detail triangle that reaches into the road's footprint has no vertex up the cutting
+  detailGrid() { return this.qName === 'ultra' ? [256, 2] : this.qBase === 'high' ? [192, 2.5] : this.qName === 'low' ? [96, 4] : [128, 3]; }
   buildDetail() {
-    const [D, DS] = this.qName === 'ultra' ? [256, 2] : this.qBase === 'high' ? [192, 2.5] : this.qName === 'low' ? [96, 4] : [128, 3];
+    const [D, DS] = this.detailGrid();
     this.detailD = D; this.detailS = DS;
     const n = D + 1, nv = n * n + 4 * D * 2, pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), idx = [];
     for (let j = 0; j < D; j++) for (let i = 0; i < D; i++) { const a = j * n + i, b = (j + 1) * n + i, c = b + 1, d = a + 1; idx.push(a, b, d, b, c, d); }
@@ -486,11 +489,24 @@ export class World {
     this.detailAt = [i0, j0];
     const n = D + 1, P = this.detail.geometry.attributes.position.array, N = this.detail.geometry.attributes.normal.array;
     const R = this.hR, st = this.hStep, H = this.Hh, W = R + 1, B = 4; // B: blend cells at the edge
-    const hs = new Float32Array(n * n);
+    const hs = new Float32Array(n * n), S = this.roadSurf, on = this.detailOn ??= new Uint8Array(n * n), cover = this.loc.city ? 2 : 0; // (cover: metres past the footprint the road meshes cover, a city street's pavements)
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
-      const x = x0 + i * DS, z = z0 + j * DS, e = Math.min(i, j, D - i, D - j);
+      const x = x0 + i * DS, z = z0 + j * DS, e = Math.min(i, j, D - i, D - j), k = j * n + i;
       const base = this.triAt(H, W, (x + half) / st, (z + half) / st); // (what the patch draws here)
-      hs[j * n + i] = e >= B ? this.sampleGrid(x, z) : e === 0 ? base : base + (this.sampleGrid(x, z) - base) * smoothstep(0, B, e);
+      const g = S && S.q(x, z) ? ((on[k] = S.e < cover ? 1 : 0), S.over(base)) : ((on[k] = 0), base); // (sampleGrid; on: under a road)
+      hs[k] = e >= B ? g : e === 0 ? base : base + (g - base) * smoothstep(0, B, e);
+    }
+    // under the roads (hidden by their ribbons, which lie on this ground at their own vertices, 8 m apart): each vertex
+    // at the lowest of its neighbours also under a road, so a triangle bridging a narrow dip in the ground (where two
+    // roads' footprints overlap at different heights, RoadSurface.blend) can't rise through the ribbon between them
+    // Beside them, no higher than the lowest road next to it (plus a 15% grade over a cell): where a road runs just below
+    // another's embankment (a switchback: the next leg's fill slope coming down onto it) the ground steps up between
+    // them by metres, and a triangle across that step leant in over the lower road's edge.
+    const hs0 = hs.slice(), lift = DS * 0.15;
+    for (let j = B; j <= D - B; j++) for (let i = B; i <= D - B; i++) {
+      const k = j * n + i; let m = Infinity;
+      for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) { const q = k + b * n + a; if (on[q] && hs0[q] < m) m = hs0[q]; }
+      if (m < Infinity) hs[k] = on[k] ? Math.min(hs0[k], m) : Math.min(hs0[k], m + lift);
     }
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const k = j * n + i, o = k * 3;
