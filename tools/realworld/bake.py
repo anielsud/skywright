@@ -81,7 +81,7 @@ LOCS = {
         # 28 km square: Queens round LGA, all of Manhattan, the Bronx shore, Brooklyn, Jersey City and Liberty Island
         hi=(-17000, -8500, 28000), hiN=2048, hiImg=4096, hiZoomH=14, hiZoomI=15,
         far=(-60000, -60000, 120000), farN=1024, farImg=2048, farZoomH=11, farZoomI=11,
-        water=0, seabed=-60, depth=(0.05, 25), clearDark=0.72, roadsMax=1,
+        water=0, seabed=-60, depth=(0.05, 25), clearDark=0.72,
         imagery='naiptiles',  # USGS The National Map NAIP tile cache (public domain, ~1 m) for the detailed square; Sentinel-2 farther out
         coast=True,      # the sea, the rivers and the harbour come from the OSM coastline (the heights are hydro-flattened)
         city=True,       # buildings packed into city.bin.gz (tools/realworld/city.py), not osm.json
@@ -536,6 +536,49 @@ def sample_grid(L, H, x, z):
     x0, z0, S = L['hi']; n = H.shape[0]; k = (n - 1) / S
     return bilinear(H, (np.asarray(x) - x0) * k + 0.5, (np.asarray(z) - z0) * k + 0.5)
 
+def bake_roadnet(L, osm, path):
+    """roads.bin.gz: every road (all classes) and road tunnel with its real topology, for src/roadnet.js.
+    Little-endian: a uint32 header length, then a JSON header {v, ways, points, nodes}, padded to 4 bytes, then:
+      x, z      float32[points]  the ways' points, metres (local frame), way after way
+      node      int32[points]    the junction (graph node) at that point, -1 if none: shared by every way through it
+      y         float32[points]  baked deck heights (bridge_profiles), NaN where none
+      start     uint32[ways]     each way's first point
+      count     uint16[ways]     its number of points
+      cls       uint8[ways]      0 motorway/trunk, 1 primary/secondary, 2 tertiary, 3 residential/unclassified/living
+      width     uint8[ways]      metres x 4
+      flags     uint8[ways]      1 bridge, 2 tunnel, 4 one-way (along its points), 8 one-way against them, 16 roundabout
+      lanes     uint8[ways]      OSM lanes (0: not tagged)
+      layer     int8[ways]       OSM layer
+    A point is a node where two or more ways meet (or a way ends): the junctions; the ways' other points are shape."""
+    import gzip, struct
+    ways = [(r, m, False) for r, m in zip(osm['roads'], osm['road_meta'])] + [(t, m, True) for t, m in zip(osm['tunnels'], osm['tunnel_meta'])]
+    uses = {}
+    for r, (keys, tags), tun in ways:
+        for i, k in enumerate(keys): uses[k] = uses.get(k, 0) + (2 if i in (0, len(keys) - 1) else 1)
+    node_id = {}
+    X, Z, N, Y, start, count, cls, width, flags, lanes, layer = [], [], [], [], [], [], [], [], [], [], []
+    for k, (r, (keys, tags), tun) in enumerate(ways):
+        f = r[3] if not tun else r[2]; P = np.array(f).reshape(-1, 2)
+        if len(P) != len(keys) or len(P) < 2: continue
+        ys = r[4] if (not tun and len(r) > 4 and r[4]) else None
+        start.append(len(X)); count.append(len(P))
+        for i, (x, z) in enumerate(P):
+            X.append(x); Z.append(z); Y.append(ys[i] if ys else float('nan'))
+            j = -1
+            if uses[keys[i]] >= 2: j = node_id.setdefault(keys[i], len(node_id))
+            N.append(j)
+        ow = str(tags.get('oneway', '')).lower(); rb = tags.get('junction') in ('roundabout', 'circular')
+        fl = (1 if (not tun and r[2]) else 0) | (2 if tun else 0) | (4 if ow in ('yes', 'true', '1') or (rb and ow != 'no') or tags.get('highway') in ('motorway',) and ow != 'no' else 0) | (8 if ow == '-1' else 0) | (16 if rb else 0)
+        cls.append(r[0]); width.append(min(255, int(round((r[1]) * 4)))); flags.append(fl)
+        lanes.append(min(255, int(num(tags.get('lanes'), 0) or 0))); layer.append(max(-127, min(127, int(num(tags.get('layer'), 0) or 0))))
+    hdr = json.dumps(dict(v=1, ways=len(start), points=len(X), nodes=len(node_id))).encode()
+    hdr += b' ' * (-(len(hdr) + 4) % 4)
+    buf = struct.pack('<I', len(hdr)) + hdr
+    for a, t in ((X, '<f4'), (Z, '<f4'), (N, '<i4'), (Y, '<f4'), (start, '<u4'), (count, '<u2'), (cls, 'u1'), (width, 'u1'), (flags, 'u1'), (lanes, 'u1'), (layer, 'i1')):
+        b = np.array(a, dtype=t).tobytes(); buf += b + b'\0' * (-len(b) % 4)
+    with gzip.open(path, 'wb', compresslevel=9) as fo: fo.write(buf)
+    print(f'  roads.bin.gz {os.path.getsize(path)} bytes: {len(start)} ways, {len(X)} points, {len(node_id)} junctions', flush=True)
+
 def bridge_profiles(L, H, osm):
     """Road bridges over water get real deck heights: OSM has no heights, and the ends of a bridge way are not where it
     meets the ground (long bridges are split into several ways). Bridge ways are chained end to end, the chain's free
@@ -713,6 +756,10 @@ def areas(L, js):
 def lines(L, js):
     return [(e.get('tags', {}), local_pts(L, e['geometry'])) for e in js['elements'] if e['type'] == 'way' and len(e.get('geometry', [])) > 1]
 
+# (a way's points as OSM coordinate keys: ways that meet share a node, so the same key; roads.bin's topology)
+def geom_keys(e):
+    return [(round(g['lat'] * 1e7), round(g['lon'] * 1e7)) for g in e['geometry']]
+
 def num(v, default=None):
     try: return float(str(v).split(';')[0].replace('m', '').replace(',', '.').strip())
     except Exception: return default
@@ -831,15 +878,17 @@ def bake_osm(L, cache, api=False):
         blds.append([kind, q(h if h is not None else -1), q(lv if lv is not None else -1), rs, q(rh if rh is not None else -1), q(mh), flat(r)])
     # ---- roads / rail / cable cars
     roads, rails, cables, tunnels, bridges = [], [], [], [], []
-    for tags, pts in lines(L, js_w):
+    road_meta, tunnel_meta = [], []  # per road / tunnel: (its points' OSM keys, its tags): roads.bin (bake_roadnet)
+    for e in [e for e in js_w['elements'] if e['type'] == 'way' and len(e.get('geometry', [])) > 1]:
+        tags, pts = e.get('tags', {}), local_pts(L, e['geometry'])
         if not in_square(pts, sq, 200): continue
         tun = tags.get('tunnel') in ('yes', 'building_passage', 'culvert') or str(tags.get('layer', '0')).startswith('-')
         br = 1 if tags.get('bridge') not in (None, 'no') else 0
         if 'highway' in tags:
             c = HCLASS[tags['highway']]
             w = num(tags.get('width'), HWIDTH[c]); w = min(max(w, 3.5), 16)
-            if tun: tunnels.append([c, q(w), flat(pts)]); continue  # [class, width, x,z...]: not drawn yet
-            roads.append([c, q(w), br, flat(pts)])
+            if tun: tunnels.append([c, q(w), flat(pts)]); tunnel_meta.append((geom_keys(e), tags)); continue  # [class, width, x,z...]: not drawn yet
+            roads.append([c, q(w), br, flat(pts)]); road_meta.append((geom_keys(e), tags))
             if br and city: bridges.append(dict(i=len(roads) - 1, name=tags.get('name', ''), pts=pts, layer=num(tags.get('layer'), 1)))
         elif 'railway' in tags:
             if tun: continue
@@ -855,7 +904,7 @@ def bake_osm(L, cache, api=False):
             places.append([t['name'], q(x), q(z), t['place']])
     land = areas(L, js_l)
     print(f'  {len(blds)} buildings, {len(roads)} roads, {len(rails)} rails, {len(cables)} cable cars, {len(land)} land areas, {len(places)} places', flush=True)
-    res = dict(out=dict(buildings=blds, roads=roads, rails=rails, cables=cables, places=places, tunnels=tunnels), land=land, roads=roads, blds=blds, rails=rails, js_r=js_r)
+    res = dict(out=dict(buildings=blds, roads=roads, rails=rails, cables=cables, places=places, tunnels=tunnels), land=land, roads=roads, blds=blds, rails=rails, js_r=js_r, road_meta=road_meta, tunnels=tunnels, tunnel_meta=tunnel_meta)
     if city:
         res['coast'] = [pts for tags, pts in lines(L, js_c) if tags.get('natural') == 'coastline']
         res['piers'] = [rings[0] for tags, rings in areas(L, js_c) if tags.get('man_made')]
@@ -1053,8 +1102,8 @@ def main():
         old = json.load(open(os.path.join(out, 'osm.json'))) if os.path.exists(os.path.join(out, 'osm.json')) else {}
         for k in ('lakes', 'rivers', 'riverStart'):  # made with the heights
             if k not in osm['out'] and k in old: osm['out'][k] = old[k]
-        if L.get('roadsMax') is not None:  # (a city draws only its main roads: realworld.js loc.roads.maxClass)
-            osm['out']['roads'] = [r for r in osm['out']['roads'] if r[0] <= L['roadsMax']]
+        bake_roadnet(L, osm, os.path.join(out, 'roads.bin.gz'))  # (every road and tunnel, with its topology: src/roadnet.js)
+        osm['out'].pop('roads', None); osm['out'].pop('tunnels', None)  # (now in roads.bin.gz)
         with open(os.path.join(out, 'osm.json'), 'w') as f: json.dump(osm['out'], f, separators=(',', ':'))
         print('  osm.json', os.path.getsize(os.path.join(out, 'osm.json')), flush=True)
     meta_p = os.path.join(out, 'meta.json')

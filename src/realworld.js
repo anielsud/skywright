@@ -14,6 +14,7 @@ import { inStuntCut } from './stuntPark.js';
 import { GLTFLoader } from '../vendor/addons/GLTFLoader.js';
 import { MeshoptDecoder } from '../vendor/addons/meshopt_decoder.module.js';
 import { GeoStream } from './geostream.js';
+import { decodeRoadnet, way } from './roadnet.js';
 
 const BASE = 'assets/real/';
 const GAIN = 1.35, DESHADE = 0.3; // imagery brightness (linear, loc.satGain overrides) and how much of its baked-in shading to remove (shaders.js)
@@ -100,7 +101,7 @@ export const REAL_LOCATIONS = {
     core: 33000, // the detailed core reaches from LaGuardia to the Statue of Liberty (16 km)
     marina: { at: [-700, 600], r: 2600, waves: 0.1 }, // boats: a marina on Flushing Bay, beside LaGuardia
     waterPark: { theme: 'urban', near: [-7600, 14300], r: 1200 }, // the water park (waterPark.js): between Liberty State Park and Ellis Island, the Statue of Liberty and Lower Manhattan round it
-    roads: { maxClass: 1, maxClassLow: 0, step: 16, chunk: 2500 }, // highways and avenues (medium / low: highways only; the photo shows the side streets, NYC's full grid is ~25k ways), meshes per 2.5 km
+    roads: { step: 16, chunk: 2500 }, // every street (roads.bin: ~58k ways), 16 m between points away from the junctions, meshes per 2.5 km
     // deciduous parks and street trees: the alpine palette's valley floor, with no rocks or shrubs on the pavement
     flora: { biome: 'alpine', snowline: 99999, h: (h) => h * 0.5, wl: 0, bare: true },
     waterColors: { deep: 0x1c3a44, shallow: 0x3a6a6a, sand: 0x5a5a50 }, // the harbour: green-grey, silty
@@ -169,11 +170,11 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   const id = loc.id, key = id + ':' + quality;
   if (cache.get(id)?.key === key) { await cache.get(id).stream.prime(1500); return cache.get(id); }
   const dir = BASE + id + '/';
-  const files = [get(dir + 'meta.json', 'json'), get(dir + 'hi.bin.gz'), get(dir + 'far.bin.gz'), get(dir + (loc.img?.[quality] || 'hi.jpg'), 'blob'), get(dir + 'far.jpg', 'blob'), get(dir + 'cover.png', 'blob'), get(dir + 'osm.json', 'json')];
+  const files = [get(dir + 'meta.json', 'json'), get(dir + 'hi.bin.gz'), get(dir + 'far.bin.gz'), get(dir + (loc.img?.[quality] || 'hi.jpg'), 'blob'), get(dir + 'far.jpg', 'blob'), get(dir + 'cover.png', 'blob'), get(dir + 'osm.json', 'json'), get(dir + 'roads.bin.gz')];
   if (loc.city) files.push(get(dir + 'city.bin.gz')); // a city's buildings (realCity.js)
   if (loc.city?.statue) files.push(get('assets/landmarks/liberty.glb').catch((e) => (console.warn('[landmarks] statue model', e), null))); // the Statue of Liberty scan (realLandmarks.js; tools/liberty)
   let done = 0; const tick = (p) => { done++; onProgress?.(done / files.length); return p; };
-  const [meta, hiZ, farZ, hiB, farB, coverB, osm, cityZ, statueB] = await Promise.all(files.map((p) => p.then(tick)));
+  const [meta, hiZ, farZ, hiB, farB, coverB, osm, roadsZ, cityZ, statueB] = await Promise.all(files.map((p) => p.then(tick)));
   // the largest imagery texture on this tier; a place with loc.img has a ready-made hi file per tier (no resize)
   const texSize = quality === 'high' || quality === 'ultra' ? 4096 : 2048, fit = { resizeWidth: texSize, resizeHeight: texSize, resizeQuality: 'high' };
   const opt = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
@@ -183,6 +184,7 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   ]);
   const D = new RealData(loc, meta, decodeHeights(await gunzip(hiZ), meta.hi.n), decodeHeights(await gunzip(farZ), meta.far.n), hiBmp, farBmp, coverBmp, osm);
   await D.stream.prime(); // the streamed land the first view reaches past the coarse square (a few seconds at most; never fails)
+  { const b = await gunzip(roadsZ); D.roadnet = decodeRoadnet(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); } // every road, with its junctions (roadnet.js)
   if (cityZ) D.city = decodeCity(await gunzip(cityZ));
   if (statueB) try { D.statue = (await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(statueB, '')).scene; } catch (e) { console.warn('[landmarks] statue model', e); }
   D.key = key;
@@ -424,39 +426,63 @@ class RealData {
     return new THREE.Vector3(E * Math.cos(th) - N * Math.sin(th), Math.sin(el), -(E * Math.sin(th) + N * Math.cos(th))).normalize();
   }
 
-  // Road network for the World (same shape as roads.js planNetwork): real roads inside the core map, so the
-  // existing road meshes, terrain flattening, painting and car traffic all work on them. No fields, no rail line.
+  // Road network for the World: every mapped road inside the core map (roads.bin, roadnet.js), so the road meshes,
+  // terrain carving, painting and car traffic all work on them. Each road keeps its junctions as exact points
+  // (rd.jn: [point index, node id] pairs: the ways meeting there share the node id), so grading meets them at one
+  // height and traffic can turn from one road onto the next. Resampled to loc.roads.step metres between junctions.
+  // Tunnels are left out (not drawn yet: #228). No fields, no rail line.
   network(w) {
-    const lim = w.half + 300, roads = [], kinds = ['highway', 'main', 'main', 'street'];
+    const lim = w.half + 300, roads = [], kinds = ['highway', 'main', 'main', 'street'], R = this.roadnet;
     const spans = (this.osm.bridges || []).map((b) => ({ ax: b.a[0], az: b.a[1], dx: b.b[0] - b.a[0], dz: b.b[1] - b.a[1] }));
-    const RC = this.loc.roads || {}, step = RC.step || 8; // a city: fewer road classes (the photo shows the side streets)
-    for (const [cls, width, br, flat, ys] of this.osm.roads) {
-      if (w.qName === 'low' && cls === 3) continue;
-      if (RC.maxClass !== undefined && cls > (w.qBase === 'high' ? RC.maxClass : RC.maxClassLow ?? Math.min(RC.maxClass, 1))) continue;
-      const pts = [];
-      for (let k = 0; k < flat.length; k += 2) pts.push(new THREE.Vector3(flat[k], ys ? ys[k / 2] : 0, flat[k + 1]));
-      if (ys) { // a bridge over water with baked deck heights (bake.py bridge_profiles): keep them, no pillars under the suspended spans
-        const rp = resample(pts, step), span = rp.map((p) => spans.some((b) => { const L2 = b.dx * b.dx + b.dz * b.dz, t = ((p.x - b.ax) * b.dx + (p.z - b.az) * b.dz) / L2; return t > 0.02 && t < 0.98 && Math.abs((p.x - b.ax) * b.dz - (p.z - b.az) * b.dx) / Math.sqrt(L2) < 40; }));
-        roads.push({ pts: rp, kind: kinds[cls], width: Math.min(width, cls === 0 ? 12 : 9), bridge: rp.map(() => true), span, real: true, baked: true });
+    const step = (this.loc.roads || {}).step || 8;
+    const ok = (x, z) => Math.abs(x) < lim && Math.abs(z) < lim && !(Math.abs(x - 100) < 520 && Math.abs(z) < 1300) && !inStuntCut(w.stuntPlan, x, z); // (inside the core, off the game's airport, not across a stunt site)
+    for (let k = 0; k < R.ways; k++) {
+      const W = way(R, k); if (W.tunnel) continue;
+      const kind = kinds[W.cls], width = Math.min(W.width, W.cls === 0 ? 12 : 9), props = { kind, width, real: true, oneway: W.oneway, lanes: W.lanes, roundabout: W.roundabout, layer: W.layer, cls: W.cls };
+      if (W.ys) { // a bridge over water with baked deck heights (bake.py bridge_profiles): keep them, no pillars under the suspended spans
+        const pts = []; for (let i = 0; i < W.n; i++) pts.push(new THREE.Vector3(R.x[W.s + i], W.ys[i], R.z[W.s + i]));
+        const rp = resample(pts, step), span = rp.map((p) => spans.some((b) => { const L2 = b.dx * b.dx + b.dz * b.dz, t = ((p.x - b.ax) * b.dx + (p.z - b.az) * b.dz) / L2; return t > 0.02 && t < 0.98 && Math.abs((p.x - b.ax) * b.dz - (p.z - b.az) * b.dx) / Math.sqrt(L2) < 30; }));
+        const jn = []; if (R.node[W.s] >= 0) jn.push([0, R.node[W.s]]); if (R.node[W.s + W.n - 1] >= 0) jn.push([rp.length - 1, R.node[W.s + W.n - 1]]);
+        roads.push({ pts: rp, ...props, bridge: rp.map(() => true), span, baked: true, jn });
         continue;
       }
-      // keep the parts inside the core and off the game's airport (a road can leave and come back: split it)
-      const runs = []; let cur = [];
-      const ok = (p) => Math.abs(p.x) < lim && Math.abs(p.z) < lim && !(Math.abs(p.x - 100) < 520 && Math.abs(p.z) < 1300) && !inStuntCut(w.stuntPlan, p.x, p.z); // (and closed across a stunt site)
-      for (const p of resample(pts, step)) { if (ok(p)) cur.push(p); else if (cur.length) { runs.push(cur); cur = []; } }
-      if (cur.length) runs.push(cur);
-      for (const rp of runs) {
-        if (rp.length < 3) continue;
+      // runs inside the core (a road can leave and come back: split it), resampled between its junctions
+      let cur = null; const runs = [];
+      for (let i = 0; i < W.n; i++) {
+        const x = R.x[W.s + i], z = R.z[W.s + i], nd = R.node[W.s + i];
+        if (!ok(x, z)) { if (cur) { runs.push(cur); cur = null; } continue; }
+        if (!cur) cur = { pts: [], jn: [] };
+        const p = new THREE.Vector3(x, 0, z);
+        if (cur.pts.length) { // fill to the step from the last point (shape points are kept too: a bend stays a bend)
+          const a = cur.pts.at(-1), m = Math.ceil(Math.hypot(x - a.x, z - a.z) / step);
+          for (let j = 1; j < m; j++) cur.pts.push(a.clone().lerp(p, j / m));
+        }
+        if (nd >= 0) cur.jn.push([cur.pts.length, nd]);
+        cur.pts.push(p);
+      }
+      if (cur) runs.push(cur);
+      for (const { pts: rp, jn } of runs) {
+        if (rp.length < 2 || (rp.length < 3 && !jn.length)) continue;
         let hs = rp.map((p) => w.rawHeight(p.x, p.z));
-        if (br) { const a = hs[0], b = hs.at(-1); hs = hs.map((_, i) => a + (b - a) * (i / (hs.length - 1)) + 0.6); }
+        if (W.bridge) { const a = hs[0], b = hs.at(-1); hs = hs.map((_, i) => a + (b - a) * (i / Math.max(1, hs.length - 1)) + 0.6); }
         else { const n = hs.length; for (let it = 0; it < 3; it++) hs = hs.map((h, i) => (hs[Math.max(0, i - 1)] + h * 2 + hs[Math.min(n - 1, i + 1)]) / 4); }
         rp.forEach((p, i) => (p.y = Math.max(hs[i], w.waterLevel + 0.6)));
-        roads.push({ pts: rp, kind: kinds[cls], width: Math.min(width, cls === 0 ? 12 : 9), bridge: rp.map(() => !!br), real: true });
+        roads.push({ pts: rp, ...props, bridge: rp.map(() => W.bridge), jn });
       }
     }
     // longest first: roads[0] is what the World calls "the road"
     roads.sort((a, b) => b.pts.length - a.pts.length);
     return { roads, towns: [], fields: [], rail: null };
+  }
+  // the mapped roads as plain lists (landStart: where 'On the road' starts): [{ cls, width, bridge, baked, pts: [[x, z]] }],
+  // and the road tunnels' centre lines ([[x, z]] each)
+  roadList() {
+    const R = this.roadnet, out = [], tunnels = [];
+    for (let k = 0; k < R.ways; k++) {
+      const W = way(R, k), pts = []; for (let i = 0; i < W.n; i++) pts.push([R.x[W.s + i], R.z[W.s + i]]);
+      if (W.tunnel) tunnels.push({ pts, width: W.width }); else out.push({ cls: W.cls, width: W.width, bridge: W.bridge, baked: !!W.ys, pts });
+    }
+    return { roads: out, tunnels };
   }
   // villages and towns as World town sites (ambience, parked cars, the shuttle helicopter): set after the terrain
   // is flattened, so they don't level the real ground around them

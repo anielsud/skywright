@@ -98,11 +98,15 @@ export function gradeReal(w, net) {
   // the airport's landside road, out to the nearest real road (its own chain: graded with its gate pins)
   const gateRd = gateRoad(w, net.roads.filter((r) => !r.baked), { terr, wetAt: (x, z, h) => h < wl + 0.6 });
   if (gateRd) { Object.assign(gateRd, { real: true, bridge: gateRd.pts.map(() => false) }); net.roads.push(gateRd); }
-  for (const rd of net.roads) if (rd.baked) { rd.terr = Float32Array.from(rd.pts, (p) => terr(p.x, p.z)); rd.wet = new Uint8Array(rd.pts.length); add(rd); } // bridges with a baked deck profile (realworld.js)
+  // junctions (roads.bin topology, realworld.js rd.jn): the first road graded through a node sets its height, every
+  // other road through it is pinned there, at that exact point
+  const nodeY = new Map(), setNodes = (q) => { for (const [j, nd] of q.jn || []) if (!nodeY.has(nd)) nodeY.set(nd, q.pts[j].y); };
+  for (const rd of net.roads) if (rd.baked) { rd.terr = Float32Array.from(rd.pts, (p) => terr(p.x, p.z)); rd.wet = new Uint8Array(rd.pts.length); add(rd); setNodes(rd); } // bridges with a baked deck profile (realworld.js)
   for (const rd of chains(net.roads.filter((r) => !r.baked))) { // (longest first)
     const fixed = rd.bridge && rd.bridge.some(Boolean) ? rd.bridge.slice() : null, pins = [], P = rd.pts, n = P.length;
     const S = new Float64Array(n); for (let i = 1; i < n; i++) S[i] = S[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z);
     if (rd.members.length === 1 && rd.members[0].rd.gate) pins.push(...gatePins(rd.members[0].rd)); // (gateRoad: its own chain, never reversed)
+    for (const m of rd.members) { const k = m.rd.pts.length; for (const [j, nd] of m.rd.jn || []) if (nodeY.has(nd)) pins.push({ i: m.start + (m.rev ? k - 1 - j : j), y: nodeY.get(nd) }); }
     for (const i of [0, n - 1]) { const y = onLine(P[i]); if (y != null) pins.push({ i, y }); }
     // where its footprint overlaps a done way's on the ground (side by side: a divided road's two carriageways, a
     // slip road; the mouth of a junction), its centre line takes that way's height: the two are one surface there.
@@ -141,7 +145,7 @@ export function gradeReal(w, net) {
       const q = m.rd, k = q.pts.length, at = (j) => m.start + (m.rev ? k - 1 - j : j);
       for (let j = 0; j < k; j++) q.pts[j].y = P[at(j)].y;
       q.terr = Float32Array.from(q.pts, (p, j) => rd.terr[at(j)]); q.wet = Uint8Array.from(q.pts, (p, j) => rd.wet[at(j)]); q.bridge = q.pts.map((p, j) => rd.bridge[at(j)]);
-      add(q);
+      add(q); setNodes(q);
     }
   }
 }

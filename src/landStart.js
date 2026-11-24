@@ -16,10 +16,11 @@ export function roadStart(w) {
   if (cfg.place && R) { const p = R.osm.places.find((q) => q[0] === cfg.place); if (p) [hx, hz] = [p[1], p[2]]; }
   else if (cfg.near?.lat != null && R) [hx, hz] = toLocal(R.meta, cfg.near.lat, cfg.near.lon);
   // the roads: every mapped class for a real place (a city draws only its avenues on some tiers; the streets are still there)
-  const roads = R ? R.osm.roads.filter(([cls, , br, , ys]) => cls <= (cfg.maxClass ?? 3) && !br && !ys).map(([, width, , flat]) => { const pts = []; for (let k = 0; k < flat.length; k += 2) pts.push([flat[k], flat[k + 1]]); return { pts, width }; })
+  const RL = R?.roadList();
+  const roads = R ? RL.roads.filter((r) => r.cls <= (cfg.maxClass ?? 3) && !r.bridge && !r.baked)
     : w.net.roads.filter((r) => !r.bridge?.some((b) => b)).map((r) => ({ pts: r.pts.map((p) => [p.x, p.z]), width: r.width }));
-  const tunnels = R?.osm.tunnels || [];
-  const inTunnel = (x, z) => tunnels.some(([, wd, f]) => { for (let k = 0; k + 3 < f.length; k += 2) { const ax = f[k], az = f[k + 1], dx = f[k + 2] - ax, dz = f[k + 3] - az, L2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)); if (Math.hypot(ax + dx * t - x, az + dz * t - z) < wd + 10) return true; } return false; });
+  const tunnels = RL?.tunnels || [];
+  const inTunnel = (x, z) => tunnels.some(({ width: wd, pts: tp }) => { for (let k = 0; k + 1 < tp.length; k++) { const [ax, az] = tp[k], dx = tp[k + 1][0] - ax, dz = tp[k + 1][1] - az, L2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)); if (Math.hypot(ax + dx * t - x, az + dz * t - z) < wd + 10) return true; } return false; });
   let best = null;
   for (const r of roads) {
     // walk the road at 5 m: a point with 35 m of straight road either side
