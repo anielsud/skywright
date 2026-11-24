@@ -25,7 +25,7 @@ import websockets
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smoke import CDP, Problems, free_port, start_server, launch_chrome  # noqa: E402
 
-LOCS = ['islands', 'canyon', 'nyc', 'lauterbrunnen', 'alpine']  # alpine is hidden from the picker but still loadable
+LOCS = ['islands', 'canyon', 'nyc', 'lauterbrunnen']
 QUALITY = {'tier': 'medium'}  # the graphics tier every session uses (--quality; run.py --ci: low, a CI runner builds shaders in software)
 
 

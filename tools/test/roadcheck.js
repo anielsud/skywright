@@ -11,7 +11,7 @@
 // The roads are read from world.net, not through the code under test's own junction logic.
 export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/realworld.js', 'src/world.js', 'tools/test/roadcheck.js'] }; // (and the ground detail: detailCheck)
 
-const PLACES = ['alpine', 'islands', 'canyon', 'lauterbrunnen', 'nyc'];
+const PLACES = ['islands', 'canyon', 'lauterbrunnen', 'nyc'];
 const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3;
 
 export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 }))]; }

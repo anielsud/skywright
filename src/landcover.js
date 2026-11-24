@@ -1,11 +1,10 @@
 // Land cover: what the ground is (forest, meadow, fields, scree, glacier, wash...) from terrain shape, the baked
-// hydrology (src/terrainBake.js: rivers, drainage, deposition, wetness) and a few noise fields. Used by
+// a few noise fields (the generated valley's baked hydrology is gone; the real places map their rivers). Used by
 // World.baseColor for the baked albedo of the core and the streamed tiles, by the vegetation (forestAt), and it
 // marks farmland for the terrain shader, which draws the field parcels crisply up close with the same parcel
 // layout as fieldColor() below (FIELD_GLSL is the GLSL twin of parcel()).
 import * as THREE from 'three';
 import { smoothstep, clamp } from './noise.js';
-import { landAt } from './terrainBake.js';
 
 // integer hash -> [0,1): identical in JS and GLSL (uint arithmetic), so baked and shaded fields agree
 export function hash3(i, j, k) {
@@ -106,7 +105,7 @@ export class Landcover {
       hedgeTrees: col(0x34502a),
     };
   }
-  land(x, z) { return landAt(this.B, x, z, this.L); }
+  land(x, z) { const L = this.L; L[0] = L[1] = L[2] = L[3] = 0; return L; } // (no baked hydrology at the real places)
   // farmland suitability 0..1 (flat, low, dry ground near settlement), before the per-field cut-off
   farm(x, z, h, slope, L = this.land(x, z)) {
     const w = this.w, wl = w.waterLevel;

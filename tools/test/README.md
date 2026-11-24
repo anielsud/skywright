@@ -598,8 +598,8 @@ Run it when you change the rocket attitude hold or fin aerodynamics in `aircraft
   15, 30 and 45 m/s, straight on, at 35° and at 60° the other way, full gas, on the game's physics at 60 Hz. Every hull
   point and wheel is checked against the box every frame: none may get more than 0.1 m inside, and the straight-on runs
   must reach the wall;
-- **New York** (its city boxes), **Lauterbrunnen** (a real village's OpenStreetMap buildings) and the **Alpine Valley**
-  town (generated), on real Worlds built in Node: every building in the place's collision grids is among
+- **New York** (its city boxes) and **Lauterbrunnen** (a real village's OpenStreetMap buildings), on real Worlds
+  built in Node: every building in the place's collision grids is among
   `world.wallBoxes`, with its own box, asked at its middle and just outside each face; building faces with a clear,
   flat run-up near the start, and both vehicles into each at 30 m/s straight on and 15 m/s at 35°, staying out and
   reaching the wall. The buildings are read from the world's own collision grids, not through `world.wallBoxes`, so

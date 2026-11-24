@@ -5,7 +5,7 @@
 // the floors above come down, or the whole top section topples off and smashes into the street. Cartoon-safe: bricks,
 // glass, dust, smoke and small fires, nobody inside.
 //
-// How it's cheap: every building is one contiguous run of vertices in its chunk's merged mesh (towns.js,
+// How it's cheap: every building is one contiguous run of vertices in its chunk's merged mesh (realBuildings.js,
 // realBuildings.js, realCity.js record the run on its collision entry). A one-byte `dmg` vertex attribute
 // (buildings.js) marks a damaged building with a slot in a small float texture (the height it has fallen to and the
 // holes through it, which the building shader discards with jagged, sooty edges) or 255 for gone (dropped in the

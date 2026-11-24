@@ -74,7 +74,7 @@ export async function stuntsAt(locId) {
   const loc = LOCATIONS[locId], cfg = loc?.stunts;
   if (!cfg || cfg.atJump || cfg.x != null) return { id: locId, searched: false };
   const t0 = performance.now();
-  await (loc.real ? loadReal(loc, 'low') : World.prepare(locId));
+  await loadReal(loc, 'low');
   const t1 = performance.now(), s0 = { ...siteStats }, w = new World(S.renderer, new THREE.Scene(), { location: locId, quality: 'low', time: 11, weather: 'clear' }), t2 = performance.now();
   try {
     const planned = noMs(w.stuntPlan?.site), fresh = noMs(findSite(w, cfg, layoutOf(cfg)));

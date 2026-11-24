@@ -83,7 +83,7 @@ export class Vehicles {
     // parked cars (towns + airport lot): static
     this.parked = [];
     const park = (p, yaw) => { const type = pickPark(); this.parked.push({ p, yaw, type, color: color(type) }); };
-    // driveways / squares laid out by towns.js; otherwise a few along each town's main street
+    // driveways / squares where the scenery lays them out; otherwise a few along each town's main street
     for (const sp of world.towns?.parkSpots || []) park(new THREE.Vector3(sp.x, 0, sp.z), sp.yaw);
     if (!world.towns?.parkSpots?.length) for (const t of world.net.towns) for (let k = 0; k < 26 * t.size; k++) {
       const side = new THREE.Vector3(-t.dir.z, 0, t.dir.x), along = (r() - 0.5) * 480 * t.size, off = (r() < 0.5 ? -1 : 1) * 5.6;

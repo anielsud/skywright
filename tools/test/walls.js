@@ -157,13 +157,13 @@ export function registered(W) {
 //             the start, and both vehicles driven into each at 30 m/s straight on and 15 m/s at 35 degrees on the
 //             place's real ground and buildings, staying out and reaching the wall.
 // The game loop's own runs (the flight's vehicle, its pedal, building damage) are in the browser (walls.py).
-export const PLACES = ['nyc', 'lauterbrunnen', 'alpine'], VEHICLES = ['Dune Buggy', 'Dirt Bike'], TOL = 0.1;
+export const PLACES = ['nyc', 'lauterbrunnen'], VEHICLES = ['Dune Buggy', 'Dirt Bike'], TOL = 0.1;
 export const STANDINS = {
   street: { x: 0, z: 0, yaw: 0, hl: 12, hw: 8, y0: 0, h: 20 },
   osm: { x: 400, z: 0, yaw: 0.47, hl: 9, hw: 6, y0: 0, h: 9 },
   tower: { x: 800, z: 0, yaw: 0, hl: 15, hw: 15, y0: 1.5, h: 120 },
 };
-export const nodeSuite = { files: ['src/aircraft.js', 'src/world.js', 'src/buildings.js', 'src/realBuildings.js', 'src/realCity.js', 'src/towns.js', 'src/destruction.js', 'src/bike*.js', 'src/drive.js', 'tools/test/walls.js', 'tools/test/node/world.mjs'], headless: true };
+export const nodeSuite = { files: ['src/aircraft.js', 'src/world.js', 'src/buildings.js', 'src/realBuildings.js', 'src/realCity.js', 'src/destruction.js', 'src/bike*.js', 'src/drive.js', 'tools/test/walls.js', 'tools/test/node/world.mjs'], headless: true };
 export function cases() {
   return [
     ...PLACES.map((loc) => ({ id: `${loc} buildings`, kind: 'place', loc, world: loc })),
