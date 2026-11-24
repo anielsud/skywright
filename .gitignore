@@ -4,3 +4,4 @@ node_modules/
 __pycache__/
 assets/boot/
 tools/test/node/.times.json
+reports/

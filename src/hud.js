@@ -28,7 +28,7 @@ export class HUD {
       </div>
       <div class="hud-tc"><div id="h-mission"></div><div id="h-station"></div><div id="h-toasts"></div></div>
       <div class="hud-tr">
-        <div class="hud-btns"><button id="h-cam" title="Camera (C)">🎥</button><button id="h-pause" title="Pause (Esc)">❚❚</button></div>
+        <div class="hud-btns"><button id="h-cam" title="Camera (C)">🎥</button><button id="h-bug" title="Report a problem here (F8): a picture and where you are">🐞</button><button id="h-pause" title="Pause (Esc)">❚❚</button></div>
         <canvas id="h-map" width="180" height="180"></canvas>
       </div>
       <div class="hud-bc">
@@ -50,6 +50,7 @@ export class HUD {
   }
   setUnits(u, car = false) { this.units = car && u !== 'metric' ? UNITS.drive : UNITS[u] || UNITS.imperial; this.altUnit = this.vsUnit = null; this.$('h-spdu').textContent = this.units.spdU; this.$('h-altu').textContent = this.units.altU; this.$('h-vsu').textContent = this.units.vsU; this.$('h-skinu').textContent = this.units.tempU; }
   toast(text, kind = '') {
+    this.onMessage?.('toast', text);
     const d = document.createElement('div'); d.className = 'toast ' + kind; d.textContent = text;
     this.toasts.prepend(d);
     while (this.toasts.children.length > 3) this.toasts.lastChild.remove();
@@ -66,7 +67,7 @@ export class HUD {
     const bc = this.root.querySelector('.hud-bc'), tc = this.root.querySelector('.hud-tc');
     if (on) tc.insertBefore(bc, this.toasts); else this.root.insertBefore(bc, tc.nextSibling);
   }
-  center(text, ms = 1800) { const c = this.$('h-center'); c.textContent = text; c.classList.add('show'); clearTimeout(this.ct); this.ct = setTimeout(() => c.classList.remove('show'), ms); }
+  center(text, ms = 1800) { this.onMessage?.('center', text); const c = this.$('h-center'); c.textContent = text; c.classList.add('show'); clearTimeout(this.ct); this.ct = setTimeout(() => c.classList.remove('show'), ms); }
   show(on) { this.visible = on; this.root.style.display = on ? '' : 'none'; }
 
   update(ac, world, mission, camera, others) {
