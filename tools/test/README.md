@@ -615,6 +615,23 @@ node tools/test/node/run.mjs walls --only contact
 Run it when you change `wallContacts` in `aircraft.js`, `world.wallBoxes`, or how towns, real places or New York file
 their buildings.
 
+## Building setbacks
+
+`setbacks.js` (Node tier, #228) checks that no building footprint stands on a road, at every real place: each building
+as the World built it (Lauterbrunnen, the Grand Canyon and Bora Bora: the footprints `RealScenery` kept; New York: every
+city.bin record through `CityScenery.footprint`, the low ones too) against every road's clear zone, its tarmac and
+gravel verge (on a city street: tarmac and pavement), measured with the test's own sampled geometry, not `setback.js`'s.
+Tunnels' tubes and bridge decks up in the air are left out. Also: few buildings dropped (most are cut back), few big
+ones left standing over a road that runs right through them (a passage under them), and the setbacks cost little at
+load. Standalone, it prints the counts before and after and the worst spots:
+
+```sh
+node tools/test/node/run.mjs setbacks
+node --import ./tools/test/node/setup.mjs tools/test/setbacks.js lauterbrunnen    # before / after counts
+```
+
+Run it when you change `setback.js`, road widths, verges or pavements, or how the real places build their buildings.
+
 ## Place check (browser)
 
 `placecheck.py` is the browser part of the stunt park, water park and wall tests, in one headless Chrome and one New
