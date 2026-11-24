@@ -14,7 +14,7 @@ export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/real
 const PLACES = ['islands', 'canyon', 'lauterbrunnen', 'nyc'];
 const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3;
 
-export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 }))]; }
+export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 }))]; }
 
 // The near-camera ground detail (World.updateDetail) at a few road points: inside, its vertices are the physics ground
 // (sampleGrid) exactly; its edge is the patch's own surface (no seam); rebuilding it stays cheap.
@@ -110,6 +110,17 @@ export function measure(w) {
 export async function runCase(c) {
   const { worldAt } = await import('./node/world.mjs');
   const w = (await worldAt(c.loc)).world;
+  if (c.traffic) { // the cars drive the road graph (laneGraph.js): onto the next road at a junction, turning round only at a dead end
+    const THREE = await import('three'), { Vehicles } = await import('../../src/vehicles.js');
+    const V = new Vehicles(new THREE.Scene(), w), G = V.graph, orig = G.next.bind(G); let on = 0, back = 0, none = 0;
+    G.next = (L) => { const N = orig(L); if (!N) none++; else if (N === L.rev) back++; else on++; return N; };
+    for (let k = 0; k < 60 * 20; k++) V.update(1 / 20, null);
+    const moves = on + back + none;
+    return [
+      { name: `${c.loc}: traffic turns onto the next road at junctions`, ok: moves > 20 && back / moves < 0.1, why: `${on} onto another road, ${back} turned round at a dead end, ${none} with nowhere to go (${G.lanes.length} lanes, 60 s)` },
+      { name: `${c.loc}: traffic rarely has nowhere to go`, ok: none / Math.max(1, moves) < 0.02, why: `${none} of ${moves}` },
+    ];
+  }
   if (c.detail) {
     const d = detailCheck(w);
     return [
