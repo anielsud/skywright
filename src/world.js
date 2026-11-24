@@ -19,7 +19,7 @@ import { RealScenery } from './realBuildings.js';
 import { Destruction } from './destruction.js';
 import { Landcover } from './landcover.js';
 import { LaunchPad } from './launchpad.js';
-import { buildAirfieldKit, CONNECTORS, TAXI, airportGate } from './airportKit.js';
+import { buildAirfieldKit, CONNECTORS, TAXI, ALS, airportGate } from './airportKit.js';
 import { buildAirportGround, gateLevel } from './airportGround.js';
 import { buildTerminalArea } from './airportBuildings.js';
 import { buildApronLife } from './airportGSE.js';
@@ -36,6 +36,8 @@ export { airportGate } from './airportKit.js'; // where the airport's landside r
 // Facing north the west one is on the left, so it is 36L / 18R; the east one is 36R / 18L.
 // the apron's stands: x, z, the parked plane's yaw (apronTexture paints them, addParked fills them, airportGSE.js services them)
 export const STANDS = [[200, -160, 1.2], [200, -80, 1.6], [190, 40, 1.4], [230, 160, 1.8], [200, 100, 1.5], [200, -20, 1.3]];
+// apron floodlight masts (World.buildAirport): their lamps join the night lights, their pools are in the apron's glow
+const APRON_MASTS = [[104, -196], [104, 196], [104, 0], [326, -196], [326, 30]];
 export const RUNWAYS = [{ x: 0, name: '36R', back: '18L' }, { x: -200, name: '36L', back: '18R' }];
 
 export const LOCATIONS = {
@@ -810,6 +812,7 @@ export class World {
     if (!this.lastBakeDir || this.lastBakeDir.distanceTo(lightDir) > 0.01) { this.lastBakeDir = lightDir.clone(); this.bakeShadows(); }
     // night lights
     if (this.lightsMat) this.lightsMat.opacity = this.night || dark > 0.55 ? 1 : 0;
+    if (this.rwyLightsMat) this.rwyLightsMat.opacity = this.rabbitMat.opacity = this.lightsMat.opacity;
     if (this.roadGroup) this.roadGroup.userData.lampMat.opacity = this.night || dark > 0.6 ? 1 : 0;
     if (this.windowMats) for (const m of this.windowMats) m.emissiveIntensity = this.night ? 3.5 : 0;
     this.space?.onLighting();
@@ -868,10 +871,10 @@ export class World {
     asph.map.repeat.set(20, 20);
     const add = (w2, l, x, z) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w2, l), asph); m.rotation.x = -Math.PI / 2; m.position.set(x, this.loc.rwyH + 0.03, z); m.receiveShadow = true; this.group.add(m); };
     // taxiway (centreline + edge lines), connectors with hold-short bars (to both runways), concrete apron with stand markings
-    const paved = (tex, w2, l, x, z, rotZ = false) => { const geo = new THREE.PlaneGeometry(w2, l); if (rotZ) geo.rotateZ(Math.PI / 2); const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 })); m.rotation.x = -Math.PI / 2; m.position.set(x, this.loc.rwyH + 0.03, z); m.receiveShadow = true; this.group.add(m); };
+    const paved = (tex, w2, l, x, z, rotZ = false, glow = null) => { const geo = new THREE.PlaneGeometry(w2, l); if (rotZ) geo.rotateZ(Math.PI / 2); const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4, ...(glow ? { emissive: 0xffffff, emissiveMap: glow, emissiveIntensity: 0 } : {}) }); if (glow) this.apronMat = mat; const m = new THREE.Mesh(geo, mat); m.rotation.x = -Math.PI / 2; m.position.set(x, this.loc.rwyH + 0.03, z); m.receiveShadow = true; this.group.add(m); };
     paved(this.taxiTexture('taxi'), 36, RWY.len, 80, 0);
     const conn = this.taxiTexture('conn'); for (const z of [RWY.len / 2 - 20, -RWY.len / 2 + 20, 0]) { paved(conn, 22, 60, 50, z, true); add(160, 22, -100, z); }
-    paved(this.apronTexture(), 232, 400, 214, 0);
+    paved(this.apronTexture(), 232, 400, 214, 0, false, this.apronGlow()); // (glow: the floodlights' pools at night)
     this.runways = rwys.map((r) => ({ x: r.x, z: 0, h: this.loc.rwyH, len: RWY.len, width: RWY.width, name: r.name, back: r.back, threshold: new THREE.Vector3(r.x, this.loc.rwyH, RWY.len / 2 - 60), heading: 0 }));
     this.runway = this.runways[0];
     // runway & approach lights (points shown at night)
@@ -883,14 +886,34 @@ export class World {
     }
     for (let z = -RWY.len / 2; z <= RWY.len / 2; z += 40) if (!CONNECTORS.some((c) => Math.abs(z - c.z) < 16)) push(TAXI.x0, z, 0x3070ff); // (on airportKit.js's fixtures; none on the apron side)
     for (const c of CONNECTORS) for (const s of [-1, 1]) for (let x = RWY.width / 2 + 8; x < TAXI.x0; x += 14) push(x, c.z + s * 12, 0x3070ff);
+    // in-pavement lights: runway centreline (white, the last 300 m red), touchdown zone bars over the first 900 m of
+    // each 36, taxiway centreline (green) along A and out over the connectors
+    for (const { x: rx } of RUNWAYS) {
+      for (let z = -RWY.len / 2 + 7.5; z < RWY.len / 2; z += 15) push(rx, z, z < -RWY.len / 2 + 300 ? 0xff4030 : 0xfff6e8, 0.06);
+      for (let z = RWY.len / 2 - 60; z > RWY.len / 2 - 900; z -= 30) for (const s of [-1, 1]) for (const dx of [9, 10.5, 12]) push(rx + s * dx, z, 0xfff6e8, 0.06);
+    }
+    for (let z = -RWY.len / 2; z <= RWY.len / 2; z += 15) push((TAXI.x0 + TAXI.x1) / 2, z, 0x30ff70, 0.06);
+    for (const c of CONNECTORS) for (let x = RWY.width / 2 + 3; x < TAXI.x0; x += 7.5) push(x, c.z, 0x30ff70, 0.06);
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3)); lg.setAttribute('color', new THREE.Float32BufferAttribute(lc, 3));
     this.lightsMat = new THREE.PointsMaterial({ size: 3.2, color: new THREE.Color(3, 3, 3), vertexColors: true, map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0, fog: false });
-    this.group.add(new THREE.Points(lg, this.lightsMat));
+    // the airfield's own lights: a fixed few pixels across, like the point sources they are (lightsMat's are metres
+    // across: right for floodlights, but runway lights became glowing balls up close and vanished far off)
+    this.rwyLightsMat = new THREE.PointsMaterial({ size: 4.5, sizeAttenuation: false, color: new THREE.Color(3, 3, 3), vertexColors: true, map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0, fog: false });
+    // far rows of fixed-size lights pile up in a few pixels and, added together, bloom into blobs: dim each with
+    // distance (a real light's share of the eye falls off too), never below a sixth
+    this.rwyLightsMat.onBeforeCompile = (sh) => { sh.vertexShader = sh.vertexShader.replace('#include <fog_vertex>', '#include <fog_vertex>\n#ifdef USE_COLOR\nvColor.rgb *= clamp(450.0 / max(1.0, -mvPosition.z), 0.16, 1.0);\n#endif'); };
+    this.rwyLightsMat.customProgramCacheKey = () => 'rwy-lights';
+    this.group.add(new THREE.Points(lg, this.rwyLightsMat));
+    // sequenced flashing lights ('the rabbit'): one per approach light row, flashing in turn towards each threshold
+    { const sp = [], n = ALS.rows; for (const { x: rx } of RUNWAYS) for (let k = n; k >= 1; k--) sp.push(rx, this.loc.rwyH + 1.6, RWY.len / 2 + ALS.start + k * ALS.step);
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(sp.length), 3));
+      this.rabbitMat = this.rwyLightsMat.clone(); this.rabbitMat.size = 6; this.rabbitMat.onBeforeCompile = this.rwyLightsMat.onBeforeCompile; this.rabbitMat.customProgramCacheKey = this.rwyLightsMat.customProgramCacheKey;
+      this.rabbit = new THREE.Points(g, this.rabbitMat); this.rabbit.frustumCulled = false; this.group.add(this.rabbit); }
     // PAPI (4 lights left of runway near threshold): colour depends on viewer angle
     const pg = new THREE.BufferGeometry();
     const pp = []; for (let k = 0; k < 4; k++) pp.push(-RWY.width / 2 - 12 - k * 9, this.loc.rwyH + 1, RWY.len / 2 - 300);
     pg.setAttribute('position', new THREE.Float32BufferAttribute(pp, 3)); pg.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(12).fill(1), 3));
-    this.papi = new THREE.Points(pg, new THREE.PointsMaterial({ size: 4.5, color: new THREE.Color(3, 3, 3), vertexColors: true, map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+    this.papi = new THREE.Points(pg, new THREE.PointsMaterial({ size: 7, sizeAttenuation: false, color: new THREE.Color(3, 3, 3), vertexColors: true, map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false })); // (visible by day too, like the real ones)
     this.group.add(this.papi);
   }
 
@@ -903,6 +926,20 @@ export class World {
     else { g.fillRect(62, 0, 5, 512); const y = (40 - 20) * 512 / 60; g.fillRect(0, y, 128, 4); g.fillRect(0, y + 8, 128, 4); for (let x = 0; x < 128; x += 16) { g.fillRect(x, y + 18, 9, 4); g.fillRect(x, y + 26, 9, 4); } }
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; t.wrapT = THREE.RepeatWrapping; if (!conn) t.repeat.set(1, RWY.len / 40);
     return t;
+  }
+  // the apron floodlights' pools of light (emissive, lit at night with the windows: World.windowMats): an ellipse thrown
+  // out from each mast across the concrete, warm white, brightest under the lamps. Same mapping as apronTexture.
+  apronGlow() {
+    const W2 = 256, H2 = 512, c = document.createElement('canvas'); c.width = W2; c.height = H2; const g = c.getContext('2d');
+    if (!g?.createRadialGradient) return new THREE.CanvasTexture(c);
+    const X = (x) => (x - 98) * W2 / 232, Z = (z) => (z + 200) * H2 / 400, S = W2 / 232;
+    g.fillStyle = '#000'; g.fillRect(0, 0, W2, H2); g.globalCompositeOperation = 'lighter';
+    for (const [x, z] of APRON_MASTS) {
+      const cx = X(x + (x < 200 ? 34 : -30)), cz = Z(z + (z < -150 ? 20 : z > 150 ? -20 : 0)), r = 48 * S;
+      const gr = g.createRadialGradient(cx, cz, 0, cx, cz, r); gr.addColorStop(0, 'rgba(255,226,180,0.17)'); gr.addColorStop(0.45, 'rgba(255,220,170,0.07)'); gr.addColorStop(1, 'rgba(255,220,170,0)');
+      g.fillStyle = gr; g.save(); g.translate(cx, cz); g.scale(1.25, 1); g.translate(-cx, -cz); g.fillRect(cx - r * 1.3, cz - r, r * 2.6, r * 2); g.restore();
+    }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
   }
   apronTexture() {
     const W2 = 1024, H2 = 2048, c = document.createElement('canvas'); c.width = W2; c.height = H2; const g = c.getContext('2d', { willReadFrequently: true });
@@ -963,7 +1000,7 @@ export class World {
     // landside car park
     A.plainQuad([346, 0.04, 112], [376, 0.04, 112], [376, 0.04, 52], [346, 0.04, 52], C.CONCRETE, 0x5a5a5c); // (east of the kerb canopy)
     const mat = buildingMaterial({ cellPx: { low: 128, medium: 192, ultra: 384 }[this.qName] ?? 256, interiors: this.qName !== 'low' }); // same atlas as the towns
-    this.windowMats = [mat];
+    this.windowMats = [mat]; if (this.apronMat) this.windowMats.push(this.apronMat);
     this.beacon = new THREE.Mesh(new THREE.SphereGeometry(0.6, 8, 6), M.light(0x40ff80).clone()); this.beacon.position.copy(TA.beacon); this.group.add(this.beacon);
     this.radar = TA.radar; this.radar.material = mat; this.group.add(this.radar);
     // name board on the terminal roof, lit at night
@@ -977,7 +1014,7 @@ export class World {
     }
     // apron flood-light masts (lamps join the night lights)
     const fp = [], fc = [];
-    for (const [x, z] of [[104, -196], [104, 196], [104, 0], [326, -196], [326, 30]]) {
+    for (const [x, z] of APRON_MASTS) {
       A.setFrame(0, y, 0, 0); A.cyl(x, z, -0.3, 20, 0.4, 0.25, 6, C.METAL, 0x9a9ea4); A.box(x, 19.9, z, 1.6, 0.6, 3, C.METAL, 0x6a6e74, { bottom: true });
       for (const dz of [-1, 0, 1]) { fp.push(x + (x < 200 ? 0.9 : -0.9), y + 19.9, z + dz); fc.push(1, 0.9, 0.7); }
     }
@@ -990,7 +1027,7 @@ export class World {
     // the airfield's furniture: light fixtures, approach lights, PAPI housings, signs, ILS (src/airportKit.js)
     const kit = buildAirfieldKit(this, A, y, TA.signs);
     this.airfield = kit; this.windowMats.push(kit.signMat); kit.signs.receiveShadow = true; this.group.add(kit.signs);
-    { const g = new THREE.BufferGeometry(), c = new THREE.Color(); g.setAttribute('position', new THREE.Float32BufferAttribute(kit.points.flatMap((p) => p.slice(0, 3)), 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(kit.points.flatMap((p) => c.set(p[3]).toArray()), 3)); this.group.add(new THREE.Points(g, this.lightsMat)); }
+    { const g = new THREE.BufferGeometry(), c = new THREE.Color(); g.setAttribute('position', new THREE.Float32BufferAttribute(kit.points.flatMap((p) => p.slice(0, 3)), 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(kit.points.flatMap((p) => c.set(p[3]).toArray()), 3)); this.group.add(new THREE.Points(g, this.rwyLightsMat)); }
     const shell = new THREE.Mesh(A.toGeometry(), mat); shell.castShadow = shell.receiveShadow = true; this.group.add(shell);
     // windsock
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 8, 8), M.paint(0xdddddd)); pole.position.set(-45, y + 4, 600); this.group.add(pole);
@@ -1210,6 +1247,8 @@ export class World {
     // windsock
     const w = this.windBase.clone().add(this.gust);
     if (w.lengthSq() > 0.01) { this.sock.lookAt(this.sock.position.clone().add(w)); this.sock.rotateX(-0.35 * Math.max(0, 1 - w.length() / 12)); }
+    // the rabbit: two flashes a second run in along the approach lights
+    if (this.rabbit && this.rabbitMat.opacity > 0) { const n = ALS.rows, k = Math.floor((this.t * 2 % 1) * (n + 3)), col = this.rabbit.geometry.attributes.color; for (let i = 0; i < col.count; i++) { const v = i % n === k ? 1 : 0; col.setXYZ(i, v, v, v); } col.needsUpdate = true; }
     // radar antenna turning (15 rpm)
     if (this.radar) this.radar.rotation.y = this.t * 1.57;
     // beacon
