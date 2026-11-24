@@ -6,16 +6,18 @@
 // The rule, per footprint, as it is built (a load-time pass: a grid of road segments, a few distance tests a building):
 //  - a road's clear zone is its tarmac plus verge (plus pavement on a city street: kerb to building line), and a
 //    building keeps SETBACK beyond it (in a city just the TOL slack: the pavement runs to the building line);
-//  - a footprint that reaches into a clear zone is cut back: its walls inside the zone are pushed straight out to the
-//    zone's edge, so the road-facing wall becomes a frontage along the road on the building line (round a dead end or
-//    a bend's outside, it follows the curve) and the rest of the house stays where OpenStreetMap has it. (Shifting the
-//    whole house back would push it into its neighbours or the hillside behind; a half-plane cut along the road's line
-//    chopped whole wings off buildings at bends.)
-//  - a road right through a footprint: the smaller side goes (cut along the road), the rest is pushed clear as above;
+//  - a footprint that reaches into a clear zone is cut back. A house (near-rectangular, or under a pitched roof, which
+//    covers its whole rectangle anyway) is trimmed as that rectangle: the face toward the road moves in, just far
+//    enough, and the same roof sits on the smaller house. Any other shape has the walls inside the zone pushed
+//    straight out to its edge: a frontage along the road on the building line, the rest as OpenStreetMap has it.
+//    (Shifting the whole house back would push it into its neighbours or the hillside behind; a half-plane cut along
+//    the road's line chopped whole wings off buildings at bends.)
+//  - a road right through a footprint: the smaller side goes;
 //  - if that leaves less than half of it, or a sliver, it is dropped; unless it's a big or tall one (MAJOR) the road
 //    runs right through: that stays whole (a passage under it, a covered highway; New York has a few dozen).
+//  - the collision box (World.wallBoxes, destruction.js) is made from what's left, and fitBox keeps it off the tarmac
+//    too (a box reaches past an irregular footprint's walls: over a cut-off corner, an L's yard).
 // Tunnels' tubes and bridge decks up in the air are left out (what's under them is no obstacle to the road).
-// The World's collision boxes (World.wallBoxes, destruction.js) are made from the footprint after this, so they match.
 import { VERGE } from './roadgrade.js';
 
 export const SETBACK = 1; // m beyond the verge, off a city's streets
