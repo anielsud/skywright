@@ -238,7 +238,7 @@ export function profileRoad(rd, o) {
   // junction (#228: a 23 m step where two Lauterbrunnen roads met end to end).
   const lap = closed ? s[n0] : 0, PS = [];
   for (const pin of o.pins || []) {
-    const sp = pin.s ?? s[pin.i], m = PS.find((q) => Math.abs(q.s - sp) < 2);
+    const sp = pin.s ?? s[pin.i], m = PS.find((q) => Math.abs(q.s - sp) < 2 && Math.abs(q.y - pin.y) < 0.15); // (two junctions close together at different heights stay two pins: each is met)
     if (m) { m.y = (m.y * m.c + pin.y) / (m.c + 1); m.c++; } else PS.push({ s: sp, y: pin.y, c: 1 });
   }
   for (const p of PS) { p.g = g; for (const q of PS) if (q !== p) p.g = Math.max(p.g, Math.abs(p.y - q.y) / Math.abs(p.s - q.s)); }

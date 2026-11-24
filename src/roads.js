@@ -102,11 +102,26 @@ export function gradeReal(w, net) {
   // other road through it is pinned there, at that exact point
   const nodeY = new Map(), setNodes = (q) => { for (const [j, nd] of q.jn || []) if (!nodeY.has(nd)) nodeY.set(nd, q.pts[j].y); };
   for (const rd of net.roads) if (rd.baked) { rd.terr = Float32Array.from(rd.pts, (p) => terr(p.x, p.z)); rd.wet = new Uint8Array(rd.pts.length); add(rd); setNodes(rd); } // bridges with a baked deck profile (realworld.js)
+  // every other junction on the ground starts at the ground's height (the ground round it: a 9 m cross), so a road
+  // graded off the ground (a street steeper than its grade, a cliff in the heights) can't carry that error through
+  // its junctions to the rest of the network (#228: Palisades streets 27 m up). Junctions out on a bridge span are
+  // left to the grading.
+  // (and how wide the widest road through each junction is: every road crossing it is level for that half width
+  // plus its verge either side, as a real junction is: no step where one road's grade meets the other's level
+  // crossing, which was ~all the steps the road check found in New York)
+  const nodeHW = new Map(); for (const rd of net.roads) for (const [, nd] of rd.jn || []) nodeHW.set(nd, Math.max(nodeHW.get(nd) || 0, rd.width / 2));
+  const grounded = new Set();
+  for (const rd of net.roads) if (!rd.baked) for (const [j, nd] of rd.jn || []) if (!rd.bridge?.[j] || j === 0 || j === rd.pts.length - 1) grounded.add(nd);
+  for (const rd of net.roads) if (!rd.baked) for (const [j, nd] of rd.jn || []) if (grounded.has(nd) && !nodeY.has(nd)) { const p = rd.pts[j]; nodeY.set(nd, Math.max(wl + 0.6, (terr(p.x, p.z) * 2 + terr(p.x + 9, p.z) + terr(p.x - 9, p.z) + terr(p.x, p.z + 9) + terr(p.x, p.z - 9)) / 6)); }
   for (const rd of chains(net.roads.filter((r) => !r.baked))) { // (longest first)
     const fixed = rd.bridge && rd.bridge.some(Boolean) ? rd.bridge.slice() : null, pins = [], P = rd.pts, n = P.length;
     const S = new Float64Array(n); for (let i = 1; i < n; i++) S[i] = S[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z);
     if (rd.members.length === 1 && rd.members[0].rd.gate) pins.push(...gatePins(rd.members[0].rd)); // (gateRoad: its own chain, never reversed)
-    for (const m of rd.members) { const k = m.rd.pts.length; for (const [j, nd] of m.rd.jn || []) if (nodeY.has(nd)) pins.push({ i: m.start + (m.rev ? k - 1 - j : j), y: nodeY.get(nd) }); }
+    for (const m of rd.members) { const k = m.rd.pts.length; for (const [j, nd] of m.rd.jn || []) if (nodeY.has(nd)) {
+      const i = m.start + (m.rev ? k - 1 - j : j), y = nodeY.get(nd), c = (nodeHW.get(nd) || 0) + VERGE + 1;
+      pins.push({ i, y });
+      if (!fixed?.[i]) for (const sg of [-1, 1]) { const sp = S[i] + sg * c; if (sp > 0 && sp < S[n - 1]) pins.push({ s: sp, y }); } // (the level junction)
+    } }
     const topo = rd.members.every((m) => m.rd.jn); // (roads.bin roads: their junctions are known, nodeY pins them; ways that cross without sharing a node are an over- or underpass, not a junction)
     if (!topo) for (const i of [0, n - 1]) { const y = onLine(P[i]); if (y != null) pins.push({ i, y }); }
     // where its footprint overlaps a done way's on the ground (side by side: a divided road's two carriageways, a

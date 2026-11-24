@@ -4,9 +4,9 @@
 //   steep:     inside every road's footprint (centre and both sides), the ground's slope in any direction may not
 //              exceed STEEP: a wall or a ramp at a junction where two roads meet at different heights. Counted as
 //              spots (40 m clusters).
-//   joins:     a road end on another road's line (within 3 m) meets it at its height (to 0.3 m), unless that is a
-//              bridge deck (an end under an overpass).
-//   crossings: two roads crossing on the ground cross at the same height (to 0.3 m).
+//   joins:     every road through a junction node (roads.bin topology) is at the same height there (to 0.3 m;
+//              not where a bridge deck meets the ground); a road without topology: an end on another's line meets it.
+//   crossings: two roads crossing on the ground without a shared node are either level (0.3 m) or clearly apart (3 m).
 // Only inside the core map (200 m in from its edge: the roads stop there).
 // The roads are read from world.net, not through the code under test's own junction logic.
 export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/realworld.js', 'src/world.js', 'tools/test/roadcheck.js'] }; // (and the ground detail: detailCheck)
@@ -41,7 +41,7 @@ export function detailCheck(w) {
 export function measure(w) {
   const roads = w.net.roads.filter((r) => r.kind !== 'rail'), lim = w.half - 200, inCore = (x, z) => Math.abs(x) < lim && Math.abs(z) < lim;
   const isDeck = (rd, i) => !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % rd.pts.length]);
-  const out = { km: 0, steps: [], steep: [], joins: [], crossings: [] };
+  const out = { km: 0, steps: [], steep: [], joins: [], crossings: [] }, nodes = new Map();
   // segment hash (20 m cells)
   const C = 20, segs = new Map(), key = (i, j) => i + ',' + j;
   roads.forEach((rd, ri) => {
@@ -76,8 +76,9 @@ export function measure(w) {
         }
       }
     }
-    // ends on another road's line
-    if (!rd.closed) for (const [e, ie] of [[P[0], 0], [P[n - 1], n - 2]]) {
+    // junctions (roads.bin topology, rd.jn): every road through a node meets the others there (checked below, once
+    // per node); roads without topology (the airport road): an end on another road's line meets it
+    if (!rd.jn && !rd.closed) for (const [e, ie] of [[P[0], 0], [P[n - 1], n - 2]]) {
       if (!inCore(e.x, e.z) || isDeck(rd, ie)) continue;
       let bd = SNAP, y = null, deck = false;
       near(e.x, e.z, (sg) => {
@@ -87,6 +88,7 @@ export function measure(w) {
       });
       if (y != null && !deck && Math.abs(y - e.y) > JOIN) spot(out.joins, e.x, e.z, Math.abs(y - e.y), rd.kind);
     }
+    for (const [j, nd] of rd.jn || []) { const p = P[j]; if (!inCore(p.x, p.z)) continue; const q = nodes.get(nd); if (!q) nodes.set(nd, { y: p.y, x: p.x, z: p.z, br: !!rd.bridge?.[j] }); else if (!q.br && !rd.bridge?.[j] && Math.abs(q.y - p.y) > JOIN) spot(out.joins, p.x, p.z, Math.abs(q.y - p.y), rd.kind); }
     // crossings with the roads after it (each pair once)
     for (let i = 0; i < last; i++) {
       if (isDeck(rd, i)) continue;
@@ -98,7 +100,7 @@ export function measure(w) {
         const t = ((r.x - a.x) * ez - (r.z - a.z) * ex) / den, u = ((r.x - a.x) * dz - (r.z - a.z) * dx) / den;
         if (t < 0.02 || t > 0.98 || u < 0.02 || u > 0.98) return; // (ends meeting: the joins check)
         const d = Math.abs(a.y + (b.y - a.y) * t - (r.y + (q.y - r.y) * u));
-        if (d > JOIN) spot(out.crossings, a.x + dx * t, a.z + dz * t, d, rd.kind);
+        if (d > JOIN && (d < 3 || !(rd.jn && roads[sg.ri].jn))) spot(out.crossings, a.x + dx * t, a.z + dz * t, d, rd.kind); // (with topology: crossing without a shared node is an over- or underpass; only a near-level clash counts)
       });
     }
   });
