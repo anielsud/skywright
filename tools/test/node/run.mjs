@@ -21,7 +21,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url)), REPO = fileURLToPath(new URL('../../../', import.meta.url));
-export const SUITES = ['bikeride', 'drivecheck', 'rocketcheck', 'riders', 'gvision', 'boatride', 'stunts', 'waterpark', 'walls', 'meshcheck', 'cockpitcheck', 'gearcheck', 'startbakes', 'tunnelcheck', 'startchoice', 'presets', 'roadcheck', 'airportcheck']; // (tools/test/<name>.js; add a suite here once it exports nodeSuite)
+export const SUITES = ['bikeride', 'drivecheck', 'rocketcheck', 'riders', 'gvision', 'boatride', 'stunts', 'waterpark', 'walls', 'meshcheck', 'cockpitcheck', 'gearcheck', 'startbakes', 'tunnelcheck', 'startchoice', 'presets', 'roadcheck', 'airportcheck', 'bldcheck']; // (tools/test/<name>.js; add a suite here once it exports nodeSuite)
 const modUrl = (name) => pathToFileURL(`${REPO}tools/test/${name}.js`).href;
 
 async function context() { const { makePresets } = await import(pathToFileURL(REPO + 'src/design.js').href); return { presets: makePresets() }; }

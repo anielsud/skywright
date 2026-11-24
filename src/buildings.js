@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import { FOG } from './shaders.js';
 
 // ---------------- atlas layout ----------------
-// 8 x 7 cells, each cell = one 3 m x 3 m facade bay (one window, one floor), 3 m x 3 m of roof or of ground.
+// 8 x 8 cells, each cell = one 3 m x 3 m facade bay (one window, one floor), 3 m x 3 m of roof or of ground.
 export const C = {
   PLAIN: 0, WIN_GREEN: 1, WIN_BLUE: 2, WIN: 3, DOOR: 4, WOOD_WIN: 5, WOOD: 6, STONE_WIN: 7,
   ADOBE_WIN: 8, ADOBE: 9, ADOBE_DOOR: 10, APT: 11, SHOP: 12, GLASS: 13, BALCONY: 14, BOARDS: 15,
@@ -19,12 +19,14 @@ export const C = {
   WOOD_WIN2: 40, SHOP2: 41, ADOBE_WIN2: 42, SHUTTERED: 43, POOL: 44, SOIL: 45, RAIL_WOOD: 46, RAIL_IRON: 47,
   SOLAR: 48, TRIM: 49, NEON: 50, FLOWERS: 51, SHOP3: 52, CLAP_DOOR: 53, WOOD_DOOR: 54, PARKING: 55,
   SHOP_N: 56, SHOP2_N: 57, SHOP3_N: 58, // shop fronts without the name board (all but one bay of a shop)
+  LIME: 59, LIME_WIN: 60, BROWN_WIN: 61, // smooth cut stone (ashlar), tinted: limestone / brownstone, tall windows with lintels
+  ROOF_TAR: 62, ROOF_GRAVEL: 63, // flat roofs: the tint decides the colour (the ground cells keep most of the photo's)
 };
 const SIGNLESS = { [C.SHOP]: C.SHOP_N, [C.SHOP2]: C.SHOP2_N, [C.SHOP3]: C.SHOP3_N };
 const COLS = 8, ROWS = 8, NCELL = COLS * ROWS, PAD = 1 / 16; // PAD: gutter per side, fraction of a slot
 // photo materials in tex/towns/mat_*.jpg (5 x 4 tiles of 512 px, each 3 m square; see tools/towns/bake_materials.py)
-const MAT = { plaster: 0, stucco: 1, chalet: 2, clap: 3, barn: 4, timber: 5, brick: 6, stone: 7, clay: 8, slate: 9, darktile: 10, metal: 11, thatch: 12, cobble: 13, pavers: 14, gravel: 15, asphalt: 16, lawn: 17, concrete: 18 };
-const MAT_AVG = ['#d8d6d2', '#c8c6bc', '#5a4632', '#e2d9a8', '#3a2a1e', '#4a3626', '#9a5040', '#6e6c60', '#a85a3a', '#3a3c3e', '#2a2a2e', '#8a8c90', '#6a5a48', '#7a7058', '#bcb8b0', '#c8c4bc', '#7a7a78', '#5a8a2a', '#c4c4c0'];
+const MAT = { plaster: 0, stucco: 1, chalet: 2, clap: 3, barn: 4, timber: 5, brick: 6, stone: 7, clay: 8, slate: 9, darktile: 10, metal: 11, thatch: 12, cobble: 13, pavers: 14, gravel: 15, asphalt: 16, lawn: 17, concrete: 18, ashlar: 19 };
+const MAT_AVG = ['#d8d6d2', '#c8c6bc', '#5a4632', '#e2d9a8', '#3a2a1e', '#4a3626', '#9a5040', '#6e6c60', '#a67058', '#3a3c3e', '#2a2a2e', '#8a8c90', '#b7b0a9', '#7a7058', '#bcb8b0', '#c8c4bc', '#7a7a78', '#5a8a2a', '#c4c4c0', '#bebab7'];
 export const MAT_FILES = ['tex/towns/mat_color.jpg', 'tex/towns/mat_normal.jpg', 'tex/towns/mat_rough.jpg'];
 
 // Window openings per cell in bay fractions (u0, v0, u1, v1; v up), the frame's outer edge. The shader traces the
@@ -36,7 +38,7 @@ winCell(C.WIN_GREEN, 41, 27, 46, 62); winCell(C.WIN_BLUE, 41, 27, 46, 62); winCe
 winCell(C.WOOD_WIN, 39, 23, 50, 58, 0.06, 1.3, 0, false); winCell(C.WOOD_WIN2, 22, 30, 84, 46, 0.06, 1.3, 0, false); winCell(C.STONE_WIN, 45, 37, 38, 46, 0.12);
 winCell(C.ADOBE_WIN, 46, 40, 36, 44, 0.13); winCell(C.ADOBE_WIN2, 40, 30, 48, 56, 0.12, 1.2);
 winCell(C.APT, 25, 21, 78, 76, 0.05, 1.4); winCell(C.BRICK_WIN, 33, 25, 62, 68, 0.07); winCell(C.CLAP_WIN, 43, 25, 42, 64, 0.04);
-winCell(C.WIN_TALL, 44, 14, 40, 96, 0.05, 1.4);
+winCell(C.WIN_TALL, 44, 14, 40, 96, 0.05, 1.4); winCell(C.LIME_WIN, 43, 15, 42, 88, 0.09, 1.4); winCell(C.BROWN_WIN, 44, 19, 40, 84, 0.1, 1.3);
 for (const c of [C.SHOP, C.SHOP2, C.SHOP_N, C.SHOP2_N]) winCell(c, 8, 48, 74, 80, 0.04, 1.6, 1); for (const c of [C.SHOP3, C.SHOP3_N]) winCell(c, 6, 46, 116, 82, 0.03, 1.8, 1);
 winCell(C.GLASS, 0, 16, 128, 112, 0.0, 1.8, 4); winCell(C.BALCONY, 23, 11, 82, 96, 0.06, 1.5);
 winCell(C.DOOR, 46, 34, 36, 24, 0.08, 1.0); winCell(C.CHURCH_WIN, 44, 20, 40, 100, 0.08, 1, 2); winCell(C.NEON, 0, 0, 128, 128, 0, 1, 3);
@@ -174,6 +176,15 @@ function paintAtlas(CELL, photo) {
   at(C.WOOD_DOOR); base(MAT.chalet, 0.35); door(40, 22, 48, 106, '#5a3a20', { frame: '#7a5a3a' }); P(34, 12, 60, 8, '#4a3020', { z: 170 }); done();
   at(C.STONE); base(MAT.stone, 0.25); done();
   at(C.STONE_WIN); base(MAT.stone, 0.25); P(44, 34, 40, 4, '#9a968c', { z: 160 }); window_(48, 40, 32, 40, { frame: '#e8e2d6' }); done();
+  // cut stone (pre-war limestone, brownstone; all tinted per building): a string course at the floor line, tall
+  // one-over-one sash windows; flat lintels with a keystone on limestone, a hood on corbels on brownstone
+  const sash = (x, y, w, hh, frame, sill) => { window_(x, y, w, hh, { frame, cross: false, sill }); P(x, y + hh * 0.5 - 1.5, w, 3, frame, { z: 114, rough: 0.5 }); };
+  const st = { tint: 1, rough: 0.75 };
+  at(C.LIME); base(MAT.ashlar, 1); P(0, 123, 128, 5, '#f4f2ee', { ...st, z: 150 }); done();
+  at(C.LIME_WIN); base(MAT.ashlar, 1); P(0, 123, 128, 5, '#f4f2ee', { ...st, z: 150 }); sash(46, 18, 36, 82, '#ece8e0', '#f2f0ea');
+  P(39, 6, 50, 8, '#f6f4f0', { ...st, z: 162 }); P(59, 3, 10, 12, '#fbfaf8', { ...st, z: 172 }); Z(39, 13, 50, 1, 140); done();
+  at(C.BROWN_WIN); base(MAT.ashlar, 1); P(0, 123, 128, 5, '#e8e4de', { ...st, z: 150 }); sash(47, 22, 34, 78, '#2e2a26', '#ece8e2');
+  P(36, 6, 56, 6, '#f8f6f2', { ...st, z: 180 }); P(38, 12, 52, 5, '#ece8e2', { ...st, z: 168 }); for (const x of [38, 84]) P(x, 17, 6, 7, '#e4e0da', { ...st, z: 160 }); done();
   // adobe / pueblo revival: deep-set windows with timber lintels, turquoise doors
   const adobe = () => { base(MAT.stucco, 1); g.save(); g.globalAlpha = 0.18; g.fillStyle = '#a07850'; g.fillRect(0, 0, 128, 128); g.restore(); };
   at(C.ADOBE); adobe(); done();
@@ -211,7 +222,8 @@ function paintAtlas(CELL, photo) {
   at(C.TILES); base(MAT.clay, 0.55); done();
   at(C.SLATE); base(MAT.slate, 1); done();
   at(C.DARKTILE); base(MAT.darktile, 1); done();
-  at(C.THATCH); base(MAT.thatch, 0.3); done();
+  at(C.THATCH); base(MAT.thatch, 1); done(); // (the photo is baked pale grey: the straw tint decides)
+  at(C.ROOF_TAR); base(MAT.asphalt, 1); done(); at(C.ROOF_GRAVEL); base(MAT.gravel, 1); done();
   at(C.SEAM); P(0, 0, 128, 128, '#d4d4d4', { tint: 1, rough: 0.35 }); for (let k = 0; k < 128; k += 21) { P(k, 0, 3, 128, '#f4f4f4', { tint: 1, rough: 0.3, z: 170 }); P(k + 3, 0, 2, 128, '#9a9a9a', { tint: 1, z: 150 }); } done();
   at(C.SHINGLE); P(0, 0, 128, 128, '#5a4030', { tint: 0.5, rough: 0.95 }); for (let y = 0; y < 128; y += 10) for (let x = R() * 8 - 8; x < 128; x += 7 + R() * 6) { const v = R(); P(x, y, 6 + R() * 4, 9, `rgb(${96 + v * 50 | 0},${68 + v * 38 | 0},${48 + v * 28 | 0})`, { tint: 0.5, rough: 0.95, z: 128 + (y % 20) }); g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(x, y + 8, 7, 1.5); } done();
   at(C.SOLAR); P(0, 0, 128, 128, '#c8ccd0', { rough: 0.3, z: 150 }); for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) { grad(3 + x * 63, 3 + y * 63, 59, 59, '#1a2a48', '#0e1830', { rough: 0.08, z: 135 }); for (let k = 1; k < 6; k++) { g.fillStyle = 'rgba(160,180,220,0.35)'; g.fillRect(3 + x * 63 + k * 10, 3 + y * 63, 0.8, 59); g.fillRect(3 + x * 63, 3 + y * 63 + k * 10, 59, 0.8); } } done();
@@ -484,6 +496,7 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
 
 // ---------------- geometry builder ----------------
 const _c = new THREE.Color();
+const SILL_TOP = 10.5; // m: walls up to this high get window sills (detail)
 export class Builder {
   constructor() { this.cap = 0; this.ni = 0; this.idx = new Uint32Array(1024); this.n = 0; this._grow(256); this.setFrame(0, 0, 0, 0); this.seed = 0; this.det = null; this.fine = 1; }
   // typed, growable vertex storage (a big town is ~1M vertices: plain JS arrays would cost hundreds of MB)
@@ -520,31 +533,34 @@ export class Builder {
     const L = Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) / s, H = Math.hypot(p3[0] - p0[0], p3[1] - p0[1], p3[2] - p0[2]) / s, u = uvs || [0, 0, L, 0, L, H, 0, H];
     this.quad(p0, p1, p2, p3, u, cell, col); this.quad(p1, p0, p3, p2, [u[2], u[3], u[0], u[1], u[6], u[7], u[4], u[5]], cell, col);
   }
-  // vertical wall from (ax,az) to (bx,bz) seen from outside; u = whole bays, v = floors. Window cells get sills (detail).
+  // vertical wall from (ax,az) to (bx,bz) seen from outside; u = whole bays, v = floors. Window cells get sills (detail:
+  // the det builder at fine > 2, on house-sized walls only, up to SILL_TOP. Not used yet: in a Swiss valley at High
+  // they were +70% of the buildings' vertices, for a 14 cm ledge)
   wall(ax, az, bx, bz, y0, y1, cell, col, bay = 3, fl = 3, u0 = 0) {
     const L = Math.hypot(bx - ax, bz - az), nb = Math.max(1, Math.round(L / bay)), v0 = y0 / fl, v1 = y1 / fl;
     this.quad([ax, y0, az], [bx, y0, bz], [bx, y1, bz], [ax, y1, az], [u0, v0, u0 + nb, v0, u0 + nb, v1, u0, v1], cell, col);
     const wr = WIN[cell], D = this.det;
-    if (D && wr && wr.sill && wr.kind <= 1 && this.fine > 1 && L > 1) { // sills: high / ultra only
+    if (D && wr && wr.sill && wr.kind <= 1 && this.fine > 2 && L > 1 && y1 <= SILL_TOP) {
       const ux = (bx - ax) / L, uz = (bz - az) / L, nx = -uz, nz = ux, bw = L / nb, sx = D.sillCol ?? 0xd8d4cc;
       D.setFrame(this.fx, this.fy, this.fz, this.yaw); D.seed = this.seed;
       for (let f = Math.ceil(v0 - wr.r[1] - 1e-3); (f + wr.r[3]) * fl <= y1 + 0.05; f++) {
         const ys = (f + wr.r[1]) * fl; if (ys < y0 - 0.05 || ys < 0.3) continue;
         for (let j = 0; j < nb; j++) {
           const s0 = (j + wr.r[0]) * bw - 0.1, s1 = (j + wr.r[2]) * bw + 0.1, cx = ax + ux * (s0 + s1) / 2, cz = az + uz * (s0 + s1) / 2;
+          // one sloped quad from the wall out over the facade (seen from the street and from above alike)
           const h0 = (s1 - s0) / 2, ex = cx + nx * 0.14, ez = cz + nz * 0.14, y0s = ys - 0.07, y1s = ys + 0.03;
-          D.plainQuad([ex - ux * h0, y0s, ez - uz * h0], [ex + ux * h0, y0s, ez + uz * h0], [ex + ux * h0, y1s, ez + uz * h0], [ex - ux * h0, y1s, ez - uz * h0], C.CONCRETE, sx);
-          D.plainQuad([ex - ux * h0, y1s, ez - uz * h0], [ex + ux * h0, y1s, ez + uz * h0], [cx + ux * h0, y1s, cz + uz * h0], [cx - ux * h0, y1s, cz - uz * h0], C.CONCRETE, sx);
+          D.plainQuad([ex - ux * h0, y0s, ez - uz * h0], [ex + ux * h0, y0s, ez + uz * h0], [cx + ux * h0, y1s, cz + uz * h0], [cx - ux * h0, y1s, cz - uz * h0], C.CONCRETE, sx);
         }
       }
     }
   }
-  // oriented box: centre (cx,cz), along-axis (ux,uz) half length hu, half depth hn, from y0 to y1
-  obox(cx, cz, ux, uz, hu, hn, y0, y1, cell, col, { top = true, s = 3 } = {}) {
+  // oriented box: centre (cx,cz), along-axis (ux,uz) half length hu, half depth hn, from y0 to y1. sides: which of the
+  // four sides to write (0 faces +n, 1 +u, 2 -n, 3 -u; n = (-uz, ux)), default all
+  obox(cx, cz, ux, uz, hu, hn, y0, y1, cell, col, { top = true, s = 3, sides = null } = {}) {
     const nx = -uz, nz = ux, c = (a, b) => [cx + ux * a + nx * b, 0, cz + uz * a + nz * b];
     const P = [c(-hu, hn), c(hu, hn), c(hu, -hn), c(-hu, -hn)];
-    for (let k = 0; k < 4; k++) { const p = P[k], q = P[(k + 1) % 4]; this.plainQuad([p[0], y0, p[2]], [q[0], y0, q[2]], [q[0], y1, q[2]], [p[0], y1, p[2]], cell, col, s); }
-    if (top) this.plainQuad([P[3][0], y1, P[3][2]], [P[2][0], y1, P[2][2]], [P[1][0], y1, P[1][2]], [P[0][0], y1, P[0][2]], cell, col, s);
+    for (let k = 0; k < 4; k++) { if (sides && !sides.includes(k)) continue; const p = P[k], q = P[(k + 1) % 4]; this.plainQuad([p[0], y0, p[2]], [q[0], y0, q[2]], [q[0], y1, q[2]], [p[0], y1, p[2]], cell, col, s); }
+    if (top) this.plainQuad([P[0][0], y1, P[0][2]], [P[1][0], y1, P[1][2]], [P[2][0], y1, P[2][2]], [P[3][0], y1, P[3][2]], cell, col, s); // (counter-clockwise from above: faces up)
   }
   // plain surface with metre-scaled uv (no windows), any orientation
   plainQuad(p0, p1, p2, p3, cell, col, s = 3) {
@@ -616,8 +632,10 @@ export class Builder {
     const D = this.det; D.setFrame(this.fx, this.fy, this.fz, this.yaw); D.seed = this.seed;
     for (const [x0, z0, x1, z1] of edges) {
       const L = Math.hypot(x1 - x0, z1 - z0), ux = (x1 - x0) / L, uz = (z1 - z0) / L, nx = -uz, nz = ux;
-      D.obox((x0 + x1) / 2 + nx * 0.06, (z0 + z1) / 2 + nz * 0.06, ux, uz, L / 2, 0.08, gy - 0.07, gy + 0.07, C.METAL, 0x8a8a84);
-      if (this.fine > 1) { const px = x1 - ux * 0.4 + nx * 0.02, pz = z1 - uz * 0.4 + nz * 0.02; D.obox(px - nx * 0.25, pz - nz * 0.25, ux, uz, 0.05, 0.05, -0.3, gy, C.METAL, 0x7a7a74, { top: false }); }
+      // (n points in under the roof: only the faces seen from outside are written: the gutter's outer face and the
+      // downpipe's, 8 vertices an eave)
+      D.obox((x0 + x1) / 2 + nx * 0.06, (z0 + z1) / 2 + nz * 0.06, ux, uz, L / 2, 0.08, gy - 0.07, gy + 0.07, C.METAL, 0x8a8a84, { top: false, sides: [2] });
+      if (this.fine > 1) { const px = x1 - ux * 0.4 + nx * 0.02, pz = z1 - uz * 0.4 + nz * 0.02; D.obox(px - nx * 0.25, pz - nz * 0.25, ux, uz, 0.05, 0.05, -0.3, gy, C.METAL, 0x7a7a74, { top: false, sides: [2] }); }
     }
   }
   // hip roof (or pyramid when square), with fascia, soffit, hip caps and gutters on all four sides
