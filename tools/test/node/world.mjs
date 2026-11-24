@@ -42,7 +42,7 @@ export function envOf(world) {
     get night() { return world.night || world.W.dark > 0.6; }, groundHeightAtSpawn: world.loc.rwyH,
     ...(world.surfs.length ? { surfRay: (o, d, len) => world.surfRay(o, d, len), surfPoint: (p) => world.surfPoint(p) } : {}),
     waveAmp: world.loc.marina?.waves ?? 0.06,
-    walls: (x, z, r, out) => world.wallBoxes(x, z, r, out), wallPass: (e, p) => !!e.dk && world.destruct.passes(e, p),
+    walls: (x, z, r, out) => world.wallBoxes(x, z, r, out), tunnelWalls: (x, z, r, out) => (world.tunnelWalls ? world.tunnelWalls(x, z, r, out) : ((out.length = 0), out)), // (stand-in worlds have none) wallPass: (e, p) => !!e.dk && world.destruct.passes(e, p),
     onDebrisHit: () => {},
   };
 }

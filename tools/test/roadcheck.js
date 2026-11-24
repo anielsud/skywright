@@ -14,7 +14,7 @@ export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/real
 const PLACES = ['islands', 'canyon', 'lauterbrunnen', 'nyc'];
 const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3;
 
-export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 }))]; }
+export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 }))]; }
 
 // The near-camera ground detail (World.updateDetail) at a few road points: inside, its vertices are the physics ground
 // (sampleGrid) exactly; its edge is the patch's own surface (no seam); rebuilding it stays cheap.
@@ -107,9 +107,26 @@ export function measure(w) {
   return out;
 }
 
-export async function runCase(c) {
+export async function runCase(c, ctx) {
   const { worldAt } = await import('./node/world.mjs');
   const w = (await worldAt(c.loc)).world;
+  if (c.tunnel) { // a car driven into the place's longest tunnel stays on its floor, under the hill or the river, in one piece
+    const THREE = await import('three'), { Aircraft, REALISM } = await import('../../src/aircraft.js'), { envOf } = await import('./node/world.mjs');
+    const env = envOf(w); let best = null;
+    w.net.roads.forEach((r) => { if (!r.tube) return; const a = r.tube.indexOf(true), b = r.tube.lastIndexOf(true); if (a > 3 && (!best || b - a > best.b - best.a)) best = { r, a, b }; });
+    if (!best) return [{ name: `${c.loc}: a car drives through a tunnel`, ok: false, why: 'no tunnel' }];
+    const { r, a } = best, P = r.pts, i0 = a - 5, d = new THREE.Vector3().subVectors(P[i0 + 1], P[i0]).setY(0).normalize();
+    const ac = new Aircraft(ctx.presets.find((x) => x.name === 'Dune Buggy'), REALISM.pilot); ac.spawn(env, new THREE.Vector3(P[i0].x, P[i0].y + 1, P[i0].z), Math.atan2(-d.x, -d.z));
+    let inTube = 0, above = 0, off = 0;
+    for (let k = 0; k < 60 * 20; k++) {
+      let bi = 0, bd = 1e9; for (let i = 0; i < P.length; i++) { const dd = (P[i].x - ac.x.x) ** 2 + (P[i].z - ac.x.z) ** 2; if (dd < bd) { bd = dd; bi = i; } }
+      const t = P[Math.min(P.length - 1, bi + 3)], f = ac.forward, e = Math.atan2(Math.sin(Math.atan2(-(t.x - ac.x.x), -(t.z - ac.x.z)) - Math.atan2(-f.x, -f.z)), Math.cos(Math.atan2(-(t.x - ac.x.x), -(t.z - ac.x.z)) - Math.atan2(-f.x, -f.z)));
+      ac.setControls({ throttle: 0.5, roll: Math.max(-1, Math.min(1, -e * 2)), pitch: 0, yaw: 0, rev: 0, hand: 0 }); ac.step(1 / 60, env);
+      off = Math.max(off, Math.sqrt(bd)); if (r.tube[bi]) { inTube++; above = Math.max(above, ac.x.y - P[bi].y); }
+    }
+    const alive = ac.parts.filter((q) => q.alive).length;
+    return [{ name: `${c.loc}: a car drives through a tunnel on its floor`, ok: inTube > 300 && above < 2.5 && alive === ac.parts.length, why: `${inTube} steps in the tube, at most ${above.toFixed(2)} m over its floor, ${alive}/${ac.parts.length} parts, ${off.toFixed(1)} m off the line` }];
+  }
   if (c.pack) { // the deploy's road pack (roadPack.js) gives back exactly the roads it was made from
     const { encodeRoads, decodeRoads } = await import('../../src/roadPack.js'), roads = w.net.roads, P = decodeRoads(encodeRoads(roads, 'test'));
     let worst = 0, bad = 0;

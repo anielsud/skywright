@@ -15,7 +15,7 @@ import { clamp, smoothstep } from './noise.js';
 export const GRADE = { highway: 0.08, main: 0.1, street: 0.12, lane: 0.14, rail: 0.035, real: 0.2 };
 export const VERGE = 1.5; // gravel verge beside the tarmac (part of the drivable footprint)
 const FILL = 0.6, CUT = 0.9; // embankment / cutting side slopes (rise per metre out)
-const SEG = 9, BLEND = 3; // RoadSurface: floats per segment; metres a major road hands over to a minor one in, at its edge
+const SEG = 9, BLEND = 3, UNDER = 9; // (UNDER: a tunnel's cover, metres: profileRoad) // RoadSurface: floats per segment; metres a major road hands over to a minor one in, at its edge
 
 // Bilinear sampler over a (R+1)^2 core grid (the raw fine heights, before any carving).
 export function gridSampler(w, H, R) {
@@ -197,7 +197,16 @@ export function profileRoad(rd, o) {
   for (let k = 0; k < n; k++) {
     const p = P[idx(k)];
     if (k) { const q = P[idx(k - 1)]; s[k] = s[k - 1] + Math.hypot(p.x - q.x, p.z - q.z); }
-    if (k < n0) { t[k] = o.terr(p.x, p.z); wet[k] = o.wetAt(p.x, p.z, t[k]) ? 1 : 0; } else { t[k] = t[idx(k)]; wet[k] = wet[idx(k)]; }
+    if (k < n0) { t[k] = o.terr(p.x, p.z) - (o.under?.[k] ? UNDER : 0); wet[k] = o.under?.[k] ? 0 : o.wetAt(p.x, p.z, t[k]) ? 1 : 0; } else { t[k] = t[idx(k)]; wet[k] = wet[idx(k)]; } // (o.under: a tunnel's points: follow the ground UNDER metres down)
+  }
+  // a tunnel's points (o.under): straight from one portal to the other, as tunnels are, only dipping where the ground
+  // (a river bed, a valley) is less than UNDER metres over that line: never the hill's bumps far above it (#228)
+  if (o.under) for (let k = 0; k < n0; k++) {
+    if (!o.under[k] || (k > 0 && o.under[k - 1])) continue;
+    let e = k; while (e + 1 < n0 && o.under[e + 1]) e++;
+    const a = Math.max(0, k - 1), b = Math.min(n0 - 1, e + 1), ta = o.under[a] ? t[a] + UNDER : t[a], tb = o.under[b] ? t[b] + UNDER : t[b];
+    for (let q = k; q <= e; q++) t[q] = Math.min(ta + (tb - ta) * (s[q] - s[a]) / Math.max(1, s[b] - s[a]), t[q]);
+    k = e;
   }
   const g = o.g, fx = o.fixed;
   // what the road should hug: the ground with narrow dips (streams, gullies) closed over, to bridge or fill, and narrow
@@ -218,7 +227,7 @@ export function profileRoad(rd, o) {
   // hold decks above water (rivers: above their banks), and every road above the water level
   if (o.wl !== undefined) {
     const W = new Float64Array(n).fill(-Infinity);
-    for (let k = 0; k < n; k++) W[k] = wet[k] ? Math.max(t[k], o.wl) + o.clear : o.wl + 1;
+    for (let k = 0; k < n; k++) W[k] = o.under?.[idx(k)] ? -Infinity : wet[k] ? Math.max(t[k], o.wl) + o.clear : o.wl + 1; // (a tunnel goes under rivers and the sea)
     for (let k = 1; k < n; k++) W[k] = Math.max(W[k], W[k - 1] - g * (s[k] - s[k - 1]));
     for (let k = n - 2; k >= 0; k--) W[k] = Math.max(W[k], W[k + 1] - g * (s[k + 1] - s[k]));
     for (let k = 0; k < n; k++) y[k] = Math.max(y[k], W[k]);
@@ -293,11 +302,12 @@ export function carveGrid(w, roads, H, R, st, bench = 0.75) {
   for (const rd of roads) {
     const hw = rd.width / 2 + VERGE, P = rd.pts;
     for (let i = 0; i < P.length; i++) {
-      if (rd.bridge?.[i]) continue;
+      if (rd.bridge?.[i] || rd.tube?.[i]) continue; // (a bridge's deck, a tunnel's tube: not on the ground)
       const p = P[i], i0 = Math.round((p.x + half) / st), j0 = Math.round((p.z + half) / st);
       // as far out as this point's embankment or cutting reaches: a road at the ground's height needs only its bench
       // (a city's streets: most of them; the 46 m search round every point was ~1 s of New York's load)
-      const g = H[clamp(j0, 0, R) * W + clamp(i0, 0, R)], rl = Math.min(reach, st * bench + Math.abs(p.y - g) / FILL + st), rr = Math.ceil((hw + rl) / st);
+      const nearPortal = rd.tube && (rd.tube[i + 1] || rd.tube[i + 2] || rd.tube[i - 1] || rd.tube[i - 2]); // (the last of a tunnel's cutting: just its bench, or it would cut into the hill over the tube's mouth; the portal's headwall hides the face)
+      const g = H[clamp(j0, 0, R) * W + clamp(i0, 0, R)], rl = nearPortal ? st * bench : Math.min(reach, st * bench + Math.abs(p.y - g) / FILL + st), rr = Math.ceil((hw + rl) / st);
       for (let j = j0 - rr; j <= j0 + rr; j++) for (let ii = i0 - rr; ii <= i0 + rr; ii++) {
         if (ii < 0 || j < 0 || ii > R || j > R) continue;
         const e = Math.hypot(-half + ii * st - p.x, -half + j * st - p.z) - hw, k = j * W + ii;
@@ -323,7 +333,7 @@ function pinUnder(w, roads, H, R, st) {
   for (const rd of roads) { // (one pass, three samples across: the road's edges and middle)
     const P = rd.pts, n = P.length, hw = rd.width / 2 + VERGE;
     for (let i = 0; i < n; i++) {
-      if (rd.bridge?.[i]) continue;
+      if (rd.bridge?.[i] || rd.tube?.[i]) continue;
       const p = P[i], a = P[Math.max(0, i - 1)], b = P[Math.min(n - 1, i + 1)];
       let dx = b.x - a.x, dz = b.z - a.z; const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
       for (const f of [-1, 0, 1]) for (const al of [-2, 2]) {
@@ -356,10 +366,10 @@ export class RoadSurface {
     roads.forEach((rd, ri) => {
       const P = rd.pts, n = P.length, last = rd.closed ? n : n - 1;
       for (let i = 0; i < last; i++, s0++) {
-        const a = P[i], b = P[(i + 1) % n], br = !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % n]);
+        const a = P[i], b = P[(i + 1) % n], tu = !!(rd.tube?.[i] && rd.tube?.[(i + 1) % n]), br = tu || !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % n]); // (a tunnel's tube: a deck underground, flag 8)
         // deck flags: 1 = deck, +2 / +4 = the deck carries on before / after (a joint, round; an abutment end is square)
-        const isD = (k) => !!(rd.bridge?.[(k + n) % n] && rd.bridge?.[(k + 1 + n) % n]) && (rd.closed || (k >= 0 && k < n - 1));
-        const o = s0 * SEG; S[o] = a.x; S[o + 1] = a.z; S[o + 2] = b.x; S[o + 3] = b.z; S[o + 4] = a.y; S[o + 5] = b.y; S[o + 6] = br ? rd.width / 2 + 1 : rd.width / 2 + VERGE; S[o + 7] = br ? 1 + (isD(i - 1) ? 2 : 0) + (isD(i + 1) ? 4 : 0) : 0; S[o + 8] = rd.rank ?? ri;
+        const isD = (k) => !!((rd.bridge?.[(k + n) % n] && rd.bridge?.[(k + 1 + n) % n]) || (rd.tube?.[(k + n) % n] && rd.tube?.[(k + 1 + n) % n])) && (rd.closed || (k >= 0 && k < n - 1));
+        const o = s0 * SEG; S[o] = a.x; S[o + 1] = a.z; S[o + 2] = b.x; S[o + 3] = b.z; S[o + 4] = a.y; S[o + 5] = b.y; S[o + 6] = br ? rd.width / 2 + 1 : rd.width / 2 + VERGE; S[o + 7] = br ? 1 + (isD(i - 1) ? 2 : 0) + (isD(i + 1) ? 4 : 0) + (tu ? 8 : 0) : 0; S[o + 8] = rd.rank ?? ri;
         reach[s0] = br || !ground ? skirt : Math.min(skirt, Math.max(Math.abs(a.y - ground(a.x, a.z)), Math.abs(b.y - ground(b.x, b.z))) / FILL + 4);
       }
     });
@@ -390,9 +400,10 @@ export class RoadSurface {
       const t0 = ((x - ax) * dx + (z - az) * dz) / L2; if (deck && ((t0 < -0.01 && !(f & 2)) || (t0 > 1.01 && !(f & 4)))) continue; // decks end square at their abutments
       const t = clamp(t0, 0, 1), px = ax + dx * t - x, pz = az + dz * t - z;
       const e = Math.sqrt(px * px + pz * pz) - S[o + 6], yy = S[o + 4] + (S[o + 5] - S[o + 4]) * t;
+      if (deck && (f & 8) && !(yy > y - 7)) continue; // (a tunnel's floor: only for what is down in the tunnel, not on the hill above it)
       // decks: the nearest centreline on the same level; a deck a level up (an overpass) wins outright
       if (!deck && e < 0) this.inside(S[o + 8], e, yy, (S[o + 5] - S[o + 4]) * dx / L2, (S[o + 5] - S[o + 4]) * dz / L2);
-      if (deck ? e < 0.5 && yy < y + 2 && (!hit || yy > top + 2.5 || (yy > top - 2.5 && e < best)) : e < best) {
+      if (deck ? e < ((f & 8) ? 1.5 : 0.5) && yy < y + 2 && (!hit || yy > top + 2.5 || (yy > top - 2.5 && e < best)) : e < best) {
         best = e; top = yy; hit = true; this.y = yy; this.e = e; this.gx = (S[o + 5] - S[o + 4]) * dx / L2; this.gz = (S[o + 5] - S[o + 4]) * dz / L2;
       }
     }

@@ -115,7 +115,7 @@ export function gradeReal(w, net) {
   // crossing, which was ~all the steps the road check found in New York)
   const nodeHW = new Map(); for (const rd of net.roads) for (const [, nd] of rd.jn || []) nodeHW.set(nd, Math.max(nodeHW.get(nd) || 0, rd.width / 2));
   const grounded = new Set();
-  for (const rd of net.roads) if (!rd.baked) for (const [j, nd] of rd.jn || []) if (!rd.bridge?.[j] || j === 0 || j === rd.pts.length - 1) grounded.add(nd);
+  for (const rd of net.roads) if (!rd.baked) for (const [j, nd] of rd.jn || []) if ((!rd.bridge?.[j] && !rd.tunnel) || j === 0 || j === rd.pts.length - 1) grounded.add(nd); // (not out on a bridge, nor inside a tunnel; its ends, the portals, are on the ground)
   for (const rd of net.roads) if (!rd.baked) for (const [j, nd] of rd.jn || []) if (grounded.has(nd) && !nodeY.has(nd)) { const p = rd.pts[j]; nodeY.set(nd, Math.max(wl + 0.6, (terr(p.x, p.z) * 2 + terr(p.x + 9, p.z) + terr(p.x - 9, p.z) + terr(p.x, p.z + 9) + terr(p.x, p.z - 9)) / 6)); }
   for (const rd of chains(net.roads.filter((r) => !r.baked))) { // (longest first)
     const fixed = rd.bridge && rd.bridge.some(Boolean) ? rd.bridge.slice() : null, pins = [], P = rd.pts, n = P.length;
@@ -160,11 +160,17 @@ export function gradeReal(w, net) {
         if (t >= 0 && t <= 1 && u >= 0 && u <= 1) pins.push({ s: S[i] + t * L, y: r.y + (q.y - r.y) * u });
       });
     }
-    profileRoad(rd, { g: GRADE.real, terr, wetAt: () => false, wl, clear: 0, smooth: 2, bridges: false, fixed, pins });
+    const under = rd.members.some((m) => m.rd.tunnel) ? Uint8Array.from(P, (p, i) => (rd.members.some((m) => m.rd.tunnel && i >= m.start && i < m.start + m.rd.pts.length) ? 1 : 0)) : null; // (a tunnel's points: under the ground)
+    profileRoad(rd, { g: GRADE.real, terr, wetAt: () => false, wl, clear: 0, smooth: 2, bridges: false, fixed, pins, under });
     for (const m of rd.members) {
       const q = m.rd, k = q.pts.length, at = (j) => m.start + (m.rev ? k - 1 - j : j);
       for (let j = 0; j < k; j++) q.pts[j].y = P[at(j)].y;
       q.terr = Float32Array.from(q.pts, (p, j) => rd.terr[at(j)]); q.wet = Uint8Array.from(q.pts, (p, j) => rd.wet[at(j)]); q.bridge = q.pts.map((p, j) => rd.bridge[at(j)]);
+      if (q.tunnel) { // where the tunnel is a tube: 8 m of ground over it (less: an open cutting, carved), or below the water; one tube from the first such point to the last (no portals inside it)
+        const o = q.width / 2 + 3, tb = q.pts.map((p, i) => { const a = q.pts[Math.max(0, i - 1)], b = q.pts[Math.min(q.pts.length - 1, i + 1)], l = Math.hypot(b.x - a.x, b.z - a.z) || 1, rx = -(b.z - a.z) / l * o, rz = (b.x - a.x) / l * o;
+          return Math.min(terr(p.x, p.z), terr(p.x + rx, p.z + rz), terr(p.x - rx, p.z - rz)) - p.y > 8 || p.y < wl - 0.3; }), a = tb.indexOf(true), b = tb.lastIndexOf(true); // (the ground clears the tube either side too: no hillside inside the opening)
+        q.tube = tb.map((_, i) => a >= 0 && i >= a && i <= b);
+      }
       addI(q); setNodes(q);
     }
   }
@@ -208,7 +214,7 @@ export function makePainter(w, net) {
     const R = Math.max(f.sx, f.sz) * 1.5;
     for (let gx = Math.floor((f.x - R) / cell); gx <= Math.floor((f.x + R) / cell); gx++) for (let gz = Math.floor((f.z - R) / cell); gz <= Math.floor((f.z + R) / cell); gz++) add(gx + ',' + gz, { f });
   }
-  for (const rd of [...net.roads, ...(net.rail ? [net.rail] : [])]) rd.pts.forEach((p, i) => { if (i % 2 === 0 && !rd.bridge?.[i]) add(Math.floor(p.x / cell) + ',' + Math.floor(p.z / cell), { p, w: rd.width, rail: rd === net.rail }); });
+  for (const rd of [...net.roads, ...(net.rail ? [net.rail] : [])]) rd.pts.forEach((p, i) => { if (i % 2 === 0 && !rd.bridge?.[i] && !rd.tube?.[i]) add(Math.floor(p.x / cell) + ',' + Math.floor(p.z / cell), { p, w: rd.width, rail: rd === net.rail }); });
   const tmp = new THREE.Color();
   return (x, z, c) => {
     const items = grid.get(Math.floor(x / cell) + ',' + Math.floor(z / cell)); if (!items) return;
@@ -303,7 +309,7 @@ export function buildRoadMeshes(w, net) {
     const P = rd.pts, n = P.length, hw = rd.width / 2 + VERGE, rows = [0, 1.5, 4, 8, 13, 20, 30, 42, 60].filter((o) => o < SW).concat([SW]);
     const need = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
-      if (rd.bridge?.[i]) continue;
+      if (rd.bridge?.[i] || rd.tube?.[i]) continue;
       const p = P[i], [, rt] = frame(P, i, rd.closed);
       for (const s of [-1, 1]) for (const o of rows) { const x = p.x + rt.x * (hw + o) * s, z = p.z + rt.z * (hw + o) * s; if (Math.abs(w.sampleGrid(x, z) - meshH(x, z)) > SKIRT_MIN) { need[i] = 1; break; } }
     }
@@ -320,12 +326,12 @@ export function buildRoadMeshes(w, net) {
   const J = net.roads.some((r) => r.jn) ? junctionsFromNodes(net.roads, region, city) : findJunctions(net.roads, region, city);
   const roadMesh = (rd, k) => {
     const hw = rd.width / 2, info = [hw, roadStyle(region, rd, city), (k * 7.31) % 97], jp = junctionPoints(rd, J[k]);
-    if (!w.loc.city || rd.kind === 'highway') strip(jp, [-hw - VERGE, -hw, hw, hw + VERGE], (i) => jp.pts[i].y, (i) => !isBr(jp, i), shoulder, (c, d, o) => [o, d], 1, info, jp.rjunc);
+    if (!w.loc.city || rd.kind === 'highway') strip(jp, [-hw - VERGE, -hw, hw, hw + VERGE], (i) => jp.pts[i].y, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]), shoulder, (c, d, o) => [o, d], 1, info, jp.rjunc);
     // a city street's pavements: the kerb's face (15 cm up from the gutter) and the slabs out to the building line
     if (sidewalk && rd.kind !== 'highway' && !rd.baked) {
       const W = rd.kind === 'main' ? 4.5 : 3.5, up = (i, x, z, o, c) => jp.pts[i].y + (c === 0 ? 0.02 : 0.17), up2 = (i, x, z, o, c) => jp.pts[i].y + (c === 3 ? 0.02 : 0.17);
-      strip(jp, [hw, hw, hw + 0.35, hw + W], up, (i) => !isBr(jp, i), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
-      strip(jp, [-hw - W, -hw - 0.35, -hw, -hw], up2, (i) => !isBr(jp, i), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, [hw, hw, hw + 0.35, hw + W], up, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, [-hw - W, -hw - 0.35, -hw, -hw], up2, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
     }
     strip(jp, [-hw, hw], (i) => jp.pts[i].y + 0.02, () => true, tarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
     skirts(rd);
@@ -390,12 +396,41 @@ export function buildRoadMeshes(w, net) {
     pm.castShadow = w.qName === 'high' || w.qName === 'ultra'; pm.computeBoundingSphere(); group.add(pm); t.meshes.push(pm);
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3)); const pt = new THREE.Points(lg, lampMat); group.add(pt); t.meshes.push(pt);
   };
+  // tunnels: the tube (walls and a vault over the road, lined; a strip of lights along its crown) where there's
+  // ground or water over it, and a concrete portal (a headwall round the opening) where it goes in
+  const tubeMat = new THREE.MeshStandardMaterial({ color: 0x6e6c66, emissive: 0x2a2924, roughness: 0.9, side: THREE.DoubleSide }); // (lined; lit from within: the light strip)
+  const tubeLight = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 1.9, 1.3), toneMapped: false });
+  let tubeGeos = [], lightGeos = [];
+  const tubeMesh = (rd) => {
+    if (!rd.tube?.some(Boolean)) return;
+    const P = rd.pts, n = P.length, hw = rd.width / 2 + 1.2, H = 5.6, pos = [], lit = [];
+    const quad = (A, a, b, c, d) => A.push(...a, ...b, ...c, ...a, ...c, ...d);
+    const at = (p, r, o, dy) => [p.x + r.x * o, p.y + dy, p.z + r.z * o];
+    for (let i = 0; i + 1 < n; i++) {
+      if (!(rd.tube[i] && rd.tube[i + 1])) continue;
+      const A = P[i], B = P[i + 1], [, ra] = frame(P, i, false), [, rb] = frame(P, i + 1, false);
+      for (const sd of [-1, 1]) { quad(pos, at(A, ra, hw * sd, -0.3), at(B, rb, hw * sd, -0.3), at(B, rb, hw * sd, H * 0.8), at(A, ra, hw * sd, H * 0.8)); quad(pos, at(A, ra, hw * sd, H * 0.8), at(B, rb, hw * sd, H * 0.8), at(B, rb, hw * 0.55 * sd, H), at(A, ra, hw * 0.55 * sd, H)); }
+      quad(pos, at(A, ra, -hw * 0.55, H), at(B, rb, -hw * 0.55, H), at(B, rb, hw * 0.55, H), at(A, ra, hw * 0.55, H));
+      quad(lit, at(A, ra, -0.25, H - 0.05), at(A, ra, 0.25, H - 0.05), at(B, rb, 0.25, H - 0.05), at(B, rb, -0.25, H - 0.05));
+      // the portals: where the tube begins or ends, a headwall facing out with the opening in it
+      for (const [p, r, out] of [[A, ra, i === 0 || !rd.tube[i - 1]], [B, rb, i + 2 >= n || !rd.tube[i + 2]]]) {
+        if (!out) continue;
+        const W = hw + 5, top = H + 6, t = 0.7, d = new THREE.Vector3(-r.z, 0, r.x), wall = (o0, o1, y0, y1) => { const g = new THREE.BoxGeometry(o1 - o0, y1 - y0, t); g.rotateY(Math.atan2(r.x, r.z) + Math.PI / 2); g.translate(p.x + r.x * (o0 + o1) / 2, p.y + (y0 + y1) / 2, p.z + r.z * (o0 + o1) / 2); tubeGeos.push(g); };
+        wall(-W, -hw, -1, top); wall(hw, W, -1, top); wall(-hw, hw, H, top); void d;
+      }
+    }
+    if (pos.length) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.computeVertexNormals(); tubeGeos.push(g); }
+    if (lit.length) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(lit, 3)); lightGeos.push(g); }
+  };
   // building a tile: its roads' ribbons, shoulders, skirts and bridges, merged per material
   const D = ROAD_D[w.qName] ?? 10000, warm = new Set([tarmac, shoulder, skirtMat, concrete, poleMat, ...(sidewalk ? [sidewalk] : [])]);
   const buildTile = (t) => {
     pending = new Map(); bridgeGeos = [];
     const lamps = [], poles = [];
-    for (const k of t.roads) { roadMesh(net.roads[k], k); bridgeMesh(net.roads[k]); lampsFor(net.roads[k], lamps, poles); }
+    tubeGeos = []; lightGeos = [];
+    for (const k of t.roads) { roadMesh(net.roads[k], k); bridgeMesh(net.roads[k]); tubeMesh(net.roads[k]); if (!net.roads[k].tunnel) lampsFor(net.roads[k], lamps, poles); }
+    if (tubeGeos.length) { const m = new THREE.Mesh(mergeAll(tubeGeos), tubeMat); m.receiveShadow = true; group.add(m); t.meshes.push(m); }
+    if (lightGeos.length) { const m = new THREE.Mesh(mergeAll(lightGeos), tubeLight); group.add(m); t.meshes.push(m); }
     lampMeshes(lamps, poles, t);
     for (const [material, geos] of pending) { const m = new THREE.Mesh(mergeGeometries(geos), material); m.receiveShadow = true; group.add(m); t.meshes.push(m); }
     if (bridgeGeos.length) { const m = new THREE.Mesh(mergeAll(bridgeGeos), concrete); m.castShadow = m.receiveShadow = true; group.add(m); t.meshes.push(m); }
@@ -586,11 +621,11 @@ export function findJunctions(roads, region, city) {
 export function junctionPoints(rd, J) {
   const P = rd.pts, n = P.length, S = new Float64Array(n); for (let i = 1; i < n; i++) S[i] = S[i - 1] + P[i].distanceTo(P[i - 1]);
   const code = (j) => Math.round(j.r * 4) * 32 + (j.stop ? 1 : 0) + (j.walk ? 2 : 0) + (j.side >= 0 ? 4 : 0) + (j.side <= 0 ? 8 : 0);
-  const pts = [], ss = [], br = [];
+  const pts = [], ss = [], br = [], tb = [];
   let k = 0;
   for (let i = 0; i < n; i++) {
-    if (i > 0) while (k < J.length && J[k].s < S[i] - 0.02) { const j = J[k++]; if (j.s <= S[i - 1] + 0.02) continue; const t = (j.s - S[i - 1]) / (S[i] - S[i - 1]); for (const e of [-0.01, 0.01]) { const tt = t + e / (S[i] - S[i - 1]); pts.push(P[i - 1].clone().lerp(P[i], tt)); ss.push(j.s + e); br.push(!!(rd.bridge?.[i - 1] && rd.bridge?.[i])); } }
-    pts.push(P[i]); ss.push(S[i]); br.push(!!rd.bridge?.[i]);
+    if (i > 0) while (k < J.length && J[k].s < S[i] - 0.02) { const j = J[k++]; if (j.s <= S[i - 1] + 0.02) continue; const t = (j.s - S[i - 1]) / (S[i] - S[i - 1]); for (const e of [-0.01, 0.01]) { const tt = t + e / (S[i - 1] - S[i - 1] + (S[i] - S[i - 1])); pts.push(P[i - 1].clone().lerp(P[i], tt)); ss.push(j.s + e); br.push(!!(rd.bridge?.[i - 1] && rd.bridge?.[i])); tb.push(!!(rd.tube?.[i - 1] && rd.tube?.[i])); } }
+    pts.push(P[i]); ss.push(S[i]); br.push(!!rd.bridge?.[i]); tb.push(!!rd.tube?.[i]);
   }
   const rj = [];
   for (const s of ss) {
@@ -598,7 +633,7 @@ export function junctionPoints(rd, J) {
     const prev = J[a], next = J[a + 1];
     rj.push(prev ? s - prev.s : 1e4, next ? next.s - s : 1e4, prev ? code(prev) : 0, next ? code(next) : 0);
   }
-  return { pts, bridge: br, rjunc: rj, closed: rd.closed };
+  return { pts, bridge: br, tube: tb, rjunc: rj, closed: rd.closed };
 }
 
 // Junctions from the real topology (roads.bin: rd.jn, the node at each junction point): a node where three or more

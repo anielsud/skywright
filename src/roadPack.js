@@ -7,14 +7,14 @@
 //
 // Layout (little-endian): uint32 header length, JSON header { key, v, roads, points, jn }, padded to 4 bytes; then
 //   per point: x, y, z as centimetre steps from the road's previous point int16 (its first point: per road, float32);
-//     flags uint8 (1 bridge, 2 span: a suspended span, no piers)
+//     flags uint8 (1 bridge, 2 span: a suspended span, no piers, 4 a tunnel's tube)
 //   per road: first point x, y, z float32
 //   per road: start, count uint32; jnStart, jnCount uint32; kind, cls, width x 4, flags (1 real, 2 baked, 4 gate,
-//     8 roundabout, 16 one-way along, 32 one-way against), lanes uint8; layer int8; rank float32; gate h, x, z float32
+//     8 roundabout, 16 one-way along, 32 one-way against, 64 tunnel), lanes uint8; layer int8; rank float32; gate h, x, z float32
 //   jn: point index (within its road) uint32, node int32
 import * as THREE from 'three';
 
-export const PACK_V = 2; // bump with any change to how roads are built or graded: older packs are then ignored
+export const PACK_V = 3; // bump with any change to how roads are built or graded: older packs are then ignored
 const KINDS = ['highway', 'main', 'street', 'rail'];
 
 export function encodeRoads(roads, key) {
@@ -35,11 +35,11 @@ export function encodeRoads(roads, key) {
     for (let i = 0; i < rd.pts.length; i++, p++) {
       const q = rd.pts[i], cx = Math.round((q.x - f0.x) * 100), cy = Math.round((q.y - f0.y) * 100), cz = Math.round((q.z - f0.z) * 100);
       const dx = cx - px, dy = cy - py, dz = cz - pz; if (Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz)) > 32767) throw new Error(`roadPack: a step over 327 m on road ${k}`);
-      dq[p * 3] = dx; dq[p * 3 + 1] = dy; dq[p * 3 + 2] = dz; px = cx; py = cy; pz = cz; pf[p] = (rd.bridge?.[i] ? 1 : 0) | (rd.span?.[i] ? 2 : 0);
+      dq[p * 3] = dx; dq[p * 3 + 1] = dy; dq[p * 3 + 2] = dz; px = cx; py = cy; pz = cz; pf[p] = (rd.bridge?.[i] ? 1 : 0) | (rd.span?.[i] ? 2 : 0) | (rd.tube?.[i] ? 4 : 0);
     }
     for (const [i, nd] of rd.jn || []) { jj[j * 2] = i; jj[j * 2 + 1] = nd; j++; }
     ri[k * 6] = Math.max(0, KINDS.indexOf(rd.kind)); ri[k * 6 + 1] = rd.cls ?? 2; ri[k * 6 + 2] = Math.min(255, Math.round(rd.width * 4));
-    ri[k * 6 + 3] = (rd.real ? 1 : 0) | (rd.baked ? 2 : 0) | (rd.gate ? 4 : 0) | (rd.roundabout ? 8 : 0) | (rd.oneway > 0 ? 16 : 0) | (rd.oneway < 0 ? 32 : 0);
+    ri[k * 6 + 3] = (rd.real ? 1 : 0) | (rd.baked ? 2 : 0) | (rd.gate ? 4 : 0) | (rd.roundabout ? 8 : 0) | (rd.oneway > 0 ? 16 : 0) | (rd.oneway < 0 ? 32 : 0) | (rd.tunnel ? 64 : 0);
     ri[k * 6 + 4] = rd.lanes || 0; ri[k * 6 + 5] = ((rd.layer || 0) + 256) % 256;
     rf[k * 4] = rd.rank ?? k; rf[k * 4 + 1] = rd.gate?.h ?? 0; rf[k * 4 + 2] = rd.gate?.x ?? 0; rf[k * 4 + 3] = rd.gate?.z ?? 0;
   });
@@ -55,12 +55,13 @@ export function decodeRoads(buf) {
   const roads = new Array(R);
   for (let k = 0; k < R; k++) {
     const s = rs[k * 4], n = rs[k * 4 + 1], js = rs[k * 4 + 2], jn = rs[k * 4 + 3], f = ri[k * 6 + 3];
-    const pts = new Array(n), bridge = new Array(n); let span = null;
+    const pts = new Array(n), bridge = new Array(n); let span = null, tube = null;
     let cx = 0, cy = 0, cz = 0; const fx = p0[k * 3], fy = p0[k * 3 + 1], fz = p0[k * 3 + 2];
-    for (let i = 0; i < n; i++) { const q = s + i; cx += dq[q * 3]; cy += dq[q * 3 + 1]; cz += dq[q * 3 + 2]; pts[i] = new THREE.Vector3(fx + cx / 100, fy + cy / 100, fz + cz / 100); bridge[i] = !!(pf[q] & 1); if (pf[q] & 2) (span ??= new Array(n).fill(false))[i] = true; }
+    for (let i = 0; i < n; i++) { const q = s + i; cx += dq[q * 3]; cy += dq[q * 3 + 1]; cz += dq[q * 3 + 2]; pts[i] = new THREE.Vector3(fx + cx / 100, fy + cy / 100, fz + cz / 100); bridge[i] = !!(pf[q] & 1); if (pf[q] & 2) (span ??= new Array(n).fill(false))[i] = true; if (pf[q] & 4) (tube ??= new Array(n).fill(false))[i] = true; }
     const rd = { pts, bridge, kind: KINDS[ri[k * 6]], cls: ri[k * 6 + 1], width: ri[k * 6 + 2] / 4, real: !!(f & 1), oneway: f & 16 ? 1 : f & 32 ? -1 : 0, roundabout: !!(f & 8), lanes: ri[k * 6 + 4], layer: ri[k * 6 + 5] > 127 ? ri[k * 6 + 5] - 256 : ri[k * 6 + 5], rank: rf[k * 4], jn: [] };
     if (f & 2) { rd.baked = true; rd.span = span || new Array(n).fill(false); }
     if (f & 4) rd.gate = { h: rf[k * 4 + 1], x: rf[k * 4 + 2], z: rf[k * 4 + 3] };
+    if (f & 64) { rd.tunnel = true; rd.tube = tube || new Array(n).fill(false); }
     for (let q = js; q < js + jn; q++) rd.jn.push([jj[q * 2], jj[q * 2 + 1]]);
     roads[k] = rd;
   }

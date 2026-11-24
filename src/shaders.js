@@ -122,6 +122,9 @@ export function installFog() {
 // the patch's own material only); patch='detail': the ground-detail mesh itself (World.updateDetail), lit by its own
 // normals (the baked normal map is the grid's: it has no embankments); otherwise the coarse core mesh, which skips
 // the patch area.
+// the tunnels' tubes near the camera (World.update fills these): the ground doesn't draw inside them, so where the
+// terrain mesh's coarse triangles dip into a tube near its portal the tube is seen, not grass (#228)
+export const TUBES = { tubeN: { value: 0 }, tubeA: { value: Array.from({ length: 24 }, () => new THREE.Vector4()) }, tubeB: { value: Array.from({ length: 24 }, () => new THREE.Vector4()) } };
 export function terrainMaterial(maps, patch = false) {
   const detail = patch === 'detail';
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.93, metalness: 0 });
@@ -134,12 +137,12 @@ export function terrainMaterial(maps, patch = false) {
   // units with Ultra's extra shadow maps. Elsewhere the baked rivers/lakes map is one more sampler (see world.js).
   mat.defines = real ? { TERRAIN_NO_SAND: '' } : { TERRAIN_LAND: '' };
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, FOG, U);
+    Object.assign(sh.uniforms, FOG, TUBES, U);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vTW; varying vec3 vWN;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTW = (modelMatrix * vec4(transformed, 1.0)).xyz; vWN = normalize(mat3(modelMatrix) * objectNormal);');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
       varying vec3 vTW; varying vec3 vWN; uniform sampler2D albedoTex; uniform sampler2D normTex; uniform sampler2D shadowTex;
-      uniform vec2 tOrig; uniform float tSpan; uniform vec2 sOrig; uniform float sSpan; uniform float shadowOn; uniform vec4 patchRect; uniform vec4 detailRect;
+      uniform vec2 tOrig; uniform float tSpan; uniform vec2 sOrig; uniform float sSpan; uniform float shadowOn; uniform vec4 patchRect; uniform vec4 detailRect; uniform int tubeN; uniform vec4 tubeA[24]; uniform vec4 tubeB[24];
       #ifdef TERRAIN_LAND
       uniform sampler2D landTex; uniform float landOn; uniform float landDry; uniform vec2 landOrig; uniform float landSpan; uniform vec3 waterTint; uniform float uTime;
       #endif
@@ -147,6 +150,8 @@ export function terrainMaterial(maps, patch = false) {
       ${real ? REAL_SAT_GLSL : ''}
       ${(!real && maps.detailU?.glsl) || 'vec3 fieldShade(vec2 p, float farm, vec3 base, float dist, out float isField) { isField = 0.0; return base; }'}`)
       .replace('#include <map_fragment>', `
+        for (int i = 0; i < 24; i++) { if (i >= tubeN) break; vec3 a = tubeA[i].xyz, b = tubeB[i].xyz; vec2 ab = b.xz - a.xz; float tt = clamp(dot(vTW.xz - a.xz, ab) / max(dot(ab, ab), 1e-3), 0.0, 1.0); float fy = mix(a.y, b.y, tt);
+          if (length(vTW.xz - a.xz - ab * tt) < tubeA[i].w && vTW.y > fy - 0.6 && vTW.y < fy + 5.9) discard; } // (inside a tunnel's tube)
         ${detail ? '' : patch ? 'if (vTW.x > detailRect.x && vTW.x < detailRect.z && vTW.z > detailRect.y && vTW.z < detailRect.w) discard;' : 'if (vTW.x > patchRect.x && vTW.x < patchRect.z && vTW.z > patchRect.y && vTW.z < patchRect.w) discard;'}
         vec2 tuv = (vTW.xz - tOrig) / tSpan; // texel centres sit exactly on the bake grid points
         vec4 alb = texture2D(albedoTex, tuv);
