@@ -423,7 +423,7 @@ export function buildRoadMeshes(w, net) {
     if (lit.length) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(lit, 3)); lightGeos.push(g); }
   };
   // building a tile: its roads' ribbons, shoulders, skirts and bridges, merged per material
-  const D = ROAD_D[w.qName] ?? 10000, warm = new Set([tarmac, shoulder, skirtMat, concrete, poleMat, ...(sidewalk ? [sidewalk] : [])]);
+  const D = ROAD_D[w.qName] ?? 10000, warm = new Set([tarmac, shoulder, skirtMat, concrete, poleMat, tubeMat, tubeLight, ...(sidewalk ? [sidewalk] : [])]);
   const buildTile = (t) => {
     pending = new Map(); bridgeGeos = [];
     const lamps = [], poles = [];
