@@ -2,6 +2,12 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.163.0', items: [
+    "A road now leads from the airport out to the other roads, so you can drive from the terminal into the countryside.",
+  ] },
+  { v: '1.163.0', items: [
+    "A road now leads from the airport out to the other roads, so you can drive from the terminal into the countryside.",
+  ] },
   { v: '1.162.0', items: [
     "The grass around the runways is freshly mown now, with stripes you can see from the air.",
     "A fence runs all the way round the airport, and a road leads out through its gate.",
