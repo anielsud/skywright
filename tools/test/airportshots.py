@@ -36,6 +36,9 @@ VIEWS = {
   'front': ((215, 4, 120), (300, 8, 120)),            # square on to the terminal (compare with the reference photo)
   'apron': ((165, 7, -45), (205, 1, -90)),            # stands with their ground equipment
   'carpark': ((395, 10, 40), (360, 0, 85)),           # the landside car park
+  'hangars': ((225, 7, -10), (290, 7, -90)),          # the maintenance hangars from the apron
+  'fire': ((175, 6, 195), (192, 5, 236)),             # the fire station
+  'tower': ((215, 22, 190), (256, 26, 218)),          # the control tower
 }
 async def main():
     port = free_port(); srv = start_server(port)

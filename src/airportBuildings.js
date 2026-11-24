@@ -13,7 +13,7 @@ import { Builder, C } from './buildings.js';
 // floor band, a continuous tinted curtain wall with mullions and transoms, a thin white roof slab cantilevered past the
 // glass with the name on its fascia, and solid white gate cores standing out every 38 m, each with a parked jet bridge.
 export const TERMINAL = { x: 315, z: 120, len: 120, depth: 34, gf: 4.6, band: 1.2, cw: 7.6, slab: 1.6, over: 3, cant: 6, cores: [-38, 0, 38] };
-export const TOWER = { x: 256, z: 218, shaft: 26, cab: 3.7 };
+export const TOWER = { x: 256, z: 218, shaft: 20, service: 6.4, cab: 3.8 }; // (after Bern-Belp's tower: Wikimedia Commons)
 export const RADAR = { x: 430, z: -140, h: 12 };
 const F = -Math.PI / 2; // frame yaw for buildings facing the apron (local +z = world -x)
 
@@ -103,19 +103,36 @@ export function buildTerminalArea(A, y) {
   A.setFrame(W.x - 1, y, W.z, F); A.seed = 3;
   A.walls(16, 10, -0.5, 7.4, C.APT, 0xe4e0d8, { front: C.GLASS, door: C.DOOR, fl: 3.7 }); A.flat(16, 10, 7, 0.5, C.GRAVEL, 0xffffff, C.PLAIN, 0xe4e0d8);
   A.setFrame(0, y, 0, 0); A.seed = 5;
-  const c0 = W.shaft, c1 = c0 + 1.1, c2 = c1 + W.cab;
-  A.cyl(W.x, W.z, -0.5, c0, 3.4, 2.5, 8, C.CONCRETE, 0xe8e4dc);
-  for (let k = 0; k < 8; k += 2) { const a = (k / 8) * Math.PI * 2 + Math.PI / 8; A.box(W.x + Math.sin(a) * 2.9, 4, W.z + Math.cos(a) * 2.9, 0.5, c0 - 6, 0.5, C.GLASS, 0xffffff); } // stair windows
-  A.cyl(W.x, W.z, c0, c1, 2.5, 5.0, 8, C.CONCRETE, 0xd8d4cc); // the flare under the cab
-  A.cyl(W.x, W.z, c1 - 0.08, c1 + 0.06, 6.0, 6.0, 8, C.CONCRETE, 0xb8b4ac, { cap: true }); // catwalk
-  A.cyl(W.x, W.z, c1 + 0.06, c1 + 1.1, 6.0, 6.0, 16, C.RAIL_IRON, 0xd8d8d8); // its railing
-  A.cyl(W.x, W.z, c1, c2, 4.5, 5.4, 8, C.GLASS, 0xffffff); // cab glass, leaning out
-  A.cyl(W.x, W.z, c2, c2 + 0.9, 6.2, 6.0, 8, C.CONCRETE, 0x3a3c40, { cap: true, capCell: C.GRAVEL, capCol: 0x8a8c90 }); // roof
-  A.cyl(W.x, W.z, c2 + 0.9, c2 + 1.8, 2.2, 2.2, 8, C.METAL, 0xb0b4b8, { cap: true }); // plant on the roof
-  A.box(W.x, c2 + 1.8, W.z, 0.22, 6, 0.22, C.METAL, 0xdddddd); // antenna mast
-  for (const [dx, dz, h] of [[1.6, 0.4, 3], [-1.4, -0.9, 2.2]]) A.box(W.x + dx, c2 + 1.8, W.z + dz, 0.08, h, 0.08, C.METAL, 0xdddddd); // whips
-  A.box(W.x - 1.6, c2 + 2.2, W.z + 1, 0.9, 0.9, 0.25, C.PLAIN, 0xeeeeee); // dish
-  const beacon = new THREE.Vector3(W.x, y + c2 + 8.2, W.z);
+  const s0 = W.shaft, s1 = s0 + W.service, c1 = s1 + 0.25, c2 = c1 + W.cab, TW = 0xf0eee8;
+  // the shaft, a full-height glazed stair slot facing the apron
+  A.cyl(W.x, W.z, -0.5, s0, 2.9, 2.8, 16, C.CONCRETE, TW);
+  A.box(W.x - 2.78, 2.5, W.z, 0.14, s0 - 3, 1.4, C.GLASS, 0x5a7a86);
+  // two service floors, wider than the shaft, a window band round each, a cornice
+  A.cyl(W.x, W.z, s0 - 0.8, s0, 2.4, 5.0, 8, C.CONCRETE, TW); // (the corbel out to them)
+  A.cyl(W.x, W.z, s0, s1, 5.0, 5.0, 8, C.APT, TW); // (octagonal, nearly as wide as the cab)
+  A.cyl(W.x, W.z, s1, s1 + 0.25, 5.3, 5.3, 8, C.CONCRETE, 0xd8d6d0, { cap: true });
+  // catwalk round the cab, its railing
+  A.cyl(W.x, W.z, c1 - 0.05, c1 + 0.08, 5.9, 5.9, 16, C.CONCRETE, 0xb8b4ac, { cap: true });
+  A.cyl(W.x, W.z, c1 + 0.08, c1 + 1.1, 5.9, 5.9, 24, C.RAIL_IRON, 0xd8d8d8);
+  // the cab: dark tinted glass leaning out, twelve mullions following the lean
+  const N = 12, r0 = 4.2, r1 = 5.3;
+  A.cyl(W.x, W.z, c1, c2, r0, r1, N, C.PLAIN, 0x1c252c); // (dark tinted: cabs are kept dark, day and night, so the controllers can see out)
+  for (let k = 0; k < N; k++) {
+    const a = (k / N) * Math.PI * 2, sx = Math.sin(a), cz = Math.cos(a), tx = Math.cos(a) * 0.07, tz = -Math.sin(a) * 0.07, P = (r, yy, d) => [W.x + sx * (r + 0.03) + tx * d, yy, W.z + cz * (r + 0.03) + tz * d];
+    A.quad(P(r0, c1, -1), P(r0, c1, 1), P(r1, c2, 1), P(r1, c2, -1), [0, 0, 1, 0, 1, 1, 0, 1], C.PLAIN, 0xe8e8e4);
+  }
+  A.cyl(W.x, W.z, c1, c1 + 0.9, r0 + 0.02, r0 + 0.26, N, C.PLAIN, 0x30353a); // sill band
+  // roof: a dark overhanging lid, plant on top
+  A.cyl(W.x, W.z, c2, c2 + 1.1, 6.0, 6.0, N, C.PLAIN, 0xf0eee8, { cap: true, capCell: C.GRAVEL, capCol: 0x8a8c90 }); // thick white lid
+  A.cyl(W.x, W.z, c2 - 0.02, c2, r1, 6.0, N, C.PLAIN, 0xd8d8d4); // its underside
+  A.cyl(W.x, W.z, c2 + 1.1, c2 + 2.0, 2.0, 2.0, 8, C.METAL, 0xb0b4b8, { cap: true });
+  // lattice antenna mast with cross-arms, whips
+  const m0 = c2 + 2.0, mh = 8;
+  A.box(W.x, m0, W.z, 0.55, mh, 0.55, C.RAIL_IRON, 0xdedede);
+  for (const [hgt, len] of [[mh - 1.2, 3.2], [mh - 3.4, 2.2]]) { A.box(W.x, m0 + hgt, W.z, len, 0.12, 0.12, C.PLAIN, 0xdedede); A.box(W.x, m0 + hgt, W.z, 0.12, 0.12, len, C.PLAIN, 0xdedede); }
+  for (const [dx, dz, h] of [[1.5, 0, 2.2], [-1.5, 0, 2.2], [0, 1.5, 1.6], [0, -1.5, 1.6]]) A.box(W.x + dx, m0 + mh - 1.2, W.z + dz, 0.05, h, 0.05, C.PLAIN, 0xdedede);
+  const c2b = m0 + mh - 7.6; // (the beacon sits on the mast's top)
+  const beacon = new THREE.Vector3(W.x, y + c2b + 8.2, W.z);
 
   // ---- surveillance radar: a lattice tower by the cargo shed, the antenna turning on top ----
   const R = RADAR;
@@ -135,4 +152,90 @@ export function buildTerminalArea(A, y) {
   const radar = new THREE.Mesh(B.toGeometry()); radar.position.set(R.x, y + R.h + 0.35, R.z); radar.castShadow = true; radar.name = 'airport radar';
 
   return { signs, radar, beacon, nameBoard: { x: T.x - hd - T.over - 0.06, y: y + yS + T.slab / 2 + 0.3, z: T.z + 26, w: 36, h: 1.5, flush: true } };
+}
+
+// ---- hangars, cargo shed, fire station ----
+// Proportioned from photos (Wikimedia Commons): the maintenance hangars after Lufthansa Technik Stuttgart and the
+// Tegel hangar doors (a shallow arched roof over a deep header, six-leaf sliding doors with a panel grid and a row of
+// small windows, door pockets either side, an office annex behind); the T-hangar row after Caernarfon's GA hangars;
+// the fire station after Edinburgh Airport's (a long low block of red-framed bays, a training tower).
+export const HANGARS = [{ x: 300, z: -120, col: 0xd0d6da }, { x: 300, z: -40, col: 0xb8c8d4 }];
+export const FIRE = { x: 190, z: 236 };
+
+export function buildHangars(A, y) {
+  const DOOR = 0xc8cdd0, FRAME = 0x3a4046, DARK = 0x16181a, W = 44, D = 60, H = 12, RISE = 6, F2 = -Math.PI / 2;
+  for (const hg of HANGARS) {
+    A.setFrame(hg.x, y, hg.z, F2); A.seed = 7;
+    const hw = W / 2, hd = D / 2;
+    // side and back walls: profiled metal cladding, a clerestory window band high up
+    A.wall(hw, hd, hw, -hd, -0.5, H, C.METAL, hg.col, 3, 3); A.wall(-hw, -hd, -hw, hd, -0.5, H, C.METAL, hg.col, 3, 3); A.wall(hw, -hd, -hw, -hd, -0.5, H, C.METAL, hg.col, 3, 3);
+    for (const s of [-1, 1]) A.box(s * (hw + 0.05), H - 2.6, 0, 0.1, 1.4, D - 8, C.GLASS, 0x6a9aa0);
+    // the arched roof, a skylight strip on each side of the crown, a thick fascia over the doors
+    const SEG = 14, P = (k) => { const a = Math.PI * (k / SEG); return [-Math.cos(a) * (hw + 0.6), H + Math.sin(a) * RISE]; };
+    for (let k = 0; k < SEG; k++) {
+      const [x0, y0] = P(k), [x1, y1] = P(k + 1), sky = k === 4 || k === SEG - 5;
+      A.quad([x0, y0, -hd - 0.5], [x0, y0, hd + 0.5], [x1, y1, hd + 0.5], [x1, y1, -hd - 0.5], [0, 0, 20, 0, 20, 1, 0, 1], sky ? C.GLASS : C.SEAM, sky ? 0xa8d0d8 : 0xd4d8dc);
+      for (const zz of [hd, -hd]) { const f = zz > 0; A.tri([0, H, zz], f ? [x1 * hw / (hw + 0.6), y1, zz] : [x0 * hw / (hw + 0.6), y0, zz], f ? [x0 * hw / (hw + 0.6), y0, zz] : [x1 * hw / (hw + 0.6), y1, zz], [0, 0, 1, 0, 0.5, 0.5], C.PLAIN, hg.col); }
+      // the roof's underside and an arched fascia along the door end (seen from the apron, looking up)
+      A.quad([x1, y1 - 0.3, hd + 0.5], [x1, y1 - 0.3, hd - 4], [x0, y0 - 0.3, hd - 4], [x0, y0 - 0.3, hd + 0.5], [0, 0, 1, 0, 1, 1, 0, 1], C.PLAIN, 0xc8ccd0);
+      A.quad([x1, y1 - 0.7, hd + 0.52], [x0, y0 - 0.7, hd + 0.52], [x0, y0 + 0.05, hd + 0.52], [x1, y1 + 0.05, hd + 0.52], [0, 0, 1, 0, 1, 1, 0, 1], C.PLAIN, 0xe8eaec);
+    }
+    A.box(0, H - 3.0, hd + 0.4, W + 1.2, 3.0, 0.8, C.PLAIN, 0x4a5a6a); // header beam over the door opening
+    // door pockets: towers either side that the leaves slide into
+    for (const s of [-1, 1]) { A.box(s * (hw - 1.6), -0.5, hd + 1.2, 3.2, H + 0.5, 2.4, C.METAL, 0x9ab0a0, { topCell: C.PLAIN, topCol: 0x8a9090 }); }
+    // six door leaves, two slid open into the right pocket: panel grid, a row of small windows
+    const leaves = 6, lw = (W - 6.4) / leaves, open = 2;
+    for (let k = 0; k < leaves; k++) {
+      const x0 = -hw + 3.2 + k * lw, slid = k >= leaves - open, cx = slid ? hw - 3.2 - lw / 2 - (leaves - 1 - k) * 0.3 : x0 + lw / 2, zf = hd + (slid ? 1.0 : 0.25) + (k % 2) * 0.35;
+      A.box(cx, -0.3, zf - 0.2, lw - 0.08, H - 2.7, 0.4, C.PLAIN, DOOR);
+      for (let v = 1; v < 4; v++) A.box(cx - lw / 2 + (lw * v) / 4, -0.3, zf + 0.02, 0.08, H - 2.7, 0.06, C.PLAIN, FRAME);
+      for (const yy of [2.2, 4.4, 6.6]) A.box(cx, yy, zf + 0.02, lw - 0.1, 0.07, 0.06, C.PLAIN, FRAME);
+      for (let v = 0; v < 4; v++) A.box(cx - lw / 2 + (lw * (v + 0.5)) / 4, 5.0, zf + 0.03, 0.5, 1.1, 0.04, C.GLASS, 0x5a7a80);
+    }
+    // through the open bays: the dark hangar floor, lights in the roof
+    A.quad([hw - 3.2 - open * lw, 0.02, hd], [hw - 3.2, 0.02, hd], [hw - 3.2, 0.02, hd - 20], [hw - 3.2 - open * lw, 0.02, hd - 20], [0, 0, 1, 0, 1, 1, 0, 1], C.CONCRETE, 0x8a8a88);
+    A.quad([hw - 3.2 - open * lw, -0.3, hd - 2], [hw - 3.2, -0.3, hd - 2], [hw - 3.2, H - 3, hd - 2], [hw - 3.2 - open * lw, H - 3, hd - 2], [0, 0, 1, 0, 1, 1, 0, 1], C.PLAIN, DARK); // (the back of the hall, in shadow)
+    // office annex along the back: two storeys, windows, a flat roof with plant
+    A.setFrame(hg.x + hd + 5, y, hg.z, F2 + Math.PI); A.seed = 12;
+    A.walls(W - 6, 10, -0.5, 7.4, C.APT, 0xe8e6e0, { front: C.APT, door: C.DOOR, fl: 3.7 }); A.flat(W - 6, 10, 7.4, 0.6, C.GRAVEL, 0xffffff, C.PLAIN, 0xe8e6e0);
+    A.box(8, 7.4, 0, 3, 1.4, 2.4, C.METAL, 0xb0b4b8);
+  }
+
+  // T-hangar row for light aircraft: shallow gable, individual doors, roof lights
+  A.setFrame(310, y, -176, F2); A.seed = 21;
+  A.walls(48, 18, -0.5, 4.6, C.METAL, 0xdcd4c4, { front: C.GARAGE, side: C.METAL });
+  A.gable(48, 18, 4.6, 1.4, 0.5, C.SEAM, 0x7a3a30, C.METAL, 0xdcd4c4);
+  for (let x = -21; x <= 21; x += 6) A.box(x, 5.35, 2, 1.2, 0.08, 3, C.GLASS, 0xa8d0d8, { topCell: C.GLASS, topCol: 0xa8d0d8 });
+  for (let x = -24; x <= 24.1; x += 6) A.box(x, -0.5, 9.1, 0.3, 5.1, 0.2, C.PLAIN, 0x6a6e72); // posts between the doors
+
+  // cargo / maintenance shed: loading docks with bumpers and a canopy on the apron side
+  A.setFrame(380, y, -80, F2); A.seed = 23;
+  A.walls(50, 30, -0.5, 9, C.METAL, 0xc4cac0, { front: C.METAL }); A.gable(50, 30, 9, 2.6, 0.5, C.SEAM, 0x9aa0a6, C.METAL, 0xc4cac0);
+  for (let k = 0; k < 5; k++) {
+    const x = -18 + k * 9;
+    A.box(x, -0.5, 15.05, 3.4, 4.0, 0.1, C.GARAGE, 0xffffff); // roller door
+    A.box(x, -0.5, 15.6, 3.6, 1.7, 1.2, C.CONCRETE, 0x8a8a86); // dock
+    for (const s of [-1, 1]) A.box(x + s * 1.5, 0.6, 16.25, 0.25, 0.5, 0.15, C.PLAIN, 0x1c1c1e); // bumpers
+  }
+  A.box(0, 4.6, 17.5, 46, 0.3, 5, C.METAL, 0xb8bcc0, { bottom: true }); // canopy
+
+  // fire station: five appliance bays with red frames and glazed roller doors, offices, a flat roof, training tower
+  A.setFrame(FIRE.x, y, FIRE.z, Math.PI); A.seed = 90;
+  const bays = 5, bw = 6.4, fw = bays * bw + 2;
+  A.walls(fw, 16, -0.5, 6.2, C.CONCRETE, 0xe8e4dc, { front: C.CONCRETE });
+  A.flat(fw, 16, 6.2, 0.7, C.GRAVEL, 0xffffff, C.PLAIN, 0xe8e4dc);
+  A.plainQuad([-fw / 2 - 14, 0.14, 30], [fw / 2 + 2, 0.14, 30], [fw / 2 + 2, 0.14, 8], [-fw / 2 - 14, 0.14, 8], C.CONCRETE, 0x9a9a96); // forecourt (over the infield grass plane: airportGround.js)
+  A.box(0, 4.9, 8.05, fw, 0.9, 0.12, C.PLAIN, 0xc8282e); // red band over the bays
+  for (let k = 0; k < bays; k++) {
+    const x = -fw / 2 + 1 + bw / 2 + k * bw;
+    A.box(x, -0.3, 8.06, bw - 1.0, 4.9, 0.1, C.GARAGE, 0xf4f0ec);
+    for (const s of [-1, 1]) A.box(x + s * (bw / 2 - 0.25), -0.3, 8.15, 0.5, 5.2, 0.3, C.PLAIN, 0xc8282e); // red frames
+  }
+  A.setFrame(FIRE.x - fw / 2 - 7, y, FIRE.z, Math.PI);
+  A.walls(12, 16, -0.5, 7.4, C.APT, 0xe8e4dc, { front: C.APT, door: C.DOOR, fl: 3.7 }); A.flat(12, 16, 7.4, 0.7, C.GRAVEL, 0xffffff, C.PLAIN, 0xe8e4dc);
+  A.setFrame(FIRE.x + fw / 2 + 4, y, FIRE.z - 2, Math.PI);
+  A.box(0, -0.5, 0, 4.2, 15, 4.2, C.CONCRETE, 0xd8d4cc, { topCell: C.SEAM, topCol: 0x777777 }); // training tower
+  for (const h of [3.5, 7, 10.5]) A.box(0, h, 2.15, 1.4, 1.6, 0.08, C.PLAIN, 0x2a2c30); // its window openings
+  A.box(2.3, -0.5, 0, 0.1, 15.3, 1.2, C.RAIL_IRON, 0xc8282e); // escape ladder
+  A.setFrame(0, y, 0, 0);
 }
