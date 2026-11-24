@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.182.0', items: [
+    "Roads in the Alps no longer disappear under the grass: you can see the whole road, even on steep hairpins.",
+  ] },
   { v: '1.181.0', items: [
     "Buildings in the Alps (and everywhere) no longer stand in the road: houses are set back to the roadside.",
   ] },
