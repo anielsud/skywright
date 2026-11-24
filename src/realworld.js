@@ -448,7 +448,15 @@ class RealData {
       }
       // runs inside the core (a road can leave and come back: split it), resampled between its junctions
       let cur = null; const runs = [];
+      // the way's shape: its junctions and ends, and the points between them that bend it by more than 0.5 m (OSM
+      // traces a street every few metres: kept whole, NYC's roads had 770k points, twice the triangles)
+      const keep = new Uint8Array(W.n); keep[0] = keep[W.n - 1] = 1; for (let i = 0; i < W.n; i++) if (R.node[W.s + i] >= 0) keep[i] = 1;
+      const dp = (a, b) => { if (b - a < 2) return; let m = -1, md = 0.5; const ax = R.x[W.s + a], az = R.z[W.s + a], dx = R.x[W.s + b] - ax, dz = R.z[W.s + b] - az, L = Math.hypot(dx, dz) || 1;
+        for (let i = a + 1; i < b; i++) { const d = Math.abs((R.x[W.s + i] - ax) * dz - (R.z[W.s + i] - az) * dx) / L; if (d > md) { md = d; m = i; } }
+        if (m >= 0) { keep[m] = 1; dp(a, m); dp(m, b); } };
+      { let a = 0; for (let i = 1; i < W.n; i++) if (keep[i]) { dp(a, i); a = i; } }
       for (let i = 0; i < W.n; i++) {
+        if (!keep[i]) continue;
         const x = R.x[W.s + i], z = R.z[W.s + i], nd = R.node[W.s + i];
         if (!ok(x, z)) { if (cur) { runs.push(cur); cur = null; } continue; }
         if (!cur) cur = { pts: [], jn: [] };

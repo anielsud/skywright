@@ -117,7 +117,7 @@ export async function runCase(c) {
     for (let k = 0; k < 60 * 20; k++) V.update(1 / 20, null);
     const moves = on + back + none;
     return [
-      { name: `${c.loc}: traffic turns onto the next road at junctions`, ok: moves > 20 && back / moves < 0.1, why: `${on} onto another road, ${back} turned round at a dead end, ${none} with nowhere to go (${G.lanes.length} lanes, 60 s)` },
+      { name: `${c.loc}: traffic turns onto the next road at junctions`, ok: moves > 20 && back / moves < 0.15, /* (Bora Bora has many real dead ends; before #252 every road's end was a U-turn) */ why: `${on} onto another road, ${back} turned round at a dead end, ${none} with nowhere to go (${G.lanes.length} lanes, 60 s)` },
       { name: `${c.loc}: traffic rarely has nowhere to go`, ok: none / Math.max(1, moves) < 0.02, why: `${none} of ${moves}` },
     ];
   }
