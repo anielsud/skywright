@@ -66,10 +66,11 @@ export function roadIndex(w) {
   return { segs, start, list, ox, oz, nx, nz, stamp: new Uint32Array(segs.length), gen: 0, set: S };
 }
 
-// the segments whose clear zones may reach a footprint
-function near(I, P) {
+// the segments whose clear zones may reach a footprint (or come within pad of its box)
+function near(I, P, pad = 0) {
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
   for (const p of P) { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < z0) z0 = p[1]; if (p[1] > z1) z1 = p[1]; }
+  x0 -= pad; x1 += pad; z0 -= pad; z1 += pad;
   const out = [], g = ++I.gen, { start, list, segs, stamp } = I;
   const i0 = Math.max(0, Math.floor(x0 / CELL) - I.ox), i1 = Math.min(I.nx - 1, Math.floor(x1 / CELL) - I.ox), j0 = Math.max(0, Math.floor(z0 / CELL) - I.oz), j1 = Math.min(I.nz - 1, Math.floor(z1 / CELL) - I.oz);
   for (let cj = j0; cj <= j1; cj++) for (let ci = i0; ci <= i1; ci++) {
@@ -83,28 +84,30 @@ const inside = (P, x, z) => { let c = false; for (let i = 0, j = P.length - 1; i
 export const area = (P) => { let a = 0; for (let k = 0; k < P.length; k++) { const p = P[k], c = P[(k + 1) % P.length]; a += p[0] * c[1] - c[0] * p[1]; } return a / 2; };
 
 // How far a road's centre line is from a footprint: { d (0: it crosses or runs inside), t (where on the segment, 0..1) }
+// (the hot path: no allocations but the answer)
 export function segDist(s, P) {
-  const ax = s[0], az = s[1], dx = s[2] - ax, dz = s[3] - az, L2 = dx * dx + dz * dz || 1e-9;
-  let d2 = Infinity, t = 0;
-  const pt = (px, pz) => { let u = ((px - ax) * dx + (pz - az) * dz) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u; const ex = ax + dx * u - px, ez = az + dz * u - pz, q = ex * ex + ez * ez; if (q < d2) { d2 = q; t = u; } };
-  const n = P.length;
+  const ax = s[0], az = s[1], bx = s[2], bz = s[3], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9, n = P.length;
+  let d2 = Infinity, t = 0, odd = false;
   for (let k = 0; k < n; k++) {
-    const p = P[k], c = P[(k + 1) % n], ex = c[0] - p[0], ez = c[1] - p[1];
+    const p = P[k], c = P[k + 1 === n ? 0 : k + 1], px = p[0], pz = p[1], ex = c[0] - px, ez = c[1] - pz;
     // the centre line crossing this wall
     const den = dx * ez - dz * ex;
-    if (Math.abs(den) > 1e-12) {
-      const u = ((p[0] - ax) * ez - (p[1] - az) * ex) / den, v = ((p[0] - ax) * dz - (p[1] - az) * dx) / den;
+    if (den > 1e-12 || den < -1e-12) {
+      const u = ((px - ax) * ez - (pz - az) * ex) / den, v = ((px - ax) * dz - (pz - az) * dx) / den;
       if (u >= 0 && u <= 1 && v >= 0 && v <= 1) return { d: 0, t: u, cross: true };
     }
-    pt(p[0], p[1]);
+    if ((pz > az) !== (c[1] > az) && ax < ex * (az - pz) / ez + px) odd = !odd; // (is a inside: the ray test)
+    // the wall's corner against the segment
+    let u = ((px - ax) * dx + (pz - az) * dz) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
+    let fx = ax + dx * u - px, fz = az + dz * u - pz, q = fx * fx + fz * fz; if (q < d2) { d2 = q; t = u; }
     // the segment's ends against this wall
     const E2 = ex * ex + ez * ez || 1e-9;
-    for (const [qx, qz, uq] of [[ax, az, 0], [ax + dx, az + dz, 1]]) {
-      let v = ((qx - p[0]) * ex + (qz - p[1]) * ez) / E2; v = v < 0 ? 0 : v > 1 ? 1 : v;
-      const fx = p[0] + ex * v - qx, fz = p[1] + ez * v - qz, q = fx * fx + fz * fz; if (q < d2) { d2 = q; t = uq; }
-    }
+    let v = ((ax - px) * ex + (az - pz) * ez) / E2; v = v < 0 ? 0 : v > 1 ? 1 : v;
+    fx = px + ex * v - ax; fz = pz + ez * v - az; q = fx * fx + fz * fz; if (q < d2) { d2 = q; t = 0; }
+    v = ((bx - px) * ex + (bz - pz) * ez) / E2; v = v < 0 ? 0 : v > 1 ? 1 : v;
+    fx = px + ex * v - bx; fz = pz + ez * v - bz; q = fx * fx + fz * fz; if (q < d2) { d2 = q; t = 1; }
   }
-  if (inside(P, ax, az)) return { d: 0, t: 0, cross: true };
+  if (odd) return { d: 0, t: 0, cross: true };
   return { d: Math.sqrt(d2), t, cross: false };
 }
 
@@ -227,22 +230,85 @@ function untangle(P) {
 }
 const clear = (segs, Q, S) => segs.every((s) => segDist(s, Q).d >= s[4] + S - TOL);
 
+// The footprint's oriented bounding box (the wall direction giving the smallest rectangle): { ux, uz, u0, u1, v0, v1, ar }
+// in its frame (u along (ux, uz), v along (-uz, ux))
+function frame(P) {
+  let best = null;
+  for (let k = 0; k < P.length; k++) {
+    const a = P[k], c = P[(k + 1) % P.length], ex = c[0] - a[0], ez = c[1] - a[1], L = hyp(ex, ez); if (L < 0.5) continue;
+    const ux = ex / L, uz = ez / L; let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (const p of P) { const u = p[0] * ux + p[1] * uz, v = -p[0] * uz + p[1] * ux; if (u < u0) u0 = u; if (u > u1) u1 = u; if (v < v0) v0 = v; if (v > v1) v1 = v; }
+    const ar = (u1 - u0) * (v1 - v0); if (!best || ar < best.ar) best = { ux, uz, u0, u1, v0, v1, ar };
+  }
+  return best;
+}
+const corners = (b) => [[b.u0, b.v0], [b.u1, b.v0], [b.u1, b.v1], [b.u0, b.v1]].map(([u, v]) => [u * b.ux - v * b.uz, u * b.uz + v * b.ux]); // (counter-clockwise)
+// A rectangle (frame) with its faces moved in until it is clear of every clear zone (c = r + S), one road at a time,
+// the deepest first: of its four faces, the one that clears that road keeping the most of the rectangle moves (just far
+// enough: bisection). A house trimmed at its road end or side stays a house; a road through it takes the smaller side.
+// null if nothing 1.5 m across is left.
+const FACES = ['u0', 'u1', 'v0', 'v1'];
+function shrinkRect(b, segs, S) {
+  b = { ...b };
+  const need = (s, q) => s[4] + S - segDist(s, corners(q)).d;
+  for (let it = 0; it < 12; it++) {
+    let worst = null, wn = TOL;
+    for (const s of segs) { const n = need(s, b); if (n > wn) { wn = n; worst = s; } }
+    if (!worst) return b;
+    let best = null, part = null;
+    for (const f of FACES) {
+      const sg = f.endsWith('0') ? 1 : -1, other = f[0] + (f[1] === '0' ? '1' : '0'), room = Math.abs(b[other] - b[f]) - 1.5; if (room <= 0) continue;
+      const at = (m) => ({ ...b, [f]: b[f] + sg * m }), left = need(worst, at(room));
+      if (left > TOL) { if (!part || left < part.left) part = { left, q: at(room / 2) }; continue; } // (this face alone can't clear it: a road across a corner)
+      let lo = 0, hi = room; for (let k = 0; k < 14; k++) { const m = (lo + hi) / 2; if (need(worst, at(m)) > TOL - 0.05) lo = m; else hi = m; }
+      const q = at(hi), a = (q.u1 - q.u0) * (q.v1 - q.v0); if (!best || a > best.a) best = { q, a };
+    }
+    if (!best && !part) return null;
+    b = best ? best.q : part.q; // (no one face clears it: the one that gets furthest goes halfway, and round again)
+  }
+  return null;
+}
+// A building's collision box ({ x, z, ux, uz, hl, hw }, as World.wallBoxes reads it) kept off the roads: a footprint cut
+// back by setBack can still have a box over the road (an L cut at a corner keeps its full rectangle as its box), and a
+// car would hit thin air on the tarmac. Its faces are moved in as shrinkRect does, to the edge of the tarmac + verge /
+// pavement (no setback); the same box if it's clear, or if it can't be cleared (a road under a big building, kept whole).
+export function fitBox(I, ob) {
+  if (!I || !I.segs.length) return ob;
+  const b = { ux: ob.ux, uz: ob.uz, u0: 0, u1: 0, v0: 0, v1: 0 }, cu = ob.x * ob.ux + ob.z * ob.uz, cv = -ob.x * ob.uz + ob.z * ob.ux;
+  b.u0 = cu - ob.hl; b.u1 = cu + ob.hl; b.v0 = cv - ob.hw; b.v1 = cv + ob.hw;
+  const segs = near(I, corners(b)); if (!segs.length) return ob;
+  const f = shrinkRect(b, segs, TOL - 0.05); // (to the zones' edge: TOL - 0.05 past it, so it clears with 5 cm to spare)
+  if (!f || (f.u0 === b.u0 && f.u1 === b.u1 && f.v0 === b.v0 && f.v1 === b.v1)) return ob;
+  const um = (f.u0 + f.u1) / 2, vm = (f.v0 + f.v1) / 2;
+  return { x: um * ob.ux - vm * ob.uz, z: um * ob.uz + vm * ob.ux, ux: ob.ux, uz: ob.uz, hl: (f.u1 - f.u0) / 2, hw: (f.v1 - f.v0) / 2, fit: true };
+}
+
 // A footprint ([[x, z], ...]) set back from the roads: { P (the same array if nothing reached a road), cut (it was
 // cut back), drop (nothing worth keeping: leave the building out), depth (how far it reached into a clear zone, before) }.
 // major: a big or tall building. One a road runs right through is left whole (through: true): that is a passage under
 // it (a building_passage, a covered highway: New York has a few under towers) or a mapping clash too big to settle by
 // knocking down a landmark.
-export function setBack(I, P, major = false) {
+// asRect: trim it as its bounding rectangle whatever its shape (a building under a pitched roof, which covers that
+// rectangle anyway).
+export function setBack(I, P, major = false, asRect = false) {
   const none = { P, cut: false, drop: false, depth: 0 };
   if (!I || !I.segs.length) return none;
-  const segs = near(I, P); if (!segs.length) return none;
-  const S = I.set; let depth = 0, hit = false;
-  const D = segs.map((s) => { const d = segDist(s, P); if (s[4] - d.d > depth) depth = s[4] - d.d; if (s[4] + S - d.d > TOL) hit = true; return d; });
+  const fr = frame(P), A0 = Math.abs(area(P)), box = asRect && fr ? corners(fr) : P; // (what has to keep off the road)
+  let segs = near(I, box); if (!segs.length) return none;
+  const S = I.set; let depth = 0, hit = false, cross = false;
+  for (const s of segs) { const d = segDist(s, P); if (s[4] - d.d > depth) depth = s[4] - d.d; if (d.cross) cross = true; if (s[4] + S - (box === P ? d.d : segDist(s, box).d) > TOL) hit = true; }
   if (!hit) return none;
-  if (major && D.some((d) => d.cross)) return { P, cut: false, drop: false, depth, through: true };
-  // a road through it: cut it across first (the part on the far side goes); then push the walls out of every clear zone
+  if (major && cross) return { P, cut: false, drop: false, depth, through: true };
+  // a near-rectangular one (most houses): the rectangle trimmed, faces moved in off the road (through it: the smaller side goes)
+  segs = near(I, fr ? corners(fr) : P, 3); // (from here on: the roads near what it may become, too)
+  if (fr && (asRect || A0 / fr.ar > 0.92)) {
+    const b = shrinkRect(fr, segs, S);
+    if (!b && asRect) return { P, cut: true, drop: true, depth };
+    if (b) { const R = corners(b), A = Math.abs(area(R)); return { P: area(P) < 0 ? R.reverse() : R, cut: true, drop: A < KEEP * A0 || A < MIN_A || Math.min(b.u1 - b.u0, b.v1 - b.v0) < MIN_W, depth, rect: true }; }
+  }
+  // else: a road through it: cut it across first (the part on the far side goes); then push the walls out of every clear zone
   let Q = P;
-  segs.forEach((s, k) => { if (D[k].cross && Q.length >= 3) { const d = segDist(s, Q); if (d.cross) Q = cutAcross(Q, s, d, s[4] + S); } });
+  for (const s of segs) { if (Q.length < 3) break; const d = segDist(s, Q); if (d.cross) Q = cutAcross(Q, s, d, s[4] + S); }
   if (Q.length >= 3) Q = untangle(tidy(pushOut(Q, segs, S)));
   // (a footprint that won't come untangled, or didn't settle clear: cut along each road instead)
   if (!Q || Q.length < 3 || !clear(segs, Q, S)) {
@@ -255,7 +321,7 @@ export function setBack(I, P, major = false) {
     }
   }
   if (Q.length < 3) return { P: Q, cut: true, drop: true, depth };
-  const A0 = Math.abs(area(P)), A = Math.abs(area(Q));
+  const A = Math.abs(area(Q));
   return { P: Q, cut: true, drop: A < KEEP * A0 || A < MIN_A || width(Q) < MIN_W, depth };
 }
 // does a courtyard still lie inside a cut footprint (all its corners)?

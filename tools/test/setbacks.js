@@ -5,6 +5,7 @@
 // roadMesh). Left out: tunnels' tubes and bridge decks up in the air. Measured here with its own geometry (sampled,
 // not setback.js's), so it checks the rule, not the code against itself.
 //   on a road:  how many footprints reach more than TOL into a clear zone (none), and the deepest
+//   boxes:      the collision boxes cars meet (World.wallBoxes) are off the roads too
 //   kept:       how many buildings the setbacks left out (a few per cent at most: most are cut back, not dropped)
 //   cheap:      the setbacks' own time at load (index + cuts)
 //   few over:   big buildings a road runs right through are left standing (setback.js MAJOR: a passage under them); few
@@ -101,8 +102,18 @@ export async function measure(w, which = 'after') {
     if (f.through && d.worst >= d.at.r - 1e-6) under.push(o); else on.push(o);
   }
   on.sort((a, b) => b.d - a.d);
+  // the collision boxes the cars meet (World.wallBoxes reads these: destruction.js box), as built: none on a road either
+  const boxes = [], T = w.towns, grids = which === 'after' ? [T.city ? T.city.grid : T.grid] : [];
+  const seen = new Set();
+  for (const g of grids) for (const arr of g.values()) for (const e of arr) {
+    if (seen.has(e) || !e.solid) continue; seen.add(e);
+    if (e.through) continue; // (a big building over a road through it: counted above)
+    const b = w.destruct.box(e), C4 = [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([a, c]) => [b.x + b.ux * b.hl * a - b.uz * b.hw * c, b.z + b.uz * b.hl * a + b.ux * b.hw * c]);
+    const d = depth(Z, C4); if (d.worst > TOL) boxes.push({ x: Math.round(b.x), z: Math.round(b.z), d: d.worst, kind: d.at.kind });
+  }
+  boxes.sort((a, b) => b.d - a.d);
   const hist = [0.5, 1, 2, 4, Infinity].map((lim, i, L) => [i ? L[i - 1] : TOL, lim, on.filter((o) => o.d > (i ? L[i - 1] : TOL) && o.d <= lim).length]);
-  return { n: F.length, on, under, hist, segs: Z.n };
+  return { n: F.length, on, under, hist, segs: Z.n, boxes, nBoxes: seen.size };
 }
 
 export async function runCase(c) {
@@ -113,9 +124,10 @@ export async function runCase(c) {
   const kept = m.n / Math.max(1, m.n + sb.dropped);
   return [
     { name: `${c.loc}: no building footprint on a road`, ok: !m.on.length, why: m.on.length ? `${m.on.length} of ${m.n} footprints reach in, worst ${worst}` : `${m.n} footprints clear of ${m.segs} road segments (${sb.cut} cut back, ${sb.dropped} left out; ${m.under.length} big ones over a road through them)` },
+    { name: `${c.loc}: no collision box on a road`, ok: !m.boxes.length, why: m.boxes.length ? `${m.boxes.length} of ${m.nBoxes} boxes reach in, worst ${m.boxes.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(2)} m into a ${o.kind}`).join('; ')}` : `${m.nBoxes} boxes (World.wallBoxes${c.loc === 'nyc' ? ': the tall buildings built at load' : ''})` },
     { name: `${c.loc}: few big buildings left over a road`, ok: m.under.length <= Math.max(3, m.n * 0.0005), why: `${m.under.length} (a passage under them, or a mapping clash: ${m.under.slice(0, 4).map((o) => `(${o.x}, ${o.z})`).join(' ')})` },
     { name: `${c.loc}: setbacks keep most buildings`, ok: kept > 0.97, why: `${sb.dropped} left out, ${m.n} kept (${(100 * kept).toFixed(1)}%)` },
-    { name: `${c.loc}: setbacks are cheap at load`, ok: ms < (c.loc === 'nyc' ? 1000 : 400), why: `${ms.toFixed(0)} ms (Node, Low: the road index and the footprints built at load; New York's low ones are set back a tile at a time as they stream in)` },
+    { name: `${c.loc}: setbacks are cheap at load`, ok: ms < (c.loc === 'nyc' ? 1500 : 600), why: `${ms.toFixed(0)} ms (Node, Low: the road index, the footprints and boxes built at load; New York's low ones are set back a tile at a time as they stream in. ~0.1-0.3 s on a laptop: this catches a pass gone several times slower, not a busy machine)` },
   ];
 }
 
@@ -126,7 +138,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const { world: w, ms } = await worldAt(loc), T = w.towns.city || w.towns, sb = { ...T.setbacks };
     const b = await measure(w, 'before'), a = await measure(w, 'after');
     const fmt = (m) => `${m.on.length} of ${m.n} on a road (+${m.under.length} big ones over a road through them) [${m.hist.map(([lo, hi, k]) => `${lo}-${hi === Infinity ? '' : hi} m: ${k}`).join(', ')}]; worst ${m.on.slice(0, 5).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(1)} m ${o.kind}`).join('; ')}`;
-    console.log(`${loc}: World built in ${ms} ms; setbacks ${sb.ms.toFixed(0)} ms, ${sb.cut} cut back, ${sb.dropped} left out, ${sb.through} left whole over a road (at load: New York's tall ones)\n  before: ${fmt(b)}\n  after:  ${fmt(a)}`);
+    const boxes = `boxes on a road: ${a.boxes.length} of ${a.nBoxes}${a.boxes.length ? ', worst ' + a.boxes.slice(0, 5).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(1)} m ${o.kind}`).join('; ') : ''}`;
+    console.log(`${loc}: World built in ${ms} ms; setbacks ${sb.ms.toFixed(0)} ms, ${sb.cut} cut back, ${sb.dropped} left out, ${sb.through} left whole over a road (at load: New York's tall ones)\n  before: ${fmt(b)}\n  after:  ${fmt(a)}\n  ${boxes}`);
   }
   process.exit(0);
 }
