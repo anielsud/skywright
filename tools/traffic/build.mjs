@@ -34,7 +34,8 @@ const PREVIEW = process.env.PREVIEW === '1'; // also write OUT/preview.json (siz
 // up). length: scale to this length (m) when the source isn't in metres. tile: atlas size of its main texture.
 // paint: the body takes each car's own colour (the paint mask). kind: car | van | truck | bus | service | airport
 // turn: true/false overrides the facing test (the end with the redder light lenses is the back), for vehicles with red
-// lights at both ends (emergency lights) or none modelled
+// lights at both ends (emergency lights), none modelled, or lenses that fool it (the taxi). REV: this build's revision,
+// written into the file (src/trafficModels.js corrects the models an older file has the wrong way round)
 const P = 'generic_passenger_car_pack', C = 'generic_civil_service_vehicles_pack';
 const SPECS = [
   { id: 'compact', src: P, node: 'Compact Body', paint: true, kind: 'car' },
@@ -54,7 +55,7 @@ const SPECS = [
   { id: 'police', src: C, node: 'police_sedan', kind: 'service', turn: false },
   { id: 'utility', src: C, node: 'rdservtruck', kind: 'truck' },
   { id: 'schoolbus', src: C, node: 'school_bus', kind: 'bus', tile: 768 },
-  { id: 'taxi', src: C, node: 'taxi', kind: 'car' },
+  { id: 'taxi', src: C, node: 'taxi', kind: 'car', turn: false }, // (the police car's body, which faces the right way as it comes: the lens test turned it backwards, #228)
   { id: 'towtruck', src: C, node: 'towtruck', kind: 'truck' },
   { id: 'postvan', src: C, node: 'postvan', kind: 'van', turn: true },
   { id: 'tanker', src: 'fuel_truck', node: null, kind: 'truck', turn: true, tiles: { 'Material.003': 768 }, lod0: 14000 },
@@ -62,6 +63,7 @@ const SPECS = [
   { id: 'cart', src: 'airport_baggage_equipment_cart_lowpoly', node: null, kind: 'airport', length: 2.9, tile: 256, noWheels: true },
 ];
 const LOD_TRIS = [null, 1400, 450]; // lod0 = the model as it is; lod1/lod2 targets (whole vehicle, wheels merged)
+const REV = 2; // (1: the first build, its taxi backwards)
 
 // ---------- logos painted out (pixel rectangles in the source textures) ----------
 // word: red lettering on the yellow band -> band yellow. badge: the emblem on the white tank -> white.
@@ -320,7 +322,7 @@ for (const v of vehicles) {
   const wheels = v.wheels.map((w, k) => { tris.push(mesh(`${id}_wheel${k}`, simplify(merge(w.parts, w.c), 600, 0.02))); return [...w.c.map((x) => +x.toFixed(3)), +w.r.toFixed(3)]; });
   meta[id] = { kind: v.spec.kind, paint: !!v.spec.paint, L: +v.b.size[2].toFixed(3), W: +v.b.size[0].toFixed(3), H: +v.b.size[1].toFixed(3), wheels, head: v.head, tail: v.tail, tris };
 }
-scene.setExtras({ vehicles: meta, atlas: [AW, AH], credits: 'comrade1280, abdullahjavedyo90, propmaker1/menX1151 (Sketchfab, CC BY 4.0)' });
+scene.setExtras({ vehicles: meta, rev: REV, atlas: [AW, AH], credits: 'comrade1280, abdullahjavedyo90, propmaker1/menX1151 (Sketchfab, CC BY 4.0)' });
 const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ 'meshopt.encoder': MeshoptEncoder });
 await doc.transform(dedup(), prune({ keepAttributes: true }), // (the material has no textures in the file: prune would drop the UVs)
    quantize({ quantizePosition: 14, quantizeNormal: 8, quantizeTexcoord: 14 }), meshopt({ encoder: MeshoptEncoder, level: 'medium' }));

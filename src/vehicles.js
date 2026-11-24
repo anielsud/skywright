@@ -47,6 +47,18 @@ function blobTexture() {
 }
 
 // ---------- who drives where ----------
+// do polylines a and b ([x, z, x, z, ...]) come within d of each other?
+function near(a, b, d) {
+  const d2 = d * d, ps = (px, pz, x0, z0, x1, z1) => { const ex = x1 - x0, ez = z1 - z0, l = ex * ex + ez * ez, t = l ? Math.max(0, Math.min(1, ((px - x0) * ex + (pz - z0) * ez) / l)) : 0, dx = x0 + ex * t - px, dz = z0 + ez * t - pz; return dx * dx + dz * dz; };
+  for (let i = 0; i + 3 < a.length; i += 2) for (let j = 0; j + 3 < b.length; j += 2) {
+    const ax = a[i], az = a[i + 1], bx = a[i + 2], bz = a[i + 3], cx = b[j], cz = b[j + 1], dx = b[j + 2], dz = b[j + 3];
+    const den = (bx - ax) * (dz - cz) - (bz - az) * (dx - cx);
+    if (den) { const t = ((cx - ax) * (dz - cz) - (cz - az) * (dx - cx)) / den, u = ((cx - ax) * (bz - az) - (cz - az) * (bx - ax)) / den; if (t >= 0 && t <= 1 && u >= 0 && u <= 1) return true; }
+    if (ps(ax, az, cx, cz, dx, dz) < d2 || ps(bx, bz, cx, cz, dx, dz) < d2 || ps(cx, cz, ax, az, bx, bz) < d2 || ps(dx, dz, ax, az, bx, bz) < d2) return true;
+  }
+  return false;
+}
+const commit = (v) => Math.max(0.5, (v * v) / 12); // a car this close to its stop line (m) can't stop short of it: it goes on
 // relative odds of each model by lane kind; NYC adds its yellow cabs and buses
 const MIX = {
   sedan: 14, hatch: 10, compact: 8, suv: 12, wagon: 6, minivan: 6, coupe: 4, sport: 1.5, pickup: 8, offroad: 4,
@@ -76,9 +88,13 @@ export class Vehicles {
     this.signals = new Signals(this.graph, { city }); this.signals.build(this.group); // (a city's crossroads: traffic lights)
     this.cars = [];
     const want = ({ low: 70, medium: 140, high: 240 }[world.qBase] || 140) * (city ? 3 : 1); // (a city: busy streets; only the cars near the camera are drawn)
+    const taken = new Map(); // (lane -> where cars are put down on it: not on top of each other)
     if (this.graph.lanes.length) for (let k = 0; k < want; k++) {
-      const p = this.graph.ensure(this.graph.pick()), type = p.kind === 'street' ? pickStreet() : pick();
-      this.cars.push({ path: p, s: r() * p.total, v: p.speed * 0.8, want: p.speed * (0.8 + r() * 0.35), type, color: color(type), brake: 0, roll: 0 });
+      let p, s0, t = 0;
+      do { p = this.graph.ensure(this.graph.pick()); s0 = r() * p.total; } while (t++ < 8 && taken.get(p)?.some((x) => Math.abs(x - s0) < 12));
+      if (!taken.has(p)) taken.set(p, []); taken.get(p).push(s0);
+      const type = p.kind === 'street' ? pickStreet() : pick();
+      this.cars.push({ path: p, s: s0, v: p.speed * 0.8, want: p.speed * (0.8 + r() * 0.35), type, color: color(type), brake: 0, roll: 0, next: undefined, from: null, jw: 0 }); // (next: the lane after this one, once chosen; from: the lane it last left; jw: seconds waited at a junction)
     }
     // parked cars (towns + airport lot): static
     this.parked = [];
@@ -163,6 +179,71 @@ export class Vehicles {
     out.y = path.kind === 'apron' ? this.world.sampleGrid(out.x, out.z) + 0.25 : a.y + (b.y - a.y) * t + 0.02;
     return lo;
   }
+  // Who is in each junction (node key -> [{ c, M: its way through }]): the cars on the turn curves, the cars over their
+  // stop line (or too close to it to stop), and the cars whose tail is still within the first few metres past the junction. Made each frame, O(cars);
+  // a car crossing its stop line during the frame joins at once (occupy). Only junctions (3+ road pieces meet).
+  junctions() {
+    const occ = (this._occ ??= new Map()), G = this.graph; for (const a of occ.values()) a.length = 0;
+    for (const L of this.active) {
+      if (L.loop || !L.list.length) continue;
+      if (L.transient) { if (L.mv && G.deg.get(L.node) >= 3) for (const c of L.list) this.occupy(occ, L.node, c, L.mv); continue; }
+      const line = Math.max(L.total * 0.5, L.total - 10), jEnd = G.deg.get(L.to) >= 3, jStart = G.deg.get(L.from) >= 3;
+      for (const c of L.list) {
+        const h = this.model(c.type).L * 0.5;
+        if (jEnd && c.next && line - c.s - h <= commit(c.v)) this.occupy(occ, L.to, c, G.move(L, c.next)); // (over the line, or too close to stop before it)
+        if (jStart && c.from && c.from.to === L.from && c.s - h < 6) this.occupy(occ, L.from, c, G.move(c.from, L));
+      }
+    }
+    return occ;
+  }
+  occupy(occ, node, c, M) { let a = occ.get(node); if (!a) occ.set(node, (a = [])); a.push({ c, M }); }
+  // does a car in the junction (list) take a way that crosses M (c's)? Not one from the same lane (that's following);
+  // one onto the same lane does, or one whose way through (LaneGraph.move: a polyline) comes within a car's width of M's.
+  // (merges: only one onto the same lane; after a long wait a car goes across the others' ways, though not into a lane
+  // another is turning into: a jam clears)
+  crossed(list, c, M, merges = false) {
+    if (!list) return false;
+    for (const { c: o, M: N } of list) {
+      if (o === c || N.A === M.A) continue;
+      if (N.B === M.B || (!merges && near(M.poly, N.poly, 1.9))) return true;
+    }
+    return false;
+  }
+  // put car c down on lane N at s (recycled near the camera, or off a dead end): not on top of a car there (false: it
+  // isn't moved), and no faster than lets it stop short of what's ahead
+  place(c, N, s = this.r() * N.total) {
+    if (N.list.some((o) => o !== c && o.s - s > -12 && o.s - s < 12 + (o.v * o.v) / 8)) return false; // (nor just ahead of one coming up behind)
+    const i = c.path.list.indexOf(c); if (i >= 0) c.path.list.splice(i, 1);
+    c.path = N; c.s = s; c.next = undefined; c.from = null; c.jw = 0; N.list.push(c); this.active.add(N);
+    const h = this.model(c.type).L * 0.5; let g = Infinity;
+    for (const o of N.list) if (o !== c && o.s > s) g = Math.min(g, o.s - s - this.model(o.type).L * 0.5 - h);
+    if (g === Infinity) g = this.beyond(c, N, h);
+    c.v = Math.min(N.speed * 0.8, Math.sqrt(8 * Math.max(0, g - 6)));
+    return true;
+  }
+  // the room ahead of a lane's first car (path L, half length h): to the last car that left the lane (its odometer, c.roll,
+  // since it passed the end), and to the last car on the turn curve and the next lane it will take
+  // (this.lead: that car, null if none)
+  beyond(c, L, h) {
+    this.lead = null;
+    const rest = L.total - c.s; if (rest > 60) return Infinity;
+    let N = null, T = null;
+    if (L.transient) N = L.then;
+    else if (!L.loop) { if (c.next === undefined) c.next = this.graph.next(L); N = c.next; if (N) T = this.graph.move(L, N).T; }
+    // (the last to leave: on the turn or the next lane, or already past that lane if it's short: our way, so far)
+    let gap = Infinity; const o = L.lastOut, back = (q) => this.model(q.type).L * 0.5 + h;
+    if (o && o !== c && (o.from === L || (N && o.from === N))) { gap = rest + (o.roll - L.outRoll) - back(o); this.lead = o; }
+    let base = rest;
+    for (const P of [T, N]) {
+      if (!P) continue;
+      let m = null; for (const q of P.list) if (q !== c && (!m || q.s < m.s)) m = q;
+      if (m) { const g = base + m.s - back(m); if (g < gap) { gap = g; this.lead = m; } return gap; }
+      base += P.total;
+    }
+    const n = N?.lastOut; // (the next lane empty: the last car to leave it, if it's still just beyond)
+    if (n && n !== c && n.from === N && base + (n.roll - N.outRoll) - back(n) < gap) { gap = base + (n.roll - N.outRoll) - back(n); this.lead = n; }
+    return gap;
+  }
   update(dt, camPos) {
     this.t += dt;
     const W = this.world, night = W.night || W.W.dark > 0.5, B = this.batch;
@@ -174,9 +255,9 @@ export class Vehicles {
     // instances: bodies from the front of the pool, wheels from the back (so a crowded frame drops wheels, not cars)
     this.nBlob = 0; this._bs ??= new THREE.Vector3(); this._b4 ??= new THREE.Matrix4();
     let nb = 0, nw = 0; const S = this.slots, NS = S ? S.length : 0, NW = NS - (this.nBodies || 0);
-    const draw = (c, mdl, dist2) => {
-      if (!B || nb >= NS - NW) return;
-      const G = this.gid[c.type]; if (!G) return;
+    const draw = (c, mdl, dist2) => { // (false: not drawn, the pool is full or the type has no model)
+      if (!B || nb >= NS - NW) return false;
+      const G = this.gid[c.type]; if (!G) return false;
       const lod = dist2 < d1 * d1 ? 0 : dist2 < d2 * d2 ? 1 : 2, k = S[nb++];
       B.setGeometryIdAt(k, G.lod[lod]); B.setMatrixAt(k, m4); B.setColorAt(k, col.set(c.color)); B.setVisibleAt(k, true);
       if (lod < 2) { this._bs.set(mdl.W * 1.8, 1, mdl.L * 1.3); this._b4.makeScale(this._bs.x, 1, this._bs.z).premultiply(m4); this.blobs.setMatrixAt(this.nBlob++, this._b4); } // (far: too small to matter)
@@ -186,6 +267,7 @@ export class Vehicles {
         w4.compose(wp, wq, one).premultiply(m4);
         B.setGeometryIdAt(kw, G.wheels[j]); B.setMatrixAt(kw, w4); B.setColorAt(kw, col); B.setVisibleAt(kw, true);
       }
+      return true;
     };
     // parked cars near the camera
     if (B && camPos) for (const c of this.parked) {
@@ -193,7 +275,7 @@ export class Vehicles {
       q.setFromAxisAngle(this._Y ??= new THREE.Vector3(0, 1, 0), c.yaw); m4.compose(c.p, q, one);
       draw(c, this.model(c.type), dd);
     }
-    const moves = [];
+    const moves = [], G = this.graph, occ = this.junctions(), half = (c) => this.model(c.type).L * 0.5;
     for (const L of this.active) {
       const path = L, list = L.list;
       if (!list.length) { this.active.delete(L); continue; }
@@ -202,14 +284,25 @@ export class Vehicles {
         list.sort((a, b) => a.s - b.s);
         // the junction ahead: red (or amber with room to stop) holds the cars at the stop line, ~10 m back from its middle
         const sig = path.transient ? null : this.signals.state(path, this.t), stopAt = sig && sig !== 'g' ? Math.max(path.total * 0.5, path.total - 10) : Infinity;
+        const line = Math.max(path.total * 0.5, path.total - 10), jn = !path.transient && G.deg.get(path.to) >= 3; // (the stop line; a junction ahead)
         for (let i = 0; i < list.length; i++) {
-          const c = list[i], ahead = list[i + 1], half = this.model(c.type).L * 0.5;
-          const gap = ahead ? ahead.s - c.s - this.model(ahead.type).L * 0.5 - half : Infinity;
-          let toStop = stopAt - c.s - half; if (toStop < 0.5 || (sig === 'a' && toStop < (c.v * c.v) / 8)) toStop = Infinity; // (past the line, or too close to stop for an amber: go on)
+          const c = list[i], ahead = list[i + 1], hc = half(c);
+          let gap = ahead ? ahead.s - c.s - half(ahead) - hc : this.beyond(c, path, hc); // (the first car: the cars past the lane's end)
+          const blocked = !ahead && gap < path.total - c.s + hc + 2 && !(this.lead?.v > 3); // (no room past the junction for us, and what's there isn't driving off)
+          let toStop = stopAt - c.s - hc; if (toStop < 0.5 || (sig === 'a' && toStop < (c.v * c.v) / 8)) toStop = Infinity; // (past the line, or too close to stop for an amber: go on)
+          // the junction ahead: wait at the line while a car whose way crosses ours is in it, or (the first car) while
+          // there's no room past it to get clear of it (not for ever: a jam). A car too close to stop is committed: it
+          // claims the junction (occupy) as it would once over the line.
+          const toLine = line - c.s - hc, free = toLine > commit(c.v);
+          if (jn && free && toLine < 40) {
+            if (c.next === undefined) c.next = G.next(path);
+            if (c.next && (this.crossed(occ.get(path.to), c, G.move(path, c.next), c.jw > 15) || blocked)) { toStop = Math.min(toStop, toLine); c.jw += dt; }
+          }
           const want = Math.min(c.want, path.speed * 1.1, Math.max(0, (gap - 6) / 1.6), Math.max(0, (toStop - 1) / 1.6));
           const dv = clamp(want - c.v, -6 * dt, 2.2 * dt);
           c.brake = dv < -0.5 * dt ? 1 : Math.max(0, c.brake - dt * 2);
           c.v = Math.max(0, c.v + dv); c.s += c.v * dt; c.roll += c.v * dt;
+          if (jn && free && c.next && line - c.s - hc <= commit(c.v)) this.occupy(occ, path.to, c, G.move(path, c.next)); // (committed now: in the junction)
           if (c.s >= path.total) moves.push(c);
         }
       } else if (list.length === 1) { const c = list[0], dv = clamp(c.want - c.v, -6 * dt, 2.2 * dt); c.brake = dv < -0.5 * dt ? 1 : Math.max(0, c.brake - dt * 2); c.v = Math.max(0, c.v + dv); c.s = (c.s + c.v * dt) % path.total; c.roll += c.v * dt; }
@@ -233,7 +326,7 @@ export class Vehicles {
         // pitch with the road's grade (no per-frame allocations: reuse eu)
         const yaw = Math.atan2(-d.x, -d.z), pitch = Math.atan2(d.y, Math.hypot(d.x, d.z));
         q.setFromEuler(eu.set(pitch, yaw, 0, 'YXZ'));
-        m4.compose(p, q, one); draw(c, mdl, dd);
+        m4.compose(p, q, one); if (!draw(c, mdl, dd)) continue; // (no body drawn: no lamps either, nor a tow)
         const tail = Math.max(show * 0.5, c.brake ? 1 : 0);
         if (show || tail) { put(mdl.head[0], 1, 0.95, 0.8, show); put(mdl.head[1], 1, 0.95, 0.8, show); put(mdl.tail[0], 1, 0.08, 0.04, tail); put(mdl.tail[1], 1, 0.08, 0.04, tail); }
         if (c.tow) { // the towed carts, each on the path behind the one ahead (3.3 m apart, drawbar included)
@@ -255,8 +348,7 @@ export class Vehicles {
       const R0 = this.city ? Math.min(600, this.drawDist) : this.drawDist; // (a city's streets are dense: keep the traffic within a few blocks)
       const p0 = c.path.pts[0]; if (Math.hypot(p0.x - camPos.x, p0.z - camPos.z) < R0 * 1.5) continue;
       const N = this.graph.pickNear(camPos.x, camPos.z, R0 * 0.45, R0); if (!N) continue;
-      this.graph.ensure(N); const i = c.path.list.indexOf(c); if (i >= 0) c.path.list.splice(i, 1);
-      c.path = N; c.s = this.r() * N.total; c.v = N.speed * 0.8; N.list.push(c); this.active.add(N);
+      this.place(c, this.graph.ensure(N));
     }
     // cars past their lane's end: onto the next lane through the junction (a short turn curve first), or, at a
     // one-way road's dead end, somewhere else on the network
@@ -264,7 +356,13 @@ export class Vehicles {
       const L = c.path, G = this.graph; let over = c.s - L.total, dest;
       const i = L.list.indexOf(c); if (i >= 0) L.list.splice(i, 1);
       if (L.transient) dest = L.then;
-      else { const N = G.next(L); if (!N) { dest = G.ensure(G.pick()); over = this.r() * dest.total; } else { G.ensure(N); dest = G.turn(L, N) || N; } }
+      else {
+        const N = c.next !== undefined ? c.next : G.next(L); // (chosen ahead of the junction, as a rule)
+        if (!N) { let t = 0; while (t++ < 4 && !this.place(c, G.ensure(G.pick()))); if (c.path === L) { c.s = L.total; c.v = 0; L.list.push(c); } continue; } // (no room anywhere tried: wait at the end, and try again)
+        c.from = L; L.lastOut = c; L.outRoll = c.roll - over; // (who left last, and when: the next car follows it through)
+        dest = G.move(L, N).T || N;
+      }
+      c.next = undefined; c.jw = 0;
       c.path = dest; c.s = Math.min(over, dest.total * 0.99); dest.list.push(c); this.active.add(dest);
     }
     // hide the instances dealt last frame but not this one

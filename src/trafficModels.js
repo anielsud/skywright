@@ -28,7 +28,7 @@ export function trafficModels(quality = 'high') {
       pic('data.webp', half ? { resizeWidth: 1024, resizeHeight: 832, resizeQuality: 'high' } : {}),
     ]);
     const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(glb, '');
-    const meta = gltf.scene.userData.vehicles, geo = {};
+    const geo = {};
     gltf.scene.updateMatrixWorld(true);
     gltf.scene.traverse((o) => {
       if (!o.isMesh) return;
@@ -36,9 +36,23 @@ export function trafficModels(quality = 'high') {
       if (part.startsWith('lod')) G.lod[+part.slice(3)] = g; else G.wheels[+part.slice(5)] = g;
       o.geometry.dispose();
     });
+    const meta = orient(gltf.scene.userData, geo);
     return { meta, geo, material: material(colour, data) };
   })().catch((e) => { console.warn('[traffic] models did not load', e); return null; }).then((M) => (loaded = M));
   return loading;
+}
+// Models a given build of vehicles.glb (tools/traffic/build.mjs REV, in the file; none: 1) has facing backwards (+Z),
+// turned round here so everything after sees them the right way: geometry, wheels and lamps. A rebuilt file has them
+// right and says so with its revision (#228: the first build's taxi drove in reverse).
+export const BACKWARDS = { 1: ['taxi'] };
+export function orient(extras, geo = null) {
+  const meta = extras.vehicles, back = (v) => [-v[0], v[1], -v[2], ...v.slice(3)];
+  for (const id of BACKWARDS[extras.rev ?? 1] || []) {
+    const m = meta[id]; if (!m) continue;
+    const head = m.head; m.head = m.tail.map(back); m.tail = head.map(back); m.wheels = m.wheels.map(back);
+    if (geo?.[id]) for (const g of [...geo[id].lod, ...geo[id].wheels]) g?.rotateY(Math.PI);
+  }
+  return meta;
 }
 // the models if they have arrived (null: they failed), else undefined. main.js starts loading them with the place's
 // data, so a World built after that gets its cars at once, and their shader compiles in the loading screen's warm-up

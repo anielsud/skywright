@@ -8,11 +8,19 @@
 // road ends there (a dead end, or where the map's core cuts the road), and more often straight on than round a corner.
 import * as THREE from 'three';
 
+// the point s metres along a made lane (x, z)
+function at(L, s) {
+  const P = L.pts, S = L.len; let i = 0; while (i + 2 < P.length && S[i + 1] < s) i++;
+  const a = P[i], b = P[Math.min(i + 1, P.length - 1)], l = (S[i + 1] ?? S[i]) - S[i], t = l > 0 ? Math.min(1, Math.max(0, (s - S[i]) / l)) : 0;
+  return { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t };
+}
+
 const SPEED = { highway: 27, main: 20, street: 11 };
 
 export class LaneGraph {
   constructor(net, rand = Math.random) {
     this.r = rand; this.lanes = []; this.out = new Map(); // node key -> lanes leaving it
+    this.deg = new Map(); // node key -> road pieces meeting there (3+: a junction, where crossing traffic gives way: vehicles.js)
     net.roads.forEach((rd, ri) => {
       const P = rd.pts, n = P.length; if (n < 2 || rd.kind === 'rail') return;
       const S = new Float64Array(n); for (let i = 1; i < n; i++) S[i] = S[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z);
@@ -29,6 +37,7 @@ export class LaneGraph {
           let o = this.out.get(L.from); if (!o) this.out.set(L.from, (o = [])); o.push(L);
         }
         if (made.length === 2) { made[0].rev = made[1]; made[1].rev = made[0]; }
+        if (made.length) for (const k of [key(a), key(b)]) this.deg.set(k, (this.deg.get(k) || 0) + 1);
       }
     });
     // lanes by 400 m square of their start (pickNear)
@@ -76,6 +85,19 @@ export class LaneGraph {
     let t = this.r() * w.reduce((s, x) => s + x, 0);
     for (let i = 0; i < cand.length; i++) { t -= w[i]; if (t <= 0) return cand[i]; }
     return cand[cand.length - 1];
+  }
+  // the way from lane A onto lane B through A's end junction, made once per pair and kept (cars taking it share it, so
+  // they follow each other round the turn): its turn curve T (null where the lanes meet), and its line (poly: from A's
+  // stop line through the junction to a few metres into B), which vehicles.js compares with the others' to see whose
+  // ways cross in the junction
+  move(A, B) {
+    let M = (A.moves ??= new Map()).get(B); if (M) return M;
+    this.ensure(A); this.ensure(B);
+    const T = this.turn(A, B), a = at(A, A.total - Math.min(10, A.total * 0.5)), b = at(B, Math.min(6, B.total * 0.5));
+    if (T) { T.from = A; T.node = A.to; }
+    const e = A.pts.at(-1), f = B.pts[0], m = T ? T.pts[3] : null;
+    M = { A, B, T, node: A.to, poly: [a.x, a.z, e.x, e.z, ...(m ? [m.x, m.z] : []), f.x, f.z, b.x, b.z] }; if (T) T.mv = M;
+    A.moves.set(B, M); return M;
   }
   // a short curve from the end of lane A to the start of lane B through the junction (a transient path: the car rides
   // it, then joins B)

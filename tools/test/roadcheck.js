@@ -9,12 +9,12 @@
 //   crossings: two roads crossing on the ground without a shared node are either level (0.3 m) or clearly apart (3 m).
 // Only inside the core map (200 m in from its edge: the roads stop there).
 // The roads are read from world.net, not through the code under test's own junction logic.
-export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/realworld.js', 'src/world.js', 'tools/test/roadcheck.js'] }; // (and the ground detail: detailCheck)
+export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/realworld.js', 'src/world.js', 'src/vehicles.js', 'src/laneGraph.js', 'src/signals.js', 'src/trafficModels.js', 'tools/test/roadcheck.js'] }; // (and the ground detail: detailCheck)
 
 const PLACES = ['islands', 'canyon', 'lauterbrunnen', 'nyc'];
 const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3;
 
-export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 }))]; }
+export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), { id: 'nyc traffic safety', loc: 'nyc', world: 'nyc', safety: true, cost: 12 }, { id: 'nyc posts', loc: 'nyc', world: 'nyc', posts: true, cost: 6 }, { id: 'traffic models face forward', models: true, cost: 0.2 }, ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 }))]; }
 
 // The near-camera ground detail (World.updateDetail) at a few road points: inside, its vertices are the physics ground
 // (sampleGrid) exactly; its edge is the patch's own surface (no seam); rebuilding it stays cheap.
@@ -107,7 +107,91 @@ export function measure(w) {
   return out;
 }
 
+// #228: the traffic models face the way they drive. The shipped vehicles.glb, as src/trafficModels.js orient() turns it:
+// the taxi is the police car's body (same pack), so the two must agree (wheels and lamps where the other has them),
+// and every model's head lamps are at its front (-Z).
+export async function modelsCheck() {
+  const { readFileSync } = await import('node:fs'), { orient, BACKWARDS } = await import('../../src/trafficModels.js');
+  const b = readFileSync(new URL('../../assets/traffic/vehicles.glb', import.meta.url)), n = b.readUInt32LE(12), ex = JSON.parse(b.subarray(20, 20 + n).toString()).scenes[0].extras;
+  const m = orient(ex), P = m.police, T = m.taxi, zs = (q) => q.wheels.map((w) => w[2]).sort((a, b) => a - b);
+  const wz = Math.max(...zs(P).map((z, i) => Math.abs(z - zs(T)[i]))), lamp = Math.max(Math.abs(P.head[0][1] - T.head[0][1]), Math.abs(P.tail[0][1] - T.tail[0][1]));
+  const front = Object.entries(m).filter(([, q]) => !(q.head[0][2] < 0 && q.tail[0][2] > 0)).map(([id]) => id);
+  return [
+    { name: 'traffic: the taxi faces the way the police car (its body) does', ok: wz < 0.1 && lamp < 0.1, why: `wheels ${wz.toFixed(2)} m apart along the car, lamps ${lamp.toFixed(2)} m apart in height (file revision ${ex.rev ?? 1}: turned round ${(BACKWARDS[ex.rev ?? 1] || []).join(', ') || 'none'})` },
+    { name: 'traffic: every model has its head lamps at the front (-Z)', ok: !front.length, why: front.join(', ') },
+  ];
+}
+
+// #228: traffic near the camera in New York at night, drawn into a BatchedMesh with stand-in models (a box for a few
+// types; the rest have none, and the body pool is small enough to fill): every pair of head and tail lamps belongs to
+// a car body drawn there, faces the way its car drives, and cars don't drive through each other (two cars' footprints
+// overlapping for over 2 s: a car that didn't see the other).
+export async function safetyCheck(w) {
+  const THREE = await import('three'), { Vehicles } = await import('../../src/vehicles.js'), { toLocal } = await import('../../src/realworld.js');
+  const V = new Vehicles(new THREE.Scene(), w); V.disposed = true; // (the stand-ins stay: the real models never arrive in Node, and mustn't replace them if they did)
+  const types = ['sedan', 'taxi', 'suv', 'hatch', 'compact'], meta = {}, geo = {}, box = () => new THREE.BoxGeometry(1.9, 1.4, 4.6).translate(0, 0.7, 0);
+  for (const t of types) { meta[t] = { L: 4.6, W: 1.9, H: 1.4, wheels: [], head: [[-0.6, 0.7, -2.3], [0.6, 0.7, -2.3]], tail: [[-0.6, 0.8, 2.3], [0.6, 0.8, 2.3]] }; geo[t] = { lod: [box(), box(), box()], wheels: [] }; }
+  V.buildBatch({ meta, geo, material: new THREE.MeshBasicMaterial() });
+  const [x, z] = toLocal(w.real.meta, 40.7531, -73.9810), cam = new THREE.Vector3(x, w.sampleGrid(x, z) + 3, z), wasNight = w.night; w.night = true;
+  const B = V.batch, S = V.slots, m4 = new THREE.Matrix4(), bp = new THREE.Vector3(), p = new THREE.Vector3(), d = new THREE.Vector3();
+  const out = { groups: 0, ghost: 0, faced: 0, back: 0, samples: 0, pairs: 0, long: 0, worst: 0, cars: 0, still: 0, moving: 0, ex: [] }, run = new Map(), first = new Map();
+  const desc = (pr) => pr.map(({ c, x, z }) => `${c.path.transient ? 'turn at ' + c.path.node : c.path.from + '>' + c.path.to} s ${c.s.toFixed(1)}/${c.path.total.toFixed(0)} v ${c.v.toFixed(1)} at ${x.toFixed(0)},${z.toFixed(0)}`).join(' and ');
+  const DT = 1 / 30, EVERY = 6, LONG = 2 / (DT * EVERY);
+  try {
+    for (let k = 0; k < 30 * 45; k++) {
+      V.update(DT, cam);
+      if (k < 30 * 8 || k % EVERY) continue;
+      out.samples++;
+      // bodies drawn (positions), and the moving cars' places and headings
+      const bodies = []; for (let i = 0; i < V.nbLast; i++) { B.getMatrixAt(S[i], m4); bodies.push(bp.setFromMatrixPosition(m4).clone()); }
+      const cars = V.cars.filter((c) => !c.path.loop && c.path.pts).map((c) => { V.pathPoint(c.path, c.s, p, d); return { c, x: p.x, z: p.z, dx: d.x, dz: d.z, L: V.model(c.type).L, W: V.model(c.type).W }; });
+      const near = cars.filter((q) => Math.hypot(q.x - cam.x, q.z - cam.z) < 400); out.cars += near.length; for (const q of near) { if (q.c.v < 0.3) out.still++; else out.moving++; }
+      // lamps: four a car (head, head, tail, tail), packed
+      const LP = V.lp;
+      for (let g = 0; g + 3 < V.lightsOn; g += 4) {
+        const o = g * 3, hx = (LP[o] + LP[o + 3]) / 2, hz = (LP[o + 2] + LP[o + 5]) / 2, tx = (LP[o + 6] + LP[o + 9]) / 2, tz = (LP[o + 8] + LP[o + 11]) / 2, cx = (hx + tx) / 2, cz = (hz + tz) / 2;
+        out.groups++;
+        if (!bodies.some((b) => Math.hypot(b.x - cx, b.z - cz) < 1)) { out.ghost++; continue; }
+        const car = near.find((q) => Math.hypot(q.x - cx, q.z - cz) < 0.3); if (!car) continue;
+        if ((hx - tx) * car.dx + (hz - tz) * car.dz > 0) out.faced++; else out.back++;
+      }
+      // footprints (oriented rectangles, 90% of the car: bumpers may touch) overlapping
+      const C = 12, cell = new Map(), seen = new Set();
+      near.forEach((q, i) => { const key = Math.floor(q.x / C) + ',' + Math.floor(q.z / C); let a = cell.get(key); if (!a) cell.set(key, (a = [])); a.push(i); });
+      const hit = (a, b) => { const ax = [[a.dx, a.dz, a.L * 0.45], [-a.dz, a.dx, a.W * 0.45]], bx = [[b.dx, b.dz, b.L * 0.45], [-b.dz, b.dx, b.W * 0.45]], tx = b.x - a.x, tz = b.z - a.z;
+        for (const [ux, uz] of [...ax, ...bx]) { const pa = Math.abs(ax[0][0] * ux + ax[0][1] * uz) * ax[0][2] + Math.abs(ax[1][0] * ux + ax[1][1] * uz) * ax[1][2], pb = Math.abs(bx[0][0] * ux + bx[0][1] * uz) * bx[0][2] + Math.abs(bx[1][0] * ux + bx[1][1] * uz) * bx[1][2]; if (Math.abs(tx * ux + tz * uz) > pa + pb) return false; }
+        return true; };
+      const now = new Set(), what = new Map();
+      near.forEach((a, i) => { const ci = Math.floor(a.x / C), cj = Math.floor(a.z / C); for (let u = ci - 1; u <= ci + 1; u++) for (let v = cj - 1; v <= cj + 1; v++) for (const j of cell.get(u + ',' + v) || []) {
+        if (j <= i) continue; const b = near[j]; if (Math.hypot(a.x - b.x, a.z - b.z) > 8 || !hit(a, b)) continue;
+        const key = a.c === b.c ? null : (V.cars.indexOf(a.c) + ':' + V.cars.indexOf(b.c)); if (!key || seen.has(key)) continue; seen.add(key); now.add(key); what.set(key, [a, b]);
+      } });
+      for (const key of now) { const n = (run.get(key) || 0) + 1; run.set(key, n); if (n === 1) { out.pairs++; first.set(key, desc(what.get(key))); } if (n === Math.ceil(LONG)) { out.long++; if (out.ex.length < 6) out.ex.push(`${first.get(key)}, 2 s later ${desc(what.get(key))}`); } out.worst = Math.max(out.worst, n * DT * EVERY); }
+      for (const key of [...run.keys()]) if (!now.has(key)) run.delete(key);
+    }
+  } finally { w.night = wasNight; }
+  return out;
+}
+
+// #228: posts stand off the roads. Every traffic light's pole (signals.js, at every signalled junction) and the street
+// lamps' posts round Midtown (roads.js, the tiles within 700 m built): how many stand on a road's carriageway (closer to
+// a road's centre line than its half width; bridge decks and tunnels aside: they're above or below).
+export async function postsCheck(w) {
+  const THREE = await import('three'), { LaneGraph } = await import('../../src/laneGraph.js'), { Signals } = await import('../../src/signals.js'), { toLocal } = await import('../../src/realworld.js');
+  const C = 20, cells = new Map();
+  for (const rd of w.net.roads) { if (rd.kind === 'rail') continue; const P = rd.pts; for (let i = 0; i + 1 < P.length; i++) { if ((rd.bridge?.[i] && rd.bridge?.[i + 1]) || (rd.tube?.[i] && rd.tube?.[i + 1])) continue; const a = P[i], b = P[i + 1]; const i0 = Math.floor(Math.min(a.x, b.x) / C), i1 = Math.floor(Math.max(a.x, b.x) / C), j0 = Math.floor(Math.min(a.z, b.z) / C), j1 = Math.floor(Math.max(a.z, b.z) / C); for (let u = i0; u <= i1; u++) for (let v = j0; v <= j1; v++) { const k = u + ',' + v; let L = cells.get(k); if (!L) cells.set(k, (L = [])); L.push([a, b, rd.width / 2]); } } }
+  const onRoad = (x, z) => { for (const [a, b, hw] of cells.get(Math.floor(x / C) + ',' + Math.floor(z / C)) || []) { const ex = b.x - a.x, ez = b.z - a.z, l = ex * ex + ez * ez, t = l ? Math.max(0, Math.min(1, ((x - a.x) * ex + (z - a.z) * ez) / l)) : 0; if (Math.hypot(a.x + ex * t - x, a.z + ez * t - z) < hw) return true; } return false; };
+  const S = new Signals(new LaneGraph(w.net), { city: !!w.loc.city }); let sig = 0, sigOn = 0; const ex = [];
+  for (const n of S.nodes.values()) { S.pole(n); sig++; if (onRoad(n.px, n.pz)) { sigOn++; if (ex.length < 3) ex.push(`(${Math.round(n.x)}, ${Math.round(n.z)})`); } }
+  const [x, z] = toLocal(w.real.meta, 40.7531, -73.9810), G = w.roadGroup.userData, m4 = new THREE.Matrix4(), p = new THREE.Vector3();
+  G.update({ x, y: 0, z }, 0, 700);
+  let lamps = 0, lampsOn = 0; const lex = [];
+  for (const t of G.tiles) if (t.built && Math.hypot(t.x - x, t.z - z) < 1000) for (const m of t.meshes) if (m.isInstancedMesh) for (let i = 0; i < m.count; i++) { m.getMatrixAt(i, m4); p.setFromMatrixPosition(m4); lamps++; if (onRoad(p.x, p.z)) { lampsOn++; if (lex.length < 3) lex.push(`(${Math.round(p.x)}, ${Math.round(p.z)})`); } }
+  return { sig, sigOn, lamps, lampsOn, ex, lex };
+}
+
 export async function runCase(c, ctx) {
+  if (c.models) return modelsCheck();
   const { worldAt } = await import('./node/world.mjs');
   const w = (await worldAt(c.loc)).world;
   if (c.tunnel) { // a car driven into the place's longest tunnel stays on its floor, under the hill or the river, in one piece
@@ -126,6 +210,21 @@ export async function runCase(c, ctx) {
     }
     const alive = ac.parts.filter((q) => q.alive).length;
     return [{ name: `${c.loc}: a car drives through a tunnel on its floor`, ok: inTube > 300 && above < 2.5 && alive === ac.parts.length, why: `${inTube} steps in the tube, at most ${above.toFixed(2)} m over its floor, ${alive}/${ac.parts.length} parts, ${off.toFixed(1)} m off the line` }];
+  }
+  if (c.posts) {
+    const o = await postsCheck(w);
+    return [
+      { name: `${c.loc}: traffic light poles stand off the roads`, ok: o.sig > 100 && o.sigOn <= 0.01 * o.sig, why: `${o.sigOn} of ${o.sig} on a carriageway (at most 1%: a road not joined to the junction there)${o.ex.length ? ', e.g. ' + o.ex.join(' ') : ''}` },
+      { name: `${c.loc}: street lamps stand off the roads`, ok: o.lamps > 50 && o.lampsOn <= 0.03 * o.lamps, why: `${o.lampsOn} of ${o.lamps} posts round Midtown on a carriageway (at most 3%: beside a stack of parallel ramps a post can't miss them all; #228: half of them were in the junctions)${o.lex.length ? ', e.g. ' + o.lex.join(' ') : ''}` },
+    ];
+  }
+  if (c.safety) {
+    const o = await safetyCheck(w), lamps = o.groups / Math.max(1, o.samples);
+    return [
+      { name: `${c.loc}: car lamps only on cars that are drawn`, ok: o.groups > 0 && !o.ghost, why: `${o.ghost} of ${o.groups} lamp sets with no body (${lamps.toFixed(0)} cars lit a frame)` },
+      { name: `${c.loc}: traffic faces the way it drives`, ok: o.faced > 100 && !o.back, why: `${o.back} of ${o.faced + o.back} cars backwards` },
+      { name: `${c.loc}: cars don't drive through each other`, ok: o.long <= 0.02 * o.cars / o.samples, why: `${o.long} pairs of cars overlapping for over 2 s (worst ${o.worst.toFixed(1)} s), ${o.pairs} overlaps in all, ~${(o.cars / o.samples).toFixed(0)} cars within 400 m, ${(100 * o.still / Math.max(1, o.still + o.moving)).toFixed(0)}% standing${o.ex.length ? '; e.g. ' + o.ex.slice(0, 2).join('; ') : ''}` },
+    ];
   }
   if (c.pack) { // the deploy's road pack (roadPack.js) gives back exactly the roads it was made from
     const { encodeRoads, decodeRoads } = await import('../../src/roadPack.js'), roads = w.net.roads, P = decodeRoads(encodeRoads(roads, 'test'));
