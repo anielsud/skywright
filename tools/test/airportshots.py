@@ -32,8 +32,8 @@ VIEWS = {
   'terminal': ((215, 9, 30), (310, 9, 130)),         # the terminal and tower from the apron
   'landside': ((420, 5, 150), (320, 7, 115)),         # the terminal's kerb from the landside road
   'radar': ((412, 16, -126), (430, 13, -140)),        # the radar on its lattice tower
-  'facade': ((262, 5, 92), (300, 9, 122)),
-  'front': ((215, 4, 120), (300, 8, 120)),            # square on to the terminal (compare with the reference photo)           # close on the terminal's airside face
+  'facade': ((262, 5, 92), (300, 9, 122)),           # close on the terminal's airside face
+  'front': ((215, 4, 120), (300, 8, 120)),            # square on to the terminal (compare with the reference photo)
   'apron': ((165, 7, -45), (205, 1, -90)),            # stands with their ground equipment
   'carpark': ((395, 10, 40), (360, 0, 85)),           # the landside car park
 }
@@ -53,7 +53,8 @@ async def main():
                     await cdp.wait_for(f"{S}.F && {S}.F.t > 0 && !{S}.F.warm?.pending && {S}.F.world.loc.id === '{loc}'", 240, f'{loc} start')
                     await cdp.js(f'{S}.advance(1)'); await asyncio.sleep(4)
                     if a.js: await cdp.js(f'(() => {{ const W = {S}.F.world; {a.js}; return 1; }})()')
-                    for v in a.views.split(','):
+                    views = a.views.split(','); views.sort(key=lambda v: v != 'start') # (the start camera only exists before any other view moves it)
+                    for v in views:
                         name = os.path.join(a.out, f'{loc}-{q}-t{t}-{v}-{a.tag}.png')
                         if v == 'start':
                             await cdp.js(f"(() => {{ {S}.F.paused = true; document.getElementById('flight-ui').style.display = 'none'; return 1; }})()")
