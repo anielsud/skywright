@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Pack the road surface textures (tex/roads/) from CC0 ambientCG sets (ambientcg.com, CC0):
   Asphalt015 (fine-aggregate asphalt: the surface), Asphalt026C (cracked asphalt: its crack pattern only), Gravel023
-  (the shoulders). Each colour map is divided by its own mean, so src/roadSurface.js tints it per region (light grey
+  (the shoulders), Concrete042A (a city's pavements). Each colour map is divided by its own mean, so src/roadSurface.js tints it per region (light grey
   Swiss asphalt, darker US blacktop) instead of carrying one fixed colour.
 
-  python3 tools/roads/bake_textures.py DIR   (DIR holds Asphalt015_1K-JPG.zip, Asphalt026C_1K-JPG.zip, Gravel023_1K-JPG.zip
+  python3 tools/roads/bake_textures.py DIR   (DIR holds Asphalt015_1K-JPG.zip, Asphalt026C_1K-JPG.zip, Gravel023_1K-JPG.zip, Concrete042A_1K-JPG.zip
                                             from https://ambientcg.com/get?file=<id>_1K-JPG.zip)
 Writes, 1024 px, tiling:
   asphalt_d.jpg  RGB: asphalt colour / its mean, x 0.5 (so 0.5 = average; the shader multiplies by 2)
   asphalt_n.jpg  RG: asphalt normal (OpenGL, x/y), B: crack mask (1 = crack, from Asphalt026C's displacement)
   gravel_d.jpg   RGB: gravel colour / its mean, x 0.5
+  sidewalk_d.jpg RGB: concrete colour / its mean, x 0.5
 """
 import io, os, sys, zipfile
 import numpy as np
@@ -49,6 +50,7 @@ def main(d):
     crack = np.clip((lvl - disp - 0.03) * 9, 0, 1)
     save(np.dstack([n[..., 0], n[..., 1], crack]), 'asphalt_n.jpg')
     save(flat(img(z('Gravel023'), '_Color.jpg')), 'gravel_d.jpg')
+    save(flat(img(z('Concrete042A'), '_Color.jpg')), 'sidewalk_d.jpg')
 
 
 if __name__ == '__main__':

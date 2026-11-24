@@ -48,7 +48,7 @@ function tex(name, srgb) {
   const t = loader.load(`tex/roads/${name}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; if (srgb) t.colorSpace = THREE.SRGBColorSpace;
   cache.set(name, t); return t;
 }
-export const ROAD_TEXTURE_FILES = ['tex/roads/asphalt_d.jpg', 'tex/roads/asphalt_n.jpg', 'tex/roads/gravel_d.jpg'];
+export const ROAD_TEXTURE_FILES = ['tex/roads/asphalt_d.jpg', 'tex/roads/asphalt_n.jpg', 'tex/roads/gravel_d.jpg', 'tex/roads/sidewalk_d.jpg'];
 
 const NOISE = /* glsl */`
   float rh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -195,5 +195,41 @@ export function shoulderMaterial(region) {
       `);
   };
   mat.customProgramCacheKey = () => 'shoulder2-' + region;
+  return mat;
+}
+
+// A city's pavements (#228): a granite kerb 15 cm up from the gutter, then concrete slabs (1.5 m, with their joints) to
+// the building line. uv = (metres across from the road's centre line, metres along); rinfo as the tarmac's (half width);
+// rjunc as the tarmac's: the pavement stops at a junction's clearance, where the crossing is.
+export function sidewalkMaterial() {
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0 });
+  const U = { sD: { value: tex('sidewalk_d', true) } };
+  mat.userData.U = U;
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, FOG, U);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 rinfo; attribute vec4 rjunc; varying vec2 vR; varying vec3 vI; varying vec4 vJ;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvR = uv; vI = rinfo; vJ = rjunc;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+      varying vec2 vR; varying vec3 vI; varying vec4 vJ; uniform sampler2D sD;
+      ${NOISE}`)
+      .replace('#include <map_fragment>', `
+        float hw = vI.x, x = abs(vR.x) - hw, v = vR.y; // x: metres out from the kerb's face
+        float gFv = fwidth(v), gFx = fwidth(x);
+        float dj = min(vJ.x, vJ.y), jc = vJ.y < vJ.x ? vJ.w : vJ.z, jr = floor(jc / 32.0) / 4.0;
+        if (jc > 0.5 && dj < jr + 0.3) discard; // (the junction: the crossing's open roadway)
+        vec3 conc = vec3(0.47, 0.465, 0.45) * texture2D(sD, vec2(vR.x, v) / 2.4).rgb * 2.0;
+        // slabs: joints every 1.5 m along and across, a little darker and soiled; some slabs a shade off
+        vec2 sl = vec2(x - 0.35, v) / 1.5, f = abs(fract(sl) - 0.5) * 1.5;
+        float joint = max(smoothstep(0.73 - max(gFx, gFv), 0.75, f.x), smoothstep(0.73 - max(gFx, gFv), 0.75, f.y)) * step(0.35, x);
+        conc *= 0.9 + 0.2 * rh(floor(sl) + vI.z);
+        conc *= 1.0 - joint * 0.35;
+        conc *= 0.88 + 0.12 * fbm(vec2(vR.x, v) * 0.35);
+        // the kerb: granite, a band 35 cm wide (top and face)
+        float kerb = 1.0 - step(0.35, x);
+        vec3 granite = vec3(0.38, 0.37, 0.36) * (0.85 + 0.3 * rh(floor(vec2(v * 0.8, 3.0))));
+        diffuseColor.rgb = mix(conc, granite, kerb);
+      `);
+  };
+  mat.customProgramCacheKey = () => 'sidewalk1';
   return mat;
 }
