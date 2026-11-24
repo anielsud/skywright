@@ -14,14 +14,22 @@ export const C = {
   PLAIN: 0, WIN_GREEN: 1, WIN_BLUE: 2, WIN: 3, DOOR: 4, WOOD_WIN: 5, WOOD: 6, STONE_WIN: 7,
   ADOBE_WIN: 8, ADOBE: 9, ADOBE_DOOR: 10, APT: 11, SHOP: 12, GLASS: 13, BALCONY: 14, BOARDS: 15,
   METAL: 16, HANGAR_DOOR: 17, TILES: 18, SLATE: 19, SEAM: 20, GRAVEL: 21, SHINGLE: 22, BRICK: 23,
-  DARKWOOD: 24, CONCRETE: 25, CHURCH_WIN: 26, GARAGE: 27, THATCH: 28, HEDGE: 29, STONE: 30, BRICK_WIN: 31,
+  DARKWOOD: 24, CONCRETE: 25, CHURCH_WIN: 26, GARAGE: 27, THATCH: 28, LOG: 29, STONE: 30, BRICK_WIN: 31,
   CLAP: 32, CLAP_WIN: 33, LAWN: 34, COBBLE: 35, PAVERS: 36, ASPHALT: 37, DARKTILE: 38, WIN_TALL: 39,
-  WOOD_WIN2: 40, SHOP2: 41, ADOBE_WIN2: 42, SHUTTERED: 43, POOL: 44, SOIL: 45, RAIL_WOOD: 46, RAIL_IRON: 47,
-  SOLAR: 48, TRIM: 49, NEON: 50, FLOWERS: 51, SHOP3: 52, CLAP_DOOR: 53, WOOD_DOOR: 54, PARKING: 55,
+  WOOD_WIN2: 40, SHOP2: 41, ADOBE_WIN2: 42, SHUTTERED: 43, TIMBER_WIN: 44, MASONRY_WIN: 45, RAIL_WOOD: 46, RAIL_IRON: 47,
+  LOG_WIN: 48, TRIM: 49, NEON: 50, MOTEL_DOOR: 51, SHOP3: 52, CLAP_DOOR: 53, WOOD_DOOR: 54, PARKING: 55,
   SHOP_N: 56, SHOP2_N: 57, SHOP3_N: 58, // shop fronts without the name board (all but one bay of a shop)
   LIME: 59, LIME_WIN: 60, BROWN_WIN: 61, // smooth cut stone (ashlar), tinted: limestone / brownstone, tall windows with lintels
   ROOF_TAR: 62, ROOF_GRAVEL: 63, // flat roofs: the tint decides the colour (the ground cells keep most of the photo's)
+  // (LOG / LOG_WIN: round logs, Grand Canyon cabins and lodges; TIMBER_WIN: light timber, no flower box (Bora Bora);
+  // MASONRY_WIN: a chalet's whitewashed ground floor; MOTEL_DOOR: a motel room's door and window off its walkway)
 };
+// Two-tier walls: a wall quad written with one of these ids (past the 64 atlas cells) shows its ground floor (the first
+// 3 m above its frame's base) in the first cell and every floor above in the second, chosen in the shader: a chalet's
+// masonry ground floor under its timber, a lodge's stone base under its logs, for no extra vertices
+export const TIER = { CHALET: 64, LODGE: 65 };
+const TIERS = { [TIER.CHALET]: [C.MASONRY_WIN, C.WOOD_WIN], [TIER.LODGE]: [C.STONE_WIN, C.LOG_WIN] };
+export const tierCells = (cell) => TIERS[cell] ?? [cell, cell]; // [ground floor, upper floors]
 const SIGNLESS = { [C.SHOP]: C.SHOP_N, [C.SHOP2]: C.SHOP2_N, [C.SHOP3]: C.SHOP3_N };
 const COLS = 8, ROWS = 8, NCELL = COLS * ROWS, PAD = 1 / 16; // PAD: gutter per side, fraction of a slot
 // photo materials in tex/towns/mat_*.jpg (5 x 4 tiles of 512 px, each 3 m square; see tools/towns/bake_materials.py)
@@ -35,7 +43,8 @@ export const MAT_FILES = ['tex/towns/mat_color.jpg', 'tex/towns/mat_normal.jpg',
 const WIN = {};
 const winCell = (cell, x, y, w, h, rec = 0.05, room = 1.3, kind = 0, sill = true) => { WIN[cell] = { r: [x / 128, 1 - (y + h) / 128, (x + w) / 128, 1 - y / 128], rec, room, kind, sill }; };
 winCell(C.WIN_GREEN, 41, 27, 46, 62); winCell(C.WIN_BLUE, 41, 27, 46, 62); winCell(C.WIN, 41, 27, 46, 62); winCell(C.SHUTTERED, 41, 27, 46, 62, 0.04, 1.2);
-winCell(C.WOOD_WIN, 39, 23, 50, 58, 0.06, 1.3, 0, false); winCell(C.WOOD_WIN2, 22, 30, 84, 46, 0.06, 1.3, 0, false); winCell(C.STONE_WIN, 45, 37, 38, 46, 0.12);
+winCell(C.WOOD_WIN, 39, 23, 50, 58, 0.06, 1.3, 0, false); winCell(C.TIMBER_WIN, 41, 27, 46, 54, 0.06, 1.3, 0, false); winCell(C.LOG_WIN, 41, 29, 46, 50, 0.1, 1.3, 0, false);
+winCell(C.MASONRY_WIN, 47, 35, 34, 42, 0.14, 1.2); winCell(C.MOTEL_DOOR, 67, 37, 46, 42, 0.05, 1.3); winCell(C.WOOD_WIN2, 22, 30, 84, 46, 0.06, 1.3, 0, false); winCell(C.STONE_WIN, 45, 37, 38, 46, 0.12);
 winCell(C.ADOBE_WIN, 46, 40, 36, 44, 0.13); winCell(C.ADOBE_WIN2, 40, 30, 48, 56, 0.12, 1.2);
 winCell(C.APT, 25, 21, 78, 76, 0.05, 1.4); winCell(C.BRICK_WIN, 33, 25, 62, 68, 0.07); winCell(C.CLAP_WIN, 43, 25, 42, 64, 0.04);
 winCell(C.WIN_TALL, 44, 14, 40, 96, 0.05, 1.4); winCell(C.LIME_WIN, 43, 15, 42, 88, 0.09, 1.4); winCell(C.BROWN_WIN, 44, 19, 40, 84, 0.1, 1.3);
@@ -174,6 +183,20 @@ function paintAtlas(CELL, photo) {
   at(C.WOOD_WIN); base(MAT.chalet, 0.35); window_(42, 26, 44, 52, { frame: '#efe8da', sill: null }); flowerBox(36, 87, 56); done();
   at(C.WOOD_WIN2); base(MAT.chalet, 0.35); for (const x of [25, 67]) window_(x, 33, 36, 40, { frame: '#efe8da', sill: null, cross: true, transom: 0.5 }); P(61, 30, 6, 46, '#efe8da', { z: 114 }); for (const x of [8, 103]) { louvres(x, 30, 16, 46, '#b0303a'); g.fillStyle = 'rgba(255,255,255,0.8)'; g.beginPath(); g.moveTo(x, 30); g.lineTo(x + 16, 53); g.lineTo(x, 76); g.fill(); } flowerBox(20, 82, 88); done();
   at(C.WOOD_DOOR); base(MAT.chalet, 0.35); door(40, 22, 48, 106, '#5a3a20', { frame: '#7a5a3a' }); P(34, 12, 60, 8, '#4a3020', { z: 170 }); done();
+  // natural wood from the pale painted-board photo: its hue and saturation replaced by a wood colour (the luminance kept),
+  // so the building's tint can make it any timber from pale to brown
+  const woodWash = (mat, col, a) => { base(mat, 1); g.save(); g.globalCompositeOperation = 'color'; g.globalAlpha = a; g.fillStyle = col; g.fillRect(0, 0, 128, 128); g.restore(); };
+  // light timber (Bora Bora's bungalows and island houses): pale boards, a plain window in a dark wood frame, no flower box
+  at(C.TIMBER_WIN); woodWash(MAT.clap, '#b08a5a', 1); g.save(); g.globalAlpha = 0.1; for (let k = 0; k < 40; k++) { g.fillStyle = R() < 0.5 ? '#5a3a1a' : '#fff4dc'; g.fillRect(0, R() * 128, 128, 0.8 + R()); } g.restore();
+  P(37, 23, 54, 62, '#7a5a3a', { z: 150, rough: 0.7 }); window_(41, 27, 46, 54, { frame: '#6a4a2e', sill: null }); done();
+  // round logs (Grand Canyon cabins and lodges): rounded courses with dark chinking between, tinted per building
+  const logs = () => { woodWash(MAT.plaster, '#a07a50', 0.9); g.save(); g.globalAlpha = 0.12; for (let k = 0; k < 90; k++) { g.fillStyle = R() < 0.5 ? '#3a2410' : '#fff0d8'; g.fillRect(R() * 128 - 20, R() * 128, 10 + R() * 40, 0.8); } g.restore(); for (let y = 0; y < 128; y += 16) { for (const [dy, hh, a, z] of [[0, 3, 0.2, 140], [3, 4, 0, 158], [7, 5, -0.08, 150], [12, 2.5, -0.2, 132], [14.5, 1.5, -0.45, 104]]) { g.save(); g.globalAlpha = Math.abs(a); g.fillStyle = a > 0 ? '#fff0d8' : '#1a1008'; g.fillRect(0, y + dy, 128, hh); g.restore(); Z(0, y + dy, 128, hh, z); } } };
+  at(C.LOG); logs(); done();
+  at(C.LOG_WIN); logs(); P(35, 23, 58, 62, '#4a3220', { z: 165, rough: 0.8 }); window_(41, 29, 46, 50, { frame: '#e6dcc4', sill: null }); done();
+  // a chalet's ground floor: whitewashed masonry (barely tinted: the timber colour above is the building's), a small deep window in a stone surround
+  at(C.MASONRY_WIN); base(MAT.plaster, 0.12); P(42, 30, 44, 52, '#d6d0c2', { tint: 0.12, z: 146, rough: 0.8 }); window_(47, 35, 34, 42, { frame: '#f4f0e6', sill: '#c8c2b4' }); done();
+  // motel room off an outdoor walkway: stucco, a panelled door and a picture window
+  at(C.MOTEL_DOOR); base(MAT.stucco, 1); door(14, 30, 36, 98, '#6a4a30', { frame: '#e8e0d0', glassTop: false }); P(60, 32, 60, 56, '#e8e0d0', { z: 150 }); window_(67, 37, 46, 42, { frame: '#ece6da', cross: false, sill: null }); P(54, 40, 3, 6, '#f0d890', { z: 170, rough: 0.3 }); done();
   at(C.STONE); base(MAT.stone, 0.25); done();
   at(C.STONE_WIN); base(MAT.stone, 0.25); P(44, 34, 40, 4, '#9a968c', { z: 160 }); window_(48, 40, 32, 40, { frame: '#e8e2d6' }); done();
   // cut stone (pre-war limestone, brownstone; all tinted per building): a string course at the floor line, tall
@@ -226,7 +249,6 @@ function paintAtlas(CELL, photo) {
   at(C.ROOF_TAR); base(MAT.asphalt, 1); done(); at(C.ROOF_GRAVEL); base(MAT.gravel, 1); done();
   at(C.SEAM); P(0, 0, 128, 128, '#d4d4d4', { tint: 1, rough: 0.35 }); for (let k = 0; k < 128; k += 21) { P(k, 0, 3, 128, '#f4f4f4', { tint: 1, rough: 0.3, z: 170 }); P(k + 3, 0, 2, 128, '#9a9a9a', { tint: 1, z: 150 }); } done();
   at(C.SHINGLE); P(0, 0, 128, 128, '#5a4030', { tint: 0.5, rough: 0.95 }); for (let y = 0; y < 128; y += 10) for (let x = R() * 8 - 8; x < 128; x += 7 + R() * 6) { const v = R(); P(x, y, 6 + R() * 4, 9, `rgb(${96 + v * 50 | 0},${68 + v * 38 | 0},${48 + v * 28 | 0})`, { tint: 0.5, rough: 0.95, z: 128 + (y % 20) }); g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(x, y + 8, 7, 1.5); } done();
-  at(C.SOLAR); P(0, 0, 128, 128, '#c8ccd0', { rough: 0.3, z: 150 }); for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) { grad(3 + x * 63, 3 + y * 63, 59, 59, '#1a2a48', '#0e1830', { rough: 0.08, z: 135 }); for (let k = 1; k < 6; k++) { g.fillStyle = 'rgba(160,180,220,0.35)'; g.fillRect(3 + x * 63 + k * 10, 3 + y * 63, 0.8, 59); g.fillRect(3 + x * 63, 3 + y * 63 + k * 10, 59, 0.8); } } done();
   // ---- ground ----
   at(C.GRAVEL); base(MAT.gravel, 0.7); done();
   at(C.LAWN); base(MAT.lawn, 1); g.save(); g.globalAlpha = 0.035; g.fillStyle = '#ffffff'; g.fillRect(0, 0, 128, 64); g.restore(); done(); // mowing stripes
@@ -234,14 +256,12 @@ function paintAtlas(CELL, photo) {
   at(C.PAVERS); base(MAT.pavers, 0.5); done();
   at(C.ASPHALT); base(MAT.asphalt, 0.3); done();
   at(C.PARKING); base(MAT.asphalt, 0.3); P(0, 0, 3, 128, '#e8e8e2', { rough: 0.6 }); P(125, 0, 3, 128, '#e8e8e2', { rough: 0.6 }); done();
-  at(C.POOL); P(0, 0, 128, 128, '#3ab8d8', { rough: 0.03 }); for (let k = 0; k < 60; k++) { g.strokeStyle = `rgba(255,255,255,${0.15 + R() * 0.2})`; g.lineWidth = 1.2; g.beginPath(); const x = R() * 128, y = R() * 128; g.moveTo(x, y); g.bezierCurveTo(x + 8, y - 6, x + 14, y + 6, x + 22, y); g.stroke(); } done();
-  at(C.SOIL); P(0, 0, 128, 128, '#4a3a2c', { tint: 0.3, rough: 0.95 }); for (let k = 0; k < 500; k++) { const v = R(); g.fillStyle = `rgb(${60 + v * 50 | 0},${46 + v * 40 | 0},${34 + v * 30 | 0})`; g.fillRect(R() * 128, R() * 128, 2, 2); } done();
-  at(C.FLOWERS); P(0, 0, 128, 128, '#3a2e22', { rough: 0.95 }); for (let k = 0; k < 260; k++) { g.fillStyle = ['#2e5a22', '#3e6a2a', '#4e7a32'][k % 3]; g.beginPath(); g.arc(R() * 128, R() * 128, 3 + R() * 3, 0, 7); g.fill(); } for (let k = 0; k < 220; k++) { g.fillStyle = ['#d0283c', '#f0d040', '#f0f0f0', '#c060c0', '#f08030'][Math.floor(R() * 5)]; g.beginPath(); g.arc(R() * 128, R() * 128, 1.6 + R() * 1.4, 0, 7); g.fill(); } done();
-  at(C.HEDGE); P(0, 0, 128, 128, '#7a9a68', { tint: 1, rough: 0.9 }); for (let k = 0; k < 900; k++) { const v = R(), x = R() * 128, y = R() * 128; g.fillStyle = `rgb(${90 + v * 120 | 0},${120 + v * 110 | 0},${80 + v * 90 | 0})`; h.fillStyle = hz(110 + v * 60 | 0); for (const c of [g, h]) { c.beginPath(); c.ellipse(x, y, 3.4, 2.2, R() * 3, 0, 7); c.fill(); } } done();
   // ---- special ----
   at(C.CHURCH_WIN); base(MAT.plaster, 1);
   g.fillStyle = '#e8e4dc'; h.fillStyle = hz(150); for (const c of [g, h]) { c.beginPath(); c.moveTo(40, 124); c.lineTo(40, 40); c.arc(64, 40, 24, Math.PI, 0); c.lineTo(88, 124); c.fill(); }
-  for (let k = 0; k < 13; k++) { const y = 22 + k * 8; P(48, Math.max(y, 26), 32, 8, ['#4a6ab0', '#b03a3a', '#d8b040', '#3a8a5a'][k % 4], { win: 1, rough: 0.1, z: 110 }); }
+  // plain leaded glass (village churches): pale panes, a lead grid, no colours
+  for (let k = 0; k < 13; k++) { const y = 22 + k * 8; P(48, Math.max(y, 26), 32, 8, k % 2 ? '#8c9a98' : '#7e8c8c', { win: 1, rough: 0.1, z: 110 }); }
+  g.fillStyle = 'rgba(40,44,44,0.7)'; for (let y = 30; y < 120; y += 8) g.fillRect(48, y, 32, 1); for (const x of [55, 72]) g.fillRect(x, 26, 1, 94);
   g.fillStyle = '#e8e4dc'; g.fillRect(63, 22, 2, 98); done();
   at(C.NEON); P(0, 0, 128, 128, '#1a1a1e', { rough: 0.4 }); g.font = 'bold 30px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillStyle = '#ff3a5a'; g.fillText('MOTEL', 64, 40); d.fillStyle = dat(1, 0, 0.3); d.font = g.font; d.textAlign = 'center'; d.textBaseline = 'middle'; d.fillText('MOTEL', 64, 40);
@@ -364,7 +384,9 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
       `)
       .replace('#include <map_fragment>', `
         ${DMG_FRAG}
-        float ci = floor(vAtl.x + 0.5); int ii = int(ci);
+        float ci = floor(vAtl.x + 0.5);
+        if (ci > ${NCELL - 0.5}) ci = vMapUv.y < 1.0 ? (ci < ${TIER.LODGE - 0.5} ? ${TIERS[TIER.CHALET][0]}.0 : ${TIERS[TIER.LODGE][0]}.0) : (ci < ${TIER.LODGE - 0.5} ? ${TIERS[TIER.CHALET][1]}.0 : ${TIERS[TIER.LODGE][1]}.0); // two-tier walls (TIER)
+        int ii = int(ci);
         vec2 cxy = vec2(mod(ci, ${COLS}.0), floor(ci / ${COLS}.0 + 0.01));
         vec2 fu = fract(vMapUv), bay = floor(vMapUv);
         const float CCF = ${(1 - 2 * PAD).toFixed(5)}, PADF = ${PAD.toFixed(5)};
@@ -528,6 +550,23 @@ export class Builder {
     const I = this.idx, k = this.ni;
     if (P.length === 3) { I[k] = o; I[k + 1] = o + 1; I[k + 2] = o + 2; this.ni += 3; this.n += 3; } else { I[k] = o; I[k + 1] = o + 1; I[k + 2] = o + 2; I[k + 3] = o; I[k + 4] = o + 2; I[k + 5] = o + 3; this.ni += 6; this.n += 4; }
   }
+  // a flat polygon of many triangles sharing its vertices (one normal: the plane's; triangles
+  // counter-clockwise seen from the front): pts [[x, y, z]], uv [[u, v]], tris [[a, b, c]] indices into pts
+  fan(pts, uv, tris, cell, col) {
+    if (!tris.length) return;
+    let nx = 0, ny = 0, nz = 0; // (the triangles' area-weighted normal: a sliver's alone could be zero, NaN in the shader)
+    for (const [i0, i1, i2] of tris) {
+      const p0 = pts[i0], p1 = pts[i1], p2 = pts[i2], ax = p1[0] - p0[0], ay = p1[1] - p0[1], az = p1[2] - p0[2], bx = p2[0] - p0[0], by = p2[1] - p0[1], bz = p2[2] - p0[2];
+      nx += ay * bz - az * by; ny += az * bx - ax * bz; nz += ax * by - ay * bx;
+    }
+    const l = Math.hypot(nx, ny, nz); if (l < 1e-9) return; nx /= l; ny /= l; nz /= l;
+    _c.set(col); const cr = Math.round(Math.min(1, _c.r) * 255), cg = Math.round(Math.min(1, _c.g) * 255), cb = Math.round(Math.min(1, _c.b) * 255);
+    const o = this.n; this._grow(o + pts.length); this.vn = o;
+    while (this.ni + tris.length * 3 > this.idx.length) { const b = new Uint32Array(this.idx.length * 2); b.set(this.idx); this.idx = b; }
+    for (let i = 0; i < pts.length; i++) this._v(pts[i], nx, ny, nz, uv[i][0], uv[i][1], cell, cr, cg, cb);
+    for (const [a, b, c] of tris) { this.idx[this.ni++] = o + a; this.idx[this.ni++] = o + b; this.idx[this.ni++] = o + c; }
+    this.n += pts.length;
+  }
   // both faces of a thin panel (railings, fences, signs)
   panel(p0, p1, p2, p3, cell, col, s = 3, uvs = null) {
     const L = Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) / s, H = Math.hypot(p3[0] - p0[0], p3[1] - p0[1], p3[2] - p0[2]) / s, u = uvs || [0, 0, L, 0, L, H, 0, H];
@@ -596,36 +635,37 @@ export class Builder {
   }
   // gable roof over a w x d footprint, ridge along z. Gable ends filled with wallCell. The roof has thickness (fascia
   // and barge boards), a soffit underneath, a ridge cap; gutters + downpipes go to the detail builder.
-  gable(w, d, y, rise, over, cell, col, wallCell, wallCol, { under = null, ends = true, overZ = over, trim = C.TRIM, trimCol = 0xf0eee8, gutter = true, th = 0.22 } = {}) {
-    const hw = w / 2, ex = hw + over, ez = d / 2 + overZ, ye = y - over * rise / hw, yr = y + rise, sl = Math.hypot(ex, yr - ye) / 3, L = (2 * ez) / 3;
+  gable(w, d, y, rise, over, cell, col, wallCell, wallCol, { under = null, ends = true, overZ = over, overN = over, trim = C.TRIM, trimCol = 0xf0eee8, gutter = true, th = 0.22 } = {}) {
+    // (overN: the eave overhang on the -x side, when it differs: a veranda under the roof carried on down)
+    const hw = w / 2, ex = hw + over, exN = hw + overN, ez = d / 2 + overZ, ye = y - over * rise / hw, yeN = y - overN * rise / hw, yr = y + rise, sl = Math.hypot(ex, yr - ye) / 3, slN = Math.hypot(exN, yr - yeN) / 3, L = (2 * ez) / 3;
     this.quad([ex, ye, ez], [ex, ye, -ez], [0, yr, -ez], [0, yr, ez], [0, 0, L, 0, L, sl, 0, sl], cell, col);
-    this.quad([-ex, ye, -ez], [-ex, ye, ez], [0, yr, ez], [0, yr, -ez], [0, 0, L, 0, L, sl, 0, sl], cell, col);
+    this.quad([-exN, yeN, -ez], [-exN, yeN, ez], [0, yr, ez], [0, yr, -ez], [0, 0, L, 0, L, slN, 0, slN], cell, col);
     if (ends) {
       const z = d / 2, v = rise / 3, u = w / 3;
       this.tri([-hw, y, z], [hw, y, z], [0, yr, z], [0, y / 3, u, y / 3, u / 2, y / 3 + v], wallCell, wallCol);
       this.tri([hw, y, -z], [-hw, y, -z], [0, yr, -z], [0, y / 3, u, y / 3, u / 2, y / 3 + v], wallCell, wallCol);
     }
     if (over > 0.05 || overZ > 0.05) {
-      const t = th, yb = ye - t, yrb = yr - t;
+      const t = th, yb = ye - t, ybN = yeN - t, yrb = yr - t;
       // soffit (underside), slightly below the roof plane = visible thickness
       const sc = under ?? trim, scol = under != null ? 0xffffff : trimCol;
       this.quad([0, yrb, ez], [0, yrb, -ez], [ex, yb, -ez], [ex, yb, ez], [0, 0, L, 0, L, sl, 0, sl], sc, scol);
-      this.quad([0, yrb, -ez], [0, yrb, ez], [-ex, yb, ez], [-ex, yb, -ez], [0, 0, L, 0, L, sl, 0, sl], sc, scol);
+      this.quad([0, yrb, -ez], [0, yrb, ez], [-exN, ybN, ez], [-exN, ybN, -ez], [0, 0, L, 0, L, slN, 0, slN], sc, scol);
       // fascia along the eaves
       this.plainQuad([ex, yb, ez], [ex, yb, -ez], [ex, ye, -ez], [ex, ye, ez], trim, trimCol);
-      this.plainQuad([-ex, yb, -ez], [-ex, yb, ez], [-ex, ye, ez], [-ex, ye, -ez], trim, trimCol);
+      this.plainQuad([-exN, ybN, -ez], [-exN, ybN, ez], [-exN, yeN, ez], [-exN, yeN, -ez], trim, trimCol);
       // barge boards along the rakes
       for (const z of [ez, -ez]) {
         const f = z > 0 ? 1 : -1;
-        if (f > 0) { this.plainQuad([0, yrb, z], [ex, yb, z], [ex, ye, z], [0, yr, z], trim, trimCol); this.plainQuad([-ex, yb, z], [0, yrb, z], [0, yr, z], [-ex, ye, z], trim, trimCol); }
-        else { this.plainQuad([ex, yb, z], [0, yrb, z], [0, yr, z], [ex, ye, z], trim, trimCol); this.plainQuad([0, yrb, z], [-ex, yb, z], [-ex, ye, z], [0, yr, z], trim, trimCol); }
+        if (f > 0) { this.plainQuad([0, yrb, z], [ex, yb, z], [ex, ye, z], [0, yr, z], trim, trimCol); this.plainQuad([-exN, ybN, z], [0, yrb, z], [0, yr, z], [-exN, yeN, z], trim, trimCol); }
+        else { this.plainQuad([ex, yb, z], [0, yrb, z], [0, yr, z], [ex, ye, z], trim, trimCol); this.plainQuad([0, yrb, z], [-exN, ybN, z], [-exN, yeN, z], [0, yr, z], trim, trimCol); }
       }
     }
     // ridge cap
     const rcw = 0.22, rcy = rcw * rise / ex;
     this.quad([rcw, yr - rcy + 0.02, ez], [rcw, yr - rcy + 0.02, -ez], [0, yr + 0.12, -ez], [0, yr + 0.12, ez], [0, 0, L, 0, L, 0.1, 0, 0.1], cell, _c.set(col).multiplyScalar(0.8).getHex());
     this.quad([-rcw, yr - rcy + 0.02, -ez], [-rcw, yr - rcy + 0.02, ez], [0, yr + 0.12, ez], [0, yr + 0.12, -ez], [0, 0, L, 0, L, 0.1, 0, 0.1], cell, _c.set(col).multiplyScalar(0.8).getHex());
-    if (gutter && this.det && this.fine > 0 && over > 0.15) this._gutters([[ex, -ez, ex, ez], [-ex, ez, -ex, -ez]], ye - 0.12, y);
+    if (gutter && this.det && this.fine > 0 && over > 0.15) { if (overN === over) this._gutters([[ex, -ez, ex, ez], [-exN, ez, -exN, -ez]], ye - 0.12, y); else { this._gutters([[ex, -ez, ex, ez]], ye - 0.12, y); this._gutters([[-exN, ez, -exN, -ez]], yeN - 0.12, y); } }
   }
   // gutters along local edges [[x0,z0,x1,z1]...] at height gy, downpipes at the ends down to the ground
   _gutters(edges, gy, wallTop) {

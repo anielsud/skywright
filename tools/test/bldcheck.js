@@ -7,8 +7,13 @@
 //  - styles (Bora Bora, Lauterbrunnen): the same building gets the same walls, colours and roof at Low and at High (Low
 //    leaves the small ones out: the others' styles must not depend on that); each building's vertices are one run of
 //    its chunk (destruction.js), with High's gutters and downpipes inside it
+//  - rules (each place's own buildings, read back from the built meshes): no flower boxes in the Grand Canyon or on Bora
+//    Bora; no flat roofs on Swiss houses (industrial only); hipped roofs only on near-rectangles, and no roof reaching
+//    out over a footprint's empty corners anywhere; every church a steeple; Swiss chalets on a masonry ground floor,
+//    with balconies; Bora Bora's houses one storey with verandas, its bungalows light timber under thatch; the canyon's
+//    cabins one or two storeys under metal or shingle, its lodges stone and logs, its motels walkways
 import * as THREE from 'three';
-import { Builder, C, WINDOW_RECTS } from '../../src/buildings.js';
+import { Builder, C, WINDOW_RECTS, TIER, tierCells } from '../../src/buildings.js';
 
 export const nodeSuite = { files: ['src/buildings.js', 'src/realBuildings.js', 'tools/test/bldcheck.js'] };
 
@@ -18,12 +23,16 @@ export function cases() {
     { id: 'decks islands', loc: 'islands', world: 'islands', cost: 3 },
     { id: 'styles islands', loc: 'islands', cost: 8 },
     { id: 'styles lauterbrunnen', loc: 'lauterbrunnen', cost: 12 },
+    { id: 'rules islands', loc: 'islands', world: 'islands', cost: 3 },
+    { id: 'rules canyon', loc: 'canyon', world: 'canyon', cost: 3 },
+    { id: 'rules lauterbrunnen', loc: 'lauterbrunnen', world: 'lauterbrunnen', cost: 10 },
   ];
 }
 
 const DECK = 1.7; // (realBuildings.js)
-// the gutter and downpipe tints (buildings.js _gutters) as Builder stores them (linear, 8 bit)
-const GUTTER = new Set([0x8a8a84, 0x7a7a74].map((h) => { const c = new THREE.Color(h); return (Math.round(c.r * 255) << 16) | (Math.round(c.g * 255) << 8) | Math.round(c.b * 255); }));
+// the gutter and downpipe tints (buildings.js _gutters) and the cut gables' soffits (realBuildings.js fitGable), High's
+// alone, as Builder stores them (linear, 8 bit)
+const GUTTER = new Set([0x8a8a84, 0x7a7a74, 0xe6e2da].map((h) => { const c = new THREE.Color(h); return (Math.round(c.r * 255) << 16) | (Math.round(c.g * 255) << 8) | Math.round(c.b * 255); }));
 
 // every triangle of a geometry: its vertices, its stored normal (the first vertex's) and the normal of its winding
 function* tris(g) {
@@ -41,6 +50,8 @@ const dot = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
 function kit() {
   const out = [], vals = Object.values(C);
   out.push({ name: 'kit: atlas cells unique and inside the 8 x 8 atlas', ok: new Set(vals).size === vals.length && vals.every((v) => v >= 0 && v < 64), why: `${vals.length} cells, max ${Math.max(...vals)}` });
+  const tiers = Object.values(TIER), tb = tiers.filter((t) => t < 64 || tierCells(t).some((k) => k >= 64 || !vals.includes(k)));
+  out.push({ name: 'kit: two-tier wall ids past the atlas, each two atlas cells', ok: !tb.length, why: tb.join(', ') });
   const miss = ['LIME_WIN', 'BROWN_WIN'].filter((k) => !WINDOW_RECTS[C[k]]);
   out.push({ name: 'kit: cut-stone window cells have window rects', ok: !miss.length, why: miss.join(', ') });
   // obox at a spread of axes: every face points away from the box centre, the top straight up, winding = normal
@@ -79,7 +90,7 @@ function styles(world) {
   for (const a of world.towns.grid.values()) for (const e of a) {
     if (!e.rng || !e.ob) continue;
     const [B, s, cnt] = e.rng[0], g = B.geo, A = g.attributes.atl.array, Cl = g.attributes.color.array, set = new Set();
-    for (let i = s; i < s + cnt; i++) { const col = (Cl[i * 3] << 16) | (Cl[i * 3 + 1] << 8) | Cl[i * 3 + 2]; if (A[i * 4] === C.METAL && GUTTER.has(col)) continue; set.add(A[i * 4] * 16777216 + col); }
+    for (let i = s; i < s + cnt; i++) { const col = (Cl[i * 3] << 16) | (Cl[i * 3 + 1] << 8) | Cl[i * 3 + 2]; if ((A[i * 4] === C.METAL || A[i * 4] === C.TRIM) && GUTTER.has(col)) continue; set.add(A[i * 4] * 16777216 + col); }
     const key = `${e.ob.x.toFixed(1)},${e.ob.z.toFixed(1)},${e.ob.hl.toFixed(1)},${e.ob.hw.toFixed(1)}`;
     if (out.has(key)) dup.add(key); // (two buildings on one footprint: which is which is left open)
     out.set(key, `seed ${A[s * 4 + 1]} | ` + [...set].sort((x, y) => x - y).map((v) => `${Math.floor(v / 16777216)}:${(v % 16777216).toString(16)}`).join(' '));
@@ -115,8 +126,77 @@ async function stylesCase(c) {
   ];
 }
 
+// how far a point is outside a footprint ring ([[x, z], ...], as built: after any setback): 0 inside
+function outside(fp, x, z) {
+  const n = fp.length; let inside = false, d = Infinity;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const [ax, az] = fp[j], [bx, bz] = fp[i];
+    if ((bz > z) !== (az > z) && x < ((ax - bx) * (z - bz)) / (az - bz) + bx) inside = !inside;
+    const ex = bx - ax, ez = bz - az, t = Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez || 1)));
+    d = Math.min(d, Math.hypot(ax + ex * t - x, az + ez * t - z));
+  }
+  return inside ? 0 : d;
+}
+const ROOF_CELLS = new Set([C.TILES, C.DARKTILE, C.SLATE, C.SHINGLE, C.SEAM, C.THATCH, C.ROOF_GRAVEL]);
+const FLOWERS = new Set([C.WOOD_WIN, C.WOOD_WIN2, TIER.CHALET]); // (the chalet timber cells, with their geranium boxes)
+
+// each place's own rules, from the buildings as built (Low)
+async function rules(c) {
+  const { worldAt } = await import('./node/world.mjs'), { world } = await worldAt(c.loc), T = world.towns, out = [];
+  const ents = []; for (const a of T.grid.values()) for (const e of a) if (e.rng && e.ob) ents.push(e);
+  const cellsOf = (e) => { const [B, s, n] = e.rng[0], A = B.geo.attributes.atl.array, m = new Map(); for (let i = s; i < s + n; i++) m.set(A[i * 4], (m.get(A[i * 4]) || 0) + 1); return m; };
+  const has = (e, set) => [...cellsOf(e).keys()].some((k) => set.has(k));
+  const count = (pred) => ents.filter(pred).length;
+  // no roof over an empty corner: every roof vertex within the eave of the footprint (a chalet's 1.1 m, 1.6 m at a
+  // corner, and 0.6 m of slack), porches and
+  // walkways, the bungalows' decks and a church's spire left out)
+  let over = 0, worst = 0, ex = '';
+  for (const e of ents) {
+    if (e.roof === 0 || e.porch || e.wet || !e.fp) continue;
+    const [B, s, n] = e.rng[0], g = B.geo, P = g.attributes.position.array, A = g.attributes.atl.array, N = g.attributes.normal.array;
+    let m = 0; for (let i = s; i < s + n; i++) if (ROOF_CELLS.has(A[i * 4]) && N[i * 3 + 1] > 30) m = Math.max(m, outside(e.fp, P[i * 3], P[i * 3 + 2]));
+    if (m > 2.2) { over++; if (m > worst) { worst = m; ex = `a kind ${e.kind} building at ${e[0].toFixed(0)}, ${e[2].toFixed(0)} (roof ${e.roof}, rect ${e.rect.toFixed(2)})`; } }
+  }
+  out.push({ name: `${c.id}: no roof reaches over a footprint's empty corners`, ok: !over, why: `${over} roofs reach over 2.2 m past their walls${over ? `, worst ${worst.toFixed(1)} m: ${ex}` : ''}` });
+  const hipBad = count((e) => e.roof === 2 && e.rect < 0.9);
+  out.push({ name: `${c.id}: hipped roofs only on near-rectangular footprints`, ok: !hipBad, why: `${hipBad} of ${count((e) => e.roof === 2)} hipped roofs on footprints under 0.9 of their rectangle` });
+  const ch = ents.filter((e) => e.kind === 3 && e.ob.hl * e.ob.hw * 4 > 60), noSteeple = ch.filter((e) => {
+    const [B, s, n] = e.rng[0], P = B.geo.attributes.position.array; let top = -Infinity; for (let i = s; i < s + n; i++) top = Math.max(top, P[i * 3 + 1]);
+    return top < e[1] + e[3] + 4; // (the spire's tip well above the nave's ridge)
+  });
+  out.push({ name: `${c.id}: every church has a steeple`, ok: ch.length > 0 && !noSteeple.length, why: `${noSteeple.length} of ${ch.length} churches without a spire above the roof` });
+  if (c.loc !== 'lauterbrunnen') {
+    const fl = count((e) => has(e, FLOWERS));
+    out.push({ name: `${c.id}: no flower boxes`, ok: !fl, why: `${fl} buildings with chalet flower-box walls` });
+  }
+  if (c.loc === 'lauterbrunnen') {
+    const flat = ents.filter((e) => e.roof === 0 && e.kind !== 4).length;
+    out.push({ name: `${c.id}: flat roofs on industrial buildings only`, ok: !flat, why: `${flat} non-industrial buildings with flat roofs (of ${count((e) => e.roof === 0)} flat)` });
+    const tiered = count((e) => has(e, new Set([TIER.CHALET]))), wood = count((e) => has(e, FLOWERS)), bal = count((e) => has(e, new Set([C.RAIL_WOOD])));
+    out.push({ name: `${c.id}: chalets on a masonry ground floor, with balconies`, ok: tiered > 2000 && tiered > wood * 0.5 && bal > 500, why: `${tiered} of ${wood} chalets on masonry, ${bal} balconies` });
+  }
+  if (c.loc === 'islands') {
+    const houses = ents.filter((e) => (e.kind === 0 || e.kind === 7) && !e.wet && !e.tagged), tall = houses.filter((e) => e.walls > 3.7).length, ver = houses.filter((e) => e.porch).length;
+    out.push({ name: `${c.id}: houses one storey, most with a veranda`, ok: houses.length > 1000 && !tall && ver > houses.length * 0.5, why: `${tall} of ${houses.length} untagged houses taller than a storey, ${ver} verandas` });
+    const bung = ents.filter((e) => e.wet && e.rect * e.ob.hl * e.ob.hw * 4 < 600), // (the bigger ones over the water: restaurants, under metal)
+      good = bung.filter((e) => { const m = cellsOf(e); return m.has(C.TIMBER_WIN) && m.has(C.THATCH) && m.has(C.DARKWOOD); }).length;
+    out.push({ name: `${c.id}: overwater bungalows light timber under thatch, on stilts`, ok: bung.length > 100 && good === bung.length, why: `${good} of ${bung.length}` });
+  }
+  if (c.loc === 'canyon') {
+    const cab = ents.filter((e) => e.kind === 0 && !e.tagged), tall = cab.filter((e) => e.walls > 6.3).length;
+    out.push({ name: `${c.id}: cabins and houses one or two storeys`, ok: cab.length > 300 && !tall, why: `${tall} of ${cab.length} untagged houses over two storeys` });
+    const roofs = new Map(); for (const e of ents) for (const k of cellsOf(e).keys()) if (ROOF_CELLS.has(k)) roofs.set(k, (roofs.get(k) || 0) + 1);
+    const other = [...roofs].filter(([k]) => k !== C.SEAM && k !== C.SHINGLE && k !== C.ROOF_GRAVEL);
+    out.push({ name: `${c.id}: metal or shingle roofs`, ok: !other.length, why: other.map(([k, n]) => `cell ${k}: ${n}`).join(', ') });
+    const lodge = count((e) => has(e, new Set([TIER.LODGE]))), log = count((e) => has(e, new Set([C.LOG_WIN, C.LOG]))), walk = count((e) => has(e, new Set([C.MOTEL_DOOR])) && has(e, new Set([C.RAIL_IRON])));
+    out.push({ name: `${c.id}: stone-and-log lodges, log cabins, motels with walkways`, ok: lodge >= 3 && log > 100 && walk >= 3, why: `${lodge} lodges, ${log} log buildings, ${walk} motels with walkways` });
+  }
+  return out;
+}
+
 export async function runCase(c) {
   if (c.id === 'kit') return kit();
+  if (c.id.startsWith('rules')) return rules(c);
   if (c.id.startsWith('decks')) return decks(c);
   return stylesCase(c);
 }

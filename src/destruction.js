@@ -23,7 +23,7 @@
 // material, size} on every blow, and {type: 'collapse', pos, size, phase: 'start' | 'end'} when a building (or a
 // top section) comes down and when it has settled; the toppled top hitting the ground is a 'building_hit' too.
 import * as THREE from 'three';
-import { DMG, DMG_SLOTS, DMG_HOLES, C, buildingMaterial, buildingDepthMaterial } from './buildings.js';
+import { DMG, DMG_SLOTS, DMG_HOLES, C, buildingMaterial, buildingDepthMaterial, tierCells } from './buildings.js';
 import { FOG } from './shaders.js';
 
 const K_BLD = 800; // J per m³ of building: the energy that brings it down
@@ -41,8 +41,8 @@ const PARK = new THREE.Matrix4().compose(new THREE.Vector3(0, -1e4, 0), new THRE
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _s = new THREE.Vector3(), _m = new THREE.Matrix4(), _c = new THREE.Color();
 const rnd = (a = 1) => (Math.random() - 0.5) * 2 * a;
-const MATERIAL = (cell) => ([C.WOOD, C.WOOD_WIN, C.WOOD_WIN2, C.WOOD_DOOR, C.BOARDS, C.CLAP, C.CLAP_WIN, C.CLAP_DOOR, C.DARKWOOD, C.THATCH].includes(cell) ? 'wood'
-  : [C.BRICK, C.BRICK_WIN].includes(cell) ? 'brick' : [C.STONE, C.STONE_WIN, C.LIME, C.LIME_WIN, C.BROWN_WIN, C.ADOBE, C.ADOBE_WIN, C.ADOBE_WIN2, C.ADOBE_DOOR, C.CHURCH_WIN].includes(cell) ? 'stone'
+const MATERIAL = (cell) => ([C.WOOD, C.WOOD_WIN, C.WOOD_WIN2, C.WOOD_DOOR, C.BOARDS, C.CLAP, C.CLAP_WIN, C.CLAP_DOOR, C.DARKWOOD, C.THATCH, C.LOG, C.LOG_WIN, C.TIMBER_WIN].includes(cell) ? 'wood'
+  : [C.BRICK, C.BRICK_WIN].includes(cell) ? 'brick' : [C.STONE, C.STONE_WIN, C.LIME, C.LIME_WIN, C.BROWN_WIN, C.ADOBE, C.ADOBE_WIN, C.ADOBE_WIN2, C.ADOBE_DOOR, C.CHURCH_WIN, C.MASONRY_WIN].includes(cell) ? 'stone'
     : cell === C.GLASS ? 'glass' : [C.METAL, C.SEAM, C.HANGAR_DOOR].includes(cell) ? 'metal' : 'concrete');
 
 export class Destruction {
@@ -246,7 +246,7 @@ export class Destruction {
       if (Math.abs(ny) < 40) { cnt.set(cell, (cnt.get(cell) || 0) + 1); wr += col[i * 3]; wg += col[i * 3 + 1]; wb += col[i * 3 + 2]; wn++; if (cell === C.GLASS) glass++; }
       else if (ny > 40) { rr += col[i * 3]; rg += col[i * 3 + 1]; rb += col[i * 3 + 2]; rn++; }
     }
-    let best = -1; for (const [c, k] of cnt) if (k > best) { best = k; L.cell = c; }
+    let best = -1; for (const [c, k] of cnt) if (k > best) { best = k; L.cell = tierCells(c)[1]; } // (a two-tier wall: its upper floors' cell)
     if (wn) L.col = ((wr / wn) << 16) | ((wg / wn) << 8) | (wb / wn);
     if (rn) L.rcol = ((rr / rn) << 16) | ((rg / rn) << 8) | (rb / rn);
     L.glass = glass > wn * 0.3;
