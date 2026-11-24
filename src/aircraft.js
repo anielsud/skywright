@@ -351,7 +351,10 @@ export class Aircraft {
     const v0 = this.v.clone(), x0 = this.x.clone(), q0 = this.q.clone();
     if (this.isRocket) this.rocketControls(dtFrame); else this.ce = this.ctl;
     if (this.isBoat) boatFrame(this, env, dtFrame);
-    if (this.isCar) this.walls = env.walls ? env.walls(this.x.x, this.x.z, this.radius + this.v.length() * dtFrame + 2, this.walls || []) : null; // buildings nearby
+    if (this.isCar) { // buildings nearby; down in a tunnel, under them, the tunnel's walls instead (#228)
+      const R = this.radius + this.v.length() * dtFrame + 2, under = this.x.y < env.maxGround(this.x.x, this.x.z) - 3;
+      this.walls = under ? (env.tunnelWalls ? env.tunnelWalls(this.x.x, this.x.z, R, this.walls || []) : null) : env.walls ? env.walls(this.x.x, this.x.z, R, this.walls || []) : null;
+    }
     for (let i = 0; i < n; i++) this.substep(dt, env);
     if (!Number.isFinite(this.x.x + this.x.y + this.x.z + this.v.x + this.v.y + this.v.z + this.q.x + this.q.y + this.q.z + this.q.w + this.w.x + this.w.y + this.w.z)) {
       // numerical blow-up (absurd speeds): never let NaN reach the renderer (bloom turns it into a black frame)

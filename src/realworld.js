@@ -435,7 +435,7 @@ class RealData {
   // terrain carving, painting and car traffic all work on them. Each road keeps its junctions as exact points
   // (rd.jn: [point index, node id] pairs: the ways meeting there share the node id), so grading meets them at one
   // height and traffic can turn from one road onto the next. Resampled to loc.roads.step metres between junctions.
-  // Tunnels are left out (not drawn yet: #228). No fields, no rail line.
+  // Tunnels too (rd.tunnel: graded under the ground, roads.js; drawn as tubes). No fields, no rail line.
   network(w) {
     if (this.roadPack) return this.packedNetwork(w);
     const lim = w.half + 300, roads = [], kinds = ['highway', 'main', 'main', 'street'], R = this.roadnet;
@@ -443,8 +443,8 @@ class RealData {
     const step = (this.loc.roads || {}).step || 8;
     const ok = (x, z) => Math.abs(x) < lim && Math.abs(z) < lim && !(Math.abs(x - 100) < 520 && Math.abs(z) < 1300) && (globalThis.SKY_ROADPACK || !inStuntCut(w.stuntPlan, x, z)); // (the deploy's road pack is baked uncut: the stunt sites are cut out at load, packedNetwork) // (inside the core, off the game's airport, not across a stunt site)
     for (let k = 0; k < R.ways; k++) {
-      const W = way(R, k); if (W.tunnel) continue;
-      const kind = kinds[W.cls], width = Math.min(W.width, W.cls === 0 ? 12 : 9), props = { kind, width, real: true, oneway: W.oneway, lanes: W.lanes, roundabout: W.roundabout, layer: W.layer, cls: W.cls };
+      const W = way(R, k);
+      const kind = kinds[W.cls], width = Math.min(W.width, W.cls === 0 ? 12 : 9), props = { kind, width, real: true, oneway: W.oneway, lanes: W.lanes, roundabout: W.roundabout, layer: W.layer, cls: W.cls, ...(W.tunnel ? { tunnel: true } : {}) };
       if (W.ys) { // a bridge over water with baked deck heights (bake.py bridge_profiles): keep them, no pillars under the suspended spans
         const pts = []; for (let i = 0; i < W.n; i++) pts.push(new THREE.Vector3(R.x[W.s + i], W.ys[i], R.z[W.s + i]));
         const rp = resample(pts, step), span = rp.map((p) => spans.some((b) => { const L2 = b.dx * b.dx + b.dz * b.dz, t = ((p.x - b.ax) * b.dx + (p.z - b.az) * b.dz) / L2; return t > 0.02 && t < 0.98 && Math.abs((p.x - b.ax) * b.dz - (p.z - b.az) * b.dx) / Math.sqrt(L2) < 30; }));
@@ -499,7 +499,7 @@ class RealData {
       const jAt = new Map(rd.jn); let a = 0;
       for (let i = 0; i <= n; i++) {
         if (i < n && !cut[i]) continue;
-        if (i - a >= 2) { const sl = (A) => A?.slice(a, i); roads.push({ ...rd, pts: sl(rd.pts), bridge: sl(rd.bridge), span: sl(rd.span), jn: [...jAt].filter(([j]) => j >= a && j < i).map(([j, nd]) => [j - a, nd]) }); }
+        if (i - a >= 2) { const sl = (A) => A?.slice(a, i); roads.push({ ...rd, pts: sl(rd.pts), bridge: sl(rd.bridge), span: sl(rd.span), tube: sl(rd.tube), jn: [...jAt].filter(([j]) => j >= a && j < i).map(([j, nd]) => [j - a, nd]) }); }
         a = i + 1;
       }
     }

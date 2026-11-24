@@ -732,7 +732,7 @@ function buildFlight(cfg) {
     ...(world.surfs.length ? { surfRay: (o, d, len) => world.surfRay(o, d, len), surfPoint: (p) => world.surfPoint(p) } : {}),
     waveAmp: world.loc.marina?.waves ?? 0.06, // the swell boats ride (boat.js)
     // buildings as solid boxes for cars and bikes (aircraft.js wallContacts); a hole knocked in one lets you through
-    walls: (x, z, r, out) => world.wallBoxes(x, z, r, out), wallPass: (e, p) => !!e.dk && world.destruct.passes(e, p),
+    walls: (x, z, r, out) => world.wallBoxes(x, z, r, out), tunnelWalls: (x, z, r, out) => world.tunnelWalls(x, z, r, out), wallPass: (e, p) => !!e.dk && world.destruct.passes(e, p),
     onDebrisHit: (d, p, sp, g) => { if (sp > 10) { if (g.type === 'water') effects.splash(p, sp * 0.5); else effects.dust(p, { x: 0, z: 0 }, g.type, 6); } if (sp > 14 && Math.random() < 0.3) audio.play('impact', sp / 40, p.clone()); },
   };
   // where it starts (startChoice.js): the start picked in the flight setup, as this vehicle gets it at this place

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { makeNoise, mulberry32, clamp, lerp, smoothstep } from './noise.js';
 import { glowTexture, M } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
-import { FOG, FOG_GLSL, terrainMaterial, waterMaterial, swayMaterial } from './shaders.js';
+import { FOG, FOG_GLSL, TUBES, terrainMaterial, waterMaterial, swayMaterial } from './shaders.js';
 import { Atmosphere, skyMaterial, cloudNoiseTexture } from './sky.js';
 import { CloudField, deckMaterial } from './clouds.js';
 import { flattenGrid, flattenHi, makePainter, buildRoadMeshes, gradeReal, roadSurface } from './roads.js';
@@ -284,6 +284,12 @@ export class World {
     const paint = makePainter(this, this.net);
     this.Hh = Hh; this.hR = R; this.hStep = st;
     this.roadSurf = roadSurface(this, this.net); // from here on sampleGrid/groundAt stand on the roads and bridges
+    // tunnels' walls: a thin box along each side of every stretch of tube, for what drives in them (tunnelWalls)
+    this.tunnelCells = new Map();
+    for (const rd of this.net.roads) if (rd.tube) { const P = rd.pts, hw = rd.width / 2 + 1.5; for (let i = 0; i + 1 < P.length; i++) { if (!(rd.tube[i] && rd.tube[i + 1])) continue;
+      const a = P[i], b = P[i + 1], dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz) || 1, ux = dx / L, uz = dz / L, y0 = Math.min(a.y, b.y) - 1.5, y1 = Math.max(a.y, b.y) + 6.5;
+      (this.tubeSegs ??= []).push([a.x, a.y, a.z, b.x, b.y, b.z, rd.width / 2 + 1.6]);
+      for (const sd of [-1, 1]) { const cx = (a.x + b.x) / 2 - uz * hw * sd, cz = (a.z + b.z) / 2 + ux * hw * sd, box = { x: cx, z: cz, ux, uz, hl: L / 2 + 0.6, hw: 0.4, y0, y1, e: {} }, k = Math.floor(cx / 50) + ',' + Math.floor(cz / 50); let c = this.tunnelCells.get(k); if (!c) this.tunnelCells.set(k, (c = [])); c.push(box); } } }
     // heights padded beyond the core edge, so AO and normals at the border match the streamed tiles next to it
     const pad = this.bakePad(st), PW = W + 2 * pad, Hp = new Float32Array(PW * PW);
     for (let j = 0; j < PW; j++) for (let i = 0; i < PW; i++) {
@@ -1043,6 +1049,12 @@ export class World {
   // the oriented box, not the disc the part-centre test above uses) and its current height (lower once knocked down).
   // Towns and real places file a building under its centre's 50 m cell only, so the search reaches as far as the
   // biggest building does; New York files every box under each cell it covers.
+  // the tunnels' walls near (x, z), as wallBoxes gives buildings (what's down in a tunnel collides with these instead)
+  tunnelWalls(x, z, r, out = []) {
+    out.length = 0; const R = r + 12;
+    for (let i = Math.floor((x - R) / 50); i <= Math.floor((x + R) / 50); i++) for (let j = Math.floor((z - R) / 50); j <= Math.floor((z + R) / 50); j++) for (const b of this.tunnelCells?.get(i + ',' + j) || []) if ((b.x - x) ** 2 + (b.z - z) ** 2 < (R + b.hl) ** 2) out.push(b);
+    return out;
+  }
   wallBoxes(x, z, r, out = []) {
     out.length = 0;
     const seen = this._wbSeen || (this._wbSeen = new Set()), D = this.destruct, T = this.towns;
@@ -1189,7 +1201,14 @@ export class World {
     const cp = camera.position;
     this.real?.stream.update(cp);
     this.tiles?.update(cp);
-    this.roadCam = cp; this.roadGroup?.userData.update?.(cp, 4); // (lazy road tiles: a few ms a frame, nearest first)
+    this.roadCam = cp; this.roadGroup?.userData.update?.(cp, 4);
+    // the tunnels' tubes near the camera, for the ground to leave out (TUBES, shaders.js): re-picked every 25 m
+    if (this.tubeSegs && (!this.tubeAt || Math.hypot(cp.x - this.tubeAt.x, cp.z - this.tubeAt.z) > 25)) {
+      this.tubeAt = { x: cp.x, z: cp.z };
+      const near = this.tubeSegs.map((t) => [Math.hypot((t[0] + t[3]) / 2 - cp.x, (t[2] + t[5]) / 2 - cp.z), t]).filter((e) => e[0] < 250).sort((p, q) => p[0] - q[0]).slice(0, 24);
+      near.forEach(([, t], i) => { TUBES.tubeA.value[i].set(t[0], t[1], t[2], t[6]); TUBES.tubeB.value[i].set(t[3], t[4], t[5], 0); });
+      TUBES.tubeN.value = near.length;
+    } // (lazy road tiles: a few ms a frame, nearest first)
     this.updatePatch(cp); this.updateDetail(cp);
     const snap = (v, g) => Math.round(v / g) * g;
     this.water.position.x = snap(cp.x, 2000); this.water.position.z = snap(cp.z, 2000);
