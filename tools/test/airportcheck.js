@@ -6,7 +6,7 @@ import { LOCATIONS } from '../../src/world.js';
 import { airportGate, buildAirfieldKit } from '../../src/airportKit.js';
 import { Builder } from '../../src/buildings.js';
 
-export const nodeSuite = { files: ['src/airportKit.js', 'src/world.js', 'src/launchpad.js', 'tools/test/airportcheck.js'], headless: true };
+export const nodeSuite = { files: ['src/airportKit.js', 'src/airportGround.js', 'src/world.js', 'src/launchpad.js', 'tools/test/airportcheck.js'], headless: true };
 const PLACES = Object.values(LOCATIONS).filter((l) => l && !l.hidden).map((l) => l.id);
 export function cases() { return PLACES.map((id) => ({ id, world: id, cost: 4 })); }
 
@@ -33,6 +33,17 @@ export async function runCase(c) {
   // landside gate: outside roads.js's airport no-go box edge, at runway height (none on Bora Bora's islet)
   const gate = airportGate(W.loc);
   check('landside gate', c.id === 'islands' ? gate === null : gate && gate.x >= 560 && gate.h === y, JSON.stringify(gate));
+  // the ground (airportGround.js): fence clear of pavement and the approach lights, the road out to the gate on level
+  // ground at runway height, an infield tint that is plant- or earth-coloured (not sea or concrete)
+  const G = W.airportGround;
+  const fenceBad = G.fenceSegs.filter(([x0, z0, x1, z1]) => [[x0, z0], [x1, z1]].some(([x, z]) => W.isPaved(x, z) || W.groundAt(x, z).type === 'runway'));
+  check('fence built, off pavement', G.fenceSegs.length > 300 && !fenceBad.length, `${G.fenceSegs.length} segments, ${fenceBad.length} on pavement`);
+  if (gate) {
+    const off = G.roadPts.map(([x, z]) => [x, Math.abs(W.heightAt(x, z) - y)]).filter(([, d]) => d > 0.6);
+    check('landside road level to the gate', !off.length, off.slice(0, 4).map(([x, d]) => `x ${x}: ${d.toFixed(1)} m`).join('; '));
+  }
+  const t = W.group.getObjectByName('airport infield').material.color;
+  check('infield tint is ground, not sea or concrete', t.g >= t.b * 1.05 && t.r >= t.b, t.getHexString());
   // budget: the kit alone, built again into an empty Builder
   const A = new Builder(), t0 = performance.now(); const K2 = buildAirfieldKit(W, A, y); const ms = performance.now() - t0;
   const tris = A.ni / 3 + K2.signs.geometry.attributes.position.count / 3;
