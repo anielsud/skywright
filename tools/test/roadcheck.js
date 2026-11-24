@@ -122,11 +122,13 @@ export async function runCase(c) {
     const THREE = await import('three'), { Vehicles } = await import('../../src/vehicles.js');
     const V = new Vehicles(new THREE.Scene(), w), G = V.graph, orig = G.next.bind(G); let on = 0, back = 0, none = 0;
     G.next = (L) => { const N = orig(L); if (!N) none++; else if (N === L.rev) back++; else on++; return N; };
-    for (let k = 0; k < 60 * 20; k++) V.update(1 / 20, null);
-    const moves = on + back + none;
+    let still = 0, seen = 0;
+    for (let k = 0; k < 60 * 20; k++) { V.update(1 / 20, null); if (k > 400 && k % 20 === 0) for (const q of V.cars) if (!q.path.loop && !q.path.transient) { seen++; if (q.v < 0.5) still++; } }
+    const moves = on + back + none, lights = V.signals.nodes.size, city = !!w.loc.city;
     return [
       { name: `${c.loc}: traffic turns onto the next road at junctions`, ok: moves > 20 && back / moves < 0.15, /* (Bora Bora has many real dead ends; before #252 every road's end was a U-turn) */ why: `${on} onto another road, ${back} turned round at a dead end, ${none} with nowhere to go (${G.lanes.length} lanes, 60 s)` },
       { name: `${c.loc}: traffic rarely has nowhere to go`, ok: none / Math.max(1, moves) < 0.02, why: `${none} of ${moves}` },
+      { name: `${c.loc}: ${city ? 'traffic lights hold the cars at red, not for ever' : 'no traffic lights out of town'}`, ok: city ? lights > 100 && still / seen > 0.05 && still / seen < 0.6 : !lights, why: `${lights} signalled junctions; cars standing ${(100 * still / Math.max(1, seen)).toFixed(0)}% of the time` },
     ];
   }
   if (c.detail) {
