@@ -4,7 +4,7 @@ python3 tools/test/airportshots.py [REPO] OUTDIR TAG [--locs a,b] [--q low,high]
 REPO defaults to this checkout (give another checkout's path to photograph its code, e.g. main for a baseline).
 Views: start (the runway start's own camera), hold (cockpit height at the 36R threshold), roll (mid takeoff roll
 glancing at the terminal), back (300 m climb-out look-back), side (over the runways at the apron), final (short final
-over the approach lights), signs (taxiing towards connector B's hold point), loc (localizer), gs (glideslope + PAPI), gate (landside road and fence), terminal, landside, radar. One flight per place, time and quality,
+over the approach lights), signs (taxiing towards connector B's hold point), loc (localizer), gs (glideslope + PAPI), gate (landside road and fence), terminal, landside, radar, apron, carpark. One flight per place, time and quality,
 paused; the camera is moved and the world streamed to it before each shot."""
 import asyncio, os, sys, tempfile, shutil, json, argparse
 p = argparse.ArgumentParser(); p.add_argument('args', nargs='+')
@@ -34,6 +34,8 @@ VIEWS = {
   'radar': ((412, 16, -126), (430, 13, -140)),        # the radar on its lattice tower
   'facade': ((262, 5, 92), (300, 9, 122)),
   'front': ((215, 4, 120), (300, 8, 120)),            # square on to the terminal (compare with the reference photo)           # close on the terminal's airside face
+  'apron': ((165, 7, -45), (205, 1, -90)),            # stands with their ground equipment
+  'carpark': ((395, 10, 40), (360, 0, 85)),           # the landside car park
 }
 async def main():
     port = free_port(); srv = start_server(port)
