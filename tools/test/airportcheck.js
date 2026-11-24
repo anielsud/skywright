@@ -2,11 +2,11 @@
 // apron, lamps and signs at sensible heights over the real ground, the landside gate where roads.js expects it, and
 // a budget on what the airfield adds (triangles, build time). Node tier: builds each place's World (node/world.mjs).
 import { worldAt } from './node/world.mjs';
-import { LOCATIONS } from '../../src/world.js';
+import { LOCATIONS, STANDS } from '../../src/world.js';
 import { airportGate, buildAirfieldKit } from '../../src/airportKit.js';
 import { Builder } from '../../src/buildings.js';
 
-export const nodeSuite = { files: ['src/airportKit.js', 'src/airportGround.js', 'src/world.js', 'src/launchpad.js', 'tools/test/airportcheck.js'], headless: true };
+export const nodeSuite = { files: ['src/airportKit.js', 'src/airportGround.js', 'src/airportGSE.js', 'src/airportBuildings.js', 'src/world.js', 'src/launchpad.js', 'tools/test/airportcheck.js'], headless: true };
 const PLACES = Object.values(LOCATIONS).filter((l) => l && !l.hidden).map((l) => l.id);
 export function cases() { return PLACES.map((id) => ({ id, world: id, cost: 4 })); }
 
@@ -44,6 +44,13 @@ export async function runCase(c) {
   }
   const t = W.group.getObjectByName('airport infield').material.color;
   check('infield tint is ground, not sea or concrete', t.g >= t.b * 1.05 && t.r >= t.b, t.getHexString());
+  // ground equipment: off the runways and taxiways, clear of the apron vehicles' loop (vehicles.js: x 120 / 250, z +-128)
+  const loop = (q) => (Math.abs(q.z) < 128 + q.hz && (Math.abs(q.x - 120) < q.hx + 2.5 || Math.abs(q.x - 250) < q.hx + 2.5)) || (q.x > 120 - q.hx && q.x < 250 + q.hx && Math.abs(Math.abs(q.z) - 128) < q.hz + 2.5);
+  const onRwy = (q) => Math.abs(q.z) < W.runways[0].len / 2 + 30 && W.runways.some((r) => Math.abs(q.x - r.x) < r.width / 2 + 2 + q.hx); // (groundAt calls every hard surface 'runway', the apron too)
+  const gBad = W.apronLife.filter((q) => loop(q) || onRwy(q) || (q.x < 100 && W.isPaved(q.x, q.z)));
+  const sBad = STANDS.filter(([x, z]) => loop({ x: x + 2, z, hx: 16, hz: 14 })).map(([x, z]) => `(${x}, ${z})`);
+  check('apron vehicle loop clear of the stands', !sBad.length, sBad.join('; '));
+  check('ground equipment clear of the vehicle loop and runways', W.apronLife.length >= 30 && !gBad.length, `${W.apronLife.length} pieces; ${gBad.slice(0, 4).map((q) => `(${q.x}, ${q.z})`).join('; ')}`);
   // budget: the kit alone, built again into an empty Builder
   const A = new Builder(), t0 = performance.now(); const K2 = buildAirfieldKit(W, A, y); const ms = performance.now() - t0;
   const tris = A.ni / 3 + K2.signs.geometry.attributes.position.count / 3;

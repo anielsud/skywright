@@ -89,12 +89,12 @@ export class Vehicles {
       const side = new THREE.Vector3(-t.dir.z, 0, t.dir.x), along = (r() - 0.5) * 480 * t.size, off = (r() < 0.5 ? -1 : 1) * 5.6;
       park(t.c.clone().addScaledVector(t.dir, along).addScaledVector(side, off), Math.atan2(-t.dir.x, -t.dir.z) + (r() < 0.5 ? Math.PI : 0));
     }
-    for (let row = 0; row < 3; row++) for (let k = 0; k < 14; k++) if (r() < 0.75) park(new THREE.Vector3(345 + row * 7, 0, 60 + k * 3.2), Math.PI / 2);
+    for (let row = 0; row < 4; row++) for (let k = 0; k < 16; k++) if (r() < 0.8) park(new THREE.Vector3(350 + row * 7, 0, 56 + k * 3.2), Math.PI / 2); // (the airport car park, x 346..376, z 52..112)
     // two spare baggage carts by the terminal
     for (let k = 0; k < 2; k++) this.parked.push({ p: new THREE.Vector3(268, 0, 88 + k * 3.3), yaw: 0, type: 'cart', color: 0xffffff });
     // airport ground vehicles driving around the apron: the fuel tanker, a yellow follow-me car and a tug pulling three
     // baggage carts (tow: the carts drawn along the path behind it)
-    const apron = [[120, -150], [120, 150], [250, 150], [250, -150]].map(([x, z]) => new THREE.Vector3(x, 0, z));
+    const apron = [[120, -128], [120, 128], [250, 128], [250, -128]].map(([x, z]) => new THREE.Vector3(x, 0, z)); // (between the stands' boxes: world.js STANDS)
     const ap = { pts: [], speed: 7, kind: 'apron' }; for (let i = 0; i < 4; i++) { const a = apron[i], b = apron[(i + 1) % 4]; for (let t = 0; t < 1; t += 0.02) ap.pts.push(a.clone().lerp(b, t)); }
     ap.len = []; let L = 0; ap.pts.forEach((q, i) => { if (i) L += q.distanceTo(ap.pts[i - 1]); ap.len.push(L); }); ap.total = L + ap.pts.at(-1).distanceTo(ap.pts[0]);
     this.cars.push({ path: ap, s: 0, v: 6, want: 7, type: 'tanker', color: 0xffffff, brake: 0, roll: 0 }, { path: ap, s: ap.total * 0.5, v: 6, want: 6, type: 'offroad', color: 0xf2b705, brake: 0, roll: 0 },

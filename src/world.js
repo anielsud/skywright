@@ -22,6 +22,7 @@ import { LaunchPad } from './launchpad.js';
 import { buildAirfieldKit, CONNECTORS, TAXI, airportGate } from './airportKit.js';
 import { buildAirportGround, gateLevel } from './airportGround.js';
 import { buildTerminalArea } from './airportBuildings.js';
+import { buildApronLife } from './airportGSE.js';
 import { Helipads } from './helipad.js';
 import { StuntParks, planStunts, padsHeight } from './stuntPark.js';
 import { roadStart } from './landStart.js';
@@ -33,6 +34,8 @@ export const RWY = { len: 1800, width: 45 };
 export { airportGate } from './airportKit.js'; // where the airport's landside road meets the road network (roads.js)
 // Two parallel runways (the airport is centred on the east one, which has the PAPI and the landing mission).
 // Facing north the west one is on the left, so it is 36L / 18R; the east one is 36R / 18L.
+// the apron's stands: x, z, the parked plane's yaw (apronTexture paints them, addParked fills them, airportGSE.js services them)
+export const STANDS = [[200, -160, 1.2], [200, -80, 1.6], [190, 40, 1.4], [230, 160, 1.8], [200, 100, 1.5], [200, -20, 1.3]];
 export const RUNWAYS = [{ x: 0, name: '36R', back: '18L' }, { x: -200, name: '36L', back: '18R' }];
 
 export const LOCATIONS = {
@@ -914,7 +917,7 @@ export class World {
     const line = (pts, w, col) => { g.strokeStyle = col; g.lineWidth = w * S; g.lineCap = 'round'; g.beginPath(); pts.forEach(([x, z], i) => (i ? g.lineTo(X(x), Z(z)) : g.moveTo(X(x), Z(z)))); g.stroke(); };
     // apron taxi lane + lead-in lines to each stand (matches addParked spots)
     line([[128, -198], [128, 198]], 0.35, '#e2b52a');
-    for (const [x, z] of [[200, -160], [200, -80], [190, 40], [230, 160], [200, 100], [200, -20]]) {
+    for (const [x, z] of STANDS) {
       g.strokeStyle = '#e2b52a'; g.lineWidth = 0.35 * S; g.beginPath(); g.moveTo(X(128), Z(z - 32)); g.quadraticCurveTo(X(128), Z(z), X(150), Z(z)); g.lineTo(X(x + 14), Z(z)); g.stroke();
       line([[x + 14, z - 5], [x + 14, z + 5]], 0.6, '#e2b52a'); // stop bar
       g.strokeStyle = '#d23a2a'; g.lineWidth = 0.25 * S; g.strokeRect(X(x - 14), Z(z - 14), 32 * S, 28 * S); // stand clearance box
@@ -982,6 +985,8 @@ export class World {
     this.group.add(new THREE.Points(fg, this.lightsMat));
     // the airfield's ground: mown infield, shoulders, blast pads, perimeter fence, landside road (src/airportGround.js)
     this.airportGround = buildAirportGround(this, A, y, RWY); for (const m of this.airportGround.meshes) this.group.add(m);
+    // ground equipment round the stands (src/airportGSE.js)
+    this.apronLife = buildApronLife(A, y, STANDS);
     // the airfield's furniture: light fixtures, approach lights, PAPI housings, signs, ILS (src/airportKit.js)
     const kit = buildAirfieldKit(this, A, y, TA.signs);
     this.airfield = kit; this.windowMats.push(kit.signMat); kit.signs.receiveShadow = true; this.group.add(kit.signs);
@@ -997,7 +1002,7 @@ export class World {
   // Ultra: small things cast into the nearer shadow cascades only (see cascades.js NEAR_SHADOW)
   nearShadow(o) { if (this.cascades) o.traverse((c) => c.layers.set(NEAR_SHADOW)); return o; }
   addParked(objs) { // place parked aircraft meshes on the apron stands (painted in apronTexture)
-    const spots = [[200, -160, 1.2], [200, -80, 1.6], [190, 40, 1.4], [230, 160, 1.8], [200, 100, 1.5], [200, -20, 1.3]];
+    const spots = STANDS;
     const all = spots.map((s, i) => (i < objs.length ? objs[i] : objs[i % objs.length].clone()));
     spots.forEach((s, i) => { const o = all[i]; o.position.x += s[0]; o.position.y += this.loc.rwyH; o.position.z += s[1]; o.rotation.y = s[2]; this.group.add(this.nearShadow(o)); });
   }
