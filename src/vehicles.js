@@ -11,6 +11,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { mulberry32, clamp } from './noise.js';
 import { glowTexture } from './materials.js';
 import { LaneGraph } from './laneGraph.js';
+import { Signals } from './signals.js';
 import { trafficModels, trafficModelsNow } from './trafficModels.js';
 
 // ---------- simple shapes (the train) ----------
@@ -72,6 +73,7 @@ export class Vehicles {
     // traffic on the lanes
     // (the road graph, laneGraph.js: cars go from road to road at the junctions)
     this.graph = new LaneGraph(world.net, r);
+    this.signals = new Signals(this.graph, { city }); this.signals.build(this.group); // (a city's crossroads: traffic lights)
     this.cars = [];
     const want = ({ low: 70, medium: 140, high: 240 }[world.qBase] || 140) * (city ? 3 : 1); // (a city: busy streets; only the cars near the camera are drawn)
     if (this.graph.lanes.length) for (let k = 0; k < want; k++) {
@@ -198,10 +200,13 @@ export class Vehicles {
       // car following along the lane; a car past a road lane's end goes on to the next lane (below)
       if (!path.loop) {
         list.sort((a, b) => a.s - b.s);
+        // the junction ahead: red (or amber with room to stop) holds the cars at the stop line, ~10 m back from its middle
+        const sig = path.transient ? null : this.signals.state(path, this.t), stopAt = sig && sig !== 'g' ? Math.max(path.total * 0.5, path.total - 10) : Infinity;
         for (let i = 0; i < list.length; i++) {
-          const c = list[i], ahead = list[i + 1];
-          const gap = ahead ? ahead.s - c.s - this.model(ahead.type).L * 0.5 - this.model(c.type).L * 0.5 : Infinity;
-          const want = Math.min(c.want, path.speed * 1.1, Math.max(0, (gap - 6) / 1.6));
+          const c = list[i], ahead = list[i + 1], half = this.model(c.type).L * 0.5;
+          const gap = ahead ? ahead.s - c.s - this.model(ahead.type).L * 0.5 - half : Infinity;
+          let toStop = stopAt - c.s - half; if (toStop < 0.5 || (sig === 'a' && toStop < (c.v * c.v) / 8)) toStop = Infinity; // (past the line, or too close to stop for an amber: go on)
+          const want = Math.min(c.want, path.speed * 1.1, Math.max(0, (gap - 6) / 1.6), Math.max(0, (toStop - 1) / 1.6));
           const dv = clamp(want - c.v, -6 * dt, 2.2 * dt);
           c.brake = dv < -0.5 * dt ? 1 : Math.max(0, c.brake - dt * 2);
           c.v = Math.max(0, c.v + dv); c.s += c.v * dt; c.roll += c.v * dt;
@@ -241,6 +246,7 @@ export class Vehicles {
         }
       }
     }
+    this.signals.update(camPos, this.t);
     // traffic where it can be seen: a few cars a frame that are far beyond the draw distance come back on a lane at
     // its edge (a city's roads run to thousands of km: spread evenly, the cars round the camera would be few)
     if (camPos && this.graph.lanes.length) for (let k = 0; k < 8; k++) {
