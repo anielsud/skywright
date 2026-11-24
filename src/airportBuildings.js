@@ -13,7 +13,7 @@ import { Builder, C } from './buildings.js';
 // floor band, a continuous tinted curtain wall with mullions and transoms, a thin white roof slab cantilevered past the
 // glass with the name on its fascia, and solid white gate cores standing out every 38 m, each with a parked jet bridge.
 export const TERMINAL = { x: 315, z: 120, len: 120, depth: 34, gf: 4.6, band: 1.2, cw: 7.6, slab: 1.6, over: 3, cant: 6, cores: [-38, 0, 38] };
-export const TOWER = { x: 256, z: 218, shaft: 26, cab: 3.7 };
+export const TOWER = { x: 256, z: 218, shaft: 20, service: 6.4, cab: 3.8 }; // (after Bern-Belp's tower: Wikimedia Commons)
 export const RADAR = { x: 430, z: -140, h: 12 };
 const F = -Math.PI / 2; // frame yaw for buildings facing the apron (local +z = world -x)
 
@@ -103,19 +103,36 @@ export function buildTerminalArea(A, y) {
   A.setFrame(W.x - 1, y, W.z, F); A.seed = 3;
   A.walls(16, 10, -0.5, 7.4, C.APT, 0xe4e0d8, { front: C.GLASS, door: C.DOOR, fl: 3.7 }); A.flat(16, 10, 7, 0.5, C.GRAVEL, 0xffffff, C.PLAIN, 0xe4e0d8);
   A.setFrame(0, y, 0, 0); A.seed = 5;
-  const c0 = W.shaft, c1 = c0 + 1.1, c2 = c1 + W.cab;
-  A.cyl(W.x, W.z, -0.5, c0, 3.4, 2.5, 8, C.CONCRETE, 0xe8e4dc);
-  for (let k = 0; k < 8; k += 2) { const a = (k / 8) * Math.PI * 2 + Math.PI / 8; A.box(W.x + Math.sin(a) * 2.9, 4, W.z + Math.cos(a) * 2.9, 0.5, c0 - 6, 0.5, C.GLASS, 0xffffff); } // stair windows
-  A.cyl(W.x, W.z, c0, c1, 2.5, 5.0, 8, C.CONCRETE, 0xd8d4cc); // the flare under the cab
-  A.cyl(W.x, W.z, c1 - 0.08, c1 + 0.06, 6.0, 6.0, 8, C.CONCRETE, 0xb8b4ac, { cap: true }); // catwalk
-  A.cyl(W.x, W.z, c1 + 0.06, c1 + 1.1, 6.0, 6.0, 16, C.RAIL_IRON, 0xd8d8d8); // its railing
-  A.cyl(W.x, W.z, c1, c2, 4.5, 5.4, 8, C.GLASS, 0xffffff); // cab glass, leaning out
-  A.cyl(W.x, W.z, c2, c2 + 0.9, 6.2, 6.0, 8, C.CONCRETE, 0x3a3c40, { cap: true, capCell: C.GRAVEL, capCol: 0x8a8c90 }); // roof
-  A.cyl(W.x, W.z, c2 + 0.9, c2 + 1.8, 2.2, 2.2, 8, C.METAL, 0xb0b4b8, { cap: true }); // plant on the roof
-  A.box(W.x, c2 + 1.8, W.z, 0.22, 6, 0.22, C.METAL, 0xdddddd); // antenna mast
-  for (const [dx, dz, h] of [[1.6, 0.4, 3], [-1.4, -0.9, 2.2]]) A.box(W.x + dx, c2 + 1.8, W.z + dz, 0.08, h, 0.08, C.METAL, 0xdddddd); // whips
-  A.box(W.x - 1.6, c2 + 2.2, W.z + 1, 0.9, 0.9, 0.25, C.PLAIN, 0xeeeeee); // dish
-  const beacon = new THREE.Vector3(W.x, y + c2 + 8.2, W.z);
+  const s0 = W.shaft, s1 = s0 + W.service, c1 = s1 + 0.25, c2 = c1 + W.cab, TW = 0xf0eee8;
+  // the shaft, a full-height glazed stair slot facing the apron
+  A.cyl(W.x, W.z, -0.5, s0, 2.9, 2.8, 16, C.CONCRETE, TW);
+  A.box(W.x - 2.78, 2.5, W.z, 0.14, s0 - 3, 1.4, C.GLASS, 0x5a7a86);
+  // two service floors, wider than the shaft, a window band round each, a cornice
+  A.cyl(W.x, W.z, s0 - 0.8, s0, 2.4, 5.0, 8, C.CONCRETE, TW); // (the corbel out to them)
+  A.cyl(W.x, W.z, s0, s1, 5.0, 5.0, 8, C.APT, TW); // (octagonal, nearly as wide as the cab)
+  A.cyl(W.x, W.z, s1, s1 + 0.25, 5.3, 5.3, 8, C.CONCRETE, 0xd8d6d0, { cap: true });
+  // catwalk round the cab, its railing
+  A.cyl(W.x, W.z, c1 - 0.05, c1 + 0.08, 5.9, 5.9, 16, C.CONCRETE, 0xb8b4ac, { cap: true });
+  A.cyl(W.x, W.z, c1 + 0.08, c1 + 1.1, 5.9, 5.9, 24, C.RAIL_IRON, 0xd8d8d8);
+  // the cab: dark tinted glass leaning out, twelve mullions following the lean
+  const N = 12, r0 = 4.2, r1 = 5.3;
+  A.cyl(W.x, W.z, c1, c2, r0, r1, N, C.PLAIN, 0x1c252c); // (dark tinted: cabs are kept dark, day and night, so the controllers can see out)
+  for (let k = 0; k < N; k++) {
+    const a = (k / N) * Math.PI * 2, sx = Math.sin(a), cz = Math.cos(a), tx = Math.cos(a) * 0.07, tz = -Math.sin(a) * 0.07, P = (r, yy, d) => [W.x + sx * (r + 0.03) + tx * d, yy, W.z + cz * (r + 0.03) + tz * d];
+    A.quad(P(r0, c1, -1), P(r0, c1, 1), P(r1, c2, 1), P(r1, c2, -1), [0, 0, 1, 0, 1, 1, 0, 1], C.PLAIN, 0xe8e8e4);
+  }
+  A.cyl(W.x, W.z, c1, c1 + 0.9, r0 + 0.02, r0 + 0.26, N, C.PLAIN, 0x30353a); // sill band
+  // roof: a dark overhanging lid, plant on top
+  A.cyl(W.x, W.z, c2, c2 + 1.1, 6.0, 6.0, N, C.PLAIN, 0xf0eee8, { cap: true, capCell: C.GRAVEL, capCol: 0x8a8c90 }); // thick white lid
+  A.cyl(W.x, W.z, c2 - 0.02, c2, r1, 6.0, N, C.PLAIN, 0xd8d8d4); // its underside
+  A.cyl(W.x, W.z, c2 + 1.1, c2 + 2.0, 2.0, 2.0, 8, C.METAL, 0xb0b4b8, { cap: true });
+  // lattice antenna mast with cross-arms, whips
+  const m0 = c2 + 2.0, mh = 8;
+  A.box(W.x, m0, W.z, 0.55, mh, 0.55, C.RAIL_IRON, 0xdedede);
+  for (const [hgt, len] of [[mh - 1.2, 3.2], [mh - 3.4, 2.2]]) { A.box(W.x, m0 + hgt, W.z, len, 0.12, 0.12, C.PLAIN, 0xdedede); A.box(W.x, m0 + hgt, W.z, 0.12, 0.12, len, C.PLAIN, 0xdedede); }
+  for (const [dx, dz, h] of [[1.5, 0, 2.2], [-1.5, 0, 2.2], [0, 1.5, 1.6], [0, -1.5, 1.6]]) A.box(W.x + dx, m0 + mh - 1.2, W.z + dz, 0.05, h, 0.05, C.PLAIN, 0xdedede);
+  const c2b = m0 + mh - 7.6; // (the beacon sits on the mast's top)
+  const beacon = new THREE.Vector3(W.x, y + c2b + 8.2, W.z);
 
   // ---- surveillance radar: a lattice tower by the cargo shed, the antenna turning on top ----
   const R = RADAR;
