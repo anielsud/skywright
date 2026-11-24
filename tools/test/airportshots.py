@@ -32,6 +32,8 @@ VIEWS = {
   'terminal': ((215, 9, 30), (310, 9, 130)),         # the terminal and tower from the apron
   'landside': ((420, 5, 150), (320, 7, 115)),         # the terminal's kerb from the landside road
   'radar': ((412, 16, -126), (430, 13, -140)),        # the radar on its lattice tower
+  'facade': ((262, 5, 92), (300, 9, 122)),
+  'front': ((215, 4, 120), (300, 8, 120)),            # square on to the terminal (compare with the reference photo)           # close on the terminal's airside face
 }
 async def main():
     port = free_port(); srv = start_server(port)

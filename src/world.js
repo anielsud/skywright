@@ -987,13 +987,12 @@ export class World {
     this.radar = TA.radar; this.radar.material = mat; this.group.add(this.radar);
     // name board on the terminal roof, lit at night
     {
-      const c = document.createElement('canvas'); c.width = 1024; c.height = 128; const g = c.getContext('2d');
-      g.fillStyle = '#f4f4f0'; g.fillRect(0, 0, 1024, 128); g.fillStyle = '#1f4f9a'; const txt = (this.loc.name || 'Skywright').toUpperCase() + ' AIRPORT'; g.font = 'bold 96px Arial'; const fs = Math.min(96, 96 * 980 / g.measureText(txt).width); g.font = `bold ${fs | 0}px Arial`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(txt, 512, 68);
-      const ce = document.createElement('canvas'); ce.width = 1024; ce.height = 128; const ge = ce.getContext('2d'); ge.fillStyle = '#000'; ge.fillRect(0, 0, 1024, 128); ge.font = g.font; ge.textAlign = 'center'; ge.textBaseline = 'middle'; ge.fillStyle = '#fff'; ge.fillText(txt, 512, 68);
+      const c = document.createElement('canvas'); c.width = 1536; c.height = 64; const g = c.getContext('2d');
+      g.fillStyle = '#f2f1ec'; g.fillRect(0, 0, 1536, 64); g.fillStyle = '#1f4f9a'; const txt = (this.loc.name || 'Skywright').toUpperCase() + ' AIRPORT'; g.font = 'bold 50px Arial'; const fs = Math.min(50, 50 * 1480 / g.measureText(txt).width); g.font = `bold ${fs | 0}px Arial`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(txt, 768, 34);
+      const ce = document.createElement('canvas'); ce.width = 1536; ce.height = 64; const ge = ce.getContext('2d'); ge.fillStyle = '#000'; ge.fillRect(0, 0, 1536, 64); ge.font = g.font; ge.textAlign = 'center'; ge.textBaseline = 'middle'; ge.fillStyle = '#fff'; ge.fillText(txt, 768, 34);
       const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
       const sm = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, emissive: 0x9cc8ff, emissiveMap: new THREE.CanvasTexture(ce), emissiveIntensity: 0 }); this.windowMats.push(sm);
-      const sign = new THREE.Mesh(new THREE.PlaneGeometry(48, 6), sm); sign.rotation.y = -Math.PI / 2; const nb = TA.nameBoard; sign.position.set(nb.x, nb.y, nb.z); this.group.add(sign); // (on the vault's eave, facing the apron)
-      A.setFrame(0, y, 0, 0); A.box(nb.x + 0.3, nb.y - y - 3.2, nb.z, 0.4, 6.4, 48.4, C.CONCRETE, 0x55595e); for (const z of [nb.z - 16, nb.z + 16]) A.box(nb.x + 0.6, nb.y - y - 4.6, z, 0.3, 1.6, 0.3, C.METAL, 0x55595e);
+      const nb = TA.nameBoard, sign = new THREE.Mesh(new THREE.PlaneGeometry(nb.w, nb.h), sm); sign.rotation.y = -Math.PI / 2; sign.position.set(nb.x, nb.y, nb.z); this.group.add(sign); // (lettering on the roof slab's fascia, facing the apron)
     }
     // apron flood-light masts (lamps join the night lights)
     const fp = [], fc = [];
