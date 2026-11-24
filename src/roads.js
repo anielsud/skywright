@@ -66,6 +66,7 @@ export function roadSurface(w, net) { return new RoadSurface(w, allRoads(net), s
 // Real places: OSM roads get a profile too (smoothed, grade-limited, mapped bridges kept as straight decks), so they
 // can be carved in and driven like the planned ones. Reads the raw fine heights (w.Hh0).
 export function gradeReal(w, net) {
+  if (net.graded) return; // (the deploy's road pack: graded already, realworld.js packedNetwork)
   const terr = gridSampler(w, w.Hh0, w.hR0), wl = w.waterLevel;
   // Ways are graded longest first; each is pinned to the ways already done wherever it meets them (#228):
   //  - its own ends, on another way's line (OSM ways meet at shared nodes, but the resampled points are 8-16 m apart,
@@ -101,7 +102,10 @@ export function gradeReal(w, net) {
   // junctions (roads.bin topology, realworld.js rd.jn): the first road graded through a node sets its height, every
   // other road through it is pinned there, at that exact point
   const nodeY = new Map(), setNodes = (q) => { for (const [j, nd] of q.jn || []) if (!nodeY.has(nd)) nodeY.set(nd, q.pts[j].y); };
-  for (const rd of net.roads) if (rd.baked) { rd.terr = Float32Array.from(rd.pts, (p) => terr(p.x, p.z)); rd.wet = new Uint8Array(rd.pts.length); add(rd); setNodes(rd); } // bridges with a baked deck profile (realworld.js)
+  // (the spatial index of graded roads is only for roads without topology, other than the airport road, whose gate
+  // and far end gatePins pins exactly: none at the real places today; building it was 0.4 s of New York's load)
+  const index = net.roads.some((r) => !r.jn && !r.gate && !r.baked), addI = (rd) => { if (index) add(rd); };
+  for (const rd of net.roads) if (rd.baked) { rd.terr = Float32Array.from(rd.pts, (p) => terr(p.x, p.z)); rd.wet = new Uint8Array(rd.pts.length); addI(rd); setNodes(rd); } // bridges with a baked deck profile (realworld.js)
   // every other junction on the ground starts at the ground's height (the ground round it: a 9 m cross), so a road
   // graded off the ground (a street steeper than its grade, a cliff in the heights) can't carry that error through
   // its junctions to the rest of the network (#228: Palisades streets 27 m up). Junctions out on a bridge span are
@@ -122,7 +126,7 @@ export function gradeReal(w, net) {
       pins.push({ i, y });
       if (!fixed?.[i]) for (const sg of [-1, 1]) { const sp = S[i] + sg * c; if (sp > 0 && sp < S[n - 1]) pins.push({ s: sp, y }); } // (the level junction)
     } }
-    const topo = rd.members.every((m) => m.rd.jn); // (roads.bin roads: their junctions are known, nodeY pins them; ways that cross without sharing a node are an over- or underpass, not a junction)
+    const topo = rd.members.every((m) => m.rd.jn) || (rd.members.length === 1 && rd.members[0].rd.gate); // (the airport road: gatePins) // (roads.bin roads: their junctions are known, nodeY pins them; ways that cross without sharing a node are an over- or underpass, not a junction)
     if (!topo) for (const i of [0, n - 1]) { const y = onLine(P[i]); if (y != null) pins.push({ i, y }); }
     // where its footprint overlaps a done way's on the ground (side by side: a divided road's two carriageways, a
     // slip road; the mouth of a junction), its centre line takes that way's height: the two are one surface there.
@@ -161,7 +165,7 @@ export function gradeReal(w, net) {
       const q = m.rd, k = q.pts.length, at = (j) => m.start + (m.rev ? k - 1 - j : j);
       for (let j = 0; j < k; j++) q.pts[j].y = P[at(j)].y;
       q.terr = Float32Array.from(q.pts, (p, j) => rd.terr[at(j)]); q.wet = Uint8Array.from(q.pts, (p, j) => rd.wet[at(j)]); q.bridge = q.pts.map((p, j) => rd.bridge[at(j)]);
-      add(q); setNodes(q);
+      addI(q); setNodes(q);
     }
   }
 }

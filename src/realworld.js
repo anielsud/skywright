@@ -15,6 +15,8 @@ import { GLTFLoader } from '../vendor/addons/GLTFLoader.js';
 import { MeshoptDecoder } from '../vendor/addons/meshopt_decoder.module.js';
 import { GeoStream } from './geostream.js';
 import { decodeRoadnet, way } from './roadnet.js';
+import { decodeRoads, PACK_V } from './roadPack.js';
+import { ROADS } from './version.js';
 
 const BASE = 'assets/real/';
 const GAIN = 1.35, DESHADE = 0.3; // imagery brightness (linear, loc.satGain overrides) and how much of its baked-in shading to remove (shaders.js)
@@ -185,6 +187,9 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   const D = new RealData(loc, meta, decodeHeights(await gunzip(hiZ), meta.hi.n), decodeHeights(await gunzip(farZ), meta.far.n), hiBmp, farBmp, coverBmp, osm);
   await D.stream.prime(); // the streamed land the first view reaches past the coarse square (a few seconds at most; never fails)
   { const b = await gunzip(roadsZ); D.roadnet = decodeRoadnet(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); } // every road, with its junctions (roadnet.js)
+  // the roads already built and graded, baked at deploy for this build (roadPack.js; none locally)
+  const packKey = ROADS !== 'dev' ? ROADS : globalThis.SKY_ROADPACK_KEY; // (tests: a dev build loads packs baked with that key)
+  if (packKey) try { const b = await gunzip(await get(`assets/boot/roads-${id}.bin.gz`)), P = decodeRoads(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); if (P.key === packKey && P.v === PACK_V) D.roadPack = P; } catch { /* (missing: work them out) */ }
   if (cityZ) D.city = decodeCity(await gunzip(cityZ));
   if (statueB) try { D.statue = (await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(statueB, '')).scene; } catch (e) { console.warn('[landmarks] statue model', e); }
   D.key = key;
@@ -432,10 +437,11 @@ class RealData {
   // height and traffic can turn from one road onto the next. Resampled to loc.roads.step metres between junctions.
   // Tunnels are left out (not drawn yet: #228). No fields, no rail line.
   network(w) {
+    if (this.roadPack) return this.packedNetwork(w);
     const lim = w.half + 300, roads = [], kinds = ['highway', 'main', 'main', 'street'], R = this.roadnet;
     const spans = (this.osm.bridges || []).map((b) => ({ ax: b.a[0], az: b.a[1], dx: b.b[0] - b.a[0], dz: b.b[1] - b.a[1] }));
     const step = (this.loc.roads || {}).step || 8;
-    const ok = (x, z) => Math.abs(x) < lim && Math.abs(z) < lim && !(Math.abs(x - 100) < 520 && Math.abs(z) < 1300) && !inStuntCut(w.stuntPlan, x, z); // (inside the core, off the game's airport, not across a stunt site)
+    const ok = (x, z) => Math.abs(x) < lim && Math.abs(z) < lim && !(Math.abs(x - 100) < 520 && Math.abs(z) < 1300) && (globalThis.SKY_ROADPACK || !inStuntCut(w.stuntPlan, x, z)); // (the deploy's road pack is baked uncut: the stunt sites are cut out at load, packedNetwork) // (inside the core, off the game's airport, not across a stunt site)
     for (let k = 0; k < R.ways; k++) {
       const W = way(R, k); if (W.tunnel) continue;
       const kind = kinds[W.cls], width = Math.min(W.width, W.cls === 0 ? 12 : 9), props = { kind, width, real: true, oneway: W.oneway, lanes: W.lanes, roundabout: W.roundabout, layer: W.layer, cls: W.cls };
@@ -481,6 +487,23 @@ class RealData {
     // longest first: roads[0] is what the World calls "the road"
     roads.sort((a, b) => b.pts.length - a.pts.length);
     return { roads, towns: [], fields: [], rail: null };
+  }
+  // the network from the deploy's road pack (roadPack.js: built and graded already): the stunt sites cut out (the game's
+  // site search needs the imagery, so the pack is baked without them), each piece keeping its points' heights and
+  // junctions. net.graded: roads.js gradeReal has nothing to do.
+  packedNetwork(w) {
+    const roads = [];
+    for (const rd of this.roadPack.roads) {
+      const n = rd.pts.length, cut = rd.pts.map((p) => inStuntCut(w.stuntPlan, p.x, p.z));
+      if (!cut.some(Boolean)) { roads.push(rd); continue; }
+      const jAt = new Map(rd.jn); let a = 0;
+      for (let i = 0; i <= n; i++) {
+        if (i < n && !cut[i]) continue;
+        if (i - a >= 2) { const sl = (A) => A?.slice(a, i); roads.push({ ...rd, pts: sl(rd.pts), bridge: sl(rd.bridge), span: sl(rd.span), jn: [...jAt].filter(([j]) => j >= a && j < i).map(([j, nd]) => [j - a, nd]) }); }
+        a = i + 1;
+      }
+    }
+    return { roads, towns: [], fields: [], rail: null, graded: true };
   }
   // the mapped roads as plain lists (landStart: where 'On the road' starts): [{ cls, width, bridge, baked, pts: [[x, z]] }],
   // and the road tunnels' centre lines ([[x, z]] each)

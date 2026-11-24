@@ -37,6 +37,10 @@ jobs:
           # the cockpit views' version: which cabin linings cover the windows (baked below, and kept by each device) stays valid until it changes
           VIEWS="$(cat src/stations.js | sha1sum | cut -c1-10)"
           sed -i "s/^export const VIEWS = .*/export const VIEWS = '${VIEWS}';/" src/version.js
+          # the real places' roads' version: what builds and grades them, code and data (the road packs, baked below, and
+          # kept by each device, stay valid until it changes); generous on purpose: the ground they're graded on is World's
+          ROADS="$(cat src/roads.js src/roadgrade.js src/roadnet.js src/roadPack.js src/realworld.js src/world.js src/airportKit.js src/airportGround.js src/noise.js src/stuntPark.js assets/real/*/roads.bin.gz assets/real/*/hi.bin.gz assets/real/*/meta.json | sha1sum | cut -c1-10)"
+          sed -i "s/^export const ROADS = .*/export const ROADS = '${ROADS}';/" src/version.js
           echo "SOLVER=${SOLVER}" >> "$GITHUB_ENV"; echo "VIEWS=${VIEWS}" >> "$GITHUB_ENV" # (the bake's caches below)
           # a fresh offline-cache name per deploy, so installed apps always pick up the new build
           sed -i "s/^const CACHE = .*/const CACHE = 'skywright-${SHA}';/" sw.js
@@ -66,6 +70,15 @@ jobs:
         run: |
           python -m pip install websockets
           python tools/bake/boot.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Bake the road packs
+        # every real place's roads built and graded once (src/roadPack.js; tools/bake/roadpack.mjs): the game skips that
+        # at load with this COMMIT's packs, and works them out itself without them (continue-on-error)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: node --import ./tools/test/node/setup.mjs tools/bake/roadpack.mjs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
