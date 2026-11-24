@@ -6,7 +6,7 @@ import { glowTexture as glow } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { REGION, roadStyle, tarmacMaterial, shoulderMaterial, sidewalkMaterial } from './roadSurface.js';
 import { airportGate } from './airportKit.js';
-import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface } from './roadgrade.js';
+import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE } from './roadgrade.js';
 
 const RWY_HALF = 900;
 
@@ -61,7 +61,7 @@ const allRoads = (net) => [...net.roads, ...(net.rail ? [net.rail] : [])];
 // embankment/cutting width beside a road on a heightfield of spacing st (physics and the skirt meshes)
 export const skirtWidth = (st) => Math.min(60, st * 0.75 + 10);
 // The road surface index World.sampleGrid / groundAt read (built once the fine heights are carved)
-export function roadSurface(w, net) { return new RoadSurface(w, allRoads(net), skirtWidth(w.hStep)); }
+export function roadSurface(w, net) { return new RoadSurface(w, allRoads(net), skirtWidth(w.hStep), w.detailGrid()[1] * 1.45); }
 
 // Real places: OSM roads get a profile too (smoothed, grade-limited, mapped bridges kept as straight decks), so they
 // can be carved in and driven like the planned ones. Reads the raw fine heights (w.Hh0).
@@ -280,14 +280,22 @@ export function buildRoadMeshes(w, net) {
   };
   // a strip across the road at every point: rows of lateral offsets (heights from hf(i, x, z, off)), quads only on
   // the segments seg(i) allows
+  // (offs: the same for every row, or per row: offs(i) -> offsets. Rows of different lengths are zipped together
+  // by their offsets: no cracks where a road's ribbon goes from two vertices across to more)
   const strip = (rd, offs, hf, seg, material, uvf, gap = -1, info = null, pt4 = null) => { // gap: a column left open (the verges either side of the tarmac); info: rinfo for every vertex, pt4: rjunc per point (roadSurface.js)
-    const P = rd.pts, n = P.length, closed = !!rd.closed, m = offs.length, pos = [], uv = [], idx = [], ri = [], rj = [];
-    let dist = 0;
+    const P = rd.pts, n = P.length, closed = !!rd.closed, pos = [], uv = [], idx = [], ri = [], rj = [], rowOf = typeof offs === 'function' ? offs : () => offs;
+    let dist = 0, o0 = 0, prev = null;
     for (let k = 0; k <= (closed ? n : n - 1); k++) {
-      const i = k % n, p = P[i], [, rt] = frame(P, i, closed);
+      const i = k % n, p = P[i], [, rt] = frame(P, i, closed), row = rowOf(i), m = row.length, o = pos.length / 3;
       if (k > 0) dist += P[i].distanceTo(P[(i - 1 + n) % n]);
-      for (let c = 0; c < m; c++) { const x = p.x + rt.x * offs[c], z = p.z + rt.z * offs[c]; pos.push(x, hf(i, x, z, offs[c], c), z); uv.push(...uvf(c, dist, offs[c])); if (info) ri.push(...info); if (pt4) rj.push(pt4[i * 4], pt4[i * 4 + 1], pt4[i * 4 + 2], pt4[i * 4 + 3]); }
-      if (k > 0 && seg((k - 1) % n)) { const o = (k - 1) * m; for (let c = 0; c < m - 1; c++) if (c !== gap) idx.push(o + c, o + c + 1, o + m + c, o + c + 1, o + m + c + 1, o + m + c); }
+      for (let c = 0; c < m; c++) { const x = p.x + rt.x * row[c], z = p.z + rt.z * row[c]; pos.push(x, hf(i, x, z, row[c], c), z); uv.push(...uvf(c, dist, row[c])); if (info) ri.push(...info); if (pt4) rj.push(pt4[i * 4], pt4[i * 4 + 1], pt4[i * 4 + 2], pt4[i * 4 + 3]); }
+      if (k > 0 && seg((k - 1) % n)) {
+        if (prev.length === m) { for (let c = 0; c < m - 1; c++) if (c !== gap) idx.push(o0 + c, o0 + c + 1, o + c, o0 + c + 1, o + c + 1, o + c); }
+        else for (let a = 0, b = 0; a < prev.length - 1 || b < m - 1;) { // zip: advance along whichever row's next vertex is nearer the start
+          if (b >= m - 1 || (a < prev.length - 1 && prev[a + 1] <= row[b + 1])) { idx.push(o0 + a, o0 + a + 1, o + b); a++; } else { idx.push(o0 + a, o + b + 1, o + b); b++; }
+        }
+      }
+      o0 = o; prev = row;
     }
     if (!idx.length) return;
     const g = new THREE.BufferGeometry();
@@ -316,7 +324,7 @@ export function buildRoadMeshes(w, net) {
     const ok = (i) => !isBr(rd, i) && (need[i] || need[(i + 1) % n] || need[(i - 1 + n) % n] || need[(i + 2) % n]);
     for (const s of [-1, 1]) {
       const offs = (s < 0 ? rows.slice().reverse() : rows).map((o) => s * (hw + o));
-      strip(rd, offs, (i, x, z, off) => (Math.abs(off) <= hw + 0.01 ? P[i].y : w.sampleGrid(x, z)), ok, skirtMat, (c, d) => [c, d]);
+      strip(rd, offs, (i, x, z) => w.sampleGrid(x, z), ok, skirtMat, (c, d) => [c, d]); // (from the road's edge, where its shoulder meets it: surf)
     }
   };
   // the tarmac and its gravel shoulders (roadSurface.js): uv in metres (across, along), rinfo = half width, what is
@@ -324,16 +332,73 @@ export function buildRoadMeshes(w, net) {
   const region = REGION[w.loc.id] || 'ch', city = !!w.loc.roads?.chunk, tarmac = tarmacMaterial(region), shoulder = shoulderMaterial(region);
   const sidewalk = w.loc.city ? sidewalkMaterial() : null; // (a city's streets: kerbs and pavements)
   const J = net.roads.some((r) => r.jn) ? junctionsFromNodes(net.roads, region, city) : findJunctions(net.roads, region, city);
+  // where a road lies on the ground its surface is the ground physics drives on (World.sampleGrid), not its own profile:
+  // where two roads' footprints overlap (side by side at different heights, a slip road, the mouth of a junction)
+  // that is one surface, blended between them (RoadSurface.blend), and a ribbon at its own profile sank under it: the
+  // ground showed through the road (#228). On a bridge deck or in a tunnel's tube: its own profile.
+  const surf = (jp, i, x, z) => (jp.bridge[i] || jp.tube[i] ? jp.pts[i].y : w.sampleGrid(x, z));
+  // That blend is a ramp a few metres across, and a ribbon two vertices wide and 8 m between rows cut under it (the
+  // ground through the road again): where another road's footprint overlaps this one and the ground is more than MISS
+  // metres above what the ribbon would draw, those segments get a row every REFINE metres and a column every REFINE
+  // metres across the tarmac (the rows either side zipped to them). Elsewhere (most of every road) as before. What is
+  // left under MISS, the detail mesh lies under (World.updateDetail).
+  const RS = w.roadSurf, REFINE = 4, MISS = 0.1;
+  // mark[i]: the segment from point i to the next is refined. Where another road's footprint reaches into this one's
+  // (cheap: RoadSurface's own overlap record), the ground is sampled across the segment and compared with what the
+  // two-vertex ribbon would draw.
+  const overlaps = (jp, hw) => {
+    const P = jp.pts, n = P.length, last = jp.closed ? n : n - 1, ov = new Uint8Array(n), mark = new Uint8Array(n), E = new Float64Array(n * 4); let any = false;
+    if (!RS) return null;
+    for (let i = 0; i < n; i++) {
+      if (jp.bridge[i] || jp.tube[i]) continue;
+      const [, rt] = frame(P, i, jp.closed);
+      for (const s of [-1, 1]) { const o = (hw + VERGE - 0.3) * s; if (RS.q(P[i].x + rt.x * o, P[i].z + rt.z * o) && RS.nIn > 1) ov[i] = 1; } // (two roads' footprints: this one's and another's)
+      E[i * 4] = rt.x; E[i * 4 + 1] = rt.z;
+    }
+    for (let i = 0; i < last; i++) {
+      const j = (i + 1) % n; if (!(ov[i] || ov[j]) || jp.bridge[i] || jp.bridge[j] || jp.tube[i] || jp.tube[j]) continue;
+      const A = P[i], B = P[j], ax = E[i * 4], az = E[i * 4 + 1], bx = E[j * 4], bz = E[j * 4 + 1];
+      const at = (t, o) => { const xa = A.x + ax * o, za = A.z + az * o; return [xa + (B.x + bx * o - xa) * t, za + (B.z + bz * o - za) * t]; };
+      const g = (t, o) => { const [x, z] = at(t, o); return w.sampleGrid(x, z); };
+      const v0 = g(0, -hw), v1 = g(0, hw), v2 = g(1, -hw), v3 = g(1, hw);
+      seg: for (const t of [0, 0.25, 0.5, 0.75]) for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+        const r = t + f <= 1 ? v0 + (v2 - v0) * t + (v1 - v0) * f : v3 + (v1 - v3) * (1 - t) + (v2 - v3) * (1 - f);
+        if (g(t, -hw + 2 * hw * f) - r > MISS) { mark[i] = 1; any = true; break seg; }
+      }
+    }
+    return any ? mark : null;
+  };
+  // jp with rows every REFINE metres along the marked segments
+  const refine = (jp, mark) => {
+    const P = jp.pts, n = P.length, last = jp.closed ? n : n - 1, rj = jp.rjunc, out = { pts: [], bridge: [], tube: [], rjunc: [], fine: [], closed: jp.closed };
+    for (let i = 0; i < n; i++) {
+      out.pts.push(P[i]); out.bridge.push(jp.bridge[i]); out.tube.push(jp.tube[i]); out.rjunc.push(rj[i * 4], rj[i * 4 + 1], rj[i * 4 + 2], rj[i * 4 + 3]);
+      out.fine.push(!!(mark[i] || (i > 0 || jp.closed) && mark[(i - 1 + n) % n])); // (a row of a refined segment: as many columns as its rows)
+      if (i >= last) continue;
+      const j = (i + 1) % n, L = Math.hypot(P[j].x - P[i].x, P[j].z - P[i].z), m = Math.ceil(L / REFINE);
+      if (!mark[i] || m < 2) continue;
+      for (let s = 1; s < m; s++) { const t = s / m; out.pts.push(P[i].clone().lerp(P[j], t)); out.bridge.push(false); out.tube.push(false); out.fine.push(true); out.rjunc.push(rj[i * 4] + (rj[j * 4] - rj[i * 4]) * t, rj[i * 4 + 1] + (rj[j * 4 + 1] - rj[i * 4 + 1]) * t, rj[i * 4 + 2], rj[i * 4 + 3]); }
+    }
+    return out;
+  };
   const roadMesh = (rd, k) => {
-    const hw = rd.width / 2, info = [hw, roadStyle(region, rd, city), (k * 7.31) % 97], jp = junctionPoints(rd, J[k]);
-    if (!w.loc.city || rd.kind === 'highway') strip(jp, [-hw - VERGE, -hw, hw, hw + VERGE], (i) => jp.pts[i].y, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]), shoulder, (c, d, o) => [o, d], 1, info, jp.rjunc);
+    const hw = rd.width / 2, info = [hw, roadStyle(region, rd, city), (k * 7.31) % 97], jp0 = junctionPoints(rd, J[k]), mark = w.loc.city ? null : overlaps(jp0, hw), // (not a city's: New York's every junction mouth, +1.4M triangles; its gentle streets are covered by the detail mesh lying under them, World.updateDetail)
+      jp = mark ? refine(jp0, mark) : jp0;
+    const nc = Math.ceil(2 * hw / REFINE), fine = Array.from({ length: nc + 1 }, (_, c) => -hw + 2 * hw * c / nc), two = [-hw, hw], cols = mark ? (i) => (jp.fine[i] ? fine : two) : two;
+    const lift = TARMAC_LIFT[rd.kind] ?? 0.04; // (the tarmac's: below)
+    if (!w.loc.city || rd.kind === 'highway') strip(jp, [-hw - VERGE, -hw, hw, hw + VERGE], (i, x, z) => surf(jp, i, x, z), (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]), shoulder, (c, d, o) => [o, d], 1, info, jp.rjunc);
     // a city street's pavements: the kerb's face (15 cm up from the gutter) and the slabs out to the building line
     if (sidewalk && rd.kind !== 'highway' && !rd.baked) {
-      const W = rd.kind === 'main' ? 4.5 : 3.5, up = (i, x, z, o, c) => jp.pts[i].y + (c === 0 ? 0.02 : 0.17), up2 = (i, x, z, o, c) => jp.pts[i].y + (c === 3 ? 0.02 : 0.17);
+      // (a slab level across, at the road's height at the kerb: out over the ground's slopes beyond the footprint, which
+      // the ground's meshes don't hold under it)
+      const W = PAVE[rd.kind] ?? 3.5, kc = new Float64Array(jp.pts.length * 2).fill(NaN), kerb = (i, x, z, o) => { const s = i * 2 + (o > 0 ? 1 : 0); if (Number.isNaN(kc[s])) { const p = jp.pts[i], f = hw / Math.abs(o); kc[s] = surf(jp, i, p.x + (x - p.x) * f, p.z + (z - p.z) * f); } return kc[s]; };
+      const up = (i, x, z, o, c) => kerb(i, x, z, o) + lift + (c === 0 ? 0 : 0.15), up2 = (i, x, z, o, c) => kerb(i, x, z, o) + lift + (c === 3 ? 0 : 0.15);
       strip(jp, [hw, hw, hw + 0.35, hw + W], up, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
       strip(jp, [-hw - W, -hw - 0.35, -hw, -hw], up2, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
     }
-    strip(jp, [-hw, hw], (i) => jp.pts[i].y + 0.02, () => true, tarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
+    // (lifted over every shoulder, and the bigger road over the smaller: where two lie on one surface, side by side or
+    // at a junction's mouth, the major one's tarmac and markings show, not the other's gravel or edge line)
+    strip(jp, cols, (i, x, z) => surf(jp, i, x, z) + lift, () => true, tarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
     skirts(rd);
   };
   const tileOf = (p) => Math.floor(p.x / TILE) + ',' + Math.floor(p.z / TILE), tiles = new Map();
@@ -457,6 +522,7 @@ export function buildRoadMeshes(w, net) {
 }
 
 // a city's road chunks (ribbons and bridges) are drawn this far on the lighter settings; High and Ultra draw them all
+const TARMAC_LIFT = { highway: 0.08, main: 0.06, street: 0.04 }; // metres the tarmac lies over the ground it is on
 const ROAD_D = { low: 4000, medium: 6000, high: 9000, ultra: 12000 }; // (road tiles drawn out to: past it the ground photo shows the roads)
 function mergeAll(geos) {
   const ni = geos.map((g) => (g.index ? g.toNonIndexed() : g));
