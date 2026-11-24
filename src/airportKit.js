@@ -37,6 +37,7 @@ const STYLE = {
   loc: { bg: '#141414', fg: '#f2c318', border: '#f2c318' },
   dir: { bg: '#f2c318', fg: '#141414', border: null },
   dist: { bg: '#141414', fg: '#ffffff', border: null },
+  info: { bg: '#1f4f9a', fg: '#ffffff', border: null }, // terminal wayfinding (departures, gates)
 };
 // one sign face: a list of panels side by side, each [kind, text]
 function faceWidth(panels, g) {
@@ -74,9 +75,11 @@ class SignAtlas {
 
 // ---------------- the kit ----------------
 // A: the airport's Builder (frame reset per piece), y: runway height, world: for ground heights and runway names.
+// extra: more signs for the same mesh (the terminal's: airportBuildings.js), each { x, z, yaw, front, back?, base (m above
+// y: the face's bottom), h (face height, m), frame: false (mounted on a wall: no box or legs) }.
 // Returns { points: [[x, y, z, hexColour], ...] glow points for the night lights, signs: Mesh, solids: [{ x, z, hx, hz }]
 // (footprints, axis-aligned half sizes) }.
-export function buildAirfieldKit(world, A, y) {
+export function buildAirfieldKit(world, A, y, extra = []) {
   const pts = [], solids = [];
   const RW = world.runways, RWY_W = RW[0].width, HALF = RW[0].len / 2;
   const ground = (x, z) => Math.max(world.heightAt(x, z), world.waterLevel ?? -Infinity);
@@ -162,17 +165,19 @@ export function buildAirfieldKit(world, A, y) {
       sign(r.x - RWY_W / 2 - 18, z, 0, 1, [['dist', String(k)]], [['dist', String(back)]]);
     }
   }
+  for (const e of extra) signs.push({ ...e, front: atlas.add(e.front), back: e.back ? atlas.add(e.back) : -1 });
   atlas.draw();
   // frames, legs and faces
   const pos = [], nor = [], uv = [];
   const quad = (fr, f, s) => { // a face quad on the sign's front (s = 1) or back (s = -1)
-    const F = atlas.faces[f], hw = F.w / 2, zf = s * 0.16, [u0, v0, u1, v1] = F.uv, cs = Math.cos(fr.yaw), sn = Math.sin(fr.yaw);
+    const H = fr.h || SIGN_H, F = atlas.faces[f], hw = F.w * H / 2, zf = s * (fr.frame === false ? 0.04 : 0.16), [u0, v0, u1, v1] = F.uv, cs = Math.cos(fr.yaw), sn = Math.sin(fr.yaw);
     const W = (lx, ly) => [fr.x + lx * cs + zf * sn, y + fr.base + ly, fr.z - lx * sn + zf * cs];
-    const a = W(-hw * s, 0), b = W(hw * s, 0), c = W(hw * s, SIGN_H), d = W(-hw * s, SIGN_H), n = [s * sn, 0, s * cs];
+    const a = W(-hw * s, 0), b = W(hw * s, 0), c = W(hw * s, H), d = W(-hw * s, H), n = [s * sn, 0, s * cs];
     const ua = s > 0 ? [u0, v0, u1, v0, u1, v1, u0, v1] : [u0, v0, u1, v0, u1, v1, u0, v1];
     for (const [p, i] of [[a, 0], [b, 1], [c, 2], [a, 0], [c, 2], [d, 3]]) { pos.push(...p); nor.push(...n); uv.push(ua[i * 2], ua[i * 2 + 1]); }
   };
   for (const s of signs) {
+    if (s.frame === false) { quad(s, s.front, 1); if (s.back >= 0) quad(s, s.back, -1); continue; } // (on a wall: the building is its frame)
     const w = Math.max(atlas.faces[s.front].w, s.back >= 0 ? atlas.faces[s.back].w : 0);
     s.base = ground(s.x, s.z) - y + 0.45;
     A.setFrame(s.x, y, s.z, s.yaw);
