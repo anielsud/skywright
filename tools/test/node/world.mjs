@@ -26,7 +26,7 @@ export async function worldAt(id, { time = 11 } = {}) {
   const warn = console.warn, warns = []; console.warn = (...a) => { warns.push(a.map(String).join(' ')); warn(...a); }; // (kept: e.g. '[stunts] no flat, clear site')
   let world;
   try {
-    if (loc.real) await loadReal(loc, 'low'); else await World.prepare(id);
+    await loadReal(loc, 'low');
     world = new World(renderer, new THREE.Scene(), { location: id, quality: 'low', time, weather: 'clear' });
   } finally { globalThis.fetch = net; console.warn = warn; }
   world.gust.set(0, 0, 0); world.gustT.set(0, 0, 0); // (the same wind every run: gusts are random)
@@ -58,7 +58,7 @@ export async function nodeWorld(location, quality = 'low', { time = 10, weather 
   if (quiet) { console.log = console.warn = keep; console.error = (...a) => (String(a[0]).startsWith('THREE.') ? keep(...a) : error(...a)); }
   const fetch0 = globalThis.fetch; globalThis.fetch = (u, o) => (/^https?:/.test(String(u?.url ?? u)) ? Promise.reject(new Error('offline (tests)')) : fetch0(u, o));
   try {
-    if (loc.real) await loadReal(loc, quality); else await World.prepare(location);
+    await loadReal(loc, quality);
     const world = new World(renderer, new THREE.Scene(), { location, quality, time, weather });
     return { world, env: envOf(world), said };
   } finally { console.log = log; console.warn = warn; console.error = error; globalThis.fetch = fetch0; }

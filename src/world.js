@@ -6,20 +6,17 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { FOG, FOG_GLSL, terrainMaterial, waterMaterial, swayMaterial } from './shaders.js';
 import { Atmosphere, skyMaterial, cloudNoiseTexture } from './sky.js';
 import { CloudField, deckMaterial } from './clouds.js';
-import { planNetwork, flattenGrid, flattenHi, makePainter, buildRoadMeshes, gradeReal, roadSurface } from './roads.js';
+import { flattenGrid, flattenHi, makePainter, buildRoadMeshes, gradeReal, roadSurface } from './roads.js';
 import { Flora } from './flora.js';
-import { Towns } from './towns.js';
 import { Builder, buildingMaterial, C } from './buildings.js';
 import { TerrainTiles } from './tiles.js';
 import { MapTiles } from './maptiles.js';
-import { erode } from './erosion.js';
 import { terrainDetailUniforms } from './terrainTex.js';
 import { CascadedShadows, NEAR_SHADOW } from './cascades.js';
 import { REAL_LOCATIONS, realData } from './realworld.js';
 import { SpaceView } from './space.js';
 import { RealScenery } from './realBuildings.js';
 import { Destruction } from './destruction.js';
-import { BAKED, preloadBake, bakeFor, withBake, landAt } from './terrainBake.js';
 import { Landcover } from './landcover.js';
 import { LaunchPad } from './launchpad.js';
 import { buildAirfieldKit, CONNECTORS, TAXI, airportGate } from './airportKit.js';
@@ -39,22 +36,7 @@ export { airportGate } from './airportKit.js'; // where the airport's landside r
 export const RUNWAYS = [{ x: 0, name: '36R', back: '18L' }, { x: -200, name: '36L', back: '18R' }];
 
 export const LOCATIONS = {
-  alpine: { hidden: true, // kept for old saves / sessions, not offered in the picker
-    id: 'alpine', name: 'Alpine Valley', desc: 'Snowy peaks, a glacier lake, pine forests and a mountain village.', seed: 11, rwyH: 30, water: 0, cloudBase: 2300, trees: 'pine',
-    colors: { grass: [0x4a6b2a, 0x5f7f35, 0x3f5d27], rock: 0x6b6660, snow: 0xf4f6f8, sand: 0x9a8d6a, dirt: 0x6f5a3c }, snowline: 1250, balloons: true, erosion: { cell: 800, depth: 0.16, octaves: 4 },
-    height(n, x, z) {
-      const vx = x - Math.sin(z / 2600) * 900; // valley centre line meanders
-      let dv = Math.abs(vx);
-      // more parallel valleys every 9.5 km, so the endless mountains stay flyable
-      const k0 = Math.round(x / 9500);
-      for (const k of [k0 - 1, k0, k0 + 1]) if (k) dv = Math.min(dv, Math.abs(x - k * 9500 - Math.sin(z / 2600 + k * 1.7) * 900));
-      const mask = smoothstep(500, 2600, dv);
-      const peaks = n.ridged(x / 3800, z / 3800, 3) * 2100 + n.fbm(x / 1500, z / 1500, 2) * 220; // big shapes only: erosion adds the detail
-      let h = 25 + n.fbm(x / 1200, z / 1200, 3) * 18 + mask * peaks;
-      const lake = Math.hypot(x - 1500, z + 3800); if (lake < 1300) h = lerp(-25, h, smoothstep(700, 1300, lake));
-      return h;
-    },
-  },
+  // (the generated Alpine Valley was removed: only the four real places are kept; main.js moves old saves to Bora Bora)
   islands: null, // Bora Bora (real, src/realworld.js) took the Coral Islands' place: same id, so saved settings and online sessions carry over
   canyon: null, // the Grand Canyon (real, src/realworld.js) took the Red Canyon's place, the same way
 };
@@ -91,13 +73,10 @@ export class World {
     this.gate = airportGate(this.loc); // where the landside road leaves the airport (rawHeight levels the ground along it)
     this.q = QUALITY[opts.quality] || QUALITY.medium; this.qName = opts.quality || 'medium'; this.qBase = baseTier(this.qName);
     this.noise = makeNoise(this.loc.seed);
-    // the one height function everything uses (core bake, streamed tiles, physics fallback): location shape + erosion,
-    // plus the offline landscape-evolution bake around the airport where there is one (src/terrainBake.js)
+    // the one height function everything uses (core bake, streamed tiles, physics fallback): the place's real heights
     const base = (x, z) => this.loc.height(this.noise, x, z);
-    const analytic = this.loc.erosion === false ? base : erode(base, { seed: this.loc.seed, ...this.loc.erosion });
-    this.bake = bakeFor(this.loc.id);
-    this.height = withBake(analytic, this.bake);
-    if (this.height === analytic) this.bake = null;
+    this.height = base;
+    this.bake = null; // (the offline landscape-evolution bake was the generated valley's)
     this.cover = new Landcover(this);
     this.rnd = mulberry32(this.loc.seed * 7);
     this.time = opts.time ?? 10; this.weatherId = opts.weather || 'clear';
@@ -123,7 +102,7 @@ export class World {
     this.buildAirport();
     this.flora = new Flora(this);
     if (this.real) this.net.towns = this.real.towns(this);
-    this.towns = this.real ? new RealScenery(this) : new Towns(this);
+    this.towns = new RealScenery(this);
     if (this.stuntPlan) { // the stunt park and the canyon jump (src/stuntPark.js): nothing grows on them
       this.stunts = new StuntParks(this, this.stuntPlan);
       const F = this.flora, bare = F.bare, S = this.stunts; F.setForestMask(F.mask, (x, z) => S.bare(x, z) || (bare ? bare(x, z) : false));
@@ -182,7 +161,6 @@ export class World {
   }
 
   // Resolves once everything a World for this location loads asynchronously is in (the terrain bake). Never rejects.
-  static prepare(locId) { return BAKED.includes(locId) ? preloadBake(locId).catch(() => null) : Promise.resolve(null); }
 
   // ---------------- terrain ----------------
   // The baked hydrology/land maps on the GPU: the terrain shader draws rivers, lakes and wet banks from them.
@@ -217,7 +195,7 @@ export class World {
   }
   // [water, drain, depo, wet] at (x,z), each 0..1 (zeros where there is no bake): rivers/lakes, drainage (log area),
   // scree/alluvium, wetness. Vegetation and props can use it to keep out of rivers.
-  landAt(x, z, out = [0, 0, 0, 0]) { return landAt(this.bake, x, z, out); }
+  landAt(x, z, out = [0, 0, 0, 0]) { out[0] = out[1] = out[2] = out[3] = 0; return out; } // (no baked hydrology at the real places: their rivers are mapped)
   // Forest density 0..1 at (x,z): what the vegetation plants (Flora's F) and the canopy colour in the baked albedo.
   // Cached on a 10 m lattice (vegetation asks for it at every candidate tree).
   forestAt(x, z) {
@@ -253,8 +231,8 @@ export class World {
     this.H = H;
     // road / rail network, towns and fields; flattened into the heightfield
     this.rawFine(); // the fine grid's raw heights: routing and road profiles read them, then they are carved and baked
-    this.net = this.real ? this.real.network(this) : planNetwork(this);
-    if (this.real) gradeReal(this, this.net);
+    this.net = this.real.network(this);
+    gradeReal(this, this.net);
     this.dryLand(); // no-op without a terrain bake (real places)
     flattenGrid(this, this.net);
     for (let k = 0; k < H.length; k++) H[k] = this.shoreSnap(H[k]);
@@ -759,7 +737,7 @@ export class World {
     this.scene.fog.color.copy(fogC); this.fogBase = W.fog * (this.weatherId === 'clear' ? 1.0 : 1.5) * (this.q.res < 200 ? 1.3 : 1);
     this.scene.fog.density = W.fog;
     FOG.fogLin.value = this.fogBase;
-    FOG.fogBase.value = this.loc.fogBase ?? (this.loc.id === 'alpine' ? this.loc.rwyH - 40 : this.waterLevel);
+    FOG.fogBase.value = this.loc.fogBase ?? this.waterLevel;
     FOG.fogFalloff.value = this.weatherId === 'fog' ? 1 / 220 : W.cover ? 1 / 1400 : 1 / 750;
     FOG.fogSunDir.value.copy(this.sunDir);
     FOG.fogSunColor.value.copy(sunCol).multiplyScalar((0.25 + golden * 0.9) * day * (1 - dark * 0.9));

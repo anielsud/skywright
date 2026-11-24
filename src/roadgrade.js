@@ -50,28 +50,6 @@ function morph2(h, n, r, mx) {
   for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { let a = h[j * n + i]; for (let d = -r; d <= r; d++) a = f(a, h[j * n + clamp(i + d, 0, M)]); t[j * n + i] = a; }
   for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { let a = t[j * n + i]; for (let d = -r; d <= r; d++) a = f(a, t[clamp(j + d, 0, M) * n + i]); h[j * n + i] = a; }
 }
-// Mark the cells an existing road runs through: routing along them is cheap, so new roads share its corridor and
-// branch off where they need to (see trimShared).
-export function markRoad(G, pts) {
-  const { n, cell, x0 } = G; G.road = G.road || new Uint8Array(n * n);
-  for (const p of pts) {
-    const i0 = Math.round((p.x - x0) / cell), j0 = Math.round((p.z - x0) / cell);
-    for (let j = j0 - 1; j <= j0 + 1; j++) for (let i = i0 - 1; i <= i0 + 1; i++) if (i >= 0 && j >= 0 && i < n && j < n) G.road[j * n + i] = 1;
-  }
-}
-const onRoad = (G, p) => { const i = Math.round((p.x - G.x0) / G.cell), j = Math.round((p.z - G.x0) / G.cell); return !!G.road?.[j * G.n + i]; };
-// Drop the stretches of a routed path that run along existing roads (at its start and, if atEnd, its end).
-export function trimShared(G, P, atEnd = true) {
-  let a = 0, b = P.length - 1;
-  while (a < b - 1 && onRoad(G, P[a + 1])) a++;
-  while (atEnd && b > a + 1 && onRoad(G, P[b - 1])) b--;
-  return P.slice(a, b + 1);
-}
-// re-read the heights in a box (towns flattened after the grid was made)
-export function regrid(G, terr, x0, z0, x1, z1) {
-  const c = (v) => clamp(Math.round((v - G.x0) / G.cell), 0, G.n - 1);
-  for (let j = c(z0); j <= c(z1); j++) for (let i = c(x0); i <= c(x1); i++) G.h[j * G.n + i] = terr(G.x0 + i * G.cell, G.x0 + j * G.cell);
-}
 
 // A* from (ax,az) to (bx,bz). o: { gmax, water: cost factor per metre over water, turn, alt (per 100 m above
 // o.h0), margin (m around the endpoints' box that the search may use) }. Returns world points (y = 0) or null.
@@ -133,45 +111,12 @@ export function route(G, ax, az, bx, bz, o) {
   return out;
 }
 
-// The highest dry ground reachable from (ax,az) without any step steeper than gmax, within maxDist: where a
-// switchback road can actually climb to. Returns a world point (y = its height) or null.
-export function highestReachable(G, ax, az, gmax, maxDist, minDist = 0) {
-  const { n, cell, x0, h, wet, block } = G, s = clamp(Math.round((az - x0) / cell), 0, n - 1) * n + clamp(Math.round((ax - x0) / cell), 0, n - 1);
-  const seen = new Uint8Array(n * n), q = [s]; seen[s] = 1; let best = -1;
-  while (q.length) {
-    const k = q.pop(), i = k % n, j = (k / n) | 0, d = Math.hypot(x0 + i * cell - ax, x0 + j * cell - az);
-    if (d >= minDist && !wet[k] && (best < 0 || h[k] > h[best])) best = k;
-    for (let e = 0; e < 16; e++) {
-      const ni = i + DIRS[e][0], nj = j + DIRS[e][1]; if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
-      const nk = nj * n + ni; if (seen[nk] || block[nk] || Math.abs(h[nk] - h[k]) > gmax * DLEN[e] * cell) continue;
-      if (Math.hypot(x0 + ni * cell - ax, x0 + nj * cell - az) > maxDist) continue;
-      seen[nk] = 1; q.push(nk);
-    }
-  }
-  return best < 0 ? null : new THREE.Vector3(x0 + (best % n) * cell, h[best], x0 + ((best / n) | 0) * cell);
-}
 
 // Cut out loops: where a path comes back within d of where it was a little earlier (routes joined at a waypoint).
 export function unloop(P, d, win = 40) {
   const out = P.slice();
   for (let i = 0; i < out.length; i++) for (let j = Math.min(out.length - 1, i + win); j > i + 2; j--) {
     if ((out[i].x - out[j].x) ** 2 + (out[i].z - out[j].z) ** 2 < d * d) { out.splice(i + 1, j - i - 1); break; }
-  }
-  return out;
-}
-// Where polyline A crosses polyline B (B already has its heights): [{ i: index on A, y: B's height there }], so A can
-// be pinned to meet B at grade.
-export function crossings(A, B, closedB = false) {
-  const out = [], m = B.length;
-  for (let i = 0; i < A.length - 1; i++) {
-    const p = A[i], q = A[i + 1];
-    for (let j = 0; j < (closedB ? m : m - 1); j++) {
-      const r = B[j], s = B[(j + 1) % m];
-      if (Math.max(r.x, s.x) < Math.min(p.x, q.x) || Math.min(r.x, s.x) > Math.max(p.x, q.x) || Math.max(r.z, s.z) < Math.min(p.z, q.z) || Math.min(r.z, s.z) > Math.max(p.z, q.z)) continue;
-      const d1x = q.x - p.x, d1z = q.z - p.z, d2x = s.x - r.x, d2z = s.z - r.z, den = d1x * d2z - d1z * d2x; if (Math.abs(den) < 1e-9) continue;
-      const t = ((r.x - p.x) * d2z - (r.z - p.z) * d2x) / den, u = ((r.x - p.x) * d1z - (r.z - p.z) * d1x) / den;
-      if (t >= 0 && t <= 1 && u >= 0 && u <= 1) out.push({ i: t < 0.5 ? i : i + 1, y: r.y + (s.y - r.y) * u });
-    }
   }
   return out;
 }
@@ -217,7 +162,6 @@ export function smoothPath(P, { closed = false, tol = 14, maxL = 55, iters = 3 }
   Q = densify(Q, maxL, closed);
   return chaikin(Q, closed, iters);
 }
-export function simplifyPath(P, tol) { return simplify(P, tol); }
 // Ease every bend tighter than radius rmin (an evenly spaced path, ~8 m): points on a tight bend are pulled toward
 // their neighbours' midpoint until it opens up (ends stay put). Keeps the ribbons from folding over on themselves.
 export function relaxCurves(P, rmin, closed = false, iters = 60) {

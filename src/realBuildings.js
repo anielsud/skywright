@@ -1,7 +1,7 @@
 // Scenery for real-world locations from OpenStreetMap (© OpenStreetMap contributors, ODbL), baked by
 // tools/realworld/bake.py: every mapped building extruded from its real footprint (walls from the facade atlas in
 // buildings.js, gabled / hipped / flat roofs, Swiss chalet style up in the villages), railways, cable car lines,
-// mountain lakes and rivers above the World's water level. Takes the place of Towns (towns.js) for these locations and offers the same interface.
+// mountain lakes and rivers above the World's water level. (Generated towns, towns.js, went with the generated valley.)
 import * as THREE from 'three';
 import { Builder, buildingMaterial, buildingDepthMaterial, C } from './buildings.js';
 import { mulberry32, smoothstep } from './noise.js';
