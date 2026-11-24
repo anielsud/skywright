@@ -7,6 +7,7 @@ import { Builder, buildingMaterial, buildingDepthMaterial, C } from './buildings
 import { mulberry32, smoothstep } from './noise.js';
 import { CityScenery } from './realCity.js';
 import { Landmarks } from './realLandmarks.js';
+import { roadIndex, setBack, MAJOR } from './setback.js';
 
 const CHUNK = 1000; // m: buildings are merged per 1 km cell (one draw call each), hidden beyond VIEW
 const VIEW = { low: 4500, medium: 8000, high: 14000 };
@@ -42,20 +43,25 @@ export class RealScenery {
 
   // ---------------- buildings ----------------
   buildBuildings(list) {
+    const t0 = performance.now(), roads = roadIndex(this.w); this.setbacks = { cut: 0, dropped: 0, through: 0, ms: performance.now() - t0 }; // (ms: the index and the cuts)
     const W = this.w, seed0 = W.loc.seed * 5 + 3, lowQ = W.qName === 'low', trop = W.loc.osmStyle === 'tropical', wl = W.waterLevel, SB = W.loc.buildStyle || {};
     for (const b of list) {
       const [kind, hTag, lv, rsTag, rhTag, minH, flat] = b;
-      const n = flat.length / 2; if (n < 3) continue;
-      const P = []; let cx = 0, cz = 0;
-      for (let k = 0; k < n; k++) { P.push([flat[k * 2], flat[k * 2 + 1]]); cx += flat[k * 2]; cz += flat[k * 2 + 1]; }
-      cx /= n; cz /= n;
-      // each building's own random sequence, from where it stands: its style is the same whichever others are left out
-      // (Low skips the small ones) and whatever order they come in
+      if (flat.length < 6) continue;
+      let P = []; for (let k = 0; k < flat.length; k += 2) P.push([flat[k], flat[k + 1]]);
+      const ring = () => { let cx = 0, cz = 0, area = 0; for (let k = 0; k < P.length; k++) { const a = P[k], c = P[(k + 1) % P.length]; cx += a[0]; cz += a[1]; area += a[0] * c[1] - c[0] * a[1]; } return [cx / P.length, cz / P.length, area * 0.5]; };
+      let [cx, cz, area] = ring();
+      // each building's own random sequence, from where it stands (before any setback): its style is the same whichever
+      // others are left out (Low skips the small ones, setbacks drop some) and whatever order they come in
       const r = buildingRng(seed0, cx, cz);
-      let area = 0; for (let k = 0; k < n; k++) { const a = P[k], c = P[(k + 1) % n]; area += a[0] * c[1] - c[0] * a[1]; }
-      area *= 0.5; const A = Math.abs(area);
-      if (A < (lowQ ? 60 : W.qName === 'medium' ? 25 : 0)) continue; // lighter on tablets: no garden sheds
+      if (Math.abs(area) < (lowQ ? 60 : W.qName === 'medium' ? 25 : 0)) continue; // lighter on tablets: no garden sheds
       if (Math.abs(cx - 100) < 480 && Math.abs(cz) < 1250) continue; // the game's own airport
+      // set back from the roads (setback.js): cut back off the tarmac and verge, or left out where the road runs through
+      const ts = performance.now(), sb = setBack(roads, P, Math.abs(area) >= MAJOR.area || hTag >= MAJOR.height || lv >= 8); this.setbacks.ms += performance.now() - ts;
+      if (sb.drop) { this.setbacks.dropped++; continue; }
+      if (sb.through) this.setbacks.through++;
+      if (sb.cut) { this.setbacks.cut++; P = sb.P; [cx, cz, area] = ring(); }
+      const n = P.length, A = Math.abs(area);
       // oriented bounding box: the edge direction giving the smallest rectangle
       let best = null;
       for (let k = 0; k < n; k++) {
@@ -151,7 +157,7 @@ export class RealScenery {
       const key = Math.floor(cx / 50) + ',' + Math.floor(cz / 50);
       if (!this.grid.has(key)) this.grid.set(key, []);
       const e = [cx, base, cz, eave + rise, Math.sqrt(A / Math.PI)];
-      e.solid = true; e.dk = 'r' + this.count; e.rng = [[B, n0, B.n - n0]]; e.ob = { x: ox, z: oz, ux, uz, hl, hw }; // destructible (destruction.js)
+      e.solid = true; e.fp = P; if (sb.through) e.through = true; e.dk = 'r' + this.count; e.rng = [[B, n0, B.n - n0]]; e.ob = { x: ox, z: oz, ux, uz, hl, hw }; // destructible (destruction.js)
       this.grid.get(key).push(e);
       this.count++;
     }

@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, BLD_U } from './buildings.js';
 import { toLocal } from './realworld.js';
+import { roadIndex, setBack, holeInside, MAJOR } from './setback.js';
 
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
 const GROUP = 2; // tall buildings: one mesh per GROUP x GROUP data tiles
@@ -129,7 +130,7 @@ export class MeshW {
 }
 
 // ---------------- reading city.bin ----------------
-function readRec(U, S, o, q, cx, cz, R) {
+export function readRec(U, S, o, q, cx, cz, R) {
   const w0 = U[o], n = w0 & 4095, nh = w0 >> 12;
   R.flags = U[o + 1]; R.top = S[o + 2] / 4; R.mh = S[o + 3] / 4; R.g0 = S[o + 4] / 4; R.g1 = R.g0 + U[o + 5] / 4;
   const k6 = U[o + 6]; R.kind = k6 & 15; R.roof = (k6 >> 4) & 15; R.lv = k6 >> 8; R.rh = S[o + 7] / 4; R.col = U[o + 8]; R.name = U[o + 9]; R.o = o;
@@ -199,6 +200,7 @@ export class CityScenery {
     this.helipads = (cfg.helipads || []).map((h) => { const [x, z] = toLocal(D.meta, h.lat, h.lon), L = h.look && toLocal(D.meta, h.look.lat, h.look.lon); return { ...h, x, z, look: L ? { x: L[0], z: L[1] } : null, roof: null }; });
     const t0 = performance.now();
     this.stats = { tall: 0, low: 0, tris: 0 };
+    this.roads = roadIndex(W); this.setbacks = { cut: 0, dropped: 0, through: 0, ms: performance.now() - t0 }; // set back from the streets (setback.js; ms: the index and the cuts)
     this.buildTall();
     this.msTall = performance.now() - t0;
     this.queue = []; this.lastPlan = null; this.shadows = W_SHADOW(W);
@@ -250,15 +252,28 @@ export class CityScenery {
   skipped(R) { if (!this.hole) return false; const p = R.P[0]; return Math.hypot(p[0] - this.hole[0], p[1] - this.hole[1]) < 60; }
 
   // ---------------- one building (or part) ----------------
-  building(M, R, tall) {
-    const W = this.w;
+  // a record's footprint as built: simplified, counter-clockwise, set back from the streets (setback.js: cut back off the
+  // roadway and pavement; null if too little is left), its courtyards (those the cut reaches are filled in)
+  footprint(R, tall) {
     let P = simplify(R.P, tall ? 0.35 : 0.5);
-    if (P.length < 3) return;
+    if (P.length < 3) return null;
     if (area2(P) < 0) P.reverse();
-    const holes = R.holes.map((h) => { const Q = simplify(h, 0.5); if (area2(Q) < 0) Q.reverse(); return Q; }).filter((h) => h.length >= 3);
+    let holes = R.holes.map((h) => { const Q = simplify(h, 0.5); if (area2(Q) < 0) Q.reverse(); return Q; }).filter((h) => h.length >= 3);
+    const major = R.top >= MAJOR.height || R.lv >= 8 || Math.abs(area2(P)) >= MAJOR.area;
+    const ts = performance.now(), sb = setBack(this.roads, P, major); this.setbacks.ms += performance.now() - ts;
+    if (sb.drop) { this.setbacks.dropped++; return null; }
+    if (sb.through) { this.setbacks.through++; return { P, holes, p0: P[0], through: true }; }
+    const p0 = P[0]; // (the building's look is seeded from its mapped corner: a cut one keeps it)
+    if (sb.cut) { this.setbacks.cut++; P = area2(sb.P) < 0 ? sb.P.slice().reverse() : sb.P; holes = holes.filter((h) => holeInside(P, h)); }
+    return { P, holes, p0 };
+  }
+  building(M, R, tall) {
+    const W = this.w, F = this.footprint(R, tall);
+    if (!F) return;
+    const { P, holes, p0 } = F;
     const A = Math.abs(area2(P)) - holes.reduce((s, h) => s + Math.abs(area2(h)), 0);
     if (A < 6) return;
-    const part = R.flags & 1, hseed = hash(Math.round(P[0][0] * 4), Math.round(P[0][1] * 4)), h2 = hash(R.o, 7), h3 = hash(R.o, 13);
+    const part = R.flags & 1, hseed = hash(Math.round(p0[0] * 4), Math.round(p0[1] * 4)), h2 = hash(R.o, 7), h3 = hash(R.o, 13);
     const gm = (R.g0 + R.g1) / 2;
     // height: the tag (NYC: measured roof heights), else levels, else by use and size
     let top = R.top > 0 ? R.top : R.lv > 0 ? R.lv * 3.2 + 1 : R.kind === 0 ? 8 : R.kind === 2 ? 3.5 : A > 400 ? 12 : 9.5;
