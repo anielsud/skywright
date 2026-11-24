@@ -462,18 +462,18 @@ export function buildRoadMeshes(w, net) {
   };
   // a strip across the road at every point: rows of lateral offsets (heights from hf(i, x, z, off)), quads only on
   // the segments seg(i) allows
-  const strip = (rd, offs, hf, seg, material, uvf, gap = -1, info = null) => { // gap: a column left open (the verges either side of the tarmac); info: rinfo for every vertex (roadSurface.js)
-    const P = rd.pts, n = P.length, closed = !!rd.closed, m = offs.length, pos = [], uv = [], idx = [], ri = [];
+  const strip = (rd, offs, hf, seg, material, uvf, gap = -1, info = null, pt4 = null) => { // gap: a column left open (the verges either side of the tarmac); info: rinfo for every vertex, pt4: rjunc per point (roadSurface.js)
+    const P = rd.pts, n = P.length, closed = !!rd.closed, m = offs.length, pos = [], uv = [], idx = [], ri = [], rj = [];
     let dist = 0;
     for (let k = 0; k <= (closed ? n : n - 1); k++) {
       const i = k % n, p = P[i], [, rt] = frame(P, i, closed);
       if (k > 0) dist += P[i].distanceTo(P[(i - 1 + n) % n]);
-      for (let c = 0; c < m; c++) { const x = p.x + rt.x * offs[c], z = p.z + rt.z * offs[c]; pos.push(x, hf(i, x, z, offs[c]), z); uv.push(...uvf(c, dist, offs[c])); if (info) ri.push(...info); }
+      for (let c = 0; c < m; c++) { const x = p.x + rt.x * offs[c], z = p.z + rt.z * offs[c]; pos.push(x, hf(i, x, z, offs[c]), z); uv.push(...uvf(c, dist, offs[c])); if (info) ri.push(...info); if (pt4) rj.push(pt4[i * 4], pt4[i * 4 + 1], pt4[i * 4 + 2], pt4[i * 4 + 3]); }
       if (k > 0 && seg((k - 1) % n)) { const o = (k - 1) * m; for (let c = 0; c < m - 1; c++) if (c !== gap) idx.push(o + c, o + c + 1, o + m + c, o + c + 1, o + m + c + 1, o + m + c); }
     }
     if (!idx.length) return;
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); if (info) g.setAttribute('rinfo', new THREE.Float32BufferAttribute(ri, 3)); g.setIndex(idx); g.computeVertexNormals();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); if (info) g.setAttribute('rinfo', new THREE.Float32BufferAttribute(ri, 3)); if (pt4) g.setAttribute('rjunc', new THREE.Float32BufferAttribute(rj, 4)); g.setIndex(idx); g.computeVertexNormals();
     add(material, g);
   };
   const isBr = (rd, i) => !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % rd.pts.length]);
@@ -500,10 +500,11 @@ export function buildRoadMeshes(w, net) {
   // painted on it, a seed
   const region = REGION[w.loc.id] || 'ch', city = !!w.loc.roads?.chunk, tarmac = tarmacMaterial(region), shoulder = shoulderMaterial(region);
   findMedians(net.roads);
+  const J = findJunctions(net.roads, region, city);
   net.roads.forEach((rd, k) => {
-    const hw = rd.width / 2, info = [hw, roadStyle(region, rd, city), (k * 7.31) % 97];
-    strip(rd, [-hw - VERGE, -hw, hw, hw + VERGE], (i) => rd.pts[i].y, (i) => !isBr(rd, i), shoulder, (c, d, o) => [o, d], 1, info);
-    strip(rd, [-hw, -hw * 0.5, 0, hw * 0.5, hw], (i) => rd.pts[i].y + 0.02, () => true, tarmac, (c, d, o) => [o, d], -1, info);
+    const hw = rd.width / 2, info = [hw, roadStyle(region, rd, city), (k * 7.31) % 97], jp = junctionPoints(rd, J[k]);
+    strip(jp, [-hw - VERGE, -hw, hw, hw + VERGE], (i) => jp.pts[i].y, (i) => !isBr(jp, i), shoulder, (c, d, o) => [o, d], 1, info, jp.rjunc);
+    strip(jp, [-hw, -hw * 0.5, 0, hw * 0.5, hw], (i) => jp.pts[i].y + 0.02, () => true, tarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
     skirts(rd);
   });
   const bridgeGeos = [], railGeos = [];
@@ -680,3 +681,86 @@ export function gateRoad(w, roads, { G = null, terr, wetAt, blocked } = {}) {
 }
 // the gate road's pins: level at the gate's height across the levelled strip, the far end on the road it joins
 export const gatePins = (rd) => { const out = []; for (let i = 0; i < rd.pts.length && rd.pts[i].x < rd.gate.x && Math.abs(rd.pts[i].z - rd.gate.z) < 26; i++) out.push({ i, y: rd.gate.h }); return [...out, { i: rd.pts.length - 1, y: rd.to.y }]; }; // (the strip: from the gate while it stays in it)
+
+// Junctions along every road (#228), for the markings (roadSurface.js): where another road ends on its line (a T: this
+// is the through road, the mouth on one side), where its own end lies on another road's line (a T: this road gives
+// way there), and where two cross (an X: the minor one, later in rank, gives way). Returns per road a sorted list
+// { s (metres along), r (clearance: the other road's half width + 1 m), stop (gives way here), walk (a crossing),
+// side (+1 / -1: the mouth is on its +x / -x side; 0: both) }. Bridge decks don't make junctions (an overpass);
+// two ways meeting end to end are one road carrying on, not a junction. city: every approach stops (traffic
+// lights) and has a crossing.
+export function findJunctions(roads, region, city) {
+  const C = 25, cells = new Map(), rank = (k) => roads[k].rank ?? k;
+  const isDeck = (rd, i) => !!(rd.bridge?.[i] && rd.bridge?.[i + 1]);
+  roads.forEach((rd, ri) => { const P = rd.pts; for (let i = 0; i + 1 < P.length; i++) { if (isDeck(rd, i)) continue; const i0 = Math.floor(Math.min(P[i].x, P[i + 1].x) / C), i1 = Math.floor(Math.max(P[i].x, P[i + 1].x) / C), j0 = Math.floor(Math.min(P[i].z, P[i + 1].z) / C), j1 = Math.floor(Math.max(P[i].z, P[i + 1].z) / C); for (let a = i0; a <= i1; a++) for (let b = j0; b <= j1; b++) { const k = a + ',' + b; let A = cells.get(k); if (!A) cells.set(k, (A = [])); A.push([ri, i]); } } });
+  const S = roads.map((rd) => { const P = rd.pts, o = new Float64Array(P.length); for (let i = 1; i < P.length; i++) o[i] = o[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z); return o; });
+  const out = roads.map(() => []);
+  const town = (rd) => rd.kind === 'street' && !rd.lane;
+  const walkAt = (a, b, s) => city ? a.width >= 6 : region !== 'us' && town(a) && town(b) && ((s * 0.37 + a.width * 13.1) % 1) < 0.6;
+  const add = (ri, j) => { const L = out[ri], m = L.find((q) => Math.abs(q.s - j.s) < 3); if (m) { m.r = Math.max(m.r, j.r); m.stop ||= j.stop; m.walk ||= j.walk; if (m.side !== j.side) m.side = 0; } else L.push(j); };
+  // the nearest point on road qi's line to p, within d: { s (along qi), i, side (which side of qi p is on) }
+  const onLine = (qi, p, d) => { let best = null; const ci = Math.floor(p.x / C), cj = Math.floor(p.z / C);
+    for (let a = ci - 1; a <= ci + 1; a++) for (let b = cj - 1; b <= cj + 1; b++) for (const [rj, i] of cells.get(a + ',' + b) || []) {
+      if (rj !== qi) continue; const P = roads[qi].pts, A = P[i], B = P[i + 1], ex = B.x - A.x, ez = B.z - A.z, L2 = ex * ex + ez * ez || 1, t = clamp(((p.x - A.x) * ex + (p.z - A.z) * ez) / L2, 0, 1);
+      const qx = p.x - (A.x + ex * t), qz = p.z - (A.z + ez * t), dd = Math.hypot(qx, qz); if (dd < d && (!best || dd < best.d)) best = { d: dd, s: S[qi][i] + t * Math.sqrt(L2), side: Math.sign(-ez * qx + ex * qz) || 1 };
+    } return best; };
+  roads.forEach((rd, ri) => {
+    const P = rd.pts, n = P.length; if (rd.kind === 'rail' || n < 2) return;
+    // its ends on other roads' lines
+    if (!rd.closed) for (const [e, nb, se] of [[P[0], P[1], 0], [P[n - 1], P[n - 2], S[ri][n - 1]]]) {
+      if (isDeck(rd, se ? n - 2 : 0)) continue;
+      const seen = new Set(), ci = Math.floor(e.x / C), cj = Math.floor(e.z / C);
+      for (let a = ci - 1; a <= ci + 1; a++) for (let b = cj - 1; b <= cj + 1; b++) for (const [qi] of cells.get(a + ',' + b) || []) {
+        if (qi === ri || seen.has(qi)) continue; seen.add(qi);
+        const q = roads[qi], hit = onLine(qi, e, q.width / 2 + 1.5); if (!hit) continue;
+        const atEnd = hit.s < 2 || hit.s > S[qi].at(-1) - 2;
+        if (atEnd) { // end to end: a junction only where three or more meet (else one road carrying on)
+          let k = 0; for (const [qq] of cells.get(ci + ',' + cj) || []) if (qq !== ri && qq !== qi && onLine(qq, e, roads[qq].width / 2 + 1.5)) { k++; break; }
+          if (!k) continue;
+        }
+        const side = onLine(qi, nb, 1e9)?.side ?? 0; // which side of q this road leaves on
+        const walk = walkAt(rd, q, hit.s);
+        if (!atEnd) add(qi, { s: hit.s, r: rd.width / 2 + 1, stop: city, walk, side });
+        add(ri, { s: se, r: q.width / 2 + 1, stop: true, walk, side: 0 });
+      }
+    }
+    // crossings with the roads after it
+    for (let i = 0; i + 1 < n; i++) {
+      if (isDeck(rd, i)) continue;
+      const a = P[i], b = P[i + 1], dx = b.x - a.x, dz = b.z - a.z, seen = new Set(), ci = Math.floor((a.x + b.x) / 2 / C), cj = Math.floor((a.z + b.z) / 2 / C);
+      for (let u = ci - 1; u <= ci + 1; u++) for (let v = cj - 1; v <= cj + 1; v++) for (const [qi, j] of cells.get(u + ',' + v) || []) {
+        if (qi <= ri || seen.has(qi + ':' + j)) continue; seen.add(qi + ':' + j);
+        const q = roads[qi], r = q.pts[j], t2 = q.pts[j + 1], ex = t2.x - r.x, ez = t2.z - r.z, den = dx * ez - dz * ex; if (Math.abs(den) < 1e-9) continue;
+        const t = ((r.x - a.x) * ez - (r.z - a.z) * ex) / den, w = ((r.x - a.x) * dz - (r.z - a.z) * dx) / den;
+        if (t < 0 || t > 1 || w < 0 || w > 1) continue;
+        const sA = S[ri][i] + t * Math.hypot(dx, dz), sB = S[qi][j] + w * Math.hypot(ex, ez);
+        if (sA < 2 || sA > S[ri].at(-1) - 2 || sB < 2 || sB > S[qi].at(-1) - 2) continue; // (ends: done above)
+        const minorA = rank(ri) > rank(qi), walk = walkAt(rd, q, sA);
+        add(ri, { s: sA, r: q.width / 2 + 1, stop: city || minorA, walk, side: 0 });
+        add(qi, { s: sB, r: rd.width / 2 + 1, stop: city || !minorA, walk, side: 0 });
+      }
+    }
+  });
+  for (const L of out) L.sort((p, q) => p.s - q.s);
+  return out;
+}
+// A road's points for its meshes with a vertex either side of every junction (so the distances to the junctions,
+// rjunc, interpolate exactly), and per point rjunc = (metres since the previous junction, metres to the next, the
+// previous one's code, the next one's): code = round(r * 4) * 32 + stop + 2 walk + 4 (mouth on +x) + 8 (mouth on -x).
+export function junctionPoints(rd, J) {
+  const P = rd.pts, n = P.length, S = new Float64Array(n); for (let i = 1; i < n; i++) S[i] = S[i - 1] + P[i].distanceTo(P[i - 1]);
+  const code = (j) => Math.round(j.r * 4) * 32 + (j.stop ? 1 : 0) + (j.walk ? 2 : 0) + (j.side >= 0 ? 4 : 0) + (j.side <= 0 ? 8 : 0);
+  const pts = [], ss = [], br = [];
+  let k = 0;
+  for (let i = 0; i < n; i++) {
+    if (i > 0) while (k < J.length && J[k].s < S[i] - 0.02) { const j = J[k++]; if (j.s <= S[i - 1] + 0.02) continue; const t = (j.s - S[i - 1]) / (S[i] - S[i - 1]); for (const e of [-0.01, 0.01]) { const tt = t + e / (S[i] - S[i - 1]); pts.push(P[i - 1].clone().lerp(P[i], tt)); ss.push(j.s + e); br.push(!!(rd.bridge?.[i - 1] && rd.bridge?.[i])); } }
+    pts.push(P[i]); ss.push(S[i]); br.push(!!rd.bridge?.[i]);
+  }
+  const rj = [];
+  for (const s of ss) {
+    let a = -1; while (a + 1 < J.length && J[a + 1].s <= s) a++;
+    const prev = J[a], next = J[a + 1];
+    rj.push(prev ? s - prev.s : 1e4, next ? next.s - s : 1e4, prev ? code(prev) : 0, next ? code(next) : 0);
+  }
+  return { pts, bridge: br, rjunc: rj, closed: rd.closed };
+}
