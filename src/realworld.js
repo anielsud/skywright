@@ -406,7 +406,7 @@ class RealData {
   uniforms() {
     if (!this.tex) {
       const mk = (bmp) => { const t = new THREE.Texture(bmp); t.flipY = false; t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.anisotropy = 8; t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; t.needsUpdate = true; return t; };
-      this.tex = { hi: mk(this.hiBmp), far: mk(this.farBmp) };
+      this.tex = { hi: mk((this.paintHi && this.paintHi(this.hiBmp, this.meta.hi, this.gainS)) || this.hiBmp), far: mk(this.farBmp) }; // (paintHi: World's airport infield, airportGround.js)
     }
     const h = this.meta.hi, f = this.meta.far;
     return {

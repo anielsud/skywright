@@ -1,10 +1,12 @@
 // The airfield's ground (#227 phase 2): mown grass over the levelled infield, paved shoulders and blast pads, the
 // perimeter fence, and the landside road from the terminal out to the gate where roads.js joins the road network.
 //
-// The infield (World.rawHeight levels it: x -250..450, |z| < 1150, exactly runway height) gets one flat textured
-// plane: mowing stripes along the runways, tinted from the ground just outside it (the real imagery or the map's own
-// colours, water left out), its edges faded into the terrain. That also hides what the imagery shows under the
-// levelled ground (the real Grand Canyon Airport's runway beside ours, the water under New York's pad).
+// The infield (World.rawHeight levels it: x -250..450, |z| < 1150, exactly runway height) is repainted in the ground
+// bake (World.baseColor -> infieldPaint) with the colour of the ground just outside it (the real imagery or the map's
+// own colours, water and concrete left out), faded in over its last 110 m. The terrain shader then lights it like the
+// land around it, and it hides what the imagery shows under the levelled ground (the real Grand Canyon Airport's
+// runway beside ours, the water under New York's pad). (A separate grass plane did this before: lit by a different
+// material it never matched the terrain, too blue in the Alps and too dark in Arizona from the air.)
 import * as THREE from 'three';
 import { C } from './buildings.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
@@ -18,51 +20,55 @@ export const ROAD = { x0: 331, w: 8 }; // the landside road: from the terminal's
 const canvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('2d')]; };
 const tex = (c, srgb = true) => { const t = new THREE.CanvasTexture(c); if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; };
 
-// the infield's tint: the average ground colour in a ring just outside the levelled box, water and blue-ish texels
-// (imagery of the sea) left out. Falls back to the map's grass.
-const TEX_MEAN = 0.67;
+// the infield's colour (sRGB, as baseColor gives it): the average ground colour in a ring just outside the levelled
+// box, only plants and dry ground. Falls back to the map's grass.
 function infieldTint(W) {
   const c = new THREE.Color(), sum = new THREE.Color(0, 0, 0), n = new THREE.Vector3(0, 1, 0); let k = 0;
   for (let i = 0; i < 160; i++) {
-    const a = (i / 160) * Math.PI * 2, x = 100 + Math.cos(a) * 520, z = Math.sin(a) * 1320, h = W.heightAt(x, z);
+    const a = (i / 160) * Math.PI * 2, x = 100 + Math.cos(a) * 520, z = Math.sin(a) * 1320, h = W.height(x, z); // (the raw ground: this runs before the terrain is built)
     if (h < W.waterLevel + 1) continue;
     W.baseColor(x, z, h, 0, c, n);
     if (c.b > c.r * 1.02 || c.g < c.b * 1.1 || c.r + c.g + c.b < 0.06 || c.r + c.g + c.b > 1.9) continue; // only plants and dry ground: no sea, lagoon (bluer than red), concrete (grey), shadow, sand or surf
     sum.r += c.r; sum.g += c.g; sum.b += c.b; k++;
   }
-  if (k < 12) return new THREE.Color(W.loc.colors?.grass?.[1] ?? 0x5f7f35);
-  // (the grass texture averages ~0.67 in linear terms: divide it back out, so the infield's albedo is the ground's)
-  sum.multiplyScalar(1 / k).convertSRGBToLinear().multiplyScalar(1 / TEX_MEAN); // (baseColor gives sRGB values: the ground bake is an sRGB texture)
-  return new THREE.Color(Math.min(1, sum.r), Math.min(1, sum.g), Math.min(1, sum.b));
+  const t = k < 12 ? new THREE.Color(W.loc.colors?.grass?.[1] ?? 0x5f7f35).convertLinearToSRGB() : sum.multiplyScalar(1 / k);
+  const y = 0.3 * t.r + 0.59 * t.g + 0.11 * t.b; return t.lerp(new THREE.Color(y, y, y), 0.25); // (a quarter less saturated: mown grass over a whole field reads brighter than the mixed ground it's averaged from)
+}
+// World.baseColor: the infield's ground colour, faded in over the box's last 110 m (a little of the imagery's texture
+// left in, so it isn't a flat sheet)
+const FADE = 110;
+export function infieldPaint(W, x, z, c) {
+  const d = Math.min(x - INFIELD.x0, INFIELD.x1 - x, INFIELD.z - Math.abs(z));
+  if (d <= 0) return;
+  if (!W.infieldTint) { if (W._tinting) return; W._tinting = true; W.infieldTint = infieldTint(W); W._tinting = false; }
+  const t = Math.min(1, d / FADE), w = t * t * (3 - 2 * t) * 0.9;
+  c.lerp(W.infieldTint, w);
 }
 
-// grass tile: two mowing stripes (one a little lighter, one darker) across 24 m, fine speckle; grey (sRGB 214,
-// ~0.67 linear), tinted by the material colour
-function grassTexture() {
-  const [c, g] = canvas(256, 256);
-  if (g?.createImageData) {
-    const img = g.createImageData(256, 256), d = img.data;
-    for (let j = 0; j < 256; j++) for (let i = 0; i < 256; i++) {
-      const k = (j * 256 + i) * 4, stripe = i < 128 ? 1.035 : 0.965, v = 214 * stripe + (Math.random() - 0.5) * 26;
-      d[k] = d[k + 1] = d[k + 2] = Math.max(0, Math.min(255, v)); d[k + 3] = 255;
-    }
-    g.putImageData(img, 0, 0);
+// A real place's detailed imagery (realworld.js RealData.uniforms: the terrain shader's satHi texture) with the infield
+// painted in: the ground colour, faded in over the last 110 m, a little of the photo left in, faint mowing stripes
+// 12 m wide along the runways. bmp: the imagery bitmap, r: its square ({ x0, z0, size }), gain: the imagery's colour
+// gain (sRGB). Returns a canvas, or null where there is no canvas to draw on (Node tests).
+export function paintInfieldImagery(W, bmp, r, gain) {
+  const w = bmp?.width, h = bmp?.height, cv = typeof document !== 'undefined' && w ? document.createElement('canvas') : null, g = cv?.getContext?.('2d');
+  if (!g?.drawImage) return null;
+  cv.width = w; cv.height = h; g.drawImage(bmp, 0, 0);
+  const t = W.infieldTint || (W.infieldTint = infieldTint(W)), px = (x) => ((x - r.x0) / r.size) * w, pz = (z) => ((z - r.z0) / r.size) * h, ppm = w / r.size;
+  const rgb = (k) => `rgb(${Math.round(Math.min(1, t.r * k / gain) * 255)},${Math.round(Math.min(1, t.g * k / gain) * 255)},${Math.round(Math.min(1, t.b * k / gain) * 255)})`;
+  const STEPS = 12;
+  for (let k = 0; k < STEPS; k++) { // nested rectangles: the fade in from the box edge
+    const inset = (FADE * k) / STEPS, a = (k + 1) / STEPS, s = a * a * (3 - 2 * a);
+    const prev = k ? 0.9 * ((k / STEPS) ** 2 * (3 - 2 * k / STEPS)) : 0; // (each rectangle adds what takes the coverage from the last step's to this one's)
+    g.fillStyle = rgb(1); g.globalAlpha = 1 - (1 - 0.9 * s) / (1 - prev);
+    g.fillRect(px(INFIELD.x0 + inset), pz(-INFIELD.z + inset), (INFIELD.x1 - INFIELD.x0 - 2 * inset) * ppm, (2 * INFIELD.z - 2 * inset) * ppm);
   }
-  const t = tex(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
-}
-// edge fade over the infield (alpha: 1 inside, 0 at the box edge), its own transform (not repeated)
-function fadeTexture(fx, fz) {
-  const [c, g] = canvas(128, 256);
-  if (g?.createImageData) {
-    const img = g.createImageData(128, 256), d = img.data, s = (e) => Math.max(0, Math.min(1, e)) ** 1.5;
-    for (let j = 0; j < 256; j++) for (let i = 0; i < 128; i++) {
-      const u = Math.min(i + 0.5, 127.5 - i) / 128, v = Math.min(j + 0.5, 255.5 - j) / 256, a = s(u / fx) * s(v / fz);
-      const k = (j * 128 + i) * 4; d[k] = d[k + 1] = d[k + 2] = a * 255; d[k + 3] = 255;
-    }
-    g.putImageData(img, 0, 0);
+  if (ppm > 0.12) for (let x = INFIELD.x0 + FADE; x < INFIELD.x1 - FADE; x += 24) { // mowing stripes (where the imagery is fine enough to hold them)
+    g.globalAlpha = 0.9; g.fillStyle = rgb(1.06); g.fillRect(px(x), pz(-INFIELD.z + FADE), 12 * ppm, (2 * INFIELD.z - 2 * FADE) * ppm);
   }
-  return tex(c, false);
+  g.globalAlpha = 1;
+  return cv;
 }
+
 // blast pad: yellow chevrons pointing at the runway (towards -v), on dark asphalt
 function blastTexture() {
   const [c, g] = canvas(256, 256);
@@ -88,15 +94,6 @@ function chainTexture() {
 export function buildAirportGround(W, A, y, RWY) {
   const meshes = [], half = RWY.len / 2, flat = (geo, x, z) => { geo.rotateX(-Math.PI / 2); geo.translate(x, y, z); return geo; };
   const ground = (x, z) => W.heightAt(x, z);
-
-  // ---- mown infield ----
-  {
-    const w = INFIELD.x1 - INFIELD.x0, l = INFIELD.z * 2, geo = flat(new THREE.PlaneGeometry(w, l), (INFIELD.x0 + INFIELD.x1) / 2, 0);
-    geo.translate(0, 0.015, 0);
-    const map = grassTexture(); map.repeat.set(w / 24, l / 160); // (stripes 12 m wide along the runways; speckle stretched along them)
-    const mat = new THREE.MeshStandardMaterial({ map, alphaMap: fadeTexture(110 / w, 110 / l), color: infieldTint(W), roughness: 0.95, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
-    const m = new THREE.Mesh(geo, mat); m.receiveShadow = true; m.renderOrder = -1; m.name = 'airport infield'; meshes.push(m);
-  }
 
   // ---- shoulders (7.5 m each side) and blast pads (the 30 m overruns) ----
   {

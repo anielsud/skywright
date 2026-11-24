@@ -20,7 +20,7 @@ import { Destruction } from './destruction.js';
 import { Landcover } from './landcover.js';
 import { LaunchPad } from './launchpad.js';
 import { buildAirfieldKit, CONNECTORS, TAXI, ALS, airportGate } from './airportKit.js';
-import { buildAirportGround, gateLevel } from './airportGround.js';
+import { buildAirportGround, gateLevel, infieldPaint, paintInfieldImagery } from './airportGround.js';
 import { buildTerminalArea, buildHangars } from './airportBuildings.js';
 import { buildApronLife } from './airportGSE.js';
 import { Helipads } from './helipad.js';
@@ -90,7 +90,7 @@ export class World {
     // real location: satellite imagery is the ground colour, OSM drives roads, buildings and forests
     this.real = this.loc.real ? realData(this.loc) : null;
     if (this.loc.real && !this.real) throw new Error('location data not loaded');
-    if (this.real) Object.assign(this.detailU, this.real.uniforms());
+    if (this.real) { this.real.paintHi = (bmp, r, gain) => paintInfieldImagery(this, bmp, r, gain); Object.assign(this.detailU, this.real.uniforms()); } // (the airport's infield painted into the imagery: airportGround.js)
     this.real?.attach(this); // land past its baked squares streams in while flying (src/geostream.js) and rebuilds what it changes
     this.landUniforms(); // no bake on real places: rivers/lakes off (and compiled out of the terrain shader)
     this.size = this.loc.core || 22000; // (a real place can ask for a bigger detailed core: New York's reaches the Statue of Liberty)
@@ -395,6 +395,11 @@ export class World {
   }
   // Ground colour rules shared by the baked core terrain and the streamed outer tiles.
   baseColor(x, z, h, slope, c, nrm) {
+    const r = this.groundColor(x, z, h, slope, c, nrm);
+    infieldPaint(this, x, z, c); // (the airport's levelled infield: airportGround.js)
+    return r;
+  }
+  groundColor(x, z, h, slope, c, nrm) {
     if (this.real) { this.cover.lastFarm = 0; return this.real.color(x, z, c); }
     if (!this.pal) {
       const L = this.loc.colors;
