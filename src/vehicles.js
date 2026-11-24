@@ -6,6 +6,7 @@
 // spin; lod1 and lod2 farther, wheels merged in). The models load in the background: until they arrive the cars
 // already drive (and sound), just unseen.
 import * as THREE from 'three';
+import { FIRE } from './airportBuildings.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { mulberry32, clamp } from './noise.js';
 import { glowTexture } from './materials.js';
@@ -90,6 +91,8 @@ export class Vehicles {
       park(t.c.clone().addScaledVector(t.dir, along).addScaledVector(side, off), Math.atan2(-t.dir.x, -t.dir.z) + (r() < 0.5 ? Math.PI : 0));
     }
     for (let row = 0; row < 4; row++) for (let k = 0; k < 16; k++) if (r() < 0.8) park(new THREE.Vector3(350 + row * 7, 0, 56 + k * 3.2), Math.PI / 2); // (the airport car park, x 346..376, z 52..112)
+    // the fire station's crash tenders on its forecourt, facing out (airportBuildings.js FIRE: bays face -z)
+    for (const dx of [-6.4, 6.4]) this.parked.push({ p: new THREE.Vector3(FIRE.x + dx, 0, FIRE.z - 15), yaw: 0, type: 'firetruck', color: 0xc8282e });
     // two spare baggage carts by the terminal
     for (let k = 0; k < 2; k++) this.parked.push({ p: new THREE.Vector3(268, 0, 88 + k * 3.3), yaw: 0, type: 'cart', color: 0xffffff });
     // airport ground vehicles driving around the apron: the fuel tanker, a yellow follow-me car and a tug pulling three

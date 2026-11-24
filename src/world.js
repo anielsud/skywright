@@ -21,7 +21,7 @@ import { Landcover } from './landcover.js';
 import { LaunchPad } from './launchpad.js';
 import { buildAirfieldKit, CONNECTORS, TAXI, ALS, airportGate } from './airportKit.js';
 import { buildAirportGround, gateLevel } from './airportGround.js';
-import { buildTerminalArea } from './airportBuildings.js';
+import { buildTerminalArea, buildHangars } from './airportBuildings.js';
 import { buildApronLife } from './airportGSE.js';
 import { Helipads } from './helipad.js';
 import { StuntParks, planStunts, padsHeight } from './stuntPark.js';
@@ -968,31 +968,10 @@ export class World {
   }
   buildAirport() {
     const y = this.loc.rwyH, A = new Builder(), F = -Math.PI / 2; // F: buildings whose front faces the apron (-x)
-    // big hangars with arched roofs and sliding doors
-    const hangar = (x, z, w, d, h, rise, col) => {
-      A.setFrame(x, y, z, F); A.seed = 7;
-      A.walls(w, d, -0.5, h, C.METAL, col, { front: C.HANGAR_DOOR, back: C.METAL });
-      const seg = 10, hw = w / 2 + 0.4, hd = d / 2 + 0.4, P = (k) => { const a = Math.PI * (k / seg); return [-Math.cos(a) * hw, h + Math.sin(a) * rise]; };
-      for (let k = 0; k < seg; k++) {
-        const [x0, y0] = P(k), [x1, y1] = P(k + 1), L = 2 * hd / 3, a0 = k * Math.PI * hw / seg / 3, a1 = (k + 1) * Math.PI * hw / seg / 3, sx = (w / 2) / hw;
-        A.quad([x0, y0, -hd], [x0, y0, hd], [x1, y1, hd], [x1, y1, -hd], [0, a0, L, a0, L, a1, 0, a1], C.SEAM, 0xd8dde2);
-        const fu = [0, 0, 1, 0, 0.5, 0.5]; // arched end walls, fanned from the eave centre
-        A.tri([0, h, d / 2], [x1 * sx, y1, d / 2], [x0 * sx, y0, d / 2], fu, C.METAL, col);
-        A.tri([0, h, -d / 2], [x0 * sx, y0, -d / 2], [x1 * sx, y1, -d / 2], fu, C.METAL, col);
-      }
-      A.plainQuad([-w * 0.35, 0, d / 2 + 0.06], [w * 0.05, 0, d / 2 + 0.06], [w * 0.05, h - 1.2, d / 2 + 0.06], [-w * 0.35, h - 1.2, d / 2 + 0.06], C.CONCRETE, 0x1a1c1e); // one door slid open
-      A.plainQuad([-w / 2, h - 1.1, d / 2 + 0.08], [w / 2, h - 1.1, d / 2 + 0.08], [w / 2, h - 0.2, d / 2 + 0.08], [-w / 2, h - 0.2, d / 2 + 0.08], C.PLAIN, 0x2860a8);
-    };
-    hangar(300, -120, 44, 60, 10, 7, 0xc4ccd2); hangar(300, -40, 44, 60, 10, 7, 0xa8bcd0);
-    // row of small T-hangars
-    A.setFrame(310, y, -176, F); A.walls(46, 20, -0.5, 4.6, C.METAL, 0xd8d0c0, { front: C.GARAGE }); A.gable(46, 20, 4.6, 1.2, 0.5, C.SEAM, 0x8a3a30, C.METAL, 0xd8d0c0);
-    // maintenance / cargo shed behind the hangars
-    A.setFrame(380, y, -80, F); A.walls(50, 30, -0.5, 8, C.METAL, 0xb8c0b0, { front: C.HANGAR_DOOR }); A.gable(50, 30, 8, 3, 0.5, C.SEAM, 0x9aa0a6, C.METAL, 0xb8c0b0);
+    // hangars, T-hangars, cargo shed, fire station (src/airportBuildings.js)
+    buildHangars(A, y);
     // terminal, control tower and radar (src/airportBuildings.js)
     const TA = buildTerminalArea(A, y);
-    // fire station with tall hose tower
-    A.setFrame(190, y, 236, Math.PI); A.seed = 90; A.walls(26, 14, -0.5, 4.5, C.BRICK_WIN, 0xffffff, { front: C.GARAGE }); A.walls(26, 14, 4.5, 7.6, C.BRICK_WIN, 0xffffff); A.flat(26, 14, 7, 0.6, C.GRAVEL, 0xffffff, C.BRICK, 0xffffff);
-    A.box(10, -0.5, -4, 4, 13, 4, C.BRICK, 0xffffff, { topCell: C.SEAM, topCol: 0x777777 }); A.plainQuad([-12, 5.2, 7.05], [6, 5.2, 7.05], [6, 6.4, 7.05], [-12, 6.4, 7.05], C.PLAIN, 0xc8282e);
     // fuel farm
     A.setFrame(0, y, 0, 0);
     for (let k = 0; k < 3; k++) { A.cyl(360 + k * 13, -200, -0.3, 9, 5, 5, 16, C.SEAM, 0xf2f2ee, { cap: true, capCol: 0xd8d8d4 }); A.cyl(360 + k * 13, -200, 6.5, 7.4, 5.05, 5.05, 16, C.PLAIN, 0xc8282e); }
