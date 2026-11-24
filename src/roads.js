@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { smoothstep, lerp, clamp } from './noise.js';
 import { glowTexture as glow } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
-import { REGION, roadStyle, tarmacMaterial, shoulderMaterial } from './roadSurface.js';
+import { REGION, roadStyle, tarmacMaterial, shoulderMaterial, sidewalkMaterial } from './roadSurface.js';
 import { airportGate } from './airportKit.js';
 import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface } from './roadgrade.js';
 
@@ -280,7 +280,7 @@ export function buildRoadMeshes(w, net) {
     for (let k = 0; k <= (closed ? n : n - 1); k++) {
       const i = k % n, p = P[i], [, rt] = frame(P, i, closed);
       if (k > 0) dist += P[i].distanceTo(P[(i - 1 + n) % n]);
-      for (let c = 0; c < m; c++) { const x = p.x + rt.x * offs[c], z = p.z + rt.z * offs[c]; pos.push(x, hf(i, x, z, offs[c]), z); uv.push(...uvf(c, dist, offs[c])); if (info) ri.push(...info); if (pt4) rj.push(pt4[i * 4], pt4[i * 4 + 1], pt4[i * 4 + 2], pt4[i * 4 + 3]); }
+      for (let c = 0; c < m; c++) { const x = p.x + rt.x * offs[c], z = p.z + rt.z * offs[c]; pos.push(x, hf(i, x, z, offs[c], c), z); uv.push(...uvf(c, dist, offs[c])); if (info) ri.push(...info); if (pt4) rj.push(pt4[i * 4], pt4[i * 4 + 1], pt4[i * 4 + 2], pt4[i * 4 + 3]); }
       if (k > 0 && seg((k - 1) % n)) { const o = (k - 1) * m; for (let c = 0; c < m - 1; c++) if (c !== gap) idx.push(o + c, o + c + 1, o + m + c, o + c + 1, o + m + c + 1, o + m + c); }
     }
     if (!idx.length) return;
@@ -316,10 +316,17 @@ export function buildRoadMeshes(w, net) {
   // the tarmac and its gravel shoulders (roadSurface.js): uv in metres (across, along), rinfo = half width, what is
   // painted on it, a seed
   const region = REGION[w.loc.id] || 'ch', city = !!w.loc.roads?.chunk, tarmac = tarmacMaterial(region), shoulder = shoulderMaterial(region);
+  const sidewalk = w.loc.city ? sidewalkMaterial() : null; // (a city's streets: kerbs and pavements)
   const J = net.roads.some((r) => r.jn) ? junctionsFromNodes(net.roads, region, city) : findJunctions(net.roads, region, city);
   const roadMesh = (rd, k) => {
     const hw = rd.width / 2, info = [hw, roadStyle(region, rd, city), (k * 7.31) % 97], jp = junctionPoints(rd, J[k]);
     if (!w.loc.city || rd.kind === 'highway') strip(jp, [-hw - VERGE, -hw, hw, hw + VERGE], (i) => jp.pts[i].y, (i) => !isBr(jp, i), shoulder, (c, d, o) => [o, d], 1, info, jp.rjunc);
+    // a city street's pavements: the kerb's face (15 cm up from the gutter) and the slabs out to the building line
+    if (sidewalk && rd.kind !== 'highway' && !rd.baked) {
+      const W = rd.kind === 'main' ? 4.5 : 3.5, up = (i, x, z, o, c) => jp.pts[i].y + (c === 0 ? 0.02 : 0.17), up2 = (i, x, z, o, c) => jp.pts[i].y + (c === 3 ? 0.02 : 0.17);
+      strip(jp, [hw, hw, hw + 0.35, hw + W], up, (i) => !isBr(jp, i), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, [-hw - W, -hw - 0.35, -hw, -hw], up2, (i) => !isBr(jp, i), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+    }
     strip(jp, [-hw, hw], (i) => jp.pts[i].y + 0.02, () => true, tarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
     skirts(rd);
   };
@@ -384,7 +391,7 @@ export function buildRoadMeshes(w, net) {
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3)); const pt = new THREE.Points(lg, lampMat); group.add(pt); t.meshes.push(pt);
   };
   // building a tile: its roads' ribbons, shoulders, skirts and bridges, merged per material
-  const D = ROAD_D[w.qName] ?? 10000, warm = new Set([tarmac, shoulder, skirtMat, concrete, poleMat]);
+  const D = ROAD_D[w.qName] ?? 10000, warm = new Set([tarmac, shoulder, skirtMat, concrete, poleMat, ...(sidewalk ? [sidewalk] : [])]);
   const buildTile = (t) => {
     pending = new Map(); bridgeGeos = [];
     const lamps = [], poles = [];
