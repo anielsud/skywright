@@ -424,7 +424,7 @@ export function makePainter(w, net) {
 
 // ---------------- meshes ----------------
 function roadTexture(kind) {
-  const c = document.createElement('canvas'); c.width = 128; c.height = 256; const g = c.getContext('2d');
+  const c = document.createElement('canvas'); c.width = 128; c.height = 256; const g = c.getContext('2d', { willReadFrequently: true });
   g.fillStyle = kind === 'rail' ? '#5b5249' : '#3b3c3f'; g.fillRect(0, 0, 128, 256);
   const img = g.getImageData(0, 0, 128, 256); for (let i = 0; i < img.data.length; i += 4) { const k = (Math.random() - 0.5) * (kind === 'rail' ? 50 : 22); img.data[i] += k; img.data[i + 1] += k; img.data[i + 2] += k; } g.putImageData(img, 0, 0);
   if (kind === 'rail') {

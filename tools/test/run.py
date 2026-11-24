@@ -6,6 +6,7 @@ browser) and the browser tier (what needs a real page: boot, UI, audio, shaders,
   python3 tools/test/run.py --changed       # only the suites covering files changed vs origin/main (and uncommitted)
   python3 tools/test/run.py bikeride smoke  # these suites
   python3 tools/test/run.py --list          # the suites, their tier and what they cover
+  python3 tools/test/run.py --changed --tier browser --plan   # just print the picked suites as JSON (CI: one job each)
 
 A Node suite declares the files it covers in its module (export const nodeSuite = { files }); a browser suite in
 BROWSER below. A change to the test harness itself, or to a file no suite claims, runs everything (--changed).
@@ -29,6 +30,10 @@ BROWSER = {
 CI_ARGS = {
     'restart': ['--size', '480x300', '--restarts', '3', '--no-fresh-compare'],
     'tunnelcheck-ui': ['--size', '480x300', '--max-ms', '1e9', '--max-cpu', '1e9', '--no-compile-check'],
+    # (Low: about 100 shader programs a new place instead of 140, and each takes the runner's software GPU ~0.3 s;
+    # where things start and how they fly doesn't depend on the graphics tier)
+    'padcheck': ['--quality', 'low'],
+    'helipadcheck': ['--quality', 'low'],
 }
 HARNESS = ['tools/test/run.py', 'tools/test/node/*', 'tools/test/smoke.py']  # changing these runs everything
 
@@ -50,7 +55,7 @@ def covers(globs, f):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('suites', nargs='*'); ap.add_argument('--changed', action='store_true'); ap.add_argument('--ci', action='store_true', help='CI runner settings (CI_ARGS)'); ap.add_argument('--tier', choices=['node', 'browser'], help='only this tier'); ap.add_argument('--exclude', action='append', default=[], help='leave this suite out (repeatable)'); ap.add_argument('--list', action='store_true')
+    ap.add_argument('suites', nargs='*'); ap.add_argument('--changed', action='store_true'); ap.add_argument('--ci', action='store_true', help='CI runner settings (CI_ARGS)'); ap.add_argument('--tier', choices=['node', 'browser'], help='only this tier'); ap.add_argument('--exclude', action='append', default=[], help='leave this suite out (repeatable)'); ap.add_argument('--list', action='store_true'); ap.add_argument('--plan', action='store_true', help='print the picked suites as a JSON list and run nothing')
     ap.add_argument('--jobs', type=int, help='Node workers (default: cores - 2)')
     a = ap.parse_args()
     node = node_suites()
@@ -59,15 +64,19 @@ def main():
         for k, (tier, files) in allsuites.items(): print(f'{k:14} {tier:8} {", ".join(files)}')
         return 0
     pick = a.suites or list(allsuites)
+    say = (lambda *x: print(*x, file=sys.stderr)) if a.plan else print  # (--plan: stdout is just the JSON)
     if a.changed:
         ch = changed_files()
         if any(covers(HARNESS, f) for f in ch) or any(not any(covers(v[1], f) for v in allsuites.values()) for f in ch if f.startswith('src/')):
-            print(f'{len(ch)} changed files: the harness or an unclaimed source changed, running everything')
+            say(f'{len(ch)} changed files: the harness or an unclaimed source changed, running everything')
         else:
             pick = [k for k, (_, files) in allsuites.items() if any(covers(files, f) for f in ch)]
-            print(f'{len(ch)} changed files -> {", ".join(pick) or "no suites"}')
+            say(f'{len(ch)} changed files -> {", ".join(pick) or "no suites"}')
     if a.tier: pick = [k for k in pick if allsuites.get(k, ('',))[0] == a.tier]
     pick = [k for k in pick if k not in a.exclude]
+    if a.plan:
+        print(json.dumps(pick))
+        return 0
     t0, failed = time.time(), []
     nodes = [k for k in pick if allsuites.get(k, ('',))[0] == 'node']
     if nodes:

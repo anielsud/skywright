@@ -14,7 +14,7 @@ export function paintSkinDetail(mk) {
   const S = SKIN_TEX_SIZE;
   const px = S / SKIN_TILE; // pixels per metre
   const hC = mk(), rC = mk();
-  const h = hC.getContext('2d'), r = rC.getContext('2d');
+  const h = hC.getContext('2d', { willReadFrequently: true }), r = rC.getContext('2d', { willReadFrequently: true });
   h.fillStyle = '#fff'; h.fillRect(0, 0, S, S);
   // roughness: per-panel variation + soft grime
   const rnd = mulberry32(11);
@@ -52,7 +52,7 @@ export function paintSkinDetail(mk) {
   h.strokeStyle = 'rgb(100,100,100)'; h.lineWidth = 2; h.beginPath(); h.arc(0.95 * px, 2.0 * px, 0.05 * px, 0, 7); h.stroke();
   // wear (B): paint chipped to bare metal where hands and tools go: round the access panels, the filler cap and
   // along a few seams (kept sparse: the tile repeats over the whole aircraft)
-  const wC = mk(); const w = wC.getContext('2d');
+  const wC = mk(); const w = wC.getContext('2d', { willReadFrequently: true });
   w.fillStyle = '#000'; w.fillRect(0, 0, S, S);
   const chips = (x0, y0, x1, y1, n, size) => { for (let i = 0; i < n; i++) { const t = rnd(), x = x0 + (x1 - x0) * t + (rnd() - 0.5) * 8, y = y0 + (y1 - y0) * t + (rnd() - 0.5) * 8, rr = size * (0.3 + rnd()); w.fillStyle = `rgb(0,0,${150 + rnd() * 105 | 0})`; w.beginPath(); w.ellipse(((x % S) + S) % S, ((y % S) + S) % S, rr, rr * (0.4 + rnd() * 0.6), rnd() * 3, 0, 7); w.fill(); } };
   const ring = (cx, cy, ww, hh, n) => { chips(cx - ww / 2, cy - hh / 2, cx + ww / 2, cy - hh / 2, n, 2.2); chips(cx - ww / 2, cy + hh / 2, cx + ww / 2, cy + hh / 2, n, 2.2); chips(cx - ww / 2, cy - hh / 2, cx - ww / 2, cy + hh / 2, n / 2, 2.2); chips(cx + ww / 2, cy - hh / 2, cx + ww / 2, cy + hh / 2, n / 2, 2.2); };

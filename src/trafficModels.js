@@ -11,14 +11,14 @@ import { MeshoptDecoder } from '../vendor/addons/meshopt_decoder.module.js';
 import { FOG } from './shaders.js';
 
 const DIR = new URL('../assets/traffic/', import.meta.url).href;
-let loading = null;
+let loading = null, loaded; // (loaded: the models once they're in, null if they failed: what trafficModelsNow returns)
 
 // meta[id] = { kind, paint, L, W, H, wheels: [[x, y, z, r]...], head: [[x, y, z] x2], tail, tris }
 // geo[id] = { lod: [lod0, lod1, lod2], wheels: [geometry centred on its axle...] }, all in the vehicle's frame
 // (metres, forward -Z, standing on y = 0), plain Float32 attributes ready for a BatchedMesh.
 export function trafficModels(quality = 'high') {
   if (loading) return loading;
-  if (typeof createImageBitmap === 'undefined' || typeof fetch === 'undefined') return (loading = Promise.resolve(null)); // (Node tests: no pictures)
+  if (typeof createImageBitmap === 'undefined' || typeof fetch === 'undefined') return (loading = Promise.resolve((loaded = null))); // (Node tests: no pictures)
   loading = (async () => {
     const half = quality !== 'high'; // the atlas at half size below High (4096 x 3328 RGBA is ~70 MB of GPU memory with mipmaps)
     const pic = async (f, opt) => createImageBitmap(await (await fetch(DIR + f)).blob(), opt);
@@ -37,9 +37,13 @@ export function trafficModels(quality = 'high') {
       o.geometry.dispose();
     });
     return { meta, geo, material: material(colour, data) };
-  })().catch((e) => { console.warn('[traffic] models did not load', e); return null; });
+  })().catch((e) => { console.warn('[traffic] models did not load', e); return null; }).then((M) => (loaded = M));
   return loading;
 }
+// the models if they have arrived (null: they failed), else undefined. main.js starts loading them with the place's
+// data, so a World built after that gets its cars at once, and their shader compiles in the loading screen's warm-up
+// rather than mid-flight when they turn up later (a slow device: the tablet, a CI runner)
+export const trafficModelsNow = () => loaded;
 
 // quantized glTF attributes (normalized ints, the dequantizing scale on the node) -> Float32 in the vehicle's frame
 function plain(g, m) {

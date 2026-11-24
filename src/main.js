@@ -6,7 +6,7 @@ import { preloadTownTextures, prewarmAtlas } from './buildings.js';
 import { preloadFoliage } from './flora.js';
 import { cabinBakesReady } from './cabinLight.js';
 import { Aircraft, REALISM } from './aircraft.js';
-import { World, LOCATIONS, WEATHER } from './world.js';
+import { World, LOCATIONS, WEATHER, baseTier } from './world.js';
 import { Traffic, parkedStatic } from './traffic.js';
 import { prewarmMarina } from './marina.js';
 import { Effects } from './effects.js';
@@ -31,6 +31,7 @@ import { Net } from './net.js';
 import { Analytics } from './analytics.js';
 import { designSummary, trackHangar } from './buildStats.js';
 import { loadReal } from './realworld.js';
+import { trafficModels } from './trafficModels.js';
 import { aircraftLights, updateAircraftLights } from './navLights.js';
 import { Streaks } from './streaks.js';
 import { WindTunnel } from './windTunnel.js';
@@ -664,7 +665,9 @@ function startFlight(cfgOverride) {
   // real-world places load their baked geodata first (cached by the service worker after the first visit)
   const loc = LOCATIONS[cfg.location], msg = $('#loading p'), msg0 = msg.textContent;
   // the built-in places fetch their offline landscape-evolution bake (src/terrainBake.js; never rejects)
-  const ready = loc?.real ? loadReal(loc, qualityTier(), (f) => (msg.textContent = `Loading ${loc.name}… ${Math.round(f * 100)}%`)) : World.prepare(cfg.location);
+  const place = loc?.real ? loadReal(loc, qualityTier(), (f) => (msg.textContent = `Loading ${loc.name}… ${Math.round(f * 100)}%`)) : World.prepare(cfg.location);
+  // (and the street cars' models, so the World is built with them: trafficModelsNow; never rejects)
+  const ready = Promise.all([place, trafficModels(baseTier(qualityTier()))]);
   ready.then(() => setTimeout(() => {
     msg.textContent = msg0;
     try { buildFlight(cfg); } catch (e) { fail(e); }
@@ -1485,8 +1488,8 @@ function frame(now) {
       // shader programs must all exist before take-off (the warm-up above); flag any compiled mid-flight
       if (!F.warm) { const n = renderer.info.programs.length; if (F.progs != null && n > F.progs) { const names = renderer.info.programs.slice(F.progs).map((p) => p.name || p.cacheKey?.slice(0, 40)).join(', '); console.warn(`[shaders] ${n - F.progs} compiled in flight: ${names}`); window.__inflightCompiles = (window.__inflightCompiles || 0) + n - F.progs; } F.progs = n; }
       if (restore) { restore(); compileWith(F.scene, F.effects.boom, warm); } // and every shader as lit by a crash's explosion flash (effects.js)
-      // ...and until the ground photos have arrived (their upload, and the rock impostors' re-capture, would hitch)
-      else if (warm && (F.world.loaded?.() !== false || performance.now() - warm.t > 3000)) { F.warm = null; $('#loading').classList.remove('show'); }
+      // ...and until the ground photos have arrived (their upload, and the rock impostors' re-capture, would hitch), and the street cars' models (startFlight loads them first, so this is a safety net)
+      else if (warm && ((F.world.loaded?.() !== false && F.traffic.vehicles.ready) || performance.now() - warm.t > 3000)) { F.warm = null; $('#loading').classList.remove('show'); }
     }
   }
 }

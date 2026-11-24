@@ -66,26 +66,34 @@ def start_server(port):
 
 # ---------- Chrome + CDP ----------
 def launch_chrome(cdp_port, profile, size):
-    args = [find_chrome(), '--headless=new', f'--remote-debugging-port={cdp_port}', f'--user-data-dir={profile}',
-            '--no-first-run', '--no-default-browser-check', '--autoplay-policy=no-user-gesture-required',
-            '--mute-audio', f'--window-size={size}', '--hide-scrollbars', 'about:blank']
-    if platform.system() == 'Linux':
-        # CI runners have no GPU (WebGL via SwiftShader) and restrict the sandbox's user namespaces.
-        args[1:1] = ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-dev-shm-usage']
-    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    deadline = time.time() + 20
-    while time.time() < deadline:
-        try:
-            tabs = json.load(urllib.request.urlopen(f'http://127.0.0.1:{cdp_port}/json', timeout=1))
-            pages = [t for t in tabs if t.get('type') == 'page']
-            if pages:
-                return proc, pages[0]['webSocketDebuggerUrl']
-        except Exception:
-            pass
-        if proc.poll() is not None:
-            break
-        time.sleep(0.2)
-    proc.kill()
+    """Start headless Chrome and return (process, the first page's CDP websocket URL). On a CI runner a cold Chrome
+    can take a while to open its debugging port, and once in a while never does: up to 60 s, then once more on a
+    fresh port before giving up."""
+    ci = bool(os.environ.get('CI'))
+    for attempt in (1, 2):
+        args = [find_chrome(), '--headless=new', f'--remote-debugging-port={cdp_port}', f'--user-data-dir={profile}',
+                '--no-first-run', '--no-default-browser-check', '--autoplay-policy=no-user-gesture-required',
+                '--mute-audio', f'--window-size={size}', '--hide-scrollbars', 'about:blank']
+        if platform.system() == 'Linux':
+            # CI runners have no GPU (WebGL via SwiftShader) and restrict the sandbox's user namespaces.
+            args[1:1] = ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-dev-shm-usage']
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.time() + (60 if ci else 20)
+        while time.time() < deadline:
+            try:
+                tabs = json.load(urllib.request.urlopen(f'http://127.0.0.1:{cdp_port}/json', timeout=1))
+                pages = [t for t in tabs if t.get('type') == 'page']
+                if pages:
+                    return proc, pages[0]['webSocketDebuggerUrl']
+            except Exception:
+                pass
+            if proc.poll() is not None:
+                break
+            time.sleep(0.2)
+        proc.kill(); proc.wait()
+        if attempt == 1:
+            print(f'Chrome did not start (CDP port {cdp_port}, exit {proc.returncode}): trying once more', flush=True)
+            cdp_port = free_port()
     sys.exit(f'Chrome did not start (CDP port {cdp_port})')
 
 

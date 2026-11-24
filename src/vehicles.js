@@ -10,7 +10,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { mulberry32, clamp } from './noise.js';
 import { glowTexture } from './materials.js';
 import { lanePaths } from './roads.js';
-import { trafficModels } from './trafficModels.js';
+import { trafficModels, trafficModelsNow } from './trafficModels.js';
 
 // ---------- simple shapes (the train) ----------
 function vcol(g, hex) {
@@ -123,7 +123,10 @@ export class Vehicles {
       this.lanes.push({ path, list, cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, r: Math.hypot(x1 - x0, z1 - z0) / 2 + 10 });
     }
     this.lightsOn = 0; // light slots written last frame (the rest are past the draw range)
-    trafficModels(world.qBase).then((M) => { if (M && !this.disposed) this.buildBatch(M); });
+    // (ready: the cars' models are in, or failed: main.js holds the loading screen until then: frame)
+    const M = trafficModelsNow();
+    if (M !== undefined) { if (M) this.buildBatch(M); this.ready = true; }
+    else { this.ready = false; trafficModels(world.qBase).then((M) => { if (M && !this.disposed) this.buildBatch(M); this.ready = true; }); }
   }
   model(type) { return this.models[type] || DEFAULT; }
   // the batch: every level of detail of every type that's used, and a fixed pool of instances re-dealt each frame

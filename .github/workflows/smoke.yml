@@ -7,8 +7,8 @@ name: Tests
 # Informational: not a required check. The full check is `python3 tools/test/smoke.py` on your machine.
 # The tour's places are split over 3 parallel jobs (smoke.py --shard): each boots the game and visits a third of them.
 # Alongside: the Node tier in 2 halves (every logic, physics and geometry suite, tools/test/node/run.mjs; known failures
-# listed in tools/test/known.json don't fail it), and the browser suites covering what the PR changed (run.py --changed;
-# all of them run nightly on main: nightly.yml). Everything at once: ~4 min.
+# listed in tools/test/known.json don't fail it), and the browser suites covering what the PR changed (run.py --changed,
+# one job per suite; all of them run nightly on main: nightly.yml). Everything at once: ~6 min.
 on:
   pull_request:
   workflow_dispatch:
@@ -67,12 +67,14 @@ jobs:
       - name: Node suites
         run: node tools/test/node/run.mjs --jobs 4 --shard ${{ matrix.shard }}/2
 
-  browser:
+  # which browser suites the PR's changes need (run.py --changed), then one job each, all at once (one after another
+  # they took ~18 min; most of a suite's time is the runner's software GPU building shaders for each new place)
+  browser-plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30 # (a change to the harness itself runs every browser suite here, one after another)
-    name: browser suites (changed)
-    env:
-      SKY_CDP_TIMEOUT: '120' # (software WebGL on the runner: a frame can take seconds)
+    timeout-minutes: 5
+    name: browser suites (plan)
+    outputs:
+      suites: ${{ steps.plan.outputs.suites }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,8 +84,31 @@ jobs:
           python-version: '3.12'
       - uses: actions/setup-node@v4
         with:
+          node-version: '24' # (the Node suites list what they cover: run.mjs --files)
+      - id: plan
+        run: echo "suites=$(python tools/test/run.py --changed --tier browser --exclude smoke --exclude restart --plan)" >> "$GITHUB_OUTPUT" # (smoke: its own jobs above; restart: ~6 min on a runner, nightly only)
+
+  browser:
+    needs: browser-plan
+    if: needs.browser-plan.outputs.suites != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(needs.browser-plan.outputs.suites) }}
+    name: browser (${{ matrix.suite }})
+    env:
+      SKY_CDP_TIMEOUT: '120' # (software WebGL on the runner: a frame can take seconds)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
           node-version: '24'
       - name: Install websockets
         run: python -m pip install websockets
-      - name: Browser suites covering the changes
-        run: python tools/test/run.py --ci --changed --tier browser --exclude smoke --exclude restart # (smoke: its own jobs above; restart: ~15 min on a runner, nightly only)
+      - name: ${{ matrix.suite }}
+        run: python tools/test/run.py --ci --tier browser ${{ matrix.suite }}

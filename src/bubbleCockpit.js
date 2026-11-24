@@ -114,7 +114,7 @@ const SMALL = { a0: T0 - 1.0, a1: T0 + 1.0, src: { oilT: 'oilT', oilP: 'oilP', c
 
 function panelTextures() {
   const mk = () => { const c = document.createElement('canvas'); c.width = TW; c.height = TH; return c; };
-  const cv = mk(), g = cv.getContext('2d'), gv = mk(), e = gv.getContext('2d'), rv = mk(), r = rv.getContext('2d');
+  const cv = mk(), g = cv.getContext('2d', { willReadFrequently: true }), gv = mk(), e = gv.getContext('2d'), rv = mk(), r = rv.getContext('2d', { willReadFrequently: true });
   e.fillStyle = '#000'; e.fillRect(0, 0, TW, TH);
   // satin dark grey panel paint with a faint speckle
   // three sub-panels (the six-pack's, the avionics', the engine side's), each its own shade of satin grey

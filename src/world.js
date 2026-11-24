@@ -847,7 +847,7 @@ export class World {
   // one runway: painted asphalt texture (numbers at both ends) on a flat strip at x = r.x
   buildRunwayStrip(r) {
     const w = 512, h = 4096, c = document.createElement('canvas'); c.width = w; c.height = h;
-    const g = c.getContext('2d');
+    const g = c.getContext('2d', { willReadFrequently: true });
     g.fillStyle = '#4a4b4e'; g.fillRect(0, 0, w, h);
     const id = g.getImageData(0, 0, w, h);
     for (let i = 0; i < id.data.length; i += 4) { const k = (Math.random() - 0.5) * 22; id.data[i] += k; id.data[i + 1] += k; id.data[i + 2] += k; }
@@ -913,7 +913,7 @@ export class World {
   }
 
   taxiTexture(kind) {
-    const conn = kind === 'conn', c = document.createElement('canvas'); c.width = 128; c.height = conn ? 512 : 256; const g = c.getContext('2d');
+    const conn = kind === 'conn', c = document.createElement('canvas'); c.width = 128; c.height = conn ? 512 : 256; const g = c.getContext('2d', { willReadFrequently: true });
     g.fillStyle = '#4c4d50'; g.fillRect(0, 0, c.width, c.height);
     const id = g.getImageData(0, 0, c.width, c.height); for (let i = 0; i < id.data.length; i += 4) { const k = (Math.random() - 0.5) * 18; id.data[i] += k; id.data[i + 1] += k; id.data[i + 2] += k; } g.putImageData(id, 0, 0);
     g.fillStyle = '#e2b52a';
@@ -923,7 +923,7 @@ export class World {
     return t;
   }
   apronTexture() {
-    const W2 = 1024, H2 = 2048, c = document.createElement('canvas'); c.width = W2; c.height = H2; const g = c.getContext('2d');
+    const W2 = 1024, H2 = 2048, c = document.createElement('canvas'); c.width = W2; c.height = H2; const g = c.getContext('2d', { willReadFrequently: true });
     const X = (x) => (x - 98) * W2 / 232, Z = (z) => (z + 200) * H2 / 400, S = W2 / 232; // world metres -> canvas px
     g.fillStyle = '#4e4d4b'; g.fillRect(0, 0, W2, H2);
     const id = g.getImageData(0, 0, W2, H2); for (let i = 0; i < id.data.length; i += 4) { const k = (Math.random() - 0.5) * 14; id.data[i] += k; id.data[i + 1] += k; id.data[i + 2] += k; } g.putImageData(id, 0, 0);
