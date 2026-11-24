@@ -49,7 +49,15 @@ def main():
         if st.startswith('CONFLICTING'):
             sys.exit('✗ the PR conflicts with main')
         time.sleep(3)
-    sh(f'gh pr merge {branch} --squash')
+    # GitHub sometimes refuses the merge for a few seconds after a push ('Base branch was modified'), even with the PR
+    # mergeable: wait and try again rather than leave a pushed release commit behind (a re-run would add a second one)
+    for k in range(10):
+        r = subprocess.run(f'gh pr merge {branch} --squash', shell=True, capture_output=True, text=True)
+        if r.returncode == 0:
+            break
+        if 'Base branch was modified' not in r.stderr + r.stdout or k == 9:
+            sys.exit(f'✗ gh pr merge {branch} --squash\n{r.stdout}{r.stderr}')
+        print('  merge refused (base branch was modified); retrying'); time.sleep(15)
     print(f'merged as {ver}')
     # the deploy: GitHub's deploy-pages step sometimes fails to find its artifact; a fresh run fixes it
     sha = sh('git ls-remote origin refs/heads/main').split()[0]
