@@ -274,11 +274,11 @@ export class World {
     this.bakeTerrain();
     const sst = S / (this.shadowR - 1), maps = { detailU: this.detailU, albedo: this.albedoTex, normal: this.normalTex, shadow: this.shadowTex, orig: new THREE.Vector2(-half - this.hStep / 2, -half - this.hStep / 2), span: S + this.hStep, sOrig: new THREE.Vector2(-half - sst / 2, -half - sst / 2), sSpan: S + sst };
     const mat = terrainMaterial(maps);
-    this.terrainMat = mat; this.patchMat = terrainMaterial(maps, true);
+    this.terrainMat = mat; this.patchMat = terrainMaterial(maps, true); this.detailMat = terrainMaterial(maps, 'detail');
     const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true;
     this.terrain = mesh; this.group.add(mesh);
     this.roadGroup = buildRoadMeshes(this, this.net); this.group.add(this.roadGroup);
-    this.buildPatch();
+    this.buildPatch(); this.buildDetail();
   }
   // The fine grid's heights straight from the height function (before towns and roads are carved in).
   rawFine() {
@@ -453,6 +453,58 @@ export class World {
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nor, 3)); g.setIndex(idx);
     const mesh = new THREE.Mesh(g, this.patchMat); mesh.receiveShadow = true; mesh.visible = false;
     this.patch = mesh; this.group.add(mesh); this.patchAt = null;
+  }
+  // ---- near-camera ground detail (#228): the baked grid's cells (21-57 m) can't hold an 8 m road's embankments and
+  // cuttings, the shape of a junction, a kerb's worth of slope; physics stands on them (sampleGrid: the road surface
+  // and its side slopes) but the patch draws the grid. Close to the camera this mesh draws sampleGrid itself on a
+  // DS-metre grid, so the ground seen is the ground driven on. Its outer cells blend to the patch's own heights (the
+  // seam closes; a skirt hangs from the edge for the cracks between), and the patch discards its pixels inside.
+  // Shown while the camera is low enough for it to matter.
+  buildDetail() {
+    const [D, DS] = this.qName === 'ultra' ? [256, 2] : this.qBase === 'high' ? [192, 2.5] : this.qName === 'low' ? [96, 4] : [128, 3];
+    this.detailD = D; this.detailS = DS;
+    const n = D + 1, nv = n * n + 4 * D * 2, pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), idx = [];
+    for (let j = 0; j < D; j++) for (let i = 0; i < D; i++) { const a = j * n + i, b = (j + 1) * n + i, c = b + 1, d = a + 1; idx.push(a, b, d, b, c, d); }
+    // skirt: the border vertices again, a metre down, in order round the square
+    const ring = []; for (let i = 0; i < D; i++) ring.push(i); for (let j = 0; j < D; j++) ring.push(j * n + D); for (let i = D; i > 0; i--) ring.push(D * n + i); for (let j = D; j > 0; j--) ring.push(j * n);
+    this.detailRing = ring;
+    for (let r = 0; r < ring.length; r++) { const a = ring[r], b = ring[(r + 1) % ring.length], a2 = n * n + r, b2 = n * n + ((r + 1) % ring.length); idx.push(a, a2, b, b, a2, b2); }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nor, 3)); g.setIndex(idx);
+    const mesh = new THREE.Mesh(g, this.detailMat); mesh.receiveShadow = true; mesh.visible = false; mesh.frustumCulled = false;
+    this.detail = mesh; this.group.add(mesh); this.detailAt = null;
+  }
+  updateDetail(cp) {
+    if (!this.detail) return;
+    const D = this.detailD, DS = this.detailS, ext = D * DS, half = this.half, hide = () => { if (this.detail.visible) { this.detail.visible = false; this.patchMat.userData.U.detailRect.value.set(1e9, 1e9, -1e9, -1e9); } };
+    const lim = half - ext / 2 - 10, inCore = Math.abs(cp.x) < lim && Math.abs(cp.z) < lim;
+    if (!inCore || !this.patch?.visible || cp.y - this.sampleGrid(cp.x, cp.z) > ext * 0.75) return hide();
+    let i0 = Math.round(cp.x / DS) - D / 2, j0 = Math.round(cp.z / DS) - D / 2;
+    if (this.detail.visible && this.detailAt && Math.abs(i0 - this.detailAt[0]) < D / 6 && Math.abs(j0 - this.detailAt[1]) < D / 6) return;
+    // inside the patch (it moves in bigger steps): wait for it to catch up
+    const pr = this.terrainMat.userData.U.patchRect.value, x0 = i0 * DS, z0 = j0 * DS;
+    if (x0 < pr.x || z0 < pr.y || x0 + ext > pr.z || z0 + ext > pr.w) return hide();
+    this.detailAt = [i0, j0];
+    const n = D + 1, P = this.detail.geometry.attributes.position.array, N = this.detail.geometry.attributes.normal.array;
+    const R = this.hR, st = this.hStep, H = this.Hh, W = R + 1, B = 4; // B: blend cells at the edge
+    const hs = new Float32Array(n * n);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const x = x0 + i * DS, z = z0 + j * DS, e = Math.min(i, j, D - i, D - j);
+      const base = this.triAt(H, W, (x + half) / st, (z + half) / st); // (what the patch draws here)
+      hs[j * n + i] = e >= B ? this.sampleGrid(x, z) : e === 0 ? base : base + (this.sampleGrid(x, z) - base) * smoothstep(0, B, e);
+    }
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const k = j * n + i, o = k * 3;
+      P[o] = x0 + i * DS; P[o + 1] = hs[k]; P[o + 2] = z0 + j * DS;
+      const hx = hs[j * n + Math.min(D, i + 1)] - hs[j * n + Math.max(0, i - 1)], hz = hs[Math.min(D, j + 1) * n + i] - hs[Math.max(0, j - 1) * n + i];
+      const dx = DS * (Math.min(D, i + 1) - Math.max(0, i - 1)), dz = DS * (Math.min(D, j + 1) - Math.max(0, j - 1));
+      const nx = -hx / dx, nz = -hz / dz, l = Math.hypot(nx, 1, nz); N[o] = nx / l; N[o + 1] = 1 / l; N[o + 2] = nz / l;
+    }
+    const ring = this.detailRing;
+    for (let r = 0; r < ring.length; r++) { const a = ring[r] * 3, o = (n * n + r) * 3; P[o] = P[a]; P[o + 1] = P[a + 1] - 1; P[o + 2] = P[a + 2]; N[o] = N[a]; N[o + 1] = N[a + 1]; N[o + 2] = N[a + 2]; }
+    const g = this.detail.geometry; g.attributes.position.needsUpdate = true; g.attributes.normal.needsUpdate = true;
+    this.detail.visible = true;
+    this.patchMat.userData.U.detailRect.value.set(x0 + B * DS * 0.5, z0 + B * DS * 0.5, x0 + ext - B * DS * 0.5, z0 + ext - B * DS * 0.5);
   }
   updatePatch(cp) {
     if (!this.patch) return;
@@ -1136,7 +1188,7 @@ export class World {
     this.real?.stream.update(cp);
     this.tiles?.update(cp);
     this.roadGroup?.userData.cull?.(cp);
-    this.updatePatch(cp);
+    this.updatePatch(cp); this.updateDetail(cp);
     const snap = (v, g) => Math.round(v / g) * g;
     this.water.position.x = snap(cp.x, 2000); this.water.position.z = snap(cp.z, 2000);
     if (!this.cloudAnchor || Math.hypot(cp.x - this.cloudAnchor.x, cp.z - this.cloudAnchor.z) > 3000) { this.cloudAnchor = cp.clone(); this.wrapClouds(cp); }

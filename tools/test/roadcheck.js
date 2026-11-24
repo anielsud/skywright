@@ -9,12 +9,34 @@
 //   crossings: two roads crossing on the ground cross at the same height (to 0.3 m).
 // Only inside the core map (200 m in from its edge: the roads stop there).
 // The roads are read from world.net, not through the code under test's own junction logic.
-export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/realworld.js', 'src/world.js', 'tools/test/roadcheck.js'] };
+export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/realworld.js', 'src/world.js', 'tools/test/roadcheck.js'] }; // (and the ground detail: detailCheck)
 
 const PLACES = ['alpine', 'islands', 'canyon', 'lauterbrunnen', 'nyc'];
 const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3;
 
-export function cases() { return PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })); }
+export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 }))]; }
+
+// The near-camera ground detail (World.updateDetail) at a few road points: inside, its vertices are the physics ground
+// (sampleGrid) exactly; its edge is the patch's own surface (no seam); rebuilding it stays cheap.
+export function detailCheck(w) {
+  const roads = w.net.roads.filter((r) => r.kind !== 'rail' && r.pts.length > 10), lim = w.half - 1500, out = { n: 0, inner: 0, edge: 0, times: [], shown: 0 };
+  const picks = []; for (let k = 0; picks.length < 4 && k < roads.length * 4; k++) { const r = roads[(k * 7) % roads.length], p = r.pts[(k * 13) % r.pts.length]; if (Math.abs(p.x) < lim && Math.abs(p.z) < lim) picks.push(p); }
+  for (const p of picks) {
+    const cp = { x: p.x, y: w.sampleGrid(p.x, p.z) + 3, z: p.z };
+    w.detailAt = null; w.patchAt = null; w.updatePatch(cp);
+    if (!out.warm) { w.updateDetail(cp); w.detailAt = null; out.warm = true; } // (the first build compiles the code: not what a frame pays)
+    const t0 = performance.now(); w.updateDetail(cp); out.times.push(performance.now() - t0);
+    if (!w.detail.visible) continue; out.shown++;
+    const D = w.detailD, n = D + 1, P = w.detail.geometry.attributes.position.array, R = w.hR, st = w.hStep;
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const o = (j * n + i) * 3, x = P[o], y = P[o + 1], z = P[o + 2], e = Math.min(i, j, D - i, D - j); out.n++;
+      if (e >= 4) out.inner = Math.max(out.inner, Math.abs(y - w.sampleGrid(x, z)));
+      if (e === 0) out.edge = Math.max(out.edge, Math.abs(y - w.triAt(w.Hh, R + 1, (x + w.half) / st, (z + w.half) / st)));
+    }
+  }
+  const T = out.times.sort((a, b) => a - b); out.ms = T.length ? T[T.length >> 1] : 0;
+  return out;
+}
 
 export function measure(w) {
   const roads = w.net.roads.filter((r) => r.kind !== 'rail'), lim = w.half - 200, inCore = (x, z) => Math.abs(x) < lim && Math.abs(z) < lim;
@@ -85,7 +107,17 @@ export function measure(w) {
 
 export async function runCase(c) {
   const { worldAt } = await import('./node/world.mjs');
-  const w = (await worldAt(c.loc)).world, m = measure(w);
+  const w = (await worldAt(c.loc)).world;
+  if (c.detail) {
+    const d = detailCheck(w);
+    return [
+      { name: `${c.loc}: ground detail shown at road level`, ok: d.shown > 0, why: `${d.shown} of 4 spots` },
+      { name: `${c.loc}: ground detail is the ground driven on`, ok: d.inner < 0.01, why: `worst ${d.inner.toFixed(3)} m off sampleGrid` },
+      { name: `${c.loc}: ground detail meets the patch at its edge`, ok: d.edge < 0.01, why: `worst ${d.edge.toFixed(3)} m` },
+      { name: `${c.loc}: ground detail rebuilds in under 50 ms`, ok: d.ms < 50, why: `median ${d.ms.toFixed(1)} ms (Node, Low; a few ms on a laptop: this catches a rebuild gone 10x slower, not a slow machine)` },
+    ];
+  }
+  const m = measure(w);
   const worst = (L, unit) => { const s = [...L].sort((p, q) => q.v - p.v).slice(0, 3); return s.map((p) => `(${p.x}, ${p.z}) ${unit(p.v)}`).join('; '); };
   const m1 = (v) => `${v.toFixed(2)} m`, pc = (v) => `${Math.round(v * 100)}%`;
   return [

@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.159.0', items: [
+    "Up close, the ground beside the roads now has real banks and cuttings, so the land meets the road instead of floating next to it.",
+  ] },
   { v: '1.158.0', items: [
     "Roads in the real places now join up properly: no more cliffs where two roads meet, so you can drive right through the junctions in Lauterbrunnen and New York.",
   ] },

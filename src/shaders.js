@@ -118,24 +118,28 @@ export function installFog() {
 }
 
 // ---------- terrain material ----------
-// patch=true: draws everything (the near-camera detail mesh, and the streamed outer tiles); otherwise the coarse core mesh, which skips the patch area.
+// patch=true: the near-camera patch and the streamed outer tiles, which skip the ground-detail area (detailRect, set on
+// the patch's own material only); patch='detail': the ground-detail mesh itself (World.updateDetail), lit by its own
+// normals (the baked normal map is the grid's: it has no embankments); otherwise the coarse core mesh, which skips
+// the patch area.
 export function terrainMaterial(maps, patch = false) {
+  const detail = patch === 'detail';
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.93, metalness: 0 });
   const real = !!maps.detailU?.satHi; // real-world location: satellite imagery replaces the baked ground colour
   const U = { albedoTex: { value: maps.albedo }, normTex: { value: maps.normal }, shadowTex: { value: maps.shadow },
     tOrig: { value: maps.orig }, tSpan: { value: maps.span }, sOrig: { value: maps.sOrig || maps.orig }, sSpan: { value: maps.sSpan || maps.span },
-    shadowOn: { value: maps.shadowOn ?? 1 }, patchRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, ...maps.detailU };
+    shadowOn: { value: maps.shadowOn ?? 1 }, patchRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, detailRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, ...maps.detailU };
   mat.userData.U = U;
   // real-world: no beach detail and no baked hydrology (the imagery has both); keeps the terrain within 16 texture
   // units with Ultra's extra shadow maps. Elsewhere the baked rivers/lakes map is one more sampler (see world.js).
   mat.defines = real ? { TERRAIN_NO_SAND: '' } : { TERRAIN_LAND: '' };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, U);
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vTW;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vTW; varying vec3 vWN;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTW = (modelMatrix * vec4(transformed, 1.0)).xyz; vWN = normalize(mat3(modelMatrix) * objectNormal);');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-      varying vec3 vTW; uniform sampler2D albedoTex; uniform sampler2D normTex; uniform sampler2D shadowTex;
-      uniform vec2 tOrig; uniform float tSpan; uniform vec2 sOrig; uniform float sSpan; uniform float shadowOn; uniform vec4 patchRect;
+      varying vec3 vTW; varying vec3 vWN; uniform sampler2D albedoTex; uniform sampler2D normTex; uniform sampler2D shadowTex;
+      uniform vec2 tOrig; uniform float tSpan; uniform vec2 sOrig; uniform float sSpan; uniform float shadowOn; uniform vec4 patchRect; uniform vec4 detailRect;
       #ifdef TERRAIN_LAND
       uniform sampler2D landTex; uniform float landOn; uniform float landDry; uniform vec2 landOrig; uniform float landSpan; uniform vec3 waterTint; uniform float uTime;
       #endif
@@ -143,11 +147,11 @@ export function terrainMaterial(maps, patch = false) {
       ${real ? REAL_SAT_GLSL : ''}
       ${(!real && maps.detailU?.glsl) || 'vec3 fieldShade(vec2 p, float farm, vec3 base, float dist, out float isField) { isField = 0.0; return base; }'}`)
       .replace('#include <map_fragment>', `
-        ${patch ? '' : 'if (vTW.x > patchRect.x && vTW.x < patchRect.z && vTW.z > patchRect.y && vTW.z < patchRect.w) discard;'}
+        ${detail ? '' : patch ? 'if (vTW.x > detailRect.x && vTW.x < detailRect.z && vTW.z > detailRect.y && vTW.z < detailRect.w) discard;' : 'if (vTW.x > patchRect.x && vTW.x < patchRect.z && vTW.z > patchRect.y && vTW.z < patchRect.w) discard;'}
         vec2 tuv = (vTW.xz - tOrig) / tSpan; // texel centres sit exactly on the bake grid points
         vec4 alb = texture2D(albedoTex, tuv);
         vec4 nrmS = texture2D(normTex, tuv);
-        vec3 wn = normalize(nrmS.xyz * 2.0 - 1.0);
+        vec3 wn = ${detail ? 'normalize(vWN)' : 'normalize(nrmS.xyz * 2.0 - 1.0)'};
         ${real ? 'alb.rgb = realGround(satColor(vTW.xz, alb.rgb), wn); alb.a = mix(1.0, alb.a, 0.5); nrmS.a = 0.0;' : ''}
         float terrainShadow = mix(1.0, texture2D(shadowTex, (vTW.xz - sOrig) / sSpan).r, shadowOn);
         float dist = length(vTW - cameraPosition);
@@ -196,7 +200,7 @@ export function terrainMaterial(maps, patch = false) {
         'getDirectionalLightInfo( directionalLight, directLight );',
         'getDirectionalLightInfo( directionalLight, directLight ); directLight.color *= terrainShadow;'));
   };
-  mat.customProgramCacheKey = () => (patch ? 'terrain3-patch-' : 'terrain3-') + (real ? 'real' : maps.detailU?.key || '');
+  mat.customProgramCacheKey = () => (detail ? 'terrain3-detail-' : patch ? 'terrain3-patch-' : 'terrain3-') + (real ? 'real' : maps.detailU?.key || '');
   return mat;
 }
 
