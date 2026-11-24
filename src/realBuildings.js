@@ -3,7 +3,8 @@
 // buildings.js, gabled / hipped / flat roofs, Swiss chalet style up in the villages), railways, cable car lines,
 // mountain lakes and rivers above the World's water level. (Generated towns, towns.js, went with the generated valley.)
 import * as THREE from 'three';
-import { Builder, buildingMaterial, buildingDepthMaterial, C } from './buildings.js';
+import { Builder, buildingMaterial, buildingDepthMaterial, C, TIER, tierCells } from './buildings.js';
+import { toLocal } from './realworld.js';
 import { mulberry32, smoothstep } from './noise.js';
 import { CityScenery } from './realCity.js';
 import { Landmarks } from './realLandmarks.js';
@@ -17,10 +18,21 @@ const ROOFS = { tile: [0x7a5444, 0x6e4a3c, 0x845a48, 0x664436, 0x8a6250], grey: 
 // loc.osmStyle 'tropical' (Bora Bora): painted plaster and timber houses under corrugated metal, pandanus thatch on the
 // resorts, and overwater bungalows (kind 7, or any building standing in the lagoon) on stilts with their piers
 const TROPIC = {
-  walls: [0xf6f2e8, 0xf2ead6, 0xe6efe2, 0xf4dcc8, 0xd8eaee, 0xf6e6b8, 0xffffff, 0xe8d8c0], wood: [0xb08c64, 0x9c7a56, 0xc4a27a, 0x8a6a4a],
+  walls: [0xf6f2e8, 0xf2ead6, 0xe6efe2, 0xf4dcc8, 0xd8eaee, 0xf6e6b8, 0xffffff, 0xe8d8c0], wood: [0xfff0dc, 0xf4e0c4, 0xffffff, 0xe8d0b0], // (over the light timber cell: pale to honey)
   metal: [0xa8442e, 0x8e3a2a, 0x3f6e52, 0x3d5f86, 0xc8c8c4, 0xb8b4aa, 0x5a7a8a, 0x7a2e2a], thatch: [0xffe2a8, 0xf4d398, 0xffeabc, 0xe8c890],
 };
 const DECK = 1.7; // m above the water: bungalow floors and pier decks
+// loc.osmStyle 'rustic' (the Grand Canyon): log and stucco tints, low metal roofs in park green and brown
+const RUSTIC = {
+  log: [0xd8b898, 0xc8a07c, 0xe8c8a8, 0xb88c68, 0xf0d8bc], stucco: [0xd8b896, 0xc8a07a, 0xe0c8a8, 0xbc9474, 0xd4ae8c],
+  metal: [0x3f5e48, 0x4a6a4a, 0x56704e, 0x35503e, 0x6a4e3a, 0x5a4232], shingle: [0x6a5444, 0x5a463a, 0x7a6250],
+};
+// A box roof (gable, hip) spans the footprint's oriented rectangle: only on footprints filling RECT of it, with no point
+// of the rectangle's outline more than GAP (m) outside them (a big building's missing corner can be 9% of its rectangle
+// and still metres across)
+const RECT = 0.9, GAP = 0.6;
+// a wall cell's gable ends (the wall above the eaves, no windows)
+const END = { [C.WOOD_WIN]: C.WOOD, [C.LOG_WIN]: C.LOG, [C.TIMBER_WIN]: C.CLAP, [C.CLAP_WIN]: C.CLAP, [C.ADOBE_WIN]: C.ADOBE, [C.ADOBE_WIN2]: C.ADOBE, [C.MOTEL_DOOR]: C.ADOBE, [C.STONE_WIN]: C.STONE, [C.CONCRETE]: C.CONCRETE, [C.METAL]: C.METAL, [C.CHURCH_WIN]: C.PLAIN, [C.BOARDS]: C.BOARDS, [C.WOOD]: C.WOOD };
 
 export class RealScenery {
   constructor(world) {
@@ -44,7 +56,11 @@ export class RealScenery {
   // ---------------- buildings ----------------
   buildBuildings(list) {
     const t0 = performance.now(), roads = roadIndex(this.w); this.setbacks = { cut: 0, dropped: 0, through: 0, flat: 0, ms: performance.now() - t0 }; // (ms: the index and the cuts)
-    const W = this.w, seed0 = W.loc.seed * 5 + 3, lowQ = W.qName === 'low', trop = W.loc.osmStyle === 'tropical', wl = W.waterLevel, SB = W.loc.buildStyle || {};
+    const W = this.w, seed0 = W.loc.seed * 5 + 3, lowQ = W.qName === 'low', wl = W.waterLevel;
+    // each place's own building rules (loc.osmStyle): 'tropical' Bora Bora, 'rustic' the Grand Canyon, else the Alps
+    const trop = W.loc.osmStyle === 'tropical', rustic = W.loc.osmStyle === 'rustic', alpine = !trop && !rustic;
+    this.lodgeZones = (W.loc.lodges || []).map(([lat, lon, rr]) => [...toLocal(W.real.meta, lat, lon), rr]);
+    this.stats = { n: 0, roof: [0, 0, 0, 0, 0, 0], tiered: 0, balcony: 0, porch: 0, walk: 0, steeple: 0 }; // (what was built: tools/test/bldcheck.js)
     for (const b of list) {
       const [kind, hTag, lv, rsTag, rhTag, minH, flat] = b;
       if (flat.length < 6) continue;
@@ -82,94 +98,153 @@ export class RealScenery {
       const wet = trop && (kind === 7 || g0 < wl + 0.2); // on stilts over the lagoon
       if (wet ? A0 > 900 || g0 < wl - 15 : g0 < wl - 2) continue;
       const base = wet ? wl + DECK : g0 - 0.6;
-      // heights: tagged, from levels, or by kind and size
-      const big = A0 > 450, small = A0 < 35;
-      let roof = rsTag;
-      if (roof < 0) roof = kind === 4 || kind === 6 ? (A0 > 350 ? 0 : 1) : kind === 1 && big ? 0 : rect > 0.78 ? 1 : rect > 0.55 && A0 < 900 ? 2 : 0;
-      if (roof === 4) roof = 1;
-      if (roof === 1 && O0.hw > 16) roof = 0; // no giant gables on huge halls
-      if (trop && rsTag < 0 && (wet || kind === 5) && A0 < 500) roof = 2; // thatched resort roofs are hipped
-      // set back from the roads (setback.js): cut back off the tarmac and verge, or left out where the road runs through.
-      // Its looks (and the random draws for them, so every other building keeps its own), its roof and its height come
-      // from the footprint as mapped; its walls from the one that's left. Under a pitched roof (which covers the
-      // footprint's whole box) the house is trimmed as that rectangle: a smaller house under the same roof.
-      const ts = performance.now(), sb = setBack(roads, P, Math.abs(area) >= MAJOR.area || hTag >= MAJOR.height || lv >= 8, roof === 1 || roof === 2 || roof === 3); this.setbacks.ms += performance.now() - ts;
-      if (sb.through) this.setbacks.through++;
-      if (sb.cut && !sb.drop) { this.setbacks.cut++; P = sb.P; [cx, cz, area] = ring(); }
-      const n = P.length, A = Math.abs(area), O = sb.cut && !sb.drop ? obb() || O0 : O0;
-      const { ox, oz, ux, uz, hl, hw } = O;
-      // the collision box: the footprint's, kept off the road (setback.js fitBox: a box reaches over the tarmac where the
-      // walls don't, past a cut-off corner or an L's yard); a pitched roof over that box would overhang the road too: flat then
-      const tb = performance.now(), cb = sb.through || sb.drop ? null : fitBox(roads, { x: ox, z: oz, ux, uz, hl, hw }); this.setbacks.ms += performance.now() - tb;
-      if (cb?.fit && roof) { roof = 0; this.setbacks.flat++; }
-      const pitch = kind === 3 ? 1.1 : kind === 2 ? 0.5 : 0.58;
-      let rise = roof === 0 ? 0 : rhTag > 0 ? rhTag : Math.min(hw * (trop && roof === 2 ? 0.95 : pitch), trop ? 5.5 : 9);
-      let walls;
-      if (hTag > 0) walls = Math.max(2.5, hTag - minH - rise);
-      else if (lv > 0) walls = lv * 2.9 + 0.5;
-      else if (trop) walls = wet ? 2.9 : small ? 2.5 : kind === 0 || kind === 7 ? (A0 > 260 ? 6.2 : 3.3) : kind === 1 ? 8.8 : kind === 3 ? 7.5 : kind === 5 ? (A0 > 600 ? 7.2 : 3.6) : 5.5;
-      else walls = small ? 2.6 : kind === 0 ? (A0 > 160 ? 8.6 : 5.9) : kind === 1 ? 11.5 : kind === 2 ? 4.8 : kind === 3 ? 10 : kind === 4 ? 7.5 : kind === 5 ? 12.5 : 9.5;
-      if (hTag > 0 && hTag - minH < walls + rise) rise = Math.max(0, hTag - minH - walls);
-      const eave = wet ? walls : (g0 + g1) / 2 + minH + walls - base;
-      // style: Swiss chalets (dark timber) up in the villages, plaster in the valley towns
-      const hAbs = (g0 + g1) / 2, chalet = !trop && (kind === 0 || kind === 5 || kind === 2) && r() < (kind === 2 ? 0.75 : SB.wood ?? smoothstep(600, 1100, hAbs) * 0.6 + 0.12);
-      let wallCell, wallCol;
-      if (kind === 2) { wallCell = chalet ? C.WOOD : C.BOARDS; wallCol = chalet ? WALLS.wood[(r() * 4) | 0] : 0xd8c8b0; }
-      else if (chalet) { wallCell = C.WOOD_WIN; wallCol = WALLS.wood[(r() * 4) | 0]; }
-      else if (kind === 1) { wallCell = r() < 0.5 ? C.APT : C.BALCONY; wallCol = WALLS.plaster[(r() * WALLS.plaster.length) | 0]; }
-      else if (kind === 3) { wallCell = C.CHURCH_WIN; wallCol = 0xf2eee6; }
-      else if (kind === 4) { wallCell = A > 600 ? C.METAL : C.CONCRETE; wallCol = A > 600 ? 0xc8ccd0 : 0xe0ddd6; }
-      else if (kind === 5) { wallCell = C.BALCONY; wallCol = WALLS.plaster[(r() * WALLS.plaster.length) | 0]; }
-      else if (kind === 6) { wallCell = C.WIN; wallCol = WALLS.plaster[(r() * WALLS.plaster.length) | 0]; }
-      else { wallCell = small ? C.PLAIN : [C.WIN_GREEN, C.WIN, C.WIN_BLUE][(r() * 3) | 0]; wallCol = WALLS.plaster[(r() * WALLS.plaster.length) | 0]; }
-      // roofs: the usual Swiss mix (red-brown tiles in the valley towns, dark shingles or grey slate on chalets);
-      // the satellite can't help, its 10 m pixels blur roofs into gardens (and the bake clears them from the photo)
-      const u = r();
-      let style = kind === 4 ? 'grey' : chalet ? (u < 0.55 ? 'shingle' : u < 0.85 ? 'grey' : 'tile') : (u < 0.68 ? 'tile' : 'grey');
-      if (SB.roofs && kind !== 4) { let v = u; style = SB.roofs.find(([, p]) => (v -= p) < 0)?.[0] || 'grey'; } // the location's own mix
-      const pal = ROOFS[style], roofCol = pal[(r() * pal.length) | 0];
-      // (the clay photo tile is bright: half the tiled roofs get the weathered dark tile)
-      let roofCell = style === 'tile' ? (r() < 0.5 ? C.TILES : C.DARKTILE ?? C.TILES) : style === 'shingle' ? C.SHINGLE : kind === 4 ? C.SEAM : C.SLATE;
-      let roofC = roofCol;
+      // (its looks, roof and height from the footprint as mapped: the setback below cuts the walls, not the style)
+      let { ox, oz, ux, uz, hl, hw } = O0; const A = A0;
+      // ---- roof shape: 0 flat, 1 gable, 2 hip, 5 a gable cut to the footprint (fitGable). Box roofs (gable, hip) span the
+      // footprint's oriented rectangle, so they go only on near-rectangular footprints (on any other shape they'd overhang
+      // its empty corners); hipped roofs only where tagged or chosen for a near-rectangle
+      let boxy = rect >= RECT;
+      for (let a = -1; boxy && a <= 1; a += 0.5) for (const b of a === -1 || a === 1 ? [-1, -0.5, 0, 0.5, 1] : [-1, 1]) { // (the rectangle's outline, 16 points)
+        if (outsideRing(P, ox + ux * a * hl - uz * b * hw, oz + uz * a * hl + ux * b * hw) > GAP) { boxy = false; break; }
+      }
+      const big = A > 450, small = A < 35;
+      let roof = rsTag === 4 ? 1 : rsTag === 3 ? 2 : rsTag;
+      if (roof < 0) roof = (kind === 4 || kind === 6) && A > 350 ? 0 : trop && kind === 1 && big ? 0 : 1;
+      if (alpine && roof === 0 && kind !== 4) roof = 1; // the Alps: flat roofs only on industrial buildings
+      // (no giant gables on the huge halls: but the canyon's big lodges keep their low roofs)
+      if (!alpine && roof !== 0 && hw > 16 && kind !== 3 && !(rustic && (kind === 1 || kind === 5))) roof = 0;
+      const pick = r(); // (drawn whatever the shape: the rest of the building's sequence doesn't depend on it)
+      if (roof === 1 && rsTag < 0 && boxy && (alpine ? (kind === 1 || kind === 5 || kind === 6 ? pick < 0.4 : kind === 0 && A > 140 && pick < 0.15) : trop && (wet || kind === 5) && A < 500)) roof = 2;
+      if ((roof === 1 || roof === 2) && !boxy) roof = 5;
+      const steep = trop && (wet || kind === 5); // thatched resort roofs
+      const pitch = kind === 3 ? 1.1 : steep ? 0.95 : kind === 2 ? 0.5 : rustic ? 0.33 : trop ? 0.38 : 0.58;
+      // ---- walls: tagged height, from levels, or by kind and size (Bora Bora's houses and the canyon's cabins one storey)
+      let rise, walls, eave;
+      const heights = () => { // (from the box's width: again if a setback cut it)
+        rise = roof === 0 ? 0 : rhTag > 0 ? rhTag : Math.min(hw * pitch * (hw > 16 ? 0.6 : 1), trop ? 5.5 : 9);
+        if (hTag > 0) walls = Math.max(2.5, hTag - minH - rise);
+        else if (lv > 0) walls = lv * 2.9 + 0.5;
+        else if (trop) walls = wet ? 2.9 : small ? 2.5 : kind === 0 || kind === 7 ? 3.6 : kind === 1 ? 8.8 : kind === 3 ? 7.5 : kind === 5 ? (A > 600 ? 7.2 : 3.6) : 5.5;
+        else if (rustic) walls = small ? 2.6 : kind === 0 ? (A > 220 ? 6.2 : 3.4) : kind === 1 || kind === 5 ? (A > 1500 ? 9.2 : 6.2) : kind === 2 ? 4 : kind === 3 ? 7 : 6;
+        else walls = small ? 2.6 : kind === 0 ? (A > 160 ? 8.6 : 5.9) : kind === 1 ? 11.5 : kind === 2 ? 4.8 : kind === 3 ? 10 : kind === 4 ? 7.5 : kind === 5 ? 12.5 : 9.5;
+        if (hTag > 0 && hTag - minH < walls + rise) rise = Math.max(0, hTag - minH - walls);
+        eave = wet ? walls : (g0 + g1) / 2 + minH + walls - base;
+      };
+      heights();
+      // ---- style, per place
+      const hAbs = (g0 + g1) / 2;
+      let chalet = false, motel = false, wallCell, wallCol, roofCell, roofC;
       if (trop) {
+        // Bora Bora: painted plaster or light timber under corrugated metal in island colours, pandanus thatch on the
+        // resorts; plain windows (no European shutters), no flower boxes
         const thatch = (wet || kind === 5 || (kind === 0 && r() < 0.12)) && A < 600;
         const timber = wet || (thatch && r() < 0.6) || r() < 0.15;
-        wallCell = timber ? C.WOOD_WIN : kind === 4 ? C.CONCRETE : kind === 3 ? C.CHURCH_WIN : small ? C.PLAIN : [C.CLAP_WIN, C.SHUTTERED, C.WIN][(r() * 3) | 0];
-        wallCol = timber ? TROPIC.wood[(r() * 4) | 0] : TROPIC.walls[(r() * TROPIC.walls.length) | 0];
+        wallCell = kind === 3 ? C.CHURCH_WIN : timber ? C.TIMBER_WIN : kind === 4 ? C.CONCRETE : small ? C.PLAIN : [C.WIN, C.WIN, C.CLAP_WIN][(r() * 3) | 0];
+        wallCol = kind === 3 ? 0xf6f4ee : timber ? TROPIC.wood[(r() * TROPIC.wood.length) | 0] : TROPIC.walls[(r() * TROPIC.walls.length) | 0];
         roofCell = thatch ? C.THATCH : C.SEAM; roofC = thatch ? TROPIC.thatch[(r() * 4) | 0] : TROPIC.metal[(r() * TROPIC.metal.length) | 0];
+      } else if (rustic) {
+        // the Grand Canyon: log cabins and stuccoed houses under low green or brown metal roofs; the park's lodges stone
+        // below and logs above; the motels two storeys of rooms off an outdoor walkway
+        const park = this.lodgeZones.some(([x, z, rr]) => Math.hypot(cx - x, cz - z) < rr), u = r(), tint = (pal) => pal[(r() * pal.length) | 0];
+        if (kind === 1 || kind === 5) {
+          if (park && u < 0.8) { wallCell = eave > 4.5 ? TIER.LODGE : C.LOG_WIN; wallCol = tint(RUSTIC.log); }
+          else { const log = u > 0.8; wallCell = log ? C.LOG_WIN : C.ADOBE_WIN; wallCol = tint(log ? RUSTIC.log : RUSTIC.stucco); motel = eave > 4.5 && hl > 6; }
+        } else if (kind === 3) { wallCell = C.CHURCH_WIN; wallCol = 0xece4d6; }
+        else if (kind === 4) { wallCell = A > 600 ? C.METAL : C.CONCRETE; wallCol = A > 600 ? 0xb8aa98 : 0xd8ccb8; }
+        else if (kind === 6) { wallCell = C.ADOBE_WIN2; wallCol = tint(RUSTIC.stucco); }
+        else if (kind === 2) { wallCell = C.BOARDS; wallCol = 0xb89878; }
+        else { const log = u < (park ? 0.7 : 0.4); wallCell = log ? (small ? C.LOG : C.LOG_WIN) : small ? C.ADOBE : C.ADOBE_WIN; wallCol = tint(log ? RUSTIC.log : RUSTIC.stucco); }
+        const metal = kind === 4 || r() < 0.75;
+        roofCell = metal ? C.SEAM : C.SHINGLE; roofC = kind === 4 ? 0x8a8c8a : tint(metal ? RUSTIC.metal : RUSTIC.shingle);
+      } else {
+        // the Alps: chalets (dark timber over a whitewashed masonry ground floor) up in the villages, plaster in the
+        // valley towns, plain white churches
+        chalet = (kind === 0 || kind === 5 || kind === 2) && r() < (kind === 2 ? 0.75 : smoothstep(600, 1100, hAbs) * 0.6 + 0.12);
+        if (kind === 2) { wallCell = chalet ? C.WOOD : C.BOARDS; wallCol = chalet ? WALLS.wood[(r() * 4) | 0] : 0xd8c8b0; }
+        else if (chalet) { wallCell = eave > 4.8 ? TIER.CHALET : C.WOOD_WIN; wallCol = WALLS.wood[(r() * 4) | 0]; }
+        else if (kind === 1) { wallCell = r() < 0.5 ? C.APT : C.BALCONY; wallCol = WALLS.plaster[(r() * WALLS.plaster.length) | 0]; }
+        else if (kind === 3) { wallCell = C.CHURCH_WIN; wallCol = 0xf4f2ec; }
+        else if (kind === 4) { wallCell = A > 600 ? C.METAL : C.CONCRETE; wallCol = A > 600 ? 0xc8ccd0 : 0xe0ddd6; }
+        else if (kind === 5) { wallCell = C.BALCONY; wallCol = WALLS.plaster[(r() * WALLS.plaster.length) | 0]; }
+        else if (kind === 6) { wallCell = C.WIN; wallCol = WALLS.plaster[(r() * WALLS.plaster.length) | 0]; }
+        else { wallCell = small ? C.PLAIN : [C.WIN_GREEN, C.WIN, C.WIN_BLUE][(r() * 3) | 0]; wallCol = WALLS.plaster[(r() * WALLS.plaster.length) | 0]; }
+        // roofs: the usual Swiss mix (red-brown tiles in the valley towns, dark shingles or grey slate on chalets);
+        // the satellite can't help, its 10 m pixels blur roofs into gardens (and the bake clears them from the photo)
+        const u = r(), style = kind === 4 ? 'grey' : chalet ? (u < 0.55 ? 'shingle' : u < 0.85 ? 'grey' : 'tile') : (u < 0.68 ? 'tile' : 'grey');
+        const pal = ROOFS[style]; roofC = pal[(r() * pal.length) | 0];
+        // (the clay photo tile is bright: half the tiled roofs get the weathered dark tile)
+        roofCell = style === 'tile' ? (r() < 0.5 ? C.TILES : C.DARKTILE) : style === 'shingle' ? C.SHINGLE : kind === 4 ? C.SEAM : C.SLATE;
       }
-      const seed = (r() * 255) | 0;
-      if (sb.drop) { this.setbacks.dropped++; continue; } // (left out after its draws: the next building looks as it did)
-      // ---- geometry
+      const endCell = END[tierCells(wallCell)[1]] ?? C.PLAIN; // gable ends: the upper floors' wall without windows
+      const seed = (r() * 255) | 0, extra = r(); // (extra: which end a steeple stands at; whether a chalet has a balcony)
+      // set back from the roads (setback.js): cut back off the tarmac and verge, or left out where the road runs through
+      // (after all its draws: every other building keeps its looks). Under a box roof (which covers the footprint's whole
+      // rectangle) the house is trimmed as that rectangle: a smaller house under the same roof; a cut gable follows any cut.
+      const ts = performance.now(), sb = setBack(roads, P, A0 >= MAJOR.area || hTag >= MAJOR.height || lv >= 8, roof === 1 || roof === 2); this.setbacks.ms += performance.now() - ts;
+      if (sb.through) this.setbacks.through++;
+      if (sb.drop) { this.setbacks.dropped++; continue; }
+      if (sb.cut) { this.setbacks.cut++; P = sb.P; [cx, cz, area] = ring(); ({ ox, oz, ux, uz, hl, hw } = obb() || O0); heights(); }
+      const n = P.length;
+      // the collision box: the footprint's, kept off the road (setback.js fitBox: a box reaches over the tarmac where the
+      // walls don't, past a cut-off corner or an L's yard); a box roof over that box would overhang the road too: a gable
+      // cut to the footprint then
+      const tb = performance.now(), cb = sb.through ? null : fitBox(roads, { x: ox, z: oz, ux, uz, hl, hw }); this.setbacks.ms += performance.now() - tb;
+      if (cb?.fit && (roof === 1 || roof === 2)) { roof = 5; this.setbacks.flat++; }
+      // ---- geometry: everything a building has goes into its chunk's builder in one run (destruction.js)
       const ch = this.chunk(cx, cz), B = ch.B, n0 = B.n;
       B.seed = seed;
       B.setFrame(0, base, 0, 0);
-      const ccw = area > 0; // walls need the outside on their front: walk the ring so the face normal points out
+      const nx = -uz, nz = ux, yaw0 = Math.atan2(ux, uz), ccw = area > 0; // (walls need the outside on their front: walk the ring so the face normal points out)
+      // a veranda (Bora Bora's houses) or a walkway (motels) under the roof carried on down: on the long side facing
+      // downhill (the lagoon, the car park)
+      const porch = roof === 1 && !wet && ((trop && (kind === 0 || kind === 7) && !small && A < 400 && hl > 3) || motel);
+      let side = 1; // +1: the porch is on the +n side
+      if (porch) { const d = hw + 3; side = W.sampleGrid(ox + nx * d, oz + nz * d) <= W.sampleGrid(ox - nx * d, oz - nz * d) ? 1 : -1; }
+      // (a motel under a roof cut to its footprint: the walkway along its longest wall)
+      let walkK = -1; if (motel && roof === 5) { let bl = 0; for (let k = 0; k < n; k++) { const a = P[k], c = P[(k + 1) % n], L = Math.hypot(c[0] - a[0], c[1] - a[1]); if (L > bl) { bl = L; walkK = k; } } }
       for (let k = 0; k < n; k++) {
-        const a = P[k], c = P[(k + 1) % n];
-        if (ccw) B.wall(c[0], c[1], a[0], a[1], 0, eave, wallCell, wallCol); else B.wall(a[0], a[1], c[0], c[1], 0, eave, wallCell, wallCol);
+        const a = P[k], c = P[(k + 1) % n], [s, e] = ccw ? [c, a] : [a, c];
+        let cell = wallCell;
+        if (motel) { const L = Math.hypot(e[0] - s[0], e[1] - s[1]) || 1, on = ((s[1] - e[1]) * nx + (e[0] - s[0]) * nz) / L; if (porch ? on * side > 0.7 : k === walkK) cell = C.MOTEL_DOOR; } // (its outward normal along the walkway side)
+        B.wall(s[0], s[1], e[0], e[1], 0, eave, cell, wallCol);
       }
-      const cxo = ox, czo = oz, yaw = Math.atan2(ux, uz);
-      if (roof === 1 || roof === 2 || roof === 3) {
-        B.setFrame(cxo, base, czo, yaw);
-        const over = kind === 4 ? 0.3 : chalet ? 1.1 : 0.6;
-        if (roof === 1) B.gable(hw * 2, hl * 2, eave, rise, over, roofCell, roofC, wallCell === C.WOOD_WIN ? C.WOOD : C.PLAIN, wallCol, { under: chalet });
+      if (walkK >= 0) { const a = P[walkK], c = P[(walkK + 1) % n]; this.walkway(B, ccw ? c : a, ccw ? a : c, eave); }
+      const yaw = porch && side < 0 ? yaw0 + Math.PI : yaw0; // (the gable's -x side is the porch side)
+      if (roof === 1 || roof === 2) {
+        B.setFrame(ox, base, oz, yaw);
+        const over = kind === 4 ? 0.3 : chalet ? 1.1 : 0.6, deep = porch ? (motel ? 2.3 : 2.6) : over;
+        if (roof === 1) B.gable(hw * 2, hl * 2, eave, rise, over, roofCell, roofC, endCell, wallCol, { under: chalet ? C.WOOD : null, overN: deep });
         else B.hip(hw * 2, hl * 2, eave, rise, over, roofCell, roofC);
-      } else this.flatRoof(B, P, eave, C.ROOF_GRAVEL, kind === 4 ? 0x9a968e : 0x8a867e); // (a roof cell: the tint decides, not the bright photo)
-      if (wet) { // a timber deck round the bungalow, on piles down to the lagoon floor
-        B.setFrame(0, 0, 0, 0);
-        B.obox(cxo, czo, ux, uz, hl + 1.4, hw + 1.4, base - 0.3, base, C.BOARDS, 0x9a7a58);
-        for (const [a, c] of [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, -1], [0, 1]]) {
-          const px = cxo + ux * a * (hl + 1) - uz * c * (hw + 1), pz = czo + uz * a * (hl + 1) + ux * c * (hw + 1), y0 = Math.min(wl - 0.5, W.sampleGrid(px, pz));
-          B.box(px, y0, pz, 0.32, base - 0.3 - y0, 0.32, C.DARKWOOD, 0x5a4634, { top: false });
+        if (porch) this.porch(B, hw, hl, eave, rise, deep, motel);
+        // a chalet's balcony: across the gable end facing downhill, on top of the masonry ground floor (the carved railing)
+        if (chalet && roof === 1 && wallCell === TIER.CHALET && hw > 2.5 && extra < 0.6) {
+          const zs = W.sampleGrid(ox + ux * (hl + 2), oz + uz * (hl + 2)) <= W.sampleGrid(ox - ux * (hl + 2), oz - uz * (hl + 2)) ? 1 : -1;
+          this.balcony(B, hw - 0.4, hl * zs, zs, 3); this.stats.balcony++;
         }
+      } else if (roof === 5) this.fitGable(B, P, ccw, ox, oz, nx, nz, hw, eave, rise, roofCell, roofC, endCell, wallCol);
+      else this.flatRoof(B, P, eave, C.ROOF_GRAVEL, kind === 4 ? 0x9a968e : 0x8a867e); // (a roof cell: the tint decides, not the bright photo)
+      // a church's steeple: a white tower at one end, up through the roof, a spire on top
+      const steeple = kind === 3 && A > 50;
+      if (steeple) {
+        B.setFrame(ox, base, oz, yaw0);
+        // (at an end of the nave, or wherever along it the tower stands inside the walls: an L-shaped church's arm)
+        const s = Math.max(3, Math.min(6, hw * 1.2)), fits = (z) => Math.max(...[[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => outsideRing(P, ox + ux * (z + a * s / 2) + nx * b * s / 2, oz + uz * (z + a * s / 2) + nz * b * s / 2)));
+        let zt = (hl - s / 2) * (extra < 0.5 ? 1 : -1);
+        if (fits(zt) > 0.5) zt = [-zt, 0, zt * 0.5, -zt * 0.5].reduce((m, z) => (fits(z) < fits(m) ? z : m), zt);
+        const y1 = eave + rise + Math.max(3, s * 0.9), sp = s * (trop ? 1.4 : 2.2);
+        B.box(0, 0, zt, s, y1, s, C.PLAIN, wallCol, { top: false });
+        B.setFrame(ox + ux * zt, base, oz + uz * zt, yaw0);
+        B.hip(s + 0.3, s + 0.3, y1, sp, 0, trop ? C.SEAM : rustic ? C.SHINGLE : C.SLATE, trop ? 0xa8442e : rustic ? 0x5a463a : 0x4a4c52);
       }
+      if (wet) this.bungalowDeck(B, ox, oz, ux, uz, hl, hw, base);
+      const st = this.stats; st.n++; st.roof[roof]++; if (chalet && wallCell === TIER.CHALET) st.tiered++; if (porch) st.porch++; if (walkK >= 0) st.walk++; if (steeple) st.steeple++;
       ch.n++; ch.x += cx; ch.z += cz;
       // collisions: a disc per building (the aircraft's parts are tested against these)
       const key = Math.floor(cx / 50) + ',' + Math.floor(cz / 50);
       if (!this.grid.has(key)) this.grid.set(key, []);
-      const e = [cx, base, cz, eave + rise, Math.sqrt(A / Math.PI)];
+      const e = [cx, base, cz, eave + rise, Math.sqrt(Math.abs(area) / Math.PI)];
       e.solid = true; e.fp = P; if (sb.through) e.through = true; e.dk = 'r' + this.count; e.rng = [[B, n0, B.n - n0]]; e.ob = cb || { x: ox, z: oz, ux, uz, hl, hw }; // destructible (destruction.js)
+      e.kind = kind; e.roof = roof; e.rect = rect; e.walls = walls; e.tagged = hTag > 0 || lv > 0; e.porch = porch || walkK >= 0; e.steeple = steeple; e.wet = wet; // (what it was built as: tools/test/bldcheck.js)
       this.grid.get(key).push(e);
       this.count++;
     }
@@ -225,6 +300,119 @@ export class RealScenery {
       if (this.w.qBase === 'high') { c.B.det = c.B; c.B.fine = 2; }
     }
     return c;
+  }
+  // A gable roof cut to any footprint: the two planes of a ridge along the long axis (through the oriented box's centre,
+  // normal n across it), over the footprint grown by a short eave (and a soffit under that eave), the walls carried up
+  // under them: a gable end wherever a wall crosses the ridge. Nothing hangs over an empty corner. (World frame at base.)
+  fitGable(B, P, ccw, ox, oz, nx, nz, hw, eave, rise, cell, col, endCell, wallCol) {
+    const k = rise / hw, sl = Math.hypot(1, k) / 3, n = P.length, ux = nz, uz = -nx, OV = 0.45;
+    const vOf = (p) => (p[0] - ox) * nx + (p[1] - oz) * nz, hOf = (p) => eave + rise - Math.abs(vOf(p)) * k;
+    const cut = (p, q) => { const a = vOf(p), b = vOf(q), t = a / (a - b); return [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]; };
+    // the walls above the eaves
+    for (let i = 0; i < n; i++) {
+      const a = P[i], c = P[(i + 1) % n], [s, e] = ccw ? [c, a] : [a, c], pts = [s];
+      if (vOf(s) * vOf(e) < 0) pts.push(cut(s, e));
+      pts.push(e);
+      let u0 = 0;
+      for (let j = 1; j < pts.length; j++) {
+        const p = pts[j - 1], q = pts[j], L = Math.hypot(q[0] - p[0], q[1] - p[1]), hp = hOf(p), hq = hOf(q), u1 = u0 + L / 3, v = eave / 3;
+        if (L > 0.05 && (hp > eave + 0.05 || hq > eave + 0.05)) {
+          if (hp < eave + 0.02) B.tri([p[0], eave, p[1]], [q[0], eave, q[1]], [q[0], hq, q[1]], [u0, v, u1, v, u1, hq / 3], endCell, wallCol);
+          else if (hq < eave + 0.02) B.tri([p[0], eave, p[1]], [q[0], eave, q[1]], [p[0], hp, p[1]], [u0, v, u1, v, u0, hp / 3], endCell, wallCol);
+          else B.quad([p[0], eave, p[1]], [q[0], eave, q[1]], [q[0], hq, q[1]], [p[0], hp, p[1]], [u0, v, u1, v, u1, hq / 3, u0, hp / 3], endCell, wallCol);
+        }
+        u0 = u1;
+      }
+    }
+    // the footprint grown by the eave: each corner out along its mitre
+    const sg = ccw ? 1 : -1, Q = [];
+    for (let i = 0; i < n; i++) {
+      const p = P[i], a = P[(i + n - 1) % n], c = P[(i + 1) % n], l1 = Math.hypot(p[0] - a[0], p[1] - a[1]) || 1, l2 = Math.hypot(c[0] - p[0], c[1] - p[1]) || 1;
+      const m1x = sg * (p[1] - a[1]) / l1, m1z = -sg * (p[0] - a[0]) / l1, m2x = sg * (c[1] - p[1]) / l2, m2z = -sg * (c[0] - p[0]) / l2, f = OV / Math.max(0.5, 1 + m1x * m2x + m1z * m2z);
+      Q.push([p[0] + (m1x + m2x) * f, p[1] + (m1z + m2z) * f]);
+    }
+    simplifyRing(Q, 0.2); // (the mapped curves' extra points: under the eave's 45 cm they'd only cost vertices)
+    const m = Q.length;
+    // the roof: each side of the ridge one plane over its half of the grown footprint
+    for (const sgn of [1, -1]) {
+      const H = [];
+      for (let i = 0; i < m; i++) {
+        const p = Q[(i + m - 1) % m], q = Q[i], vp = sgn * vOf(p), vq = sgn * vOf(q);
+        if ((vp >= 0) !== (vq >= 0)) H.push(cut(p, q));
+        if (vq >= 0) H.push(q);
+      }
+      const R = H.filter((p, i) => Math.hypot(p[0] - H[(i + 1) % H.length][0], p[1] - H[(i + 1) % H.length][1]) > 0.01);
+      if (R.length < 3) continue;
+      // (one plane: its vertices shared, Builder.fan)
+      const T = [];
+      for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(R.map((p) => new THREE.Vector2(p[0], p[1])), [])) {
+        const pa = R[a], pb = R[b], pc = R[c], w = (pb[1] - pa[1]) * (pc[0] - pa[0]) - (pb[0] - pa[0]) * (pc[1] - pa[1]);
+        if (Math.abs(w) > 0.02) T.push(w > 0 ? [a, b, c] : [a, c, b]); // (slivers left out: in float32 world positions they can flip over)
+      }
+      const uv = R.map((p) => [((p[0] - ox) * ux + (p[1] - oz) * uz) / 3, (hw - Math.abs(vOf(p))) * sl]);
+      B.fan(R.map((p) => [p[0], hOf(p), p[1]]), uv, T, cell, col);
+      // its underside (the soffit under the eaves; the rest is inside the walls), High only like the gutters: on a tablet
+      // it'd double these roofs' vertices for a strip seen from below
+      if (this.w.qBase === 'high') B.fan(R.map((p) => [p[0], hOf(p) - 0.16, p[1]]), uv, T.map(([a, b, c]) => [a, c, b]), C.TRIM, 0xe6e2da); // (real uvs: the shader's tangent frame needs them to vary)
+    }
+  }
+  // Bora Bora's verandas, the motels' walkways (gable frame: the porch is under the roof's deep -x side)
+  porch(B, hw, hl, eave, rise, deep, motel) {
+    const under = (x) => eave - (-x - hw) * rise / hw - 0.24; // the roof's underside at x (x < -hw)
+    const post = (x, z, c, col) => B.obox(x, z, 1, 0, 0.1, 0.1, 0, under(x), c, col, { top: false, sides: [0, 2, 3] }); // (not the side facing the house)
+    if (motel) { // the upper floor's walkway: a slab off the wall, an iron railing, timber posts down to the ground
+      const y = 3.6, x1 = -(hw + 1.9);
+      face(B, [[x1, y, -hl], [-hw, y, -hl], [-hw, y, hl], [x1, y, hl]], C.CONCRETE, 0xc8c0b4, 0, 1, 0);
+      face(B, [[x1, y - 0.25, -hl], [-hw, y - 0.25, -hl], [-hw, y - 0.25, hl], [x1, y - 0.25, hl]], C.CONCRETE, 0xb0a89c, 0, -1, 0);
+      face(B, [[x1, y - 0.25, -hl], [x1, y - 0.25, hl], [x1, y, hl], [x1, y, -hl]], C.CONCRETE, 0xc8c0b4, -1, 0, 0);
+      const L = (2 * hl) / 1.2;
+      B.panel([x1 + 0.05, y, -hl], [x1 + 0.05, y, hl], [x1 + 0.05, y + 1, hl], [x1 + 0.05, y + 1, -hl], C.RAIL_IRON, 0x4a3a2c, 3, [0, 0, L, 0, L, 1, 0, 1]);
+      const m = Math.max(2, Math.round((2 * hl) / 5) + 1);
+      for (let k = 0; k < m; k++) post(x1 + 0.15, -hl + 0.3 + ((2 * hl - 0.6) * k) / (m - 1), C.DARKWOOD, 0x6a4a30);
+    } else { // a veranda: a low floor along the side, white posts at its edge
+      const x0 = -(hw + deep - 0.3), y = 0.75;
+      face(B, [[x0 - 0.15, y, -hl], [-hw, y, -hl], [-hw, y, hl], [x0 - 0.15, y, hl]], C.CONCRETE, 0xd8d2c8, 0, 1, 0);
+      face(B, [[x0 - 0.15, 0, -hl], [x0 - 0.15, 0, hl], [x0 - 0.15, y, hl], [x0 - 0.15, y, -hl]], C.CONCRETE, 0xc8c2b8, -1, 0, 0);
+      for (const z of hl > 6 ? [-hl + 0.3, 0, hl - 0.3] : [-hl + 0.3, hl - 0.3]) post(x0, z, C.TRIM, 0xf2f0ea);
+    }
+  }
+  // a motel's walkway along one wall s -> e (world frame at base): slab, railing, posts and a lean-to cover
+  walkway(B, s, e, eave) {
+    const L = Math.hypot(e[0] - s[0], e[1] - s[1]); if (L < 4) return;
+    const ux = (e[0] - s[0]) / L, uz = (e[1] - s[1]) / L, ox = -uz, oz = ux, y = 3.6, D = 1.9; // (o: out of the wall)
+    const at = (t, d, yy) => [s[0] + ux * t + ox * d, yy, s[1] + uz * t + oz * d];
+    face(B, [at(0, 0, y), at(L, 0, y), at(L, D, y), at(0, D, y)], C.CONCRETE, 0xc8c0b4, 0, 1, 0);
+    face(B, [at(0, 0, y - 0.25), at(L, 0, y - 0.25), at(L, D, y - 0.25), at(0, D, y - 0.25)], C.CONCRETE, 0xb0a89c, 0, -1, 0);
+    face(B, [at(0, D, y - 0.25), at(L, D, y - 0.25), at(L, D, y), at(0, D, y)], C.CONCRETE, 0xc8c0b4, ox, 0, oz);
+    const n = L / 1.2; B.panel(at(0, D - 0.05, y), at(L, D - 0.05, y), at(L, D - 0.05, y + 1), at(0, D - 0.05, y + 1), C.RAIL_IRON, 0x4a3a2c, 3, [0, 0, n, 0, n, 1, 0, 1]);
+    const top = Math.max(y + 2.4, eave - 0.1), lo = top - 0.5;
+    face(B, [at(0, 0, top), at(L, 0, top), at(L, D + 0.3, lo), at(0, D + 0.3, lo)], C.SEAM, 0x4a6a4a, 0, 1, 0);
+    face(B, [at(0, 0, top - 0.12), at(L, 0, top - 0.12), at(L, D + 0.3, lo - 0.12), at(0, D + 0.3, lo - 0.12)], C.TRIM, 0xe8e4dc, 0, -1, 0);
+    const m = Math.max(2, Math.round(L / 5) + 1);
+    for (let k = 0; k < m; k++) { const p = at(0.3 + ((L - 0.6) * k) / (m - 1), D - 0.1, 0); B.box(p[0], 0, p[2], 0.2, lo - 0.1, 0.2, C.DARKWOOD, 0x6a4a30, { top: false }); }
+  }
+  // a chalet's balcony across a gable end (gable frame: the end at z = zEnd, outward zs), the carved timber railing
+  balcony(B, hx, zEnd, zs, y) {
+    const z1 = zEnd + zs * 1.2, L = (2 * hx) / 1.5;
+    face(B, [[-hx, y, zEnd], [hx, y, zEnd], [hx, y, z1], [-hx, y, z1]], C.WOOD, 0x8a6a4a, 0, 1, 0);
+    face(B, [[-hx, y - 0.2, zEnd], [hx, y - 0.2, zEnd], [hx, y - 0.2, z1], [-hx, y - 0.2, z1]], C.WOOD, 0x7a5a3e, 0, -1, 0);
+    B.panel([-hx * zs, y, z1 - zs * 0.05], [hx * zs, y, z1 - zs * 0.05], [hx * zs, y + 1, z1 - zs * 0.05], [-hx * zs, y + 1, z1 - zs * 0.05], C.RAIL_WOOD, 0xb08a64, 3, [0, 0, L, 0, L, 1, 0, 1]);
+  }
+  // an overwater bungalow's deck, on piles down to the lagoon floor: a walk round the house, wide on the side facing the
+  // open lagoon (deepest water), with a ladder of piles under its edge (world frame)
+  bungalowDeck(B, ox, oz, ux, uz, hl, hw, base) {
+    const W = this.w, wl = W.waterLevel, nx = -uz, nz = ux;
+    const sides = [[ux, uz, hl], [-ux, -uz, hl], [nx, nz, hw], [-nx, -nz, hw]];
+    let deep = 0, lo = Infinity;
+    sides.forEach(([dx, dz, e], k) => { const g = W.sampleGrid(ox + dx * (e + 6), oz + dz * (e + 6)); if (g < lo) { lo = g; deep = k; } });
+    const m = [1.2, 1.2, 1.2, 1.2]; m[deep] = 3.8;
+    const cu = (m[0] - m[1]) / 2, cn = (m[2] - m[3]) / 2, hu = hl + (m[0] + m[1]) / 2, hn = hw + (m[2] + m[3]) / 2, dx = ox + ux * cu + nx * cn, dz = oz + uz * cu + nz * cn;
+    B.setFrame(0, 0, 0, 0);
+    B.obox(dx, dz, ux, uz, hu, hn, base - 0.3, base, C.BOARDS, 0xb08a62);
+    for (const [a, c] of [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]]) {
+      const px = dx + ux * a * (hu - 0.3) + nx * c * (hn - 0.3), pz = dz + uz * a * (hu - 0.3) + nz * c * (hn - 0.3), y0 = Math.min(wl - 0.5, W.sampleGrid(px, pz));
+      B.box(px, y0, pz, 0.36, base - 0.3 - y0, 0.36, C.DARKWOOD, 0x4a3a2c, { top: false });
+    }
   }
   flatRoof(B, P, y, cell, colr) {
     const contour = P.map((p) => new THREE.Vector2(p[0], p[1]));
@@ -374,6 +562,31 @@ export class RealScenery {
   }
 }
 
+// how far (m) a point is outside a ring of [x, z] points: 0 inside
+function outsideRing(P, x, z) {
+  let inside = false, d = Infinity;
+  for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+    const [ax, az] = P[j], [bx, bz] = P[i];
+    if ((bz > z) !== (az > z) && x < ((ax - bx) * (z - bz)) / (az - bz) + bx) inside = !inside;
+    const ex = bx - ax, ez = bz - az, t = Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez || 1)));
+    d = Math.min(d, Math.hypot(ax + ex * t - x, az + ez * t - z));
+  }
+  return inside ? 0 : d;
+}
+// drop a ring's points that lie within tol of the line through their neighbours (in place; keeps at least 3)
+function simplifyRing(Q, tol) {
+  for (let i = 0; Q.length > 3 && i < Q.length;) {
+    const a = Q[(i + Q.length - 1) % Q.length], p = Q[i], c = Q[(i + 1) % Q.length], L = Math.hypot(c[0] - a[0], c[1] - a[1]);
+    const d = L > 1e-6 ? Math.abs((c[0] - a[0]) * (p[1] - a[1]) - (c[1] - a[1]) * (p[0] - a[0])) / L : Math.hypot(p[0] - a[0], p[1] - a[1]);
+    if (d < tol) Q.splice(i, 1); else i++;
+  }
+}
+// a quad facing (nx, ny, nz): written in whichever order makes its front face that way
+function face(B, q, cell, col, nx, ny, nz) {
+  const ax = q[1][0] - q[0][0], ay = q[1][1] - q[0][1], az = q[1][2] - q[0][2], bx = q[3][0] - q[0][0], by = q[3][1] - q[0][1], bz = q[3][2] - q[0][2];
+  if ((ay * bz - az * by) * nx + (az * bx - ax * bz) * ny + (ax * by - ay * bx) * nz < 0) q = [q[1], q[0], q[3], q[2]];
+  B.plainQuad(q[0], q[1], q[2], q[3], cell, col);
+}
 // a building's own random sequence, seeded from its position (centroid, to half a metre)
 export const buildingRng = (seed, x, z) => mulberry32((Math.imul(Math.round(x * 2), 73856093) ^ Math.imul(Math.round(z * 2), 19349663) ^ Math.imul(seed, 83492791)) >>> 0);
 

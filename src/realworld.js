@@ -91,7 +91,9 @@ export const REAL_LOCATIONS = {
     flora: { biome: 'rim', snowline: 99999, h: (h) => h, wl: 50 },
     waterColors: { deep: 0x163c38, shallow: 0x3d7a68, sand: 0x9a7a52 },
     river: { color: 0x3c4836 }, // the Colorado: olive green (silty brown after storms)
-    buildStyle: { wood: 0.3, roofs: [['shingle', 0.35], ['grey', 0.5], ['tile', 0.15]] }, // the parks' log-and-stone rustic, motels in Tusayan
+    // realBuildings.js: log cabins and stucco under low green / brown metal roofs, motels with outdoor walkways (Tusayan);
+    // in the park's lodge zones ([lat, lon, radius m]: Grand Canyon Village, Yavapai) the lodges are stone below, logs above
+    osmStyle: 'rustic', lodges: [[36.0565, -112.1390, 750], [36.0577, -112.1185, 350]],
     colors: { grass: [0x8a7a55, 0x9a8a60, 0x7a6a48], rock: 0x9a5a3c, snow: 0xd9b48a, sand: 0xc49a6c, dirt: 0x9a6a48 },
     height(n, x, z) { const D = cache.get(this.id); return D ? D.height(x, z) : this.rwyH; },
   },
