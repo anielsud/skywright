@@ -42,7 +42,7 @@ export async function runCase(c) {
     const off = G.roadPts.map(([x, z]) => [x, Math.abs(W.heightAt(x, z) - y)]).filter(([, d]) => d > 0.6);
     check('landside road level to the gate', !off.length, off.slice(0, 4).map(([x, d]) => `x ${x}: ${d.toFixed(1)} m`).join('; '));
   }
-  const t = W.group.getObjectByName('airport infield').material.color;
+  const t = W.infieldTint;
   check('infield tint is ground, not sea or concrete', t.g >= t.b * 1.05 && t.r >= t.b, t.getHexString());
   // ground equipment: off the runways and taxiways, clear of the apron vehicles' loop (vehicles.js: x 120 / 250, z +-128)
   const loop = (q) => (Math.abs(q.z) < 128 + q.hz && (Math.abs(q.x - 120) < q.hx + 2.5 || Math.abs(q.x - 250) < q.hx + 2.5)) || (q.x > 120 - q.hx && q.x < 250 + q.hx && Math.abs(Math.abs(q.z) - 128) < q.hz + 2.5);

@@ -224,7 +224,7 @@ export function buildHangars(A, y) {
   const bays = 5, bw = 6.4, fw = bays * bw + 2;
   A.walls(fw, 16, -0.5, 6.2, C.CONCRETE, 0xe8e4dc, { front: C.CONCRETE });
   A.flat(fw, 16, 6.2, 0.7, C.GRAVEL, 0xffffff, C.PLAIN, 0xe8e4dc);
-  A.plainQuad([-fw / 2 - 14, 0.14, 30], [fw / 2 + 2, 0.14, 30], [fw / 2 + 2, 0.14, 8], [-fw / 2 - 14, 0.14, 8], C.CONCRETE, 0x9a9a96); // forecourt (over the infield grass plane: airportGround.js)
+  A.plainQuad([-fw / 2 - 14, 0.14, 30], [fw / 2 + 2, 0.14, 30], [fw / 2 + 2, 0.14, 8], [-fw / 2 - 14, 0.14, 8], C.CONCRETE, 0x9a9a96); // forecourt
   A.box(0, 4.9, 8.05, fw, 0.9, 0.12, C.PLAIN, 0xc8282e); // red band over the bays
   for (let k = 0; k < bays; k++) {
     const x = -fw / 2 + 1 + bw / 2 + k * bw;
