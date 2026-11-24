@@ -8,7 +8,11 @@
 import * as THREE from 'three';
 import { Builder, C } from './buildings.js';
 
-export const TERMINAL = { x: 315, z: 120, len: 120, depth: 32, h: 12, over: 4, rise: 5 };
+// the terminal, proportioned from a photo of a real regional terminal's airside face (Tuticorin's new terminal,
+// Wikimedia Commons; signage after Kristiansand Kjevik): a recessed glazed ground floor behind white columns, a white
+// floor band, a continuous tinted curtain wall with mullions and transoms, a thin white roof slab cantilevered past the
+// glass with the name on its fascia, and solid white gate cores standing out every 38 m, each with a parked jet bridge.
+export const TERMINAL = { x: 315, z: 120, len: 120, depth: 34, gf: 4.6, band: 1.2, cw: 7.6, slab: 1.6, over: 3, cant: 6, cores: [-38, 0, 38] };
 export const TOWER = { x: 256, z: 218, shaft: 26, cab: 3.7 };
 export const RADAR = { x: 430, z: -140, h: 12 };
 const F = -Math.PI / 2; // frame yaw for buildings facing the apron (local +z = world -x)
@@ -17,40 +21,82 @@ const F = -Math.PI / 2; // frame yaw for buildings facing the apron (local +z = 
 // building material: World sets it), beacon: Vector3 (the tower's rotating beacon), boards: { nameBoard: { x, y, z } } }.
 export function buildTerminalArea(A, y) {
   const T = TERMINAL, hw = T.len / 2, hd = T.depth / 2, signs = [];
+  const yB = T.gf, yC = T.gf + T.band, yS = yC + T.cw, yR = yS + T.slab; // band, curtain wall, slab bottom / roof
+  const ALU = 0x30363a, WHITE = 0xf2f1ec, GLASS = 0x3f7c84, GF_GLASS = 0x3a565c, rec = 3; // mullions, cladding, tinted glass, ground floor recess
 
   // ---- terminal ----
   A.setFrame(T.x, y, T.z, F); A.seed = 40;
-  A.walls(T.len, T.depth, -0.5, 5, C.APT, 0xe8e4dc, { front: C.GLASS, back: C.GLASS, side: C.CONCRETE, fl: 5 }); // the hall: glass both long sides
-  A.walls(T.len - 2, T.depth - 3, 5, T.h, C.APT, 0xe8e4dc, { front: C.GLASS, back: C.GLASS, side: C.CONCRETE, fl: 3.5 }); // departures level, set back
-  A.box(0, 4.75, 0, T.len + 0.3, 0.5, T.depth + 0.3, C.CONCRETE, 0xd8d8d4); // floor slab edge
-  A.box(0, T.h - 0.2, 0, T.len - 1.6, 0.4, T.depth - 2.6, C.CONCRETE, 0xd8d8d4); // (the ceiling under the vault)
-  // barrel-vault roof over both, overhanging the facades, a glass skylight along the crown, the underside pale
-  const SEG = 12, zo = hd + T.over, Y = (z) => T.h + 0.4 + T.rise * (1 - (z / zo) ** 2), x0 = -hw - 2, x1 = hw + 2;
-  for (let k = 0; k < SEG; k++) {
-    const za = -zo + (2 * zo * k) / SEG, zb = -zo + (2 * zo * (k + 1)) / SEG, ya = Y(za), yb = Y(zb), sky = k === SEG / 2 - 1 || k === SEG / 2;
-    const L = (x1 - x0) / 3;
-    A.quad([x1, ya, za], [x0, ya, za], [x0, yb, zb], [x1, yb, zb], [0, 0, L, 0, L, 1, 0, 1], sky ? C.GLASS : C.SEAM, sky ? 0xffffff : 0xc8ccd0);
-    A.quad([x0, ya - 0.25, za], [x1, ya - 0.25, za], [x1, yb - 0.25, zb], [x0, yb - 0.25, zb], [0, 0, L, 0, L, 1, 0, 1], C.PLAIN, 0xe8e6e0); // underside
-    for (const s of [-1, 1]) { const x = s * (hw - 1); A.tri([x, T.h, 0], [x, ya, za * (hd - 1.5) / zo], [x, yb, zb * (hd - 1.5) / zo], [0, 0, 1, 0, 0.5, 0.5], C.METAL, 0xb8bcc0); } // gable ends
+  // curtain wall with mullions and transoms, on one face: z (local) = zf, facing sgn (+1 airside, -1 landside)
+  const curtain = (zf, sgn, y0, y1, x0 = -hw, x1 = hw, step = 1.5, rows = [y0 + 2.5, y0 + 5.0], tint = GLASS) => {
+    const [ax, bx] = sgn > 0 ? [x0, x1] : [x1, x0];
+    A.wall(ax, zf, bx, zf, y0, y1, C.GLASS, tint, step, (y1 - y0) / 3);
+    const n = Math.round((x1 - x0) / step);
+    for (let k = 0; k <= n; k++) A.box(x0 + ((x1 - x0) * k) / n, y0, zf + sgn * 0.07, 0.09, y1 - y0, 0.14, C.PLAIN, ALU);
+    for (const ty of [y0, ...rows, y1 - 0.1]) A.box((x0 + x1) / 2, ty, zf + sgn * 0.08, x1 - x0, 0.1, 0.16, C.PLAIN, ALU);
+  };
+  // airside: recessed glazed ground floor, the soffit over it, white columns on the facade line
+  curtain(hd - rec, 1, 0, yB, -hw, hw, 1.8, [2.6], GF_GLASS);
+  A.quad([-hw, yB, hd], [hw, yB, hd], [hw, yB, hd - rec], [-hw, yB, hd - rec], [0, 0, 40, 0, 40, 1, 0, 1], C.PLAIN, 0xe4e2dc); // soffit (faces down)
+  for (let x = -hw + 5.5; x <= hw - 5.5; x += 11) if (!T.cores.some((c) => Math.abs(x - c) < 7)) A.cyl(x, hd - 0.6, -0.3, yB, 0.34, 0.34, 10, C.PLAIN, WHITE);
+  A.box(0, yB, hd - 0.35, T.len, T.band, 0.7, C.PLAIN, WHITE, { bottom: true }); // floor band
+  curtain(hd, 1, yC, yS);
+  // landside: glazed both floors, the band between
+  curtain(-hd, -1, 0, yB, -hw, hw, 1.8, [2.6], GF_GLASS); A.box(0, yB, -hd + 0.35, T.len, T.band, 0.7, C.PLAIN, WHITE, { bottom: true }); curtain(-hd, -1, yC, yS);
+  // end walls: white cladding panels with joints, a glazed strip at the airside corner
+  for (const s of [-1, 1]) {
+    const x = s * hw, [za, zb] = s > 0 ? [hd, -hd] : [-hd, hd];
+    A.wall(x, za, x, zb, -0.3, yS, C.PLAIN, WHITE, 3, 3);
+    for (let z = -hd + 3; z < hd; z += 3) A.box(x + s * 0.03, -0.3, z, 0.06, yS + 0.3, 0.05, C.PLAIN, 0xc8c8c4);
+    for (const yy of [yB, yC]) A.box(x + s * 0.03, yy, 0, 0.06, 0.05, T.depth, C.PLAIN, 0xc8c8c4);
+    A.cyl(x + s * 0.25, hd - 1.2, -0.3, yS, 0.1, 0.1, 6, C.PLAIN, 0xb8bcc0); A.cyl(x + s * 0.25, -hd + 1.2, -0.3, yS, 0.1, 0.1, 6, C.PLAIN, 0xb8bcc0); // downpipes
   }
-  for (const s of [-1, 1]) A.box(0, Y(zo) - 0.45, s * zo, x1 - x0, 0.45, 0.3, C.PLAIN, 0x9aa0a6); // fascia along the eaves
-  // roof ribs over the overhangs and slender columns holding the eaves, every 12 m
-  for (let x = -hw; x <= hw + 0.1; x += 12) for (const s of [-1, 1]) {
-    A.cyl(x, s * (zo - 1.2), -0.3, Y(zo - 1.2) - 0.3, 0.32, 0.26, 8, C.PLAIN, 0xe0e2e4);
-    A.box(x, Y(hd) - 0.7, s * (hd + T.over / 2), 0.4, 0.5, T.over, C.PLAIN, 0xd0d4d8);
+  // roof slab: cantilevered past the glass (most at the ends), white fascia, gravel roof behind a parapet
+  const sw = T.len + 2 * T.cant, sd = T.depth + 2 * T.over;
+  A.box(0, yS, 0, sw, T.slab, sd, C.PLAIN, WHITE, { top: false, bottom: true });
+  A.flat(sw, sd, yR, 0.6, C.GRAVEL, 0xffffff, C.PLAIN, WHITE);
+  A.box(0, yS - 0.02, hd + T.over / 2, sw - 0.4, 0.04, T.over - 0.4, C.PLAIN, 0xd8d6d0, { top: false, bottom: true }); // soffit panel line
+  // rooftop: air handling units with louvres, ducts, skylight strips, a maintenance railing along the airside
+  for (const [x, z] of [[-34, -6], [-10, -8], [22, -6], [44, -9]]) {
+    A.box(x, yR, z, 7, 2.2, 3.2, C.METAL, 0xb8bcc0, { topCell: C.SEAM, topCol: 0x9aa0a6 });
+    for (let k = 0; k < 3; k++) A.cyl(x - 2.2 + k * 2.2, z, yR + 2.2, yR + 2.6, 0.6, 0.6, 10, C.PLAIN, 0x8a8e92, { cap: true }); // fans
+    A.box(x, yR + 0.6, z + 1.6 + 2.5, 0.8, 0.8, 5, C.METAL, 0xa8acb0); // duct
   }
-  // gates along the airside facade: numbers over the doors (gate 1 at the south end)
-  for (let k = 0; k < 4; k++) {
-    const lx = -45 + 30 * k; // (local x: world z = T.z + lx)
-    signs.push({ x: T.x - hd - 0.08, z: T.z + lx, yaw: -Math.PI / 2, base: 5.3, h: 1.3, frame: false, front: [['info', 'Gate'], ['loc', String(k + 1)]] });
-    A.box(lx, -0.3, hd + 0.6, 4.4, 3.5, 1.2, C.PLAIN, 0x5a6068); // gate door portal
-  }
-  // landside: the kerb canopy over the drop-off lane, on columns, departures / arrivals signs on the facade above
-  A.box(0, 4.3, -hd - 5, 84, 0.45, 9.6, C.PLAIN, 0xf4f4f0, { bottom: true });
-  for (let x = -40; x <= 40.1; x += 10) A.cyl(x, -hd - 9.2, -0.3, 4.4, 0.18, 0.18, 6, C.PLAIN, 0xb8bcc0);
+  for (const x of [-48, -24, 0, 24, 48]) A.box(x, yR, 6, 14, 0.7, 2.4, C.GLASS, 0xa8d0d8, { topCell: C.GLASS, topCol: 0xa8d0d8 }); // skylights
+  for (let x = -sw / 2 + 1; x <= sw / 2 - 1; x += 3) A.box(x, yR + 0.6, sd / 2 - 1, 0.05, 1.1, 0.05, C.PLAIN, 0xd8b020); // railing posts
+  A.box(0, yR + 1.65, sd / 2 - 1, sw - 2, 0.06, 0.06, C.PLAIN, 0xd8b020);
+
+  // gate cores: solid white towers standing out from the curtain wall, a rounded airside end, a door, a slot window,
+  // the gate number; each with a jet bridge parked against it (rotunda, tunnel with glazing, cab, drive leg)
+  const yc = yS - 3.2;
+  T.cores.forEach((cx, i) => {
+    A.box(cx - 1.2, -0.3, hd + 2.6, 8, yc + 0.3, 5.2, C.PLAIN, WHITE);
+    A.cyl(cx + 2.8, hd + 2.6, -0.3, yc, 2.6, 2.6, 12, C.PLAIN, WHITE, { cap: true });
+    A.box(cx - 3.2, -0.3, hd + 5.25, 1.6, 2.6, 0.08, C.PLAIN, 0x4a5056); // door
+    A.box(cx - 1.2, 3.2, hd + 5.24, 0.7, yc - 5, 0.06, C.GLASS, GLASS); // slot window
+    signs.push({ x: T.x - (hd + 5.32), z: T.z + cx - 1.2, yaw: -Math.PI / 2, base: yc - 2.4, h: 1.1, frame: false, front: [['info', 'Gate'], ['loc', String(i + 1)]] });
+    // jet bridge: rotunda on a column, a tunnel out towards the apron, a cab at its end, a drive leg on two wheels
+    const by = 4.2, z0 = hd + 5.2, z1 = z0 + 13;
+    A.cyl(cx + 6, z0 + 1.6, -0.3, by + 3.2, 1.9, 1.9, 12, C.PLAIN, 0xd8d8d4, { cap: true });
+    A.box(cx + 6, by, (z0 + 1.6 + z1) / 2, 2.8, 3.0, z1 - z0 - 1.6, C.PLAIN, 0xd8d8d4, { bottom: true });
+    for (const sx of [-1, 1]) A.box(cx + 6 + sx * 1.42, by + 1.1, (z0 + 1.6 + z1) / 2, 0.04, 1.0, z1 - z0 - 3, C.GLASS, GLASS);
+    A.box(cx + 6, by - 0.2, z1 + 1.6, 3.6, 3.4, 3.2, C.PLAIN, 0xc8c8c4, { bottom: true });
+    A.box(cx + 6, by + 0.4, z1 + 3.3, 3.0, 2.6, 0.3, C.PLAIN, 0x2a2c30); // rubber canopy
+    A.box(cx + 6, -0.3, z1 - 1.5, 0.5, by + 0.3, 0.5, C.PLAIN, 0x8a8e92); A.box(cx + 6, 0.2, z1 - 1.5, 3.2, 0.5, 1.0, C.PLAIN, 0x5a5e62); // drive leg
+    for (const sx of [-1.3, 1.3]) A.cyl(cx + 6 + sx, z1 - 1.5, 0, 0.9, 0.45, 0.45, 8, C.PLAIN, 0x1c1c1e);
+  });
+  // ground floor doors to the apron between the cores, Kjevik-style gate letters over them
+  [-57, -19, 19, 57].forEach((dx, i) => {
+    A.box(dx, -0.3, hd - rec + 0.12, 3.2, 2.9, 0.1, C.PLAIN, 0x3a4046);
+    signs.push({ x: T.x - (hd - rec + 0.2), z: T.z + dx, yaw: -Math.PI / 2, base: 3.05, h: 0.6, frame: false, front: [['loc', String.fromCharCode(65 + i)]] });
+  });
+  // landside: the kerb canopy over the drop-off lane, revolving doors, the kerb, departures / arrivals over the doors
+  A.box(0, 4.3, -hd - 5, 84, 0.45, 9.6, C.PLAIN, WHITE, { bottom: true });
+  A.box(0, 4.75, -hd - 9.75, 84, 0.5, 0.1, C.PLAIN, 0x9aa0a6);
+  for (let x = -40; x <= 40.1; x += 10) A.cyl(x, -hd - 9.2, -0.3, 4.4, 0.18, 0.18, 8, C.PLAIN, 0xb8bcc0);
   A.box(0, -0.3, -hd - 4.2, 84, 0.45, 1.2, C.CONCRETE, 0xc8c4bc); // kerb
-  signs.push({ x: T.x + hd + 0.08, z: T.z - 22, yaw: Math.PI / 2, base: 5.6, h: 1.1, frame: false, front: [['info', 'Departures']] });
-  signs.push({ x: T.x + hd + 0.08, z: T.z + 22, yaw: Math.PI / 2, base: 5.6, h: 1.1, frame: false, front: [['info', 'Arrivals']] });
+  for (const x of [-22, 22]) { A.cyl(x, -hd - 1.6, -0.3, 2.9, 1.6, 1.6, 12, C.GLASS, GLASS); A.cyl(x, -hd - 1.6, 2.9, 3.3, 1.75, 1.75, 12, C.PLAIN, 0x8a8e92, { cap: true }); } // revolving doors
+  signs.push({ x: T.x + hd + 0.12, z: T.z - 22, yaw: Math.PI / 2, base: yB + 0.08, h: 1.0, frame: false, front: [['info', 'Departures']] });
+  signs.push({ x: T.x + hd + 0.12, z: T.z + 22, yaw: Math.PI / 2, base: yB + 0.08, h: 1.0, frame: false, front: [['info', 'Arrivals']] });
 
   // ---- control tower: office block at its foot, tapered shaft, outward-leaning glass cab, catwalk, antenna mast ----
   const W = TOWER;
@@ -88,5 +134,5 @@ export function buildTerminalArea(A, y) {
   B.box(0, 1.1, -1.0, 0.16, 0.16, 2.2, C.METAL, 0x8a8e92); B.box(0, 1.0, -2.1, 0.5, 0.5, 0.5, C.PLAIN, 0x5a5e62); // feed horn arm
   const radar = new THREE.Mesh(B.toGeometry()); radar.position.set(R.x, y + R.h + 0.35, R.z); radar.castShadow = true; radar.name = 'airport radar';
 
-  return { signs, radar, beacon, nameBoard: { x: T.x - hd - T.over - 0.35, y: y + Y(zo) + 3.0, z: T.z } };
+  return { signs, radar, beacon, nameBoard: { x: T.x - hd - T.over - 0.06, y: y + yS + T.slab / 2 + 0.3, z: T.z + 26, w: 36, h: 1.5, flush: true } };
 }
