@@ -7,7 +7,7 @@
 //   on a road:  how many footprints reach more than TOL into a clear zone (none), and the deepest
 //   boxes:      the collision boxes cars meet (World.wallBoxes) are off the roads too
 //   kept:       how many buildings the setbacks left out (a few per cent at most: most are cut back, not dropped)
-//   cheap:      the setbacks' own time at load (index + cuts)
+//   cheap:      the setbacks' own time at load (index + cuts), as a share of the World's build
 //   few over:   big buildings a road runs right through are left standing (setback.js MAJOR: a passage under them); few
 // Standalone (counts before and after, worst spots): node --import ./tools/test/node/setup.mjs tools/test/setbacks.js [place ...]
 import { VERGE } from '../../src/roadgrade.js';
@@ -118,7 +118,7 @@ export async function measure(w, which = 'after') {
 
 export async function runCase(c) {
   const { worldAt } = await import('./node/world.mjs');
-  const w = (await worldAt(c.loc)).world, sb = (w.towns.city || w.towns).setbacks, ms = sb.ms; // (at load: before measure builds New York's low footprints too)
+  const W = await worldAt(c.loc), w = W.world, sb = (w.towns.city || w.towns).setbacks, ms = sb.ms; // (at load: before measure builds New York's low footprints too)
   const m = await measure(w, 'after');
   const worst = m.on.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(2)} m into a ${o.kind}`).join('; ');
   const kept = m.n / Math.max(1, m.n + sb.dropped);
@@ -127,7 +127,7 @@ export async function runCase(c) {
     { name: `${c.loc}: no collision box on a road`, ok: !m.boxes.length, why: m.boxes.length ? `${m.boxes.length} of ${m.nBoxes} boxes reach in, worst ${m.boxes.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(2)} m into a ${o.kind}`).join('; ')}` : `${m.nBoxes} boxes (World.wallBoxes${c.loc === 'nyc' ? ': the tall buildings built at load' : ''})` },
     { name: `${c.loc}: few big buildings left over a road`, ok: m.under.length <= Math.max(3, m.n * 0.0005), why: `${m.under.length} (a passage under them, or a mapping clash: ${m.under.slice(0, 4).map((o) => `(${o.x}, ${o.z})`).join(' ')})` },
     { name: `${c.loc}: setbacks keep most buildings`, ok: kept > 0.97, why: `${sb.dropped} left out, ${m.n} kept (${(100 * kept).toFixed(1)}%)` },
-    { name: `${c.loc}: setbacks are cheap at load`, ok: ms < (c.loc === 'nyc' ? 1500 : 600), why: `${ms.toFixed(0)} ms (Node, Low: the road index, the footprints and boxes built at load; New York's low ones are set back a tile at a time as they stream in. ~0.1-0.3 s on a laptop: this catches a pass gone several times slower, not a busy machine)` },
+    { name: `${c.loc}: setbacks are cheap at load`, ok: ms < 0.15 * W.ms, why: `${ms.toFixed(0)} ms, ${(100 * ms / W.ms).toFixed(1)}% of the World's ${W.ms} ms build (Node, Low: the road index, the footprints and boxes built at load; New York's low ones are set back a tile at a time as they stream in. A share, not a time: a busy machine slows both)` },
   ];
 }
 
