@@ -10,7 +10,7 @@ import { FIRE } from './airportBuildings.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { mulberry32, clamp } from './noise.js';
 import { glowTexture } from './materials.js';
-import { lanePaths } from './roads.js';
+import { LaneGraph } from './laneGraph.js';
 import { trafficModels, trafficModelsNow } from './trafficModels.js';
 
 // ---------- simple shapes (the train) ----------
@@ -65,21 +65,18 @@ export class Vehicles {
   constructor(scene, world) {
     this.world = world; this.group = new THREE.Group(); scene.add(this.group);
     const r = (this.r = mulberry32(world.loc.seed + 77));
-    const city = world.loc.id === 'nyc', mix = { ...MIX }; if (city) for (const t in CITY) mix[t] += CITY[t];
+    const city = (this.city = world.loc.id === 'nyc'), mix = { ...MIX }; if (city) for (const t in CITY) mix[t] += CITY[t];
     const pick = picker(r, mix), pickStreet = picker(r, Object.fromEntries(Object.entries(mix).filter(([t]) => !NO_STREET.has(t))));
     const pickPark = picker(r, city ? { ...PARK, taxi: 6 } : PARK);
     const color = (type) => PAINTED.has(type) ? PAINT[Math.floor(r() * PAINT.length)] : 0xffffff;
     // traffic on the lanes
-    this.paths = lanePaths(world.net);
+    // (the road graph, laneGraph.js: cars go from road to road at the junctions)
+    this.graph = new LaneGraph(world.net, r);
     this.cars = [];
-    const want = { low: 70, medium: 140, high: 240 }[world.qBase] || 140;
-    const totalLen = this.paths.reduce((a, p) => a + p.total, 0);
-    for (const p of this.paths) {
-      const n = Math.max(1, Math.round((want * p.total) / totalLen));
-      for (let k = 0; k < n; k++) {
-        const type = p.kind === 'street' ? pickStreet() : pick();
-        this.cars.push({ path: p, s: (k / n) * p.total + r() * 10, v: p.speed * 0.8, want: p.speed * (0.8 + r() * 0.35), type, color: color(type), brake: 0, roll: 0 });
-      }
+    const want = ({ low: 70, medium: 140, high: 240 }[world.qBase] || 140) * (city ? 3 : 1); // (a city: busy streets; only the cars near the camera are drawn)
+    if (this.graph.lanes.length) for (let k = 0; k < want; k++) {
+      const p = this.graph.ensure(this.graph.pick()), type = p.kind === 'street' ? pickStreet() : pick();
+      this.cars.push({ path: p, s: r() * p.total, v: p.speed * 0.8, want: p.speed * (0.8 + r() * 0.35), type, color: color(type), brake: 0, roll: 0 });
     }
     // parked cars (towns + airport lot): static
     this.parked = [];
@@ -99,7 +96,7 @@ export class Vehicles {
     // baggage carts (tow: the carts drawn along the path behind it)
     const apron = [[120, -128], [120, 128], [250, 128], [250, -128]].map(([x, z]) => new THREE.Vector3(x, 0, z)); // (between the stands' boxes: world.js STANDS)
     const ap = { pts: [], speed: 7, kind: 'apron' }; for (let i = 0; i < 4; i++) { const a = apron[i], b = apron[(i + 1) % 4]; for (let t = 0; t < 1; t += 0.02) ap.pts.push(a.clone().lerp(b, t)); }
-    ap.len = []; let L = 0; ap.pts.forEach((q, i) => { if (i) L += q.distanceTo(ap.pts[i - 1]); ap.len.push(L); }); ap.total = L + ap.pts.at(-1).distanceTo(ap.pts[0]);
+    ap.len = []; let L = 0; ap.pts.forEach((q, i) => { if (i) L += q.distanceTo(ap.pts[i - 1]); ap.len.push(L); }); ap.total = L + ap.pts.at(-1).distanceTo(ap.pts[0]); ap.loop = true;
     this.cars.push({ path: ap, s: 0, v: 6, want: 7, type: 'tanker', color: 0xffffff, brake: 0, roll: 0 }, { path: ap, s: ap.total * 0.5, v: 6, want: 6, type: 'offroad', color: 0xf2b705, brake: 0, roll: 0 },
       { path: ap, s: ap.total * 0.25, v: 4, want: 4.5, type: 'tug', color: 0xffffff, brake: 0, roll: 0, tow: 3 });
     for (const c of this.parked) c.p.y = world.sampleGrid(c.p.x, c.p.z) + 0.03;
@@ -117,13 +114,13 @@ export class Vehicles {
     // Per frame only the cars near the camera cost anything. A city's lanes are thousands of short segments with a car
     // or two each (NYC: ~6000), so the cars are grouped by lane once, and each lane carries a bounding circle: a lane
     // wholly beyond the draw distance is skipped with one distance check (its cars still drive on).
-    this.lanes = [];
-    const byPath = new Map();
-    for (const c of this.cars) { if (!byPath.has(c.path)) byPath.set(c.path, []); byPath.get(c.path).push(c); }
-    for (const [path, list] of byPath) {
-      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-      for (const q of path.pts) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); z0 = Math.min(z0, q.z); z1 = Math.max(z1, q.z); }
-      this.lanes.push({ path, list, cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, r: Math.hypot(x1 - x0, z1 - z0) / 2 + 10 });
+    // (the lanes with cars on them: each lane keeps its own list; cars move from lane to lane at the junctions)
+    this.active = new Set();
+    for (const c of this.cars) {
+      const path = c.path;
+      if (!path.list) path.list = [];
+      if (path.cx === undefined) { let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity; for (const q of path.pts) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); z0 = Math.min(z0, q.z); z1 = Math.max(z1, q.z); } Object.assign(path, { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, r: Math.hypot(x1 - x0, z1 - z0) / 2 + 10 }); }
+      path.list.push(c); this.active.add(path);
     }
     this.lightsOn = 0; // light slots written last frame (the rest are past the draw range)
     // (ready: the cars' models are in, or failed: main.js holds the loading screen until then: frame)
@@ -194,10 +191,23 @@ export class Vehicles {
       q.setFromAxisAngle(this._Y ??= new THREE.Vector3(0, 1, 0), c.yaw); m4.compose(c.p, q, one);
       draw(c, this.model(c.type), dd);
     }
-    for (const L of this.lanes) {
-      const { path, list } = L;
-      // car following along the lane
-      if (list.length === 1) { const c = list[0], dv = clamp(c.want - c.v, -6 * dt, 2.2 * dt); c.brake = dv < -0.5 * dt ? 1 : Math.max(0, c.brake - dt * 2); c.v = Math.max(0, c.v + dv); c.s = (c.s + c.v * dt) % path.total; c.roll += c.v * dt; }
+    const moves = [];
+    for (const L of this.active) {
+      const path = L, list = L.list;
+      if (!list.length) { this.active.delete(L); continue; }
+      // car following along the lane; a car past a road lane's end goes on to the next lane (below)
+      if (!path.loop) {
+        list.sort((a, b) => a.s - b.s);
+        for (let i = 0; i < list.length; i++) {
+          const c = list[i], ahead = list[i + 1];
+          const gap = ahead ? ahead.s - c.s - this.model(ahead.type).L * 0.5 - this.model(c.type).L * 0.5 : Infinity;
+          const want = Math.min(c.want, path.speed * 1.1, Math.max(0, (gap - 6) / 1.6));
+          const dv = clamp(want - c.v, -6 * dt, 2.2 * dt);
+          c.brake = dv < -0.5 * dt ? 1 : Math.max(0, c.brake - dt * 2);
+          c.v = Math.max(0, c.v + dv); c.s += c.v * dt; c.roll += c.v * dt;
+          if (c.s >= path.total) moves.push(c);
+        }
+      } else if (list.length === 1) { const c = list[0], dv = clamp(c.want - c.v, -6 * dt, 2.2 * dt); c.brake = dv < -0.5 * dt ? 1 : Math.max(0, c.brake - dt * 2); c.v = Math.max(0, c.v + dv); c.s = (c.s + c.v * dt) % path.total; c.roll += c.v * dt; }
       else {
         list.sort((a, b) => a.s - b.s);
         for (let i = 0; i < list.length; i++) {
@@ -230,6 +240,26 @@ export class Vehicles {
           }
         }
       }
+    }
+    // traffic where it can be seen: a few cars a frame that are far beyond the draw distance come back on a lane at
+    // its edge (a city's roads run to thousands of km: spread evenly, the cars round the camera would be few)
+    if (camPos && this.graph.lanes.length) for (let k = 0; k < 8; k++) {
+      const c = this.cars[(this.recycle = ((this.recycle || 0) + 1) % this.cars.length)];
+      if (!c || c.path.loop || c.path.transient) continue;
+      const R0 = this.city ? Math.min(600, this.drawDist) : this.drawDist; // (a city's streets are dense: keep the traffic within a few blocks)
+      const p0 = c.path.pts[0]; if (Math.hypot(p0.x - camPos.x, p0.z - camPos.z) < R0 * 1.5) continue;
+      const N = this.graph.pickNear(camPos.x, camPos.z, R0 * 0.45, R0); if (!N) continue;
+      this.graph.ensure(N); const i = c.path.list.indexOf(c); if (i >= 0) c.path.list.splice(i, 1);
+      c.path = N; c.s = this.r() * N.total; c.v = N.speed * 0.8; N.list.push(c); this.active.add(N);
+    }
+    // cars past their lane's end: onto the next lane through the junction (a short turn curve first), or, at a
+    // one-way road's dead end, somewhere else on the network
+    for (const c of moves) {
+      const L = c.path, G = this.graph; let over = c.s - L.total, dest;
+      const i = L.list.indexOf(c); if (i >= 0) L.list.splice(i, 1);
+      if (L.transient) dest = L.then;
+      else { const N = G.next(L); if (!N) { dest = G.ensure(G.pick()); over = this.r() * dest.total; } else { G.ensure(N); dest = G.turn(L, N) || N; } }
+      c.path = dest; c.s = Math.min(over, dest.total * 0.99); dest.list.push(c); this.active.add(dest);
     }
     // hide the instances dealt last frame but not this one
     if (B) {
