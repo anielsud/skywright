@@ -5,6 +5,7 @@ import { mulberry32, smoothstep, lerp, clamp } from './noise.js';
 import { glowTexture as glow } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { REGION, roadStyle, tarmacMaterial, shoulderMaterial } from './roadSurface.js';
+import { airportGate } from './airportKit.js';
 import { GRADE, VERGE, gridSampler, planGrid, regrid, markRoad, trimShared, unloop, crossings, route, highestReachable, smoothPath, simplifyPath, relaxCurves, profileRoad, carveGrid, RoadSurface } from './roadgrade.js';
 
 const RWY_HALF = 900;
@@ -105,6 +106,9 @@ export function planNetwork(w) {
       roads.push({ pts: resample([o.clone().addScaledVector(side, -cl), o.clone().addScaledVector(side, cl)], 8), kind: 'street', width: 6.5 });
     }
   }
+  // 3a) the airport's landside road, from its gate out to the ring
+  const gateRd = gateRoad(w, [roads[0]], { G, terr, wetAt });
+  if (gateRd) { roads.push(gateRd); markRoad(G, gateRd.pts); }
   // 3b) old-town lanes: a few narrow winding streets out from the centre between the grid streets (own RNG, so the
   // rest of the plan is unchanged)
   {
@@ -179,6 +183,7 @@ export function planNetwork(w) {
     if (main) pins.push({ i: 0, y: nearest(main.pts, rd.pts[0]).y });
     prof(rd, pins);
   }
+  if (gateRd) prof(gateRd, gatePins(gateRd));
   for (const rd of roads) if (rd.from) prof(rd, [{ i: 0, y: rd.from.y }]); // in the order they were built
   // 5) railway alongside the first highway (mountains + desert): a broad offset of its line, at a railway's grade
   let rail = null;
@@ -302,10 +307,14 @@ export function gradeReal(w, net) {
     });
     return y;
   };
+  // the airport's landside road, out to the nearest real road (its own chain: graded with its gate pins)
+  const gateRd = gateRoad(w, net.roads.filter((r) => !r.baked), { terr, wetAt: (x, z, h) => h < wl + 0.6 });
+  if (gateRd) { Object.assign(gateRd, { real: true, bridge: gateRd.pts.map(() => false) }); net.roads.push(gateRd); }
   for (const rd of net.roads) if (rd.baked) { rd.terr = Float32Array.from(rd.pts, (p) => terr(p.x, p.z)); rd.wet = new Uint8Array(rd.pts.length); add(rd); } // bridges with a baked deck profile (realworld.js)
   for (const rd of chains(net.roads.filter((r) => !r.baked))) { // (longest first)
     const fixed = rd.bridge && rd.bridge.some(Boolean) ? rd.bridge.slice() : null, pins = [], P = rd.pts, n = P.length;
     const S = new Float64Array(n); for (let i = 1; i < n; i++) S[i] = S[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z);
+    if (rd.members.length === 1 && rd.members[0].rd.gate) pins.push(...gatePins(rd.members[0].rd)); // (gateRoad: its own chain, never reversed)
     for (const i of [0, n - 1]) { const y = onLine(P[i]); if (y != null) pins.push({ i, y }); }
     // where its footprint overlaps a done way's on the ground (side by side: a divided road's two carriageways, a
     // slip road; the mouth of a junction), its centre line takes that way's height: the two are one surface there.
@@ -354,8 +363,8 @@ export function gradeReal(w, net) {
 // width, members: [{ rd, start (its first point's index in the chain), rev (it runs backwards along the chain) }] }.
 function chains(ways) {
   const ek = (p) => Math.round(p.x * 2) + ',' + Math.round(p.z * 2), at = new Map();
-  for (const r of ways) for (const e of [0, 1]) { const k = ek(e ? r.pts.at(-1) : r.pts[0]); if (!at.has(k)) at.set(k, []); at.get(k).push({ r, e }); }
-  const next = (r, e) => { const L = at.get(ek(e ? r.pts.at(-1) : r.pts[0])); return L.length === 2 ? L.find((o) => o.r !== r) ?? null : null; }; // (a way's own two ends meeting: a loop, left alone)
+  for (const r of ways) for (const e of [0, 1]) { if (r.gate) continue; const k = ek(e ? r.pts.at(-1) : r.pts[0]); if (!at.has(k)) at.set(k, []); at.get(k).push({ r, e }); }
+  const next = (r, e) => { const L = at.get(ek(e ? r.pts.at(-1) : r.pts[0])); return L?.length === 2 ? L.find((o) => o.r !== r) ?? null : null; }; // (a way's own two ends meeting: a loop, left alone)
   const used = new Set(), out = [];
   for (const r0 of ways) {
     if (used.has(r0)) continue;
@@ -644,3 +653,30 @@ export function findMedians(roads) {
     if (m != null && cand.has(m) && pair[m]?.has(ri)) roads[ri].median = sd;
   }
 }
+
+// The airport's landside road out to the network (#227 / #228): the airport owns its road from the terminal to the
+// gate (airportKit.js airportGate: the box edge, at the runway's height, heading +x, the ground levelled to rwyH for
+// 70 m past it). From the gate this road runs straight out for 60 m, then (grade-limited, routed round high and wet
+// ground: route()) to the nearest point of the given roads. Returns the road ({ pts, kind, width, gate: { h, x }, to })
+// or null (no gate: Bora Bora's airport is on its own motu). Its profile: level at the gate's height across the
+// levelled strip, meeting `to` at the far end (callers pin both).
+export function gateRoad(w, roads, { G = null, terr, wetAt, blocked } = {}) {
+  const gate = airportGate(w.loc); if (!gate) return null;
+  const a = new THREE.Vector3(gate.x, 0, gate.z), b = new THREE.Vector3(gate.x + 60, 0, gate.z);
+  let to = null, bd = Infinity;
+  for (const rd of roads) { if (rd.kind === 'rail' || rd.kind === 'street' && !rd.real) continue; rd.pts.forEach((p, i) => { if (rd.bridge?.[i] || p.x < gate.x + 30) return; const d = Math.hypot(p.x - b.x, p.z - b.z); if (d < bd) { bd = d; to = p; } }); }
+  if (!to) return null;
+  let mid = [];
+  if (bd > 300) {
+    const grid = G || planGrid(w, terr, wetAt, blocked || ((x, z) => Math.abs(x - 100) < 470 && Math.abs(z) < RWY_HALF + 350 || Math.abs(x) > w.half - 400 || Math.abs(z) > w.half - 400));
+    const leg = route(grid, b.x, b.z, to.x, to.z, { gmax: GRADE.main, water: 10, margin: 1500 });
+    if (leg) mid = smoothPath(leg).slice(1, -1);
+  }
+  const end = to.clone().setY(0); // (resample measures in 3D: the routed points are at y 0, the road's point at its height)
+  let Q = relaxCurves(resample(unloop(resample([a, b, ...mid, end], 8), 14, 40), 8), 20, false, 200); // (unloop: a route that doubles back near its end)
+  while (Q.length > 4 && Q.at(-2).distanceTo(end) < 16) Q.pop(); // meet the road square on, no hook at the end
+  Q[Q.length - 1] = end.clone(); Q[0] = a.clone();
+  return { pts: resample(Q, 8), kind: 'main', width: 8, gate: { h: gate.h, x: gate.x + 65, z: gate.z }, to };
+}
+// the gate road's pins: level at the gate's height across the levelled strip, the far end on the road it joins
+export const gatePins = (rd) => { const out = []; for (let i = 0; i < rd.pts.length && rd.pts[i].x < rd.gate.x && Math.abs(rd.pts[i].z - rd.gate.z) < 26; i++) out.push({ i, y: rd.gate.h }); return [...out, { i: rd.pts.length - 1, y: rd.to.y }]; }; // (the strip: from the gate while it stays in it)
