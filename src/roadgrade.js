@@ -291,14 +291,17 @@ export function carveGrid(w, roads, H, R, st, bench = 0.75) {
   const bd = new Float32Array(N).fill(Infinity), by = new Float32Array(N);
   const reach = st * bench + 46;
   for (const rd of roads) {
-    const hw = rd.width / 2 + VERGE, P = rd.pts, rr = Math.ceil((hw + reach) / st);
+    const hw = rd.width / 2 + VERGE, P = rd.pts;
     for (let i = 0; i < P.length; i++) {
       if (rd.bridge?.[i]) continue;
       const p = P[i], i0 = Math.round((p.x + half) / st), j0 = Math.round((p.z + half) / st);
+      // as far out as this point's embankment or cutting reaches: a road at the ground's height needs only its bench
+      // (a city's streets: most of them; the 46 m search round every point was ~1 s of New York's load)
+      const g = H[clamp(j0, 0, R) * W + clamp(i0, 0, R)], rl = Math.min(reach, st * bench + Math.abs(p.y - g) / FILL + st), rr = Math.ceil((hw + rl) / st);
       for (let j = j0 - rr; j <= j0 + rr; j++) for (let ii = i0 - rr; ii <= i0 + rr; ii++) {
         if (ii < 0 || j < 0 || ii > R || j > R) continue;
         const e = Math.hypot(-half + ii * st - p.x, -half + j * st - p.z) - hw, k = j * W + ii;
-        if (e < bd[k] && e < reach) { bd[k] = e; by[k] = p.y; }
+        if (e < bd[k] && e < rl) { bd[k] = e; by[k] = p.y; }
       }
     }
   }
@@ -317,13 +320,13 @@ export function carveGrid(w, roads, H, R, st, bench = 0.75) {
 function pinUnder(w, roads, H, R, st) {
   const W = R + 1, half = w.half;
   const lower = (k, y) => { if (H[k] > y) H[k] = y; };
-  for (let pass = 0; pass < 2; pass++) for (const rd of roads) {
+  for (const rd of roads) { // (one pass, three samples across: the road's edges and middle)
     const P = rd.pts, n = P.length, hw = rd.width / 2 + VERGE;
     for (let i = 0; i < n; i++) {
       if (rd.bridge?.[i]) continue;
       const p = P[i], a = P[Math.max(0, i - 1)], b = P[Math.min(n - 1, i + 1)];
       let dx = b.x - a.x, dz = b.z - a.z; const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
-      for (const f of [-1, -0.5, 0, 0.5, 1]) for (const al of [-2, 2]) {
+      for (const f of [-1, 0, 1]) for (const al of [-2, 2]) {
         const x = p.x - dz * hw * f + dx * al, z = p.z + dx * hw * f + dz * al;
         const fx = (x + half) / st, fz = (z + half) / st; if (fx < 0 || fz < 0 || fx >= R || fz >= R) continue;
         const ii = fx | 0, j = fz | 0, u = fx - ii, v = fz - j, y = p.y - 0.05;
@@ -344,19 +347,24 @@ export class RoadSurface {
   constructor(w, roads, skirt) {
     this.half = w.half; this.S = skirt; this.cell = 32;
     const C = this.cell, nC = (this.nC = Math.ceil(w.size / C) + 1);
-    const segs = []; // ax, az, bx, bz, ay, by, hw, deck, rank (the order the profiles were made in: lower = the major road)
+    // ax, az, bx, bz, ay, by, hw, deck, rank (the order the profiles were made in: lower = the major road); and how far
+    // out each segment's embankment reaches (its height off the ground / the fill slope: a street at the ground's
+    // height, just its verge). Registering every segment out to the full skirt was ~10M cell entries in New York.
+    let ns = 0; for (const rd of roads) ns += rd.closed ? rd.pts.length : rd.pts.length - 1;
+    const S = (this.seg = new Float32Array(ns * SEG)), reach = new Float32Array(ns), ground = w.Hh ? (x, z) => w.triAt(w.Hh, w.hR + 1, clamp((x + w.half) / w.hStep, 0, w.hR - 1e-3), clamp((z + w.half) / w.hStep, 0, w.hR - 1e-3)) : null;
+    let s0 = 0;
     roads.forEach((rd, ri) => {
       const P = rd.pts, n = P.length, last = rd.closed ? n : n - 1;
-      for (let i = 0; i < last; i++) {
+      for (let i = 0; i < last; i++, s0++) {
         const a = P[i], b = P[(i + 1) % n], br = !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % n]);
         // deck flags: 1 = deck, +2 / +4 = the deck carries on before / after (a joint, round; an abutment end is square)
         const isD = (k) => !!(rd.bridge?.[(k + n) % n] && rd.bridge?.[(k + 1 + n) % n]) && (rd.closed || (k >= 0 && k < n - 1));
-        segs.push(a.x, a.z, b.x, b.z, a.y, b.y, br ? rd.width / 2 + 1 : rd.width / 2 + VERGE, br ? 1 + (isD(i - 1) ? 2 : 0) + (isD(i + 1) ? 4 : 0) : 0, rd.rank ?? ri);
+        const o = s0 * SEG; S[o] = a.x; S[o + 1] = a.z; S[o + 2] = b.x; S[o + 3] = b.z; S[o + 4] = a.y; S[o + 5] = b.y; S[o + 6] = br ? rd.width / 2 + 1 : rd.width / 2 + VERGE; S[o + 7] = br ? 1 + (isD(i - 1) ? 2 : 0) + (isD(i + 1) ? 4 : 0) : 0; S[o + 8] = rd.rank ?? ri;
+        reach[s0] = br || !ground ? skirt : Math.min(skirt, Math.max(Math.abs(a.y - ground(a.x, a.z)), Math.abs(b.y - ground(b.x, b.z))) / FILL + 4);
       }
     });
-    const S = (this.seg = new Float32Array(segs)), ns = S.length / SEG;
     const cnt = new Int32Array(nC * nC + 1), cells = (s, fn) => {
-      const r = S[s * SEG + 6] + (S[s * SEG + 7] ? 0.5 : skirt) + 1;
+      const r = S[s * SEG + 6] + (S[s * SEG + 7] ? 0.5 : reach[s]) + 1;
       const o = s * SEG, xa = Math.min(S[o], S[o + 2]) - r, xb = Math.max(S[o], S[o + 2]) + r, za = Math.min(S[o + 1], S[o + 3]) - r, zb = Math.max(S[o + 1], S[o + 3]) + r;
       for (let cj = Math.max(0, Math.floor((za + this.half) / C)); cj <= Math.min(nC - 1, Math.floor((zb + this.half) / C)); cj++)
         for (let ci = Math.max(0, Math.floor((xa + this.half) / C)); ci <= Math.min(nC - 1, Math.floor((xb + this.half) / C)); ci++) fn(cj * nC + ci);

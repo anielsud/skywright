@@ -14,7 +14,7 @@ export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/real
 const PLACES = ['islands', 'canyon', 'lauterbrunnen', 'nyc'];
 const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3;
 
-export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 }))]; }
+export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 }))]; }
 
 // The near-camera ground detail (World.updateDetail) at a few road points: inside, its vertices are the physics ground
 // (sampleGrid) exactly; its edge is the patch's own surface (no seam); rebuilding it stays cheap.
@@ -110,6 +110,14 @@ export function measure(w) {
 export async function runCase(c) {
   const { worldAt } = await import('./node/world.mjs');
   const w = (await worldAt(c.loc)).world;
+  if (c.pack) { // the deploy's road pack (roadPack.js) gives back exactly the roads it was made from
+    const { encodeRoads, decodeRoads } = await import('../../src/roadPack.js'), roads = w.net.roads, P = decodeRoads(encodeRoads(roads, 'test'));
+    let worst = 0, bad = 0;
+    roads.forEach((rd, k) => { const q = P.roads[k];
+      if (!q || q.pts.length !== rd.pts.length || q.kind !== rd.kind || q.oneway !== (rd.oneway || 0) || JSON.stringify(q.jn) !== JSON.stringify(rd.jn || []) || q.bridge.some((b, i) => b !== !!rd.bridge?.[i])) { bad++; return; }
+      rd.pts.forEach((p, i) => { worst = Math.max(worst, Math.abs(p.x - q.pts[i].x), Math.abs(p.y - q.pts[i].y), Math.abs(p.z - q.pts[i].z)); }); });
+    return [{ name: `${c.loc}: the road pack gives back its roads`, ok: !bad && worst < 0.011 && P.key === 'test', why: `${bad} roads differ, points within ${(worst * 100).toFixed(1)} cm` }];
+  }
   if (c.traffic) { // the cars drive the road graph (laneGraph.js): onto the next road at a junction, turning round only at a dead end
     const THREE = await import('three'), { Vehicles } = await import('../../src/vehicles.js');
     const V = new Vehicles(new THREE.Scene(), w), G = V.graph, orig = G.next.bind(G); let on = 0, back = 0, none = 0;
