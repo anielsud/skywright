@@ -290,13 +290,18 @@ export function buildRoadMeshes(w, net) {
   const skirtMat = new THREE.MeshStandardMaterial({ roughness: w.patchMat.roughness, metalness: 0 }); // (not clone(): that JSON-copies userData, the terrain textures)
   Object.assign(skirtMat, { onBeforeCompile: w.patchMat.onBeforeCompile, defines: w.patchMat.defines, userData: w.patchMat.userData, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
   const SW = skirtWidth(w.hStep), meshH = (x, z) => { const fx = (x + w.half) / w.hStep, fz = (z + w.half) / w.hStep; return fx >= 0 && fz >= 0 && fx < w.hR && fz < w.hR ? w.triAt(w.Hh, w.hR + 1, fx, fz) : w.sampleCoarse(x, z); };
+  // (only off a city, only the main roads, only where the grid is half a metre or more off: near the camera the ground
+  // detail mesh, World.updateDetail, draws the embankments exactly. #251 drew them for every street: 4.9M triangles
+  // in New York, two thirds of its road meshes)
+  const skirtsOn = !w.loc.city, SKIRT_MIN = 0.4;
   const skirts = (rd) => {
+    if (!skirtsOn || (rd.kind === 'street' && rd.real)) return;
     const P = rd.pts, n = P.length, hw = rd.width / 2 + VERGE, rows = [0, 1.5, 4, 8, 13, 20, 30, 42, 60].filter((o) => o < SW).concat([SW]);
     const need = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
       if (rd.bridge?.[i]) continue;
       const p = P[i], [, rt] = frame(P, i, rd.closed);
-      for (const s of [-1, 1]) for (const o of rows) { const x = p.x + rt.x * (hw + o) * s, z = p.z + rt.z * (hw + o) * s; if (Math.abs(w.sampleGrid(x, z) - meshH(x, z)) > 0.12) { need[i] = 1; break; } }
+      for (const s of [-1, 1]) for (const o of rows) { const x = p.x + rt.x * (hw + o) * s, z = p.z + rt.z * (hw + o) * s; if (Math.abs(w.sampleGrid(x, z) - meshH(x, z)) > SKIRT_MIN) { need[i] = 1; break; } }
     }
     const ok = (i) => !isBr(rd, i) && (need[i] || need[(i + 1) % n] || need[(i - 1 + n) % n] || need[(i + 2) % n]);
     for (const s of [-1, 1]) {
@@ -310,8 +315,8 @@ export function buildRoadMeshes(w, net) {
   const J = net.roads.some((r) => r.jn) ? junctionsFromNodes(net.roads, region, city) : findJunctions(net.roads, region, city);
   const roadMesh = (rd, k) => {
     const hw = rd.width / 2, info = [hw, roadStyle(region, rd, city), (k * 7.31) % 97], jp = junctionPoints(rd, J[k]);
-    strip(jp, [-hw - VERGE, -hw, hw, hw + VERGE], (i) => jp.pts[i].y, (i) => !isBr(jp, i), shoulder, (c, d, o) => [o, d], 1, info, jp.rjunc);
-    strip(jp, [-hw, -hw * 0.5, 0, hw * 0.5, hw], (i) => jp.pts[i].y + 0.02, () => true, tarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
+    if (!w.loc.city || rd.kind === 'highway') strip(jp, [-hw - VERGE, -hw, hw, hw + VERGE], (i) => jp.pts[i].y, (i) => !isBr(jp, i), shoulder, (c, d, o) => [o, d], 1, info, jp.rjunc);
+    strip(jp, [-hw, hw], (i) => jp.pts[i].y + 0.02, () => true, tarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
     skirts(rd);
   };
   const tileOf = (p) => Math.floor(p.x / TILE) + ',' + Math.floor(p.z / TILE), tiles = new Map();
@@ -355,26 +360,32 @@ export function buildRoadMeshes(w, net) {
     for (const dp of decks.values()) if (dp.length) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(dp, 3)); bridgeGeos.push(g); }
   };
   if (net.rail) bridgeMesh(net.rail);
-  // street lamps (glow at night)
-  const lamps = [];
-  // (town streets get their own lamp posts from the scenery, except on low quality)
-  const poles = [];
-  for (const rd of net.roads) { if (rd.kind === 'highway' || rd.mountain || (rd.kind === 'street' && w.qName !== 'low')) continue; const every = rd.kind === 'street' ? 4 : 6; rd.pts.forEach((p, i) => { if (i % every) return; const a = rd.pts[Math.max(0, i - 1)], b = rd.pts[Math.min(rd.pts.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); const s = (i / every) % 2 ? 1 : -1; const off = rd.bridge?.[i] ? rd.width / 2 + 0.6 : rd.width / 2 + 1.5, x = p.x - d.z * off * s, z = p.z + d.x * off * s, gy = rd.bridge?.[i] ? p.y + 1 : w.sampleGrid(x, z); lamps.push(x + d.z * 1.2 * s, gy + 7, z - d.x * 1.2 * s); poles.push(x, gy, z, Math.atan2(d.z * s, -d.x * s)); }); }
-  // poles: tapered mast + outreach arm + luminaire, one instanced mesh
-  if (poles.length) {
-    const pg = mergeGeometries([new THREE.CylinderGeometry(0.07, 0.12, 7.4, 6).translate(0, 3.5, 0), new THREE.BoxGeometry(0.08, 0.08, 1.5).translate(0, 7.15, 0.65), new THREE.BoxGeometry(0.28, 0.12, 0.6).translate(0, 7.05, 1.25)].map((g) => g.toNonIndexed()));
-    const pm = new THREE.InstancedMesh(pg, new THREE.MeshStandardMaterial({ color: 0x8a8e94, metalness: 0.6, roughness: 0.45 }), poles.length / 4), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
-    for (let k = 0; k < poles.length / 4; k++) pm.setMatrixAt(k, m4.compose(new THREE.Vector3(poles[k * 4], poles[k * 4 + 1] - 0.2, poles[k * 4 + 2]), q.setFromAxisAngle(up, poles[k * 4 + 3]), one));
-    pm.count = poles.length / 4; pm.castShadow = w.qName === 'high' || w.qName === 'ultra'; group.add(pm);
-  }
-  const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3));
+  // street lamps (glow at night): per tile, built and culled with it (#251: on Low every street of New York got
+  // posts, ~7M triangles in one instanced mesh). Not on a real place's minor streets (its scenery has its own), not on
+  // highways or mountain roads.
   const lampMat = new THREE.PointsMaterial({ size: 3, color: new THREE.Color(3.2, 2.2, 1.1), map: glow(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0 });
-  group.add(new THREE.Points(lg, lampMat)); group.userData.lampMat = lampMat;
+  group.userData.lampMat = lampMat;
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x8a8e94, metalness: 0.6, roughness: 0.45 });
+  const poleGeo = mergeGeometries([new THREE.CylinderGeometry(0.07, 0.12, 7.4, 6).translate(0, 3.5, 0), new THREE.BoxGeometry(0.08, 0.08, 1.5).translate(0, 7.15, 0.65), new THREE.BoxGeometry(0.28, 0.12, 0.6).translate(0, 7.05, 1.25)].map((g) => g.toNonIndexed()));
+  const lampsFor = (rd, lamps, poles) => {
+    if (rd.kind === 'highway' || rd.mountain || (rd.kind === 'street' && (rd.real || w.qName !== 'low'))) return;
+    const every = rd.kind === 'street' ? 4 : 6;
+    rd.pts.forEach((p, i) => { if (i % every) return; const a = rd.pts[Math.max(0, i - 1)], b = rd.pts[Math.min(rd.pts.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); const s = (i / every) % 2 ? 1 : -1; const off = rd.bridge?.[i] ? rd.width / 2 + 0.6 : rd.width / 2 + 1.5, x = p.x - d.z * off * s, z = p.z + d.x * off * s, gy = rd.bridge?.[i] ? p.y + 1 : w.sampleGrid(x, z); lamps.push(x + d.z * 1.2 * s, gy + 7, z - d.x * 1.2 * s); poles.push(x, gy, z, Math.atan2(d.z * s, -d.x * s)); });
+  };
+  const lampMeshes = (lamps, poles, t) => {
+    if (!poles.length) return;
+    const pm = new THREE.InstancedMesh(poleGeo, poleMat, poles.length / 4), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
+    for (let k = 0; k < poles.length / 4; k++) pm.setMatrixAt(k, m4.compose(new THREE.Vector3(poles[k * 4], poles[k * 4 + 1] - 0.2, poles[k * 4 + 2]), q.setFromAxisAngle(up, poles[k * 4 + 3]), one));
+    pm.castShadow = w.qName === 'high' || w.qName === 'ultra'; pm.computeBoundingSphere(); group.add(pm); t.meshes.push(pm);
+    const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3)); const pt = new THREE.Points(lg, lampMat); group.add(pt); t.meshes.push(pt);
+  };
   // building a tile: its roads' ribbons, shoulders, skirts and bridges, merged per material
-  const D = chunk ? ROAD_D[w.qName] : 0, warm = new Set([tarmac, shoulder, skirtMat, concrete]);
+  const D = ROAD_D[w.qName] ?? 10000, warm = new Set([tarmac, shoulder, skirtMat, concrete, poleMat]);
   const buildTile = (t) => {
     pending = new Map(); bridgeGeos = [];
-    for (const k of t.roads) { roadMesh(net.roads[k], k); bridgeMesh(net.roads[k]); }
+    const lamps = [], poles = [];
+    for (const k of t.roads) { roadMesh(net.roads[k], k); bridgeMesh(net.roads[k]); lampsFor(net.roads[k], lamps, poles); }
+    lampMeshes(lamps, poles, t);
     for (const [material, geos] of pending) { const m = new THREE.Mesh(mergeGeometries(geos), material); m.receiveShadow = true; group.add(m); t.meshes.push(m); }
     if (bridgeGeos.length) { const m = new THREE.Mesh(mergeAll(bridgeGeos), concrete); m.castShadow = m.receiveShadow = true; group.add(m); t.meshes.push(m); }
     t.built = true; pending = null;
@@ -399,7 +410,7 @@ export function buildRoadMeshes(w, net) {
 }
 
 // a city's road chunks (ribbons and bridges) are drawn this far on the lighter settings; High and Ultra draw them all
-const ROAD_D = { low: 5000, medium: 8000 };
+const ROAD_D = { low: 4000, medium: 6000, high: 9000, ultra: 12000 }; // (road tiles drawn out to: past it the ground photo shows the roads)
 function mergeAll(geos) {
   const ni = geos.map((g) => (g.index ? g.toNonIndexed() : g));
   let n = 0; for (const g of ni) n += g.attributes.position.count;
