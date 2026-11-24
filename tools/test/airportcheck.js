@@ -23,9 +23,9 @@ export async function runCase(c) {
     if (W.isPaved(x, z) || W.groundAt(x, z).type === 'runway') { bad.push(`(${Math.round(s.x)}, ${Math.round(s.z)}) ${s.hx.toFixed(1)} x ${s.hz.toFixed(1)}`); i = j = 9; }
   }
   check('nothing solid on runways, taxiways or apron', !bad.length, bad.slice(0, 6).join('; '));
-  // everything inside the box towns keep clear of (towns.js nearAirport: |x - 140| < 380, |z| < 1150)
-  const out_ = K.solids.filter((s) => Math.abs(s.x - 140) + s.hx > 380 || Math.abs(s.z) + s.hz > 1150).map((s) => `(${Math.round(s.x)}, ${Math.round(s.z)})`);
-  check('inside the towns\' airport box', !out_.length, out_.slice(0, 6).join('; '));
+  // everything inside the box real places' buildings and the road network keep clear of (realBuildings.js, roads.js)
+  const out_ = K.solids.filter((s) => Math.abs(s.x - 100) + s.hx > 470 || Math.abs(s.z) + s.hz > 1250).map((s) => `(${Math.round(s.x)}, ${Math.round(s.z)})`);
+  check('inside the airport no-go box', !out_.length, out_.slice(0, 6).join('; '));
   // lamps: above the ground under them, and not on stilts
   const lamps = [];
   for (const [x, ly, z, col] of K.points) { const g = Math.max(W.heightAt(x, z), W.waterLevel); if (ly < g + 0.2 || ly > Math.max(g, y) + (col === 0xff3020 ? 20 : 9)) lamps.push(`(${Math.round(x)}, ${Math.round(z)}) ${(ly - g).toFixed(1)} m`); }

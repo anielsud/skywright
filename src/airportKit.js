@@ -24,9 +24,9 @@ export function airportGate(loc) {
 export const CONNECTORS = [{ z: 880, name: 'B' }, { z: 0, name: 'C' }, { z: -880, name: 'D' }];
 export const TAXI = { x0: 62, x1: 98, name: 'A' };
 // how far the approach lights, localizers and glideslope masts reach (other sites keep clear: launchpad.js)
-// rows at HALF + start + k * step: clear of the 30 m overrun, and inside the box towns (towns.js nearAirport, |z| < 1150),
-// real buildings and roads keep clear of
-export const ALS = { start: 15, rows: 7, step: 30, half: 15, wide: 5 };
+// rows at HALF + start + k * step: clear of the 30 m overrun, and inside the box real places' buildings and the road
+// network keep clear of (realBuildings.js, roads.js: |x - 100| < 470, |z| < 1250)
+export const ALS = { start: 15, rows: 10, step: 30, half: 15, wide: 9 };
 export const LOC_Z = 200; // localizer array this far past the far end
 const FT = 0.3048;
 
@@ -96,8 +96,8 @@ export function buildAirfieldKit(world, A, y) {
   for (let z = -HALF; z <= HALF; z += 40) if (!CONNECTORS.some((c) => Math.abs(z - c.z) < 16)) fixture(TAXI.x0, z, 0x5a86e0);
   for (const c of CONNECTORS) for (const s of [-1, 1]) for (let x = RWY_W / 2 + 8; x < TAXI.x0; x += 14) fixture(x, c.z + s * 12, 0x5a86e0);
 
-  // approach light system: seven rows of five lamps on crossbars, every 30 m out from each 36 threshold, the
-  // fifth a wide crossbar. Lamps stay level with the runway unless the ground rises above them.
+  // approach light system: ten rows of five lamps on crossbars, every 30 m out from each 36 threshold, the
+  // ninth (~285 m) a wide crossbar. Lamps stay level with the runway unless the ground rises above them.
   for (const r of RW) {
     for (let k = 1; k <= ALS.rows; k++) {
       const z = HALF + ALS.start + k * ALS.step, wide = k === ALS.wide, half = wide ? 15 : 8, g = Math.min(ground(r.x - half, z), ground(r.x, z), ground(r.x + half, z));
