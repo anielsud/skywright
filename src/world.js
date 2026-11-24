@@ -1184,7 +1184,7 @@ export class World {
     const cp = camera.position;
     this.real?.stream.update(cp);
     this.tiles?.update(cp);
-    this.roadGroup?.userData.cull?.(cp);
+    this.roadCam = cp; this.roadGroup?.userData.update?.(cp, 4); // (lazy road tiles: a few ms a frame, nearest first)
     this.updatePatch(cp); this.updateDetail(cp);
     const snap = (v, g) => Math.round(v / g) * g;
     this.water.position.x = snap(cp.x, 2000); this.water.position.z = snap(cp.z, 2000);
@@ -1250,6 +1250,7 @@ export class World {
   // re-captured once the rock photo is in): main.js keeps the loading screen up meanwhile (at most a few seconds)
   loaded() {
     for (const u of Object.values(this.detailU)) if (u?.value?.isTexture && !u.value.image) return false;
+    if (this.roadCam && this.roadGroup?.userData.update && !this.roadGroup.userData.update(this.roadCam, 0, 2500)) return false; // (the road tiles round the start, built now, behind the loading screen)
     return !this.flora || (!!this.flora.captured && !!this.flora.rockCaptured); // (the tree impostors too: captured after the warm-up, their textured shader would compile mid-flight)
   }
   // The ground under (x0,z0)-(x1,z1) (world metres) has better data than it was built from (a real place's streamed
