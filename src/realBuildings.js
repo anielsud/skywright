@@ -42,13 +42,16 @@ export class RealScenery {
 
   // ---------------- buildings ----------------
   buildBuildings(list) {
-    const W = this.w, r = mulberry32(W.loc.seed * 5 + 3), lowQ = W.qName === 'low', trop = W.loc.osmStyle === 'tropical', wl = W.waterLevel, SB = W.loc.buildStyle || {};
+    const W = this.w, seed0 = W.loc.seed * 5 + 3, lowQ = W.qName === 'low', trop = W.loc.osmStyle === 'tropical', wl = W.waterLevel, SB = W.loc.buildStyle || {};
     for (const b of list) {
       const [kind, hTag, lv, rsTag, rhTag, minH, flat] = b;
       const n = flat.length / 2; if (n < 3) continue;
       const P = []; let cx = 0, cz = 0;
       for (let k = 0; k < n; k++) { P.push([flat[k * 2], flat[k * 2 + 1]]); cx += flat[k * 2]; cz += flat[k * 2 + 1]; }
       cx /= n; cz /= n;
+      // each building's own random sequence, from where it stands: its style is the same whichever others are left out
+      // (Low skips the small ones) and whatever order they come in
+      const r = buildingRng(seed0, cx, cz);
       let area = 0; for (let k = 0; k < n; k++) { const a = P[k], c = P[(k + 1) % n]; area += a[0] * c[1] - c[0] * a[1]; }
       area *= 0.5; const A = Math.abs(area);
       if (A < (lowQ ? 60 : W.qName === 'medium' ? 25 : 0)) continue; // lighter on tablets: no garden sheds
@@ -134,7 +137,7 @@ export class RealScenery {
         const over = kind === 4 ? 0.3 : chalet ? 1.1 : 0.6;
         if (roof === 1) B.gable(hw * 2, hl * 2, eave, rise, over, roofCell, roofC, wallCell === C.WOOD_WIN ? C.WOOD : C.PLAIN, wallCol, { under: chalet });
         else B.hip(hw * 2, hl * 2, eave, rise, over, roofCell, roofC);
-      } else this.flatRoof(B, P, eave, kind === 4 ? C.GRAVEL : C.CONCRETE, kind === 4 ? 0xa8a49c : 0x9a958c);
+      } else this.flatRoof(B, P, eave, C.ROOF_GRAVEL, kind === 4 ? 0x9a968e : 0x8a867e); // (a roof cell: the tint decides, not the bright photo)
       if (wet) { // a timber deck round the bungalow, on piles down to the lagoon floor
         B.setFrame(0, 0, 0, 0);
         B.obox(cxo, czo, ux, uz, hl + 1.4, hw + 1.4, base - 0.3, base, C.BOARDS, 0x9a7a58);
@@ -196,7 +199,13 @@ export class RealScenery {
   }
   chunk(x, z) {
     const k = Math.floor(x / CHUNK) + ',' + Math.floor(z / CHUNK);
-    let c = this.chunks.get(k); if (!c) this.chunks.set(k, (c = { B: new Builder(), n: 0, x: 0, z: 0 }));
+    let c = this.chunks.get(k);
+    if (!c) {
+      this.chunks.set(k, (c = { B: new Builder(), n: 0, x: 0, z: 0 }));
+      // High / Ultra: gutters and downpipes (fine 2: no window sills), written into the same builder (so each building's vertices
+      // stay one contiguous run for destruction.js, and no extra draw call)
+      if (this.w.qBase === 'high') { c.B.det = c.B; c.B.fine = 2; }
+    }
     return c;
   }
   flatRoof(B, P, y, cell, colr) {
@@ -346,6 +355,9 @@ export class RealScenery {
     for (const c of this.chunkList) c.m.visible = Math.hypot(c.x - cam.x, c.z - cam.z) < this.view + c.r;
   }
 }
+
+// a building's own random sequence, seeded from its position (centroid, to half a metre)
+export const buildingRng = (seed, x, z) => mulberry32((Math.imul(Math.round(x * 2), 73856093) ^ Math.imul(Math.round(z * 2), 19349663) ^ Math.imul(seed, 83492791)) >>> 0);
 
 // railways: how far the steel rails (14 cm wide: under a pixel beyond this) and the ballast bed (3.6 m) are drawn
 const RAIL_STEEL_D = { low: 600, medium: 900, high: 1500, ultra: 1500 }, RAIL_BALLAST_D = { low: 4000, medium: 6000, high: 10000, ultra: 12000 };

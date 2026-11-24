@@ -24,7 +24,7 @@ const hash = (a, b) => { let h = (a * 374761393 + b * 668265263) | 0; h = Math.i
 // ---------------- palettes (tints over the photo atlas cells) ----------------
 const PAL = {
   brick: [0x9a6050, 0x8a5446, 0x8e6656, 0x7a4e42, 0xa88068, 0xa8947e, 0xc8bca8, 0x94604e, 0xd8d2c8],
-  brown: [0x7a4e3c, 0x8a5c44, 0x6e4636, 0x94664c],
+  brown: [0x5e3426, 0x6c3e2c, 0x523024, 0x74462f], // (vertex colours are linear: these read as chocolate sandstone on the pale ashlar cell)
   lime: [0xe6dcc6, 0xd6c8ac, 0xcfc2a8, 0xe8e2d4, 0xc8bca4, 0xdcd4c4],
   glass: [0x8fb0c8, 0x7aa0a8, 0xb4c2cc, 0x5a6c7c, 0x9aaabb, 0x9fb4a8, 0x6f8aa8, 0xc0c8cc],
   concrete: [0xd0ccc4, 0xb8b4ac, 0xdcd8d0, 0xc4c0b6],
@@ -269,15 +269,15 @@ export class CityScenery {
     const date = (R.flags >> 8) & 7, glassTag = R.flags & 4, brickTag = R.flags & 8, stoneTag = R.flags & 16, concTag = R.flags & 32, metalTag = R.flags & 64;
     let st; // { cell, col, bay, fl, ground: cell for the ground floor band, roof: 'flat' | 'gable' | 'hip', rcell, rcol, parapet }
     const kind = R.kind;
-    if (kind === 3) st = { cell: C.STONE_WIN, col: pick(PAL.lime, hseed), bay: 3, fl: 4.5 };
+    if (kind === 3) st = { cell: C.LIME_WIN, col: pick(PAL.lime, hseed), bay: 3, fl: 4.5 };
     else if (top >= 25 || tall) {
       let pg = date >= 6 ? 0.88 : date === 5 ? 0.6 : date === 4 ? 0.4 : date >= 1 ? 0.02 : top > 150 ? 0.72 : top > 70 ? 0.48 : 0.22;
       if (glassTag) pg = 1; else if (brickTag || stoneTag) pg = 0;
       if (h2 < pg || metalTag) st = { cell: C.GLASS, col: R.flags & 128 ? c565(R.col) : pick(PAL.glass, hseed), bay: 6, fl: 4, glass: true }; // (wide bays: fewer, bolder mullions, less moire far away)
       else if (date >= 1 && date <= 3 || (date === 0 && h3 < 0.62) || brickTag || stoneTag) {
-        // pre-war: limestone or brick, small windows, deep reveals
+        // pre-war: limestone (ashlar, tall sash windows under lintels) or brick, deep reveals
         const stone = stoneTag || (!brickTag && h3 < 0.5);
-        st = stone ? { cell: C.STONE_WIN, col: pick(PAL.lime, hseed), bay: 2.6, fl: 3.5 } : { cell: C.BRICK_WIN, col: pick(PAL.brick, hseed), bay: 2.8, fl: 3.3 };
+        st = stone ? { cell: C.LIME_WIN, col: pick(PAL.lime, hseed), bay: 2.6, fl: 3.5 } : { cell: C.BRICK_WIN, col: pick(PAL.brick, hseed), bay: 2.8, fl: 3.3 };
         st.prewar = true;
       } else st = { cell: concTag || h3 < 0.8 ? C.APT : C.WIN_TALL, col: pick(PAL.concrete, hseed), bay: 3, fl: 3.4 };
       if (top < 120 && !st.glass && kind !== 6 && hash(R.o, 3) < 0.6) st.ground = pick([C.SHOP_N, C.SHOP2_N, C.SHOP3_N, C.SHOP3_N], hash(R.o, 5));
@@ -289,11 +289,11 @@ export class CityScenery {
       st = { cell: C.CLAP_WIN, col: pick(PAL.siding, hseed), bay: 3, fl: 3, roof: h3 < 0.65 ? 'gable' : 'hip', rcell: h3 < 0.3 ? C.SHINGLE : C.SLATE, rcol: pick(PAL.roofs, h3) };
     } else if (A < 220 && top < 20) {
       // row houses: brownstones and brick
-      st = h2 < 0.35 ? { cell: C.STONE_WIN, col: pick(PAL.brown, hseed), bay: 2.4, fl: 3.4 } : { cell: C.BRICK_WIN, col: pick(PAL.brick, hseed), bay: 2.6, fl: 3.1 };
+      st = h2 < 0.35 ? { cell: C.BROWN_WIN, col: pick(PAL.brown, hseed), bay: 2.4, fl: 3.4 } : { cell: C.BRICK_WIN, col: pick(PAL.brick, hseed), bay: 2.6, fl: 3.1 };
       st.cornice = true;
     } else {
       // walk-ups, lofts, shops
-      st = h2 < 0.62 ? { cell: C.BRICK_WIN, col: pick(PAL.brick, hseed), bay: 2.8, fl: 3.2 } : h2 < 0.82 ? { cell: C.STONE_WIN, col: pick(PAL.lime, hseed), bay: 2.6, fl: 3.4 } : { cell: C.APT, col: pick(PAL.concrete, hseed), bay: 3, fl: 3.1 };
+      st = h2 < 0.62 ? { cell: C.BRICK_WIN, col: pick(PAL.brick, hseed), bay: 2.8, fl: 3.2 } : h2 < 0.82 ? { cell: C.LIME_WIN, col: pick(PAL.lime, hseed), bay: 2.6, fl: 3.4 } : { cell: C.APT, col: pick(PAL.concrete, hseed), bay: 3, fl: 3.1 };
       if (kind === 5 || (kind === 7 && h3 < 0.45)) st.ground = pick([C.SHOP_N, C.SHOP2_N, C.SHOP3_N, C.SHOP, C.SHOP2], hash(R.o, 5));
       st.cornice = true;
     }
@@ -326,12 +326,12 @@ export class CityScenery {
     };
     ring(P, false); for (const h of holes) ring(h, true);
     // ---- roof
-    const flatCell = st.glass ? C.SEAM : h3 < 0.6 ? C.ASPHALT : C.GRAVEL; // tar and gravel roofs (the photo cells are bright: the tint barely reaches them)
+    const flatCell = st.glass ? C.SEAM : h3 < 0.6 ? C.ROOF_TAR : C.ROOF_GRAVEL; // tar and gravel roofs (roof cells: the tint below decides how dark)
     if (roof === 'flat') {
       const parapet = this.detail && (tall || A > 120) && !part ? (st.glass ? 1.2 : st.cornice || st.prewar ? 1.0 : 0.9) : 0;
       if (parapet) {
         M.color(st.glass ? 0x9aa0a6 : st.col);
-        for (let k = 0; k < P.length; k++) { const a = P[k], b = P[(k + 1) % P.length]; M.wall(b[0], b[1], a[0], a[1], eave, eave + parapet, eave, st.glass ? C.METAL : st.cell === C.BRICK_WIN ? C.BRICK : st.cell === C.CLAP_WIN ? C.CLAP : C.STONE, 3, 3); }
+        for (let k = 0; k < P.length; k++) { const a = P[k], b = P[(k + 1) % P.length]; M.wall(b[0], b[1], a[0], a[1], eave, eave + parapet, eave, st.glass ? C.METAL : st.cell === C.BRICK_WIN ? C.BRICK : st.cell === C.CLAP_WIN ? C.CLAP : C.LIME, 3, 3); }
       }
       M.color(st.glass ? 0x6e7074 : pick([0x6a6660, 0x5c5a56, 0x76706a, 0x54524f, 0x4a4846], h3)); // tar, gravel, concrete
       M.roof(P, holes, eave, flatCell);
@@ -340,8 +340,8 @@ export class CityScenery {
         const b = box || obb(P);
         if (b && A / b.ar > 0.6) {
           if (tall && top > 35 && hash(R.o, 17) < 0.7) {
-            M.color(st.glass ? 0x9aa0a6 : pick(PAL.concrete, h3));
-            M.box(b.cx, b.cz, b.ux, b.uz, b.hl * 0.45, b.hw * 0.5, eave, eave + 4 + h3 * 3, st.glass ? C.METAL : C.CONCRETE);
+            M.color(st.glass ? 0x9aa0a6 : pick([0x8a8680, 0x7a7670, 0x969088], h3)); // (on a tinted cell: not the near-white concrete photo from the air)
+            M.box(b.cx, b.cz, b.ux, b.uz, b.hl * 0.45, b.hw * 0.5, eave, eave + 4 + h3 * 3, st.glass ? C.METAL : C.LIME);
           }
           if (!st.glass && top > 14 && top < 90 && hash(R.o, 19) < (st.prewar || st.cornice ? 0.45 : 0.15)) { this.waterTower(M, b, eave, hash(R.o, 23)); wt = true; }
         }
@@ -353,7 +353,7 @@ export class CityScenery {
       // spires and domes over the footprint: to the centroid
       let cx = 0, cz = 0; for (const p of P) { cx += p[0]; cz += p[1]; } cx /= P.length; cz /= P.length;
       M.color(st.glass ? 0xb8c0c8 : st.col);
-      const rows = roof === 'dome' ? 4 : 1, cell = st.glass ? C.METAL : C.STONE;
+      const rows = roof === 'dome' ? 4 : 1, cell = st.glass ? C.METAL : C.LIME;
       for (let r = 0; r < rows; r++) {
         const t0 = r / rows, t1 = (r + 1) / rows, s0 = roof === 'dome' ? Math.cos(t0 * Math.PI / 2) : 1 - t0, s1 = roof === 'dome' ? Math.cos(t1 * Math.PI / 2) : 1 - t1;
         const y0 = eave + rise * (roof === 'dome' ? Math.sin(t0 * Math.PI / 2) : t0), y1 = eave + rise * (roof === 'dome' ? Math.sin(t1 * Math.PI / 2) : t1);
