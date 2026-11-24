@@ -54,10 +54,13 @@ Tests are in two tiers.
 
 **Known failures:** `tools/test/known.json` lists failing checks that are already tracked (suite → check name →
 issue). The Node runner reports them as `known` and doesn't count them. A listed check that passes is reported as
-`fixed` (take it off the list). **CI** (`.github/workflows/smoke.yml`, "Tests") runs on every PR as three parallel
+`fixed` (take it off the list). **CI** (`.github/workflows/smoke.yml`, "Tests") runs on every PR as parallel
 jobs: the smoke tour (3 parts), the Node tier (2 halves, `run.mjs --shard K/N`), and the browser suites covering
-what the PR changed (`run.py --ci --changed --tier browser`). In all, about 4 minutes. Every browser suite runs nightly
-on main (`.github/workflows/nightly.yml`).
+what the PR changed, one job each (`run.py --changed --tier browser --plan` lists them, then `run.py --ci <suite>`).
+In all, about 6 minutes. Every browser suite runs nightly on main (`.github/workflows/nightly.yml`).
+Where a runner's time goes: it has no GPU, so Chrome's software GPU builds every shader program a new place needs
+(~100 at Low, ~0.3 s each), and drawing is a small part. So `--ci` runs padcheck and helipadcheck at Low, and anything
+that reads a canvas back (`getImageData`) asks for `willReadFrequently`, or it waits for that shader queue.
 
 `bikeride` is the reference Node suite: 77 checks in about 2.5 s, against 28 s in Chrome. Its results are identical
 with and without `headless`.

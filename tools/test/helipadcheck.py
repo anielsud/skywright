@@ -28,7 +28,7 @@ import argparse, asyncio, json, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smoke import free_port, start_server  # noqa: E402
-from padcheck import session, spawns_ref, spawns, check_predicted, check_spawns  # noqa: E402
+from padcheck import QUALITY, session, spawns_ref, spawns, check_predicted, check_spawns  # noqa: E402
 
 OTHERS = ['Kestrel', 'Dune Buggy']  # really started at New York: where the start rule says, not on the helipad
 
@@ -40,7 +40,9 @@ def main():
     ap.add_argument('--port', type=int)
     ap.add_argument('--realism', action='append', help='pilot / arcade / sim (repeatable; default pilot and arcade)')
     ap.add_argument('--json', help='write the full report here')
+    ap.add_argument('--quality', choices=['low', 'medium', 'high'], default='medium', help='graphics tier (default medium; CI: low)')
     a = ap.parse_args()
+    QUALITY['tier'] = a.quality
     port = a.port or free_port()
     srv = None if a.url else start_server(port)
     origin = (a.url or f'http://127.0.0.1:{port}').rstrip('/')

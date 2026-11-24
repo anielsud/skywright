@@ -100,7 +100,7 @@ const LAYOUTS = new Map(); const layoutOf = (name) => { if (!LAYOUTS.has(name)) 
 
 function drawAtlas() {
   const mk = () => { const c = document.createElement('canvas'); c.width = S; c.height = SH; return c; };
-  const cA = mk(), cE = mk(), cR = mk(), g = cA.getContext('2d'), e = cE.getContext('2d'), ro = cR.getContext('2d');
+  const cA = mk(), cE = mk(), cR = mk(), g = cA.getContext('2d', { willReadFrequently: true }), e = cE.getContext('2d'), ro = cR.getContext('2d', { willReadFrequently: true });
   g.fillStyle = '#1a1c1f'; g.fillRect(0, 0, S, SH); e.fillStyle = '#000'; e.fillRect(0, 0, S, SH);
   ro.fillStyle = 'rgb(0,175,0)'; ro.fillRect(0, 0, S, SH); // (roughness in G: 0.69 painted panels; glass and screens glossy)
   const gloss = (x, y, w, h, v, round = false) => { ro.fillStyle = `rgb(0,${Math.round(v * 255)},0)`; if (round) { ro.beginPath(); ro.arc(x, y, w, 0, Math.PI * 2); ro.fill(); } else ro.fillRect(x, y, w, h); };

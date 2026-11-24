@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smoke import CDP, Problems, free_port, start_server, launch_chrome  # noqa: E402
 
 LOCS = ['islands', 'canyon', 'nyc', 'lauterbrunnen', 'alpine']  # alpine is hidden from the picker but still loadable
+QUALITY = {'tier': 'medium'}  # the graphics tier every session uses (--quality; run.py --ci: low, a CI runner builds shaders in software)
 
 
 async def session(origin, fn):
@@ -41,7 +42,7 @@ async def session(origin, fn):
             await cdp.send('Network.setCacheDisabled', cacheDisabled=True)
             await cdp.send('Page.navigate', url=origin + '/')
             await cdp.wait_for('window.__sky && window.__sky.presets.length && !document.getElementById("splash")', 60, 'the app to boot')
-            await cdp.js("window.__sky.settings.quality = 'medium'; 1")  # (the same tier on both sides of a --ref comparison)
+            await cdp.js(f"window.__sky.settings.quality = {json.dumps(QUALITY['tier'])}; 1")  # (the same tier on both sides of a --ref comparison)
             return await fn(cdp, probs)
     finally:
         proc.kill(); proc.wait(); shutil.rmtree(profile, ignore_errors=True)
@@ -87,7 +88,9 @@ def main():
     ap.add_argument('--url', help='check an already running server instead of serving this checkout')
     ap.add_argument('--port', type=int)
     ap.add_argument('--json', help='write the full report here')
+    ap.add_argument('--quality', choices=['low', 'medium', 'high'], default='medium', help='graphics tier (default medium; CI: low)')
     a = ap.parse_args()
+    QUALITY['tier'] = a.quality
     locs = a.only or LOCS
     port = a.port or free_port()
     srv = None if a.url else start_server(port)
