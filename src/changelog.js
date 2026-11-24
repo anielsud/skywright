@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.160.0', items: [
+    "The airport has proper runway lights, approach lights you fly in over, and real airport signs by the taxiways.",
+    "Look for the radio antennas at the end of each runway and the red-and-white mast that helps planes land.",
+  ] },
   { v: '1.159.0', items: [
     "Up close, the ground beside the roads now has real banks and cuttings, so the land meets the road instead of floating next to it.",
   ] },
