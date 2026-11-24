@@ -58,14 +58,14 @@ export function tarmacMaterial(region) {
   const L = LOOK[region] || LOOK.ch;
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
   const U = { rD: { value: tex('asphalt_d', true) }, rN: { value: tex('asphalt_n') }, rTint: { value: new THREE.Color(...L.tint) }, rWear: { value: L.wear },
-    rLW: { value: L.lw }, rDash: { value: new THREE.Vector4(...L.dash) }, rYellow: { value: L.yellow ? 1 : 0 } };
+    rLW: { value: L.lw }, rDash: { value: new THREE.Vector4(...L.dash) }, rYellow: { value: L.yellow ? 1 : 0 }, rRegion: { value: { ch: 0, us: 1, fr: 2 }[region] ?? 0 } };
   mat.userData.U = U;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, U); // (FOG: the game's height fog, shaders.js installFog: a material with its own hook must add it)
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 rinfo; varying vec2 vR; varying vec3 vI; varying vec3 vWP;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvR = uv; vI = rinfo; vWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 rinfo; attribute vec4 rjunc; varying vec2 vR; varying vec3 vI; varying vec3 vWP; varying vec4 vJ;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvR = uv; vI = rinfo; vJ = rjunc; vWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-      varying vec2 vR; varying vec3 vI; varying vec3 vWP; uniform sampler2D rD; uniform sampler2D rN; uniform vec3 rTint; uniform float rWear; uniform float rLW; uniform vec4 rDash; uniform float rYellow;
+      varying vec2 vR; varying vec3 vI; varying vec3 vWP; varying vec4 vJ; uniform float rRegion; uniform sampler2D rD; uniform sampler2D rN; uniform vec3 rTint; uniform float rWear; uniform float rLW; uniform vec4 rDash; uniform float rYellow;
       ${NOISE}
       // coverage of a line of width w centred at c across x (antialiased; thinner than a pixel: its average)
       // (derivatives taken once, up front: fwidth inside branches or after a discard is undefined)
@@ -112,10 +112,40 @@ export function tarmacMaterial(region) {
             float c = oneWay > 0.5 ? -hw + 2.0 * hw * float(k) / n : hw * float(k) / n;
             paint = max(paint, lineAA(oneWay > 0.5 ? x : ax, c, lw) * dashAA(v, rDash.z, rDash.w)); }
         }
-        if (edgeOn > 0.5 && edgeOn < 1.5) paint = max(paint, lineAA(ax, hw - 0.35, lw));
+        // junctions (rjunc, roads.js junctionPoints): the nearer one, its clearance r and flags
+        bool nextNear = vJ.y < vJ.x; float dj = min(vJ.x, vJ.y), jc = nextNear ? vJ.w : vJ.z, jr = floor(jc / 32.0) / 4.0, jf = mod(jc, 32.0);
+        float jStop = mod(jf, 2.0), jWalk = mod(floor(jf / 2.0), 2.0), mouthP = mod(floor(jf / 4.0), 2.0), mouthN = mod(floor(jf / 8.0), 2.0);
+        float inJ = jc > 0.5 ? 1.0 - smoothstep(jr - 0.3, jr + 0.3, dj) : 0.0; // inside the crossing road: no lines
+        paint *= 1.0 - inJ; yel *= 1.0 - inJ;
+        float mouth = jc > 0.5 ? 1.0 - smoothstep(jr + 1.0, jr + 1.6, dj) : 0.0; // the edge lines open for the side road
+        float edgeP = 1.0 - mouth * mouthP, edgeN = 1.0 - mouth * mouthN;
+        if (edgeOn > 0.5 && edgeOn < 1.5) paint = max(paint, lineAA(ax, hw - 0.35, lw) * (x > 0.0 ? edgeP : edgeN));
         if (edgeOn > 1.5) { // a divided road's carriageway: the median side yellow (US), the outside white
           float ms = edgeOn < 2.5 ? 1.0 : -1.0, med = lineAA(x * ms, hw - 0.5, lw), outer = lineAA(x * ms, -(hw - 0.35), lw);
           paint = max(paint, outer); yel = max(yel, med * rYellow); paint = max(paint, med * (1.0 - rYellow)); }
+        // crossings and the line where traffic stops or gives way, on the approach to a junction
+        float jPaint = 0.0, jYel = 0.0;
+        if (jc > 0.5) {
+          float wc = rRegion > 0.5 && rRegion < 1.5 ? 3.0 : 4.0, c0 = jr + 0.6, c1 = c0 + wc, fwv = max(gFv, 1e-4);
+          float band = jWalk * clamp((dj - c0) / fwv + 0.5, 0.0, 1.0) * clamp((c1 - dj) / fwv + 0.5, 0.0, 1.0);
+          if (band > 0.0) { // zebra bars along the road: white 0.6 / 0.6 m (US), yellow 0.5 / 0.5 m (Swiss), white (France)
+            float per = rRegion > 0.5 && rRegion < 1.5 ? 1.2 : 1.0, bar = lineAA(mod(x + hw + 0.25, per), per * 0.5, per * 0.5) * step(ax, hw - 0.3);
+            if (rRegion < 0.5) jYel = band * bar; else jPaint = band * bar;
+            paint *= 1.0 - band; yel *= 1.0 - band;
+          }
+          float r0 = jWalk > 0.5 ? c1 + 1.0 : c0, oneWay = step(2.5, cKind) + step(1.5, edgeOn);
+          float lane = oneWay > 0.5 ? step(ax, hw - 0.3) : (nextNear ? step(0.15, x) : step(x, -0.15)) * step(ax, hw - 0.3);
+          if (jStop > 0.5 && lane > 0.0) {
+            if (rRegion > 0.5 && rRegion < 1.5) { // US: a solid white stop line, 45 cm
+              jPaint = max(jPaint, clamp((dj - r0) / fwv + 0.5, 0.0, 1.0) * clamp((r0 + 0.45 - dj) / fwv + 0.5, 0.0, 1.0) * lane);
+            } else { // Swiss / French: give way, a row of triangles pointing at the oncoming driver
+              float t = (dj - r0) / 0.6, u = abs(fract(x / 1.0) - 0.5);
+              jPaint = max(jPaint, step(0.0, t) * step(t, 1.0) * clamp((0.25 * (1.0 - t) - u) / max(gFx, 1e-4) + 0.5, 0.0, 1.0) * lane);
+            }
+            paint *= 1.0 - step(abs(dj - r0 - 0.3), 0.6) * lane;
+          }
+        }
+        paint = max(paint, jPaint); yel = max(yel, jYel);
         // worn paint: thinned where the tyres run, and patchy
         float wear = rWear * (0.35 + 0.65 * fbm(vec2(x * 3.0, v * 0.7) + seed)) * (0.5 + 0.5 * tracks);
         float keep = 1.0 - smoothstep(0.25, 0.75, wear) * 0.8;

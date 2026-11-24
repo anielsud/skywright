@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.164.0', items: [
+    "Junctions have proper markings now: zebra crossings and stop lines in New York, give-way triangles and yellow crossings in Switzerland.",
+  ] },
   { v: '1.163.1', items: [
     "No more little stutter just after take-off when the cars on the road appear: they're there from the start now, even on slower tablets.",
   ] },
