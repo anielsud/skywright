@@ -28,12 +28,16 @@ const C_NONE = 0, C_DASH = 1, C_DOUBLE = 2, C_LANES = 3; // C_LANES: one-way, da
 // yellow there, white outside; elsewhere white both sides)
 export function roadStyle(region, rd, city) {
   const w = rd.width, narrow = w < 6.2 || rd.lane;
-  let center = C_NONE, edge = 0, lanes = 1;
-  if (rd.median) { lanes = w >= 10 ? 3 : w >= 6.5 ? 2 : 1; return (lanes > 1 ? C_LANES : C_NONE) + 8 * (rd.median > 0 ? 2 : 3) + 32 * lanes; }
-  if (region === 'us') {
-    if (city) { lanes = w >= 11 ? 3 : w >= 8 ? 2 : 1; center = lanes > 1 ? C_LANES : C_NONE; edge = rd.kind === 'highway' ? 1 : 0; }
-    else if (!narrow) { center = C_DOUBLE; edge = 1; lanes = w >= 13 ? 2 : 1; }
-  } else if (!narrow && rd.kind !== 'street') { center = C_DASH; edge = region === 'ch' && w >= 7 ? 1 : 0; lanes = w >= 13 ? 2 : 1; }
+  // lanes each way: OSM's lanes where mapped, else from the width
+  const perDir = (two) => (rd.lanes ? Math.max(1, Math.round(rd.lanes / (two ? 2 : 1))) : two ? (w >= 13 ? 2 : 1) : w >= 10 ? 3 : w >= 6.5 ? 2 : 1);
+  // one-way (OSM's oneway: a divided road's carriageway, most of Manhattan's streets): lane lines only; the left edge
+  // (US: yellow, MUTCD) is -x when traffic runs along the road's points (+x is the driver's right), +x when against
+  const ow = rd.oneway || (rd.median ? (rd.median > 0 ? -1 : 1) : 0);
+  if (ow) { const lanes = Math.min(3, perDir(false)); return (lanes > 1 ? C_LANES : C_NONE) + 8 * (ow > 0 ? 3 : 2) + 32 * lanes; }
+  let center = C_NONE, edge = 0;
+  const lanes = Math.min(3, perDir(true));
+  if (region === 'us') { if (!narrow) { center = C_DOUBLE; edge = city ? (rd.kind === 'highway' ? 1 : 0) : 1; } }
+  else if (!narrow && rd.kind !== 'street') { center = C_DASH; edge = region === 'ch' && w >= 7 ? 1 : 0; }
   else if (!narrow && region !== 'ch') center = C_DASH;
   return center + 8 * edge + 32 * lanes;
 }
