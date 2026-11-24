@@ -9,10 +9,11 @@ import * as THREE from 'three';
 import { C } from './buildings.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { airportGate } from './airportKit.js';
+import { tarmacMaterial, roadStyle, REGION } from './roadSurface.js';
 
 export const INFIELD = { x0: -250, x1: 450, z: 1150 }; // World.rawHeight's level box (x 100 ± 350, |z| < RWY.len / 2 + 250)
 export const FENCE = { x0: -330, x1: 555, z: 1235, gate: 12 }; // gate: half width of the landside road's opening
-export const ROAD = { x0: 331, w: 9 }; // the landside road: from the terminal's kerb east to the gate
+export const ROAD = { x0: 331, w: 8 }; // the landside road: from the terminal's kerb east to the gate
 
 const canvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('2d')]; };
 const tex = (c, srgb = true) => { const t = new THREE.CanvasTexture(c); if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; };
@@ -82,17 +83,6 @@ function chainTexture() {
   }
   const t = tex(c); t.wrapS = THREE.RepeatWrapping; return t;
 }
-// landside road: asphalt, white edge lines, dashed centre
-function roadTexture() {
-  const [c, g] = canvas(64, 256);
-  if (g?.fillRect) {
-    g.fillStyle = '#4a4b4e'; g.fillRect(0, 0, 64, 256);
-    for (let k = 0; k < 900; k++) { g.fillStyle = `rgba(${Math.random() < 0.5 ? '30,30,32' : '110,110,112'},0.25)`; g.fillRect(Math.random() * 64, Math.random() * 256, 1, 1); }
-    g.fillStyle = '#e4e4de'; g.fillRect(3, 0, 2, 256); g.fillRect(59, 0, 2, 256); for (let y = 0; y < 256; y += 64) g.fillRect(31, y, 2, 32);
-  }
-  const t = tex(c); t.wrapT = THREE.RepeatWrapping; return t;
-}
-
 // A: the airport's Builder (fence posts and the gate go into its merged geometry), y: runway height.
 // Returns { meshes: [Mesh...], fenceSegs, roadPts: [[x, z]...] (the landside road's centreline) }.
 export function buildAirportGround(W, A, y, RWY) {
@@ -155,19 +145,19 @@ export function buildAirportGround(W, A, y, RWY) {
 
   // ---- landside road: from the terminal's kerb east through the fence to the gate ----
   const roadPts = [];
-  if (gate) {
-    const pos = [], uv = [], z = gate.z, hw = ROAD.w / 2, x1 = gate.x + 6;
-    let v = 0;
+  if (gate) { // (the road surface the road network uses, roadSurface.js: uv = metres across, metres along; rinfo = half width, markings, seed)
+    const pos = [], uv = [], ri = [], z = gate.z, hw = ROAD.w / 2, x1 = gate.x + 6, region = REGION[W.loc.id] || 'ch', info = [hw, roadStyle(region, { width: ROAD.w, kind: 'main' }, false), 41];
     for (let x = ROAD.x0; x < x1; x += 8) {
-      const xb = Math.min(x1, x + 8), ga = ground(x, z) + 0.06, gb = ground(xb, z) + 0.06, dv = (xb - x) / 16;
-      pos.push(x, ga, z + hw, xb, gb, z + hw, xb, gb, z - hw, x, ga, z + hw, xb, gb, z - hw, x, ga, z - hw);
-      uv.push(0, v, 0, v + dv, 1, v + dv, 0, v, 1, v + dv, 1, v); v += dv;
+      const xb = Math.min(x1, x + 8), ga = ground(x, z) + 0.06, gb = ground(xb, z) + 0.06, da = x - ROAD.x0, db = xb - ROAD.x0;
+      // (across: +hw on the north side, so the markings run the same way as the network's roads)
+      pos.push(x, ga, z - hw, xb, gb, z + hw, xb, gb, z - hw, x, ga, z - hw, x, ga, z + hw, xb, gb, z + hw); // (counter-clockwise from above)
+      uv.push(hw, da, -hw, db, hw, db, hw, da, -hw, da, -hw, db);
+      for (let k = 0; k < 6; k++) ri.push(...info);
       roadPts.push([x, z]);
     }
     roadPts.push([x1, z]);
-    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); geo.computeVertexNormals();
-    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }));
-    m.receiveShadow = true; m.name = 'landside road'; meshes.push(m);
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); geo.setAttribute('rinfo', new THREE.Float32BufferAttribute(ri, 3)); geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, tarmacMaterial(region)); m.receiveShadow = true; m.name = 'landside road'; meshes.push(m);
   }
   return { meshes, fenceSegs: segs, roadPts, gate };
 }

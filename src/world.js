@@ -24,6 +24,7 @@ import { Landcover } from './landcover.js';
 import { LaunchPad } from './launchpad.js';
 import { buildAirfieldKit, CONNECTORS, TAXI, airportGate } from './airportKit.js';
 import { buildAirportGround, gateLevel } from './airportGround.js';
+import { buildTerminalArea } from './airportBuildings.js';
 import { Helipads } from './helipad.js';
 import { StuntParks, planStunts, padsHeight } from './stuntPark.js';
 import { roadStart } from './landStart.js';
@@ -948,7 +949,7 @@ export class World {
     return t;
   }
   buildAirport() {
-    const y = this.loc.rwyH, A = new Builder(), Dt = new Builder(), F = -Math.PI / 2; // F: buildings whose front faces the apron (-x)
+    const y = this.loc.rwyH, A = new Builder(), F = -Math.PI / 2; // F: buildings whose front faces the apron (-x)
     // big hangars with arched roofs and sliding doors
     const hangar = (x, z, w, d, h, rise, col) => {
       A.setFrame(x, y, z, F); A.seed = 7;
@@ -969,31 +970,21 @@ export class World {
     A.setFrame(310, y, -176, F); A.walls(46, 20, -0.5, 4.6, C.METAL, 0xd8d0c0, { front: C.GARAGE }); A.gable(46, 20, 4.6, 1.2, 0.5, C.SEAM, 0x8a3a30, C.METAL, 0xd8d0c0);
     // maintenance / cargo shed behind the hangars
     A.setFrame(380, y, -80, F); A.walls(50, 30, -0.5, 8, C.METAL, 0xb8c0b0, { front: C.HANGAR_DOOR }); A.gable(50, 30, 8, 3, 0.5, C.SEAM, 0x9aa0a6, C.METAL, 0xb8c0b0);
-    // terminal: two storeys of glass facing the apron, offices behind, flat roof with plant
-    A.setFrame(315, y, 120, F); A.seed = 40;
-    A.walls(110, 30, -0.5, 3.6, C.APT, 0xe8e4dc, { front: C.GLASS, back: C.GLASS, fl: 3.6 });
-    A.walls(110, 30, 3.6, 9.4, C.APT, 0xe8e4dc, { front: C.GLASS, fl: 3.6 }); A.flat(110, 30, 8.6, 0.8, C.GRAVEL, 0xffffff, C.PLAIN, 0xe8e4dc);
-    A.box(0, 8.6, -4, 60, 1.6, 10, C.CONCRETE, 0xd8d8d8); for (let k = 0; k < 4; k++) Dt.setFrame(315, y, 120, F), Dt.box(-36 + k * 24, 10.2, -4, 5, 1.6, 4, C.METAL, 0xb0b4b8);
-    A.box(0, 3.4, -18, 30, 0.5, 6, C.PLAIN, 0xf4f4f0, { bottom: true }); // landside entrance canopy
+    // terminal, control tower and radar (src/airportBuildings.js)
+    const TA = buildTerminalArea(A, y);
     // fire station with tall hose tower
     A.setFrame(190, y, 236, Math.PI); A.seed = 90; A.walls(26, 14, -0.5, 4.5, C.BRICK_WIN, 0xffffff, { front: C.GARAGE }); A.walls(26, 14, 4.5, 7.6, C.BRICK_WIN, 0xffffff); A.flat(26, 14, 7, 0.6, C.GRAVEL, 0xffffff, C.BRICK, 0xffffff);
     A.box(10, -0.5, -4, 4, 13, 4, C.BRICK, 0xffffff, { topCell: C.SEAM, topCol: 0x777777 }); A.plainQuad([-12, 5.2, 7.05], [6, 5.2, 7.05], [6, 6.4, 7.05], [-12, 6.4, 7.05], C.PLAIN, 0xc8282e);
-    // control tower: concrete shaft, office block at its foot, glass cab
-    A.setFrame(255, y, 218, F); A.seed = 3;
-    A.walls(16, 10, -0.5, 4, C.APT, 0xe4e0d8, { front: C.GLASS, door: C.DOOR }); A.flat(16, 10, 3.5, 0.5, C.GRAVEL, 0xffffff, C.PLAIN, 0xe4e0d8);
-    A.box(0, -0.5, -1, 5, 25, 5, C.CONCRETE, 0xe8e4dc, { top: false });
-    A.cyl(0, -1, 24.5, 25.6, 3.6, 5.2, 8, C.CONCRETE, 0xd8d4cc);
-    A.cyl(0, -1, 25.6, 29.4, 5.2, 5.6, 8, C.GLASS, 0xffffff); A.cyl(0, -1, 29.4, 30.2, 6.2, 6.2, 8, C.CONCRETE, 0x3a3c40, { cap: true, capCell: C.CONCRETE, capCol: 0x55585c });
-    Dt.setFrame(255, y, 218, F); Dt.box(1.5, 30.2, -1, 0.15, 5, 0.15, C.METAL, 0xdddddd); Dt.box(-2, 30.2, 0, 1.2, 0.8, 1.2, C.METAL, 0xcccccc);
     // fuel farm
     A.setFrame(0, y, 0, 0);
     for (let k = 0; k < 3; k++) { A.cyl(360 + k * 13, -200, -0.3, 9, 5, 5, 16, C.SEAM, 0xf2f2ee, { cap: true, capCol: 0xd8d8d4 }); A.cyl(360 + k * 13, -200, 6.5, 7.4, 5.05, 5.05, 16, C.PLAIN, 0xc8282e); }
     A.box(373, -0.5, -186, 30, 1.0, 1.0, C.CONCRETE, 0xbbbbbb);
     // landside car park
-    A.plainQuad([338, 0.04, 112], [366, 0.04, 112], [366, 0.04, 52], [338, 0.04, 52], C.CONCRETE, 0x5a5a5c);
+    A.plainQuad([346, 0.04, 112], [376, 0.04, 112], [376, 0.04, 52], [346, 0.04, 52], C.CONCRETE, 0x5a5a5c); // (east of the kerb canopy)
     const mat = buildingMaterial({ cellPx: { low: 128, medium: 192, ultra: 384 }[this.qName] ?? 256, interiors: this.qName !== 'low' }); // same atlas as the towns
     this.windowMats = [mat];
-    this.beacon = new THREE.Mesh(new THREE.SphereGeometry(0.6, 8, 6), M.light(0x40ff80).clone()); this.beacon.position.set(256, y + 30.9, 216.5); this.group.add(this.beacon);
+    this.beacon = new THREE.Mesh(new THREE.SphereGeometry(0.6, 8, 6), M.light(0x40ff80).clone()); this.beacon.position.copy(TA.beacon); this.group.add(this.beacon);
+    this.radar = TA.radar; this.radar.material = mat; this.group.add(this.radar);
     // name board on the terminal roof, lit at night
     {
       const c = document.createElement('canvas'); c.width = 1024; c.height = 128; const g = c.getContext('2d');
@@ -1001,8 +992,8 @@ export class World {
       const ce = document.createElement('canvas'); ce.width = 1024; ce.height = 128; const ge = ce.getContext('2d'); ge.fillStyle = '#000'; ge.fillRect(0, 0, 1024, 128); ge.font = g.font; ge.textAlign = 'center'; ge.textBaseline = 'middle'; ge.fillStyle = '#fff'; ge.fillText(txt, 512, 68);
       const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
       const sm = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, emissive: 0x9cc8ff, emissiveMap: new THREE.CanvasTexture(ce), emissiveIntensity: 0 }); this.windowMats.push(sm);
-      const sign = new THREE.Mesh(new THREE.PlaneGeometry(48, 6), sm); sign.rotation.y = -Math.PI / 2; sign.position.set(299.6, y + 13.2, 120); this.group.add(sign);
-      A.setFrame(0, y, 0, 0); A.box(299.9, 10, 120, 0.4, 6.4, 48.4, C.CONCRETE, 0x55595e); for (const z of [104, 136]) A.box(300.2, 8.6, z, 0.3, 1.5, 0.3, C.METAL, 0x55595e);
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(48, 6), sm); sign.rotation.y = -Math.PI / 2; const nb = TA.nameBoard; sign.position.set(nb.x, nb.y, nb.z); this.group.add(sign); // (on the vault's eave, facing the apron)
+      A.setFrame(0, y, 0, 0); A.box(nb.x + 0.3, nb.y - y - 3.2, nb.z, 0.4, 6.4, 48.4, C.CONCRETE, 0x55595e); for (const z of [nb.z - 16, nb.z + 16]) A.box(nb.x + 0.6, nb.y - y - 4.6, z, 0.3, 1.6, 0.3, C.METAL, 0x55595e);
     }
     // apron flood-light masts (lamps join the night lights)
     const fp = [], fc = [];
@@ -1015,11 +1006,10 @@ export class World {
     // the airfield's ground: mown infield, shoulders, blast pads, perimeter fence, landside road (src/airportGround.js)
     this.airportGround = buildAirportGround(this, A, y, RWY); for (const m of this.airportGround.meshes) this.group.add(m);
     // the airfield's furniture: light fixtures, approach lights, PAPI housings, signs, ILS (src/airportKit.js)
-    const kit = buildAirfieldKit(this, A, y);
+    const kit = buildAirfieldKit(this, A, y, TA.signs);
     this.airfield = kit; this.windowMats.push(kit.signMat); kit.signs.receiveShadow = true; this.group.add(kit.signs);
     { const g = new THREE.BufferGeometry(), c = new THREE.Color(); g.setAttribute('position', new THREE.Float32BufferAttribute(kit.points.flatMap((p) => p.slice(0, 3)), 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(kit.points.flatMap((p) => c.set(p[3]).toArray()), 3)); this.group.add(new THREE.Points(g, this.lightsMat)); }
     const shell = new THREE.Mesh(A.toGeometry(), mat); shell.castShadow = shell.receiveShadow = true; this.group.add(shell);
-    const det = new THREE.Mesh(Dt.toGeometry(), mat); det.castShadow = true; this.group.add(det);
     // windsock
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 8, 8), M.paint(0xdddddd)); pole.position.set(-45, y + 4, 600); this.group.add(pole);
     const sockG = new THREE.ConeGeometry(0.7, 4, 12, 5, true); sockG.rotateX(-Math.PI / 2); sockG.translate(0, 0, 2);
@@ -1238,6 +1228,8 @@ export class World {
     // windsock
     const w = this.windBase.clone().add(this.gust);
     if (w.lengthSq() > 0.01) { this.sock.lookAt(this.sock.position.clone().add(w)); this.sock.rotateX(-0.35 * Math.max(0, 1 - w.length() / 12)); }
+    // radar antenna turning (15 rpm)
+    if (this.radar) this.radar.rotation.y = this.t * 1.57;
     // beacon
     this.beacon.material.color.setHex(Math.floor(this.t * 1.2) % 2 ? 0x40ff80 : 0xffffff).multiplyScalar(5);
     // PAPI
