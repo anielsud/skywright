@@ -369,10 +369,9 @@ export class RealScenery {
       B.panel([x1 + 0.05, y, -hl], [x1 + 0.05, y, hl], [x1 + 0.05, y + 1, hl], [x1 + 0.05, y + 1, -hl], C.RAIL_IRON, 0x4a3a2c, 3, [0, 0, L, 0, L, 1, 0, 1]);
       const m = Math.max(2, Math.round((2 * hl) / 5) + 1);
       for (let k = 0; k < m; k++) post(x1 + 0.15, -hl + 0.3 + ((2 * hl - 0.6) * k) / (m - 1), C.DARKWOOD, 0x6a4a30);
-    } else { // a veranda: a low floor along the side, white posts at its edge
+    } else { // a veranda: a low floor along the side (its top: 15 cm above the ground at the low corner), white posts at its edge
       const x0 = -(hw + deep - 0.3), y = 0.75;
       face(B, [[x0 - 0.15, y, -hl], [-hw, y, -hl], [-hw, y, hl], [x0 - 0.15, y, hl]], C.CONCRETE, 0xd8d2c8, 0, 1, 0);
-      face(B, [[x0 - 0.15, 0, -hl], [x0 - 0.15, 0, hl], [x0 - 0.15, y, hl], [x0 - 0.15, y, -hl]], C.CONCRETE, 0xc8c2b8, -1, 0, 0);
       for (const z of hl > 6 ? [-hl + 0.3, 0, hl - 0.3] : [-hl + 0.3, hl - 0.3]) post(x0, z, C.TRIM, 0xf2f0ea);
     }
   }
