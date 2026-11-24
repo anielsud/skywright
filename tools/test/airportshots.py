@@ -4,12 +4,13 @@ python3 tools/test/airportshots.py [REPO] OUTDIR TAG [--locs a,b] [--q low,high]
 REPO defaults to this checkout (give another checkout's path to photograph its code, e.g. main for a baseline).
 Views: start (the runway start's own camera), hold (cockpit height at the 36R threshold), roll (mid takeoff roll
 glancing at the terminal), back (300 m climb-out look-back), side (over the runways at the apron), final (short final
-over the approach lights), signs (taxiing towards connector B's hold point), loc (localizer), gs (glideslope + PAPI). One flight per place, time and quality,
+over the approach lights), signs (taxiing towards connector B's hold point), loc (localizer), gs (glideslope + PAPI), gate (landside road and fence). One flight per place, time and quality,
 paused; the camera is moved and the world streamed to it before each shot."""
 import asyncio, os, sys, tempfile, shutil, json, argparse
 p = argparse.ArgumentParser(); p.add_argument('args', nargs='+')
 p.add_argument('--locs', default='lauterbrunnen,islands,canyon,nyc'); p.add_argument('--q', default='high'); p.add_argument('--times', default='11,21')
 p.add_argument('--views', default='start,hold,roll,back,side'); p.add_argument('--size', default='1280,800'); p.add_argument('--design', default='Kestrel')
+p.add_argument('--js', default='', help='JavaScript run in the page after each flight starts (W = the World), e.g. to try a material setting')
 a = p.parse_args()
 if len(a.args) == 2: a.args.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 a.repo, a.out, a.tag = a.args
@@ -27,6 +28,7 @@ VIEWS = {
   'signs': ((74, 3.2, 925), (30, 1, 892)),             # taxiing towards connector B's hold point
   'loc':   ((35, 6, -1060), (0, 2, -1100)),            # the 36R localizer array past the far end
   'gs':    ((-40, 5, 680), (-80, 6, 640)),             # the glideslope mast and PAPI by the touchdown zone
+  'gate':  ((620, 7, 170), (420, 1, 110)),            # the landside road through the perimeter fence's gate
 }
 async def main():
     port = free_port(); srv = start_server(port)
@@ -43,6 +45,7 @@ async def main():
                         if ({S}.F) {S}.F.t = 0; {S}.hangar.load({S}.presets.find((d) => d.name === '{a.design}')); {S}.startFlight(); return 1; }})()""")
                     await cdp.wait_for(f"{S}.F && {S}.F.t > 0 && !{S}.F.warm?.pending && {S}.F.world.loc.id === '{loc}'", 240, f'{loc} start')
                     await cdp.js(f'{S}.advance(1)'); await asyncio.sleep(4)
+                    if a.js: await cdp.js(f'(() => {{ const W = {S}.F.world; {a.js}; return 1; }})()')
                     for v in a.views.split(','):
                         name = os.path.join(a.out, f'{loc}-{q}-t{t}-{v}-{a.tag}.png')
                         if v == 'start':

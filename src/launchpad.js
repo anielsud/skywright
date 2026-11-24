@@ -35,6 +35,7 @@ export function findPadSite(world) {
     for (const r of rw) if (Math.abs(x - r.x) < r.width / 2 + 140 + m && Math.abs(z) < r.len / 2 + 220 + m) return false;
     for (const r of rw) if (Math.abs(x - r.x) < ALS.half + 10 + m && z > 0 && z < r.len / 2 + ALS.start + ALS.rows * ALS.step + 20 + m) return false; // approach lights (airportKit.js)
     for (const r of rw) if (Math.abs(x - r.x) < 40 + m && z < 0 && z > -r.len / 2 - LOC_Z - 20 - m) return false; // localizer
+    const G = world.gate; if (G && x > 300 - m && x < G.x + 70 + m && Math.abs(z - G.z) < 30 + m) return false; // the landside road (airportGround.js)
     if (x > 40 - m && x < 450 + m && Math.abs(z) < 270 + m) return false; // apron, terminal, hangars, tower, fuel farm
     if (Math.hypot(x + 45, z - 600) < 30 + m) return false; // windsock
     return true;

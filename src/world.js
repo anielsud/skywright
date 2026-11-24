@@ -22,7 +22,8 @@ import { Destruction } from './destruction.js';
 import { BAKED, preloadBake, bakeFor, withBake, landAt } from './terrainBake.js';
 import { Landcover } from './landcover.js';
 import { LaunchPad } from './launchpad.js';
-import { buildAirfieldKit, CONNECTORS, TAXI } from './airportKit.js';
+import { buildAirfieldKit, CONNECTORS, TAXI, airportGate } from './airportKit.js';
+import { buildAirportGround, gateLevel } from './airportGround.js';
 import { Helipads } from './helipad.js';
 import { StuntParks, planStunts, padsHeight } from './stuntPark.js';
 import { roadStart } from './landStart.js';
@@ -86,6 +87,7 @@ export class World {
   constructor(renderer, scene, opts) {
     this.renderer = renderer; this.scene = scene;
     this.loc = LOCATIONS[opts.location] || LOCATIONS.alpine;
+    this.gate = airportGate(this.loc); // where the landside road leaves the airport (rawHeight levels the ground along it)
     this.q = QUALITY[opts.quality] || QUALITY.medium; this.qName = opts.quality || 'medium'; this.qBase = baseTier(this.qName);
     this.noise = makeNoise(this.loc.seed);
     // the one height function everything uses (core bake, streamed tiles, physics fallback): location shape + erosion,
@@ -239,7 +241,7 @@ export class World {
     const dx = Math.max(0, Math.abs(x - 100) - 350), dz = Math.max(0, Math.abs(z) - RWY.len / 2 - 250);
     const d = Math.hypot(dx, dz);
     const t = smoothstep(0, this.loc.padBlend || 700, d); // padBlend: a tighter apron, e.g. an airport on a narrow reef islet
-    const a = lerp(this.loc.rwyH, h, t);
+    const a = gateLevel(this.gate, this.loc.rwyH, x, z, lerp(this.loc.rwyH, h, t)); // (and along the landside road out to the gate: airportGround.js)
     return this.stuntPlan ? padsHeight(this.stuntPlan.pads, x, z, a) : a; // the stunt sites' levelled ground (after the airport's: a park can sit near it)
   }
   buildTerrain() {
@@ -1010,6 +1012,8 @@ export class World {
     }
     const fg = new THREE.BufferGeometry(); fg.setAttribute('position', new THREE.Float32BufferAttribute(fp, 3)); fg.setAttribute('color', new THREE.Float32BufferAttribute(fc, 3));
     this.group.add(new THREE.Points(fg, this.lightsMat));
+    // the airfield's ground: mown infield, shoulders, blast pads, perimeter fence, landside road (src/airportGround.js)
+    this.airportGround = buildAirportGround(this, A, y, RWY); for (const m of this.airportGround.meshes) this.group.add(m);
     // the airfield's furniture: light fixtures, approach lights, PAPI housings, signs, ILS (src/airportKit.js)
     const kit = buildAirfieldKit(this, A, y);
     this.airfield = kit; this.windowMats.push(kit.signMat); kit.signs.receiveShadow = true; this.group.add(kit.signs);
