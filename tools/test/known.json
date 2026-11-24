@@ -14,5 +14,18 @@
   "speed 7 (fus_fighter, top engines, fin on body)": "#173",
   "seams 6 (fus_heli: ck_heli)": "#173",
   "seams 15 (fus_cargo: ck_heli)": "#173"
+ },
+ "roadcheck": {
+  "canyon: no steps along the roads": "#228",
+  "canyon: no walls or ramps on the roads": "#228",
+  "lauterbrunnen: no steps along the roads": "#228",
+  "lauterbrunnen: no walls or ramps on the roads": "#228",
+  "islands: no walls or ramps on the roads": "#228",
+  "alpine: no steps along the roads": "#228",
+  "alpine: no walls or ramps on the roads": "#228",
+  "nyc: no steps along the roads": "#228",
+  "nyc: no walls or ramps on the roads": "#228",
+  "nyc: road ends meet the road they join": "#228",
+  "nyc: roads cross at the same height": "#228"
  }
 }

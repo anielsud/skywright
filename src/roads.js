@@ -168,7 +168,8 @@ export function planNetwork(w) {
   // pinned to meet the roads it crosses at grade
   const done = [];
   const cross = (rd) => done.flatMap((q) => crossings(rd.pts, q.pts, q.closed)).filter((c) => c.i > 2 && c.i < rd.pts.length - 3);
-  const prof = (rd, pins = []) => { profileRoad(rd, { g: rd.g ?? (rd.lane ? GRADE.lane : GRADE[rd.kind]), terr, wetAt, wl, clear: rd.kind === 'highway' ? 9 : rd.kind === 'main' ? 7 : 5, pins: [...pins, ...cross(rd)], smooth: rd.kind === 'street' ? 2 : 3 }); if (rd.kind !== 'street') done.push(rd); };
+  let rank = 0; // (the order the profiles are made in: RoadSurface's major road where two overlap)
+  const prof = (rd, pins = []) => { rd.rank = rank++; profileRoad(rd, { g: rd.g ?? (rd.lane ? GRADE.lane : GRADE[rd.kind]), terr, wetAt, wl, clear: rd.kind === 'highway' ? 9 : rd.kind === 'main' ? 7 : 5, pins: [...pins, ...cross(rd)], smooth: rd.kind === 'street' ? 2 : 3 }); if (rd.kind !== 'street') done.push(rd); };
   const nearest = (P, p) => { let bi = 0, bd = 1e18; P.forEach((q, i) => { const d = (q.x - p.x) ** 2 + (q.z - p.z) ** 2; if (d < bd) { bd = d; bi = i; } }); return P[bi]; };
   prof(roads[0]);
   for (const rd of roads) if (rd.kind === 'street') prof(rd);
@@ -272,16 +273,110 @@ export function roadSurface(w, net) { return new RoadSurface(w, allRoads(net), s
 // can be carved in and driven like the planned ones. Reads the raw fine heights (w.Hh0).
 export function gradeReal(w, net) {
   const terr = gridSampler(w, w.Hh0, w.hR0), wl = w.waterLevel;
-  // ways meet end to end (or end on another way): each one's ends are pinned to the ways already done, longest first
-  const hash = new Map(), key = (x, z) => Math.floor(x / 10) + ',' + Math.floor(z / 10);
-  const at = (p) => { let best = null, bd = 9; for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const q of hash.get(key(p.x + i * 10, p.z + j * 10)) || []) { const d = (q.x - p.x) ** 2 + (q.z - p.z) ** 2; if (d < bd) { bd = d; best = q; } } return best; };
-  for (const rd of net.roads) { // (sorted longest first by RealData.network)
-    if (rd.baked) { rd.terr = Float32Array.from(rd.pts, (p) => terr(p.x, p.z)); rd.wet = new Uint8Array(rd.pts.length); for (const p of rd.pts) { const k = key(p.x, p.z); if (!hash.has(k)) hash.set(k, []); hash.get(k).push(p); } continue; } // a bridge with a baked deck profile (realworld.js)
-    const fixed = rd.bridge && rd.bridge.some(Boolean) ? rd.bridge.slice() : null, pins = [];
-    for (const i of [0, rd.pts.length - 1]) { const q = at(rd.pts[i]); if (q) pins.push({ i, y: q.y }); }
+  // Ways are graded longest first; each is pinned to the ways already done wherever it meets them (#228):
+  //  - its own ends, on another way's line (OSM ways meet at shared nodes, but the resampled points are 8-16 m apart,
+  //    so a T-junction's node rarely falls on a point);
+  //  - another way's end on its line (a longer way that ends on this one: graded first, so this one meets it);
+  //  - where it crosses another way's line at grade (an X junction whose node is neither way's end).
+  // Bridge decks are left out of the crossings (an overpass), but their ends join like any road's.
+  const C = 20, segs = new Map(), ends = new Map(), key = (x, z) => Math.floor(x / C) + ',' + Math.floor(z / C);
+  const put = (M, k, v) => { let a = M.get(k); if (!a) M.set(k, (a = [])); a.push(v); };
+  const near = (M, x, z, fn) => { const ci = Math.floor(x / C), cj = Math.floor(z / C); for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) for (const v of M.get(i + ',' + j) || []) fn(v); };
+  const SNAP = 3;
+  const add = (rd) => {
+    const P = rd.pts;
+    for (let i = 0; i + 1 < P.length; i++) {
+      const a = P[i], b = P[i + 1], deck = !!(rd.bridge?.[i] && rd.bridge?.[i + 1]), sg = { a, b, deck, rd };
+      const seen = new Set();
+      for (let f = 0; f <= 1.0001; f += Math.min(1, C / 2 / Math.max(1, a.distanceTo(b)))) { const k = key(a.x + (b.x - a.x) * f, a.z + (b.z - a.z) * f); if (!seen.has(k)) { seen.add(k); put(segs, k, sg); } }
+    }
+    for (const p of [P[0], P.at(-1)]) put(ends, key(p.x, p.z), p);
+  };
+  // the nearest point on a done way's line to p (within SNAP): its height there
+  const onLine = (p) => {
+    let bd = SNAP, y = null;
+    near(segs, p.x, p.z, ({ a, b }) => {
+      const dx = b.x - a.x, dz = b.z - a.z, L2 = dx * dx + dz * dz || 1, t = clamp(((p.x - a.x) * dx + (p.z - a.z) * dz) / L2, 0, 1);
+      const d = Math.hypot(a.x + dx * t - p.x, a.z + dz * t - p.z); if (d < bd) { bd = d; y = a.y + (b.y - a.y) * t; }
+    });
+    return y;
+  };
+  for (const rd of net.roads) if (rd.baked) { rd.terr = Float32Array.from(rd.pts, (p) => terr(p.x, p.z)); rd.wet = new Uint8Array(rd.pts.length); add(rd); } // bridges with a baked deck profile (realworld.js)
+  for (const rd of chains(net.roads.filter((r) => !r.baked))) { // (longest first)
+    const fixed = rd.bridge && rd.bridge.some(Boolean) ? rd.bridge.slice() : null, pins = [], P = rd.pts, n = P.length;
+    const S = new Float64Array(n); for (let i = 1; i < n; i++) S[i] = S[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z);
+    for (const i of [0, n - 1]) { const y = onLine(P[i]); if (y != null) pins.push({ i, y }); }
+    // where its footprint overlaps a done way's on the ground (side by side: a divided road's two carriageways, a
+    // slip road; the mouth of a junction), its centre line takes that way's height: the two are one surface there.
+    // (A ramp climbing to an overpass right beside the carriageway it left gets pulled down too: the steep stretch
+    // that leaves is a retaining wall the road meshes don't draw yet, #228.)
+    for (let i = 0; i < n; i++) {
+      if (fixed?.[i]) continue;
+      const p = P[i], hw = rd.width / 2 + VERGE; let bd = Infinity, y = null;
+      near(segs, p.x, p.z, ({ a, b, deck, rd: q }) => {
+        if (deck) return;
+        const dx = b.x - a.x, dz = b.z - a.z, L2 = dx * dx + dz * dz || 1, t = clamp(((p.x - a.x) * dx + (p.z - a.z) * dz) / L2, 0, 1);
+        const d = Math.hypot(a.x + dx * t - p.x, a.z + dz * t - p.z); if (d < hw + q.width / 2 + VERGE && d < bd) { bd = d; y = a.y + (b.y - a.y) * t; }
+      });
+      if (y != null) pins.push({ i, y });
+    }
+    for (let i = 0; i + 1 < n; i++) {
+      const a = P[i], b = P[i + 1], dx = b.x - a.x, dz = b.z - a.z, L2 = dx * dx + dz * dz, L = Math.sqrt(L2); if (L < 1e-6) continue;
+      const myDeck = !!(fixed?.[i] && fixed?.[i + 1]), mid = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 }, done = new Set();
+      // done ways' ends on this segment
+      near(ends, mid.x, mid.z, (q) => {
+        if (done.has(q)) return; done.add(q);
+        const t = ((q.x - a.x) * dx + (q.z - a.z) * dz) / L2; if (t < 0 || t > 1) return;
+        if (Math.hypot(a.x + dx * t - q.x, a.z + dz * t - q.z) < SNAP) pins.push({ s: S[i] + t * L, y: q.y });
+      });
+      // crossings at grade
+      if (myDeck) continue;
+      near(segs, mid.x, mid.z, (sg) => {
+        if (sg.deck || done.has(sg)) return; done.add(sg);
+        const r = sg.a, q = sg.b, ex = q.x - r.x, ez = q.z - r.z, den = dx * ez - dz * ex; if (Math.abs(den) < 1e-9) return;
+        const t = ((r.x - a.x) * ez - (r.z - a.z) * ex) / den, u = ((r.x - a.x) * dz - (r.z - a.z) * dx) / den;
+        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) pins.push({ s: S[i] + t * L, y: r.y + (q.y - r.y) * u });
+      });
+    }
     profileRoad(rd, { g: GRADE.real, terr, wetAt: () => false, wl, clear: 0, smooth: 2, bridges: false, fixed, pins });
-    for (const p of rd.pts) { const k = key(p.x, p.z); if (!hash.has(k)) hash.set(k, []); hash.get(k).push(p); }
+    for (const m of rd.members) {
+      const q = m.rd, k = q.pts.length, at = (j) => m.start + (m.rev ? k - 1 - j : j);
+      for (let j = 0; j < k; j++) q.pts[j].y = P[at(j)].y;
+      q.terr = Float32Array.from(q.pts, (p, j) => rd.terr[at(j)]); q.wet = Uint8Array.from(q.pts, (p, j) => rd.wet[at(j)]); q.bridge = q.pts.map((p, j) => rd.bridge[at(j)]);
+      add(q);
+    }
   }
+}
+// OSM splits a road into ways at every tag change (a bridge, a speed limit, a name): where exactly two ways meet end
+// to end they are one road, graded as one chain (#228: two long ways graded apart, then a 15 m way between them
+// left 17 m to climb). Returns the chains, longest first: { pts (the ways' own points, the shared node once), bridge,
+// width, members: [{ rd, start (its first point's index in the chain), rev (it runs backwards along the chain) }] }.
+function chains(ways) {
+  const ek = (p) => Math.round(p.x * 2) + ',' + Math.round(p.z * 2), at = new Map();
+  for (const r of ways) for (const e of [0, 1]) { const k = ek(e ? r.pts.at(-1) : r.pts[0]); if (!at.has(k)) at.set(k, []); at.get(k).push({ r, e }); }
+  const next = (r, e) => { const L = at.get(ek(e ? r.pts.at(-1) : r.pts[0])); return L.length === 2 ? L.find((o) => o.r !== r) ?? null : null; }; // (a way's own two ends meeting: a loop, left alone)
+  const used = new Set(), out = [];
+  for (const r0 of ways) {
+    if (used.has(r0)) continue;
+    // back to the chain's first way: e is the end it starts from
+    let r = r0, e = 0; const seen = new Set([r0]);
+    for (;;) { const o = next(r, e); if (!o || seen.has(o.r) || used.has(o.r)) break; seen.add(o.r); r = o.r; e = 1 - o.e; }
+    const mem = []; let from = e;
+    for (;;) {
+      used.add(r); mem.push({ rd: r, rev: from === 1 });
+      const o = next(r, 1 - from); if (!o || used.has(o.r)) break;
+      r = o.r; from = o.e;
+    }
+    const pts = [], bridge = []; let width = Infinity;
+    for (const m of mem) {
+      const P = m.rev ? m.rd.pts.slice().reverse() : m.rd.pts, B = m.rd.bridge ? (m.rev ? m.rd.bridge.slice().reverse() : m.rd.bridge) : P.map(() => false);
+      m.start = pts.length ? pts.length - 1 : 0; width = Math.min(width, m.rd.width);
+      if (pts.length) { bridge[bridge.length - 1] = bridge.at(-1) && B[0]; P.slice(1).forEach((p) => pts.push(p)); B.slice(1).forEach((b) => bridge.push(!!b)); }
+      else { P.forEach((p) => pts.push(p)); B.forEach((b) => bridge.push(!!b)); }
+    }
+    out.push({ pts, bridge, width, members: mem });
+  }
+  return out.sort((a, b) => b.pts.length - a.pts.length);
 }
 // Paint fields / road verges into the baked albedo at texel (x,z). Returns a colour or null.
 export function makePainter(w, net) {
