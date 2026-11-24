@@ -7,11 +7,66 @@ import * as THREE from 'three';
 
 const G = 18, A = 3, R = 2, CYCLE = 2 * (G + A + R); // seconds: green, amber, all red (per group)
 
+// The pole's place at a junction (node point c, the lanes in and out of it): on a corner's pavement, KERB metres past
+// the kerbs of the two roads either side of it (the corner of two neighbouring legs, 30-170 degrees apart), clear of
+// the carriageway of every road piece near (pieces: this junction's and its neighbours' within 35 m, e.g. a divided
+// avenue's other half); the nearest such corner. null if there is none.
+const KERB = 1.2;
+function nearby(graph, into, key, c) {
+  const pieces = new Set(), seen = new Set([key]); let front = [key];
+  for (let d = 0; d < 2 && front.length; d++) {
+    const next = [];
+    for (const k of front) for (const L of [...(into.get(k) || []), ...(graph.out.get(k) || [])]) {
+      pieces.add(L.piece);
+      const o = L.to === k ? L.from : L.to; if (seen.has(o)) continue; seen.add(o);
+      const { rd, a, b } = L.piece, q = rd.pts[(L.to === k) === L.fwd ? a : b]; // (the other end)
+      if (Math.hypot(q.x - c.x, q.z - c.z) < 35) next.push(o);
+    }
+    front = next;
+  }
+  return pieces;
+}
+function corner(c, lanes, key, pieces) {
+  const legs = [], seen = new Set();
+  for (const L of lanes) {
+    const { rd, a, b } = L.piece; if (seen.has(L.piece)) continue; seen.add(L.piece);
+    const P = rd.pts, atA = (L.to === key) !== L.fwd, i0 = atA ? a : b, st = atA ? 1 : -1; // (the piece's end at this node, and the way along it away from the node)
+    let i = i0; while (i + st >= a && i + st <= b && Math.hypot(P[i].x - c.x, P[i].z - c.z) < 6) i += st;
+    const dx = P[i].x - c.x, dz = P[i].z - c.z, l = Math.hypot(dx, dz); if (l < 0.5) continue;
+    legs.push({ ux: dx / l, uz: dz / l, hw: rd.width / 2, ang: Math.atan2(dz, dx) });
+  }
+  if (legs.length < 2) return null;
+  legs.sort((p, q) => p.ang - q.ang);
+  const room = (x, z) => { // (how far outside every piece's carriageway: negative, on one)
+    let r = Infinity;
+    for (const { rd, a, b } of pieces) for (let i = a; i < b; i++) {
+      const p = rd.pts[i], q = rd.pts[i + 1], ex = q.x - p.x, ez = q.z - p.z, l = ex * ex + ez * ez, t = l ? Math.max(0, Math.min(1, ((x - p.x) * ex + (z - p.z) * ez) / l)) : 0;
+      r = Math.min(r, Math.hypot(p.x + ex * t - x, p.z + ez * t - z) - rd.width / 2);
+    }
+    return r;
+  };
+  let best = null, bd = Infinity, most = null, mr = -Infinity; // (the nearest clear corner; failing that, the clearest)
+  for (let k = 0; k < legs.length; k++) {
+    const A = legs[k], B = legs[(k + 1) % legs.length]; let gap = B.ang - A.ang; if (gap <= 0) gap += Math.PI * 2;
+    if (gap < 0.52 || gap > 2.97) continue;
+    // A's kerb on B's side, B's on A's: c + nA (hwA + KERB) + t uA = c + nB (hwB + KERB) + s uB
+    const ax = -A.uz * (A.hw + KERB), az = A.ux * (A.hw + KERB), bx = B.uz * (B.hw + KERB), bz = -B.ux * (B.hw + KERB);
+    const den = A.ux * -B.uz - A.uz * -B.ux; if (Math.abs(den) < 1e-6) continue;
+    const rx = bx - ax, rz = bz - az, t = (rx * -B.uz - rz * -B.ux) / den;
+    const x = c.x + ax + A.ux * t, z = c.z + az + A.uz * t, d = Math.hypot(x - c.x, z - c.z);
+    if (t <= 0 || d > 40) continue;
+    const r = room(x, z);
+    if (r > KERB * 0.6 && d < bd) { best = [x, z]; bd = d; }
+    if (r > mr) { most = [x, z]; mr = r; }
+  }
+  return best || most;
+}
+
 export class Signals {
   constructor(graph, { city = false } = {}) {
-    this.nodes = new Map(); // node key -> { x, y, z, off, lanes: Map(lane -> group), heads: [{ yaw, group }] }
+    this.nodes = new Map(); // node key -> { key, x, y, z, off, lanes: Map(lane -> group), heads: [{ yaw, group }], px, pz (the pole, once placed) }
     if (!city) return;
-    const into = new Map();
+    const into = (this.into = new Map()); this.graph = graph;
     for (const L of graph.lanes) { let a = into.get(L.to); if (!a) into.set(L.to, (a = [])); a.push(L); }
     for (const [key, inc] of into) {
       if (!key.startsWith('n')) continue;
@@ -21,7 +76,7 @@ export class Signals {
       const lanes = new Map(), groups = [0, 0]; for (const d of dirs) { const g = ax(d.yaw); lanes.set(d.L, g); groups[g]++; }
       if (!groups[0] || !groups[1]) continue; // (a fork, not a crossroads)
       const p = dirs[0].p, h = (key.length * 7.13 + parseInt(key.slice(1), 10) * 0.6180339) % 1;
-      this.nodes.set(key, { x: p.x, y: p.y, z: p.z, off: h * CYCLE, lanes, heads: dirs.map((d) => ({ yaw: d.yaw, group: lanes.get(d.L) })) });
+      this.nodes.set(key, { key, x: p.x, y: p.y, z: p.z, off: h * CYCLE, lanes, heads: dirs.map((d) => ({ yaw: d.yaw, group: lanes.get(d.L) })) });
     }
   }
   // 'g' | 'a' | 'r' for lane L arriving at its junction at time t (null: no signal there)
@@ -30,6 +85,14 @@ export class Signals {
     const g = n.lanes.get(L); if (g === undefined) return null;
     const c = (t + n.off + (g ? G + A + R : 0)) % CYCLE;
     return c < G ? 'g' : c < G + A ? 'a' : 'r';
+  }
+  // where junction n's pole stands (corner(), worked out the first time it's near the camera: x, z)
+  pole(n) {
+    if (n.px === undefined) {
+      const p = n, c = corner(p, [...(this.into.get(n.key) || []), ...(this.graph.out.get(n.key) || [])], n.key, nearby(this.graph, this.into, n.key, p)), y0 = n.heads[0].yaw;
+      n.px = c ? c[0] : p.x - Math.sin(y0 + 0.8) * 9; n.pz = c ? c[1] : p.z - Math.cos(y0 + 0.8) * 9; // (no corner at all: as before, 9 m out)
+    }
+    return n;
   }
   // the lights' meshes (added to group): poles and heads instanced, three lamps a head whose colours update() sets
   build(group) {
@@ -57,7 +120,7 @@ export class Signals {
       let np = 0, nh = 0;
       for (const n of this.near) {
         // the pole on the corner, back from the junction's middle; an arm and a head over each approach
-        const h0 = n.heads[0].yaw, cx = n.x - Math.sin(h0 + 0.8) * 9, cz = n.z - Math.cos(h0 + 0.8) * 9;
+        const { px: cx, pz: cz } = this.pole(n);
         this.poles.setMatrixAt(np++, m4.compose(p.set(cx, n.y, cz), q.identity(), one));
         for (const hd of n.heads) { if (nh >= this.MAX) break; const yaw = hd.yaw + Math.PI; q.setFromAxisAngle(up, Math.atan2(n.x - cx, n.z - cz)); this.arms.setMatrixAt(nh, m4.compose(p.set(cx, n.y, cz), q, one)); this.heads.setMatrixAt(nh, m4.compose(p.set(cx, n.y, cz), q.setFromAxisAngle(up, yaw), one)); hd.slot = nh++; hd.q = q.clone(); hd.c = new THREE.Vector3(cx, n.y, cz); }
       }

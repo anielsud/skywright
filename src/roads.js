@@ -384,10 +384,11 @@ export function buildRoadMeshes(w, net) {
   group.userData.lampMat = lampMat;
   const poleMat = new THREE.MeshStandardMaterial({ color: 0x8a8e94, metalness: 0.6, roughness: 0.45 });
   const poleGeo = mergeGeometries([new THREE.CylinderGeometry(0.07, 0.12, 7.4, 6).translate(0, 3.5, 0), new THREE.BoxGeometry(0.08, 0.08, 1.5).translate(0, 7.15, 0.65), new THREE.BoxGeometry(0.28, 0.12, 0.6).translate(0, 7.05, 1.25)].map((g) => g.toNonIndexed()));
-  const lampsFor = (rd, lamps, poles) => {
+  const lampsFor = (rd, lamps, poles, jn = []) => { // (jn: the road's junctions, J[k]: no post within a junction's clearance, out in the crossing road)
     if (rd.kind === 'highway' || rd.mountain || (rd.kind === 'street' && (rd.real || w.qName !== 'low'))) return;
     const every = rd.kind === 'street' ? 4 : 6;
-    rd.pts.forEach((p, i) => { if (i % every) return; const a = rd.pts[Math.max(0, i - 1)], b = rd.pts[Math.min(rd.pts.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); const s = (i / every) % 2 ? 1 : -1; const off = rd.bridge?.[i] ? rd.width / 2 + 0.6 : rd.width / 2 + 1.5, x = p.x - d.z * off * s, z = p.z + d.x * off * s, gy = rd.bridge?.[i] ? p.y + 1 : w.sampleGrid(x, z); lamps.push(x + d.z * 1.2 * s, gy + 7, z - d.x * 1.2 * s); poles.push(x, gy, z, Math.atan2(d.z * s, -d.x * s)); });
+    let at = 0; // (metres along the road)
+    rd.pts.forEach((p, i) => { if (i) at += Math.hypot(p.x - rd.pts[i - 1].x, p.z - rd.pts[i - 1].z); if (i % every || jn.some((j) => Math.abs(j.s - at) < j.r + 1.5)) return; const a = rd.pts[Math.max(0, i - 1)], b = rd.pts[Math.min(rd.pts.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); const s = (i / every) % 2 ? 1 : -1; const off = rd.bridge?.[i] ? rd.width / 2 + 0.6 : rd.width / 2 + 1.5, x = p.x - d.z * off * s, z = p.z + d.x * off * s, gy = rd.bridge?.[i] ? p.y + 1 : w.sampleGrid(x, z); lamps.push(x + d.z * 1.2 * s, gy + 7, z - d.x * 1.2 * s); poles.push(x, gy, z, Math.atan2(d.z * s, -d.x * s)); });
   };
   const lampMeshes = (lamps, poles, t) => {
     if (!poles.length) return;
@@ -428,7 +429,7 @@ export function buildRoadMeshes(w, net) {
     pending = new Map(); bridgeGeos = [];
     const lamps = [], poles = [];
     tubeGeos = []; lightGeos = [];
-    for (const k of t.roads) { roadMesh(net.roads[k], k); bridgeMesh(net.roads[k]); tubeMesh(net.roads[k]); if (!net.roads[k].tunnel) lampsFor(net.roads[k], lamps, poles); }
+    for (const k of t.roads) { roadMesh(net.roads[k], k); bridgeMesh(net.roads[k]); tubeMesh(net.roads[k]); if (!net.roads[k].tunnel) lampsFor(net.roads[k], lamps, poles, J[k]); }
     if (tubeGeos.length) { const m = new THREE.Mesh(mergeAll(tubeGeos), tubeMat); m.receiveShadow = true; group.add(m); t.meshes.push(m); }
     if (lightGeos.length) { const m = new THREE.Mesh(mergeAll(lightGeos), tubeLight); group.add(m); t.meshes.push(m); }
     lampMeshes(lamps, poles, t);
