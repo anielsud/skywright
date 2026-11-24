@@ -15,6 +15,7 @@ import { clamp, smoothstep } from './noise.js';
 export const GRADE = { highway: 0.08, main: 0.1, street: 0.12, lane: 0.14, rail: 0.035, real: 0.2 };
 export const VERGE = 1.5; // gravel verge beside the tarmac (part of the drivable footprint)
 const FILL = 0.6, CUT = 0.9; // embankment / cutting side slopes (rise per metre out)
+const SEG = 9, BLEND = 3; // RoadSurface: floats per segment; metres a major road hands over to a minor one in, at its edge
 
 // Bilinear sampler over a (R+1)^2 core grid (the raw fine heights, before any carving).
 export function gridSampler(w, H, R) {
@@ -285,10 +286,21 @@ export function profileRoad(rd, o) {
     const ya = y[Math.max(0, a - 1)], yb = y[Math.min(n0 - 1, b + 1)];
     for (let k = a; k <= b; k++) y[k] = ya + (yb - ya) * (s[k] - s[a]) / Math.max(1, s[b] - s[a]);
   }
-  // pins: where this road joins another, meet it exactly (a grade-limited cone around the junction)
-  for (const pin of o.pins || []) for (let r = 0; r < reps; r++) {
-    const kp = pin.i + r * n0;
-    for (let k = 0; k < n; k++) { const d = g * Math.abs(s[k] - s[kp]); y[k] = clamp(y[k], pin.y - d, pin.y + d); }
+  // pins: where this road joins another, meet it exactly (a grade-limited cone around the junction). A pin is at a
+  // point (i) or anywhere along the road (s, metres from its start: a crossing between two points). Pins closer than
+  // 2 m are one junction (their mean). Every pin is met: where two of them are further apart in height than the grade
+  // allows over the distance between them (a real road steeper than its class), their cones widen to that grade, so
+  // the road runs straight from one junction to the other instead of the last pin's cone pulling the first off its
+  // junction (#228: a 23 m step where two Lauterbrunnen roads met end to end).
+  const lap = closed ? s[n0] : 0, PS = [];
+  for (const pin of o.pins || []) {
+    const sp = pin.s ?? s[pin.i], m = PS.find((q) => Math.abs(q.s - sp) < 2);
+    if (m) { m.y = (m.y * m.c + pin.y) / (m.c + 1); m.c++; } else PS.push({ s: sp, y: pin.y, c: 1 });
+  }
+  for (const p of PS) { p.g = g; for (const q of PS) if (q !== p) p.g = Math.max(p.g, Math.abs(p.y - q.y) / Math.abs(p.s - q.s)); }
+  for (const p of PS) for (let r = 0; r < reps; r++) {
+    const sp = p.s + r * lap;
+    for (let k = 0; k < n; k++) { const d = p.g * Math.abs(s[k] - sp); y[k] = clamp(y[k], p.y - d, p.y + d); }
   }
   const off = closed ? n0 : 0;
   rd.terr = new Float32Array(n0); rd.wet = new Uint8Array(n0);
@@ -388,20 +400,20 @@ export class RoadSurface {
   constructor(w, roads, skirt) {
     this.half = w.half; this.S = skirt; this.cell = 32;
     const C = this.cell, nC = (this.nC = Math.ceil(w.size / C) + 1);
-    const segs = []; // ax, az, bx, bz, ay, by, hw, deck
-    for (const rd of roads) {
+    const segs = []; // ax, az, bx, bz, ay, by, hw, deck, rank (the order the profiles were made in: lower = the major road)
+    roads.forEach((rd, ri) => {
       const P = rd.pts, n = P.length, last = rd.closed ? n : n - 1;
       for (let i = 0; i < last; i++) {
         const a = P[i], b = P[(i + 1) % n], br = !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % n]);
         // deck flags: 1 = deck, +2 / +4 = the deck carries on before / after (a joint, round; an abutment end is square)
         const isD = (k) => !!(rd.bridge?.[(k + n) % n] && rd.bridge?.[(k + 1 + n) % n]) && (rd.closed || (k >= 0 && k < n - 1));
-        segs.push(a.x, a.z, b.x, b.z, a.y, b.y, br ? rd.width / 2 + 1 : rd.width / 2 + VERGE, br ? 1 + (isD(i - 1) ? 2 : 0) + (isD(i + 1) ? 4 : 0) : 0);
+        segs.push(a.x, a.z, b.x, b.z, a.y, b.y, br ? rd.width / 2 + 1 : rd.width / 2 + VERGE, br ? 1 + (isD(i - 1) ? 2 : 0) + (isD(i + 1) ? 4 : 0) : 0, rd.rank ?? ri);
       }
-    }
-    const S = (this.seg = new Float32Array(segs)), ns = S.length / 8;
+    });
+    const S = (this.seg = new Float32Array(segs)), ns = S.length / SEG;
     const cnt = new Int32Array(nC * nC + 1), cells = (s, fn) => {
-      const r = S[s * 8 + 6] + (S[s * 8 + 7] ? 0.5 : skirt) + 1;
-      const xa = Math.min(S[s * 8], S[s * 8 + 2]) - r, xb = Math.max(S[s * 8], S[s * 8 + 2]) + r, za = Math.min(S[s * 8 + 1], S[s * 8 + 3]) - r, zb = Math.max(S[s * 8 + 1], S[s * 8 + 3]) + r;
+      const r = S[s * SEG + 6] + (S[s * SEG + 7] ? 0.5 : skirt) + 1;
+      const o = s * SEG, xa = Math.min(S[o], S[o + 2]) - r, xb = Math.max(S[o], S[o + 2]) + r, za = Math.min(S[o + 1], S[o + 3]) - r, zb = Math.max(S[o + 1], S[o + 3]) + r;
       for (let cj = Math.max(0, Math.floor((za + this.half) / C)); cj <= Math.min(nC - 1, Math.floor((zb + this.half) / C)); cj++)
         for (let ci = Math.max(0, Math.floor((xa + this.half) / C)); ci <= Math.min(nC - 1, Math.floor((xb + this.half) / C)); ci++) fn(cj * nC + ci);
     };
@@ -410,7 +422,7 @@ export class RoadSurface {
     const ids = new Int32Array(cnt[nC * nC]), fill = cnt.slice();
     for (let s = 0; s < ns; s++) cells(s, (c) => (ids[fill[c]++] = s));
     this.start = cnt; this.ids = ids;
-    this.y = 0; this.e = 0; this.g = 0;
+    this.y = 0; this.e = 0; this.g = 0; this.In = new Float64Array(40); this.ord = new Int32Array(8); this.nIn = 0;
   }
   // deck: bridge decks only, and where decks cross (an overpass) the highest one not above y + 2 (any, without y)
   q(x, z, deck = false, y = Infinity) {
@@ -418,20 +430,39 @@ export class RoadSurface {
     if (ci < 0 || cj < 0 || ci >= nC || cj >= nC) return false;
     const c = cj * nC + ci, a = this.start[c], b = this.start[c + 1];
     if (a === b) return false;
-    const S = this.seg, want = deck ? 1 : 0;
+    const S = this.seg, want = deck ? 1 : 0; this.nIn = 0;
     let best = deck ? 0.5 : this.S, top = -Infinity, hit = false; // (decks: best = e of the current pick)
     for (let k = a; k < b; k++) {
-      const o = this.ids[k] * 8, f = S[o + 7]; if ((f & 1) !== want) continue;
+      const o = this.ids[k] * SEG, f = S[o + 7]; if ((f & 1) !== want) continue;
       const ax = S[o], az = S[o + 1], dx = S[o + 2] - ax, dz = S[o + 3] - az, L2 = dx * dx + dz * dz || 1;
       const t0 = ((x - ax) * dx + (z - az) * dz) / L2; if (deck && ((t0 < -0.01 && !(f & 2)) || (t0 > 1.01 && !(f & 4)))) continue; // decks end square at their abutments
       const t = clamp(t0, 0, 1), px = ax + dx * t - x, pz = az + dz * t - z;
       const e = Math.sqrt(px * px + pz * pz) - S[o + 6], yy = S[o + 4] + (S[o + 5] - S[o + 4]) * t;
       // decks: the nearest centreline on the same level; a deck a level up (an overpass) wins outright
+      if (!deck && e < 0) this.inside(S[o + 8], e, yy, (S[o + 5] - S[o + 4]) * dx / L2, (S[o + 5] - S[o + 4]) * dz / L2);
       if (deck ? e < 0.5 && yy < y + 2 && (!hit || yy > top + 2.5 || (yy > top - 2.5 && e < best)) : e < best) {
         best = e; top = yy; hit = true; this.y = yy; this.e = e; this.gx = (S[o + 5] - S[o + 4]) * dx / L2; this.gz = (S[o + 5] - S[o + 4]) * dz / L2;
       }
     }
+    if (!deck && this.nIn > 1) this.blend();
     return hit;
+  }
+  // where footprints overlap (a junction, roads side by side): one surface, not whichever edge is nearest (that jumps
+  // between the roads' heights, a wall across the junction, #228). The major road (lowest rank) holds inside its
+  // footprint and hands over to the minor one over the last BLEND metres to its edge. inside(): records a road (x, z)
+  // is inside, each road once (its deepest segment).
+  inside(rank, e, y, gx, gz) {
+    const R = this.In; let k = 0;
+    while (k < this.nIn && R[k * 5] !== rank) k++;
+    if (k < this.nIn) { if (e >= R[k * 5 + 1]) return; } else { if (k >= 8) return; this.nIn++; }
+    R[k * 5] = rank; R[k * 5 + 1] = e; R[k * 5 + 2] = y; R[k * 5 + 3] = gx; R[k * 5 + 4] = gz;
+  }
+  blend() {
+    const R = this.In, n = this.nIn, ord = this.ord; for (let k = 0; k < n; k++) ord[k] = k;
+    for (let a = 1; a < n; a++) { const v = ord[a]; let b = a - 1; while (b >= 0 && R[ord[b] * 5] < R[v * 5]) { ord[b + 1] = ord[b]; b--; } ord[b + 1] = v; } // minor first
+    let k = ord[0] * 5, y = R[k + 2], gx = R[k + 3], gz = R[k + 4];
+    for (let a = 1; a < n; a++) { k = ord[a] * 5; const w = smoothstep(0, BLEND, -R[k + 1]); y += (R[k + 2] - y) * w; gx += (R[k + 3] - gx) * w; gz += (R[k + 4] - gz) * w; }
+    this.y = y; this.gx = gx; this.gz = gz;
   }
   // ground height with the road on it: the profile inside the footprint, then the embankment (the base surface
   // clamped to the side slopes from the footprint edge), fading back to the base surface by the skirt's end
