@@ -187,7 +187,7 @@ function paintAtlas(CELL, photo) {
   // so the building's tint can make it any timber from pale to brown
   const woodWash = (mat, col, a) => { base(mat, 1); g.save(); g.globalCompositeOperation = 'color'; g.globalAlpha = a; g.fillStyle = col; g.fillRect(0, 0, 128, 128); g.restore(); };
   // light timber (Bora Bora's bungalows and island houses): pale boards, a plain window in a dark wood frame, no flower box
-  at(C.TIMBER_WIN); woodWash(MAT.clap, '#b08a5a', 0.85); g.save(); g.globalAlpha = 0.1; for (let k = 0; k < 40; k++) { g.fillStyle = R() < 0.5 ? '#5a3a1a' : '#fff4dc'; g.fillRect(0, R() * 128, 128, 0.8 + R()); } g.restore();
+  at(C.TIMBER_WIN); woodWash(MAT.clap, '#b08a5a', 1); g.save(); g.globalAlpha = 0.1; for (let k = 0; k < 40; k++) { g.fillStyle = R() < 0.5 ? '#5a3a1a' : '#fff4dc'; g.fillRect(0, R() * 128, 128, 0.8 + R()); } g.restore();
   P(37, 23, 54, 62, '#7a5a3a', { z: 150, rough: 0.7 }); window_(41, 27, 46, 54, { frame: '#6a4a2e', sill: null }); done();
   // round logs (Grand Canyon cabins and lodges): rounded courses with dark chinking between, tinted per building
   const logs = () => { woodWash(MAT.plaster, '#a07a50', 0.9); g.save(); g.globalAlpha = 0.12; for (let k = 0; k < 90; k++) { g.fillStyle = R() < 0.5 ? '#3a2410' : '#fff0d8'; g.fillRect(R() * 128 - 20, R() * 128, 10 + R() * 40, 0.8); } g.restore(); for (let y = 0; y < 128; y += 16) { for (const [dy, hh, a, z] of [[0, 3, 0.2, 140], [3, 4, 0, 158], [7, 5, -0.08, 150], [12, 2.5, -0.2, 132], [14.5, 1.5, -0.45, 104]]) { g.save(); g.globalAlpha = Math.abs(a); g.fillStyle = a > 0 ? '#fff0d8' : '#1a1008'; g.fillRect(0, y + dy, 128, hh); g.restore(); Z(0, y + dy, 128, hh, z); } } };
