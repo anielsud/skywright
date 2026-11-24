@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { mulberry32, smoothstep, lerp, clamp } from './noise.js';
 import { glowTexture as glow } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
+import { REGION, roadStyle, tarmacMaterial, shoulderMaterial } from './roadSurface.js';
 import { GRADE, VERGE, gridSampler, planGrid, regrid, markRoad, trimShared, unloop, crossings, route, highestReachable, smoothPath, simplifyPath, relaxCurves, profileRoad, carveGrid, RoadSurface } from './roadgrade.js';
 
 const RWY_HALF = 900;
@@ -452,18 +453,18 @@ export function buildRoadMeshes(w, net) {
   };
   // a strip across the road at every point: rows of lateral offsets (heights from hf(i, x, z, off)), quads only on
   // the segments seg(i) allows
-  const strip = (rd, offs, hf, seg, material, uvf, gap = -1) => { // gap: a column left open (the verges either side of the tarmac)
-    const P = rd.pts, n = P.length, closed = !!rd.closed, m = offs.length, pos = [], uv = [], idx = [];
+  const strip = (rd, offs, hf, seg, material, uvf, gap = -1, info = null) => { // gap: a column left open (the verges either side of the tarmac); info: rinfo for every vertex (roadSurface.js)
+    const P = rd.pts, n = P.length, closed = !!rd.closed, m = offs.length, pos = [], uv = [], idx = [], ri = [];
     let dist = 0;
     for (let k = 0; k <= (closed ? n : n - 1); k++) {
       const i = k % n, p = P[i], [, rt] = frame(P, i, closed);
       if (k > 0) dist += P[i].distanceTo(P[(i - 1 + n) % n]);
-      for (let c = 0; c < m; c++) { const x = p.x + rt.x * offs[c], z = p.z + rt.z * offs[c]; pos.push(x, hf(i, x, z, offs[c]), z); uv.push(...uvf(c, dist)); }
+      for (let c = 0; c < m; c++) { const x = p.x + rt.x * offs[c], z = p.z + rt.z * offs[c]; pos.push(x, hf(i, x, z, offs[c]), z); uv.push(...uvf(c, dist, offs[c])); if (info) ri.push(...info); }
       if (k > 0 && seg((k - 1) % n)) { const o = (k - 1) * m; for (let c = 0; c < m - 1; c++) if (c !== gap) idx.push(o + c, o + c + 1, o + m + c, o + c + 1, o + m + c + 1, o + m + c); }
     }
     if (!idx.length) return;
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); if (info) g.setAttribute('rinfo', new THREE.Float32BufferAttribute(ri, 3)); g.setIndex(idx); g.computeVertexNormals();
     add(material, g);
   };
   const isBr = (rd, i) => !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % rd.pts.length]);
@@ -486,12 +487,16 @@ export function buildRoadMeshes(w, net) {
       strip(rd, offs, (i, x, z, off) => (Math.abs(off) <= hw + 0.01 ? P[i].y : w.sampleGrid(x, z)), ok, skirtMat, (c, d) => [c, d]);
     }
   };
-  for (const rd of net.roads) {
-    const hw = rd.width / 2;
-    strip(rd, [-hw - VERGE, -hw, hw, hw + VERGE], (i) => rd.pts[i].y, (i) => !isBr(rd, i), verge, (c, d) => [c, d / 10], 1);
-    strip(rd, [-hw, hw], (i) => rd.pts[i].y + 0.02, () => true, mat(rd.kind), (c, d) => [c, d / 14]);
+  // the tarmac and its gravel shoulders (roadSurface.js): uv in metres (across, along), rinfo = half width, what is
+  // painted on it, a seed
+  const region = REGION[w.loc.id] || 'ch', city = !!w.loc.roads?.chunk, tarmac = tarmacMaterial(region), shoulder = shoulderMaterial(region);
+  findMedians(net.roads);
+  net.roads.forEach((rd, k) => {
+    const hw = rd.width / 2, info = [hw, roadStyle(region, rd, city), (k * 7.31) % 97];
+    strip(rd, [-hw - VERGE, -hw, hw, hw + VERGE], (i) => rd.pts[i].y, (i) => !isBr(rd, i), shoulder, (c, d, o) => [o, d], 1, info);
+    strip(rd, [-hw, -hw * 0.5, 0, hw * 0.5, hw], (i) => rd.pts[i].y + 0.02, () => true, tarmac, (c, d, o) => [o, d], -1, info);
     skirts(rd);
-  }
+  });
   const bridgeGeos = [], railGeos = [];
   if (net.rail) {
     const rl = net.rail;
@@ -602,4 +607,40 @@ export function lanePaths(net) {
     p.len = []; let L = 0; p.pts.forEach((q, i) => { if (i) L += q.distanceTo(p.pts[i - 1]); p.len.push(L); }); p.total = L + p.pts.at(-1).distanceTo(p.pts[0]);
   }
   return paths;
+}
+
+// Divided roads (#228): OSM maps each carriageway of a dual carriageway as its own (one-way) way, but the bake
+// doesn't keep 'oneway'. A road whose points mostly have another road running alongside it, parallel, 6-22 m from
+// centre line to centre line, is one carriageway of a pair: rd.median = +1 / -1, the side (+x: its right vector,
+// roads.js frame) the other carriageway is on. roadSurface.js paints it as one-way (no centre line; US: yellow on
+// the median side).
+export function findMedians(roads) {
+  const C = 25, cells = new Map(), key = (x, z) => Math.floor(x / C) + ',' + Math.floor(z / C);
+  roads.forEach((rd, ri) => { const P = rd.pts; for (let i = 0; i + 1 < P.length; i++) { const k = key((P[i].x + P[i + 1].x) / 2, (P[i].z + P[i + 1].z) / 2); let a = cells.get(k); if (!a) cells.set(k, (a = [])); a.push([ri, i]); } });
+  const cand = new Map(), pair = [];
+  roads.forEach((rd, ri) => {
+    const P = rd.pts, n = P.length; if (rd.kind === 'street' && !rd.real || n < 6 || rd.width > 13) return;
+    let hits = 0, side = 0, tried = 0;
+    for (let i = 1; i + 1 < n; i += 2) {
+      const p = P[i], dx = P[i + 1].x - P[i - 1].x, dz = P[i + 1].z - P[i - 1].z, L = Math.hypot(dx, dz) || 1, ux = dx / L, uz = dz / L;
+      tried++; let best = null;
+      const ci = Math.floor(p.x / C), cj = Math.floor(p.z / C);
+      for (let a = ci - 1; a <= ci + 1; a++) for (let b = cj - 1; b <= cj + 1; b++) for (const [qj, j] of cells.get(a + ',' + b) || []) {
+        if (qj === ri) continue;
+        const A = roads[qj].pts[j], B = roads[qj].pts[j + 1], ex = B.x - A.x, ez = B.z - A.z, EL = Math.hypot(ex, ez) || 1;
+        if (Math.abs((ux * ex + uz * ez) / EL) < 0.94) continue; // parallel (either way round)
+        const t = Math.max(0, Math.min(1, ((p.x - A.x) * ex + (p.z - A.z) * ez) / (EL * EL))), qx = A.x + ex * t - p.x, qz = A.z + ez * t - p.z, d = Math.hypot(qx, qz);
+        const q = roads[qj], gap = d - (rd.width + q.width) / 2; // the median between the two carriageways' edges
+        if (gap < 0.5 || gap > 14 || q.kind !== rd.kind || Math.abs(q.width - rd.width) > 2 || Math.abs(A.y - p.y) > 3) continue;
+        if (!best || d < best.d) best = { d, s: Math.sign(-uz * qx + ux * qz), qj };
+      }
+      if (best) { hits++; side += best.s; (pair[ri] ??= new Map()).set(best.qj, (pair[ri].get(best.qj) || 0) + 1); }
+    }
+    if (tried >= 4 && hits / tried > 0.6) cand.set(ri, side >= 0 ? 1 : -1);
+  });
+  // mutual: the road it runs beside most is a candidate too, and runs beside it
+  for (const [ri, sd] of cand) {
+    const m = [...pair[ri].entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (m != null && cand.has(m) && pair[m]?.has(ri)) roads[ri].median = sd;
+  }
 }

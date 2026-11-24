@@ -143,6 +143,8 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 
 Ground textures in `tex/` are CC0 from [Poly Haven](https://polyhaven.com) (aerial_grass_rock, aerial_rocks_02, aerial_beach_01, dry_ground_rocks, cliff_side).
 
+Road surfaces in `tex/roads/` are CC0 from [ambientCG](https://ambientcg.com) (Asphalt015, Asphalt026C's crack pattern, Gravel023), packed by `tools/roads/bake_textures.py`; the markings are drawn by `src/roadSurface.js` to each region's rules (Swiss VSS, US MUTCD).
+
 Building and town materials in `tex/towns/` are CC0 from [ambientCG](https://ambientcg.com) (Plaster001, Plaster007, WoodSiding001, WoodSiding008, WoodSiding009, Planks037A, Bricks085, Bricks076A, RoofingTiles003, RoofingTiles013A, RoofingTiles014A, CorrugatedSteel009, ThatchedRoof001A, PavingStones128, PavingStones142, Gravel023, Asphalt031, Grass005, Concrete034), packed into one colour / normal / roughness sheet by `tools/towns/bake_materials.py`. Windows, doors, shutters, signs, railings and the rooms behind the glass are painted procedurally on top at start-up.
 
 The sky's atmosphere model (Rayleigh/Mie/ozone coefficients, single scattering into a sky-view lookup table) follows Eric Bruneton's *Precomputed Atmospheric Scattering* and Sébastien Hillaire's *A Scalable and Production Ready Sky and Atmosphere Rendering Technique* (EGSR 2020); the code is our own.

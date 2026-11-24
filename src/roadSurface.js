@@ -1,0 +1,165 @@
+// Road surface materials (#228): photo asphalt (CC0 ambientCG, tex/roads/, tools/roads/bake_textures.py) tinted per
+// region, with the markings drawn in metres by the shader (crisp up close, averaging out to the right grey with
+// distance instead of shimmering), worn paint, darker polished wheel tracks, crack sealing on worn blacktop, patch
+// repairs and a ragged tarmac edge; and the gravel shoulders either side fading into the ground.
+//
+// Every road ribbon carries uv = (metres across from its centre line, metres along it) and rinfo = (half width,
+// style, seed). style packs what is painted on it (roadStyle): centre line kind + 8 * edge line + 32 * lanes each way.
+// Markings follow each place's own rules, from the photos (see the PR for #228):
+//   ch (Swiss Alps): light grey asphalt; 15 cm white lines; a dashed white centre line on main roads (6 m dash, 12 m
+//     gap; 3 m / 6 m in towns), solid white edge lines on the main roads, nothing on village streets and lanes.
+//   us (New York, Arizona): darker blacktop with tar-sealed cracks; 10-15 cm lines; a double yellow centre line on
+//     two-way roads (with dashed passing stretches out in the country), white edge lines, dashed white lane lines
+//     (3 m dash, 9 m gap: MUTCD's 10 ft / 30 ft); city avenues as one-way, several lanes.
+//   fr (French Polynesia): white lines, a dashed centre line (3 m / 10 m), pale coral-sand asphalt.
+import * as THREE from 'three';
+import { FOG } from './shaders.js';
+
+export const REGION = { alpine: 'ch', lauterbrunnen: 'ch', nyc: 'us', canyon: 'us', islands: 'fr' };
+const LOOK = {
+  // asphalt tint (linear), how worn (cracks, faded paint), line width, dash/gap (country, town), shoulder gravel tint
+  ch: { tint: [0.235, 0.228, 0.215], wear: 0.25, lw: 0.15, dash: [6, 12, 3, 6], yellow: false, gravel: [0.42, 0.41, 0.39] },
+  us: { tint: [0.13, 0.125, 0.118], wear: 0.7, lw: 0.13, dash: [3, 9, 3, 9], yellow: true, gravel: [0.48, 0.40, 0.31] },
+  fr: { tint: [0.2, 0.192, 0.18], wear: 0.45, lw: 0.12, dash: [3, 10, 3, 10], yellow: false, gravel: [0.55, 0.52, 0.45] },
+};
+// centre line kinds
+const C_NONE = 0, C_DASH = 1, C_DOUBLE = 2, C_LANES = 3; // C_LANES: one-way, dashed white lane lines only
+// edge: 0 none, 1 white both sides, 2 / 3: one carriageway of a divided road, its median on the +x / -x side (US:
+// yellow there, white outside; elsewhere white both sides)
+export function roadStyle(region, rd, city) {
+  const w = rd.width, narrow = w < 6.2 || rd.lane;
+  let center = C_NONE, edge = 0, lanes = 1;
+  if (rd.median) { lanes = w >= 10 ? 3 : w >= 6.5 ? 2 : 1; return (lanes > 1 ? C_LANES : C_NONE) + 8 * (rd.median > 0 ? 2 : 3) + 32 * lanes; }
+  if (region === 'us') {
+    if (city) { lanes = w >= 11 ? 3 : w >= 8 ? 2 : 1; center = lanes > 1 ? C_LANES : C_NONE; edge = rd.kind === 'highway' ? 1 : 0; }
+    else if (!narrow) { center = C_DOUBLE; edge = 1; lanes = w >= 13 ? 2 : 1; }
+  } else if (!narrow && rd.kind !== 'street') { center = C_DASH; edge = region === 'ch' && w >= 7 ? 1 : 0; lanes = w >= 13 ? 2 : 1; }
+  else if (!narrow && region !== 'ch') center = C_DASH;
+  return center + 8 * edge + 32 * lanes;
+}
+
+const loader = new THREE.TextureLoader(), cache = new Map();
+function tex(name, srgb) {
+  if (cache.has(name)) return cache.get(name);
+  const t = loader.load(`tex/roads/${name}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+  cache.set(name, t); return t;
+}
+export const ROAD_TEXTURE_FILES = ['tex/roads/asphalt_d.jpg', 'tex/roads/asphalt_n.jpg', 'tex/roads/gravel_d.jpg'];
+
+const NOISE = /* glsl */`
+  float rh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float rn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(rh(i), rh(i + vec2(1, 0)), f.x), mix(rh(i + vec2(0, 1)), rh(i + vec2(1, 1)), f.x), f.y); }
+  float fbm(vec2 p) { return rn(p) * 0.5 + rn(p * 2.03) * 0.3 + rn(p * 4.1) * 0.2; }
+`;
+
+// The tarmac. region: 'ch' | 'us' | 'fr'.
+export function tarmacMaterial(region) {
+  const L = LOOK[region] || LOOK.ch;
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
+  const U = { rD: { value: tex('asphalt_d', true) }, rN: { value: tex('asphalt_n') }, rTint: { value: new THREE.Color(...L.tint) }, rWear: { value: L.wear },
+    rLW: { value: L.lw }, rDash: { value: new THREE.Vector4(...L.dash) }, rYellow: { value: L.yellow ? 1 : 0 } };
+  mat.userData.U = U;
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, FOG, U); // (FOG: the game's height fog, shaders.js installFog: a material with its own hook must add it)
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 rinfo; varying vec2 vR; varying vec3 vI; varying vec3 vWP;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvR = uv; vI = rinfo; vWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+      varying vec2 vR; varying vec3 vI; varying vec3 vWP; uniform sampler2D rD; uniform sampler2D rN; uniform vec3 rTint; uniform float rWear; uniform float rLW; uniform vec4 rDash; uniform float rYellow;
+      ${NOISE}
+      // coverage of a line of width w centred at c across x (antialiased; thinner than a pixel: its average)
+      // (derivatives taken once, up front: fwidth inside branches or after a discard is undefined)
+      float gFx, gFv;
+      // coverage of a line of width w centred at c across x (antialiased; thinner than a pixel: its average)
+      float lineAA(float x, float c, float w) { float fw = max(gFx, 1e-4), W = max(w, fw); return clamp((W * 0.5 - abs(x - c)) / fw + 0.5, 0.0, 1.0) * (w / W); }
+      float dashAA(float v, float dash, float gap) { float p = dash + gap, fw = max(gFv, 1e-4), t = mod(v, p);
+        float on = clamp(min(t, dash - t) / fw + 0.5, 0.0, 1.0); return mix(on, dash / p, smoothstep(0.3, 1.0, fw / p)); }`)
+      .replace('#include <map_fragment>', `
+        float hw = vI.x, st = vI.y, seed = vI.z, x = vR.x, v = vR.y, ax = abs(x);
+        gFx = fwidth(x); gFv = fwidth(v);
+        float cKind = mod(st, 8.0), edgeOn = mod(floor(st / 8.0), 4.0), lanes = floor(st / 32.0);
+        vec2 tp = vec2(x, v) / 3.2; // the photo: 3.2 m square
+        vec3 grain = texture2D(rD, tp).rgb * 2.0, nrm = texture2D(rN, tp).rgb;
+        float town = step(hw, 3.6);
+        // the tarmac's ragged edge: the last 25 cm crumble into the shoulder underneath
+        float rag = fbm(vec2(v * 1.7, seed)) * 0.35;
+        if (ax > hw - rag * 0.7 + 0.02) discard;
+        vec3 col = rTint * grain;
+        // patch repairs: now and then a lane-wide stretch of newer, darker tarmac with crisp edges
+        float pk = floor(v / 23.0 + seed), pr = rh(vec2(pk, seed * 3.1));
+        float patchOn = step(1.0 - 0.07 * rWear, pr) * step(abs(x - (rh(vec2(pk, 7.0)) - 0.5) * hw), hw * 0.45) * step(fract(v / 23.0 + seed), 0.35 + 0.5 * rh(vec2(pk, 9.0)));
+        col *= mix(1.0, 0.86, patchOn);
+        // large-scale tone (old and new surfacing, dirt), and the wheel tracks: darker and polished
+        col *= 0.88 + 0.24 * fbm(vec2(x * 0.15, v * 0.02 + seed));
+        float laneW = cKind > 2.5 ? 2.0 * hw / max(lanes, 1.0) : hw / max(lanes, 1.0);
+        float lx = mod(cKind > 2.5 ? x + hw : ax, laneW) - laneW * 0.5, tracks = smoothstep(0.55, 0.2, abs(abs(lx) - 0.85)) * (1.0 - town * 0.5);
+        col *= 1.0 - 0.13 * tracks; float oil = smoothstep(0.5, 0.0, abs(lx)) * 0.1; col *= 1.0 - oil;
+        // cracks, sealed with tar (US: tar snakes), fewer on the Swiss roads
+        float crack = smoothstep(0.35, 0.8, nrm.b) * smoothstep(0.35, 0.65, fbm(vec2(x * 0.08 + seed, v * 0.01))) * rWear;
+        col = mix(col, vec3(0.025), crack * 0.85 * (1.0 - patchOn));
+        // markings
+        float lw = rLW, dashC = mix(rDash.x, rDash.z, town), gapC = mix(rDash.y, rDash.w, town);
+        float paint = 0.0, yel = 0.0;
+        if (cKind > 0.5 && cKind < 1.5) paint = lineAA(x, 0.0, lw) * dashAA(v, dashC, gapC);
+        if (cKind > 1.5 && cKind < 2.5) { // double yellow; out in the country, a dashed passing stretch on one side now and then
+          float pass = step(0.6, rn(vec2(v / 400.0, seed))), side = step(0.5, rh(vec2(floor(v / 400.0), seed)));
+          float l1 = lineAA(x, -lw, lw) * mix(1.0, dashAA(v, rDash.x, rDash.y), pass * side), l2 = lineAA(x, lw, lw) * mix(1.0, dashAA(v, rDash.x, rDash.y), pass * (1.0 - side));
+          yel = max(l1, l2) * rYellow; paint = max(l1, l2) * (1.0 - rYellow);
+        }
+        if (lanes > 1.5) { // lane lines: dashed white between the lanes (on each side of the centre on a two-way road)
+          float n = lanes, oneWay = step(2.5, cKind);
+          for (int k = 1; k < 4; k++) { if (float(k) >= n) break;
+            float c = oneWay > 0.5 ? -hw + 2.0 * hw * float(k) / n : hw * float(k) / n;
+            paint = max(paint, lineAA(oneWay > 0.5 ? x : ax, c, lw) * dashAA(v, rDash.z, rDash.w)); }
+        }
+        if (edgeOn > 0.5 && edgeOn < 1.5) paint = max(paint, lineAA(ax, hw - 0.35, lw));
+        if (edgeOn > 1.5) { // a divided road's carriageway: the median side yellow (US), the outside white
+          float ms = edgeOn < 2.5 ? 1.0 : -1.0, med = lineAA(x * ms, hw - 0.5, lw), outer = lineAA(x * ms, -(hw - 0.35), lw);
+          paint = max(paint, outer); yel = max(yel, med * rYellow); paint = max(paint, med * (1.0 - rYellow)); }
+        // worn paint: thinned where the tyres run, and patchy
+        float wear = rWear * (0.35 + 0.65 * fbm(vec2(x * 3.0, v * 0.7) + seed)) * (0.5 + 0.5 * tracks);
+        float keep = 1.0 - smoothstep(0.25, 0.75, wear) * 0.8;
+        paint *= keep * (1.0 - patchOn * 0.6); yel *= keep;
+        vec3 white = vec3(0.78), yellow = vec3(0.78, 0.52, 0.08);
+        col = mix(col, white * (0.92 + 0.08 * grain.r), paint);
+        col = mix(col, yellow * (0.92 + 0.08 * grain.r), yel);
+        diffuseColor.rgb = col;
+        float rPaint = max(paint, yel);
+      `)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = mix(mix(0.96, 0.84, tracks), 0.7, rPaint) - 0.04 * patchOn;`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        { vec2 g = (nrm.rg * 2.0 - 1.0) * (0.55 - 0.35 * rPaint); vec3 tn = normalize(vec3(g.x, 1.0, -g.y));
+          // the ribbon lies flat along the road: its world normal is up, tilted by the profile; add the grain on top
+          normal = normalize(normal + (viewMatrix * vec4(tn.x, 0.0, tn.z, 0.0)).xyz); }`);
+  };
+  mat.customProgramCacheKey = () => 'tarmac2-' + region;
+  return mat;
+}
+
+// The gravel shoulders (the verges either side of the tarmac): a band of gravel and dust whose outer part breaks up
+// into the ground beside it (dithered, so no sorting of transparent strips).
+export function shoulderMaterial(region) {
+  const L = LOOK[region] || LOOK.ch;
+  const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+  const U = { gD: { value: tex('gravel_d', true) }, gTint: { value: new THREE.Color(...L.gravel) } };
+  mat.userData.U = U;
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, FOG, U); // (FOG: the game's height fog, shaders.js installFog: a material with its own hook must add it)
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 rinfo; varying vec2 vR; varying vec3 vI;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvR = uv; vI = rinfo;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+      varying vec2 vR; varying vec3 vI; uniform sampler2D gD; uniform vec3 gTint;
+      ${NOISE}`)
+      .replace('#include <map_fragment>', `
+        float hw = vI.x, x = abs(vR.x) - hw, v = vR.y; // x: metres out from the tarmac edge (0 .. VERGE)
+        float outK = clamp(x / 1.5, 0.0, 1.0), n = fbm(vec2(v * 0.6, vI.z + vR.x * 0.4));
+        if (outK > 0.35 + 0.6 * n) discard; // breaks up into the ground (and grass)
+        vec3 col = gTint * texture2D(gD, vec2(vR.x, v) / 1.6).rgb * 2.0 * (0.85 + 0.3 * n);
+        col *= mix(0.8, 1.0, smoothstep(0.0, 0.25, x)); // the tarmac's shadow line
+        diffuseColor.rgb = col;
+      `);
+  };
+  mat.customProgramCacheKey = () => 'shoulder2-' + region;
+  return mat;
+}
