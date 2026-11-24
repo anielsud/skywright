@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, BLD_U } from './buildings.js';
 import { toLocal } from './realworld.js';
+import { roadIndex, setBack, holeInside, fitBox, MAJOR } from './setback.js';
 
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
 const GROUP = 2; // tall buildings: one mesh per GROUP x GROUP data tiles
@@ -129,7 +130,7 @@ export class MeshW {
 }
 
 // ---------------- reading city.bin ----------------
-function readRec(U, S, o, q, cx, cz, R) {
+export function readRec(U, S, o, q, cx, cz, R) {
   const w0 = U[o], n = w0 & 4095, nh = w0 >> 12;
   R.flags = U[o + 1]; R.top = S[o + 2] / 4; R.mh = S[o + 3] / 4; R.g0 = S[o + 4] / 4; R.g1 = R.g0 + U[o + 5] / 4;
   const k6 = U[o + 6]; R.kind = k6 & 15; R.roof = (k6 >> 4) & 15; R.lv = k6 >> 8; R.rh = S[o + 7] / 4; R.col = U[o + 8]; R.name = U[o + 9]; R.o = o;
@@ -199,6 +200,7 @@ export class CityScenery {
     this.helipads = (cfg.helipads || []).map((h) => { const [x, z] = toLocal(D.meta, h.lat, h.lon), L = h.look && toLocal(D.meta, h.look.lat, h.look.lon); return { ...h, x, z, look: L ? { x: L[0], z: L[1] } : null, roof: null }; });
     const t0 = performance.now();
     this.stats = { tall: 0, low: 0, tris: 0 };
+    this.roads = roadIndex(W); this.setbacks = { cut: 0, dropped: 0, through: 0, ms: performance.now() - t0 }; // set back from the streets (setback.js; ms: the index and the cuts)
     this.buildTall();
     this.msTall = performance.now() - t0;
     this.queue = []; this.lastPlan = null; this.shadows = W_SHADOW(W);
@@ -250,15 +252,28 @@ export class CityScenery {
   skipped(R) { if (!this.hole) return false; const p = R.P[0]; return Math.hypot(p[0] - this.hole[0], p[1] - this.hole[1]) < 60; }
 
   // ---------------- one building (or part) ----------------
-  building(M, R, tall) {
-    const W = this.w;
+  // a record's footprint as built: simplified, counter-clockwise, set back from the streets (setback.js: cut back off the
+  // roadway and pavement; null if too little is left), its courtyards (those the cut reaches are filled in)
+  footprint(R, tall) {
     let P = simplify(R.P, tall ? 0.35 : 0.5);
-    if (P.length < 3) return;
+    if (P.length < 3) return null;
     if (area2(P) < 0) P.reverse();
-    const holes = R.holes.map((h) => { const Q = simplify(h, 0.5); if (area2(Q) < 0) Q.reverse(); return Q; }).filter((h) => h.length >= 3);
+    let holes = R.holes.map((h) => { const Q = simplify(h, 0.5); if (area2(Q) < 0) Q.reverse(); return Q; }).filter((h) => h.length >= 3);
+    const major = R.top >= MAJOR.height || R.lv >= 8 || Math.abs(area2(P)) >= MAJOR.area;
+    const ts = performance.now(), sb = setBack(this.roads, P, major); this.setbacks.ms += performance.now() - ts;
+    if (sb.drop) { this.setbacks.dropped++; return null; }
+    if (sb.through) { this.setbacks.through++; return { P, holes, p0: P[0], through: true }; }
+    const p0 = P[0]; // (the building's look is seeded from its mapped corner: a cut one keeps it)
+    if (sb.cut) { this.setbacks.cut++; P = area2(sb.P) < 0 ? sb.P.slice().reverse() : sb.P; holes = holes.filter((h) => holeInside(P, h)); }
+    return { P, holes, p0, cut: sb.cut };
+  }
+  building(M, R, tall) {
+    const W = this.w, F = this.footprint(R, tall);
+    if (!F) return;
+    const { P, holes, p0 } = F;
     const A = Math.abs(area2(P)) - holes.reduce((s, h) => s + Math.abs(area2(h)), 0);
     if (A < 6) return;
-    const part = R.flags & 1, hseed = hash(Math.round(P[0][0] * 4), Math.round(P[0][1] * 4)), h2 = hash(R.o, 7), h3 = hash(R.o, 13);
+    const part = R.flags & 1, hseed = hash(Math.round(p0[0] * 4), Math.round(p0[1] * 4)), h2 = hash(R.o, 7), h3 = hash(R.o, 13);
     const gm = (R.g0 + R.g1) / 2;
     // height: the tag (NYC: measured roof heights), else levels, else by use and size
     let top = R.top > 0 ? R.top : R.lv > 0 ? R.lv * 3.2 + 1 : R.kind === 0 ? 8 : R.kind === 2 ? 3.5 : A > 400 ? 12 : 9.5;
@@ -303,7 +318,8 @@ export class CityScenery {
     const rc = R.roof; // 1 gabled 2 hipped 3 pyramidal 4 dome 5 onion 6 skillion 7 round 8 gambrel 9 mansard 10 cone 11 flat
     if (rc === 1 || rc === 8 || rc === 7 || rc === 6) roof = 'gable'; else if (rc === 2 || rc === 9) roof = 'hip'; else if (rc === 3 || rc === 10) roof = 'pyramid'; else if (rc === 4 || rc === 5) roof = 'dome'; else if (rc === 11) roof = 'flat';
     let box = null;
-    if (roof === 'gable' || roof === 'hip') { box = obb(P); if (!box || box.hw > 14 || A / box.ar < 0.7) roof = 'flat'; }
+    const fit = (b) => { const t0 = performance.now(), f = fitBox(this.roads, { x: b.cx, z: b.cz, ux: b.ux, uz: b.uz, hl: b.hl, hw: b.hw }); this.setbacks.ms += performance.now() - t0; return f; }; // (a box kept off the street, setback.js: an irregular footprint's reaches past its walls)
+    if (roof === 'gable' || roof === 'hip') { box = obb(P); if (!box || box.hw > 14 || A / box.ar < 0.7 || (!F.through && fit(box).fit)) roof = 'flat'; } // (no pitched roof over the pavement)
     if (roof !== 'flat') {
       const rad = Math.sqrt(A / Math.PI);
       rise = R.rh > 0 ? R.rh : roof === 'pyramid' ? Math.min(H * 0.6, rad * 1.6) : roof === 'dome' ? Math.min(H * 0.5, rad) : Math.min(box.hw * 0.75, 5);
@@ -372,9 +388,12 @@ export class CityScenery {
       M.color(0xd8dce0); M.cyl(m.x, m.z, yTop - 1, gm + m.top, 2.2, 0.3, 8, C.METAL);
       this.addBox({ cx: m.x, cz: m.z, ux: 1, uz: 0, hl: 2, hw: 2 }, yTop, gm + m.top, null);
     }
-    const b = box || obb(P);
-    if (!b) return;
-    const t = this.addBox({ cx: b.cx, cz: b.cz, ux: b.ux, uz: b.uz, hl: b.hl * (A / b.ar > 0.7 ? 1 : 0.85), hw: b.hw * (A / b.ar > 0.7 ? 1 : 0.85) }, part && R.mh > 0.5 ? yBase : R.g0 - 1, yTop, this.curTile);
+    const b0 = box || obb(P);
+    if (!b0) return;
+    const k = A / b0.ar > 0.7 ? 1 : 0.85; let b = { cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz, hl: b0.hl * k, hw: b0.hw * k };
+    if (!F.through) { const f = fit(b); b = { cx: f.x, cz: f.z, ux: f.ux, uz: f.uz, hl: f.hl, hw: f.hw }; }
+    const t = this.addBox(b, part && R.mh > 0.5 ? yBase : R.g0 - 1, yTop, this.curTile);
+    if (F.through) t.through = true;
     if (pad) { t.fixed = true; return; } // (no damage key: destruction.js leaves it standing, whatever falls around it)
     // destructible (destruction.js): its vertices, what it's made of; damage done earlier this flight comes back with it
     t.dk = 'c' + R.o; t.rng = [[M, n0, M.n - n0]]; t.look = { cell: st.cell, col: st.col, rcol: 0x5c5a56, glass: !!st.glass }; if (wt) t.type = 'waterTower';

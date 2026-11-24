@@ -7,6 +7,7 @@ import { Builder, buildingMaterial, buildingDepthMaterial, C } from './buildings
 import { mulberry32, smoothstep } from './noise.js';
 import { CityScenery } from './realCity.js';
 import { Landmarks } from './realLandmarks.js';
+import { roadIndex, setBack, fitBox, MAJOR } from './setback.js';
 
 const CHUNK = 1000; // m: buildings are merged per 1 km cell (one draw call each), hidden beyond VIEW
 const VIEW = { low: 4500, medium: 8000, high: 14000 };
@@ -42,57 +43,72 @@ export class RealScenery {
 
   // ---------------- buildings ----------------
   buildBuildings(list) {
+    const t0 = performance.now(), roads = roadIndex(this.w); this.setbacks = { cut: 0, dropped: 0, through: 0, flat: 0, ms: performance.now() - t0 }; // (ms: the index and the cuts)
     const W = this.w, seed0 = W.loc.seed * 5 + 3, lowQ = W.qName === 'low', trop = W.loc.osmStyle === 'tropical', wl = W.waterLevel, SB = W.loc.buildStyle || {};
     for (const b of list) {
       const [kind, hTag, lv, rsTag, rhTag, minH, flat] = b;
-      const n = flat.length / 2; if (n < 3) continue;
-      const P = []; let cx = 0, cz = 0;
-      for (let k = 0; k < n; k++) { P.push([flat[k * 2], flat[k * 2 + 1]]); cx += flat[k * 2]; cz += flat[k * 2 + 1]; }
-      cx /= n; cz /= n;
-      // each building's own random sequence, from where it stands: its style is the same whichever others are left out
-      // (Low skips the small ones) and whatever order they come in
+      if (flat.length < 6) continue;
+      let P = []; for (let k = 0; k < flat.length; k += 2) P.push([flat[k], flat[k + 1]]);
+      const ring = () => { let cx = 0, cz = 0, area = 0; for (let k = 0; k < P.length; k++) { const a = P[k], c = P[(k + 1) % P.length]; cx += a[0]; cz += a[1]; area += a[0] * c[1] - c[0] * a[1]; } return [cx / P.length, cz / P.length, area * 0.5]; };
+      let [cx, cz, area] = ring();
+      // each building's own random sequence, from where it stands (before any setback): its style is the same whichever
+      // others are left out (Low skips the small ones, setbacks drop some) and whatever order they come in
       const r = buildingRng(seed0, cx, cz);
-      let area = 0; for (let k = 0; k < n; k++) { const a = P[k], c = P[(k + 1) % n]; area += a[0] * c[1] - c[0] * a[1]; }
-      area *= 0.5; const A = Math.abs(area);
-      if (A < (lowQ ? 60 : W.qName === 'medium' ? 25 : 0)) continue; // lighter on tablets: no garden sheds
+      if (Math.abs(area) < (lowQ ? 60 : W.qName === 'medium' ? 25 : 0)) continue; // lighter on tablets: no garden sheds
       if (Math.abs(cx - 100) < 480 && Math.abs(cz) < 1250) continue; // the game's own airport
-      // oriented bounding box: the edge direction giving the smallest rectangle
-      let best = null;
-      for (let k = 0; k < n; k++) {
-        const a = P[k], c = P[(k + 1) % n], ex = c[0] - a[0], ez = c[1] - a[1], L = Math.hypot(ex, ez); if (L < 0.5) continue;
-        const ux = ex / L, uz = ez / L;
-        let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
-        for (const p of P) { const u = p[0] * ux + p[1] * uz, v = -p[0] * uz + p[1] * ux; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }
-        const ar = (u1 - u0) * (v1 - v0);
-        if (!best || ar < best.ar) best = { ar, ux, uz, u0, u1, v0, v1 };
-      }
-      if (!best) continue;
-      // long axis u, half sizes hl >= hw, centre
-      let { ux, uz } = best, hl = (best.u1 - best.u0) / 2, hw = (best.v1 - best.v0) / 2;
-      const um = (best.u0 + best.u1) / 2, vm = (best.v0 + best.v1) / 2;
-      const ox = um * ux - vm * uz, oz = um * uz + vm * ux;
-      if (hw > hl) { [hl, hw] = [hw, hl]; [ux, uz] = [-uz, ux]; }
-      const rect = A / Math.max(1, best.ar);
+      // oriented bounding box: the edge direction giving the smallest rectangle; long axis u, half sizes hl >= hw, centre
+      const obb = () => {
+        let best = null;
+        for (let k = 0; k < P.length; k++) {
+          const a = P[k], c = P[(k + 1) % P.length], ex = c[0] - a[0], ez = c[1] - a[1], L = Math.hypot(ex, ez); if (L < 0.5) continue;
+          const ux = ex / L, uz = ez / L;
+          let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+          for (const p of P) { const u = p[0] * ux + p[1] * uz, v = -p[0] * uz + p[1] * ux; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }
+          const ar = (u1 - u0) * (v1 - v0);
+          if (!best || ar < best.ar) best = { ar, ux, uz, u0, u1, v0, v1 };
+        }
+        if (!best) return null;
+        let { ux, uz } = best, hl = (best.u1 - best.u0) / 2, hw = (best.v1 - best.v0) / 2;
+        const um = (best.u0 + best.u1) / 2, vm = (best.v0 + best.v1) / 2;
+        if (hw > hl) { [hl, hw] = [hw, hl]; [ux, uz] = [-uz, ux]; }
+        return { ox: um * best.ux - vm * best.uz, oz: um * best.uz + vm * best.ux, ux, uz, hl, hw, ar: best.ar };
+      };
+      const P0 = P, A0 = Math.abs(area), O0 = obb();
+      if (!O0) continue;
+      const rect = A0 / Math.max(1, O0.ar);
       // ground under it: walls start just below the lowest corner
       let g0 = Infinity, g1 = -Infinity;
-      for (const p of P) { const h = W.sampleGrid(p[0], p[1]); g0 = Math.min(g0, h); g1 = Math.max(g1, h); }
+      for (const p of P0) { const h = W.sampleGrid(p[0], p[1]); g0 = Math.min(g0, h); g1 = Math.max(g1, h); }
       const wet = trop && (kind === 7 || g0 < wl + 0.2); // on stilts over the lagoon
-      if (wet ? A > 900 || g0 < wl - 15 : g0 < wl - 2) continue;
+      if (wet ? A0 > 900 || g0 < wl - 15 : g0 < wl - 2) continue;
       const base = wet ? wl + DECK : g0 - 0.6;
       // heights: tagged, from levels, or by kind and size
-      const big = A > 450, small = A < 35;
+      const big = A0 > 450, small = A0 < 35;
       let roof = rsTag;
-      if (roof < 0) roof = kind === 4 || kind === 6 ? (A > 350 ? 0 : 1) : kind === 1 && big ? 0 : rect > 0.78 ? 1 : rect > 0.55 && A < 900 ? 2 : 0;
+      if (roof < 0) roof = kind === 4 || kind === 6 ? (A0 > 350 ? 0 : 1) : kind === 1 && big ? 0 : rect > 0.78 ? 1 : rect > 0.55 && A0 < 900 ? 2 : 0;
       if (roof === 4) roof = 1;
-      if (roof === 1 && hw > 16) roof = 0; // no giant gables on huge halls
-      if (trop && rsTag < 0 && (wet || kind === 5) && A < 500) roof = 2; // thatched resort roofs are hipped
+      if (roof === 1 && O0.hw > 16) roof = 0; // no giant gables on huge halls
+      if (trop && rsTag < 0 && (wet || kind === 5) && A0 < 500) roof = 2; // thatched resort roofs are hipped
+      // set back from the roads (setback.js): cut back off the tarmac and verge, or left out where the road runs through.
+      // Its looks (and the random draws for them, so every other building keeps its own), its roof and its height come
+      // from the footprint as mapped; its walls from the one that's left. Under a pitched roof (which covers the
+      // footprint's whole box) the house is trimmed as that rectangle: a smaller house under the same roof.
+      const ts = performance.now(), sb = setBack(roads, P, Math.abs(area) >= MAJOR.area || hTag >= MAJOR.height || lv >= 8, roof === 1 || roof === 2 || roof === 3); this.setbacks.ms += performance.now() - ts;
+      if (sb.through) this.setbacks.through++;
+      if (sb.cut && !sb.drop) { this.setbacks.cut++; P = sb.P; [cx, cz, area] = ring(); }
+      const n = P.length, A = Math.abs(area), O = sb.cut && !sb.drop ? obb() || O0 : O0;
+      const { ox, oz, ux, uz, hl, hw } = O;
+      // the collision box: the footprint's, kept off the road (setback.js fitBox: a box reaches over the tarmac where the
+      // walls don't, past a cut-off corner or an L's yard); a pitched roof over that box would overhang the road too: flat then
+      const tb = performance.now(), cb = sb.through || sb.drop ? null : fitBox(roads, { x: ox, z: oz, ux, uz, hl, hw }); this.setbacks.ms += performance.now() - tb;
+      if (cb?.fit && roof) { roof = 0; this.setbacks.flat++; }
       const pitch = kind === 3 ? 1.1 : kind === 2 ? 0.5 : 0.58;
       let rise = roof === 0 ? 0 : rhTag > 0 ? rhTag : Math.min(hw * (trop && roof === 2 ? 0.95 : pitch), trop ? 5.5 : 9);
       let walls;
       if (hTag > 0) walls = Math.max(2.5, hTag - minH - rise);
       else if (lv > 0) walls = lv * 2.9 + 0.5;
-      else if (trop) walls = wet ? 2.9 : small ? 2.5 : kind === 0 || kind === 7 ? (A > 260 ? 6.2 : 3.3) : kind === 1 ? 8.8 : kind === 3 ? 7.5 : kind === 5 ? (A > 600 ? 7.2 : 3.6) : 5.5;
-      else walls = small ? 2.6 : kind === 0 ? (A > 160 ? 8.6 : 5.9) : kind === 1 ? 11.5 : kind === 2 ? 4.8 : kind === 3 ? 10 : kind === 4 ? 7.5 : kind === 5 ? 12.5 : 9.5;
+      else if (trop) walls = wet ? 2.9 : small ? 2.5 : kind === 0 || kind === 7 ? (A0 > 260 ? 6.2 : 3.3) : kind === 1 ? 8.8 : kind === 3 ? 7.5 : kind === 5 ? (A0 > 600 ? 7.2 : 3.6) : 5.5;
+      else walls = small ? 2.6 : kind === 0 ? (A0 > 160 ? 8.6 : 5.9) : kind === 1 ? 11.5 : kind === 2 ? 4.8 : kind === 3 ? 10 : kind === 4 ? 7.5 : kind === 5 ? 12.5 : 9.5;
       if (hTag > 0 && hTag - minH < walls + rise) rise = Math.max(0, hTag - minH - walls);
       const eave = wet ? walls : (g0 + g1) / 2 + minH + walls - base;
       // style: Swiss chalets (dark timber) up in the villages, plaster in the valley towns
@@ -122,9 +138,11 @@ export class RealScenery {
         wallCol = timber ? TROPIC.wood[(r() * 4) | 0] : TROPIC.walls[(r() * TROPIC.walls.length) | 0];
         roofCell = thatch ? C.THATCH : C.SEAM; roofC = thatch ? TROPIC.thatch[(r() * 4) | 0] : TROPIC.metal[(r() * TROPIC.metal.length) | 0];
       }
+      const seed = (r() * 255) | 0;
+      if (sb.drop) { this.setbacks.dropped++; continue; } // (left out after its draws: the next building looks as it did)
       // ---- geometry
       const ch = this.chunk(cx, cz), B = ch.B, n0 = B.n;
-      B.seed = (r() * 255) | 0;
+      B.seed = seed;
       B.setFrame(0, base, 0, 0);
       const ccw = area > 0; // walls need the outside on their front: walk the ring so the face normal points out
       for (let k = 0; k < n; k++) {
@@ -151,7 +169,7 @@ export class RealScenery {
       const key = Math.floor(cx / 50) + ',' + Math.floor(cz / 50);
       if (!this.grid.has(key)) this.grid.set(key, []);
       const e = [cx, base, cz, eave + rise, Math.sqrt(A / Math.PI)];
-      e.solid = true; e.dk = 'r' + this.count; e.rng = [[B, n0, B.n - n0]]; e.ob = { x: ox, z: oz, ux, uz, hl, hw }; // destructible (destruction.js)
+      e.solid = true; e.fp = P; if (sb.through) e.through = true; e.dk = 'r' + this.count; e.rng = [[B, n0, B.n - n0]]; e.ob = cb || { x: ox, z: oz, ux, uz, hl, hw }; // destructible (destruction.js)
       this.grid.get(key).push(e);
       this.count++;
     }
