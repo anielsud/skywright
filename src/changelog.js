@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.166.0', items: [
+    "The terminal got a real makeover: a long glass front, a thin white roof that sticks out over the edges, and jet bridges parked at the gates.",
+  ] },
   { v: '1.165.0', items: [
     "The airport has a brand-new terminal with a curved roof, numbered gates and a drop-off area out front.",
     "The control tower has a glass room at the top, and a radar dish spins round next to the hangars.",
