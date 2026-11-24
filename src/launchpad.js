@@ -13,6 +13,7 @@
 // like town buildings). Everything is merged: the slab, buildings and tanks are one draw call on the airport's building
 // material, the stand is a handful of meshes on cached paint materials, and the lamps join the world's night lights.
 import * as THREE from 'three';
+import { ALS, LOC_Z } from './airportKit.js';
 import { Builder, C } from './buildings.js';
 import { buildDesign, uprightStage } from './hangar.js';
 import { analyze } from './design.js';
@@ -32,6 +33,8 @@ export function findPadSite(world) {
   const rw = world.runways || [], P = new THREE.Vector3();
   const clearOfAirport = (x, z, m) => {
     for (const r of rw) if (Math.abs(x - r.x) < r.width / 2 + 140 + m && Math.abs(z) < r.len / 2 + 220 + m) return false;
+    for (const r of rw) if (Math.abs(x - r.x) < ALS.half + 10 + m && z > 0 && z < r.len / 2 + ALS.start + ALS.rows * ALS.step + 20 + m) return false; // approach lights (airportKit.js)
+    for (const r of rw) if (Math.abs(x - r.x) < 40 + m && z < 0 && z > -r.len / 2 - LOC_Z - 20 - m) return false; // localizer
     if (x > 40 - m && x < 450 + m && Math.abs(z) < 270 + m) return false; // apron, terminal, hangars, tower, fuel farm
     if (Math.hypot(x + 45, z - 600) < 30 + m) return false; // windsock
     return true;

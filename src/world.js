@@ -22,6 +22,7 @@ import { Destruction } from './destruction.js';
 import { BAKED, preloadBake, bakeFor, withBake, landAt } from './terrainBake.js';
 import { Landcover } from './landcover.js';
 import { LaunchPad } from './launchpad.js';
+import { buildAirfieldKit, CONNECTORS, TAXI } from './airportKit.js';
 import { Helipads } from './helipad.js';
 import { StuntParks, planStunts, padsHeight } from './stuntPark.js';
 import { roadStart } from './landStart.js';
@@ -30,6 +31,7 @@ import { WaterParks } from './waterPark.js';
 import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
 
 export const RWY = { len: 1800, width: 45 };
+export { airportGate } from './airportKit.js'; // where the airport's landside road meets the road network (roads.js)
 // Two parallel runways (the airport is centred on the east one, which has the PAPI and the landing mission).
 // Facing north the west one is on the left, so it is 36L / 18R; the east one is 36R / 18L.
 export const RUNWAYS = [{ x: 0, name: '36R', back: '18L' }, { x: -200, name: '36L', back: '18R' }];
@@ -894,9 +896,9 @@ export class World {
     for (const { x: rx } of RUNWAYS) {
       for (let z = -RWY.len / 2; z <= RWY.len / 2; z += 60) { push(rx - RWY.width / 2 - 1, z, 0xfff0c0); push(rx + RWY.width / 2 + 1, z, 0xfff0c0); }
       for (let x = -RWY.width / 2; x <= RWY.width / 2; x += 4) { push(rx + x, RWY.len / 2 + 2, 0x30ff60); push(rx + x, -RWY.len / 2 - 2, 0xff3030); }
-      for (let k = 1; k <= 12; k++) for (let x = -8; x <= 8; x += 4) push(rx + x, RWY.len / 2 + k * 30, 0xffffff, 1 + k * 0.4);
     }
-    for (let z = -RWY.len / 2; z <= RWY.len / 2; z += 40) { push(62, z, 0x3070ff); push(98, z, 0x3070ff); }
+    for (let z = -RWY.len / 2; z <= RWY.len / 2; z += 40) if (!CONNECTORS.some((c) => Math.abs(z - c.z) < 16)) push(TAXI.x0, z, 0x3070ff); // (on airportKit.js's fixtures; none on the apron side)
+    for (const c of CONNECTORS) for (const s of [-1, 1]) for (let x = RWY.width / 2 + 8; x < TAXI.x0; x += 14) push(x, c.z + s * 12, 0x3070ff);
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3)); lg.setAttribute('color', new THREE.Float32BufferAttribute(lc, 3));
     this.lightsMat = new THREE.PointsMaterial({ size: 3.2, color: new THREE.Color(3, 3, 3), vertexColors: true, map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0, fog: false });
     this.group.add(new THREE.Points(lg, this.lightsMat));
@@ -906,7 +908,6 @@ export class World {
     pg.setAttribute('position', new THREE.Float32BufferAttribute(pp, 3)); pg.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(12).fill(1), 3));
     this.papi = new THREE.Points(pg, new THREE.PointsMaterial({ size: 4.5, color: new THREE.Color(3, 3, 3), vertexColors: true, map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
     this.group.add(this.papi);
-    for (let k = 0; k < 4; k++) { const b = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1, 1), M.paint(0x333333)); b.position.set(pp[k * 3], this.loc.rwyH + 0.5, pp[k * 3 + 2] + 0.7); this.group.add(b); }
   }
 
   taxiTexture(kind) {
@@ -1009,6 +1010,10 @@ export class World {
     }
     const fg = new THREE.BufferGeometry(); fg.setAttribute('position', new THREE.Float32BufferAttribute(fp, 3)); fg.setAttribute('color', new THREE.Float32BufferAttribute(fc, 3));
     this.group.add(new THREE.Points(fg, this.lightsMat));
+    // the airfield's furniture: light fixtures, approach lights, PAPI housings, signs, ILS (src/airportKit.js)
+    const kit = buildAirfieldKit(this, A, y);
+    this.airfield = kit; this.windowMats.push(kit.signMat); kit.signs.receiveShadow = true; this.group.add(kit.signs);
+    { const g = new THREE.BufferGeometry(), c = new THREE.Color(); g.setAttribute('position', new THREE.Float32BufferAttribute(kit.points.flatMap((p) => p.slice(0, 3)), 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(kit.points.flatMap((p) => c.set(p[3]).toArray()), 3)); this.group.add(new THREE.Points(g, this.lightsMat)); }
     const shell = new THREE.Mesh(A.toGeometry(), mat); shell.castShadow = shell.receiveShadow = true; this.group.add(shell);
     const det = new THREE.Mesh(Dt.toGeometry(), mat); det.castShadow = true; this.group.add(det);
     // windsock
