@@ -12,11 +12,14 @@
 import * as THREE from 'three';
 import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, facade, facadeSpec, floodlit, linHex, LY0, LYS } from './buildings.js';
 import { toLocal } from './realworld.js';
-import { roadIndex, setBack, holeInside, fitBox, boxInside, MAJOR, streetWalls } from './setback.js';
+import { roadIndex, setBack, holeInside, fitBox, boxInside, MAJOR, streetWalls, PASSAGE, clip, intrusion } from './setback.js';
 
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
 const GROUP = 2; // tall buildings: one mesh per GROUP x GROUP data tiles
 const LOW_R = { low: 900, medium: 1600, high: 2400, ultra: 2600 }; // low buildings within this distance of the camera
+const DENSE = 12; // tall buildings within ~300 m (CityScenery.dense): a built-up spot
+const SUP = 25; // (m) the cells base() looks for what stands under a part in
+const REACH = 24, FRONT = 40, CONE = 0; // (m) a wall facing a street within REACH of its pavement (CONE: setback.js streetWalls, out in front of it at any angle) is a street front (shop fronts, doors: the city's streets are drawn narrower than the real ones, and a forecourt or plaza can stand between); else the walls facing the nearest street within FRONT
 const LEVELS = [150, 70, 35, 0]; // tall meshes, sorted by height: a far mesh draws only buildings >= LEVELS[k] m
 const LEVEL_D = { low: [5000, 3000, 1800], medium: [8000, 5000, 3000], high: [14000, 8000, 5000], ultra: [15000, 9000, 5500] };
 const FURN_D = { low: 1300, medium: 2400, high: 4000, ultra: 4500 }; // roof furniture (late indices) drawn within this of a tall mesh
@@ -35,6 +38,7 @@ const PAL = {
   glass: [0x8fb0c8, 0x7aa0a8, 0xb4c2cc, 0x5a6c7c, 0x9aaabb, 0x9fb4a8, 0x6f8aa8, 0xc0c8cc],
   concrete: [0xd0ccc4, 0xb8b4ac, 0xdcd8d0, 0xc4c0b6],
   siding: [0xeae6dc, 0xd8dce0, 0xe4d4b4, 0xc8d4c0, 0xf0e8e0, 0xd8c8b8],
+  kiosk: [0x2e4a3a, 0x5a2420, 0x26304a, 0x2c2c2e, 0x6a5428, 0x3a3e42], // (a kiosk's frames and fascia: dark green, oxblood, navy, black, bronze, gunmetal)
   roofs: [0x5a5c60, 0x6a6c70, 0x7a6a5c, 0x6e4a3c, 0x4e5056],
 };
 // roofs and what stands on them (sRGB, as the photos show them: stored as MeshW's linear bytes)
@@ -71,15 +75,16 @@ export class MeshW {
   }
   // vertical wall seen from outside, a -> b: u counts bays (from u0: a facade program's door is bay 0), v floors (from
   // yf, the floor datum)
-  wall(ax, az, bx, bz, y0, y1, yf, cell, bay, fl, u0 = 0) {
-    const L = Math.hypot(bx - ax, bz - az); if (L < 0.05 || y1 - y0 < 0.05) return;
+  // (t0, t1: only that stretch of it, its bays where the whole wall's are: a wall broken by a passage)
+  wall(ax, az, bx, bz, y0, y1, yf, cell, bay, fl, u0 = 0, t0 = 0, t1 = 1) {
+    const L = Math.hypot(bx - ax, bz - az); if (L < 0.05 || y1 - y0 < 0.05 || (t1 - t0) * L < 0.05) return;
     const ux = (bx - ax) / L, uz = (bz - az) / L, nx = -uz, nz = ux, nb = Math.max(1, Math.round(L / bay)), v0 = (y0 - yf) / fl, v1 = (y1 - yf) / fl;
     // (a facade program's ground floor reads the height above the floor, atl.z, which stops 60 m up: a taller wall is
     // two quads, so the lower one's heights interpolate true)
-    const ys = this.yg + 255 / LYS - LY0 - 4; if (y1 > ys + 1 && y0 < ys - 1 && facadeSpec(cell)?.gH > 0) { this.wall(ax, az, bx, bz, y0, ys, yf, cell, bay, fl, u0); this.wall(ax, az, bx, bz, ys, y1, yf, cell, bay, fl, u0); return; }
+    const ys = this.yg + 255 / LYS - LY0 - 4; if (y1 > ys + 1 && y0 < ys - 1 && facadeSpec(cell)?.gH > 0) { this.wall(ax, az, bx, bz, y0, ys, yf, cell, bay, fl, u0, t0, t1); this.wall(ax, az, bx, bz, ys, y1, yf, cell, bay, fl, u0, t0, t1); return; }
     this.grow(this.n + 4); this.growI(6);
-    const o = this.n;
-    this.v(ax, y0, az, nx, 0, nz, u0, v0, cell); this.v(bx, y0, bz, nx, 0, nz, u0 + nb, v0, cell); this.v(bx, y1, bz, nx, 0, nz, u0 + nb, v1, cell); this.v(ax, y1, az, nx, 0, nz, u0, v1, cell);
+    const o = this.n, x0 = ax + (bx - ax) * t0, z0 = az + (bz - az) * t0, x1 = ax + (bx - ax) * t1, z1 = az + (bz - az) * t1, ua = u0 + nb * t0, ub = u0 + nb * t1;
+    this.v(x0, y0, z0, nx, 0, nz, ua, v0, cell); this.v(x1, y0, z1, nx, 0, nz, ub, v0, cell); this.v(x1, y1, z1, nx, 0, nz, ub, v1, cell); this.v(x0, y1, z0, nx, 0, nz, ua, v1, cell);
     const I = this.idx, k = this.ni; I[k] = o; I[k + 1] = o + 1; I[k + 2] = o + 2; I[k + 3] = o; I[k + 4] = o + 2; I[k + 5] = o + 3; this.ni += 6;
   }
   // any planar polygon (counter-clockwise from its front), uv in metres / s from its first point
@@ -120,16 +125,16 @@ export class MeshW {
       if (apex && j === nr - 1) { I[i] = a; I[i + 1] = a + 1; I[i + 2] = o + nr * m; this.ni += 3; } else { I[i] = a; I[i + 1] = a + 1; I[i + 2] = b + 1; I[i + 3] = a; I[i + 4] = b + 1; I[i + 5] = b; this.ni += 6; }
     }
   }
-  // flat roof over a footprint (x, z pairs) with holes, at height y, facing up
-  roof(P, holes, y, cell) {
+  // flat roof over a footprint (x, z pairs) with holes, at height y, facing up (down: a ceiling, facing down)
+  roof(P, holes, y, cell, down = false) {
     const ct = P.map((p) => new THREE.Vector2(p[0], p[1])), hs = holes.map((h) => h.map((p) => new THREE.Vector2(p[0], p[1])));
     let tris; try { tris = THREE.ShapeUtils.triangulateShape(ct, hs); } catch (e) { return; }
     const all = [...P, ...holes.flat()], n = all.length, ox = P[0][0], oz = P[0][1];
     this.grow(this.n + n); this.growI(tris.length * 3);
     const o = this.n;
-    for (const p of all) this.v(p[0], y, p[1], 0, 1, 0, (p[0] - ox) / 3, (p[1] - oz) / 3, cell);
+    for (const p of all) this.v(p[0], y, p[1], 0, down ? -1 : 1, 0, (p[0] - ox) / 3, (p[1] - oz) / 3, cell);
     for (const [a, b, c] of tris) {
-      const A = all[a], B = all[b], Cc = all[c], up = (B[1] - A[1]) * (Cc[0] - A[0]) - (B[0] - A[0]) * (Cc[1] - A[1]) > 0;
+      const A = all[a], B = all[b], Cc = all[c], up = ((B[1] - A[1]) * (Cc[0] - A[0]) - (B[0] - A[0]) * (Cc[1] - A[1]) > 0) !== down;
       const I = this.idx, j = this.ni; I[j] = o + a; I[j + 1] = o + (up ? b : c); I[j + 2] = o + (up ? c : b); this.ni += 3;
     }
   }
@@ -225,6 +230,21 @@ function obb(P) {
   if (hw > hl) { [hl, hw] = [hw, hl]; [ux, uz] = [-uz, ux]; }
   return { cx, cz, ux, uz, hl, hw, ar: best.ar };
 }
+// a point's distance from a clear zone's centre line (setback.js segment: [ax, az, bx, bz, r, ...])
+const segD = (s, x, z) => { const dx = s[2] - s[0], dz = s[3] - s[1], L2 = dx * dx + dz * dz || 1e-9; let t = ((x - s[0]) * dx + (z - s[1]) * dz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t; return Math.hypot(s[0] + dx * t - x, s[1] + dz * t - z); };
+// a wall p -> r cut where it goes in and out of the region inn(x, z) says: [[t0, t1, in], ...] (sampled every 50 cm,
+// each change pinned down to a centimetre)
+function spans(p, r, inn) {
+  const L = Math.hypot(r[0] - p[0], r[1] - p[1]), m = Math.max(2, Math.ceil(L / 0.5)), at = (t) => inn(p[0] + (r[0] - p[0]) * t, p[1] + (r[1] - p[1]) * t), out = [];
+  let t0 = 0, s0 = at(0);
+  for (let i = 1; i <= m; i++) {
+    const t = i / m, si = at(t); if (si === s0) continue;
+    let lo = (i - 1) / m, hi = t; for (let k = 0; k < 6; k++) { const md = (lo + hi) / 2; if (at(md) === s0) lo = md; else hi = md; }
+    out.push([t0, hi, s0]); t0 = hi; s0 = si;
+  }
+  out.push([t0, 1, s0]);
+  return out;
+}
 const c565 = (c) => { const r = (c >> 11) & 31, g = (c >> 5) & 63, b = c & 31; return ((r * 255 / 31) << 16) | ((g * 255 / 63) << 8) | (b * 255 / 31); };
 const pick = (a, h) => a[Math.floor(h * a.length) % a.length];
 
@@ -251,6 +271,7 @@ export class CityScenery {
     const t0 = performance.now();
     this.stats = { tall: 0, low: 0, tris: 0 };
     this.roads = roadIndex(W); this.setbacks = { cut: 0, dropped: 0, through: 0, ms: performance.now() - t0 }; // set back from the streets (setback.js; ms: the index and the cuts)
+    this.density(); this.sup = new Map(); this.supTiles = new Set(); this.grounded = 0; this.nested = 0; this.kiosks = 0; this.passages = []; this.gf = { front: 0, ground: 0, parts: 0, miss: [] };
     this.buildTall();
     this.msTall = performance.now() - t0;
     this.queue = []; this.lastPlan = null; this.shadows = W_SHADOW(W);
@@ -301,6 +322,73 @@ export class CityScenery {
 
   skipped(R) { if (!this.hole) return false; const p = R.P[0]; return Math.hypot(p[0] - this.hole[0], p[1] - this.hole[1]) < 60; }
 
+  // How built-up a spot is: the tall buildings (city.bin's tall flag: 20 m and up, or big) counted in 100 m cells, once
+  // at load. dense(x, z): a dozen or more within a block or two (Midtown, downtown Brooklyn, Jersey City's waterfront),
+  // where a small untagged building is a kiosk, a booth or a pavilion, not a clapboard house (Queens, Staten Island).
+  density() {
+    const U = this.city.U, S = this.city.S, R = {}, D = (this.dens = new Map());
+    for (const t of this.tiles.values()) {
+      if (!t.nTall) continue;
+      const [cx, cz] = this.tileCentre(t.i, t.j); let o = t.off;
+      for (let r = 0; r < t.nTall; r++) { readRec(U, S, o, this.q, cx, cz, R); o = R.next; if (R.flags & 1) continue; const k = Math.floor(R.P[0][0] / 100) + ',' + Math.floor(R.P[0][1] / 100); D.set(k, (D.get(k) || 0) + 1); }
+    }
+  }
+  dense(x, z) {
+    const i = Math.floor(x / 100), j = Math.floor(z / 100); let n = 0;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) n += this.dens.get(i + a + ',' + (j + b)) || 0;
+    return n >= DENSE;
+  }
+  // What stands under a building:part, from the other records round it (supIndex), its footprint sampled (the middle,
+  // and part way out to each corner):
+  //  - a part raised off the ground (min_height) with nothing under it: city.py drops a building's outline when its
+  //    parts cover most of it, counting the parts up in the air too, so a tower whose podium was only mapped as the
+  //    outline floats on its upper parts (Madison Avenue at 47th: twelve metres of nothing under a brick tower). If
+  //    under most of the points no other building or part stands up to its underside, it is grounded (built down to
+  //    the street; one over a street, a skybridge or an arch over the road, stays up in the air): returns 0.
+  //  - a part on the ground standing inside a lower one (a tower mapped from the street up inside its podium, the
+  //    wedding cake's tiers all from the ground): its walls start on the podium's roof (returns that height), so the
+  //    podium's ground floor is the one on the street and the walls don't fight over it.
+  // Else its own min_height.
+  base(R, P, mh, top) {
+    let cx = 0, cz = 0; for (const p of P) { cx += p[0]; cz += p[1]; } cx /= P.length; cz /= P.length;
+    const pts = [[cx, cz]], step = Math.max(1, Math.floor(P.length / 8));
+    for (let k = 0; k < P.length; k += step) pts.push([cx + (P[k][0] - cx) * 0.6, cz + (P[k][1] - cz) * 0.6]);
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity; for (const p of P) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
+    const H = this.city.hdr, T = H.tile;
+    for (let i = Math.floor((x0 - 60 - H.x0) / T); i <= Math.floor((x1 + 60 - H.x0) / T); i++) for (let j = Math.floor((z0 - 60 - H.z0) / T); j <= Math.floor((z1 + 60 - H.z0) / T); j++) this.supIndex(i, j);
+    const U = this.city.U, S = this.city.S, Q = {}, up = mh > 0.5;
+    let held = 0, pod = Infinity;
+    for (const [x, z] of pts) {
+      const c = this.sup.get(Math.floor(x / SUP) * 65536 + Math.floor(z / SUP)); let best = -1;
+      if (c) for (const e of c) {
+        if (e[0] === R.o || x < e[1] || x > e[3] || z < e[2] || z > e[4]) continue;
+        if (up ? e[5] > mh - 1 || e[6] < mh - 1.5 : e[5] > 0.5 || e[6] > top - 1 || e[6] < 3 || e[6] <= best) continue;
+        readRec(U, S, e[0], this.q, e[7], e[8], Q); if (!inside(Q.P, x, z)) continue;
+        if (up) { held++; break; }
+        best = e[6];
+      }
+      if (!up) { if (best < 0) return mh; pod = Math.min(pod, best); }
+    }
+    if (up) return held < pts.length * 0.5 && intrusion(this.roads, P) < 0.5 ? 0 : mh;
+    return pod - 0.3;
+  }
+  // every record of tile (i, j) (tall and low) filed by its box in SUP m cells: [o, x0, z0, x1, z1, min height, top, tile centre]
+  supIndex(i, j) {
+    const key = i + ',' + j; if (this.supTiles.has(key)) return; this.supTiles.add(key);
+    const t = this.tiles.get(key); if (!t) return;
+    const U = this.city.U, S = this.city.S, q = this.q, [cx, cz] = this.tileCentre(i, j); let o = t.off;
+    for (let r = 0; r < t.nTall + t.nLow; r++) { // (readRec's layout, the outer ring's box only: no arrays)
+      const w0 = U[o], n = w0 & 4095, nh = w0 >> 12, rt = S[o + 2] / 4, mh = S[o + 3] / 4, lv = U[o + 6] >> 8, o0 = o;
+      let p = o + 10, x = 0, z = 0, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (let k = 0; k < n; k++) { x += S[p++]; z += S[p++]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+      for (let h = 0; h < nh; h++) p += 2 * U[p] + 1;
+      o = p; x0 = cx + x0 / q; x1 = cx + x1 / q; z0 = cz + z0 / q; z1 = cz + z1 / q;
+      const top = rt > 0 ? rt : lv > 0 ? lv * 3.2 + 1 : 8, e = [o0, x0, z0, x1, z1, mh, top, cx, cz];
+      if ((x1 - x0) * (z1 - z0) > 250000) continue; // (a footprint half a kilometre across is not anyone's podium)
+      for (let a = Math.floor(x0 / SUP); a <= Math.floor(x1 / SUP); a++) for (let b = Math.floor(z0 / SUP); b <= Math.floor(z1 / SUP); b++) { const k = a * 65536 + b; let c = this.sup.get(k); if (!c) this.sup.set(k, (c = [])); c.push(e); }
+    }
+  }
+
   // ---------------- one building (or part) ----------------
   // a record's footprint as built: simplified, counter-clockwise, set back from the streets (setback.js: cut back off the
   // roadway and pavement; null if too little is left), its courtyards (those the cut reaches are filled in)
@@ -310,9 +398,10 @@ export class CityScenery {
     if (area2(P) < 0) P.reverse();
     let holes = R.holes.map((h) => { const Q = simplify(h, 0.5); if (area2(Q) < 0) Q.reverse(); return Q; }).filter((h) => h.length >= 3);
     const major = R.top >= MAJOR.height || R.lv >= 8 || Math.abs(area2(P)) >= MAJOR.area;
-    const ts = performance.now(), sb = setBack(this.roads, P, major); this.setbacks.ms += performance.now() - ts;
+    const pass = { h: (R.top > 0 ? R.top : R.lv * 3.2 + 1) - R.mh, tagged: R.top > 0 || R.lv > 0 }; // (a passage under it: setback.js PASSAGE)
+    const ts = performance.now(), sb = setBack(this.roads, P, major, false, pass); this.setbacks.ms += performance.now() - ts;
     if (sb.drop) { this.setbacks.dropped++; return null; }
-    if (sb.through) { this.setbacks.through++; return { P, holes, p0: P[0], through: true }; }
+    if (sb.through) { this.setbacks.through++; return { P, holes, p0: P[0], through: true, pass: sb.pass }; }
     const p0 = P[0]; // (the building's look is seeded from its mapped corner: a cut one keeps it)
     if (sb.cut) { this.setbacks.cut++; P = area2(sb.P) < 0 ? sb.P.slice().reverse() : sb.P; holes = holes.filter((h) => holeInside(P, h)); }
     return { P, holes, p0, cut: sb.cut };
@@ -325,16 +414,24 @@ export class CityScenery {
     if (A < 6) return;
     const part = R.flags & 1, hseed = hash(Math.round(p0[0] * 4), Math.round(p0[1] * 4)), h2 = hash(R.o, 7), h3 = hash(R.o, 13);
     const gm = (R.g0 + R.g1) / 2;
+    let mx = 0, mz = 0; for (const p of P) { mx += p[0]; mz += p[1]; } mx /= P.length; mz /= P.length;
+    // a part up in the air with nothing under it: down to the street; one on the ground inside a lower one: on its roof (base())
+    let mh = R.mh;
+    if (part) { const b = this.base(R, P, mh, R.top > 0 ? R.top : R.lv * 3.2 + 1); if (b !== mh) { if (b < mh) this.grounded++; else this.nested++; mh = b; } }
+    const kind = R.kind, dense = this.dense(mx, mz), tagged = R.top > 0 || R.lv > 0;
+    // a small structure in a built-up spot (a kiosk, a newsstand, a booth, a pavilion in a plaza: Times Square's police
+    // booth, the cafe kiosks in Bryant Park): one storey of shop windows under a flat roof, not a clapboard house
+    const kiosk = !part && dense && A < 120 && kind !== 0 && kind !== 1 && kind !== 3 && (!tagged || R.top < 7);
     // height: the tag (NYC: measured roof heights), else levels, else by use and size
-    let top = R.top > 0 ? R.top : R.lv > 0 ? R.lv * 3.2 + 1 : R.kind === 0 ? 8 : R.kind === 2 ? 3.5 : A > 400 ? 12 : 9.5;
-    top = Math.max(top, R.mh + 2.5);
-    const yTop = gm + top, yBase = part && R.mh > 0.5 ? gm + R.mh : R.g0 - 3, yFloor = part && R.mh > 0.5 ? gm + R.mh : R.g0;
-    const H = top - (part ? R.mh : 0);
+    let top = R.top > 0 ? R.top : R.lv > 0 ? R.lv * 3.2 + 1 : kiosk ? (A < 40 ? 3.2 : 4.5) : kind === 0 ? 8 : kind === 2 ? 3.5 : A > 400 ? 12 : 9.5;
+    top = Math.max(top, mh + 2.5);
+    const raised = part && mh > 0.5, yTop = gm + top, yBase = raised ? gm + mh : R.g0 - 3, yFloor = raised ? gm + mh : R.g0;
+    const H = top - (part ? mh : 0);
     // ---- style
     const date = (R.flags >> 8) & 7, glassTag = R.flags & 4, brickTag = R.flags & 8, stoneTag = R.flags & 16, concTag = R.flags & 32, metalTag = R.flags & 64;
     let st; // { cell, col, bay, fl, ground: cell for the ground floor band, roof: 'flat' | 'gable' | 'hip', rcell, rcol, parapet }
-    const kind = R.kind;
-    if (kind === 3) st = { cell: C.LIME_WIN, col: pick(PAL.lime, hseed), bay: 3, fl: 4.5 };
+    if (kiosk) { st = { cell: C.SHOPFRONT, col: pick(PAL.kiosk, hseed), bay: 3, fl: top - 0.4, kiosk: true }; this.kiosks++; }
+    else if (kind === 3) st = { cell: C.LIME_WIN, col: pick(PAL.lime, hseed), bay: 3, fl: 4.5 };
     else if (top >= 25 || tall) {
       let pg = date >= 6 ? 0.88 : date === 5 ? 0.6 : date === 4 ? 0.4 : date >= 1 ? 0.02 : top > 150 ? 0.72 : top > 70 ? 0.48 : 0.22;
       if (glassTag) pg = 1; else if (brickTag || stoneTag) pg = 0;
@@ -349,7 +446,7 @@ export class CityScenery {
       else if (st.glass) st.ground = true;
     } else if (kind === 4) st = h2 < 0.45 ? { cell: C.BRICK, col: pick(PAL.brick, hseed), bay: 3, fl: 4 } : h2 < 0.8 ? { cell: C.CONCRETE, col: pick(PAL.concrete, hseed), bay: 3, fl: 4 } : { cell: C.METAL, col: 0xc8ccd0, bay: 3, fl: 4 };
     else if (kind === 2) st = { cell: C.GARAGE, col: pick(PAL.concrete, hseed), bay: 3, fl: 3 };
-    else if ((kind === 0 || kind === 7) && A < 200 && top < 11.5 && h2 < 0.55 && !brickTag) {
+    else if ((kind === 0 || kind === 7) && !dense && A < 200 && top < 11.5 && h2 < 0.55 && !brickTag) { // (among the towers a house is a townhouse: a brownstone, below)
       // a detached / semi-detached house: clapboard siding, pitched roof
       st = { cell: C.CLAP_WIN, col: pick(PAL.siding, hseed), bay: 3, fl: 3, roof: h3 < 0.65 ? 'gable' : 'hip', rcell: h3 < 0.3 ? C.SHINGLE : C.SLATE, rcol: pick(PAL.roofs, h3) };
     } else if (A < 220 && top < 20) {
@@ -366,13 +463,19 @@ export class CityScenery {
     // ---- roof shape
     let roof = st.roof || 'flat', rise = 0;
     const rc = R.roof; // 1 gabled 2 hipped 3 pyramidal 4 dome 5 onion 6 skillion 7 round 8 gambrel 9 mansard 10 cone 11 flat
-    if (rc === 1 || rc === 8 || rc === 7 || rc === 6) roof = 'gable'; else if (rc === 2 || rc === 9) roof = 'hip'; else if (rc === 3 || rc === 10) roof = 'pyramid'; else if (rc === 4 || rc === 5) roof = 'dome'; else if (rc === 11) roof = 'flat';
+    if (rc === 6) roof = 'skillion'; else if (rc === 1 || rc === 8 || rc === 7) roof = 'gable'; else if (rc === 2 || rc === 9) roof = 'hip'; else if (rc === 3 || rc === 10) roof = 'pyramid'; else if (rc === 4 || rc === 5) roof = 'dome'; else if (rc === 11) roof = 'flat';
+    if (st.kiosk) roof = 'flat';
     let box = null;
     const fit = (b) => { const t0 = performance.now(), f = fitBox(this.roads, { x: b.cx, z: b.cz, ux: b.ux, uz: b.uz, hl: b.hl, hw: b.hw }); this.setbacks.ms += performance.now() - t0; return f; }; // (a box kept off the street, setback.js: an irregular footprint's reaches past its walls)
-    if (roof === 'gable' || roof === 'hip') { box = obb(P); if (!box || box.hw > 14 || A / box.ar < 0.7 || (!F.through && fit(box).fit)) roof = 'flat'; } // (no pitched roof over the pavement)
+    if (roof === 'gable' || roof === 'hip' || roof === 'skillion') { box = obb(P); if (!box || box.hw > 14 || A / box.ar < 0.7 || (!F.through && fit(box).fit)) roof = 'flat'; } // (no pitched roof over the pavement)
+    // a glass tower's sloped top (a skillion, a gable: the slanted crowns of Midtown's curtain walls) is its curtain wall
+    // carried up at a slant, not a slate roof; a masonry building's pitched roof keeps to a roof's pitch (a roof:height
+    // tag as tall as the building made its whole front a wall of slates)
+    const glassTop = st.glass && roof !== 'flat';
     if (roof !== 'flat') {
       const rad = Math.sqrt(A / Math.PI);
-      rise = R.rh > 0 ? R.rh : roof === 'pyramid' ? Math.min(H * 0.6, rad * 1.6) : roof === 'dome' ? Math.min(H * 0.5, rad) : Math.min(box.hw * 0.75, 5);
+      rise = R.rh > 0 ? R.rh : roof === 'pyramid' ? Math.min(H * 0.6, rad * 1.6) : roof === 'dome' ? Math.min(H * 0.5, rad) : Math.min(box.hw * (roof === 'skillion' ? 0.5 : 0.75), 5);
+      if (!glassTop && box) rise = Math.min(rise, box.hw * (roof === 'skillion' ? 1.2 : 1.6)); // (at most ~58 degrees)
       rise = Math.min(rise, H - 1);
     }
     // a helipad's building (the tallest flat roof at its point): a bare roof for the deck, and it can't be knocked down
@@ -398,21 +501,37 @@ export class CityScenery {
     // the parapet carried up past a flat roof with its cornice. The floors are fitted between the ground floor and the
     // eave, so the cornice sits on a whole floor.
     const parapet = roof === 'flat' && !part && crown?.kind !== 'screen' && (tall || A > 120 || st.cornice) ? (st.glass ? 1.2 : st.cornice || st.prewar ? 1.0 : 0.9) : 0;
-    const F2 = part ? null : this.facades(st, kind, parapet > 0, eave - yFloor);
+    // (a part standing on the street gets its ground floor too: in Midtown most towers are their building:parts)
+    const F2 = raised ? null : this.facades(st, kind, parapet > 0, eave - yFloor);
     let yfV = yFloor, flV = st.fl;
     if (F2) { const up = eave - yFloor - F2.gH, nU = Math.max(1, Math.round(up / st.fl)); flV = up / nU; yfV = F2.gH > 0 ? yFloor + F2.gH - flV : yFloor; M.top = parapet ? nU + (F2.gH > 0 ? 1 : 0) : 0; }
-    const street = F2 ? streetWalls(this.roads, P) : null, wTop = eave + parapet;
+    const street = F2 ? streetWalls(this.roads, P, REACH, F2.gH > 0 && !st.row && st.cell !== C.CLAP_WIN ? FRONT : 0, CONE) : null, wTop = eave + parapet; // (the fallback: not for a house)
+    // (what the streets got, for tools/test/bldcheck.js: the buildings other than houses and sheds standing on the
+    // street with a wall facing one, and those whose street walls have a ground floor of their own)
+    if (!raised && !st.kiosk && !st.row && st.cell !== C.CLAP_WIN && kind !== 2 && eave - yFloor >= 7) {
+      const fr = street || streetWalls(this.roads, P, REACH, FRONT, CONE), G = this.gf;
+      if (fr.some(Boolean)) { G.front++; if (part) G.parts++; if (F2?.gH > 0) G.ground++; else if (G.miss.length < 5) G.miss.push([Math.round(mx), Math.round(mz), st.cell, Math.round(eave - yFloor)]); }
+    }
+    // a passage under it (setback.js PASSAGE: a road through a tall building): its walls stop at the passage's
+    // underside where they cross the road, walls line it either side and a ceiling closes it over the road
+    const pass = F.pass?.length ? F.pass : null, yPass = pass ? R.g1 + PASSAGE.clear : 0, cut = pass && yPass > yBase + 0.5 && yPass < eave - 2;
+    const inPass = (x, z) => pass.some((s) => segD(s, x, z) < s[4]);
     const ring = (Q, inner) => {
       const n = Q.length;
       for (let k = 0; k < n; k++) {
         const a = Q[k], b = Q[(k + 1) % n], [p, r] = inner ? [a, b] : [b, a]; // outer walls b -> a (outside on the front)
         const front = !!street && !inner && street[k], nb = Math.max(1, Math.round(Math.hypot(r[0] - p[0], r[1] - p[1]) / st.bay));
-        if (F2) M.wall(p[0], p[1], r[0], r[1], yBase, wTop, yfV, front ? F2.front : F2.rear, st.bay, flV, front && !F2.endDoor ? -Math.floor(nb / 2) : 0);
-        else M.wall(p[0], p[1], r[0], r[1], yBase, wTop, yFloor, st.cell, st.bay, st.fl);
+        const wall = (y0, t0, t1) => {
+          if (F2) M.wall(p[0], p[1], r[0], r[1], y0, wTop, yfV, front ? F2.front : F2.rear, st.bay, flV, front && !F2.endDoor ? -Math.floor(nb / 2) : 0, t0, t1);
+          else M.wall(p[0], p[1], r[0], r[1], y0, wTop, yFloor, st.cell, st.bay, st.fl, 0, t0, t1);
+        };
+        if (!cut) { wall(yBase, 0, 1); continue; }
+        for (const [t0, t1, over] of spans(p, r, inPass)) wall(over ? yPass : yBase, t0, t1);
       }
     };
     ring(P, false); for (const h of holes) ring(h, true);
     M.top = 0;
+    if (cut) { this.passage(M, P, pass, yBase, yPass, inPass); this.passages.push([mx, mz, pass.length]); }
     // ---- roof
     let rLook = null;
     if (roof === 'flat') {
@@ -425,9 +544,10 @@ export class CityScenery {
         const b = box || obb(P);
         if (b && A / b.ar > 0.6 && b.hw > 2.2) { M.setLate(true); wt = this.roofTop(M, R, st, kind, P, b, eave, A, top, tall, rLook); M.setLate(false); }
       }
-    } else if (roof === 'gable' || roof === 'hip') {
+    } else if (roof === 'gable' || roof === 'hip' || roof === 'skillion') {
       const b = box, yaw = Math.atan2(b.ux, b.uz);
-      this.pitched(M, b, eave, rise, roof, st.rcell ?? C.SLATE, st.rcol ?? pick(PAL.roofs, h3), st.cell === C.CLAP_WIN ? C.CLAP : st.cell, st.col, yaw);
+      if (glassTop) this.pitched(M, b, eave, rise, roof, C.GLASS, st.col, C.GLASS, st.col, yaw);
+      else this.pitched(M, b, eave, rise, roof, st.rcell ?? C.SLATE, st.rcol ?? pick(PAL.roofs, h3), st.cell === C.CLAP_WIN ? C.CLAP : st.cell, st.col, yaw);
     } else {
       // spires and domes over the footprint: to the centroid
       let cx = 0, cz = 0; for (const p of P) { cx += p[0]; cz += p[1]; } cx /= P.length; cz /= P.length;
@@ -455,8 +575,12 @@ export class CityScenery {
     if (!b0) return;
     const k = A / b0.ar > 0.7 ? 1 : 0.85; let b = { cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz, hl: b0.hl * k, hw: b0.hw * k };
     if (!F.through) { const f = fit(b); b = { cx: f.x, cz: f.z, ux: f.ux, uz: f.uz, hl: f.hl, hw: f.hw }; if (A / b0.ar < 0.97) b = boxInside(P, b); } // (an irregular footprint's box: kept to its walls, setback.js)
-    const t = this.addBox(b, part && R.mh > 0.5 ? yBase : R.g0 - 1, yTop, this.curTile);
+    // over a passage: the whole building from the passage's underside up; below it, the parts either side of the road
+    // (boxes kept off it: they stay standing, the rubble covers them if it comes down)
+    if (cut) for (const Q of this.besidePass(P, pass)) { const q = obb(Q); if (!q) continue; const f = fit(q), c = [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([u, v]) => [f.x + f.ux * f.hl * u - f.uz * f.hw * v, f.z + f.uz * f.hl * u + f.ux * f.hw * v]); if (intrusion(this.roads, c) < 0.25) this.addBox({ cx: f.x, cz: f.z, ux: f.ux, uz: f.uz, hl: f.hl, hw: f.hw }, R.g0 - 1, yPass, this.curTile).below = true; }
+    const t = this.addBox(b, cut ? yPass : raised ? yBase : R.g0 - 1, yTop, this.curTile);
     if (F.through) t.through = true;
+    if (cut) t.passage = true;
     if (pad) { t.fixed = true; return; } // (no damage key: destruction.js leaves it standing, whatever falls around it)
     // destructible (destruction.js): its vertices, what it's made of; damage done earlier this flight comes back with it
     t.dk = 'c' + R.o; t.rng = [[M, n0, M.n - n0]]; t.look = { cell: st.cell, col: st.col, rcol: rLook?.col ?? 0x5c5a56, glass: !!st.glass }; if (wt) t.type = 'waterTower';
@@ -470,6 +594,7 @@ export class CityScenery {
   // the parlour floor), glass towers (a lobby of glass, a metal parapet), clapboard houses and warehouses (a door, a
   // loading door). null: plain walls (building parts, garages, anything too short for a ground floor of its own).
   facades(st, kind, parapet, hFl) {
+    if (st.kiosk) return null; // (shop windows all round: its own cell)
     const u = st.cell, plain = { [C.LIME_WIN]: C.LIME, [C.BROWN_WIN]: C.LIME, [C.BRICK_WIN]: C.BRICK, [C.APT]: C.CONCRETE, [C.WIN_TALL]: C.CONCRETE, [C.GLASS]: C.METAL }[u] ?? u;
     const top = parapet ? plain : -1, cornice = parapet && !st.glass && (st.prewar || st.cornice || kind === 3);
     const brick = u === C.BRICK_WIN, stone = 0xd8ccb4; // (a brick building's base, string course and cornice: limestone)
@@ -480,7 +605,7 @@ export class CityScenery {
       return { front: facade({ upper: u, cornice, ...fr }), rear: facade({ upper: u, top, cornice: false }), gH: o.gH ?? 0, endDoor: !!o.endDoor };
     };
     if (kind === 2 || hFl < 4) return null;
-    if (st.glass) return hFl > 9 ? mk({ ground: C.SHOP3_N, gH: 5, band: 0.35, bandCell: C.METAL, bandCol: 0x2a2c30 }) : mk({});
+    if (st.glass) return hFl >= 6.5 ? mk({ ground: C.SHOP3_N, gH: hFl > 9 ? 5 : hFl - 3, band: 0.35, bandCell: C.METAL, bandCol: 0x2a2c30 }) : mk({}); // (a low glass block: its lobby a storey, one floor over it)
     if (st.ground != null && hFl > 7) return mk({ ground: C.SHOPFRONT, door2: C.SHOP_DOOR, every: 3, gH: hFl > 30 ? 4.6 : 4.0, band: 0.55, bandCell: C.LIME, bandCol: brick ? stone : null, shop: true });
     if (u === C.CLAP_WIN) return mk({ ground: C.CLAP_WIN, gH: 3, door: C.CLAP_DOOR });
     if (u === C.BRICK || u === C.CONCRETE || u === C.METAL) return mk({ ground: u, gH: 4, door: C.GARAGE });
@@ -492,10 +617,45 @@ export class CityScenery {
     // apartment houses and pre-war towers: a rusticated base (double height on a tower), the entrance in the middle
     return mk({ ground: C.RUST, door: C.RUST_DOOR, gH: hFl > 30 ? 5 : 3.6, band: hFl > 30 ? 0.5 : 0.35, bandCell: C.LIME, groundCol: brick ? stone : null, bandCol: brick ? stone : null });
   }
+  // A passage under a building, where a road runs through it (setback.js PASSAGE): each clear zone's two sides lined
+  // with walls from the street up to the underside, inside the footprint and outside the other zones (concrete, facing
+  // the road), and the underside a ceiling over the road. Walls and ceiling only where the footprint is.
+  passage(M, P, segs, y0, y1, inPass) {
+    M.color(0xa8a49c);
+    for (const s of segs) {
+      const [ax, az, bx, bz, r] = s, L = Math.hypot(bx - ax, bz - az); if (L < 0.5) continue;
+      const ux = (bx - ax) / L, uz = (bz - az) / L, nx = -uz, nz = ux, others = segs.filter((o) => o !== s);
+      for (const sd of [1, -1]) { // (the left side's wall faces right: drawn b -> a)
+        const oa = [ax + nx * r * sd, az + nz * r * sd], ob = [bx + nx * r * sd, bz + nz * r * sd], [p, q] = sd > 0 ? [ob, oa] : [oa, ob];
+        for (const [t0, t1, ok] of spans(p, q, (x, z) => inside(P, x, z) && !others.some((o) => segD(o, x, z) < o[4] - 0.05))) if (ok) M.wall(p[0], p[1], q[0], q[1], y0, y1, y0, C.CONCRETE, 3, 3, 0, t0, t1);
+      }
+      let Q = clip(P, ux, uz, ax, az, 0); if (Q.length >= 3) Q = clip(Q, -ux, -uz, bx, bz, 0);
+      if (Q.length >= 3) Q = clip(Q, nx, nz, ax, az, -r); if (Q.length >= 3) Q = clip(Q, -nx, -nz, ax, az, -r);
+      if (Q.length >= 3 && Math.abs(area2(Q)) > 0.5) M.roof(area2(Q) < 0 ? Q.slice().reverse() : Q, [], y1, C.CONCRETE, true);
+    }
+  }
+  // the footprint's parts beside the roads through it (for their collision boxes): cut along each road's clear zone,
+  // both sides kept (the six longest roads; pieces of 15 m2 and more)
+  besidePass(P, segs) {
+    let parts = [P];
+    for (const s of segs.slice().sort((a, b) => Math.hypot(b[2] - b[0], b[3] - b[1]) - Math.hypot(a[2] - a[0], a[3] - a[1])).slice(0, 6)) {
+      const [ax, az, bx, bz, r] = s, L = Math.hypot(bx - ax, bz - az) || 1, nx = -(bz - az) / L, nz = (bx - ax) / L, next = [];
+      for (const Q of parts) for (const sd of [1, -1]) { const K = clip(Q, nx * sd, nz * sd, ax, az, r); if (K.length >= 3 && Math.abs(area2(K)) >= 15) next.push(K); }
+      parts = next;
+    }
+    return parts;
+  }
   pitched(M, b, y, rise, roof, cell, col, gcell, gcol, yaw) {
     const { cx, cz, ux, uz, hl, hw } = b, nx = -uz, nz = ux, o = 0.4, ex = hw + o, el = hl + o, ye = y - o * rise / hw, yr = y + rise;
     const p = (a, c, yy) => [cx + ux * a + nx * c, yy, cz + uz * a + nz * c];
     M.color(col);
+    if (roof === 'skillion') { // one slope, up from the eave on one long side to the top of a wall on the other
+      M.poly([p(-el, ex, ye), p(el, ex, ye), p(el, -hw, yr), p(-el, -hw, yr)], cell);
+      M.color(gcol);
+      M.poly([p(hl, hw, y), p(hl, -hw, y), p(hl, -hw, yr)], gcell); M.poly([p(-hl, -hw, y), p(-hl, hw, y), p(-hl, -hw, yr)], gcell);
+      M.poly([p(hl, -hw, y), p(-hl, -hw, y), p(-hl, -hw, yr), p(hl, -hw, yr)], gcell);
+      return;
+    }
     if (roof === 'gable') {
       M.poly([p(-el, ex, ye), p(el, ex, ye), p(el, 0, yr), p(-el, 0, yr)], cell);
       M.poly([p(el, -ex, ye), p(-el, -ex, ye), p(-el, 0, yr), p(el, 0, yr)], cell);

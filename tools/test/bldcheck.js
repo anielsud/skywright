@@ -37,6 +37,7 @@ export function cases() {
     { id: 'rules lauterbrunnen', loc: 'lauterbrunnen', world: 'lauterbrunnen', cost: 10 },
     { id: 'facades nyc', loc: 'nyc', world: 'nyc', cost: 12 },
     { id: 'roofs nyc', loc: 'nyc', world: 'nyc', cost: 6 },
+    { id: 'streets nyc', loc: 'nyc', world: 'nyc', cost: 10 },
   ];
 }
 
@@ -286,6 +287,52 @@ async function roofsNyc(c) {
   return out;
 }
 
+// New York's buildings where they meet the streets (realCity.js, Low; the 🐞 reports of 2026-11-25):
+//  - ground floors: every building but the houses and sheds with a wall facing a street (setback.js streetWalls: its
+//    pavement within reach, at any angle out in front; else the nearest street's walls) has a ground floor of its own
+//    on it (shop fronts, a lobby, a stone base), building:parts standing on the street too
+//  - through-buildings: no building stands over a road unless there is a passage under it (setback.js PASSAGE): its
+//    collision boxes below the passage's underside off the road, the underside a ceiling, walls lining it; a
+//    footprint swallowing whole streets (Grand Central's train shed under Park Avenue) cut back like any other; no
+//    part floating with nothing under it (a tower whose podium was only its outline), and no part on the ground
+//    inside a lower one drawing its walls over the podium's (base())
+//  - small structures in the built-up spots (kiosks, booths) are kiosks, never clapboard houses; no wall of slates
+//    (a pitched roof steeper than a roof), a glass tower's sloped top in glass
+async function streetsNyc(c) {
+  const { worldAt } = await import('./node/world.mjs'), { world } = await worldAt(c.loc), CS = world.towns.city, out = [];
+  const { readRec } = await import('../../src/realCity.js'), G = CS.gf;
+  out.push({ name: `${c.id}: a ground floor on the street walls of every building but the houses (parts too)`, ok: G.front > 25000 && G.parts > 5000 && G.ground >= G.front * 0.995, why: `${G.ground} of ${G.front} buildings facing a street (${G.parts} of them parts)${G.miss.length ? ', e.g. without: ' + G.miss.map((m) => `(${m[0]}, ${m[1]}) cell ${m[2]} ${m[3]} m`).join('; ') : ''}` });
+  // the low tiles round Midtown built (the kiosks, the Times Square booth), then every tile's walls read back
+  for (const t of CS.tiles.values()) { const [x, z] = CS.tileCentre(t.i, t.j); if (Math.hypot(x + 6300, z - 6600) < 1300 && !t.low) while (!CS.buildLowStep(t, 1e9)); }
+  let clap = 0, steep = 0, glassSlope = 0, ceil = 0, ex = '';
+  const meshes = [...CS.tallMeshes.map((m) => m.m), ...[...CS.tiles.values()].filter((t) => t.low && t.low !== true).map((t) => t.low)];
+  for (const m of meshes) {
+    const g = m.geometry, P = g.attributes.position.array, A = g.attributes.atl.array, I = g.index.array, ox = m.position.x, oz = m.position.z;
+    for (let k = 0; k < I.length; k += 3) {
+      const a = I[k], cell = A[a * 4]; if (cell !== C.CLAP_WIN && cell !== C.SLATE && cell !== C.SHINGLE && cell !== C.GLASS && cell !== C.CONCRETE) continue;
+      const b = I[k + 1], d = I[k + 2], ux = P[b * 3] - P[a * 3], uy = P[b * 3 + 1] - P[a * 3 + 1], uz = P[b * 3 + 2] - P[a * 3 + 2], vx = P[d * 3] - P[a * 3], vy = P[d * 3 + 1] - P[a * 3 + 1], vz = P[d * 3 + 2] - P[a * 3 + 2];
+      const wx = uy * vz - uz * vy, wy = uz * vx - ux * vz, wz = ux * vy - uy * vx, l = Math.hypot(wx, wy, wz); if (l < 1) continue;
+      const ny = wy / l, x = ox + P[a * 3] / 16, z = oz + P[a * 3 + 2] / 16; // (MeshW: 16 units a metre about the mesh's centre)
+      if (cell === C.CLAP_WIN && [[0, 0], [15, 0], [-15, 0], [0, 15], [0, -15]].every(([a, b]) => CS.dense(x + a, z + b))) { clap++; ex ||= `clapboard at (${x.toFixed(0)}, ${z.toFixed(0)})`; }
+      if ((cell === C.SLATE || cell === C.SHINGLE) && Math.abs(ny) < 0.3) steep++;
+      if (cell === C.GLASS && Math.abs(ny) > 0.05 && Math.abs(ny) < 0.95) glassSlope++;
+      if (cell === C.CONCRETE && ny < -0.99) ceil++;
+    }
+  }
+  out.push({ name: `${c.id}: no clapboard houses among the towers; kiosks in the plazas`, ok: !clap && CS.kiosks > 20, why: `${clap} clapboard triangles in built-up spots${ex ? ` (${ex})` : ''}, ${CS.kiosks} kiosks` });
+  out.push({ name: `${c.id}: no wall of slates (a pitched roof steeper than 72 degrees); glass towers' sloped tops in glass`, ok: !steep && glassSlope > 50, why: `${steep} steep slate or shingle triangles, ${glassSlope} sloped glass` });
+  // through-buildings: the passages (their underside a ceiling, the boxes below it off the road: setbacks.js checks
+  // every box), nothing over the road where the 🐞 report crashed (Madison Avenue at 47th) or floating over it
+  const bx = []; world.wallBoxes(-5825, 6292, 6, bx); const gr = world.sampleGrid(-5825, 6292), low = bx.filter((b) => b.y0 < gr + 4 && Math.abs((-5825 - b.x) * b.ux + (6292 - b.z) * b.uz) < b.hl && Math.abs(-(-5825 - b.x) * b.uz + (6292 - b.z) * b.ux) < b.hw);
+  let boxes = 0, raised = 0; const seen = new Set(); for (const a of CS.grid.values()) for (const e of a) if (e.passage && !seen.has(e)) { seen.add(e); boxes++; if (e[1] >= world.sampleGrid(e[0], e[2]) + 4) raised++; }
+  out.push({ name: `${c.id}: passages under the buildings over a road (raised over it, a ceiling); none over Madison Avenue at 47th`, ok: CS.passages.length >= 20 && raised === boxes && ceil > 100 && !low.length, why: `${CS.passages.length} passages, ${raised} of ${boxes} raised, ${ceil} ceiling triangles; ${low.length} boxes on the road at (-5825, 6292)` });
+  // Grand Central's train shed (record 2031428: 157,000 m2 over Park Avenue, no height): not left standing over the streets
+  const R = {}; let shed = null;
+  for (const t of CS.tiles.values()) { const [cx, cz] = CS.tileCentre(t.i, t.j); let o = t.off; for (let r = 0; r < t.nTall + t.nLow && !shed; r++) { readRec(CS.city.U, CS.city.S, o, CS.q, cx, cz, R); if (R.o === 2031428 && Math.abs(R.P.reduce((s, p, i, P) => s + p[0] * P[(i + 1) % P.length][1] - P[(i + 1) % P.length][0] * p[1], 0) / 2) > 1e5) shed = CS.footprint(R, false) || 'dropped'; o = R.next; } if (shed) break; }
+  out.push({ name: `${c.id}: a footprint over whole streets is cut back, not left over them (Grand Central's train shed); parts grounded or on their podium`, ok: !!shed && (shed === 'dropped' || !shed.through) && CS.grounded > 200 && CS.nested > 500, why: `the shed: ${shed === 'dropped' ? 'left out' : shed ? (shed.through ? 'left over the road' : 'cut back') : 'not found'}; ${CS.grounded} floating parts grounded, ${CS.nested} parts set on their podium` });
+  return out;
+}
+
 // The lights at night (buildings.js): the share of windows lit by hour, the dusk, the floodlit programs
 function lights() {
   const out = [], P = LIGHT_PROFILES, at = (h, p = P.city) => occupancy(h, p);
@@ -310,6 +357,7 @@ export async function runCase(c) {
   if (c.id === 'kit') return kit();
   if (c.id === 'lights') return lights();
   if (c.id.startsWith('facades')) return facadesNyc(c);
+  if (c.id.startsWith('streets')) return streetsNyc(c);
   if (c.id.startsWith('rules')) return rules(c);
   if (c.id.startsWith('decks')) return decks(c);
   return stylesCase(c);

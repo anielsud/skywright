@@ -205,7 +205,7 @@ export class RealScenery {
       // set back from the roads (setback.js): cut back off the tarmac and verge, or left out where the road runs through
       // (after all its draws: every other building keeps its looks). Under a box roof (which covers the footprint's whole
       // rectangle) the house is trimmed as that rectangle: a smaller house under the same roof; a cut gable follows any cut.
-      const ts = performance.now(), sb = setBack(roads, P, A0 >= MAJOR.area || hTag >= MAJOR.height || lv >= 8, roof === 1 || roof === 2); this.setbacks.ms += performance.now() - ts;
+      const ts = performance.now(), sb = setBack(roads, P, A0 >= MAJOR.area || hTag >= MAJOR.height || lv >= 8, roof === 1 || roof === 2, { h: walls + rise, tagged: hTag > 0 || lv > 0 }); this.setbacks.ms += performance.now() - ts;
       if (sb.through) this.setbacks.through++;
       if (sb.drop) { this.setbacks.dropped++; continue; }
       if (sb.cut) { this.setbacks.cut++; P = sb.P; [cx, cz, area] = ring(); ({ ox, oz, ux, uz, hl, hw } = obb() || O0); if (overZ != null) orient(); heights(); }
@@ -213,7 +213,7 @@ export class RealScenery {
       // the collision box: the footprint's, kept off the road (setback.js fitBox: a box reaches over the tarmac where the
       // walls don't, past a cut-off corner or an L's yard); a box roof over that box would overhang the road too: a gable
       // cut to the footprint then
-      const tb = performance.now(), cb = sb.through ? null : fitBox(roads, { x: ox, z: oz, ux, uz, hl, hw }); this.setbacks.ms += performance.now() - tb;
+      const tb = performance.now(), cb = fitBox(roads, { x: ox, z: oz, ux, uz, hl, hw }); // (a passage under it too: its box off the road where it can be) this.setbacks.ms += performance.now() - tb;
       if (cb?.fit && (roof === 1 || roof === 2)) { roof = 5; this.setbacks.flat++; }
       // ---- geometry: everything a building has goes into its chunk's builder in one run (destruction.js)
       const ch = this.chunk(cx, cz), B = ch.B, n0 = B.n;
