@@ -6,7 +6,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { FOG, FOG_GLSL, TUBES, terrainMaterial, waterMaterial, swayMaterial } from './shaders.js';
 import { Atmosphere, skyMaterial, cloudNoiseTexture } from './sky.js';
 import { CloudField, deckMaterial } from './clouds.js';
-import { flattenGrid, flattenHi, makePainter, buildRoadMeshes, gradeReal, roadSurface } from './roads.js';
+import { flattenGrid, flattenHi, makePainter, buildRoadMeshes, gradeReal, roadSurface, cityGround } from './roads.js';
 import { ROAD_U } from './roadSurface.js';
 import { Flora } from './flora.js';
 import { Builder, buildingMaterial, C, lightsDark } from './buildings.js';
@@ -261,13 +261,20 @@ export class World {
     }
     geo.computeVertexNormals();
     this.bakeTerrain();
-    const sst = S / (this.shadowR - 1), maps = { detailU: this.detailU, albedo: this.albedoTex, normal: this.normalTex, shadow: this.shadowTex, orig: new THREE.Vector2(-half - this.hStep / 2, -half - this.hStep / 2), span: S + this.hStep, sOrig: new THREE.Vector2(-half - sst / 2, -half - sst / 2), sSpan: S + sst };
+    const sst = S / (this.shadowR - 1), maps = { detailU: this.detailU, albedo: this.albedoTex, normal: this.normalTex, shadow: this.shadowTex, orig: new THREE.Vector2(-half - this.hStep / 2, -half - this.hStep / 2), span: S + this.hStep, sOrig: new THREE.Vector2(-half - sst / 2, -half - sst / 2), sSpan: S + sst, city: this.cityD ? this.coverTex() : null };
     const mat = terrainMaterial(maps);
     this.terrainMat = mat; this.patchMat = terrainMaterial(maps, true); this.detailMat = terrainMaterial(maps, 'detail');
     const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true;
     this.terrain = mesh; this.group.add(mesh);
     this.roadGroup = buildRoadMeshes(this, this.net); this.group.add(this.roadGroup);
     this.buildPatch(); this.buildDetail();
+  }
+  // a city's land cover (cover.png: 0 paved, else parks, lawns and woods) for the terrain shader, which paves the open
+  // ground near the camera (shaders.js cityPaved)
+  coverTex() {
+    const C = this.real.cover, t = new THREE.DataTexture(C.d, C.n, C.n, THREE.RedFormat, THREE.UnsignedByteType);
+    t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.flipY = false; t.needsUpdate = true;
+    return { tex: t, rect: new THREE.Vector3(C.x0, C.z0, 1 / C.size) };
   }
   // The fine grid's heights straight from the height function (before towns and roads are carved in).
   rawFine() {
@@ -284,6 +291,7 @@ export class World {
     for (let k = 0; k < Hh.length; k++) Hh[k] = this.shoreSnap(Hh[k]);
     const paint = makePainter(this, this.net);
     this.Hh = Hh; this.hR = R; this.hStep = st;
+    this.cityD = cityGround(this, this.net, Hh, R, this.stuntPlan ? (x, z) => padsHeight(this.stuntPlan.pads, x, z, 1e4) !== 1e4 : null); // a city's open ground at its pavements' level (cityAt)
     this.roadSurf = roadSurface(this, this.net); // from here on sampleGrid/groundAt stand on the roads and bridges
     // tunnels' walls: a thin box along each side of every stretch of tube, for what drives in them (tunnelWalls)
     this.tunnelCells = new Map();
@@ -423,9 +431,27 @@ export class World {
   sampleGrid(x, z) {
     if (this.Hh) {
       const R = this.hR, st = this.hStep, fx = (x + this.half) / st, fz = (z + this.half) / st;
-      if (fx >= 0 && fz >= 0 && fx < R && fz < R) { const h = this.triAt(this.Hh, R + 1, fx, fz), S = this.roadSurf; return S && S.q(x, z) ? S.over(h) : h; }
+      if (fx >= 0 && fz >= 0 && fx < R && fz < R) { const h = this.cityAt(x, z, this.triAt(this.Hh, R + 1, fx, fz)), S = this.roadSurf; return S && S.q(x, z) ? S.over(h) : h; }
     }
     return this.sampleCoarse(x, z);
+  }
+  // the ground at (x, z), h on the fine grid, with a city's open ground at its level (roads.js cityGround: the lots,
+  // plazas and gaps between the buildings at the pavements' level). Bilinear over its grid.
+  cityAt(x, z, h) {
+    const D = this.cityD; if (!D) return h;
+    const fx = (x + this.half) / D.st, fz = (z + this.half) / D.st; if (!(fx >= 0 && fz >= 0 && fx < D.R && fz < D.R)) return h;
+    const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, W = D.R + 1, k = j * W + i, T = D.t;
+    const a = (1 - u) * (1 - v), b = u * (1 - v), c = (1 - u) * v, d = u * v, t = T[k] * a + T[k + 1] * b + T[k + W] * c + T[k + W + 1] * d;
+    if (t <= 0) return h;
+    const L = D.L, l = L[k] * a + L[k + 1] * b + L[k + W] * c + L[k + W + 1] * d;
+    return h + (l - h) * t;
+  }
+  // how much (x, z) is a city's paved open ground (0..1: cityAt's t)
+  cityPaved(x, z) {
+    const D = this.cityD; if (!D) return 0;
+    const fx = (x + this.half) / D.st, fz = (z + this.half) / D.st; if (!(fx >= 0 && fz >= 0 && fx < D.R && fz < D.R)) return 0;
+    const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, W = D.R + 1, k = j * W + i, T = D.t;
+    return (T[k] * (1 - u) + T[k + 1] * u) * (1 - v) + (T[k + W] * (1 - u) + T[k + W + 1] * u) * v;
   }
   // triangle interpolation matching PlaneGeometry's split: (a,b,d) + (b,c,d)
   triAt(H, W, fx, fz) {
@@ -493,8 +519,8 @@ export class World {
     const hs = new Float32Array(n * n), S = this.roadSurf, on = this.detailOn ??= new Uint8Array(n * n), cover = this.loc.city ? 2 : 0; // (cover: metres past the footprint the road meshes cover, a city street's pavements)
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const x = x0 + i * DS, z = z0 + j * DS, e = Math.min(i, j, D - i, D - j), k = j * n + i;
-      const base = this.triAt(H, W, (x + half) / st, (z + half) / st); // (what the patch draws here)
-      const g = S && S.q(x, z) ? ((on[k] = S.e < cover ? 1 : 0), S.over(base)) : ((on[k] = 0), base); // (sampleGrid; on: under a road)
+      const base = this.triAt(H, W, (x + half) / st, (z + half) / st), b2 = this.cityAt(x, z, base); // (what the patch draws here; the ground sampleGrid stands on, b2)
+      const g = S && S.q(x, z) ? ((on[k] = S.e < cover ? 1 : 0), S.over(b2)) : ((on[k] = 0), b2); // (sampleGrid; on: under a road)
       hs[k] = e >= B ? g : e === 0 ? base : base + (g - base) * smoothstep(0, B, e);
     }
     // under the roads (hidden by their ribbons, which lie on this ground at their own vertices, 8 m apart): each vertex
@@ -573,6 +599,7 @@ export class World {
     if (this.bake && !this.bake.dry && this.landAt(x, z, this.gL || (this.gL = [0, 0, 0, 0]))[0] > 0.6) return { h, n: new THREE.Vector3(0, 1, 0), type: 'water' }; // rivers, lakes
     const hx = this.sampleGrid(x + e, z), hz = this.sampleGrid(x, z + e);
     const n = new THREE.Vector3(h - hx, e, h - hz).normalize();
+    if (this.cityD && this.cityPaved(x, z) > 0.5 && this.real.bare(x, z)) return { h, n, type: 'runway' }; // a city's paved ground (cityAt)
     let type = 'grass';
     if (Math.abs(z) < RWY.len / 2 + 30 && RUNWAYS.some((r) => Math.abs(x - r.x) < RWY.width / 2 + 2)) type = 'runway';
     else if (this.isPaved(x, z)) type = 'runway';

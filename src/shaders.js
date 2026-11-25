@@ -131,11 +131,12 @@ export function terrainMaterial(maps, patch = false) {
   const real = !!maps.detailU?.satHi; // real-world location: satellite imagery replaces the baked ground colour
   const U = { albedoTex: { value: maps.albedo }, normTex: { value: maps.normal }, shadowTex: { value: maps.shadow },
     tOrig: { value: maps.orig }, tSpan: { value: maps.span }, sOrig: { value: maps.sOrig || maps.orig }, sSpan: { value: maps.sSpan || maps.span },
-    shadowOn: { value: maps.shadowOn ?? 1 }, patchRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, detailRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, ...maps.detailU };
+    shadowOn: { value: maps.shadowOn ?? 1 }, patchRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, detailRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, ...maps.detailU,
+    ...(maps.city ? { coverTex: { value: maps.city.tex }, coverR: { value: maps.city.rect } } : {}) };
   mat.userData.U = U;
   // real-world: no beach detail and no baked hydrology (the imagery has both); keeps the terrain within 16 texture
   // units with Ultra's extra shadow maps. Elsewhere the baked rivers/lakes map is one more sampler (see world.js).
-  mat.defines = real ? { TERRAIN_NO_SAND: '' } : { TERRAIN_LAND: '' };
+  mat.defines = real ? { TERRAIN_NO_SAND: '', ...(maps.city ? { TERRAIN_CITY: '' } : {}) } : { TERRAIN_LAND: '' }; // (TERRAIN_CITY: a city's open ground paved, CITY_GLSL)
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, TUBES, U);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vTW; varying vec3 vWN;')
@@ -148,6 +149,9 @@ export function terrainMaterial(maps, patch = false) {
       #endif
       ${TERRAIN_DETAIL_GLSL}
       ${real ? REAL_SAT_GLSL : ''}
+      #ifdef TERRAIN_CITY
+      ${CITY_GLSL}
+      #endif
       ${(!real && maps.detailU?.glsl) || 'vec3 fieldShade(vec2 p, float farm, vec3 base, float dist, out float isField) { isField = 0.0; return base; }'}`)
       .replace('#include <map_fragment>', `
         for (int i = 0; i < 24; i++) { if (i >= tubeN) break; vec3 a = tubeA[i].xyz, b = tubeB[i].xyz; vec2 ab = b.xz - a.xz; float tt = clamp(dot(vTW.xz - a.xz, ab) / max(dot(ab, ab), 1e-3), 0.0, 1.0); float fy = mix(a.y, b.y, tt);
@@ -158,6 +162,11 @@ export function terrainMaterial(maps, patch = false) {
         vec4 nrmS = texture2D(normTex, tuv);
         vec3 wn = ${detail ? 'normalize(vWN)' : 'normalize(nrmS.xyz * 2.0 - 1.0)'};
         ${real ? 'alb.rgb = realGround(satColor(vTW.xz, alb.rgb), wn); alb.a = mix(1.0, alb.a, 0.5); nrmS.a = 0.0;' : ''}
+        float pv = 0.0; // (a city's paved open ground)
+        #ifdef TERRAIN_CITY
+        pv = cityPaved(vTW.xz, alb.rgb, length(vTW - cameraPosition));
+        alb.rgb = mix(alb.rgb, cityPave(vTW.xz, length(vTW - cameraPosition)), pv); // (not in a branch: it takes derivatives)
+        #endif
         float terrainShadow = mix(1.0, texture2D(shadowTex, (vTW.xz - sOrig) / sSpan).r, shadowOn);
         float dist = length(vTW - cameraPosition);
         // farm parcels (farmland mask in the normal map's alpha), crisp up close
@@ -168,7 +177,7 @@ export function terrainMaterial(maps, patch = false) {
         float snowy = smoothstep(0.55, 0.72, min(alb.r, min(alb.g, alb.b)));
         mul = mix(mul, vec3(0.92 + 0.08 * dot(mul, vec3(0.333))), snowy);
         mul = mix(mul, vec3(1.0) + (mul - 1.0) * 0.6, isField); // fields: their own colour, softer photo texture
-        wn = dn;
+        mul = mix(mul, vec3(1.0), pv); wn = pv > 0.0 ? normalize(mix(dn, mix(wn, vec3(0.0, 1.0, 0.0), 0.8), pv)) : dn; // (paving: its own pattern, no photo grass; lit near flat, no facets of the ground mesh on the smooth concrete)
         // rivers, streams and lakes from the baked hydrology: a still or flowing water surface with wet banks
         float tRough = -1.0, river = 0.0;
         #ifdef TERRAIN_LAND
@@ -193,6 +202,7 @@ export function terrainMaterial(maps, patch = false) {
           }
         }
         #endif
+        if (pv > 0.0) tRough = mix(tRough < 0.0 ? 0.93 : tRough, 0.85, pv);
         // snow glitter: tiny facets catching the sun up close
         if (snowy > 0.5 && dist < 220.0) { vec2 gc = floor(vTW.xz * 2.5); float gl = fract(sin(dot(gc, vec2(12.9898, 78.233))) * 43758.5453); if (gl > 0.985) tRough = 0.08; }
         diffuseColor.rgb = alb.rgb * mul * (0.6 + 0.4 * alb.a) * 1.12;
@@ -205,7 +215,7 @@ export function terrainMaterial(maps, patch = false) {
         'getDirectionalLightInfo( directionalLight, directLight );',
         'getDirectionalLightInfo( directionalLight, directLight ); directLight.color *= terrainShadow;'));
   };
-  mat.customProgramCacheKey = () => (detail ? 'terrain3-detail-' : patch ? 'terrain3-patch-' : 'terrain3-') + (real ? 'real' : maps.detailU?.key || '');
+  mat.customProgramCacheKey = () => (detail ? 'terrain3-detail-' : patch ? 'terrain3-patch-' : 'terrain3-') + (real ? (maps.city ? 'real-city' : 'real') : maps.detailU?.key || '');
   return mat;
 }
 
@@ -238,6 +248,25 @@ const REAL_SAT_GLSL = /* glsl */`
     c = mix(c, satCliff.rgb * (0.8 + 0.4 * fract(sin(dot(floor(n.xz * 9.0), vec2(12.9, 78.2))) * 43758.5)), cliff * satCliff.a); // (the place's rock colour)
     c *= vec3(1.0 + 0.06 * sh, 1.0 + 0.03 * sh, 1.0 - 0.3 * sh);
     return min(c * k * satGain, vec3(0.92));
+  }`;
+
+// A city's open ground (the lots, plazas, pedestrian streets and gaps between buildings: cover.png 0, at the pavements'
+// level, roads.js cityGround) is paved near the camera: concrete slabs 3 m square, a shade off one to the next, darker
+// joints, a little grime. Not where the photo is green (yards and street trees the land cover doesn't map as parks),
+// and not far off, where the aerial photo (the streets, roofs and plazas as they really look) is the better picture.
+const CITY_GLSL = /* glsl */`
+  uniform sampler2D coverTex; uniform vec3 coverR;
+  float cityPaved(vec2 p, vec3 photo, float dist) {
+    vec2 u = (p - coverR.xy) * coverR.z;
+    float bare = 1.0 - smoothstep(0.0012, 0.0028, texture2D(coverTex, u).r); // (0: paved; parks 22 or 28 / 255, woods more, a park's clearings 1 / 255)
+    if (u.x <= 0.0 || u.y <= 0.0 || u.x >= 1.0 || u.y >= 1.0) return 0.0;
+    float gc = photo.g / max(photo.r + photo.g + photo.b, 0.03), veg = smoothstep(0.36, 0.39, gc);
+    return bare * (1.0 - veg) * (1.0 - smoothstep(500.0, 900.0, dist));
+  }
+  vec3 cityPave(vec2 p, float dist) {
+    vec2 sl = p / 3.0, f = abs(fract(sl) - 0.5), fw = fwidth(sl) * 1.5 + 0.015;
+    float joint = max(smoothstep(0.5 - fw.x, 0.5, f.x), smoothstep(0.5 - fw.y, 0.5, f.y)) * (1.0 - smoothstep(60.0, 220.0, dist));
+    return vec3(0.175, 0.172, 0.165) * (0.92 + 0.16 * tvh(floor(sl))) * (1.0 - 0.3 * joint) * (0.86 + 0.14 * tvn(p * 0.37)) * (0.9 + 0.1 * tvn(p * 0.045));
   }`;
 
 // ---------- water ----------

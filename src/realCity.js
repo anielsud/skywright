@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, facade, facadeSpec, floodlit, linHex, LY0, LYS } from './buildings.js';
 import { toLocal } from './realworld.js';
-import { roadIndex, setBack, holeInside, fitBox, MAJOR, streetWalls } from './setback.js';
+import { roadIndex, setBack, holeInside, fitBox, boxInside, MAJOR, streetWalls } from './setback.js';
 
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
 const GROUP = 2; // tall buildings: one mesh per GROUP x GROUP data tiles
@@ -454,7 +454,7 @@ export class CityScenery {
     const b0 = box || obb(P);
     if (!b0) return;
     const k = A / b0.ar > 0.7 ? 1 : 0.85; let b = { cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz, hl: b0.hl * k, hw: b0.hw * k };
-    if (!F.through) { const f = fit(b); b = { cx: f.x, cz: f.z, ux: f.ux, uz: f.uz, hl: f.hl, hw: f.hw }; }
+    if (!F.through) { const f = fit(b); b = { cx: f.x, cz: f.z, ux: f.ux, uz: f.uz, hl: f.hl, hw: f.hw }; if (A / b0.ar < 0.97) b = boxInside(P, b); } // (an irregular footprint's box: kept to its walls, setback.js)
     const t = this.addBox(b, part && R.mh > 0.5 ? yBase : R.g0 - 1, yTop, this.curTile);
     if (F.through) t.through = true;
     if (pad) { t.fixed = true; return; } // (no damage key: destruction.js leaves it standing, whatever falls around it)

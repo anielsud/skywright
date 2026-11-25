@@ -336,6 +336,13 @@ export function carveGrid(w, roads, H, R, st, bench = 0.75) {
 // beyond the detail mesh the ground showed through the road.)
 const PIN = 0.05; // metres the ground stays under a road
 export const PAVE = { main: 4.5, street: 3.5 }; // a city street's pavements: metres out from the tarmac's edge (roads.js)
+// A city's open ground (roads.js cityGround) lies CITY_TOP over the tarmac: the slabs' top (0.15 m kerb + the tarmac's
+// lift, roads.js TARMAC_LIFT) less a centimetre. Off a city street's footprint (tarmac and verge) RoadSurface.over
+// ramps up to it over PAVE_RAMP metres (under the slabs: no kerb in physics, a 4-9% rise) and from there hands over to
+// that ground (World.cityAt) by CITY_BAND metres out (the ground between two streets at different heights is a slope
+// from one to the other, and cityAt's grid, 40-57 m, is too coarse to have it right just beside them). SLAB: how far
+// past a city street's footprint its pavement's slabs reach (roads.js roadMesh).
+export const CITY_TOP = 0.18, PAVE_RAMP = 2, CITY_BAND = 12, SLAB = PAVE.main - VERGE;
 function pinUnder(w, roads, H, R, st) {
   const W = R + 1, half = w.half, q = new Float64Array(8), tri = [0, 0, 0], wt = [0, 0, 0];
   let poly = new Float64Array(32), tmp = new Float64Array(32), np = 0; // (the clipped polygon: np floats, x, z pairs)
@@ -416,14 +423,16 @@ export class RoadSurface {
     let ns = 0; for (const rd of roads) ns += rd.closed ? rd.pts.length : rd.pts.length - 1;
     const S = (this.seg = new Float32Array(ns * SEG)), reach = new Float32Array(ns), ground = w.Hh ? (x, z) => w.triAt(w.Hh, w.hR + 1, clamp((x + w.half) / w.hStep, 0, w.hR - 1e-3), clamp((z + w.half) / w.hStep, 0, w.hR - 1e-3)) : null;
     let s0 = 0;
+    const cs = (this.cs = new Uint8Array(ns)), city = !!w.loc?.city; this.k = 0; // (cs: a city street's segment, on the ground: its pavements and the open ground round it at the slabs' level, over)
     roads.forEach((rd, ri) => {
-      const P = rd.pts, n = P.length, last = rd.closed ? n : n - 1;
+      const P = rd.pts, n = P.length, last = rd.closed ? n : n - 1, street = city && (rd.kind === 'main' || rd.kind === 'street') && !rd.baked;
       for (let i = 0; i < last; i++, s0++) {
         const a = P[i], b = P[(i + 1) % n], tu = !!(rd.tube?.[i] && rd.tube?.[(i + 1) % n]), br = tu || !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % n]); // (a tunnel's tube: a deck underground, flag 8)
         // deck flags: 1 = deck, +2 / +4 = the deck carries on before / after (a joint, round; an abutment end is square)
         const isD = (k) => !!((rd.bridge?.[(k + n) % n] && rd.bridge?.[(k + 1 + n) % n]) || (rd.tube?.[(k + n) % n] && rd.tube?.[(k + 1 + n) % n])) && (rd.closed || (k >= 0 && k < n - 1));
         const o = s0 * SEG; S[o] = a.x; S[o + 1] = a.z; S[o + 2] = b.x; S[o + 3] = b.z; S[o + 4] = a.y; S[o + 5] = b.y; S[o + 6] = br ? rd.width / 2 + 1 : rd.width / 2 + VERGE; S[o + 7] = br ? 1 + (isD(i - 1) ? 2 : 0) + (isD(i + 1) ? 4 : 0) + (tu ? 8 : 0) : 0; S[o + 8] = rd.rank ?? ri;
         reach[s0] = br || !ground ? skirt : Math.min(skirt, Math.max(Math.abs(a.y - ground(a.x, a.z)), Math.abs(b.y - ground(b.x, b.z))) / FILL + 4 + bench);
+        if (street && !br) { cs[s0] = 1; reach[s0] = Math.max(reach[s0], CITY_BAND + 1); } // (a city street: out to its hand-over to the open ground)
       }
     });
     const cnt = new Int32Array(nC * nC + 1), cells = (s, fn) => {
@@ -437,7 +446,7 @@ export class RoadSurface {
     const ids = new Int32Array(cnt[nC * nC]), fill = cnt.slice();
     for (let s = 0; s < ns; s++) cells(s, (c) => (ids[fill[c]++] = s));
     this.start = cnt; this.ids = ids;
-    this.y = 0; this.e = 0; this.g = 0; this.In = new Float64Array(40); this.ord = new Int32Array(8); this.nIn = 0;
+    this.y = 0; this.e = 0; this.g = 0; this.In = new Float64Array(40); this.ord = new Int32Array(8); this.nIn = 0; this.Out = new Float64Array(24); this.nOut = 0; // (Out: the city streets just beyond whose footprints (x, z) is, near)
   }
   // deck: bridge decks only, and where decks cross (an overpass) the highest one not above y + 2 (any, without y)
   q(x, z, deck = false, y = Infinity) {
@@ -445,7 +454,7 @@ export class RoadSurface {
     if (ci < 0 || cj < 0 || ci >= nC || cj >= nC) return false;
     const c = cj * nC + ci, a = this.start[c], b = this.start[c + 1];
     if (a === b) return false;
-    const S = this.seg, want = deck ? 1 : 0; this.nIn = 0;
+    const S = this.seg, want = deck ? 1 : 0; this.nIn = 0; this.nOut = 0;
     let best = deck ? 0.5 : this.S, top = -Infinity, hit = false; // (decks: best = e of the current pick)
     for (let k = a; k < b; k++) {
       const o = this.ids[k] * SEG, f = S[o + 7]; if ((f & 1) !== want) continue;
@@ -456,8 +465,9 @@ export class RoadSurface {
       if (deck && (f & 8) && !(yy > y - 7)) continue; // (a tunnel's floor: only for what is down in the tunnel, not on the hill above it)
       // decks: the nearest centreline on the same level; a deck a level up (an overpass) wins outright
       if (!deck && e < 0) this.inside(S[o + 8], e, yy, (S[o + 5] - S[o + 4]) * dx / L2, (S[o + 5] - S[o + 4]) * dz / L2);
+      else if (!deck && e < CITY_BAND && this.cs[this.ids[k]]) this.near(S[o + 8], e, yy);
       if (deck ? e < ((f & 8) ? 1.5 : 0.5) && yy < y + 2 && (!hit || yy > top + 2.5 || (yy > top - 2.5 && e < best)) : e < best) {
-        best = e; top = yy; hit = true; this.y = yy; this.e = e; this.gx = (S[o + 5] - S[o + 4]) * dx / L2; this.gz = (S[o + 5] - S[o + 4]) * dz / L2;
+        best = e; top = yy; hit = true; this.k = this.ids[k]; this.y = yy; this.e = e; this.gx = (S[o + 5] - S[o + 4]) * dx / L2; this.gz = (S[o + 5] - S[o + 4]) * dz / L2;
       }
     }
     if (!deck && this.nIn > 1) this.blend();
@@ -473,6 +483,13 @@ export class RoadSurface {
     if (k < this.nIn) { if (e >= R[k * 5 + 1]) return; } else { if (k >= 8) return; this.nIn++; }
     R[k * 5] = rank; R[k * 5 + 1] = e; R[k * 5 + 2] = y; R[k * 5 + 3] = gx; R[k * 5 + 4] = gz;
   }
+  // a city street (x, z) lies just beyond (within CITY_BAND of its footprint): each street once, its nearest segment
+  near(rank, e, y) {
+    const R = this.Out; let k = 0;
+    while (k < this.nOut && R[k * 3] !== rank) k++;
+    if (k < this.nOut) { if (e >= R[k * 3 + 1]) return; } else { if (k >= 8) return; this.nOut++; }
+    R[k * 3] = rank; R[k * 3 + 1] = e; R[k * 3 + 2] = y;
+  }
   blend() {
     const R = this.In, n = this.nIn, ord = this.ord; for (let k = 0; k < n; k++) ord[k] = k;
     for (let a = 1; a < n; a++) { const v = ord[a]; let b = a - 1; while (b >= 0 && R[ord[b] * 5] < R[v * 5]) { ord[b + 1] = ord[b]; b--; } ord[b + 1] = v; } // minor first
@@ -482,10 +499,25 @@ export class RoadSurface {
   }
   // ground height with the road on it: the profile inside the footprint, then the embankment (the base surface
   // clamped to the side slopes from the footprint edge; a cutting from the bench's edge), fading back to the base
-  // surface by the skirt's end
+  // surface by the skirt's end.
+  // Beside a city street the ground is its pavement and then the open ground beyond at the slabs' level (base is that
+  // already: World.cityAt), not an embankment: up PAVE_RAMP metres from the footprint's edge to the slabs' top, then
+  // by CITY_BAND to base (where base is more than a metre or so off the slabs, a real embankment or cutting or a park
+  // lower down, the slopes as anywhere else). Several streets near (a junction's corner, between two streets at
+  // different heights): each one's ramp and hand-over, weighted by how near it is (fading out by CITY_BAND), so there
+  // is no step where one street's side meets another's; and never over a street's slabs.
   over(base) {
     const e = this.e; if (e <= 0) return this.y;
-    const c = clamp(base, this.y - FILL * e, this.y + CUT * Math.max(0, e - this.B));
-    return c + (base - c) * smoothstep(this.S * 0.6, this.S, e);
+    const c = clamp(base, this.y - FILL * e, this.y + CUT * Math.max(0, e - this.B)), h = c + (base - c) * smoothstep(this.S * 0.6, this.S, e);
+    if (!this.cs[this.k]) return h;
+    const R = this.Out; let sw = 0, sp = 0, sk = 0, cap = Infinity;
+    for (let i = 0; i < this.nOut; i++) {
+      const ei = R[i * 3 + 1], yi = R[i * 3 + 2], d = base - yi - CITY_TOP, w = (1 - smoothstep(CITY_BAND * 0.6, CITY_BAND, ei)) / ((ei + 0.5) * (ei + 0.5));
+      sw += w; sp += w * (yi + CITY_TOP * smoothstep(0, PAVE_RAMP, ei) + d * smoothstep(PAVE_RAMP, CITY_BAND, ei)); sk += w * (1 - smoothstep(0.8, 1.6, Math.abs(d)));
+      if (ei < SLAB + 1) cap = Math.min(cap, yi + CITY_TOP + 50 * smoothstep(SLAB, SLAB + 1, ei)); // (under a street's slabs: no higher than their top, whatever is beyond)
+    }
+    if (sw < 1e-9) return h + (base - h) * (1 - smoothstep(0.8, 1.6, Math.abs(base - this.y - CITY_TOP))); // (past them all: the open ground itself)
+    const r = h + (sp / sw - h) * (sk / sw);
+    return r < cap ? r : cap;
   }
 }
