@@ -8,7 +8,8 @@
 //   boxes:      the collision boxes cars meet (World.wallBoxes) are off the roads too
 //   kept:       how many buildings the setbacks left out (a few per cent at most: most are cut back, not dropped)
 //   cheap:      the setbacks' own time at load (index + cuts), as a share of the World's build
-//   few over:   big buildings a road runs right through are left standing (setback.js MAJOR: a passage under them); few
+//   few over:   big buildings a road runs right through are left standing only with a passage under them (setback.js
+//               MAJOR, PASSAGE; realCity.js builds it, its boxes below the underside are checked with the others); few
 // Standalone (counts before and after, worst spots): node --import ./tools/test/node/setup.mjs tools/test/setbacks.js [place ...]
 import { VERGE } from '../../src/roadgrade.js';
 
@@ -107,7 +108,7 @@ export async function measure(w, which = 'after') {
   const seen = new Set();
   for (const g of grids) for (const arr of g.values()) for (const e of arr) {
     if (seen.has(e) || !e.solid) continue; seen.add(e);
-    if (e.through) continue; // (a big building over a road through it: counted above)
+    if (e.through) continue; // (a big building over a road through it: counted above; its passage's boxes either side are not through)
     const b = w.destruct.box(e), C4 = [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([a, c]) => [b.x + b.ux * b.hl * a - b.uz * b.hw * c, b.z + b.uz * b.hl * a + b.ux * b.hw * c]);
     const d = depth(Z, C4); if (d.worst > TOL) boxes.push({ x: Math.round(b.x), z: Math.round(b.z), d: d.worst, kind: d.at.kind });
   }

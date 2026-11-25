@@ -14,7 +14,12 @@
 //    the road's line chopped whole wings off buildings at bends.)
 //  - a road right through a footprint: the smaller side goes;
 //  - if that leaves less than half of it, or a sliver, it is dropped; unless it's a big or tall one (MAJOR) the road
-//    runs right through: that stays whole (a passage under it, a covered highway; New York has a few dozen).
+//    runs right through that can take a passage (PASSAGE: its height mapped, storeys to spare over the road, the road's
+//    run under it a passage and not a street grid): that stays whole, with a passage cut under it (realCity.js: the
+//    road clear under a raised underside, walls either side, the collision box split). New York has a few dozen: the
+//    Bridge Apartments and the bus station over the Trans-Manhattan Expressway. A footprint that swallows whole blocks
+//    of streets (Grand Central's train shed under Park Avenue, mapped as a building) or whose height is a guess is a
+//    mapping clash: it is cut back like any other.
 //  - the collision box (World.wallBoxes, destruction.js) is made from what's left, and fitBox keeps it off the tarmac
 //    too (a box reaches past an irregular footprint's walls: over a cut-off corner, an L's yard).
 // Tunnels' tubes and bridge decks up in the air are left out (what's under them is no obstacle to the road).
@@ -24,6 +29,9 @@ export const SETBACK = 1; // m beyond the verge, off a city's streets
 const PAVE = { main: 4.5, street: 3.5 }; // a city street's pavement (roads.js roadMesh: the slabs out to the building line)
 const hyp = (x, z) => Math.sqrt(x * x + z * z); // (Math.hypot is slow)
 export const MAJOR = { area: 800, height: 25 }; // (m2, m) a building too big to drop for a road through it
+// a passage under a building (m): the headroom over the road, the least of the building over that, and the most road
+// (all its centre lines' runs under the footprint added up) that is still a passage
+export const PASSAGE = { clear: 5.5, over: 4, run: 400 };
 const CELL = 32, KEEP = 0.5, MIN_A = 12, MIN_W = 2.2, TOL = 0.3; // (TOL: how far into the setback a wall may stand: it's slack, not road)
 
 // The clear zones of a World's road network: segments [ax, az, bx, bz, r, ends, x0, x1, z0, z1] (r: the clear half
@@ -114,23 +122,62 @@ export function segDist(s, P) {
 }
 
 // Which of a footprint's walls face a street (for their doors and shop fronts): wall k (P[k] -> P[k + 1]) does when a
-// road's clear zone (tarmac and pavement) comes within reach metres of its middle, out in front of it. (Either winding.)
-export function streetWalls(I, P, reach = 4) {
+// road's clear zone (tarmac and pavement: measured from its edge, not the centre line) comes within reach metres of its
+// middle, out in front of it. (Either winding.) fallback (m): if no wall is that close, the walls facing the nearest
+// road within fallback metres of the clear zone's edge still do (a building set back behind a forecourt or a plaza, a
+// street drawn narrower than the real one: its front is still its front). cone: how squarely a wall must face the road
+// (the cosine of the angle off its normal to the road's nearest point); 0: any wall with a road out in front of it
+// (the road's nearest point among those 2 m or more in front), seen from the street at a slant too: a corner
+// building's end wall over a forecourt or a vacant lot.
+export function streetWalls(I, P, reach = 4, fallback = 0, cone = 0.6) {
   const n = P.length, out = new Array(n).fill(false);
   if (!I.segs.length || n < 3) return out;
-  const S = near(I, P, reach), sg = area(P) > 0 ? 1 : -1;
-  if (!S.length) return out;
-  for (let k = 0; k < n; k++) {
-    const p = P[k], q = P[(k + 1) % n], ex = q[0] - p[0], ez = q[1] - p[1], L = hyp(ex, ez); if (L < 2) continue;
-    const mx = (p[0] + q[0]) / 2, mz = (p[1] + q[1]) / 2, ox = sg * ez / L, oz = -sg * ex / L; // (outward)
-    for (const s of S) {
-      const dx = s[2] - s[0], dz = s[3] - s[1], L2 = dx * dx + dz * dz || 1e-9;
-      let t = ((mx - s[0]) * dx + (mz - s[1]) * dz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
-      const cx = s[0] + dx * t - mx, cz = s[1] + dz * t - mz, d = hyp(cx, cz);
-      if (d - s[4] < reach && cx * ox + cz * oz > 0.6 * d) { out[k] = true; break; }
+  const sg = area(P) > 0 ? 1 : -1;
+  for (let pass = 0; pass < (fallback > reach ? 2 : 1); pass++) { // (the near roads, then (none) the nearest within fallback)
+    const lim = pass ? fallback : reach, S = near(I, P, lim); if (!S.length) continue;
+    let any = false, best = Infinity, bk = [];
+    for (let k = 0; k < n; k++) {
+      const p = P[k], q = P[(k + 1) % n], ex = q[0] - p[0], ez = q[1] - p[1], L = hyp(ex, ez); if (L < (pass ? 4 : 2)) continue;
+      const mx = (p[0] + q[0]) / 2, mz = (p[1] + q[1]) / 2, ox = sg * ez / L, oz = -sg * ex / L; // (outward)
+      for (const s of S) {
+        let ax = s[0], az = s[1], bx = s[2], bz = s[3];
+        if (!pass && cone <= 0) { // (the part of the centre line out in front of the wall, 2 m on)
+          const fa = (ax - mx) * ox + (az - mz) * oz - 2, fb = (bx - mx) * ox + (bz - mz) * oz - 2;
+          if (fa < 0 && fb < 0) continue;
+          if (fa < 0) { const u = fa / (fa - fb); ax += (bx - ax) * u; az += (bz - az) * u; } else if (fb < 0) { const u = fa / (fa - fb); bx = ax + (bx - ax) * u; bz = az + (bz - az) * u; }
+        }
+        const dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9;
+        let t = ((mx - ax) * dx + (mz - az) * dz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const cx = ax + dx * t - mx, cz = az + dz * t - mz, d = hyp(cx, cz), g = d - s[4];
+        if (g >= lim || (cone > 0 || pass ? cx * ox + cz * oz <= (pass ? 0.6 : cone) * d : false)) continue;
+        if (!pass) { out[k] = any = true; break; }
+        if (g < best - 2) { best = g; bk = [k]; } else if (g < best + 2) bk.push(k); // (the nearest road's walls: within 2 m of the nearest)
+      }
     }
+    if (any) return out;
+    for (const k of bk) out[k] = true;
   }
   return out;
+}
+
+// The roads a footprint stands over: the clear zones whose centre lines cross it, and how much of them runs under it
+// (m, all of them added up): { segs, len }
+export function roadRun(I, P) {
+  const segs = [], n = P.length; let len = 0;
+  if (!I || !I.segs.length) return { segs, len };
+  for (const s of near(I, P)) {
+    if (!segDist(s, P).cross) continue;
+    const ax = s[0], az = s[1], dx = s[2] - ax, dz = s[3] - az, L = hyp(dx, dz), ts = [0, 1];
+    for (let k = 0; k < n; k++) { // (where the centre line crosses the walls)
+      const p = P[k], c = P[(k + 1) % n], ex = c[0] - p[0], ez = c[1] - p[1], den = dx * ez - dz * ex; if (Math.abs(den) < 1e-12) continue;
+      const u = ((p[0] - ax) * ez - (p[1] - az) * ex) / den, v = ((p[0] - ax) * dz - (p[1] - az) * dx) / den;
+      if (u > 0 && u < 1 && v >= 0 && v <= 1) ts.push(u);
+    }
+    ts.sort((a, b) => a - b); let run = 0;
+    for (let i = 0; i + 1 < ts.length; i++) { const m = (ts[i] + ts[i + 1]) / 2; if (inside(P, ax + dx * m, az + dz * m)) run += (ts[i + 1] - ts[i]) * L; }
+    if (run > 0.05) { segs.push(s); len += run; }
+  }
+  return { segs, len };
 }
 
 // How deep a footprint reaches into the clear zones (tarmac + verge / pavement; no setback): the worst, in metres (0: clear)
@@ -141,7 +188,7 @@ export function intrusion(I, P) {
 }
 
 // keep the part of P with n . (x - o) >= c (Sutherland-Hodgman against one half-plane; keeps the ring's winding)
-function clip(P, nx, nz, ox, oz, c) {
+export function clip(P, nx, nz, ox, oz, c) {
   const out = [], f = (p) => (p[0] - ox) * nx + (p[1] - oz) * nz - c;
   for (let k = 0; k < P.length; k++) {
     const a = P[k], b = P[(k + 1) % P.length], fa = f(a), fb = f(b);
@@ -307,12 +354,12 @@ export function fitBox(I, ob) {
 
 // A footprint ([[x, z], ...]) set back from the roads: { P (the same array if nothing reached a road), cut (it was
 // cut back), drop (nothing worth keeping: leave the building out), depth (how far it reached into a clear zone, before) }.
-// major: a big or tall building. One a road runs right through is left whole (through: true): that is a passage under
-// it (a building_passage, a covered highway: New York has a few under towers) or a mapping clash too big to settle by
-// knocking down a landmark.
+// major: a big or tall building. One a road runs right through is left whole (through: true, pass: the clear zones
+// under it, for the passage) where it can take a passage: pass = { h: its height above its floor (m), tagged: that
+// height is mapped, not guessed } (PASSAGE; without pass: always). Else (a mapping clash) it is cut back like any other.
 // asRect: trim it as its bounding rectangle whatever its shape (a building under a pitched roof, which covers that
 // rectangle anyway).
-export function setBack(I, P, major = false, asRect = false) {
+export function setBack(I, P, major = false, asRect = false, pass = null) {
   const none = { P, cut: false, drop: false, depth: 0 };
   if (!I || !I.segs.length) return none;
   const fr = frame(P), A0 = Math.abs(area(P)), box = asRect && fr ? corners(fr) : P; // (what has to keep off the road)
@@ -320,7 +367,10 @@ export function setBack(I, P, major = false, asRect = false) {
   const S = I.set; let depth = 0, hit = false, cross = false;
   for (const s of segs) { const d = segDist(s, P); if (s[4] - d.d > depth) depth = s[4] - d.d; if (d.cross) cross = true; if (s[4] + S - (box === P ? d.d : segDist(s, box).d) > TOL) hit = true; }
   if (!hit) return none;
-  if (major && cross) return { P, cut: false, drop: false, depth, through: true };
+  if (major && cross) {
+    const run = roadRun(I, P);
+    if (!pass || (pass.tagged && pass.h >= PASSAGE.clear + PASSAGE.over && run.len <= PASSAGE.run)) return { P, cut: false, drop: false, depth, through: true, pass: run.segs };
+  }
   // a near-rectangular one (most houses): the rectangle trimmed, faces moved in off the road (through it: the smaller side goes)
   segs = near(I, fr ? corners(fr) : P, 3); // (from here on: the roads near what it may become, too)
   if (fr && (asRect || A0 / fr.ar > 0.92)) {

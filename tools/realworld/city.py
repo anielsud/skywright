@@ -103,6 +103,7 @@ def load_buildings(L, cache):
         part = 'building:part' in tags and 'building' not in tags
         bt = tags.get('building:part' if part else 'building', 'yes')
         if bt in ('no', 'roof', 'construction', 'ruins', 'collapsed', 'bridge', 'canopy', 'carport'): continue
+        if tags.get('location') in ('underground', 'subway') or str(tags.get('layer', '0')).lstrip('-').isdigit() and int(tags.get('layer', '0')) < 0: continue  # (below the street: a train shed under the avenue, a concourse)
         ring = max(rings, key=len)
         if not in_square(ring, sq) or in_airport(ring): continue
         r = ring[:-1]
@@ -151,7 +152,8 @@ def load_buildings(L, cache):
         for k in grid.get((int(cx // cell), int(cz // cell)), []):
             o = outl[k]
             if id(o) not in dup and inside(o['_P'], cx, cz):
-                o['_cover'] += b['area']; b['tall'] = b['tall'] or o['tall'] or b['h'] >= 20
+                if b['mh'] < 1: o['_cover'] += b['area']  # (only parts standing on the ground cover it: parts up in the air over a podium mapped only as the outline left it floating)
+                b['tall'] = b['tall'] or o['tall'] or b['h'] >= 20
                 if not b['nm']: b['nm'] = o['nm']
                 if b['h'] < 0 and o['h'] > 0: b['h'] = o['h']
                 break
