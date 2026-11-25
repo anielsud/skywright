@@ -41,7 +41,7 @@ const PARK = new THREE.Matrix4().compose(new THREE.Vector3(0, -1e4, 0), new THRE
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _s = new THREE.Vector3(), _m = new THREE.Matrix4(), _c = new THREE.Color();
 const rnd = (a = 1) => (Math.random() - 0.5) * 2 * a;
-const MATERIAL = (cell) => ([C.WOOD, C.WOOD_WIN, C.WOOD_WIN2, C.WOOD_DOOR, C.BOARDS, C.CLAP, C.CLAP_WIN, C.CLAP_DOOR, C.DARKWOOD, C.THATCH, C.LOG, C.LOG_WIN, C.TIMBER_WIN].includes(cell) ? 'wood'
+const MATERIAL = (cell) => ([C.WOOD, C.WOOD_WIN, C.WTANK, C.WOOD_DOOR, C.BOARDS, C.CLAP, C.CLAP_WIN, C.CLAP_DOOR, C.DARKWOOD, C.THATCH, C.LOG, C.LOG_WIN, C.TIMBER_WIN].includes(cell) ? 'wood'
   : [C.BRICK, C.BRICK_WIN].includes(cell) ? 'brick' : [C.STONE, C.STONE_WIN, C.LIME, C.LIME_WIN, C.BROWN_WIN, C.ADOBE, C.ADOBE_WIN, C.ADOBE_WIN2, C.ADOBE_DOOR, C.CHURCH_WIN, C.MASONRY_WIN].includes(cell) ? 'stone'
     : cell === C.GLASS ? 'glass' : [C.METAL, C.SEAM, C.HANGAR_DOOR].includes(cell) ? 'metal' : 'concrete');
 
