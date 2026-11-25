@@ -68,24 +68,28 @@ export const WINDOW_RECTS = WIN;
 // [band colour, band cell] [ground colour, parapet cell] (colours: linear bytes, as given). flags: 1 the ground cell is metric (a plinth: 3 m tiles),
 // 2 the ground takes a shop colour (per shop: three bays), 4 the ground takes its own colour, 8 the band and cornice
 // take their own colour (else the building's), 16 a moulded cornice at the top (else plain), 32 the door is the whole
-// first floor's bay 0 (v 0..1), over any plinth (gH: a plinth, not a floor)
-const NFAC = 256, FAC_DATA = new Uint8Array(4 * NFAC * 4), FAC = new Map(), FAC_SPEC = [];
+// first floor's bay 0 (v 0..1), over any plinth (gH: a plinth, not a floor), 64 floodlit at night (a tower's crown: lit
+// from below, brightest at the foot of each tier; see floodlit())
+const NFAC = 256, FAC_DATA = new Uint8Array(4 * NFAC * 4), FAC = new Map(), FAC_SPEC = [], FAC_OPTS = [];
 export const FAC_TEX = new THREE.DataTexture(FAC_DATA, 4, NFAC, THREE.RGBAFormat, THREE.UnsignedByteType);
 FAC_TEX.needsUpdate = true;
-export function facade({ upper, ground = upper, gH = 0, door = -1, door2 = -1, every = 0, band = 0, bandCell = C.LIME, bandCol = null, groundCol = null, shop = false, metric = false, doorUp = false, top = -1, cornice = false }) {
-  const key = [upper, ground, gH, door, door2, every, band, bandCell, bandCol, groundCol, shop, metric, doorUp, top, cornice].join();
+export function facade(opts) {
+  const { upper, ground = upper, gH = 0, door = -1, door2 = -1, every = 0, band = 0, bandCell = C.LIME, bandCol = null, groundCol = null, shop = false, metric = false, doorUp = false, top = -1, cornice = false, flood = false } = opts;
+  const key = [upper, ground, gH, door, door2, every, band, bandCell, bandCol, groundCol, shop, metric, doorUp, top, cornice, flood].join();
   let id = FAC.get(key); if (id != null) return id;
   id = NCELL + FAC.size; if (id >= NFAC) throw new Error('facade programs: table full');
-  FAC.set(key, id); FAC_SPEC[id] = { upper, ground, gH, door, door2, every, band, top, cornice };
+  FAC.set(key, id); FAC_SPEC[id] = { upper, ground, gH, door, door2, every, band, top, cornice, flood }; FAC_OPTS[id] = { ...opts };
   const o = id * 16, D = FAC_DATA, lin = (h, k) => { h = h ?? 0xffffff; D[k] = (h >> 16) & 255; D[k + 1] = (h >> 8) & 255; D[k + 2] = h & 255; }; // (colours as stored: linear, like MeshW's)
   D[o] = upper; D[o + 1] = gH > 0 ? ground : upper; D[o + 2] = door < 0 ? 255 : door; D[o + 3] = door2 < 0 ? 255 : door2;
   D[o + 4] = Math.round(gH * 20); D[o + 5] = Math.round(band * 80); D[o + 6] = every;
-  D[o + 7] = (metric ? 1 : 0) | (shop ? 2 : 0) | (groundCol != null ? 4 : 0) | (bandCol != null ? 8 : 0) | (cornice ? 16 : 0) | (doorUp ? 32 : 0);
+  D[o + 7] = (metric ? 1 : 0) | (shop ? 2 : 0) | (groundCol != null ? 4 : 0) | (bandCol != null ? 8 : 0) | (cornice ? 16 : 0) | (doorUp ? 32 : 0) | (flood ? 64 : 0);
   lin(bandCol, o + 8); D[o + 11] = bandCell; lin(groundCol, o + 12); D[o + 15] = top < 0 ? upper : top;
   FAC_TEX.needsUpdate = true;
   return id;
 }
 export const facadeSpec = (id) => FAC_SPEC[id] ?? null;
+// the same wall (an atlas cell or a program), floodlit at night: a landmark tower's crown (realCity.js crown())
+export const floodlit = (id) => facade(id < NCELL ? { upper: id, flood: true } : { ...FAC_OPTS[id], flood: true });
 export const linHex = (h) => { _lc.set(h); return (Math.round(_lc.r * 255) << 16) | (Math.round(_lc.g * 255) << 8) | Math.round(_lc.b * 255); }; // (an sRGB colour as the linear bytes a facade takes, like Builder's vertex colours)
 const _lc = new THREE.Color();
 // a wall id's [ground floor, upper floors] cells (an atlas cell: itself twice)
@@ -409,8 +413,51 @@ function paintAtlas(CELL, photo) {
   return { col: cv, dat: dv, nrm: nv };
 }
 
-// Shared uniforms (updated by Towns.update): daylight 0..1 for the brightness of rooms behind the glass by day.
-export const BLD_U = { uDay: { value: 1 } };
+// Shared uniforms (updateBuildingLights, every frame): uDay daylight 0..1 (the rooms behind the glass by day); uLit
+// the share of homes, offices, shops lit at this hour, and whether the floodlights are on (x, y, z, w); uDark how dark
+// it is outside (0 day .. 1 night: each flat, office and shop switches its lights on at its own darkness, so they
+// come on one by one through the dusk); uProf the place's habits (x a city: tower blocks of offices, the streets'
+// glow on the walls; y warm lamps only; z the share of homes lit by a television); uTime for the televisions.
+export const BLD_U = { uDay: { value: 1 }, uLit: { value: new THREE.Vector4() }, uDark: { value: 0 }, uProf: { value: new THREE.Vector4() }, uTime: { value: 0 } };
+
+// ---------------- lights at night ----------------
+// How many windows are lit, by hour (the share of flats with someone home and a lamp on, of office floors working or
+// being cleaned, of shops open; from night photos of Manhattan and the time-use surveys' daily curves: homes peak
+// 20-22 h and go dark from 23 h, offices empty from 18 h but a quarter stay lit all night, delis and lobbies never
+// close), and each place's habits: Alpine villages early to bed under warm lamps, Bora Bora's few houses and its
+// resort's bungalows warm and sparse.
+const OCC = {
+  home: [[0, 0.26], [1, 0.16], [3, 0.07], [5, 0.07], [6, 0.2], [7, 0.32], [8.5, 0.16], [12, 0.1], [16, 0.22], [18, 0.5], [20, 0.66], [21.5, 0.66], [22.5, 0.55], [23.5, 0.38], [24, 0.26]],
+  office: [[0, 0.13], [5, 0.12], [7, 0.36], [9, 0.85], [17, 0.82], [18, 0.62], [19, 0.42], [20, 0.3], [21, 0.24], [22, 0.2], [24, 0.13]],
+  shop: [[0, 0.24], [6, 0.26], [8, 0.7], [10, 0.92], [19, 0.92], [21, 0.74], [22, 0.48], [23, 0.32], [24, 0.24]],
+  flood: [[0, 1], [1.8, 1], [2.2, 0], [15.9, 0], [16, 1], [24, 1]], // (the crowns: dusk to 2 a.m.)
+};
+export const LIGHT_PROFILES = {
+  city: { home: 1, office: 1, shop: 1, flood: 1, shift: 0, warm: 0, tv: 0.07, city: 1 },
+  alps: { home: 0.9, office: 0.6, shop: 0.8, flood: 0, shift: 1.3, warm: 0.85, tv: 0.03, city: 0 }, // (shift: hours early: to bed at ten)
+  islands: { home: 0.62, office: 0.5, shop: 0.7, flood: 0, shift: 0.6, warm: 1, tv: 0.02, city: 0 },
+  rural: { home: 0.7, office: 0.5, shop: 0.7, flood: 0, shift: 0.8, warm: 0.7, tv: 0.04, city: 0 },
+};
+const PLACE_LIGHTS = { nyc: 'city', lauterbrunnen: 'alps', alpine: 'alps', islands: 'islands', canyon: 'rural' };
+export const lightProfile = (id) => LIGHT_PROFILES[PLACE_LIGHTS[id] ?? 'rural'];
+const knots = (K, h) => { for (let i = 1; i < K.length; i++) if (h <= K[i][0]) { const [h0, a] = K[i - 1], [h1, b] = K[i]; return a + (b - a) * (h1 > h0 ? (h - h0) / (h1 - h0) : 1); } return K[K.length - 1][1]; };
+// the shares lit at hour h (0..24) for a place's profile: { home, office, shop, flood }
+export function occupancy(h, P = LIGHT_PROFILES.city) {
+  const hl = (((h + P.shift) % 24) + 24) % 24, hw = ((h % 24) + 24) % 24; // (a place's habits shift its homes' evening; offices and shops keep the clock)
+  return { home: knots(OCC.home, hl) * P.home, office: knots(OCC.office, hw) * P.office, shop: knots(OCC.shop, hw) * P.shop, flood: knots(OCC.flood, hw) * P.flood };
+}
+// how dark it is for lights (0 day, 1 night) from the sun's elevation (rad) and the weather's gloom: the first lamps
+// go on with the sun a few degrees up (about 17:30 on the game's sun path), the last as civil twilight ends
+export const lightsDark = (el, gloom = 0) => Math.min(1, Math.max(0, 1 - smooth01((el + 0.12) / 0.28)) + gloom * 0.5);
+const smooth01 = (t) => { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); };
+// every frame, from the place's scenery (realBuildings.js RealScenery.update): the uniforms above for world w
+export function updateBuildingLights(w, t = 0) {
+  const P = lightProfile(w.loc?.id), o = occupancy(w.time ?? 12, P), dark = w.lightsK ?? (w.night ? 1 : 0);
+  BLD_U.uLit.value.set(o.home, o.office, o.shop, o.flood);
+  BLD_U.uDark.value = dark; BLD_U.uProf.value.set(P.city, P.warm, P.tv, 0); BLD_U.uTime.value = t % 1000;
+  BLD_U.uDay.value = Math.max(0.05, Math.min(1, ((w.sunElev ?? 0.5) + 0.05) * 3)) * (1 - 0.5 * (w.W?.dark ?? 0));
+  return dark;
+}
 
 // ---------------- destruction (destruction.js) ----------------
 // Every building vertex has a `dmg` byte saying what's left of its building: 0 intact, 255 gone (the vertex shader
@@ -479,7 +526,7 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
       .replace('#include <uv_vertex>', '#include <uv_vertex>\nvAtl = atl; vWP = (modelMatrix * vec4(position, 1.0)).xyz; ' + DMG_VERT)
       .replace('#include <fog_vertex>', '#include <fog_vertex>\n' + DMG_VERT_KILL);
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-      uniform sampler2D tData; uniform highp sampler2D tFac; uniform vec4 uRect[${NCELL}]; uniform vec4 uCP[${NCELL}]; uniform float uDay;
+      uniform sampler2D tData; uniform highp sampler2D tFac; uniform vec4 uRect[${NCELL}]; uniform vec4 uCP[${NCELL}]; uniform float uDay; uniform vec4 uLit; uniform float uDark; uniform vec4 uProf; uniform float uTime;
       varying vec4 vAtl; varying vec3 vWP; ${DMG_FRAG_HEAD}
       #define vDmgP vWP
       float bh1(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -489,7 +536,7 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
         return mix(a, b, f.z); }
       vec3 roomPal(float h) { return h < 0.25 ? vec3(0.86, 0.82, 0.74) : h < 0.45 ? vec3(0.92, 0.9, 0.86) : h < 0.6 ? vec3(0.72, 0.78, 0.8) : h < 0.75 ? vec3(0.8, 0.84, 0.72) : h < 0.88 ? vec3(0.88, 0.76, 0.7) : vec3(0.6, 0.64, 0.7); }
       vec3 fabric(float h) { return h < 0.3 ? vec3(0.9, 0.88, 0.8) : h < 0.5 ? vec3(0.62, 0.18, 0.16) : h < 0.65 ? vec3(0.2, 0.3, 0.5) : h < 0.8 ? vec3(0.85, 0.75, 0.5) : vec3(0.35, 0.45, 0.3); }
-      vec3 bWinRad = vec3(0.0); float bGlass = 0.0; vec3 bJambN = vec3(0.0); float bJamb = 0.0;
+      float bGlass = 0.0, bPan = 1.0; vec3 bJambN = vec3(0.0); float bJamb = 0.0;
       // shopfront paint (linear): black, bottle green, oxblood, navy, cream, slate, teal, red
       vec3 shopPal(float h) { return h < 0.2 ? vec3(0.03) : h < 0.34 ? vec3(0.03, 0.09, 0.05) : h < 0.46 ? vec3(0.2, 0.02, 0.025) : h < 0.58 ? vec3(0.02, 0.04, 0.12)
         : h < 0.7 ? vec3(0.75, 0.68, 0.52) : h < 0.82 ? vec3(0.12, 0.13, 0.14) : h < 0.91 ? vec3(0.02, 0.14, 0.13) : vec3(0.45, 0.04, 0.03); }
@@ -500,13 +547,14 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
         // ---- facade programs (FAC_TEX): which cell this fragment of the wall shows, and where in it
         vec2 muv = vMapUv; vec3 bTint = vColor;
         vec2 dUx = dFdx(vMapUv), dUy = dFdy(vMapUv), dLx = vec2(dUx.x, dFdx(ly)), dLy = vec2(dUy.x, dFdy(ly)); // (derivatives out here: the branches below only pick)
-        float fBand = -1.0, fTop = -1.0, fShade = 1.0, fCorn = 0.0, fAwn = 0.0; vec3 awnC = vec3(0.0);
+        float fBand = -1.0, fTop = -1.0, fShade = 1.0, fCorn = 0.0, fAwn = 0.0, fFlood = 0.0; vec3 awnC = vec3(0.0);
+        float fpB = max(max(length(dUx), length(dUy)), 1e-4); // (a pixel's footprint in bays / floors: far away, the lights are averaged)
         if (ci > ${NCELL - 0.5}) {
           int pid = int(ci);
           vec4 f0 = floor(texelFetch(tFac, ivec2(0, pid), 0) * 255.0 + 0.5), f1 = floor(texelFetch(tFac, ivec2(1, pid), 0) * 255.0 + 0.5), f2 = texelFetch(tFac, ivec2(2, pid), 0), f3 = texelFetch(tFac, ivec2(3, pid), 0);
           float gH = f1.x / 20.0, bH = f1.y / 80.0, b0 = floor(vMapUv.x); int fl = int(f1.w + 0.5);
           vec3 shopC = shopPal(bh1(vec2(vAtl.y * 0.37 + ci, floor((b0 + 1.0) / 3.0))));
-          ci = f0.x;
+          ci = f0.x; fFlood = float((fl & 64) != 0);
           bool door0 = b0 == 0.0 && f0.z < 254.5, door2 = f1.z > 0.5 && f0.w < 254.5 && mod(b0, f1.z) < 0.5;
           if ((fl & 32) != 0 && door0 && vMapUv.y < 1.0) ci = f0.z; // (a door from the ground up through the first floor, over any plinth)
           else if (ly < gH && gH > 0.0) { // the ground floor (gH 0: none; the wall below the floor too then)
@@ -596,6 +644,17 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
         normal = normalize(mat3(Tt, Bt, normal) * mapN);
         if (bJamb > 0.0) normal = normalize(bJambN + Ng * 0.8);
         if (winM > 0.5) normal = Ng;
+        #ifdef BLD_GLASS
+        if (winM > 0.5 && cp.z > 3.5) { // curtain-wall panes, each a little off true and pillowed, each floor's row a little
+          // out of line: the reflections break from pane to pane and band floor by floor (each only while it is a few pixels
+          // across: no sparkle far away)
+          vec2 pn = vec2(floor(fu.x * 4.0) + bay.x * 4.0, bay.y * 2.0 + step(0.45, fu.y));
+          float pa = 1.0 - smoothstep(0.03, 0.12, fpB), fa = 1.0 - smoothstep(0.4, 1.5, fpB);
+          bPan = 1.0 + (bh1(pn + seed) - 0.5) * 0.3 * (1.0 - smoothstep(0.1, 0.4, fpB)) + (bh1(vec2(bay.y, seed)) - 0.5) * 0.2 * fa;
+          normal = normalize(Ng + Tt * (((bh1(pn + seed * 0.7) - 0.5) * 0.035 + (fract(fu.x * 4.0) - 0.5) * 0.04) * pa)
+            + Bt * ((bh1(pn + 7.3) - 0.5) * 0.035 * pa + (bh1(vec2(bay.y + 0.5, seed)) - 0.5) * 0.035 * fa));
+        }
+        #endif
         if (awnB > 0.5) normal = normalize(Ng - Bt * 0.5); // (sloping out and down)
         if (fBand >= 0.0) normal = normalize(normal + Bt * (fBand < 0.22 ? -1.3 : fBand > 0.78 ? 1.1 : 0.0)); // bed mould faces down, the wash up
         if (fTop >= 0.0 && fCorn > 0.5) normal = normalize(normal + Bt * (fTop < 0.06 ? -0.8 : fTop < 0.2 ? 0.0 : fTop < 0.23 ? -1.4 : 0.9));`)
@@ -604,10 +663,12 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
         float nightK = emissive.r * (1.0 - dmgDark); // a damaged building's power is out
         vec2 wid = bay + vec2(seed * 0.618, ci * 0.37);
         float wh = bh1(wid), wh2 = bh1(wid + 17.3), wh3 = bh1(wid + 41.9);
+        float bS = bh1(vec2(seed, 5.3)), far = smoothstep(1.2, 4.0, fpB); // (bS: how busy the building is; far: average the lights)
         vec3 rad = vec3(0.0);
         if (winM > 0.01) {
-          if (cp.z > 1.5) { // stained glass / neon: glow with the painted colour
-            rad = bTex.rgb * (cp.z > 2.5 ? 3.0 : 1.2) * nightK + (cp.z > 2.5 ? bTex.rgb * 0.4 * uDay : vec3(0.0));
+          if (cp.z > 1.5 && cp.z < 3.5) { // stained glass / neon: glow with the painted colour (offices, kind 4: rooms below)
+            rad = (cp.z > 2.5 ? bTex.rgb * 3.0 : bTex.rgb * vec3(1.0, 0.7, 0.42) * 0.45) * nightK * smoothstep(0.2, 0.5, uDark) // (a church: lit warm and dim from within, not a white blaze)
+               + (cp.z > 2.5 ? bTex.rgb * 0.4 * uDay : vec3(0.0));
           } else {
             float shop = step(0.5, cp.z) * step(cp.z, 1.5), office = step(3.5, cp.z);
             vec3 ro = vec3(suv, -cp.x);
@@ -632,17 +693,33 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
               alb = rd3.y > 0.0 ? vec3(0.93) : (wh < 0.5 ? vec3(0.42, 0.3, 0.2) : vec3(0.5, 0.48, 0.45));
               ao = smoothstep(0.0, 0.25, (hp.z - back));
             } else { alb = wallC * 0.85; ao = smoothstep(0.0, 0.2, min(hp.y, 1.0 - hp.y)); }
-            if (office > 0.5) { alb = mix(alb, vec3(0.75, 0.78, 0.8), 0.6); }
+            // who is in with a lamp on: a flat (2-3 bays of a floor), an office (a run of 3-8 bays, or the whole floor lit
+            // end to end), a shop (its three bays); a city's concrete towers are half of them offices; lobbies never close
+            float isOff = office;
+            if (ii == ${C.APT} || ii == ${C.WIN_TALL}) isOff = max(isOff, uProf.x * step(0.5, bh1(vec2(seed, 8.1))));
+            float occ = shop > 0.5 ? mix(uLit.z, 0.95, float(ii == ${C.SHOP3_N})) : mix(uLit.x, uLit.y, isOff);
+            occ = clamp(occ * (0.55 + 0.9 * bS), 0.0, 1.0);
+            float uw = shop > 0.5 ? 3.0 : isOff > 0.5 ? 3.0 + floor(bh1(vec2(seed, bay.y)) * 6.0) : 2.0 + floor(bS * 2.0);
+            vec2 unit = vec2(floor((bay.x + floor(bh1(vec2(bay.y, seed + 2.0)) * uw)) / uw), bay.y);
+            float uh = bh1(unit + vec2(seed * 1.37, 3.1));
+            float on = max(step(uh, occ), isOff * step(bh1(vec2(bay.y + 0.5, seed + 9.0)), occ * 0.3));
+            on *= step(isOff > 0.5 || shop > 0.5 ? 0.06 : 0.3, wh3); // (not every room of a flat lit)
+            on *= step(bh1(unit + 7.7) * 0.85 + 0.08, uDark); // each switched on at its own darkness, through the dusk
+            // the lamp: homes warm (2700-3000 K, some 4000 K; warm only in the villages), offices neutral to cool white,
+            // shops bright, a television's flicker now and then
+            float ct = bh1(unit + 2.3);
+            vec3 lampC = ct < 0.55 ? vec3(1.0, 0.62, 0.34) : ct < 0.85 ? vec3(1.0, 0.74, 0.5) : vec3(1.0, 0.88, 0.74);
+            if (isOff > 0.5) lampC = ct < 0.55 ? vec3(1.0, 0.84, 0.62) : ct < 0.85 ? vec3(1.0, 0.92, 0.8) : vec3(0.88, 0.94, 1.0); // (from the night photos: mostly warm white, some fluorescent)
+            if (shop > 0.5) lampC = vec3(1.0, 0.88, 0.72);
+            lampC = mix(lampC, vec3(1.0, 0.64, 0.36), uProf.y * (1.0 - shop));
+            if ((1.0 - isOff) * (1.0 - shop) * step(bh1(unit + 11.1), uProf.z) > 0.5)
+              lampC = vec3(0.42, 0.55, 1.0) * (0.5 + 0.3 * sin(uTime * 7.0 + uh * 40.0) * sin(uTime * 2.3 + uh * 13.0) + 0.2 * step(0.7, fract(uTime * 0.37 + uh)));
             ao = 0.55 + 0.45 * ao;
             float depth = clamp((-hp.z - cp.x) / max(cp.y, 0.1), 0.0, 1.5);
-            // daylight falls off into the room; at night a ceiling lamp lights it (if anyone is home)
-            float lit = step(shop > 0.5 ? 0.15 : office > 0.5 ? 0.6 : 0.45, wh3);
-            vec3 lampC = wh < 0.7 ? vec3(1.0, 0.72, 0.42) : wh < 0.9 ? vec3(1.0, 0.88, 0.74) : vec3(0.62, 0.74, 1.0);
-            if (shop > 0.5 || office > 0.5) lampC = vec3(1.0, 0.92, 0.8);
             vec3 lp = vec3(0.5, 0.95, -cp.x - cp.y * 0.5); float ld = length(hp - lp);
-            float lamp = 0.25 + 0.9 / (1.0 + 7.0 * ld * ld);
+            float lamp = isOff > 0.5 ? 0.6 : 0.25 + 0.9 / (1.0 + 7.0 * ld * ld); // (an office: panels lighting it evenly)
             vec3 day = alb * ao * uDay * (0.4 - 0.1 * shop) * exp(-depth * 1.2);
-            vec3 night = alb * ao * lampC * lamp * lit * nightK * (0.6 + 0.4 * shop);
+            vec3 night = alb * ao * lampC * lamp * on * nightK * (0.6 + 0.4 * shop);
             rad = day + night;
             // curtains / blinds on the glass plane
             float cw = rc.z - rc.x, chh = rc.w - rc.y, cu = (suv.x - rc.x) / max(cw, 1e-3), cv = (suv.y - rc.y) / max(chh, 1e-3);
@@ -652,21 +729,58 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
               else if (sel < 0.65) { cov = step(1.0 - (0.2 + 0.7 * wh3), cv); fc = vec3(0.86, 0.84, 0.8) * (0.85 + 0.15 * step(0.5, fract(suv.y * 70.0))); }
             } else if (office > 0.5) { cov = step(1.0 - 0.6 * wh3 * step(0.5, sel), cv); fc = vec3(0.8, 0.82, 0.84) * (0.85 + 0.15 * step(0.5, fract(suv.y * 50.0))); }
             cov = clamp(cov, 0.0, 1.0);
-            rad = mix(rad, fc * (uDay * 0.18 + lampC * lit * nightK * 0.45), cov);
+            rad = mix(rad, fc * (uDay * 0.18 + lampC * on * nightK * 0.45), cov);
+            // far away (a pixel over several bays): the facade's average, its share lit times a lamp, not one window's
+            // draw per pixel (which sparkles as the camera moves)
+            vec3 lampM = isOff > 0.5 ? vec3(1.0, 0.87, 0.7) : shop > 0.5 ? vec3(1.0, 0.88, 0.72) : vec3(1.0, 0.68, 0.42);
+            float onM = occ * (isOff > 0.5 || shop > 0.5 ? 0.94 : 0.7) * clamp((uDark - 0.08) / 0.85, 0.0, 1.0);
+            rad = mix(rad, vec3(0.1 * uDay) + lampM * onM * nightK * 0.45 * (0.6 + 0.4 * shop), far);
             diffuseColor.rgb = mix(vec3(0.015), fc * 0.25, cov);
           }
         }
         #ifdef BLD_GLASS
-        if (winM > 0.5 && cp.z > 3.5) { // curtain walls (city towers): coated glass mirrors the sky, tinted by the vertex colour
-          // (at night: the lit rooms show, not the sky, and no moon glare across every pane)
-          diffuseColor.rgb = vColor * 0.4; metalnessFactor = mix(0.1, 0.6, uDay); roughnessFactor = mix(0.45, 0.08, uDay);
-          rad *= vec3(1.0, 0.85, 0.62) * 0.3 * step(0.55, bh1(wid + 3.3)); // big panes: dimmer, warm, and fewer of them lit (dark floors and bays)
+        if (winM > 0.5 && cp.z > 3.5) { // curtain walls (city towers): coated glass, dark itself; what it reflects (the sky,
+          // the towers round it: after the lights, below) is its colour. At night the lit floors show through, and no
+          // moon glare across every pane
+          bGlass = 1.0; diffuseColor.rgb = vColor * 0.09 * bPan; metalnessFactor = 0.0; roughnessFactor = mix(0.3, 0.04, uDay);
+          rad *= mix(0.6, 0.12, uDay); // (tinted, coated: by day the rooms barely show through the reflection)
         } else if (cp.z > 3.5) roughnessFactor = max(roughnessFactor, 0.55); // the mullions and spandrels: satin, not mirrors
         #endif
-        totalEmissiveRadiance = rad * winM;`);
+        // a crown floodlit from below (realCity.js: a landmark tower's top tiers, its cap, a glass tower's screen):
+        // brightest at the foot of each tier, its cornice catching the light; and a city's lit streets on the walls' feet
+        vec3 bLit = vec3(0.0);
+        if (fFlood > 0.5) {
+          float tvF = vAtl.w > 0.5 ? vMapUv.y - vAtl.w : -3.0, fg = tvF > 0.0 ? 0.8 : mix(1.0, 0.45, smoothstep(-5.0, 0.0, tvF));
+          vec3 flc = bh1(vec2(seed, 21.0)) < 0.7 ? vec3(1.0, 0.84, 0.62) : vec3(0.86, 0.93, 1.0);
+          bLit += flc * fg * 1.1 * uLit.w * smoothstep(0.3, 0.65, uDark);
+        }
+        bLit += vec3(1.0, 0.78, 0.52) * uProf.x * wall * exp(-max(ly, 0.0) * 0.6) * 0.1 * smoothstep(0.3, 0.6, uDark);
+        totalEmissiveRadiance = rad * winM + diffuseColor.rgb * bLit * nightK * (1.0 - winM);`)
+      .replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
+        #if defined(BLD_GLASS) && defined(USE_ENVMAP) && defined(ENVMAP_TYPE_CUBE_UV) && defined(RE_IndirectSpecular)
+        if (bGlass > 0.5) {
+          // a city's glass reflects the towers round it, not only the sky: their roofs a stepped skyline (each building a
+          // few degrees of the reflected ray's bearing, lower seen from high up), their faces in the light of the horizon
+          // (the environment's irradiance at this wall), their windows lit at night
+          vec3 rW = inverseTransformDirection(reflect(-geometryViewDir, geometryNormal), viewMatrix);
+          float el = rW.y / max(length(rW.xz), 1e-3), az = atan(rW.z, abs(rW.x) > 1e-5 ? rW.x : 1e-5);
+          float kb = az * 7.0 + seed * 0.37, bi = floor(kb), nh = bh1(vec2(bi, seed * 0.1 + 4.0));
+          float sk = (0.03 + 0.55 * nh * nh) * clamp(1.5 - vWP.y / 260.0, 0.1, 1.0), ew = 0.006 + 0.02 * fpB;
+          float occN = (1.0 - smoothstep(sk - ew, sk + ew, el)) * uProf.x;
+          vec3 nb = iblIrradiance * RECIPROCAL_PI * mix(vec3(0.2, 0.22, 0.25), vec3(0.42, 0.38, 0.32), bh1(vec2(bi, 3.0)));
+          float wn = 1.0 - smoothstep(0.3, 1.2, fpB);
+          vec2 wc = floor(vec2(kb * 3.0, el * 30.0));
+          nb += vec3(1.0, 0.8, 0.56) * emissive.r * smoothstep(0.3, 0.7, uDark) * 0.2 * mix(uLit.y * 0.5, step(bh1(wc + bi), uLit.y * 0.6), wn);
+          radiance = mix(radiance, nb, occN);
+          // coated glass: a tinted reflection some four times plain glass's head on, a clear mirror at grazing
+          float fres = pow(1.0 - clamp(dot(geometryNormal, geometryViewDir), 0.0, 1.0), 5.0);
+          vec3 tintN = vColor / max(max(vColor.r, vColor.g), max(vColor.b, 1e-3));
+          radiance *= mix(tintN * 4.0 * bPan, vec3(1.0), fres);
+        }
+        #endif`);
   };
   mat.defines = { ...(mat.defines || {}), ...(interiors ? { BLD_INTERIOR: '' } : {}), ...(glass ? { BLD_GLASS: '' } : {}) };
-  mat.customProgramCacheKey = () => 'bldg5' + (interiors ? 'i' : '') + (ground ? 'g' : '') + (glass ? 'q' : '');
+  mat.customProgramCacheKey = () => 'bldg6' + (interiors ? 'i' : '') + (ground ? 'g' : '') + (glass ? 'q' : '');
   return mat;
 }
 

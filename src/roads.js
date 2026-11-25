@@ -329,7 +329,7 @@ export function buildRoadMeshes(w, net) {
   };
   // the tarmac and its gravel shoulders (roadSurface.js): uv in metres (across, along), rinfo = half width, what is
   // painted on it, a seed
-  const region = REGION[w.loc.id] || 'ch', city = !!w.loc.roads?.chunk, tarmac = tarmacMaterial(region), shoulder = shoulderMaterial(region);
+  const region = REGION[w.loc.id] || 'ch', city = !!w.loc.roads?.chunk, tarmac = tarmacMaterial(region, { city: !!w.loc.city }), shoulder = shoulderMaterial(region);
   const sidewalk = w.loc.city ? sidewalkMaterial() : null; // (a city's streets: kerbs and pavements)
   const J = net.roads.some((r) => r.jn) ? junctionsFromNodes(net.roads, region, city) : findJunctions(net.roads, region, city);
   // where a road lies on the ground its surface is the ground physics drives on (World.sampleGrid), not its own profile:

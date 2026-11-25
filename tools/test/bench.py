@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Skywright frame benchmark: CPU cost per frame and draw calls, per location, at a fixed graphics setting.
 
-  python3 tools/test/bench.py [--quality medium] [--locations islands,canyon,nyc,lauterbrunnen] [--cpu-throttle 4]
+  python3 tools/test/bench.py [--quality medium] [--locations islands,canyon,nyc,lauterbrunnen] [--cpu-throttle 4] [--time 21.5]
                               [--preset Kestrel] [--start runway] [--seconds 6] [--json out.json] [--renderer webgl|webgpu]
 
 For each location it flies the preset off the runway at full throttle, lets it settle, then measures over --seconds:
@@ -35,13 +35,13 @@ SETUP = """(() => { const S = __sky, B = __bench, r = S.renderer, info = r.info;
   return true; })()"""
 
 
-async def bench(cdp, preset, loc, quality, seconds, start='runway'):
+async def bench(cdp, preset, loc, quality, seconds, start='runway', hour=10):
     S = '__sky'
     if await cdp.js(f'!!{S}.F'):
         await cdp.js(f'{S}.endFlight()')
     await cdp.wait_for(f"!{S}.F", 30, 'the hangar')
     await cdp.js(f"""(() => {{ {S}.settings.quality = {json.dumps(quality)}; {S}.perf.scale = 1; {S}.perf.level = 0; {S}.applyQuality();
-        Object.assign({S}.flightCfg, {{ location: {json.dumps(loc)}, start: {json.dumps(start)}, mode: 'free', online: false, time: 10, weather: 'clear' }});
+        Object.assign({S}.flightCfg, {{ location: {json.dumps(loc)}, start: {json.dumps(start)}, mode: 'free', online: false, time: {hour}, weather: 'clear' }});
         {S}.hangar.load({S}.presets.find((d) => d.name === {json.dumps(preset)})); {S}.startFlight(); }})()""")
     await cdp.wait_for(f'{S}.F && {S}.F.ac && {S}.F.t > 1', 180, f'the flight at {loc} to start')
     await cdp.js(f'{S}.controls.setThrottle(1)')
@@ -75,7 +75,7 @@ async def main(a):
             await cdp.wait_for('window.__sky && window.__sky.hangar', 120, 'the app to boot')
             await cdp.js(SETUP)
             for loc in a.locations.split(','):
-                r = await bench(cdp, a.preset, loc, a.quality, a.seconds, a.start)
+                r = await bench(cdp, a.preset, loc, a.quality, a.seconds, a.start, a.time)
                 rows.append(r)
                 print(f"{r['location']:<15} {r['fps']:6.1f} fps   frame {r['frame_ms']:6.2f} ms   render {r['render_ms']:6.2f} ms   {r['calls']:5d} calls   {r['tris'] / 1e6:5.2f} M tris", flush=True)
     finally:
@@ -91,5 +91,6 @@ if __name__ == '__main__':
     ap.add_argument('--seconds', type=float, default=6), ap.add_argument('--cpu-throttle', type=float, default=1)
     ap.add_argument('--renderer', default=None), ap.add_argument('--json')
     ap.add_argument('--start', default='runway', help='flight start: runway, park, water, waterpark, marina…')
+    ap.add_argument('--time', type=float, default=10, help='hour of the day (e.g. 21.5: night, the windows and street lamps lit)')
     ap.add_argument('--port', type=int), ap.add_argument('--cdp-port', type=int)
     asyncio.run(main(ap.parse_args()))

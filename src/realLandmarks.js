@@ -246,8 +246,8 @@ export class Landmarks {
     return null;
   }
   update(dt, cam) {
-    const night = this.w.night ? 1 : 0;
-    if (this.flame) this.flame.emissiveIntensity = night ? 3 : 0.15;
-    if (this.flood) this.flood.emissiveIntensity = night ? 0.9 : 0;
+    const k = this.w.lightsK ?? (this.w.night ? 1 : 0), night = Math.min(1, Math.max(0, (k - 0.3) / 0.35)); // (floodlights on in the last of the dusk, with the towers' crowns: buildings.js)
+    if (this.flame) this.flame.emissiveIntensity = 0.15 + 2.85 * night;
+    if (this.flood) this.flood.emissiveIntensity = 0.9 * night;
   }
 }

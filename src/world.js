@@ -7,8 +7,9 @@ import { FOG, FOG_GLSL, TUBES, terrainMaterial, waterMaterial, swayMaterial } fr
 import { Atmosphere, skyMaterial, cloudNoiseTexture } from './sky.js';
 import { CloudField, deckMaterial } from './clouds.js';
 import { flattenGrid, flattenHi, makePainter, buildRoadMeshes, gradeReal, roadSurface } from './roads.js';
+import { ROAD_U } from './roadSurface.js';
 import { Flora } from './flora.js';
-import { Builder, buildingMaterial, C } from './buildings.js';
+import { Builder, buildingMaterial, C, lightsDark } from './buildings.js';
 import { TerrainTiles } from './tiles.js';
 import { MapTiles } from './maptiles.js';
 import { terrainDetailUniforms } from './terrainTex.js';
@@ -735,6 +736,7 @@ export class World {
     const day = smoothstep(-0.12, 0.25, el); // 0 night, 1 day
     const golden = smoothstep(0.45, 0.02, el) * smoothstep(-0.15, 0.02, el);
     this.night = day < 0.25;
+    this.lightsK = lightsDark(el, dark); // (buildings.js: the windows come on one by one through the dusk, all of them by nightfall)
     this.deckNight = 1 - day; // (cabinLight: a flight deck's own lamps come up as the daylight goes)
     this.scene.userData.nightK = clamp(1 - day + dark * 0.6, 0, 1); // running lights (navLights.js): full glow after dark or in murk
     // the atmosphere decides the sky, the horizon haze and the colour of the sunlight
@@ -840,8 +842,10 @@ export class World {
     // night lights
     if (this.lightsMat) this.lightsMat.opacity = this.night || dark > 0.55 ? 1 : 0;
     if (this.rwyLightsMat) this.rwyLightsMat.opacity = this.rabbitMat.opacity = this.lightsMat.opacity;
-    if (this.roadGroup) this.roadGroup.userData.lampMat.opacity = this.night || dark > 0.6 ? 1 : 0;
-    if (this.windowMats) for (const m of this.windowMats) m.emissiveIntensity = this.night ? 3.5 : 0;
+    const lampsOn = smoothstep(0.3, 0.55, this.lightsK); // (street lamps: on their photocells, in the last of the dusk)
+    if (this.roadGroup) this.roadGroup.userData.lampMat.opacity = Math.max(lampsOn, dark > 0.6 ? 1 : 0);
+    ROAD_U.rLamp.value = lampsOn;
+    if (this.windowMats) for (const m of this.windowMats) m.emissiveIntensity = 3.5 * smoothstep(0, 0.12, this.lightsK);
     this.space?.onLighting();
     this.envDirty = true;
   }
