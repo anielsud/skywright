@@ -348,3 +348,41 @@ export function setBack(I, P, major = false, asRect = false) {
 }
 // does a courtyard still lie inside a cut footprint (all its corners)?
 export const holeInside = (P, h) => h.every((p) => inside(P, p[0], p[1]));
+
+// A collision box kept to its footprint's walls: an irregular footprint's oriented box (realCity.js obb, fitted off
+// the streets by fitBox) reaches past its walls (over a trapezoid's sliver on a diagonal street, into an L's yard):
+// an invisible wall out on the open ground beside it (a car driving along a building hit one 5 m short of its wall).
+// Each face moves in, half a metre at a time, while a corner or the middle of an edge stands more than OUT metres
+// outside the walls (the face that brings the worst one in most; no face further in than half way to the middle).
+// b, and the result: { cx, cz, ux, uz, hl, hw } (realCity.js's).
+export function boxInside(P, b, OUT = 1) {
+  const { ux, uz } = b, lim = [-b.hl * 0.5, b.hl * 0.5, -b.hw * 0.5, b.hw * 0.5], f = [-b.hl, b.hl, -b.hw, b.hw]; // u0 u1 v0 v1
+  const outside = (u, v) => { // metres (u, v) of the box's frame lies outside the footprint (0 inside)
+    const x = b.cx + u * ux - v * uz, z = b.cz + u * uz + v * ux; if (inside(P, x, z)) return 0;
+    let m = Infinity;
+    for (let i = 0, j = P.length - 1; i < P.length; j = i++) { const a = P[j], c = P[i], ex = c[0] - a[0], ez = c[1] - a[1], L2 = ex * ex + ez * ez || 1e-9, t = clamp01(((x - a[0]) * ex + (z - a[1]) * ez) / L2), d = hyp(a[0] + ex * t - x, a[1] + ez * t - z); if (d < m) m = d; }
+    return m;
+  };
+  // the samples (corners, edge middles) and the faces each lies on
+  const worst = () => {
+    const um = (f[0] + f[1]) / 2, vm = (f[2] + f[3]) / 2; let w = OUT, faces = null;
+    for (const [u, v, F] of [[f[0], f[2], [0, 2]], [f[1], f[2], [1, 2]], [f[1], f[3], [1, 3]], [f[0], f[3], [0, 3]], [um, f[2], [2]], [um, f[3], [3]], [f[0], vm, [0]], [f[1], vm, [1]]]) { const d = outside(u, v); if (d > w) { w = d; faces = F; } }
+    return faces && { w, faces };
+  };
+  let moved = false;
+  for (let it = 0; it < 48; it++) {
+    const W = worst(); if (!W) break;
+    let best = null, bw = Infinity;
+    for (const k of W.faces) {
+      const s = k & 1 ? -0.5 : 0.5, to = f[k] + s; if (k & 1 ? to < lim[k] : to > lim[k]) continue; // (at its limit)
+      const was = f[k]; f[k] = to; const r = worst(); f[k] = was;
+      const v = r ? r.w : 0; if (v < bw) { bw = v; best = [k, to]; }
+    }
+    if (!best) break;
+    f[best[0]] = best[1]; moved = true;
+  }
+  if (!moved) return b;
+  const um = (f[0] + f[1]) / 2, vm = (f[2] + f[3]) / 2;
+  return { cx: b.cx + um * ux - vm * uz, cz: b.cz + um * uz + vm * ux, ux, uz, hl: (f[1] - f[0]) / 2, hw: (f[3] - f[2]) / 2 };
+}
+const clamp01 = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);

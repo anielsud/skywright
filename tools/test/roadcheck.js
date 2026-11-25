@@ -12,9 +12,9 @@
 export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/realworld.js', 'src/world.js', 'src/vehicles.js', 'src/laneGraph.js', 'src/signals.js', 'src/trafficModels.js', 'tools/test/roadcheck.js'] }; // (and the ground detail: detailCheck)
 
 const PLACES = ['islands', 'canyon', 'lauterbrunnen', 'nyc'];
-const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3;
+const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3, STEP_CITY = 0.12;
 
-export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), { id: 'nyc traffic safety', loc: 'nyc', world: 'nyc', safety: true, cost: 12 }, { id: 'nyc posts', loc: 'nyc', world: 'nyc', posts: true, cost: 6 }, { id: 'traffic models face forward', models: true, cost: 0.2 }, ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 })), ...PLACES.map((loc) => ({ id: `${loc} ground under the road`, loc, world: loc, bleed: true, cost: loc === 'nyc' ? 30 : 12 }))]; }
+export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), { id: 'nyc traffic safety', loc: 'nyc', world: 'nyc', safety: true, cost: 12 }, { id: 'nyc posts', loc: 'nyc', world: 'nyc', posts: true, cost: 6 }, { id: 'traffic models face forward', models: true, cost: 0.2 }, ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 })), ...PLACES.map((loc) => ({ id: `${loc} ground under the road`, loc, world: loc, bleed: true, cost: loc === 'nyc' ? 30 : 12 })), { id: 'nyc open ground', loc: 'nyc', world: 'nyc', cityGround: true, cost: 6 }]; }
 
 // The near-camera ground detail (World.updateDetail) at a few road points: inside, its vertices are the physics ground
 // (sampleGrid) exactly away from the roads, and never above it (under and beside a road it is let down: it is hidden
@@ -83,6 +83,53 @@ export function bleedCheck(w, { spots = 6, stride = 1 } = {}) {
     for (const v of tris) { if (Math.abs(v[0] - p.x) > D * DS / 2 || Math.abs(v[2] - p.z) > D * DS / 2) continue; each(v, (x, z, y) => { const g = det(x, z); if (g != null && onGround(x, z, y)) tally('detail', x, z, g - y); }); }
   }
   out.tris = tris.length * stride;
+  return out;
+}
+
+// A city's open ground (the lots, plazas, pedestrian streets and strips between the pavements and the buildings: what the
+// land cover leaves paved and no road covers) as physics stands on it (sampleGrid), sampled out from both sides of the
+// streets round Manhattan, square to them: from the kerb out past the pavement (roadgrade.js PAVE) to 20 m.
+//   level:  just past the pavement the ground is the slabs' top (the street's height + the kerb, CITY_TOP), not
+//           sunken under it (it was 0.2-1.5 m below: walls stood on a ledge, the slabs floated over it);
+//   smooth: from the tarmac's edge outward no step (no kerb or ledge in physics: a car rolls up onto the pavement);
+//   paved:  groundAt says it's paved (the tyres, the dust).
+// (Only where nothing else is: not inside another road's footprint, a building's box or a park; the street's
+// grade away from a junction, so the street beside it is this one.)
+export function cityGroundCheck(w, { x0 = -9000, x1 = -3000, z0 = 4000, z1 = 12000 } = {}) {
+  const S = w.roadSurf, out = { n: 0, low: 0, high: 0, steps: 0, lines: 0, paved: 0, worst: 0, at: '', wstep: 0, sat: '' }, top = 0.18, boxes = []; // (top: roadgrade.js CITY_TOP)
+  const PAVE = { main: 4.5, street: 3.5 }, free = (x, z) => w.real.bare(x, z) && !(S.q(x, z) && S.e <= 0) && !w.wallBoxes(x, z, 0.5, boxes).some((b) => { const dx = x - b.x, dz = z - b.z; return Math.abs(dx * b.ux + dz * b.uz) < b.hl + 0.5 && Math.abs(-dx * b.uz + dz * b.ux) < b.hw + 0.5; });
+  for (const rd of w.net.roads) {
+    if (rd.kind === 'highway' || rd.baked || rd.tunnel || rd.kind === 'rail') continue;
+    const P = rd.pts, hw = rd.width / 2, pv = PAVE[rd.kind] ?? 3.5, J = new Set((rd.jn || []).map(([j]) => j));
+    for (let i = 2; i + 2 < P.length; i += 3) {
+      const p = P[i]; if (p.x < x0 || p.x > x1 || p.z < z0 || p.z > z1 || rd.bridge?.[i] || rd.tube?.[i]) continue;
+      if ([...J].some((j) => Math.abs(j - i) <= 3)) continue; // (away from its junctions)
+      const a = P[i - 1], b = P[i + 1], L = Math.hypot(b.x - a.x, b.z - a.z) || 1, rx = -(b.z - a.z) / L, rz = (b.x - a.x) / L;
+      if (Math.abs(b.y - a.y) / L > 0.06) continue; // (a steep street: its pavement's own grade)
+      for (const sd of [-1, 1]) {
+        // smooth: kerb to 20 m out, every 0.5 m, until something else (a building, another road, a park) is there. Not
+        // where the street is on an embankment or in a cutting (the mapped heights 10 m out more than 1.5 m off it: a
+        // slope there is real)
+        if (Math.abs(w.rawHeight(p.x + rx * (hw + 10) * sd, p.z + rz * (hw + 10) * sd) - p.y) > 1.5) continue;
+        let prev = null, o = hw;
+        for (; o <= hw + pv + 20; o += 0.5) {
+          const x = p.x + rx * o * sd, z = p.z + rz * o * sd;
+          if (o > hw + 1.5 && !free(x, z)) break;
+          const g = w.sampleGrid(x, z);
+          if (prev != null && Math.abs(g - prev) > STEP_CITY) { out.steps++; if (Math.abs(g - prev) > out.wstep) { out.wstep = Math.abs(g - prev); out.sat = `${x.toFixed(0)}, ${z.toFixed(0)}`; } break; }
+          prev = g;
+        }
+        out.lines++;
+        // level just past the pavement
+        const oo = hw + pv + 1, x = p.x + rx * oo * sd, z = p.z + rz * oo * sd;
+        if (o <= oo || !free(x, z)) continue;
+        const d = w.sampleGrid(x, z) - (p.y + top); out.n++;
+        if (d < -0.15) out.low++; else if (d > 0.3) out.high++;
+        if (Math.abs(d) > Math.abs(out.worst)) { out.worst = d; out.at = `${x.toFixed(0)}, ${z.toFixed(0)}`; }
+        if (w.groundAt(x, z).type === 'runway') out.paved++;
+      }
+    }
+  }
   return out;
 }
 
@@ -299,6 +346,14 @@ export async function runCase(c, ctx) {
     const b = bleedCheck(w, { stride: c.loc === 'nyc' ? 8 : 1 }), pc = (o) => `${(100 * o.over / Math.max(1, o.n)).toFixed(3)}%`;
     return ['detail', 'patch', 'coarse'].map((L) => { const o = b[L] || { n: 0, over: 0, worst: 0, spots: [] };
       return { name: `${c.loc}: the ${L === 'detail' ? 'near-camera detail' : L === 'patch' ? 'patch' : 'coarse'} ground stays under the road`, ok: o.n > 1000 && o.over / o.n < BLEED, why: `${pc(o)} of ${o.n} road samples under ground by more than ${OVER} m (${o.spots.length} spots${L === 'detail' ? `; ${b.tris} road triangles` : ''})${o.over ? `, worst ${o.worst.toFixed(2)} m at (${o.at})` : ''}` }; });
+  }
+  if (c.cityGround) {
+    const o = cityGroundCheck(w), pc = (v) => `${(100 * v / Math.max(1, o.n)).toFixed(1)}%`;
+    return [
+      { name: `${c.loc}: open ground beside the streets at the pavements' level`, ok: o.n > 2000 && o.low <= 0.03 * o.n && o.high <= 0.03 * o.n, why: `${o.n} spots just past a pavement: ${pc(o.low)} more than 0.15 m under the slabs' top, ${pc(o.high)} more than 0.3 m over it (at most 3% each); worst ${o.worst.toFixed(2)} m at (${o.at})` },
+      { name: `${c.loc}: no step from the street onto the open ground`, ok: o.lines > 4000 && o.steps <= 0.03 * o.lines, why: `${o.steps} of ${o.lines} lines out from the kerb step more than ${STEP_CITY} m in 0.5 m (at most 3%, was 65%: a kerb is 0.15 m; what is left, a street beside a highway in a cutting, a hillside)${o.steps ? `, worst ${o.wstep.toFixed(2)} m at (${o.sat})` : ''}` },
+      { name: `${c.loc}: the open ground is paved`, ok: o.paved >= 0.97 * o.n, why: `${o.paved} of ${o.n} (World.groundAt: 'runway', not grass)` },
+    ];
   }
   if (c.detail) {
     const d = detailCheck(w);

@@ -14,7 +14,7 @@ import { VERGE } from '../../src/roadgrade.js';
 
 export const nodeSuite = { files: ['src/setback.js', 'src/realBuildings.js', 'src/realCity.js', 'tools/test/setbacks.js'] };
 const PLACES = ['lauterbrunnen', 'canyon', 'islands', 'nyc'];
-const TOL = 0.1, PAVE = { main: 4.5, street: 3.5 }, C = 25;
+const TOL = 0.1, PAVE = { main: 4.5, street: 3.5 }, C = 25, OUT_TOL = 2, NEAR = 12, OUT_MAX = 0.05; // (OUT_TOL: m a collision box may reach past its walls, out on the open ground within NEAR of a street's pavement: setback.js boxInside keeps them within 1 m of them, sampled at its corners and edge middles)
 
 export function cases() { return PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 40 : 8 })); }
 
@@ -112,19 +112,48 @@ export async function measure(w, which = 'after') {
     const d = depth(Z, C4); if (d.worst > TOL) boxes.push({ x: Math.round(b.x), z: Math.round(b.z), d: d.worst, kind: d.at.kind });
   }
   boxes.sort((a, b) => b.d - a.d);
+  // ... and none reaching out past its building's walls onto the open ground (an invisible wall: a box over a
+  // trapezoid's sliver or an L's yard, setback.js boxInside): a corner or edge middle more than OUT_TOL from every
+  // footprint (the footprints as built, in a 25 m hash)
+  const FH = new Map(), out = [];
+  if (which === 'after' && T.city) { // (New York's: the other places' boxes are their footprints' own rectangles, or a town's houses)
+    for (const f of F) { let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity; for (const p of f.P) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
+      for (let ci = Math.floor(x0 / C); ci <= Math.floor(x1 / C); ci++) for (let cj = Math.floor(z0 / C); cj <= Math.floor(z1 / C); cj++) { const k = ci + ',' + cj; let c = FH.get(k); if (!c) FH.set(k, (c = [])); c.push(f.P); } }
+    const off = (x, z) => { // metres from the nearest footprint (0 inside one), up to 2 cells away
+      let m = Infinity; const ci = Math.floor(x / C), cj = Math.floor(z / C), done = new Set();
+      for (let a = ci - 1; a <= ci + 1; a++) for (let b = cj - 1; b <= cj + 1; b++) for (const P of FH.get(a + ',' + b) || []) {
+        if (done.has(P)) continue; done.add(P); if (inPoly(P, x, z)) return 0;
+        for (let i = 0, j = P.length - 1; i < P.length; j = i++) m = Math.min(m, ptSeg(x, z, { ax: P[j][0], az: P[j][1], bx: P[i][0], bz: P[i][1] }));
+      }
+      return m;
+    };
+    const street = (x, z) => { const ci = Math.floor(x / C), cj = Math.floor(z / C); for (let a = ci - 1; a <= ci + 1; a++) for (let b = cj - 1; b <= cj + 1; b++) for (const sg of Z.cells.get(a + ',' + b) || []) if (ptSeg(x, z, sg) - sg.r < NEAR) return true; return false; }; // (near a street: the open ground beside it, where cars go; not a courtyard or a notch deep in a block)
+    for (const e of seen) {
+      if (e.through || !e.dk) continue; // (buildings only: not masts)
+      const b = w.destruct.box(e); if (off(b.x, b.z) > 0) continue; // (its footprint: the one round its middle; none, a building this quality leaves out)
+      let worst = 0;
+      for (const [a, c] of [[1, 1], [-1, 1], [-1, -1], [1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const x = b.x + b.ux * b.hl * a - b.uz * b.hw * c, z = b.z + b.uz * b.hl * a + b.ux * b.hw * c, d = off(x, z);
+        if (d > worst && street(x, z)) worst = d;
+      }
+      if (worst > OUT_TOL) out.push({ x: Math.round(b.x), z: Math.round(b.z), d: worst });
+    }
+    out.sort((a, b) => b.d - a.d);
+  }
   const hist = [0.5, 1, 2, 4, Infinity].map((lim, i, L) => [i ? L[i - 1] : TOL, lim, on.filter((o) => o.d > (i ? L[i - 1] : TOL) && o.d <= lim).length]);
-  return { n: F.length, on, under, hist, segs: Z.n, boxes, nBoxes: seen.size };
+  return { n: F.length, on, under, hist, segs: Z.n, boxes, nBoxes: seen.size, out };
 }
 
 export async function runCase(c) {
   const { worldAt } = await import('./node/world.mjs');
   const W = await worldAt(c.loc), w = W.world, sb = (w.towns.city || w.towns).setbacks, ms = sb.ms; // (at load: before measure builds New York's low footprints too)
-  const m = await measure(w, 'after');
+  const m = await measure(w, 'after'), T0 = w.towns;
   const worst = m.on.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(2)} m into a ${o.kind}`).join('; ');
   const kept = m.n / Math.max(1, m.n + sb.dropped);
   return [
     { name: `${c.loc}: no building footprint on a road`, ok: !m.on.length, why: m.on.length ? `${m.on.length} of ${m.n} footprints reach in, worst ${worst}` : `${m.n} footprints clear of ${m.segs} road segments (${sb.cut} cut back, ${sb.dropped} left out; ${m.under.length} big ones over a road through them)` },
     { name: `${c.loc}: no collision box on a road`, ok: !m.boxes.length, why: m.boxes.length ? `${m.boxes.length} of ${m.nBoxes} boxes reach in, worst ${m.boxes.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(2)} m into a ${o.kind}`).join('; ')}` : `${m.nBoxes} boxes (World.wallBoxes${c.loc === 'nyc' ? ': the tall buildings built at load' : ''})` },
+    { name: `${c.loc}: few collision boxes out past their walls`, ok: !T0.city || m.out.length <= m.nBoxes * OUT_MAX, why: `${m.out.length} of ${m.nBoxes} boxes reach more than ${OUT_TOL} m past every footprint within ${NEAR} m of a street (at most ${OUT_MAX * 100}%: an invisible wall on the open ground beside it; 15% did before setback.js boxInside. What's left: a cross or a U, which one box can't fit, setback.js)${m.out.length ? `, worst ${m.out.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(1)} m`).join('; ')}` : ''}` },
     { name: `${c.loc}: few big buildings left over a road`, ok: m.under.length <= Math.max(3, m.n * 0.0005), why: `${m.under.length} (a passage under them, or a mapping clash: ${m.under.slice(0, 4).map((o) => `(${o.x}, ${o.z})`).join(' ')})` },
     { name: `${c.loc}: setbacks keep most buildings`, ok: kept > 0.97, why: `${sb.dropped} left out, ${m.n} kept (${(100 * kept).toFixed(1)}%)` },
     { name: `${c.loc}: setbacks are cheap at load`, ok: ms < 0.15 * W.ms, why: `${ms.toFixed(0)} ms, ${(100 * ms / W.ms).toFixed(1)}% of the World's ${W.ms} ms build (Node, Low: the road index, the footprints and boxes built at load; New York's low ones are set back a tile at a time as they stream in. A share, not a time: a busy machine slows both)` },

@@ -6,7 +6,7 @@ import { glowTexture as glow } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { REGION, roadStyle, tarmacMaterial, shoulderMaterial, sidewalkMaterial } from './roadSurface.js';
 import { airportGate } from './airportKit.js';
-import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE } from './roadgrade.js';
+import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE, CITY_TOP } from './roadgrade.js';
 
 const RWY_HALF = 900;
 
@@ -58,6 +58,72 @@ export function flattenHi(w, net, Hh, R) {
   carveGrid(w, allRoads(net), Hh, R, st, 0.75);
 }
 const allRoads = (net) => [...net.roads, ...(net.rail ? [net.rail] : [])];
+// A city's open ground (the lots, plazas and pedestrian streets, the gaps between buildings and the strips between a
+// building line and the pavement: whatever OpenStreetMap leaves paved, cover.png 0, that is no road) lies at the
+// pavement's level, as a real city's does: not the raw heights, which the streets' grading left up to a metre or two
+// below the kerbs (the "sunken lots": walls standing on a ledge above the ground, a car dropping off the pavement).
+// Returns { L, t, R, st }: a grid (spacing st: every f-th vertex of the fine grid's, f making it 40 m or more; only the
+// middle of a block reads it, RoadSurface.over has the ground beside a street) of the level such ground lies at, L, the
+// streets' pavement top round it (inverse-distance weighted over the streets within CITY_REACH, so a block between
+// two streets at different heights is a smooth slope from one to the other), and how much the ground there takes it,
+// t: 1 on the paved ground, 0 on the parks, water, the levelled airport and stunt parks and anything more than a few
+// metres off the streets (a cliff, a cutting). World.cityAt blends the fine grid's ground to it; sampleGrid stands on
+// that (RoadSurface.over ramps the pavement up to it), so the near-camera ground mesh draws it and physics drives on
+// it; the coarse patch further out keeps drawing the carved grid. Null away from a city.
+export const CITY_REACH = 36; // m from a street's tarmac edge (the ground lies CITY_TOP over the tarmac, roadgrade.js)
+export function cityGround(w, net, Hh, R, levelled = null) { // (levelled(x, z): ground something else has levelled, the stunt parks)
+  const C = w.real?.cover; if (!w.loc.city || !C) return null;
+  const f = Math.max(1, Math.round(40 / (w.size / R))), dR = Math.floor(R / f), st = (w.size / R) * f, W = dR + 1, HW = R + 1, half = w.half, wl = w.waterLevel, N = W * W;
+  // which vertices are paved ground (looked at only where a street is near): bare in the land cover (no park, lawn or
+  // wood), dry, off the airport's and the stunt parks' levelled ground. 0 not yet asked, 1 paved, 2 not
+  const open = new Uint8Array(N), pb = w.loc.padBlend || 700, cn = C.n, ck = cn / C.size, cd = C.d;
+  const sw = new Float32Array(N), sy = new Float32Array(N), dm = new Float32Array(N).fill(Infinity);
+  // the streets' heights round each of them, inverse-distance weighted (not highways: an embankment or a cutting
+  // beside them is real; not a bridge's deck or a tunnel), per straight run of a street
+  const run = (A, B, hw) => {
+    const dx = B.x - A.x, dz = B.z - A.z, L2 = dx * dx + dz * dz || 1e-9, r = hw + CITY_REACH;
+    const i0 = Math.max(0, Math.ceil((Math.min(A.x, B.x) - r + half) / st)), i1 = Math.min(dR, Math.floor((Math.max(A.x, B.x) + r + half) / st));
+    const j0 = Math.max(0, Math.ceil((Math.min(A.z, B.z) - r + half) / st)), j1 = Math.min(dR, Math.floor((Math.max(A.z, B.z) + r + half) / st));
+    for (let j = j0; j <= j1; j++) {
+      const z = -half + j * st;
+      for (let i = i0; i <= i1; i++) {
+        const x = -half + i * st;
+        let t = ((x - A.x) * dx + (z - A.z) * dz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const ex = A.x + dx * t - x, ez = A.z + dz * t - z, d = Math.sqrt(ex * ex + ez * ez) - hw; if (d > CITY_REACH) continue;
+        const k = j * W + i;
+        let o = open[k];
+        if (!o) {
+          const ci = Math.floor((x - C.x0) * ck), cj = Math.floor((z - C.z0) * ck), ax = Math.max(0, Math.abs(x - 100) - 350), az = Math.max(0, Math.abs(z) - RWY_HALF - 250);
+          o = open[k] = Hh[j * f * HW + i * f] >= wl + 0.6 && ci >= 0 && cj >= 0 && ci < cn && cj < cn && cd[cj * cn + ci] === 0 && ax * ax + az * az >= pb * pb && !levelled?.(x, z) ? 1 : 2;
+        }
+        if (o !== 1) continue;
+        const e = d > 1 ? d : 1, wt = 1 / (e * e);
+        sw[k] += wt; sy[k] += wt * (A.y + (B.y - A.y) * t); if (d < dm[k]) dm[k] = d;
+      }
+    }
+  };
+  for (const rd of net.roads) {
+    if (rd.kind === 'highway' || rd.baked || rd.tunnel) continue;
+    const P = rd.pts, n = P.length, hw = rd.width / 2, br = rd.bridge, tb = rd.tube;
+    for (let i = 0, a = -1; i < n - 1; i++) {
+      if ((br?.[i] && br?.[i + 1]) || tb?.[i] || tb?.[i + 1]) { a = -1; continue; }
+      if (a < 0) a = i;
+      // carry the run on while the next point stays within 0.3 m of its line and 0.1 m of its straight grade (under 120 m)
+      if (i + 2 < n && !(br?.[i + 1] && br?.[i + 2]) && !tb?.[i + 2]) {
+        const A = P[a], Q = P[i + 2], p = P[i + 1], ex = Q.x - A.x, ez = Q.z - A.z, L2 = ex * ex + ez * ez, c = (p.x - A.x) * ez - (p.z - A.z) * ex;
+        if (L2 < 14400 && c * c < 0.09 * L2 && Math.abs(A.y + (Q.y - A.y) * (((p.x - A.x) * ex + (p.z - A.z) * ez) / L2) - p.y) < 0.1) continue;
+      }
+      run(P[a], P[i + 1], hw); a = -1;
+    }
+  }
+  // the level (L) and how much of it the ground takes (t, 0..1: the rest is the fine grid's own)
+  const L = new Float32Array(N), t = new Float32Array(N);
+  for (let j = 0; j <= dR; j++) for (let i = 0; i <= dR; i++) {
+    const k = j * W + i, h = Hh[j * f * HW + i * f]; L[k] = h; if (!sw[k]) continue;
+    const l = sy[k] / sw[k] + CITY_TOP; L[k] = l; t[k] = (1 - smoothstep(CITY_REACH * 0.7, CITY_REACH, dm[k])) * (1 - smoothstep(2.5, 4, Math.abs(l - h)));
+  }
+  return { L, t, R: dR, st };
+}
 // embankment/cutting width beside a road on a heightfield of spacing st (physics and the skirt meshes)
 export const skirtWidth = (st) => Math.min(60, st * 0.75 + 10);
 // The road surface index World.sampleGrid / groundAt read (built once the fine heights are carved)
