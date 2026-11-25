@@ -13,9 +13,9 @@
 //    with balconies; Bora Bora's houses one storey with verandas, its bungalows light timber under thatch; the canyon's
 //    cabins one or two storeys under metal or shingle, its lodges stone and logs, its motels walkways
 import * as THREE from 'three';
-import { Builder, C, WINDOW_RECTS, TIER, tierCells } from '../../src/buildings.js';
+import { Builder, C, WINDOW_RECTS, TIER, tierCells, facade, facadeSpec, LY0, LYS } from '../../src/buildings.js';
 
-export const nodeSuite = { files: ['src/buildings.js', 'src/realBuildings.js', 'tools/test/bldcheck.js'] };
+export const nodeSuite = { files: ['src/buildings.js', 'src/realBuildings.js', 'src/realCity.js', 'src/setback.js', 'tools/test/bldcheck.js'] };
 
 export function cases() {
   return [
@@ -26,6 +26,7 @@ export function cases() {
     { id: 'rules islands', loc: 'islands', world: 'islands', cost: 3 },
     { id: 'rules canyon', loc: 'canyon', world: 'canyon', cost: 3 },
     { id: 'rules lauterbrunnen', loc: 'lauterbrunnen', world: 'lauterbrunnen', cost: 10 },
+    { id: 'facades nyc', loc: 'nyc', world: 'nyc', cost: 12 },
   ];
 }
 
@@ -52,8 +53,12 @@ function kit() {
   out.push({ name: 'kit: atlas cells unique and inside the 8 x 8 atlas', ok: new Set(vals).size === vals.length && vals.every((v) => v >= 0 && v < 64), why: `${vals.length} cells, max ${Math.max(...vals)}` });
   const tiers = Object.values(TIER), tb = tiers.filter((t) => t < 64 || tierCells(t).some((k) => k >= 64 || !vals.includes(k)));
   out.push({ name: 'kit: two-tier wall ids past the atlas, each two atlas cells', ok: !tb.length, why: tb.join(', ') });
-  const miss = ['LIME_WIN', 'BROWN_WIN'].filter((k) => !WINDOW_RECTS[C[k]]);
-  out.push({ name: 'kit: cut-stone window cells have window rects', ok: !miss.length, why: miss.join(', ') });
+  // facade programs (ground floors): one id per program, past the atlas; each one's cells atlas cells
+  const f1 = facade({ upper: C.BRICK_WIN, ground: C.RUST, gH: 3.6, door: C.RUST_DOOR }), f2 = facade({ upper: C.BRICK_WIN, ground: C.RUST, gH: 3.6, door: C.RUST_DOOR });
+  const fb = []; for (let id = 64; id < 256; id++) { const f = facadeSpec(id); if (f && ![f.upper, f.ground, f.door, f.door2, f.top].every((k) => k < 64)) fb.push(id); }
+  out.push({ name: 'kit: facade programs: one id each, past the atlas, made of atlas cells', ok: f1 === f2 && f1 >= 64 && TIER.CHALET === 64 && TIER.LODGE === 65 && !fb.length, why: `ids ${f1}, ${f2}, tiers ${TIER.CHALET}, ${TIER.LODGE}; bad ${fb.join(', ')}` });
+  const miss = ['LIME_WIN', 'BROWN_WIN', 'SHOPFRONT', 'SHOP_DOOR', 'RUST', 'RUST_DOOR'].filter((k) => !WINDOW_RECTS[C[k]]);
+  out.push({ name: 'kit: cut-stone and ground-floor window cells have window rects', ok: !miss.length, why: miss.join(', ') });
   // obox at a spread of axes: every face points away from the box centre, the top straight up, winding = normal
   const bad = [];
   for (let k = 0; k < 16; k++) {
@@ -174,6 +179,10 @@ async function rules(c) {
     out.push({ name: `${c.id}: flat roofs on industrial buildings only`, ok: !flat, why: `${flat} non-industrial buildings with flat roofs (of ${count((e) => e.roof === 0)} flat)` });
     const tiered = count((e) => has(e, new Set([TIER.CHALET]))), wood = count((e) => has(e, FLOWERS)), bal = count((e) => has(e, new Set([C.RAIL_WOOD])));
     out.push({ name: `${c.id}: chalets on a masonry ground floor, with balconies`, ok: tiered > 2000 && tiered > wood * 0.5 && bal > 500, why: `${tiered} of ${wood} chalets on masonry, ${bal} balconies` });
+    // ground floors (facade programs): doors on the walls facing a street, the plinths, the towns' shop fronts
+    const prog = (pred) => count((e) => [...cellsOf(e).keys()].some((k) => { const f = facadeSpec(k); return f && pred(f); }));
+    const doors = prog((f) => f.door >= 0), plinths = prog((f) => f.ground === C.STONE || f.ground === C.CONCRETE), shops = prog((f) => f.ground === C.SHOPFRONT), chDoor = prog((f) => f.door === C.MASONRY_DOOR);
+    out.push({ name: `${c.id}: doors on the street, plinths, shop fronts in the towns`, ok: doors > 3000 && chDoor > 500 && plinths > 10000 && shops > 50, why: `${doors} buildings with a door on a street (${chDoor} chalets), ${plinths} on a plinth, ${shops} with shop fronts` });
   }
   if (c.loc === 'islands') {
     const houses = ents.filter((e) => (e.kind === 0 || e.kind === 7) && !e.wet && !e.tagged), tall = houses.filter((e) => e.walls > 3.7).length, ver = houses.filter((e) => e.porch).length;
@@ -194,8 +203,32 @@ async function rules(c) {
   return out;
 }
 
+// New York's facades (realCity.js, Low): its streets' ground floors, read back from the skyline's meshes. Every wall
+// with a ground floor reads its height above the floor from atl.z, which must interpolate true up it (no vertex past
+// atl.z's range, else the ground floor slides up the wall), and no wall's uv may overflow a half float (a v of
+// Infinity: NaN in the shader, a black frame through the bloom)
+async function facadesNyc(c) {
+  const { worldAt } = await import('./node/world.mjs'), { world } = await worldAt(c.loc), out = [];
+  const n = { shop: 0, rust: 0, cornice: 0, door: 0, walls: 0 }; let clamped = 0, inf = 0, ex = '';
+  for (const m of world.towns.city.tallMeshes) {
+    const g = m.m.geometry, A = g.attributes.atl.array, U = g.attributes.uv.array, I = g.index.array;
+    for (let i = 0; i < U.length; i++) if ((U[i] & 0x7c00) === 0x7c00) inf++;
+    for (let k = 0; k + 5 < I.length; k += 3) {
+      const a = I[k]; if (I[k + 1] !== a + 1 || I[k + 2] !== a + 2 || I[k + 3] !== a || I[k + 5] !== a + 3) continue; // (a wall: MeshW.wall's quad)
+      const f = facadeSpec(A[a * 4]); if (!f) continue;
+      n.walls++; if (f.ground === C.SHOPFRONT) n.shop++; if (f.ground === C.RUST) n.rust++; if (f.cornice) n.cornice++; if (f.door >= 0 || f.door2 >= 0) n.door++;
+      if (f.gH > 0 && Math.min(A[I[k] * 4 + 2], A[I[k + 1] * 4 + 2]) < (20 + LY0) * LYS) for (const v of [I[k + 2], I[k + 5]]) if (A[v * 4 + 2] >= 255) { clamped++; ex ||= `program ${A[a * 4]} (gH ${f.gH})`; break; } // (a quad from near the ground up past the range: a tall wall's upper quad may go past it)
+    }
+  }
+  out.push({ name: `${c.id}: shop fronts, rusticated bases, doors and cornices on the streets`, ok: n.shop > 2000 && n.rust > 2000 && n.cornice > 2000 && n.door > 5000, why: JSON.stringify(n) });
+  out.push({ name: `${c.id}: ground-floor heights true up every wall (atl.z in range, ${-LY0} to ${255 / LYS - LY0} m)`, ok: !clamped, why: `${clamped} walls past it${ex ? `, e.g. ${ex}` : ''}` });
+  out.push({ name: `${c.id}: no wall's uv overflows a half float`, ok: !inf, why: `${inf} infinite uv values` });
+  return out;
+}
+
 export async function runCase(c) {
   if (c.id === 'kit') return kit();
+  if (c.id.startsWith('facades')) return facadesNyc(c);
   if (c.id.startsWith('rules')) return rules(c);
   if (c.id.startsWith('decks')) return decks(c);
   return stylesCase(c);

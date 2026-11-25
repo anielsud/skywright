@@ -10,9 +10,9 @@
 // brick walk-ups and brownstones, clapboard houses with pitched roofs, warehouses; water towers and plant rooms on
 // the roofs. Collisions: an oriented box per building.
 import * as THREE from 'three';
-import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, BLD_U } from './buildings.js';
+import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, BLD_U, facade, facadeSpec, LY0, LYS } from './buildings.js';
 import { toLocal } from './realworld.js';
-import { roadIndex, setBack, holeInside, fitBox, MAJOR } from './setback.js';
+import { roadIndex, setBack, holeInside, fitBox, MAJOR, streetWalls } from './setback.js';
 
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
 const GROUP = 2; // tall buildings: one mesh per GROUP x GROUP data tiles
@@ -35,7 +35,7 @@ const PAL = {
 
 // ---------------- mesh writer: the buildings.js vertex layout, quantised ----------------
 export class MeshW {
-  constructor(cx, cz, cap = 8192) { this.cx = cx; this.cz = cz; this.n = 0; this.ni = 0; this.cap = 0; this.idx = new Uint32Array(cap * 2); this.grow(cap); this.seed = 0; this.yg = 0; }
+  constructor(cx, cz, cap = 8192) { this.cx = cx; this.cz = cz; this.n = 0; this.ni = 0; this.cap = 0; this.idx = new Uint32Array(cap * 2); this.grow(cap); this.seed = 0; this.yg = 0; this.top = 0; }
   grow(need) {
     if (need <= this.cap) return;
     const cap = Math.max(need, this.cap * 2), cp = (A, T, k) => { const b = new T(cap * k); if (A) b.set(A.subarray(0, this.n * k)); return b; };
@@ -49,16 +49,20 @@ export class MeshW {
     this.nor[k] = nx * 127; this.nor[k + 1] = ny * 127; this.nor[k + 2] = nz * 127;
     this.uv[i * 2] = half(u); this.uv[i * 2 + 1] = half(w);
     this.col[k] = this.cr; this.col[k + 1] = this.cg; this.col[k + 2] = this.cb;
-    const a = i * 4; this.atl[a] = cell; this.atl[a + 1] = this.seed; this.atl[a + 2] = Math.max(0, Math.min(255, (y - this.yg) * 8));
+    const a = i * 4; this.atl[a] = cell; this.atl[a + 1] = this.seed; this.atl[a + 2] = Math.max(0, Math.min(255, (y - this.yg + LY0) * LYS)); this.atl[a + 3] = this.top;
     return i;
   }
-  // vertical wall seen from outside, a -> b: u counts bays, v floors (from yf, the floor datum)
-  wall(ax, az, bx, bz, y0, y1, yf, cell, bay, fl) {
+  // vertical wall seen from outside, a -> b: u counts bays (from u0: a facade program's door is bay 0), v floors (from
+  // yf, the floor datum)
+  wall(ax, az, bx, bz, y0, y1, yf, cell, bay, fl, u0 = 0) {
     const L = Math.hypot(bx - ax, bz - az); if (L < 0.05 || y1 - y0 < 0.05) return;
     const ux = (bx - ax) / L, uz = (bz - az) / L, nx = -uz, nz = ux, nb = Math.max(1, Math.round(L / bay)), v0 = (y0 - yf) / fl, v1 = (y1 - yf) / fl;
+    // (a facade program's ground floor reads the height above the floor, atl.z, which stops 60 m up: a taller wall is
+    // two quads, so the lower one's heights interpolate true)
+    const ys = this.yg + 255 / LYS - LY0 - 4; if (y1 > ys + 1 && y0 < ys - 1 && facadeSpec(cell)?.gH > 0) { this.wall(ax, az, bx, bz, y0, ys, yf, cell, bay, fl, u0); this.wall(ax, az, bx, bz, ys, y1, yf, cell, bay, fl, u0); return; }
     this.grow(this.n + 4); this.growI(6);
     const o = this.n;
-    this.v(ax, y0, az, nx, 0, nz, 0, v0, cell); this.v(bx, y0, bz, nx, 0, nz, nb, v0, cell); this.v(bx, y1, bz, nx, 0, nz, nb, v1, cell); this.v(ax, y1, az, nx, 0, nz, 0, v1, cell);
+    this.v(ax, y0, az, nx, 0, nz, u0, v0, cell); this.v(bx, y0, bz, nx, 0, nz, u0 + nb, v0, cell); this.v(bx, y1, bz, nx, 0, nz, u0 + nb, v1, cell); this.v(ax, y1, az, nx, 0, nz, u0, v1, cell);
     const I = this.idx, k = this.ni; I[k] = o; I[k + 1] = o + 1; I[k + 2] = o + 2; I[k + 3] = o; I[k + 4] = o + 2; I[k + 5] = o + 3; this.ni += 6;
   }
   // any planar polygon (counter-clockwise from its front), uv in metres / s from its first point
@@ -188,7 +192,7 @@ export class CityScenery {
     this.qn = W.qName;
     this.grid = new Map(); // 50 m cells -> collision boxes
     this.lowR = LOW_R[W.qName] ?? 1600;
-    this.detail = W.qBase === 'high'; // parapets, shop fronts and roof furniture (medium / low: plain walls and roofs, half the vertices)
+    this.detail = W.qBase === 'high'; // roof furniture (plant rooms, water tanks). (Ground floors, cornices and parapets: every tier, drawn by the facade programs)
     this.levelD = LEVEL_D[W.qName] ?? LEVEL_D.medium;
     this.mat = buildingMaterial({ cellPx: { low: 128, medium: 192, ultra: 384 }[W.qName] ?? 256, interiors: W.qName !== 'low', glass: true });
     // (lit windows: set in update, dimmer than a village's; thousands of them in view)
@@ -305,7 +309,7 @@ export class CityScenery {
     } else if (A < 220 && top < 20) {
       // row houses: brownstones and brick
       st = h2 < 0.35 ? { cell: C.BROWN_WIN, col: pick(PAL.brown, hseed), bay: 2.4, fl: 3.4 } : { cell: C.BRICK_WIN, col: pick(PAL.brick, hseed), bay: 2.6, fl: 3.1 };
-      st.cornice = true;
+      st.cornice = true; st.row = true;
     } else {
       // walk-ups, lofts, shops
       st = h2 < 0.62 ? { cell: C.BRICK_WIN, col: pick(PAL.brick, hseed), bay: 2.8, fl: 3.2 } : h2 < 0.82 ? { cell: C.LIME_WIN, col: pick(PAL.lime, hseed), bay: 2.6, fl: 3.4 } : { cell: C.APT, col: pick(PAL.concrete, hseed), bay: 3, fl: 3.1 };
@@ -330,25 +334,29 @@ export class CityScenery {
     const pad = tall && roof === 'flat' ? this.helipads.find((h) => inside(P, h.x, h.z)) : null;
     if (pad && !(pad.roof && pad.roof.y >= eave)) pad.roof = { y: eave, box: box || obb(P), P, g: gm };
     M.seed = (hseed * 255) | 0; M.yg = yFloor; M.color(st.col);
-    // ---- walls: an optional ground floor band (shops / lobby), then the floors
-    const gTop = this.detail && st.ground != null && eave - yFloor > 8 ? yFloor + 4.2 : null;
+    // ---- walls: one quad a wall, the whole facade drawn by its program (buildings.js facade): the ground floor (shop
+    // fronts, a rusticated base, the door) on the walls facing a street, the string course over it, the floors, and
+    // the parapet carried up past a flat roof with its cornice. The floors are fitted between the ground floor and the
+    // eave, so the cornice sits on a whole floor.
+    const parapet = roof === 'flat' && !part && (tall || A > 120 || st.cornice) ? (st.glass ? 1.2 : st.cornice || st.prewar ? 1.0 : 0.9) : 0;
+    const F2 = part ? null : this.facades(st, kind, parapet > 0, eave - yFloor);
+    let yfV = yFloor, flV = st.fl;
+    if (F2) { const up = eave - yFloor - F2.gH, nU = Math.max(1, Math.round(up / st.fl)); flV = up / nU; yfV = F2.gH > 0 ? yFloor + F2.gH - flV : yFloor; M.top = parapet ? nU + (F2.gH > 0 ? 1 : 0) : 0; }
+    const street = F2 ? streetWalls(this.roads, P) : null, wTop = eave + parapet;
     const ring = (Q, inner) => {
       const n = Q.length;
       for (let k = 0; k < n; k++) {
         const a = Q[k], b = Q[(k + 1) % n], [p, r] = inner ? [a, b] : [b, a]; // outer walls b -> a (outside on the front)
-        if (gTop != null) { M.wall(p[0], p[1], r[0], r[1], yBase, gTop, yFloor, st.ground, 3, 4.2); M.wall(p[0], p[1], r[0], r[1], gTop, eave, yFloor, st.cell, st.bay, st.fl); }
-        else M.wall(p[0], p[1], r[0], r[1], yBase, eave, yFloor, st.cell, st.bay, st.fl);
+        const front = !!street && !inner && street[k], nb = Math.max(1, Math.round(Math.hypot(r[0] - p[0], r[1] - p[1]) / st.bay));
+        if (F2) M.wall(p[0], p[1], r[0], r[1], yBase, wTop, yfV, front ? F2.front : F2.rear, st.bay, flV, front && !F2.endDoor ? -Math.floor(nb / 2) : 0);
+        else M.wall(p[0], p[1], r[0], r[1], yBase, wTop, yFloor, st.cell, st.bay, st.fl);
       }
     };
     ring(P, false); for (const h of holes) ring(h, true);
+    M.top = 0;
     // ---- roof
     const flatCell = st.glass ? C.SEAM : h3 < 0.6 ? C.ROOF_TAR : C.ROOF_GRAVEL; // tar and gravel roofs (roof cells: the tint below decides how dark)
     if (roof === 'flat') {
-      const parapet = this.detail && (tall || A > 120) && !part ? (st.glass ? 1.2 : st.cornice || st.prewar ? 1.0 : 0.9) : 0;
-      if (parapet) {
-        M.color(st.glass ? 0x9aa0a6 : st.col);
-        for (let k = 0; k < P.length; k++) { const a = P[k], b = P[(k + 1) % P.length]; M.wall(b[0], b[1], a[0], a[1], eave, eave + parapet, eave, st.glass ? C.METAL : st.cell === C.BRICK_WIN ? C.BRICK : st.cell === C.CLAP_WIN ? C.CLAP : C.LIME, 3, 3); }
-      }
       M.color(st.glass ? 0x6e7074 : pick([0x6a6660, 0x5c5a56, 0x76706a, 0x54524f, 0x4a4846], h3)); // tar, gravel, concrete
       M.roof(P, holes, eave, flatCell);
       // roof furniture: a plant room on the towers, water tanks on the pre-war and walk-up roofs
@@ -398,6 +406,36 @@ export class CityScenery {
     // destructible (destruction.js): its vertices, what it's made of; damage done earlier this flight comes back with it
     t.dk = 'c' + R.o; t.rng = [[M, n0, M.n - n0]]; t.look = { cell: st.cell, col: st.col, rcol: 0x5c5a56, glass: !!st.glass }; if (wt) t.type = 'waterTower';
     W.destruct?.restore(t);
+  }
+  // A building's facade programs (buildings.js facade): { front: the walls facing a street, rear: the others, gH: its
+  // ground floor's height, endDoor: the door at the wall's end (a row house's stoop), not its middle }. From the
+  // reference photos: tenement and loft storefronts (a sign fascia and transom over display windows, a door every few
+  // bays, the cornice over them), Striver's Row and the pre-war apartment houses (a rusticated stone base, the
+  // entrance between pilasters, a string course, a bracketed cornice), brownstones (a raised rusticated basement under
+  // the parlour floor), glass towers (a lobby of glass, a metal parapet), clapboard houses and warehouses (a door, a
+  // loading door). null: plain walls (building parts, garages, anything too short for a ground floor of its own).
+  facades(st, kind, parapet, hFl) {
+    const u = st.cell, plain = { [C.LIME_WIN]: C.LIME, [C.BROWN_WIN]: C.LIME, [C.BRICK_WIN]: C.BRICK, [C.APT]: C.CONCRETE, [C.WIN_TALL]: C.CONCRETE, [C.GLASS]: C.METAL }[u] ?? u;
+    const top = parapet ? plain : -1, cornice = parapet && !st.glass && (st.prewar || st.cornice || kind === 3);
+    const brick = u === C.BRICK_WIN, stone = 0xd8ccb4; // (a brick building's base, string course and cornice: limestone)
+    const mk = (o) => {
+      if (o.gH > 0 && hFl - o.gH < 2.4) o = {}; // (no room for a floor over the ground floor: the floors' v would blow up)
+      // (the cornice: cut stone or painted metal, cream over brick, whatever the parapet behind it is made of)
+      const fr = cornice ? { top: C.LIME, bandCol: brick ? stone : undefined, ...o } : { top, ...o };
+      return { front: facade({ upper: u, cornice, ...fr }), rear: facade({ upper: u, top, cornice: false }), gH: o.gH ?? 0, endDoor: !!o.endDoor };
+    };
+    if (kind === 2 || hFl < 4) return null;
+    if (st.glass) return hFl > 9 ? mk({ ground: C.SHOP3_N, gH: 5, band: 0.35, bandCell: C.METAL, bandCol: 0x2a2c30 }) : mk({});
+    if (st.ground != null && hFl > 7) return mk({ ground: C.SHOPFRONT, door2: C.SHOP_DOOR, every: 3, gH: hFl > 30 ? 4.6 : 4.0, band: 0.55, bandCell: C.LIME, bandCol: brick ? stone : null, shop: true });
+    if (u === C.CLAP_WIN) return mk({ ground: C.CLAP_WIN, gH: 3, door: C.CLAP_DOOR });
+    if (u === C.BRICK || u === C.CONCRETE || u === C.METAL) return mk({ ground: u, gH: 4, door: C.GARAGE });
+    if (kind === 3) return mk({ ground: u, gH: st.fl, door: C.RUST_DOOR });
+    if (u === C.APT || u === C.WIN_TALL) return mk({ ground: u, gH: st.fl, door: C.SHOP_DOOR });
+    if (st.row) // row houses: a raised basement, the door at one end
+      return mk({ ground: C.RUST, door: C.RUST_DOOR, gH: 2.6, band: 0.3, bandCell: C.LIME, groundCol: brick ? 0x9a8670 : null, bandCol: brick ? 0x9a8670 : null, endDoor: true });
+    if (hFl < 7) return mk({});
+    // apartment houses and pre-war towers: a rusticated base (double height on a tower), the entrance in the middle
+    return mk({ ground: C.RUST, door: C.RUST_DOOR, gH: hFl > 30 ? 5 : 3.6, band: hFl > 30 ? 0.5 : 0.35, bandCell: C.LIME, groundCol: brick ? stone : null, bandCol: brick ? stone : null });
   }
   pitched(M, b, y, rise, roof, cell, col, gcell, gcol, yaw) {
     const { cx, cz, ux, uz, hl, hw } = b, nx = -uz, nz = ux, o = 0.4, ex = hw + o, el = hl + o, ye = y - o * rise / hw, yr = y + rise;

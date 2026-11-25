@@ -133,7 +133,7 @@ export class Destruction {
     _q.setFromEuler(new THREE.Euler(Math.random() * 6.3, Math.random() * 6.3, Math.random() * 6.3)); P.Q.set([_q.x, _q.y, _q.z, _q.w], k * 4);
     P.Wv.set([rnd(spin), rnd(spin), rnd(spin)], k * 3); P.age[k] = 0; P.st[k] = 1; P.life[k] = life;
     if (P.atl) {
-      P.atl.array.set([look[0], (Math.random() * 255) | 0, 40, 0], k * 4); P.col.array.set([look[1], look[2], look[3]], k * 3);
+      P.atl.array.set([look[0], (Math.random() * 255) | 0, 36, 0], k * 4); // (atl.z: 5 m up, buildings.js LY0) P.col.array.set([look[1], look[2], look[3]], k * 3);
       P.atl.addUpdateRange(k * 4, 4); P.col.addUpdateRange(k * 3, 3); P.atl.needsUpdate = P.col.needsUpdate = true;
     } else { P.mesh.instanceColor.setXYZ(k, look.r, look.g, look.b); P.mesh.instanceColor.needsUpdate = true; }
     return k;
@@ -481,7 +481,7 @@ export class Destruction {
   mound(B, y, h, k) {
     const P = this.mounds, o = B.ob, i = this.take(P), L = B.look;
     _c.setHex(L.col).lerp(new THREE.Color(0x6a645c), 0.55).multiplyScalar(0.8);
-    P.atl.array.set([Math.random() < 0.5 ? C.GRAVEL : C.COBBLE, (Math.random() * 255) | 0, 40, 0], i * 4); P.col.array.set([_c.r * 255, _c.g * 255, _c.b * 255], i * 3);
+    P.atl.array.set([Math.random() < 0.5 ? C.GRAVEL : C.COBBLE, (Math.random() * 255) | 0, 36, 0], i * 4); P.col.array.set([_c.r * 255, _c.g * 255, _c.b * 255], i * 3);
     P.atl.addUpdateRange(i * 4, 4); P.col.addUpdateRange(i * 3, 3); P.atl.needsUpdate = P.col.needsUpdate = true;
     P.st[i] = 2; // (not simulated)
     const M = { i, x: o.x, y, z: o.z, sx: o.hl * 1.08, sz: o.hw * 1.08, h, yaw: Math.atan2(-o.uz, o.ux) };

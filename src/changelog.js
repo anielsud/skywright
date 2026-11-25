@@ -2,6 +2,12 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.185.0', items: [
+    "City streets now have shops with awnings, front doors and stone steps, and chalets got wooden doors.",
+  ] },
+  { v: '1.185.0', items: [
+    "Streets look lived in: New York has shop fronts with signs and awnings, front doors on the street, and big cornices along the rooftops. In the Alps, chalets sit on stone bases with their doors facing the road.",
+  ] },
   { v: '1.184.0', items: [
     "New 🐞 button: press it (or F8) when something looks wrong and it sends a picture and where you are so it can get fixed.",
   ] },

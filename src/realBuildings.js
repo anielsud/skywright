@@ -3,12 +3,12 @@
 // buildings.js, gabled / hipped / flat roofs, Swiss chalet style up in the villages), railways, cable car lines,
 // mountain lakes and rivers above the World's water level. (Generated towns, towns.js, went with the generated valley.)
 import * as THREE from 'three';
-import { Builder, buildingMaterial, buildingDepthMaterial, C, TIER, tierCells } from './buildings.js';
+import { Builder, buildingMaterial, buildingDepthMaterial, C, TIER, tierCells, facade, linHex } from './buildings.js';
 import { toLocal } from './realworld.js';
 import { mulberry32, smoothstep } from './noise.js';
 import { CityScenery } from './realCity.js';
 import { Landmarks } from './realLandmarks.js';
-import { roadIndex, setBack, fitBox, MAJOR } from './setback.js';
+import { roadIndex, setBack, fitBox, MAJOR, streetWalls } from './setback.js';
 
 const CHUNK = 1000; // m: buildings are merged per 1 km cell (one draw call each), hidden beyond VIEW
 const VIEW = { low: 4500, medium: 8000, high: 14000 };
@@ -192,7 +192,7 @@ export class RealScenery {
       if (cb?.fit && (roof === 1 || roof === 2)) { roof = 5; this.setbacks.flat++; }
       // ---- geometry: everything a building has goes into its chunk's builder in one run (destruction.js)
       const ch = this.chunk(cx, cz), B = ch.B, n0 = B.n;
-      B.seed = seed;
+      B.seed = seed; B.lyOff = wet ? 0 : hAbs - base; // (heights for the facade programs from the mean ground: a plinth shows its height above that, more downhill)
       B.setFrame(0, base, 0, 0);
       const nx = -uz, nz = ux, yaw0 = Math.atan2(ux, uz), ccw = area > 0; // (walls need the outside on their front: walk the ring so the face normal points out)
       // a veranda (Bora Bora's houses) or a walkway (motels) under the roof carried on down: on the long side facing
@@ -202,11 +202,14 @@ export class RealScenery {
       if (porch) { const d = hw + 3; side = W.sampleGrid(ox + nx * d, oz + nz * d) <= W.sampleGrid(ox - nx * d, oz - nz * d) ? 1 : -1; }
       // (a motel under a roof cut to its footprint: the walkway along its longest wall)
       let walkK = -1; if (motel && roof === 5) { let bl = 0; for (let k = 0; k < n; k++) { const a = P[k], c = P[(k + 1) % n], L = Math.hypot(c[0] - a[0], c[1] - a[1]); if (L > bl) { bl = L; walkK = k; } } }
+      // ground floors (buildings.js facade programs): a door on a wall facing the street, a plinth, shop fronts
+      const fac = this.facades(wallCell, kind, chalet, wet, eave, buildingRng(seed0 + 11, cx, cz)()), street = fac?.front ? streetWalls(roads, P, 8) : null;
       for (let k = 0; k < n; k++) {
         const a = P[k], c = P[(k + 1) % n], [s, e] = ccw ? [c, a] : [a, c];
-        let cell = wallCell;
+        let cell = wallCell, u0 = 0, yf = 0;
         if (motel) { const L = Math.hypot(e[0] - s[0], e[1] - s[1]) || 1, on = ((s[1] - e[1]) * nx + (e[0] - s[0]) * nz) / L; if (porch ? on * side > 0.7 : k === walkK) cell = C.MOTEL_DOOR; } // (its outward normal along the walkway side)
-        B.wall(s[0], s[1], e[0], e[1], 0, eave, cell, wallCol);
+        else if (fac) { const front = street && street[k]; cell = front ? fac.front : fac.rear; yf = B.lyOff + fac.yf; if (front) u0 = -Math.floor(Math.max(1, Math.round(Math.hypot(e[0] - s[0], e[1] - s[1]) / 3)) / 2); }
+        B.wall(s[0], s[1], e[0], e[1], 0, eave, cell, wallCol, 3, 3, u0, yf);
       }
       if (walkK >= 0) { const a = P[walkK], c = P[(walkK + 1) % n]; this.walkway(B, ccw ? c : a, ccw ? a : c, eave); }
       const yaw = porch && side < 0 ? yaw0 + Math.PI : yaw0; // (the gable's -x side is the porch side)
@@ -219,7 +222,7 @@ export class RealScenery {
         // a chalet's balcony: across the gable end facing downhill, on top of the masonry ground floor (the carved railing)
         if (chalet && roof === 1 && wallCell === TIER.CHALET && hw > 2.5 && extra < 0.6) {
           const zs = W.sampleGrid(ox + ux * (hl + 2), oz + uz * (hl + 2)) <= W.sampleGrid(ox - ux * (hl + 2), oz - uz * (hl + 2)) ? 1 : -1;
-          this.balcony(B, hw - 0.4, hl * zs, zs, 3); this.stats.balcony++;
+          this.balcony(B, hw - 0.4, hl * zs, zs, B.lyOff + 2.8); this.stats.balcony++;
         }
       } else if (roof === 5) this.fitGable(B, P, ccw, ox, oz, nx, nz, hw, eave, rise, roofCell, roofC, endCell, wallCol);
       else this.flatRoof(B, P, eave, C.ROOF_GRAVEL, kind === 4 ? 0x9a968e : 0x8a867e); // (a roof cell: the tint decides, not the bright photo)
@@ -237,6 +240,7 @@ export class RealScenery {
         B.hip(s + 0.3, s + 0.3, y1, sp, 0, trop ? C.SEAM : rustic ? C.SHINGLE : C.SLATE, trop ? 0xa8442e : rustic ? 0x5a463a : 0x4a4c52);
       }
       if (wet) this.bungalowDeck(B, ox, oz, ux, uz, hl, hw, base);
+      B.lyOff = 0;
       const st = this.stats; st.n++; st.roof[roof]++; if (chalet && wallCell === TIER.CHALET) st.tiered++; if (porch) st.porch++; if (walkK >= 0) st.walk++; if (steeple) st.steeple++;
       ch.n++; ch.x += cx; ch.z += cz;
       // collisions: a disc per building (the aircraft's parts are tested against these)
@@ -356,10 +360,36 @@ export class RealScenery {
       if (this.w.qBase === 'high') B.fan(R.map((p) => [p[0], hOf(p) - 0.16, p[1]]), uv, T.map(([a, b, c]) => [a, c, b]), C.TRIM, 0xe6e2da); // (real uvs: the shader's tangent frame needs them to vary)
     }
   }
+  // A building's facade programs (buildings.js facade): { front: its walls facing a street, rear: the others, yf: the
+  // floor datum (v = 0) above the mean ground (Builder.lyOff) }, or null for plain walls. From the reference photos: chalets on a whitewashed masonry ground
+  // floor (their door in it) or a stone plinth, the barns on stone; the valley towns' plastered houses on a grey
+  // plinth with their door on the street, and the shops (Interlaken, Wengen, Grindelwald) in the ground floor of the
+  // hotels and commercial blocks; Bora Bora's houses on their slab, the canyon's adobe with its turquoise door. (u: a
+  // draw of the building's own, not from its style sequence)
+  facades(cell, kind, chalet, wet, eave, u) {
+    const st = this.w.loc.osmStyle, F = facade, stone = linHex(0x8a867e), slab = linHex(0xc8c2b6);
+    if (st === 'rustic') return cell === C.ADOBE_WIN && eave > 2.5 ? { front: F({ upper: cell, door: C.ADOBE_DOOR, doorUp: true }), rear: cell, yf: 0 } : null;
+    if (st === 'tropical') {
+      if (wet || !(cell === C.WIN || cell === C.CLAP_WIN || cell === C.PLAIN)) return null;
+      const o = { upper: cell, ground: C.CONCRETE, gH: 0.3, metric: true, groundCol: slab };
+      return { front: F({ ...o, door: cell === C.CLAP_WIN ? C.CLAP_DOOR : C.DOOR, doorUp: true }), rear: F(o), yf: 0 };
+    }
+    if (cell === TIER.CHALET) return { front: F({ upper: C.WOOD_WIN, ground: C.MASONRY_WIN, gH: 2.8, door: C.MASONRY_DOOR }), rear: cell, yf: -0.2 };
+    if (chalet || kind === 2) { const o = { upper: cell, ground: C.STONE, gH: 0.8, metric: true, groundCol: stone }; return { front: cell === C.WOOD_WIN ? F({ ...o, door: C.WOOD_DOOR, doorUp: true }) : F(o), rear: F(o), yf: 0 }; }
+    if (eave < 3) return null;
+    const plinth = { upper: cell, ground: C.CONCRETE, gH: 0.5, metric: true, groundCol: stone };
+    // shops: in a hotel's or a commercial block's ground floor, some apartment houses'; the floors above fitted over it
+    if (eave > 7 && ((kind === 5 && u < 0.6) || (kind === 4 && cell === C.CONCRETE && u < 0.7) || (kind === 1 && u < 0.3)))
+      return { front: F({ upper: cell, ground: C.SHOPFRONT, door2: C.SHOP_DOOR, every: 3, gH: 3.6, band: 0.35, bandCell: C.PLAIN, shop: true }), rear: F(plinth), yf: 0.6 };
+    const door = cell === C.WIN || cell === C.WIN_GREEN || cell === C.WIN_BLUE || cell === C.APT || cell === C.BALCONY || cell === C.PLAIN ? C.DOOR : -1;
+    return { front: door >= 0 ? F({ ...plinth, door, doorUp: true }) : F(plinth), rear: F(plinth), yf: 0 };
+  }
   // Bora Bora's verandas, the motels' walkways (gable frame: the porch is under the roof's deep -x side)
   porch(B, hw, hl, eave, rise, deep, motel) {
     const under = (x) => eave - (-x - hw) * rise / hw - 0.24; // the roof's underside at x (x < -hw)
-    const post = (x, z, c, col) => B.obox(x, z, 1, 0, 0.1, 0.1, 0, under(x), c, col, { top: false, sides: [0, 2, 3] }); // (not the side facing the house)
+    // (not the side facing the house; Low: only the face out from under the roof, like the gutters: a 20 cm post
+    // seen side on is a pixel wide on a tablet)
+    const post = (x, z, c, col) => B.obox(x, z, 1, 0, 0.1, 0.1, 0, under(x), c, col, { top: false, sides: this.w.qName === 'low' ? [3] : [0, 2, 3] });
     if (motel) { // the upper floor's walkway: a slab off the wall, an iron railing, timber posts down to the ground
       const y = 3.6, x1 = -(hw + 1.9);
       face(B, [[x1, y, -hl], [-hw, y, -hl], [-hw, y, hl], [x1, y, hl]], C.CONCRETE, 0xc8c0b4, 0, 1, 0);
@@ -408,7 +438,7 @@ export class RealScenery {
     const cu = (m[0] - m[1]) / 2, cn = (m[2] - m[3]) / 2, hu = hl + (m[0] + m[1]) / 2, hn = hw + (m[2] + m[3]) / 2, dx = ox + ux * cu + nx * cn, dz = oz + uz * cu + nz * cn;
     B.setFrame(0, 0, 0, 0);
     B.obox(dx, dz, ux, uz, hu, hn, base - 0.3, base, C.BOARDS, 0xb08a62);
-    for (const [a, c] of [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]]) {
+    for (const [a, c] of this.w.qName === 'low' ? [[-1, -1], [1, -1], [1, 1], [-1, 1]] : [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]]) { // (Low: the corner piles)
       const px = dx + ux * a * (hu - 0.3) + nx * c * (hn - 0.3), pz = dz + uz * a * (hu - 0.3) + nz * c * (hn - 0.3), y0 = Math.min(wl - 0.5, W.sampleGrid(px, pz));
       B.box(px, y0, pz, 0.36, base - 0.3 - y0, 0.36, C.DARKWOOD, 0x4a3a2c, { top: false });
     }
