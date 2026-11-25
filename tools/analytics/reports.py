@@ -30,7 +30,7 @@ def main():
         shot = p.pop('screenshot', '') or ''
         if shot.startswith('data:image'): open(base + '.jpg', 'wb').write(base64.b64decode(shot.split(',', 1)[1]))
         json.dump(p, open(base + '.json', 'w'), indent=1)
-        print(f"\n== {ts[:19]}  {uid[:8]}  v{p.get('$app_version') or p.get('version', '?')}  {p.get('location')} · {p.get('vehicle')} · {p.get('tier')} · "
+        print(f"\n== {ts[:19]}  {uid[:8]}  v{p.get('app_version', '?')}  {p.get('location')} · {p.get('vehicle')} · {p.get('tier')} · "
               f"{p.get('time_of_day')}h {p.get('weather')}  ({p.get('flight_s')} s into the flight)")
         print(f"   note: {p.get('note') or '(none)'}")
         print(f"   vehicle {p.get('pos')}  camera {p.get('cam')} looking {p.get('look')} ({p.get('cam_mode')})")
