@@ -12,13 +12,13 @@ import { FOG } from './shaders.js';
 // 8 x 8 cells, each cell = one 3 m x 3 m facade bay (one window, one floor), 3 m x 3 m of roof or of ground.
 export const C = {
   PLAIN: 0, WIN_GREEN: 1, WIN_BLUE: 2, WIN: 3, DOOR: 4, WOOD_WIN: 5, WOOD: 6, STONE_WIN: 7,
-  ADOBE_WIN: 8, ADOBE: 9, ADOBE_DOOR: 10, APT: 11, SHOP: 12, GLASS: 13, BALCONY: 14, BOARDS: 15,
+  ADOBE_WIN: 8, ADOBE: 9, ADOBE_DOOR: 10, APT: 11, WTANK: 12, GLASS: 13, BALCONY: 14, BOARDS: 15,
   METAL: 16, HANGAR_DOOR: 17, TILES: 18, SLATE: 19, SEAM: 20, GRAVEL: 21, SHINGLE: 22, BRICK: 23,
   DARKWOOD: 24, CONCRETE: 25, CHURCH_WIN: 26, GARAGE: 27, THATCH: 28, LOG: 29, STONE: 30, BRICK_WIN: 31,
   CLAP: 32, CLAP_WIN: 33, SHOPFRONT: 34, COBBLE: 35, PAVERS: 36, ASPHALT: 37, DARKTILE: 38, WIN_TALL: 39,
-  WOOD_WIN2: 40, SHOP2: 41, ADOBE_WIN2: 42, SHOP_DOOR: 43, TIMBER_WIN: 44, MASONRY_WIN: 45, RAIL_WOOD: 46, RAIL_IRON: 47,
+  FRAME: 40, LOUVRE: 41, ADOBE_WIN2: 42, SHOP_DOOR: 43, TIMBER_WIN: 44, MASONRY_WIN: 45, RAIL_WOOD: 46, RAIL_IRON: 47,
   LOG_WIN: 48, TRIM: 49, RUST: 50, MOTEL_DOOR: 51, RUST_DOOR: 52, CLAP_DOOR: 53, WOOD_DOOR: 54, MASONRY_DOOR: 55,
-  SHOP_N: 56, SHOP2_N: 57, SHOP3_N: 58, // shop fronts without the name board (all but one bay of a shop)
+  ROOF_STONES: 56, ROOF_MEMBRANE: 57, SHOP3_N: 58, // (SHOP3_N: a glass tower's lobby)
   LIME: 59, LIME_WIN: 60, BROWN_WIN: 61, // smooth cut stone (ashlar), tinted: limestone / brownstone, tall windows with lintels
   ROOF_TAR: 62, ROOF_GRAVEL: 63, // flat roofs: the tint decides the colour (the ground cells keep most of the photo's)
   // (LOG / LOG_WIN: round logs, Grand Canyon cabins and lodges; TIMBER_WIN: light timber, no flower box (Bora Bora);
@@ -26,8 +26,11 @@ export const C = {
   // ground floors (facade programs below): SHOPFRONT / SHOP_DOOR a New York storefront's display window / its door
   // (frame and fascia take the shop's colour); RUST / RUST_DOOR a rusticated stone base, a barred window / the entrance;
   // MASONRY_DOOR a chalet's door in its whitewashed ground floor
+  // roofs and what stands on them: WTANK a New York water tank's staves and hoops (v 0..1: the whole tank); FRAME its
+  // steel stand (cut out: legs, girts and cross bracing, one cell a side); LOUVRE plant rooms, cooling units and a
+  // tower's mechanical screen; ROOF_STONES an alpine shingle roof weighted with stones on poles (Legschindeldach);
+  // ROOF_MEMBRANE a flat roof's light sheet membrane (seams, patches, a drain)
 };
-const SIGNLESS = { [C.SHOP]: C.SHOP_N, [C.SHOP2]: C.SHOP2_N };
 const COLS = 8, ROWS = 8, NCELL = COLS * ROWS, PAD = 1 / 16; // PAD: gutter per side, fraction of a slot
 // photo materials in tex/towns/mat_*.jpg (5 x 4 tiles of 512 px, each 3 m square; see tools/towns/bake_materials.py)
 const MAT = { plaster: 0, stucco: 1, chalet: 2, clap: 3, barn: 4, timber: 5, brick: 6, stone: 7, clay: 8, slate: 9, darktile: 10, metal: 11, thatch: 12, cobble: 13, pavers: 14, gravel: 15, asphalt: 16, lawn: 17, concrete: 18, ashlar: 19 };
@@ -41,11 +44,11 @@ const WIN = {};
 const winCell = (cell, x, y, w, h, rec = 0.05, room = 1.3, kind = 0, sill = true) => { WIN[cell] = { r: [x / 128, 1 - (y + h) / 128, (x + w) / 128, 1 - y / 128], rec, room, kind, sill }; };
 winCell(C.WIN_GREEN, 41, 27, 46, 62); winCell(C.WIN_BLUE, 41, 27, 46, 62); winCell(C.WIN, 41, 27, 46, 62);
 winCell(C.WOOD_WIN, 39, 23, 50, 58, 0.06, 1.3, 0, false); winCell(C.TIMBER_WIN, 41, 27, 46, 54, 0.06, 1.3, 0, false); winCell(C.LOG_WIN, 41, 29, 46, 50, 0.1, 1.3, 0, false);
-winCell(C.MASONRY_WIN, 47, 35, 34, 42, 0.14, 1.2); winCell(C.MOTEL_DOOR, 67, 37, 46, 42, 0.05, 1.3); winCell(C.WOOD_WIN2, 22, 30, 84, 46, 0.06, 1.3, 0, false); winCell(C.STONE_WIN, 45, 37, 38, 46, 0.12);
+winCell(C.MASONRY_WIN, 47, 35, 34, 42, 0.14, 1.2); winCell(C.MOTEL_DOOR, 67, 37, 46, 42, 0.05, 1.3); winCell(C.STONE_WIN, 45, 37, 38, 46, 0.12);
 winCell(C.ADOBE_WIN, 46, 40, 36, 44, 0.13); winCell(C.ADOBE_WIN2, 40, 30, 48, 56, 0.12, 1.2);
 winCell(C.APT, 25, 21, 78, 76, 0.05, 1.4); winCell(C.BRICK_WIN, 33, 25, 62, 68, 0.07); winCell(C.CLAP_WIN, 43, 25, 42, 64, 0.04);
 winCell(C.WIN_TALL, 44, 14, 40, 96, 0.05, 1.4); winCell(C.LIME_WIN, 43, 15, 42, 88, 0.09, 1.4); winCell(C.BROWN_WIN, 44, 19, 40, 84, 0.1, 1.3);
-for (const c of [C.SHOP, C.SHOP2, C.SHOP_N, C.SHOP2_N]) winCell(c, 8, 48, 74, 80, 0.04, 1.6, 1); winCell(C.SHOP3_N, 6, 46, 116, 82, 0.03, 1.8, 1);
+winCell(C.SHOP3_N, 6, 46, 116, 82, 0.03, 1.8, 1);
 winCell(C.SHOPFRONT, 8, 44, 112, 58, 0.04, 1.8, 1); winCell(C.SHOP_DOOR, 49, 46, 30, 72, 0.16, 1.6, 1); winCell(C.RUST, 46, 38, 36, 52, 0.14, 1.2); winCell(C.RUST_DOOR, 49, 30, 30, 24, 0.14, 1.0);
 winCell(C.GLASS, 0, 16, 128, 112, 0.0, 1.8, 4); winCell(C.BALCONY, 23, 11, 82, 96, 0.06, 1.5);
 winCell(C.DOOR, 46, 34, 36, 24, 0.08, 1.0); winCell(C.CHURCH_WIN, 44, 20, 40, 100, 0.08, 1, 2);
@@ -206,8 +209,6 @@ function paintAtlas(CELL, photo) {
     P(x + w - 9, y + hh * 0.55, 3, 3, '#c8b070', { z: 140, rough: 0.3 });
     P(x - 8, y + hh, w + 16, 128 - y - hh, '#a8a49c', { z: 150, rough: 0.8 }); // step
   };
-  const awning = (y, c1, c2) => { for (let k = 0; k < 128; k += 16) { P(k, y, 8, 16, c1, { z: 180, rough: 0.8 }); P(k + 8, y, 8, 16, c2, { z: 180, rough: 0.8 }); } g.fillStyle = 'rgba(0,0,0,0.3)'; g.fillRect(0, y + 16, 128, 4); for (let k = 0; k < 128; k += 8) { g.fillStyle = k % 16 ? c2 : c1; g.beginPath(); g.arc(k + 4, y + 16, 4, 0, Math.PI); g.fill(); } };
-  const sign = (x, y, w, hh, bg, fg, text) => { P(x, y, w, hh, bg, { z: 160, rough: 0.4 }); g.fillStyle = fg; g.font = `bold ${hh * 0.7}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, x + w / 2, y + hh / 2 + 1, w - 4); };
 
   // ---- walls ----
   at(C.PLAIN); base(MAT.plaster, 1); done();
@@ -217,7 +218,6 @@ function paintAtlas(CELL, photo) {
   // chalet timber: horizontal boards, window with flower box; a pair of small windows with red/white shutters
   at(C.WOOD); base(MAT.chalet, 0.35); done();
   at(C.WOOD_WIN); base(MAT.chalet, 0.35); window_(42, 26, 44, 52, { frame: '#efe8da', sill: null }); flowerBox(36, 87, 56); done();
-  at(C.WOOD_WIN2); base(MAT.chalet, 0.35); for (const x of [25, 67]) window_(x, 33, 36, 40, { frame: '#efe8da', sill: null, cross: true, transom: 0.5 }); P(61, 30, 6, 46, '#efe8da', { z: 114 }); for (const x of [8, 103]) { louvres(x, 30, 16, 46, '#b0303a'); g.fillStyle = 'rgba(255,255,255,0.8)'; g.beginPath(); g.moveTo(x, 30); g.lineTo(x + 16, 53); g.lineTo(x, 76); g.fill(); } flowerBox(20, 82, 88); done();
   at(C.WOOD_DOOR); base(MAT.chalet, 0.35); door(40, 22, 48, 106, '#5a3a20', { frame: '#7a5a3a' }); P(34, 12, 60, 8, '#4a3020', { z: 170 }); done();
   // natural wood from the pale painted-board photo: its hue and saturation replaced by a wood colour (the luminance kept),
   // so the building's tint can make it any timber from pale to brown
@@ -260,15 +260,6 @@ function paintAtlas(CELL, photo) {
   at(C.CLAP); base(MAT.clap, 1); done();
   at(C.CLAP_WIN); base(MAT.clap, 1); P(40, 22, 48, 70, '#f6f6f2', { z: 150 }); window_(46, 28, 36, 58, { frame: '#ffffff', sill: '#f0f0ea' }); shutters(46, 28, 36, 58, '#2f7f86'); done();
   at(C.CLAP_DOOR); base(MAT.clap, 1); door(42, 24, 44, 104, '#2f6f9f', { frame: '#ffffff' }); done();
-  // shops: sign band, awning, display window
-  const shopFront = (c1, c2, signBg, signFg, label) => {
-    base(MAT.plaster, 1); if (label) sign(4, 2, 120, 18, signBg, signFg, label); else P(0, 6, 128, 10, '#d8d4cc', { tint: 0.6, z: 150 }); awning(22, c1, c2);
-    P(0, 42, 128, 86, '#3a3a3c', { z: 150, rough: 0.5 }); glass(10, 50, 70, 74); P(84, 50, 34, 78, '#4a3424', { z: 110 }); glass(88, 54, 26, 36);
-  };
-  at(C.SHOP); shopFront('#c8283a', '#f6f0e6', '#f2efe6', '#7a1820', 'CAFÉ'); done();
-  at(C.SHOP2); shopFront('#2e6b3f', '#f0ece0', '#1f3a2a', '#e8d8a0', 'BAKERY'); done();
-  at(C.SHOP_N); shopFront('#c8283a', '#f6f0e6'); done();
-  at(C.SHOP2_N); shopFront('#2e6b3f', '#f0ece0'); done();
   { at(C.SHOP3_N); base(MAT.plaster, 1); P(0, 0, 128, 40, '#2a2a2c', { z: 150, rough: 0.4 }); P(4, 44, 120, 84, '#55585c', { z: 150, rough: 0.4 }); glass(9, 49, 110, 79); for (let k = 9; k < 119; k += 27) P(k, 49, 2, 79, '#55585c', { z: 140 }); done(); }
   // ---- ground floors (facade programs: the floor's cell is stretched over its own height, gH) ----
   // a New York storefront (traced from tenement shops in the Village and on Eighth Avenue): a sign fascia, a transom of
@@ -316,7 +307,63 @@ function paintAtlas(CELL, photo) {
   at(C.THATCH); base(MAT.thatch, 1); done(); // (the photo is baked pale grey: the straw tint decides)
   at(C.ROOF_TAR); base(MAT.asphalt, 1); done(); at(C.ROOF_GRAVEL); base(MAT.gravel, 1); done();
   at(C.SEAM); P(0, 0, 128, 128, '#d4d4d4', { tint: 1, rough: 0.35 }); for (let k = 0; k < 128; k += 21) { P(k, 0, 3, 128, '#f4f4f4', { tint: 1, rough: 0.3, z: 170 }); P(k + 3, 0, 2, 128, '#9a9a9a', { tint: 1, z: 150 }); } done();
-  at(C.SHINGLE); P(0, 0, 128, 128, '#5a4030', { tint: 0.5, rough: 0.95 }); for (let y = 0; y < 128; y += 10) for (let x = R() * 8 - 8; x < 128; x += 7 + R() * 6) { const v = R(); P(x, y, 6 + R() * 4, 9, `rgb(${96 + v * 50 | 0},${68 + v * 38 | 0},${48 + v * 28 | 0})`, { tint: 0.5, rough: 0.95, z: 128 + (y % 20) }); g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(x, y + 8, 7, 1.5); } done();
+  // weathered larch shingles (traced from laid-shingle roofs in the Alps: silver-grey to grey-brown, each shingle its
+  // own shade, dark gaps between, a shadow under each course); half tinted: the roof's colour leans them brown or grey
+  const shingles = (dy = 10.67) => {
+    P(0, 0, 128, 128, '#4a443c', { tint: 0.5, rough: 0.95 });
+    for (let y = 0; y < 128; y += dy) for (let x = R() * 8 - 8; x < 128; x += 5 + R() * 4) {
+      const v = R(), w = 4 + R() * 4, c = Math.round(96 + v * 70);
+      P(x, y, w, dy, `rgb(${c},${Math.round(c * 0.96)},${Math.round(c * 0.9)})`, { tint: 0.5, rough: 0.95, z: 128 + Math.round((y % (dy * 2)) / dy) * 6 });
+      g.fillStyle = 'rgba(20,16,12,0.55)'; g.fillRect(x + w - 0.8, y, 0.8, dy); // (the gap)
+      g.fillStyle = 'rgba(0,0,0,0.3)'; g.fillRect(x, y + dy - 1.6, w, 1.6); Z(x, y + dy - 1.6, w, 1.6, 116); // (the course's shadow)
+      if (R() < 0.15) { g.fillStyle = 'rgba(90,96,60,0.25)'; g.fillRect(x, y + dy * 0.5, w, dy * 0.5); } // (lichen)
+    }
+  };
+  at(C.SHINGLE); shingles(); done();
+  // the same, weighted with stones (Legschindeldach): a pole across the roof every metre, fieldstones resting on it
+  at(C.ROOF_STONES); shingles();
+  for (let k = 0; k < 3; k++) {
+    const yp = 34 + k * 42.67;
+    P(0, yp, 128, 3.2, '#5a4c3e', { tint: 0.3, rough: 0.9, z: 168 }); g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(0, yp + 3.2, 128, 2);
+    for (let x = R() * 12; x < 128; x += 13 + R() * 13) {
+      const r = 4.5 + R() * 3.5, cy = yp - r * 0.45, v = Math.round(120 + R() * 60);
+      g.fillStyle = 'rgba(0,0,0,0.4)'; g.beginPath(); g.ellipse(x + 1.5, cy + r * 0.55, r * 1.05, r * 0.6, 0, 0, 7); g.fill(); // (its shadow down the roof)
+      for (const c of [g, h]) { c.fillStyle = c === g ? `rgb(${v},${v - 4},${v - 10})` : hz(215); c.beginPath(); c.ellipse(x, cy, r, r * 0.72, R() - 0.5, 0, 7); c.fill(); }
+      d.fillStyle = dat(0, 0, 0.9); d.beginPath(); d.ellipse(x, cy, r, r * 0.72, 0, 0, 7); d.fill(); // (stone: not tinted)
+      g.fillStyle = 'rgba(255,255,255,0.18)'; g.beginPath(); g.ellipse(x - r * 0.3, cy - r * 0.25, r * 0.45, r * 0.3, 0, 0, 7); g.fill();
+    }
+  }
+  done();
+  // a flat roof's light membrane (white / grey sheet roofing on the city's flat roofs, traced from aerial photos of
+  // Manhattan: sheets with lapped seams a metre or so apart, darker patches, a drain with its stain)
+  at(C.ROOF_MEMBRANE); base(MAT.concrete, 1); g.save(); g.globalAlpha = 0.55; g.fillStyle = '#dcdcd8'; g.fillRect(0, 0, 128, 128); g.restore();
+  for (let y = 18; y < 128; y += 40 + R() * 6) { P(0, y, 128, 2.2, '#f4f4f2', { tint: 1, rough: 0.6, z: 140 }); g.fillStyle = 'rgba(0,0,0,0.12)'; g.fillRect(0, y + 2.2, 128, 1.2); }
+  for (let k = 0; k < 3; k++) { const x = R() * 100, y = R() * 100, w = 10 + R() * 24, hh = 8 + R() * 16; g.fillStyle = `rgba(${R() < 0.5 ? '90,88,84' : '255,255,250'},0.16)`; g.fillRect(x, y, w, hh); }
+  { const gr = g.createRadialGradient(96, 84, 1, 96, 84, 18); gr.addColorStop(0, 'rgba(40,38,34,0.5)'); gr.addColorStop(1, 'rgba(40,38,34,0)'); g.fillStyle = gr; g.fillRect(70, 60, 50, 50); P(93, 81, 6, 6, '#3a3a3a', { rough: 0.5, z: 110 }); }
+  done();
+  // a water tank's staves (traced from SoHo's and Midtown's: weathered cedar gone silver-grey, every stave its own shade
+  // with a dark joint, the steel hoops closer together low down where the pressure is, rust bleeding from them, a dark
+  // chime at the foot, water stains darkening the lower staves). v 0..1 is the whole tank, foot to rim
+  at(C.WTANK); P(0, 0, 128, 128, '#d4d0c8', { tint: 1, rough: 0.9 });
+  for (let x = 0; x < 128; x += 128 / 30) { const v = R(); g.fillStyle = v < 0.5 ? `rgba(40,34,28,${0.05 + R() * 0.14})` : `rgba(255,250,240,${0.04 + R() * 0.1})`; g.fillRect(x, 0, 128 / 30, 128); g.fillStyle = 'rgba(0,0,0,0.3)'; g.fillRect(x, 0, 0.7, 128); Z(x, 0, 0.7, 128, 112); }
+  { const gr = g.createLinearGradient(0, 128, 0, 40); gr.addColorStop(0, 'rgba(30,26,22,0.35)'); gr.addColorStop(1, 'rgba(30,26,22,0)'); g.fillStyle = gr; g.fillRect(0, 40, 128, 88); }
+  for (let k = 0, y = 119; k < 13 && y > 4; k++, y -= 4.4 + k * 0.72) {
+    P(0, y, 128, 1.5, '#3a3430', { tint: 0, rough: 0.5, z: 152 });
+    g.save(); g.globalAlpha = 0.12; g.fillStyle = '#6a3a1c'; for (let j = 0; j < 6; j++) g.fillRect(R() * 128, y + 1.5, 1 + R(), 3 + R() * 8); g.restore();
+  }
+  P(0, 123, 128, 5, '#2e2a26', { tint: 0, rough: 0.8, z: 150 }); P(0, 0, 128, 3, '#2e2a26', { tint: 0, rough: 0.8, z: 140 });
+  done();
+  // the tank's steel stand, one side of it (cut out: alpha): two legs, girts top, middle and foot, cross bracing in each
+  // panel (dark painted steel: the vertex colour)
+  at(C.FRAME); g.clearRect(0, 0, 128, 128); d.fillStyle = dat(0, 1, 0.55); d.fillRect(0, 0, 128, 128);
+  { const st = { tint: 1, rough: 0.55, z: 165 }, cl = '#d8d8d6'; P(0, 0, 10, 128, cl, st); P(118, 0, 10, 128, cl, st); for (const y of [0, 60, 121]) P(0, y, 128, 7, cl, st);
+    for (const c of [g, h]) { c.strokeStyle = c === g ? cl : hz(160); c.lineWidth = 4; c.beginPath(); for (const [y0, y1] of [[7, 60], [67, 121]]) { c.moveTo(10, y0); c.lineTo(118, y1); c.moveTo(118, y0); c.lineTo(10, y1); } c.stroke(); } }
+  done();
+  // louvres: plant rooms, rooftop units, a tower's mechanical screen (horizontal blades, each throwing a shadow, mullions)
+  at(C.LOUVRE); P(0, 0, 128, 128, '#5a5c5e', { tint: 1, rough: 0.5, z: 110 });
+  for (let y = 3; y < 125; y += 6) { P(1, y, 126, 3.2, '#e4e4e2', { tint: 1, rough: 0.45, z: 152 }); g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(1, y + 3.2, 126, 1.4); }
+  for (const x of [0, 42, 85, 125]) P(x, 0, 3, 128, '#d6d6d4', { tint: 1, rough: 0.45, z: 168 }); P(0, 0, 128, 3, '#d6d6d4', { tint: 1, z: 168 }); P(0, 125, 128, 3, '#d6d6d4', { tint: 1, z: 168 });
+  done();
   // ---- ground ----
   at(C.GRAVEL); base(MAT.gravel, 0.7); done();
   at(C.COBBLE); base(MAT.cobble, 0.3); done();
@@ -415,7 +462,7 @@ export function buildingDepthMaterial() {
   return m;
 }
 const rectArr = () => { const a = []; for (let i = 0; i < NCELL; i++) { const w = WIN[i]; a.push(w ? new THREE.Vector4(...w.r) : new THREE.Vector4(2, 2, -1, -1)); } return a; };
-const parArr = () => { const a = []; for (let i = 0; i < NCELL; i++) { const w = WIN[i]; a.push(new THREE.Vector4(w ? w.rec : 0, w ? w.room : 0, w ? w.kind : -1, i === C.METAL || i === C.SEAM || i === C.HANGAR_DOOR ? 0.6 : 0)); } return a; };
+const parArr = () => { const a = []; for (let i = 0; i < NCELL; i++) { const w = WIN[i]; a.push(new THREE.Vector4(w ? w.rec : 0, w ? w.room : 0, w ? w.kind : -1, i === C.METAL || i === C.SEAM || i === C.HANGAR_DOOR || i === C.LOUVRE ? 0.6 : i === C.FRAME ? 0.4 : 0)); } return a; };
 
 // One material for every building. opts.interiors (default true): reveal + interior mapping; opts.ground: polygon
 // offset for lots / paving laid on the terrain; opts.cellPx: atlas resolution; opts.glass: office glass (GLASS cells)
@@ -836,12 +883,6 @@ export class Builder {
       this.wall(xa, hd, xb, hd, y0, y2, door, col, bw, fl);
       if (k < nb - 1) this.wall(xb, hd, hw, hd, y0, y2, front, col, bw, fl);
       if (y1 > y2 + 0.01) this.wall(-hw, hd, hw, hd, y2, y1, front, col, 3, fl);
-    } else if (SIGNLESS[front] != null && w > 4.5) { // one name board per shop, plain shop windows either side
-      const nb = Math.max(1, Math.round(w / 3)), bw = w / nb, k = Math.floor(nb / 2), xa = -hw + k * bw, xb = xa + bw, y2 = Math.min(y1, Math.max(y0 + fl, fl));
-      if (k > 0) this.wall(-hw, hd, xa, hd, y0, y2, SIGNLESS[front], col, bw, fl);
-      this.wall(xa, hd, xb, hd, y0, y2, front, col, bw, fl);
-      if (k < nb - 1) this.wall(xb, hd, hw, hd, y0, y2, SIGNLESS[front], col, bw, fl);
-      if (y1 > y2 + 0.01) this.wall(-hw, hd, hw, hd, y2, y1, SIGNLESS[front], col, 3, fl);
     } else this.wall(-hw, hd, hw, hd, y0, y1, front, col, 3, fl);
     this.wall(hw, hd, hw, -hd, y0, y1, side, col, 3, fl);
     this.wall(hw, -hd, -hw, -hd, y0, y1, back, col, 3, fl);

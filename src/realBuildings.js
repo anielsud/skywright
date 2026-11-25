@@ -14,12 +14,12 @@ const CHUNK = 1000; // m: buildings are merged per 1 km cell (one draw call each
 const VIEW = { low: 4500, medium: 8000, high: 14000 };
 // kind codes from the bake: 0 house, 1 apartments, 2 farm / barn / shed, 3 church, 4 industrial / commercial, 5 hotel, 6 public
 const WALLS = { plaster: [0xf2ece0, 0xe8dcc4, 0xefe2c8, 0xdcd0b8, 0xe6dccc, 0xd8d4c8, 0xf0e8d8], wood: [0xffffff, 0xf0e0c8, 0xd8b898, 0xc8a080] }; // tints over the photo atlas (buildings.js)
-const ROOFS = { tile: [0x7a5444, 0x6e4a3c, 0x845a48, 0x664436, 0x8a6250], grey: [0x6a6c70, 0x5a5c62, 0x7a7266, 0x666058], shingle: [0x8a8070, 0x7a7266, 0x6e665a, 0x948a78] };
+const ROOFS = { tile: [0x7a5444, 0x6e4a3c, 0x845a48, 0x664436, 0x8a6250], grey: [0x6a6c70, 0x5a5c62, 0x7a7266, 0x666058], shingle: [0x6e6254, 0x5e544a, 0x7a6c5c, 0x645c54, 0x84786a] }; // (shingles weathered dark: grey-brown)
 // loc.osmStyle 'tropical' (Bora Bora): painted plaster and timber houses under corrugated metal, pandanus thatch on the
 // resorts, and overwater bungalows (kind 7, or any building standing in the lagoon) on stilts with their piers
 const TROPIC = {
   walls: [0xf6f2e8, 0xf2ead6, 0xe6efe2, 0xf4dcc8, 0xd8eaee, 0xf6e6b8, 0xffffff, 0xe8d8c0], wood: [0xfff0dc, 0xf4e0c4, 0xffffff, 0xe8d0b0], // (over the light timber cell: pale to honey)
-  metal: [0xa8442e, 0x8e3a2a, 0x3f6e52, 0x3d5f86, 0xc8c8c4, 0xb8b4aa, 0x5a7a8a, 0x7a2e2a], thatch: [0xffe2a8, 0xf4d398, 0xffeabc, 0xe8c890],
+  metal: [0xa8442e, 0x8e3a2a, 0x3f6e52, 0x3d5f86, 0xc8c8c4, 0xb8b4aa, 0x5a7a8a, 0x7a2e2a], thatch: [0xc8b494, 0xb8a282, 0xd8c49e, 0xa8947a, 0xe6cc96], // (pandanus weathers grey-brown: from the air the resorts' roofs are taupe, a fresh one golden)
 };
 const DECK = 1.7; // m above the water: bungalow floors and pier decks
 // loc.osmStyle 'rustic' (the Grand Canyon): log and stucco tints, low metal roofs in park green and brown
@@ -117,7 +117,7 @@ export class RealScenery {
       if (roof === 1 && rsTag < 0 && boxy && (alpine ? (kind === 1 || kind === 5 || kind === 6 ? pick < 0.4 : kind === 0 && A > 140 && pick < 0.15) : trop && (wet || kind === 5) && A < 500)) roof = 2;
       if ((roof === 1 || roof === 2) && !boxy) roof = 5;
       const steep = trop && (wet || kind === 5); // thatched resort roofs
-      const pitch = kind === 3 ? 1.1 : steep ? 0.95 : kind === 2 ? 0.5 : rustic ? 0.33 : trop ? 0.38 : 0.58;
+      let pitch = kind === 3 ? 1.1 : steep ? 0.95 : kind === 2 ? 0.5 : rustic ? 0.33 : trop ? 0.38 : 0.58;
       // ---- walls: tagged height, from levels, or by kind and size (Bora Bora's houses and the canyon's cabins one storey)
       let rise, walls, eave;
       const heights = () => { // (from the box's width: again if a setback cut it)
@@ -141,7 +141,7 @@ export class RealScenery {
         const timber = wet || (thatch && r() < 0.6) || r() < 0.15;
         wallCell = kind === 3 ? C.CHURCH_WIN : timber ? C.TIMBER_WIN : kind === 4 ? C.CONCRETE : small ? C.PLAIN : [C.WIN, C.WIN, C.CLAP_WIN][(r() * 3) | 0];
         wallCol = kind === 3 ? 0xf6f4ee : timber ? TROPIC.wood[(r() * TROPIC.wood.length) | 0] : TROPIC.walls[(r() * TROPIC.walls.length) | 0];
-        roofCell = thatch ? C.THATCH : C.SEAM; roofC = thatch ? TROPIC.thatch[(r() * 4) | 0] : TROPIC.metal[(r() * TROPIC.metal.length) | 0];
+        roofCell = thatch ? C.THATCH : C.SEAM; roofC = thatch ? TROPIC.thatch[(r() * TROPIC.thatch.length) | 0] : TROPIC.metal[(r() * TROPIC.metal.length) | 0];
       } else if (rustic) {
         // the Grand Canyon: log cabins and stuccoed houses under low green or brown metal roofs; the park's lodges stone
         // below and logs above; the motels two storeys of rooms off an outdoor walkway
@@ -175,6 +175,31 @@ export class RealScenery {
         // (the clay photo tile is bright: half the tiled roofs get the weathered dark tile)
         roofCell = style === 'tile' ? (r() < 0.5 ? C.TILES : C.DARKTILE) : style === 'shingle' ? C.SHINGLE : kind === 4 ? C.SEAM : C.SLATE;
       }
+      // ---- a chalet's roof (traced from the Grindelwald, Wengen and Lauterbrunnen photos): low, about 23 degrees, over wide
+      // eaves, and wider still at the gable, which faces the valley: the ridge runs down the slope (on the level: the
+      // gable to the street). Weathered dark shingles; on the barns and the old huts up high, laid shingles weighted with
+      // stones on poles. (Its own draws: the rest of the building's sequence, and every other building, keep their looks)
+      let overZ = null, across = false;
+      const orient = () => { // (the ridge along u: swapped onto n when the gable should face that way)
+        if (!(alpine && chalet && (roof === 1 || roof === 5)) || hl > hw * 1.7) return;
+        const d = hl + 6, e = hw + 6, gs = (x, z) => W.real.height(x, z); // (the survey's heights: the same at every tier)
+        const gu = (gs(ox + ux * d, oz + uz * d) - gs(ox - ux * d, oz - uz * d)) / (2 * d), gn = (gs(ox - uz * e, oz + ux * e) - gs(ox + uz * e, oz - ux * e)) / (2 * e);
+        if (Math.hypot(gu, gn) > 0.05) across = Math.abs(gn) > Math.abs(gu);
+        else { // level: whichever way the walls on a street face
+          const sw = streetWalls(roads, P, 8); let su = 0, sn = 0;
+          for (let k = 0; k < P.length; k++) if (sw[k]) { const a = P[k], c = P[(k + 1) % P.length], ex = c[0] - a[0], ez = c[1] - a[1]; su += Math.abs(ex * ux + ez * uz); sn += Math.abs(-ex * uz + ez * ux); }
+          across = su > sn * 1.2;
+        }
+        if (across) { [ux, uz] = [-uz, ux]; [hl, hw] = [hw, hl]; }
+      };
+      if (trop && roofCell === C.THATCH && roof !== 0) { pitch = 0.95; heights(); } // (thatch is steep, on a house too)
+      if (alpine && chalet && roof !== 0 && roof !== 3) {
+        const rc = buildingRng(seed0 + 23, cx, cz);
+        pitch = kind === 2 ? 0.45 : 0.42;
+        orient(); heights();
+        overZ = Math.min(2.1, 1.4 + hw * 0.08);
+        if ((kind === 2 && rc() < 0.3) || (hAbs > 1000 && rc() < 0.1)) roofCell = C.ROOF_STONES;
+      }
       const endCell = END[tierCells(wallCell)[1]] ?? C.PLAIN; // gable ends: the upper floors' wall without windows
       const seed = (r() * 255) | 0, extra = r(); // (extra: which end a steeple stands at; whether a chalet has a balcony)
       // set back from the roads (setback.js): cut back off the tarmac and verge, or left out where the road runs through
@@ -183,7 +208,7 @@ export class RealScenery {
       const ts = performance.now(), sb = setBack(roads, P, A0 >= MAJOR.area || hTag >= MAJOR.height || lv >= 8, roof === 1 || roof === 2); this.setbacks.ms += performance.now() - ts;
       if (sb.through) this.setbacks.through++;
       if (sb.drop) { this.setbacks.dropped++; continue; }
-      if (sb.cut) { this.setbacks.cut++; P = sb.P; [cx, cz, area] = ring(); ({ ox, oz, ux, uz, hl, hw } = obb() || O0); heights(); }
+      if (sb.cut) { this.setbacks.cut++; P = sb.P; [cx, cz, area] = ring(); ({ ox, oz, ux, uz, hl, hw } = obb() || O0); if (overZ != null) orient(); heights(); }
       const n = P.length;
       // the collision box: the footprint's, kept off the road (setback.js fitBox: a box reaches over the tarmac where the
       // walls don't, past a cut-off corner or an L's yard); a box roof over that box would overhang the road too: a gable
@@ -215,9 +240,11 @@ export class RealScenery {
       const yaw = porch && side < 0 ? yaw0 + Math.PI : yaw0; // (the gable's -x side is the porch side)
       if (roof === 1 || roof === 2) {
         B.setFrame(ox, base, oz, yaw);
-        const over = kind === 4 ? 0.3 : chalet ? 1.1 : 0.6, deep = porch ? (motel ? 2.3 : 2.6) : over;
-        if (roof === 1) B.gable(hw * 2, hl * 2, eave, rise, over, roofCell, roofC, endCell, wallCol, { under: chalet ? C.WOOD : null, overN: deep });
-        else B.hip(hw * 2, hl * 2, eave, rise, over, roofCell, roofC);
+        // (thatch: a deep eave, and its edge and underside thatch too, thick and with no gutter)
+        const thatch = roofCell === C.THATCH, over = kind === 4 ? 0.3 : chalet ? 1.2 : thatch ? 1.0 : 0.6, deep = porch ? (motel ? 2.3 : 2.6) : over;
+        const edge = thatch ? { trim: C.THATCH, trimCol: new THREE.Color(roofC).multiplyScalar(0.72).getHex(), th: 0.4, gutter: false } : chalet ? { trim: C.WOOD, trimCol: 0x6a5038, th: 0.3 } : {}; // (a chalet's fascia and barge boards: dark timber, not white)
+        if (roof === 1) B.gable(hw * 2, hl * 2, eave, rise, over, roofCell, roofC, endCell, wallCol, { under: chalet ? C.WOOD : null, overN: deep, overZ: overZ ?? over, ...edge });
+        else B.hip(hw * 2, hl * 2, eave, rise, over, roofCell, roofC, edge);
         if (porch) this.porch(B, hw, hl, eave, rise, deep, motel);
         // a chalet's balcony: across the gable end facing downhill, on top of the masonry ground floor (the carved railing)
         if (chalet && roof === 1 && wallCell === TIER.CHALET && hw > 2.5 && extra < 0.6) {
@@ -248,7 +275,7 @@ export class RealScenery {
       if (!this.grid.has(key)) this.grid.set(key, []);
       const e = [cx, base, cz, eave + rise, Math.sqrt(Math.abs(area) / Math.PI)];
       e.solid = true; e.fp = P; if (sb.through) e.through = true; e.dk = 'r' + this.count; e.rng = [[B, n0, B.n - n0]]; e.ob = cb || { x: ox, z: oz, ux, uz, hl, hw }; // destructible (destruction.js)
-      e.kind = kind; e.roof = roof; e.rect = rect; e.walls = walls; e.tagged = hTag > 0 || lv > 0; e.porch = porch || walkK >= 0; e.steeple = steeple; e.wet = wet; // (what it was built as: tools/test/bldcheck.js)
+      e.kind = kind; e.roof = roof; e.rect = rect; e.walls = walls; e.chalet = chalet; e.pitch = roof === 0 ? 0 : rise / Math.max(0.1, hw); e.rise = rise; e.ridge = [ux, uz]; e.overMax = Math.hypot(chalet ? 1.2 : 0.6, overZ ?? (chalet ? 1.2 : 0.6)); e.stones = roofCell === C.ROOF_STONES; e.tagged = hTag > 0 || lv > 0; e.porch = porch || walkK >= 0; e.steeple = steeple; e.wet = wet; // (what it was built as: tools/test/bldcheck.js)
       this.grid.get(key).push(e);
       this.count++;
     }
