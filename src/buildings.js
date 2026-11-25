@@ -15,22 +15,19 @@ export const C = {
   ADOBE_WIN: 8, ADOBE: 9, ADOBE_DOOR: 10, APT: 11, SHOP: 12, GLASS: 13, BALCONY: 14, BOARDS: 15,
   METAL: 16, HANGAR_DOOR: 17, TILES: 18, SLATE: 19, SEAM: 20, GRAVEL: 21, SHINGLE: 22, BRICK: 23,
   DARKWOOD: 24, CONCRETE: 25, CHURCH_WIN: 26, GARAGE: 27, THATCH: 28, LOG: 29, STONE: 30, BRICK_WIN: 31,
-  CLAP: 32, CLAP_WIN: 33, LAWN: 34, COBBLE: 35, PAVERS: 36, ASPHALT: 37, DARKTILE: 38, WIN_TALL: 39,
-  WOOD_WIN2: 40, SHOP2: 41, ADOBE_WIN2: 42, SHUTTERED: 43, TIMBER_WIN: 44, MASONRY_WIN: 45, RAIL_WOOD: 46, RAIL_IRON: 47,
-  LOG_WIN: 48, TRIM: 49, NEON: 50, MOTEL_DOOR: 51, SHOP3: 52, CLAP_DOOR: 53, WOOD_DOOR: 54, PARKING: 55,
+  CLAP: 32, CLAP_WIN: 33, SHOPFRONT: 34, COBBLE: 35, PAVERS: 36, ASPHALT: 37, DARKTILE: 38, WIN_TALL: 39,
+  WOOD_WIN2: 40, SHOP2: 41, ADOBE_WIN2: 42, SHOP_DOOR: 43, TIMBER_WIN: 44, MASONRY_WIN: 45, RAIL_WOOD: 46, RAIL_IRON: 47,
+  LOG_WIN: 48, TRIM: 49, RUST: 50, MOTEL_DOOR: 51, RUST_DOOR: 52, CLAP_DOOR: 53, WOOD_DOOR: 54, MASONRY_DOOR: 55,
   SHOP_N: 56, SHOP2_N: 57, SHOP3_N: 58, // shop fronts without the name board (all but one bay of a shop)
   LIME: 59, LIME_WIN: 60, BROWN_WIN: 61, // smooth cut stone (ashlar), tinted: limestone / brownstone, tall windows with lintels
   ROOF_TAR: 62, ROOF_GRAVEL: 63, // flat roofs: the tint decides the colour (the ground cells keep most of the photo's)
   // (LOG / LOG_WIN: round logs, Grand Canyon cabins and lodges; TIMBER_WIN: light timber, no flower box (Bora Bora);
   // MASONRY_WIN: a chalet's whitewashed ground floor; MOTEL_DOOR: a motel room's door and window off its walkway)
+  // ground floors (facade programs below): SHOPFRONT / SHOP_DOOR a New York storefront's display window / its door
+  // (frame and fascia take the shop's colour); RUST / RUST_DOOR a rusticated stone base, a barred window / the entrance;
+  // MASONRY_DOOR a chalet's door in its whitewashed ground floor
 };
-// Two-tier walls: a wall quad written with one of these ids (past the 64 atlas cells) shows its ground floor (the first
-// 3 m above its frame's base) in the first cell and every floor above in the second, chosen in the shader: a chalet's
-// masonry ground floor under its timber, a lodge's stone base under its logs, for no extra vertices
-export const TIER = { CHALET: 64, LODGE: 65 };
-const TIERS = { [TIER.CHALET]: [C.MASONRY_WIN, C.WOOD_WIN], [TIER.LODGE]: [C.STONE_WIN, C.LOG_WIN] };
-export const tierCells = (cell) => TIERS[cell] ?? [cell, cell]; // [ground floor, upper floors]
-const SIGNLESS = { [C.SHOP]: C.SHOP_N, [C.SHOP2]: C.SHOP2_N, [C.SHOP3]: C.SHOP3_N };
+const SIGNLESS = { [C.SHOP]: C.SHOP_N, [C.SHOP2]: C.SHOP2_N };
 const COLS = 8, ROWS = 8, NCELL = COLS * ROWS, PAD = 1 / 16; // PAD: gutter per side, fraction of a slot
 // photo materials in tex/towns/mat_*.jpg (5 x 4 tiles of 512 px, each 3 m square; see tools/towns/bake_materials.py)
 const MAT = { plaster: 0, stucco: 1, chalet: 2, clap: 3, barn: 4, timber: 5, brick: 6, stone: 7, clay: 8, slate: 9, darktile: 10, metal: 11, thatch: 12, cobble: 13, pavers: 14, gravel: 15, asphalt: 16, lawn: 17, concrete: 18, ashlar: 19 };
@@ -42,17 +39,57 @@ export const MAT_FILES = ['tex/towns/mat_color.jpg', 'tex/towns/mat_normal.jpg',
 // kind: 0 home, 1 shop, 2 stained glass (no room, glows), 3 neon sign (glows), 4 office.
 const WIN = {};
 const winCell = (cell, x, y, w, h, rec = 0.05, room = 1.3, kind = 0, sill = true) => { WIN[cell] = { r: [x / 128, 1 - (y + h) / 128, (x + w) / 128, 1 - y / 128], rec, room, kind, sill }; };
-winCell(C.WIN_GREEN, 41, 27, 46, 62); winCell(C.WIN_BLUE, 41, 27, 46, 62); winCell(C.WIN, 41, 27, 46, 62); winCell(C.SHUTTERED, 41, 27, 46, 62, 0.04, 1.2);
+winCell(C.WIN_GREEN, 41, 27, 46, 62); winCell(C.WIN_BLUE, 41, 27, 46, 62); winCell(C.WIN, 41, 27, 46, 62);
 winCell(C.WOOD_WIN, 39, 23, 50, 58, 0.06, 1.3, 0, false); winCell(C.TIMBER_WIN, 41, 27, 46, 54, 0.06, 1.3, 0, false); winCell(C.LOG_WIN, 41, 29, 46, 50, 0.1, 1.3, 0, false);
 winCell(C.MASONRY_WIN, 47, 35, 34, 42, 0.14, 1.2); winCell(C.MOTEL_DOOR, 67, 37, 46, 42, 0.05, 1.3); winCell(C.WOOD_WIN2, 22, 30, 84, 46, 0.06, 1.3, 0, false); winCell(C.STONE_WIN, 45, 37, 38, 46, 0.12);
 winCell(C.ADOBE_WIN, 46, 40, 36, 44, 0.13); winCell(C.ADOBE_WIN2, 40, 30, 48, 56, 0.12, 1.2);
 winCell(C.APT, 25, 21, 78, 76, 0.05, 1.4); winCell(C.BRICK_WIN, 33, 25, 62, 68, 0.07); winCell(C.CLAP_WIN, 43, 25, 42, 64, 0.04);
 winCell(C.WIN_TALL, 44, 14, 40, 96, 0.05, 1.4); winCell(C.LIME_WIN, 43, 15, 42, 88, 0.09, 1.4); winCell(C.BROWN_WIN, 44, 19, 40, 84, 0.1, 1.3);
-for (const c of [C.SHOP, C.SHOP2, C.SHOP_N, C.SHOP2_N]) winCell(c, 8, 48, 74, 80, 0.04, 1.6, 1); for (const c of [C.SHOP3, C.SHOP3_N]) winCell(c, 6, 46, 116, 82, 0.03, 1.8, 1);
+for (const c of [C.SHOP, C.SHOP2, C.SHOP_N, C.SHOP2_N]) winCell(c, 8, 48, 74, 80, 0.04, 1.6, 1); winCell(C.SHOP3_N, 6, 46, 116, 82, 0.03, 1.8, 1);
+winCell(C.SHOPFRONT, 8, 44, 112, 58, 0.04, 1.8, 1); winCell(C.SHOP_DOOR, 49, 46, 30, 72, 0.16, 1.6, 1); winCell(C.RUST, 46, 38, 36, 52, 0.14, 1.2); winCell(C.RUST_DOOR, 49, 30, 30, 24, 0.14, 1.0);
 winCell(C.GLASS, 0, 16, 128, 112, 0.0, 1.8, 4); winCell(C.BALCONY, 23, 11, 82, 96, 0.06, 1.5);
-winCell(C.DOOR, 46, 34, 36, 24, 0.08, 1.0); winCell(C.CHURCH_WIN, 44, 20, 40, 100, 0.08, 1, 2); winCell(C.NEON, 0, 0, 128, 128, 0, 1, 3);
+winCell(C.DOOR, 46, 34, 36, 24, 0.08, 1.0); winCell(C.CHURCH_WIN, 44, 20, 40, 100, 0.08, 1, 2);
 winCell(C.HANGAR_DOOR, 8, 20, 112, 18, 0.02, 2.5, 4);
-export const WINDOW_RECTS = WIN; // { cell: { r: [u0, v0, u1, v1], ... } } for geometry (sills) and other modules
+export const WINDOW_RECTS = WIN;
+
+// ---------------- facade programs ----------------
+// A wall quad written with a program id (past the 64 atlas cells) is drawn as a whole facade, picked in the shader from
+// the fragment's height above the building's floor (atl.z) and its bay (u): no extra vertices for any of it.
+//  - the ground floor, its first gH metres: its own cell stretched over that height (or metric: a plinth); a door
+//    cell in bay 0 (the writer puts bay 0 where the door goes: -u0), another every `every` bays (shops)
+//  - a string course / storefront cornice, band metres above it: a moulded band (the shader shades its profile)
+//  - the upper floors: `upper`
+//  - the top: past floor line atl.w (the eave, in the wall's v: floors), the parapet (the walls go on up past the
+//    flat roof): a moulded cornice there, or plain coping
+// Each program is 4 texels of FAC_TEX (row = id): [upper, ground, door, door2] [gH * 20, band * 80, every, flags]
+// [band colour, band cell] [ground colour, parapet cell] (colours: linear bytes, as given). flags: 1 the ground cell is metric (a plinth: 3 m tiles),
+// 2 the ground takes a shop colour (per shop: three bays), 4 the ground takes its own colour, 8 the band and cornice
+// take their own colour (else the building's), 16 a moulded cornice at the top (else plain), 32 the door is the whole
+// first floor's bay 0 (v 0..1), over any plinth (gH: a plinth, not a floor)
+const NFAC = 256, FAC_DATA = new Uint8Array(4 * NFAC * 4), FAC = new Map(), FAC_SPEC = [];
+export const FAC_TEX = new THREE.DataTexture(FAC_DATA, 4, NFAC, THREE.RGBAFormat, THREE.UnsignedByteType);
+FAC_TEX.needsUpdate = true;
+export function facade({ upper, ground = upper, gH = 0, door = -1, door2 = -1, every = 0, band = 0, bandCell = C.LIME, bandCol = null, groundCol = null, shop = false, metric = false, doorUp = false, top = -1, cornice = false }) {
+  const key = [upper, ground, gH, door, door2, every, band, bandCell, bandCol, groundCol, shop, metric, doorUp, top, cornice].join();
+  let id = FAC.get(key); if (id != null) return id;
+  id = NCELL + FAC.size; if (id >= NFAC) throw new Error('facade programs: table full');
+  FAC.set(key, id); FAC_SPEC[id] = { upper, ground, gH, door, door2, every, band, top, cornice };
+  const o = id * 16, D = FAC_DATA, lin = (h, k) => { h = h ?? 0xffffff; D[k] = (h >> 16) & 255; D[k + 1] = (h >> 8) & 255; D[k + 2] = h & 255; }; // (colours as stored: linear, like MeshW's)
+  D[o] = upper; D[o + 1] = gH > 0 ? ground : upper; D[o + 2] = door < 0 ? 255 : door; D[o + 3] = door2 < 0 ? 255 : door2;
+  D[o + 4] = Math.round(gH * 20); D[o + 5] = Math.round(band * 80); D[o + 6] = every;
+  D[o + 7] = (metric ? 1 : 0) | (shop ? 2 : 0) | (groundCol != null ? 4 : 0) | (bandCol != null ? 8 : 0) | (cornice ? 16 : 0) | (doorUp ? 32 : 0);
+  lin(bandCol, o + 8); D[o + 11] = bandCell; lin(groundCol, o + 12); D[o + 15] = top < 0 ? upper : top;
+  FAC_TEX.needsUpdate = true;
+  return id;
+}
+export const facadeSpec = (id) => FAC_SPEC[id] ?? null;
+export const linHex = (h) => { _lc.set(h); return (Math.round(_lc.r * 255) << 16) | (Math.round(_lc.g * 255) << 8) | Math.round(_lc.b * 255); }; // (an sRGB colour as the linear bytes a facade takes, like Builder's vertex colours)
+const _lc = new THREE.Color();
+// a wall id's [ground floor, upper floors] cells (an atlas cell: itself twice)
+export const tierCells = (cell) => { const f = FAC_SPEC[cell]; return f ? [f.gH > 0 ? f.ground : f.upper, f.upper] : [cell, cell]; };
+// Two-tier walls (the first programs): a chalet's masonry ground floor under its timber, a lodge's stone base under its logs
+export const TIER = { CHALET: facade({ upper: C.WOOD_WIN, ground: C.MASONRY_WIN, gH: 2.8 }), LODGE: facade({ upper: C.LOG_WIN, ground: C.STONE_WIN, gH: 3 }) };
+ // { cell: { r: [u0, v0, u1, v1], ... } } for geometry (sills) and other modules
 
 // ---------------- texture atlas ----------------
 let matImgs = null, matReady = null;
@@ -175,7 +212,6 @@ function paintAtlas(CELL, photo) {
   // ---- walls ----
   at(C.PLAIN); base(MAT.plaster, 1); done();
   for (const [cell, sh] of [[C.WIN_GREEN, '#3f6a3c'], [C.WIN_BLUE, '#2f6fa8'], [C.WIN, null]]) { at(cell); base(MAT.plaster, 1); window_(44, 30, 40, 56); if (sh) shutters(44, 30, 40, 56, sh); done(); }
-  at(C.SHUTTERED); base(MAT.plaster, 1); window_(44, 30, 40, 56); louvres(44, 27, 20, 62, '#4a7a46', 150); louvres(64, 27, 20, 62, '#4a7a46', 150); done();
   at(C.WIN_TALL); base(MAT.plaster, 1); window_(47, 17, 34, 90, { transom: 0.22 }); shutters(47, 17, 34, 90, '#4f7f9a'); P(40, 104, 48, 3, '#2a2a2a', { z: 190, rough: 0.4 }); for (let k = 42; k < 88; k += 5) P(k, 90, 1.5, 15, '#2a2a2a', { z: 190, rough: 0.4 }); done();
   at(C.DOOR); base(MAT.plaster, 1); door(42, 26, 44, 102, '#6b4529'); P(36, 16, 56, 6, '#b8b4ac', { z: 170 }); done();
   // chalet timber: horizontal boards, window with flower box; a pair of small windows with red/white shutters
@@ -233,7 +269,39 @@ function paintAtlas(CELL, photo) {
   at(C.SHOP2); shopFront('#2e6b3f', '#f0ece0', '#1f3a2a', '#e8d8a0', 'BAKERY'); done();
   at(C.SHOP_N); shopFront('#c8283a', '#f6f0e6'); done();
   at(C.SHOP2_N); shopFront('#2e6b3f', '#f0ece0'); done();
-  for (const [cell, label] of [[C.SHOP3, 'MARKET'], [C.SHOP3_N, null]]) { at(cell); base(MAT.plaster, 1); P(0, 0, 128, 40, '#2a2a2c', { z: 150, rough: 0.4 }); if (label) sign(10, 8, 108, 22, '#1d4e89', '#ffffff', label); P(4, 44, 120, 84, '#55585c', { z: 150, rough: 0.4 }); glass(9, 49, 110, 79); for (let k = 9; k < 119; k += 27) P(k, 49, 2, 79, '#55585c', { z: 140 }); done(); }
+  { at(C.SHOP3_N); base(MAT.plaster, 1); P(0, 0, 128, 40, '#2a2a2c', { z: 150, rough: 0.4 }); P(4, 44, 120, 84, '#55585c', { z: 150, rough: 0.4 }); glass(9, 49, 110, 79); for (let k = 9; k < 119; k += 27) P(k, 49, 2, 79, '#55585c', { z: 140 }); done(); }
+  // ---- ground floors (facade programs: the floor's cell is stretched over its own height, gH) ----
+  // a New York storefront (traced from tenement shops in the Village and on Eighth Avenue): a sign fascia, a transom of
+  // small panes, the display window over a panelled bulkhead on a granite step, cast-iron piers either side. The frame,
+  // fascia and bulkhead take the shop's colour (tint); the piers are the building's stone.
+  const shopTop = () => {
+    P(0, 0, 128, 24, '#f0eeea', { tint: 1, z: 166, rough: 0.5 }); P(0, 0, 128, 3, '#fafaf8', { tint: 1, z: 174 }); P(0, 21, 128, 3, '#c4c2be', { tint: 1, z: 158 });
+    P(4, 24, 120, 20, '#e8e8e6', { tint: 1, z: 140, rough: 0.5 }); for (let x = 8; x < 120; x += 16) glass(x, 27, 13, 13); // transom
+  };
+  const pier = (x, w) => { P(x, 0, w, 128, '#d6d0c2', { z: 178, rough: 0.85 }); g.fillStyle = 'rgba(0,0,0,0.14)'; g.fillRect(x + w - 1, 24, 1, 104); };
+  const bulk = (x, w) => { P(x, 102, w, 18, '#e2e2e0', { tint: 1, z: 150, rough: 0.6 }); P(x + 3, 105, w - 6, 12, '#c8c8c6', { tint: 1, z: 140, rough: 0.6 }); P(x, 120, w, 8, '#4c4a48', { z: 150, rough: 0.7 }); };
+  at(C.SHOPFRONT); base(MAT.ashlar, 0.5); shopTop(); P(4, 42, 120, 60, '#e8e8e6', { tint: 1, z: 136, rough: 0.5 }); glass(8, 44, 112, 58); P(62, 44, 4, 58, '#e8e8e6', { tint: 1, z: 138, rough: 0.5 });
+  bulk(4, 120); pier(0, 4); pier(124, 4); done();
+  // its door: recessed between two narrow display windows, a glazed door with a kick plate
+  at(C.SHOP_DOOR); base(MAT.ashlar, 0.5); shopTop(); g.fillStyle = '#f6eed6'; g.font = 'bold 12px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('DELI & GROCERY', 64, 12.5, 112); // (the shop's name over its door) P(4, 42, 120, 86, '#e8e8e6', { tint: 1, z: 136, rough: 0.5 }); for (const x of [8, 88]) { glass(x, 44, 32, 58); bulk(x - 4, 40); }
+  P(44, 42, 40, 86, '#24221f', { z: 96, rough: 0.8 }); P(46, 44, 36, 84, '#e0e0de', { tint: 1, z: 104, rough: 0.45 }); glass(49, 46, 30, 72); P(49, 118, 30, 8, '#a8a8a4', { z: 106, rough: 0.3 });
+  P(76, 80, 2, 10, '#d8d4c8', { z: 112, rough: 0.3 }); pier(0, 4); pier(124, 4); done();
+  // a rusticated stone base (Striver's Row, the pre-war apartment houses, a brownstone's raised basement): deep
+  // horizontal channels, a flat lintel with a keystone over a barred window, a granite water table
+  const rust = () => {
+    base(MAT.ashlar, 1);
+    for (let y = 0, k = 0; y < 114; y += 19, k++) { P(0, y + 16, 128, 3, '#8a8680', { tint: 1, z: 112 }); Z(0, y + 15, 128, 1, 124); for (let x = (k & 1) * 21; x < 128; x += 42) { g.fillStyle = 'rgba(0,0,0,0.12)'; g.fillRect(x, y, 1, 16); } }
+    P(0, 114, 128, 14, '#9a9690', { tint: 0.5, z: 150, rough: 0.8 }); P(0, 114, 128, 2, '#c8c4bc', { tint: 0.5, z: 158 });
+  };
+  at(C.RUST); rust(); window_(46, 38, 36, 52, { frame: '#3a3632', cross: false, sill: '#e8e4dc' }); for (let x = 50; x < 82; x += 6) P(x, 38, 1.6, 52, '#1c1a18', { z: 122, rough: 0.5 });
+  P(40, 27, 48, 9, '#f4f2ee', { tint: 1, z: 172 }); P(59, 24, 10, 13, '#fbfaf8', { tint: 1, z: 180 }); done();
+  // the entrance: a panelled door with a glazed top between pilasters, under an entablature
+  at(C.RUST_DOOR); rust(); P(34, 12, 60, 9, '#f6f4f0', { tint: 1, z: 190 }); P(36, 21, 56, 3, '#d8d4cc', { tint: 1, z: 170 }); for (const x of [36, 86]) P(x, 24, 6, 90, '#efece6', { tint: 1, z: 168 });
+  door(46, 24, 36, 92, '#3a2a1e', { frame: '#2a2018' }); done();
+  // a chalet's door in its whitewashed ground floor: dark vertical planks, a stone surround, a lamp
+  at(C.MASONRY_DOOR); base(MAT.plaster, 0.12); P(38, 20, 52, 108, '#d2ccbe', { tint: 0.12, z: 150, rough: 0.8 }); P(44, 26, 40, 102, '#5a3c22', { z: 110, rough: 0.8 });
+  for (let x = 51; x < 84; x += 7) { g.fillStyle = 'rgba(0,0,0,0.3)'; g.fillRect(x, 26, 1, 102); } for (const y of [40, 104]) P(46, y, 30, 3, '#2a2a2a', { z: 116, rough: 0.5 });
+  P(78, 76, 3, 4, '#c8b070', { z: 140, rough: 0.3 }); P(94, 30, 6, 9, '#f0d890', { z: 170, rough: 0.3 }); done();
   // ---- industrial ----
   at(C.BOARDS); base(MAT.barn, 0.55); done();
   at(C.METAL); base(MAT.metal, 0.9); done();
@@ -251,11 +319,9 @@ function paintAtlas(CELL, photo) {
   at(C.SHINGLE); P(0, 0, 128, 128, '#5a4030', { tint: 0.5, rough: 0.95 }); for (let y = 0; y < 128; y += 10) for (let x = R() * 8 - 8; x < 128; x += 7 + R() * 6) { const v = R(); P(x, y, 6 + R() * 4, 9, `rgb(${96 + v * 50 | 0},${68 + v * 38 | 0},${48 + v * 28 | 0})`, { tint: 0.5, rough: 0.95, z: 128 + (y % 20) }); g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(x, y + 8, 7, 1.5); } done();
   // ---- ground ----
   at(C.GRAVEL); base(MAT.gravel, 0.7); done();
-  at(C.LAWN); base(MAT.lawn, 1); g.save(); g.globalAlpha = 0.035; g.fillStyle = '#ffffff'; g.fillRect(0, 0, 128, 64); g.restore(); done(); // mowing stripes
   at(C.COBBLE); base(MAT.cobble, 0.3); done();
   at(C.PAVERS); base(MAT.pavers, 0.5); done();
   at(C.ASPHALT); base(MAT.asphalt, 0.3); done();
-  at(C.PARKING); base(MAT.asphalt, 0.3); P(0, 0, 3, 128, '#e8e8e2', { rough: 0.6 }); P(125, 0, 3, 128, '#e8e8e2', { rough: 0.6 }); done();
   // ---- special ----
   at(C.CHURCH_WIN); base(MAT.plaster, 1);
   g.fillStyle = '#e8e4dc'; h.fillStyle = hz(150); for (const c of [g, h]) { c.beginPath(); c.moveTo(40, 124); c.lineTo(40, 40); c.arc(64, 40, 24, Math.PI, 0); c.lineTo(88, 124); c.fill(); }
@@ -263,10 +329,6 @@ function paintAtlas(CELL, photo) {
   for (let k = 0; k < 13; k++) { const y = 22 + k * 8; P(48, Math.max(y, 26), 32, 8, k % 2 ? '#8c9a98' : '#7e8c8c', { win: 1, rough: 0.1, z: 110 }); }
   g.fillStyle = 'rgba(40,44,44,0.7)'; for (let y = 30; y < 120; y += 8) g.fillRect(48, y, 32, 1); for (const x of [55, 72]) g.fillRect(x, 26, 1, 94);
   g.fillStyle = '#e8e4dc'; g.fillRect(63, 22, 2, 98); done();
-  at(C.NEON); P(0, 0, 128, 128, '#1a1a1e', { rough: 0.4 }); g.font = 'bold 30px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillStyle = '#ff3a5a'; g.fillText('MOTEL', 64, 40); d.fillStyle = dat(1, 0, 0.3); d.font = g.font; d.textAlign = 'center'; d.textBaseline = 'middle'; d.fillText('MOTEL', 64, 40);
-  g.fillStyle = '#40e0ff'; g.font = 'bold 20px Georgia, serif'; g.fillText('VACANCY', 64, 86); d.font = g.font; d.fillText('VACANCY', 64, 86);
-  g.strokeStyle = '#f0c040'; g.lineWidth = 3; g.strokeRect(6, 6, 116, 116); d.strokeStyle = dat(1, 0, 0.3); d.lineWidth = 3; d.strokeRect(6, 6, 116, 116); done();
   // balcony railings with cut-outs (alpha): carved chalet boards, wrought iron
   at(C.RAIL_WOOD); base(MAT.timber, 0.4); P(0, 0, 128, 10, '#4a3020', { z: 160 }); P(0, 118, 128, 10, '#4a3020', { z: 160 });
   for (let k = 0; k < 8; k++) { const cx = 8 + k * 16; for (const c of [g, h]) { c.save(); c.globalCompositeOperation = c === g ? 'destination-out' : 'source-over'; if (c === h) c.fillStyle = hz(90); c.beginPath(); c.ellipse(cx, 52, 3.2, 10, 0, 0, 7); c.moveTo(cx + 4, 80); c.arc(cx, 80, 4, 0, 7); c.moveTo(cx + 2, 98); c.ellipse(cx, 98, 2, 6, 0, 0, 7); c.fill(); c.restore(); } }
@@ -363,14 +425,14 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
   const mat = new THREE.MeshStandardMaterial({ map: A.map, normalMap: A.nrm, vertexColors: true, roughness: 1, metalness: 0, emissive: 0xffffff, emissiveIntensity: 0, alphaTest: ground ? 0 : 0.5 });
   if (ground) { mat.polygonOffset = true; mat.polygonOffsetFactor = -2; mat.polygonOffsetUnits = -6; }
   mat.normalScale.set(1, 1);
-  const U = { tData: { value: A.data }, uRect: { value: rectArr() }, uCP: { value: parArr() } };
+  const U = { tData: { value: A.data }, tFac: { value: FAC_TEX }, uRect: { value: rectArr() }, uCP: { value: parArr() } };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, U, BLD_U, DMG.U);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 atl; varying vec4 vAtl; varying vec3 vWP; ' + DMG_VERT_HEAD)
       .replace('#include <uv_vertex>', '#include <uv_vertex>\nvAtl = atl; vWP = (modelMatrix * vec4(position, 1.0)).xyz; ' + DMG_VERT)
       .replace('#include <fog_vertex>', '#include <fog_vertex>\n' + DMG_VERT_KILL);
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-      uniform sampler2D tData; uniform vec4 uRect[${NCELL}]; uniform vec4 uCP[${NCELL}]; uniform float uDay;
+      uniform sampler2D tData; uniform highp sampler2D tFac; uniform vec4 uRect[${NCELL}]; uniform vec4 uCP[${NCELL}]; uniform float uDay;
       varying vec4 vAtl; varying vec3 vWP; ${DMG_FRAG_HEAD}
       #define vDmgP vWP
       float bh1(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -381,16 +443,48 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
       vec3 roomPal(float h) { return h < 0.25 ? vec3(0.86, 0.82, 0.74) : h < 0.45 ? vec3(0.92, 0.9, 0.86) : h < 0.6 ? vec3(0.72, 0.78, 0.8) : h < 0.75 ? vec3(0.8, 0.84, 0.72) : h < 0.88 ? vec3(0.88, 0.76, 0.7) : vec3(0.6, 0.64, 0.7); }
       vec3 fabric(float h) { return h < 0.3 ? vec3(0.9, 0.88, 0.8) : h < 0.5 ? vec3(0.62, 0.18, 0.16) : h < 0.65 ? vec3(0.2, 0.3, 0.5) : h < 0.8 ? vec3(0.85, 0.75, 0.5) : vec3(0.35, 0.45, 0.3); }
       vec3 bWinRad = vec3(0.0); float bGlass = 0.0; vec3 bJambN = vec3(0.0); float bJamb = 0.0;
+      // shopfront paint (linear): black, bottle green, oxblood, navy, cream, slate, teal, red
+      vec3 shopPal(float h) { return h < 0.2 ? vec3(0.03) : h < 0.34 ? vec3(0.03, 0.09, 0.05) : h < 0.46 ? vec3(0.2, 0.02, 0.025) : h < 0.58 ? vec3(0.02, 0.04, 0.12)
+        : h < 0.7 ? vec3(0.75, 0.68, 0.52) : h < 0.82 ? vec3(0.12, 0.13, 0.14) : h < 0.91 ? vec3(0.02, 0.14, 0.13) : vec3(0.45, 0.04, 0.03); }
       `)
       .replace('#include <map_fragment>', `
         ${DMG_FRAG}
-        float ci = floor(vAtl.x + 0.5);
-        if (ci > ${NCELL - 0.5}) ci = vMapUv.y < 1.0 ? (ci < ${TIER.LODGE - 0.5} ? ${TIERS[TIER.CHALET][0]}.0 : ${TIERS[TIER.LODGE][0]}.0) : (ci < ${TIER.LODGE - 0.5} ? ${TIERS[TIER.CHALET][1]}.0 : ${TIERS[TIER.LODGE][1]}.0); // two-tier walls (TIER)
+        float ci = floor(vAtl.x + 0.5), ly = vAtl.z / ${LYS}.0 - ${LY0}.0;
+        // ---- facade programs (FAC_TEX): which cell this fragment of the wall shows, and where in it
+        vec2 muv = vMapUv; vec3 bTint = vColor;
+        vec2 dUx = dFdx(vMapUv), dUy = dFdy(vMapUv), dLx = vec2(dUx.x, dFdx(ly)), dLy = vec2(dUy.x, dFdy(ly)); // (derivatives out here: the branches below only pick)
+        float fBand = -1.0, fTop = -1.0, fShade = 1.0, fCorn = 0.0, fAwn = 0.0; vec3 awnC = vec3(0.0);
+        if (ci > ${NCELL - 0.5}) {
+          int pid = int(ci);
+          vec4 f0 = floor(texelFetch(tFac, ivec2(0, pid), 0) * 255.0 + 0.5), f1 = floor(texelFetch(tFac, ivec2(1, pid), 0) * 255.0 + 0.5), f2 = texelFetch(tFac, ivec2(2, pid), 0), f3 = texelFetch(tFac, ivec2(3, pid), 0);
+          float gH = f1.x / 20.0, bH = f1.y / 80.0, b0 = floor(vMapUv.x); int fl = int(f1.w + 0.5);
+          vec3 shopC = shopPal(bh1(vec2(vAtl.y * 0.37 + ci, floor((b0 + 1.0) / 3.0))));
+          ci = f0.x;
+          bool door0 = b0 == 0.0 && f0.z < 254.5, door2 = f1.z > 0.5 && f0.w < 254.5 && mod(b0, f1.z) < 0.5;
+          if ((fl & 32) != 0 && door0 && vMapUv.y < 1.0) ci = f0.z; // (a door from the ground up through the first floor, over any plinth)
+          else if (ly < gH && gH > 0.0) { // the ground floor (gH 0: none; the wall below the floor too then)
+            float gs = (fl & 1) != 0 ? 1.0 / 3.0 : 1.0 / gH;
+            muv = vec2(vMapUv.x, max(ly, 0.0) * gs); dUx = dLx * vec2(1.0, gs); dUy = dLy * vec2(1.0, gs);
+            ci = f0.y;
+            if (door0) ci = f0.z; else if (door2) ci = f0.w;
+            if ((fl & 2) != 0) { // a shop: its colour; some have a striped awning over the window (over the transom)
+              bTint = shopC; float sk = floor((b0 + 1.0) / 3.0);
+              if (bh1(vec2(sk + 0.5, vAtl.y * 1.37 + 11.0)) < 0.45) { fAwn = 1.0; awnC = shopPal(bh1(vec2(sk, vAtl.y + 3.1))); }
+            } else if ((fl & 4) != 0) bTint = f3.rgb;
+            if (bH > 0.0) fShade = 1.0 - 0.4 * smoothstep(gH - 0.35, gH, ly); // in the band's shadow
+          }
+          if (bH > 0.0 && ly >= gH && ly < gH + bH) { fBand = (ly - gH) / bH; ci = floor(f2.w * 255.0 + 0.5); bTint = (fl & 8) != 0 ? f2.rgb : vColor; }
+          float tv = vMapUv.y - vAtl.w; // the top: floors past the eave
+          if (vAtl.w > 0.5 && tv > -0.12) {
+            if (tv < 0.0) { if ((fl & 16) != 0) fShade *= 1.0 - 0.45 * smoothstep(-0.12, 0.0, tv); }
+            else { ci = floor(f3.w * 255.0 + 0.5); fTop = tv; fCorn = float((fl & 16) != 0); if ((fl & 8) != 0) bTint = f2.rgb; }
+          }
+        }
         int ii = int(ci);
         vec2 cxy = vec2(mod(ci, ${COLS}.0), floor(ci / ${COLS}.0 + 0.01));
-        vec2 fu = fract(vMapUv), bay = floor(vMapUv);
+        vec2 fu = fract(muv), bay = floor(muv);
         const float CCF = ${(1 - 2 * PAD).toFixed(5)}, PADF = ${PAD.toFixed(5)};
-        vec2 gdx = dFdx(vMapUv) * vec2(CCF / ${COLS}.0, CCF / ${ROWS}.0), gdy = dFdy(vMapUv) * vec2(CCF / ${COLS}.0, CCF / ${ROWS}.0);
+        vec2 gdx = dUx * vec2(CCF / ${COLS}.0, CCF / ${ROWS}.0), gdy = dUy * vec2(CCF / ${COLS}.0, CCF / ${ROWS}.0);
         { // never sample coarser than the gutter can protect (the cell's own content stays >= 16 texels across)
           vec2 ts = vec2(textureSize(map, 0)); float gm = max(length(gdx * ts), length(gdy * ts)), lim = ts.x / ${COLS}.0 / 16.0;
           if (gm > lim) { gdx *= lim / gm; gdy *= lim / gm; } }
@@ -417,13 +511,23 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
         vec4 bTex = textureGrad(map, auv, gdx, gdy);
         vec4 bDat = textureGrad(tData, auv, gdx, gdy);
         float winM = bDat.r * (1.0 - step(0.5, bJamb));
-        float seed = vAtl.y, ly = vAtl.z / 8.0;
+        float seed = vAtl.y;
         diffuseColor.rgb *= bTex.rgb; diffuseColor.a *= bTex.a;
         // per building variation and weathering
         float wn = vn3(vWP * 0.35) * 0.6 + vn3(vWP * 1.7) * 0.4;
         `)
       .replace('#include <color_fragment>', `
-        diffuseColor.rgb *= mix(vec3(1.0), vColor, bDat.g);
+        diffuseColor.rgb *= mix(vec3(1.0), bTint, bDat.g);
+        // mouldings: a string course over the ground floor, a cornice along the top (its brackets and dentils), the
+        // shadows they cast on the wall below (their profile shades through the normal, below)
+        diffuseColor.rgb *= fShade;
+        float awnB = 0.0; // the awning: canvas stripes over the transom (rows 24..44 of a shop cell), its shadow on the window
+        if (fAwn > 0.5) { if (fu.y > 0.656 && fu.y < 0.82) { awnB = 1.0; winM = 0.0; diffuseColor.rgb = mix(awnC, vec3(0.8, 0.78, 0.72), step(0.5, fract(muv.x * 7.0))) * (0.85 + 0.15 * smoothstep(0.656, 0.7, fu.y)); } else if (fu.y > 0.5 && fu.y <= 0.656) diffuseColor.rgb *= 0.55 + 0.45 * smoothstep(0.5, 0.656, 0.5 + 0.656 - fu.y); }
+        if (fTop >= 0.0 && fCorn > 0.5) {
+          if (fTop < 0.06) diffuseColor.rgb *= 0.72 + 0.28 * step(0.5, fract(vMapUv.x * 12.0)); // dentils
+          else if (fTop < 0.2) diffuseColor.rgb *= 1.0 - 0.35 * step(fract(vMapUv.x * 4.0), 0.14); // brackets' shadowed sides
+          else if (fTop < 0.23) diffuseColor.rgb *= 0.55; // under the corona
+        }
         vec3 wN = normalize((vec4(Ng, 0.0) * viewMatrix).xyz);
         float wall = 1.0 - smoothstep(0.35, 0.7, abs(wN.y));
         float ground = smoothstep(0.85, 0.95, wN.y) * step(ly, 0.6);
@@ -444,7 +548,10 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
         mapN.xy *= normalScale;
         normal = normalize(mat3(Tt, Bt, normal) * mapN);
         if (bJamb > 0.0) normal = normalize(bJambN + Ng * 0.8);
-        if (winM > 0.5) normal = Ng;`)
+        if (winM > 0.5) normal = Ng;
+        if (awnB > 0.5) normal = normalize(Ng - Bt * 0.5); // (sloping out and down)
+        if (fBand >= 0.0) normal = normalize(normal + Bt * (fBand < 0.22 ? -1.3 : fBand > 0.78 ? 1.1 : 0.0)); // bed mould faces down, the wash up
+        if (fTop >= 0.0 && fCorn > 0.5) normal = normalize(normal + Bt * (fTop < 0.06 ? -0.8 : fTop < 0.2 ? 0.0 : fTop < 0.23 ? -1.4 : 0.9));`)
       .replace('#include <emissivemap_fragment>', `
         // ---- behind the glass ----
         float nightK = emissive.r * (1.0 - dmgDark); // a damaged building's power is out
@@ -512,15 +619,16 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
         totalEmissiveRadiance = rad * winM;`);
   };
   mat.defines = { ...(mat.defines || {}), ...(interiors ? { BLD_INTERIOR: '' } : {}), ...(glass ? { BLD_GLASS: '' } : {}) };
-  mat.customProgramCacheKey = () => 'bldg4' + (interiors ? 'i' : '') + (ground ? 'g' : '') + (glass ? 'q' : '');
+  mat.customProgramCacheKey = () => 'bldg5' + (interiors ? 'i' : '') + (ground ? 'g' : '') + (glass ? 'q' : '');
   return mat;
 }
 
 // ---------------- geometry builder ----------------
 const _c = new THREE.Color();
+export const LY0 = 4, LYS = 4; // atl.z holds the height above a building's floor, (h + LY0) * LYS: from LY0 m below it (walls go on down into the ground) to 60 m up
 const SILL_TOP = 10.5; // m: walls up to this high get window sills (detail)
 export class Builder {
-  constructor() { this.cap = 0; this.ni = 0; this.idx = new Uint32Array(1024); this.n = 0; this._grow(256); this.setFrame(0, 0, 0, 0); this.seed = 0; this.det = null; this.fine = 1; }
+  constructor() { this.cap = 0; this.ni = 0; this.idx = new Uint32Array(1024); this.n = 0; this._grow(256); this.setFrame(0, 0, 0, 0); this.seed = 0; this.det = null; this.fine = 1; this.lyOff = 0; } // (lyOff: atl.z's datum above the frame's base)
   // typed, growable vertex storage (a big town is ~1M vertices: plain JS arrays would cost hundreds of MB)
   _grow(need) {
     if (need <= this.cap) return;
@@ -534,7 +642,7 @@ export class Builder {
     this.pos[i * 3] = this.fx + p[0] * cs + p[2] * sn; this.pos[i * 3 + 1] = this.fy + p[1]; this.pos[i * 3 + 2] = this.fz - p[0] * sn + p[2] * cs;
     this.nor[i * 3] = Math.round((nx * cs + nz * sn) * 127); this.nor[i * 3 + 1] = Math.round(ny * 127); this.nor[i * 3 + 2] = Math.round((-nx * sn + nz * cs) * 127);
     this.uv[i * 2] = u; this.uv[i * 2 + 1] = v; this.col[i * 3] = cr; this.col[i * 3 + 1] = cg; this.col[i * 3 + 2] = cb;
-    this.atl[i * 4] = cell; this.atl[i * 4 + 1] = this.seed; this.atl[i * 4 + 2] = Math.max(0, Math.min(255, Math.round(p[1] * 8)));
+    this.atl[i * 4] = cell; this.atl[i * 4 + 1] = this.seed; this.atl[i * 4 + 2] = Math.max(0, Math.min(255, Math.round((p[1] - this.lyOff + LY0) * LYS))); // (height above the frame's base: LY0 below it to 60 m above, 1/4 m steps)
   }
   // quad p0..p3 counter-clockwise seen from the front (p0 bottom-left), uv given per corner
   quad(p0, p1, p2, p3, uvs, cell, col) { this._poly(p2 === p3 ? [p0, p1, p2] : [p0, p1, p2, p3], uvs, cell, col); }
@@ -575,15 +683,17 @@ export class Builder {
   // vertical wall from (ax,az) to (bx,bz) seen from outside; u = whole bays, v = floors. Window cells get sills (detail:
   // the det builder at fine > 2, on house-sized walls only, up to SILL_TOP. Not used yet: in a Swiss valley at High
   // they were +70% of the buildings' vertices, for a 14 cm ledge)
-  wall(ax, az, bx, bz, y0, y1, cell, col, bay = 3, fl = 3, u0 = 0) {
-    const L = Math.hypot(bx - ax, bz - az), nb = Math.max(1, Math.round(L / bay)), v0 = y0 / fl, v1 = y1 / fl;
+  // (yf: the floor datum, v = 0 there; u0: the first bay's number, a facade program's door goes in bay 0)
+  wall(ax, az, bx, bz, y0, y1, cell, col, bay = 3, fl = 3, u0 = 0, yf = 0) {
+    if (FAC_SPEC[cell]?.gH > 0 && y1 > 56 && y0 < 54) { this.wall(ax, az, bx, bz, y0, 55, cell, col, bay, fl, u0, yf); this.wall(ax, az, bx, bz, 55, y1, cell, col, bay, fl, u0, yf); return; } // (atl.z stops 60 m up: LY0)
+    const L = Math.hypot(bx - ax, bz - az), nb = Math.max(1, Math.round(L / bay)), v0 = (y0 - yf) / fl, v1 = (y1 - yf) / fl;
     this.quad([ax, y0, az], [bx, y0, bz], [bx, y1, bz], [ax, y1, az], [u0, v0, u0 + nb, v0, u0 + nb, v1, u0, v1], cell, col);
     const wr = WIN[cell], D = this.det;
     if (D && wr && wr.sill && wr.kind <= 1 && this.fine > 2 && L > 1 && y1 <= SILL_TOP) {
       const ux = (bx - ax) / L, uz = (bz - az) / L, nx = -uz, nz = ux, bw = L / nb, sx = D.sillCol ?? 0xd8d4cc;
       D.setFrame(this.fx, this.fy, this.fz, this.yaw); D.seed = this.seed;
-      for (let f = Math.ceil(v0 - wr.r[1] - 1e-3); (f + wr.r[3]) * fl <= y1 + 0.05; f++) {
-        const ys = (f + wr.r[1]) * fl; if (ys < y0 - 0.05 || ys < 0.3) continue;
+      for (let f = Math.ceil(v0 - wr.r[1] - 1e-3); (f + wr.r[3]) * fl + yf <= y1 + 0.05; f++) {
+        const ys = (f + wr.r[1]) * fl + yf; if (ys < y0 - 0.05 || ys < 0.3) continue;
         for (let j = 0; j < nb; j++) {
           const s0 = (j + wr.r[0]) * bw - 0.1, s1 = (j + wr.r[2]) * bw + 0.1, cx = ax + ux * (s0 + s1) / 2, cz = az + uz * (s0 + s1) / 2;
           // one sloped quad from the wall out over the facade (seen from the street and from above alike)

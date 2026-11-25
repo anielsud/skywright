@@ -113,6 +113,26 @@ export function segDist(s, P) {
   return { d: Math.sqrt(d2), t, cross: false };
 }
 
+// Which of a footprint's walls face a street (for their doors and shop fronts): wall k (P[k] -> P[k + 1]) does when a
+// road's clear zone (tarmac and pavement) comes within reach metres of its middle, out in front of it. (Either winding.)
+export function streetWalls(I, P, reach = 4) {
+  const n = P.length, out = new Array(n).fill(false);
+  if (!I.segs.length || n < 3) return out;
+  const S = near(I, P, reach), sg = area(P) > 0 ? 1 : -1;
+  if (!S.length) return out;
+  for (let k = 0; k < n; k++) {
+    const p = P[k], q = P[(k + 1) % n], ex = q[0] - p[0], ez = q[1] - p[1], L = hyp(ex, ez); if (L < 2) continue;
+    const mx = (p[0] + q[0]) / 2, mz = (p[1] + q[1]) / 2, ox = sg * ez / L, oz = -sg * ex / L; // (outward)
+    for (const s of S) {
+      const dx = s[2] - s[0], dz = s[3] - s[1], L2 = dx * dx + dz * dz || 1e-9;
+      let t = ((mx - s[0]) * dx + (mz - s[1]) * dz) / L2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const cx = s[0] + dx * t - mx, cz = s[1] + dz * t - mz, d = hyp(cx, cz);
+      if (d - s[4] < reach && cx * ox + cz * oz > 0.6 * d) { out[k] = true; break; }
+    }
+  }
+  return out;
+}
+
 // How deep a footprint reaches into the clear zones (tarmac + verge / pavement; no setback): the worst, in metres (0: clear)
 export function intrusion(I, P) {
   let worst = 0; if (!I.segs.length) return 0;
