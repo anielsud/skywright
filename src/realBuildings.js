@@ -3,7 +3,7 @@
 // buildings.js, gabled / hipped / flat roofs, Swiss chalet style up in the villages), railways, cable car lines,
 // mountain lakes and rivers above the World's water level. (Generated towns, towns.js, went with the generated valley.)
 import * as THREE from 'three';
-import { Builder, buildingMaterial, buildingDepthMaterial, C, TIER, tierCells, facade, linHex } from './buildings.js';
+import { Builder, buildingMaterial, buildingDepthMaterial, C, TIER, tierCells, facade, linHex, updateBuildingLights } from './buildings.js';
 import { toLocal } from './realworld.js';
 import { mulberry32, smoothstep } from './noise.js';
 import { CityScenery } from './realCity.js';
@@ -610,6 +610,7 @@ export class RealScenery {
     return null;
   }
   update(dt, t, fx, cam) {
+    updateBuildingLights(this.w, t || 0); // (the windows lit at this hour, the place's habits)
     if (this.river) this.river.material.normalMap.offset.y = -(t || 0) * 0.06; // flowing downstream
     if (cam && this.railChunks) for (const c of this.railChunks) c.m.visible = Math.hypot(c.x - cam.x, c.z - cam.z) - c.r < (c.steel ? this.railView.steel : this.railView.ballast);
     if (this.city) { this.city.update(dt, cam); this.landmarks.update(dt, cam); return; }

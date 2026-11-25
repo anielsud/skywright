@@ -58,19 +58,31 @@ const NOISE = /* glsl */`
 `;
 
 // The tarmac. region: 'ch' | 'us' | 'fr'.
-export function tarmacMaterial(region) {
+// Street lamps at night (world.js applyLighting: rLamp 0 by day, 1 with every lamp on): their pools of light on the
+// tarmac and the pavements, staggered either side of the road about every 28 m (New York's lamp posts, from the night
+// photos); far away the pools average into a lit line, so from the air a city's streets draw its grid. All of a
+// city's streets; elsewhere the village streets only, dimmer.
+export const ROAD_U = { rLamp: { value: 0 } };
+const POOL = `
+      float lampPool(float v, float x, float hw, float seed, float fv) {
+        float sp = 28.0, s = v + seed * 13.0, d = abs(mod(s, sp) - sp * 0.5), side = mod(floor(s / sp), 2.0) * 2.0 - 1.0;
+        float pool = exp(-d * d / 50.0) * (0.6 + 0.4 * smoothstep(-hw - 2.0, hw + 2.0, x * side));
+        return mix(pool, 0.33, smoothstep(0.15, 0.6, fv / sp));
+      }`;
+export function tarmacMaterial(region, { city = false } = {}) {
   const L = LOOK[region] || LOOK.ch;
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
   const U = { rD: { value: tex('asphalt_d', true) }, rN: { value: tex('asphalt_n') }, rTint: { value: new THREE.Color(...L.tint) }, rWear: { value: L.wear },
-    rLW: { value: L.lw }, rDash: { value: new THREE.Vector4(...L.dash) }, rYellow: { value: L.yellow ? 1 : 0 }, rRegion: { value: { ch: 0, us: 1, fr: 2 }[region] ?? 0 } };
+    rLW: { value: L.lw }, rDash: { value: new THREE.Vector4(...L.dash) }, rYellow: { value: L.yellow ? 1 : 0 }, rRegion: { value: { ch: 0, us: 1, fr: 2 }[region] ?? 0 },
+    rLit: { value: city ? 1 : region === 'ch' ? 0.35 : 0.12 }, rCity: { value: city ? 1 : 0 }, rLamp: ROAD_U.rLamp };
   mat.userData.U = U;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, U); // (FOG: the game's height fog, shaders.js installFog: a material with its own hook must add it)
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 rinfo; attribute vec4 rjunc; varying vec2 vR; varying vec3 vI; varying vec3 vWP; varying vec4 vJ;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvR = uv; vI = rinfo; vJ = rjunc; vWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-      varying vec2 vR; varying vec3 vI; varying vec3 vWP; varying vec4 vJ; uniform float rRegion; uniform sampler2D rD; uniform sampler2D rN; uniform vec3 rTint; uniform float rWear; uniform float rLW; uniform vec4 rDash; uniform float rYellow;
-      ${NOISE}
+      varying vec2 vR; varying vec3 vI; varying vec3 vWP; varying vec4 vJ; uniform float rRegion; uniform sampler2D rD; uniform sampler2D rN; uniform vec3 rTint; uniform float rWear; uniform float rLW; uniform vec4 rDash; uniform float rYellow; uniform float rLit; uniform float rCity; uniform float rLamp;
+      ${NOISE}${POOL}
       // coverage of a line of width w centred at c across x (antialiased; thinner than a pixel: its average)
       // (derivatives taken once, up front: fwidth inside branches or after a discard is undefined)
       float gFx, gFv;
@@ -162,12 +174,14 @@ export function tarmacMaterial(region) {
       `)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor = mix(mix(0.96, 0.84, tracks), 0.7, rPaint) - 0.04 * patchOn;`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.74, 0.44) * (0.4 + 3.5 * lampPool(v, x, hw, seed, gFv)) * rLamp * rLit * mix(town, 1.0, rCity);`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         { vec2 g = (nrm.rg * 2.0 - 1.0) * (0.55 - 0.35 * rPaint); vec3 tn = normalize(vec3(g.x, 1.0, -g.y));
           // the ribbon lies flat along the road: its world normal is up, tilted by the profile; add the grain on top
           normal = normalize(normal + (viewMatrix * vec4(tn.x, 0.0, tn.z, 0.0)).xyz); }`);
   };
-  mat.customProgramCacheKey = () => 'tarmac2-' + region;
+  mat.customProgramCacheKey = () => 'tarmac3-' + region;
   return mat;
 }
 
@@ -203,15 +217,15 @@ export function shoulderMaterial(region) {
 // rjunc as the tarmac's: the pavement stops at a junction's clearance, where the crossing is.
 export function sidewalkMaterial() {
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0 });
-  const U = { sD: { value: tex('sidewalk_d', true) } };
+  const U = { sD: { value: tex('sidewalk_d', true) }, rLamp: ROAD_U.rLamp };
   mat.userData.U = U;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, U);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 rinfo; attribute vec4 rjunc; varying vec2 vR; varying vec3 vI; varying vec4 vJ;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvR = uv; vI = rinfo; vJ = rjunc;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-      varying vec2 vR; varying vec3 vI; varying vec4 vJ; uniform sampler2D sD;
-      ${NOISE}`)
+      varying vec2 vR; varying vec3 vI; varying vec4 vJ; uniform sampler2D sD; uniform float rLamp;
+      ${NOISE}${POOL}`)
       .replace('#include <map_fragment>', `
         float hw = vI.x, x = abs(vR.x) - hw, v = vR.y; // x: metres out from the kerb's face
         float gFv = fwidth(v), gFx = fwidth(x);
@@ -228,8 +242,10 @@ export function sidewalkMaterial() {
         float kerb = 1.0 - step(0.35, x);
         vec3 granite = vec3(0.38, 0.37, 0.36) * (0.85 + 0.3 * rh(floor(vec2(v * 0.8, 3.0))));
         diffuseColor.rgb = mix(conc, granite, kerb);
-      `);
+      `)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.74, 0.44) * (0.3 + 2.4 * lampPool(v, vR.x, hw, vI.z, gFv)) * rLamp;`);
   };
-  mat.customProgramCacheKey = () => 'sidewalk1';
+  mat.customProgramCacheKey = () => 'sidewalk2';
   return mat;
 }

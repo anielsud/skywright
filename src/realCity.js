@@ -10,7 +10,7 @@
 // brick walk-ups and brownstones, clapboard houses with pitched roofs, warehouses; water towers and plant rooms on
 // the roofs. Collisions: an oriented box per building.
 import * as THREE from 'three';
-import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, BLD_U, facade, facadeSpec, linHex, LY0, LYS } from './buildings.js';
+import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, facade, facadeSpec, floodlit, linHex, LY0, LYS } from './buildings.js';
 import { toLocal } from './realworld.js';
 import { roadIndex, setBack, holeInside, fitBox, MAJOR, streetWalls } from './setback.js';
 
@@ -238,7 +238,7 @@ export class CityScenery {
     this.grid = new Map(); // 50 m cells -> collision boxes
     this.lowR = LOW_R[W.qName] ?? 1600;
     this.furn = FURN[W.qName] ?? FURN.medium; this.furnD = FURN_D[W.qName] ?? FURN_D.medium; // roof furniture: every tier, its detail by tier
-    this.roofStats = { flat: 0, tanks: 0, bulkheads: 0, plant: 0, units: 0, hatches: 0, cake: 0, screen: 0, copper: 0, cells: {}, cols: new Set() }; // (what the roofs got: tools/test/bldcheck.js)
+    this.roofStats = { flat: 0, tanks: 0, bulkheads: 0, plant: 0, units: 0, hatches: 0, cake: 0, screen: 0, copper: 0, flood: 0, cells: {}, cols: new Set() }; // (what the roofs got: tools/test/bldcheck.js)
     this.levelD = LEVEL_D[W.qName] ?? LEVEL_D.medium;
     this.mat = buildingMaterial({ cellPx: { low: 128, medium: 192, ultra: 384 }[W.qName] ?? 256, interiors: W.qName !== 'low', glass: true });
     // (lit windows: set in update, dimmer than a village's; thousands of them in view)
@@ -599,16 +599,20 @@ export class CityScenery {
   // A tall tower's crown (building(): crown { kind, h, b }), from the walls' top (eave) to its measured top
   crown(M, R, st, P, cr, eave, yTop, yfV, flV, F2, look) {
     const RS = this.roofStats, { b } = cr;
+    // floodlit at night (buildings.js floodlit: lit from below, dusk to 2 a.m.), from the night photos: most of the
+    // pre-war towers' crowns and caps, half the flat-topped ones, a few of the glass towers' screens
+    const fh = hash(R.o, 71), flood = cr.kind === 'screen' ? fh < 0.35 : cr.cap === 'flat' ? fh < 0.5 : fh < 0.85, lit = (id) => (flood ? floodlit(id) : id);
+    if (flood) RS.flood++;
     if (cr.kind === 'screen') { // a louvred screen round the roof (both faces: from above its inside shows too), the plant behind it
-      M.color(ROOF.screen);
-      for (let k = 0; k < P.length; k++) { const a = P[k], c = P[(k + 1) % P.length]; M.wall(c[0], c[1], a[0], a[1], eave, yTop, eave, C.LOUVRE, 3, 3); M.wall(a[0], a[1], c[0], c[1], eave, yTop, eave, C.LOUVRE, 3, 3); }
+      M.color(ROOF.screen); const lv = lit(C.LOUVRE);
+      for (let k = 0; k < P.length; k++) { const a = P[k], c = P[(k + 1) % P.length]; M.wall(c[0], c[1], a[0], a[1], eave, yTop, eave, lv, 3, 3); M.wall(a[0], a[1], c[0], c[1], eave, yTop, eave, C.LOUVRE, 3, 3); }
       M.setLate(true); this.block(M, b.cx, b.cz, b.ux, b.uz, b.hl * 0.4, b.hw * 0.45, eave, yTop - 1.5, C.LOUVRE, pick(ROOF.plant, hash(R.o, 61))); M.setLate(false);
       RS.screen++; RS.crowns?.push([b.cx, b.cz, 'screen', Math.round(yTop)]); return;
     }
     // wedding-cake setbacks: one or two tiers stepped in, each to a whole floor with its cornice; the top one capped
     const rect = (s) => { const Q = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, c]) => [b.cx + b.ux * a * b.hl * s - b.uz * c * b.hw * s, b.cz + b.uz * a * b.hl * s + b.ux * c * b.hw * s]); return area2(Q) < 0 ? Q.reverse() : Q; };
     const n = cr.tiers, sOf = (t) => (n === 1 ? 0.7 : 1 - 0.2 * t), sN = sOf(n);
-    const capR = cr.cap === 'flat' ? 0 : Math.min(b.hw * sN * 0.8, cr.h * 0.45), cell = F2 ? F2.front : st.cell;
+    const capR = cr.cap === 'flat' ? 0 : Math.min(b.hw * sN * 0.8, cr.h * 0.45), cell = lit(F2 ? F2.front : st.cell);
     let y0 = eave;
     for (let t = 1; t <= n; t++) {
       const last = t === n, want = eave + ((cr.h - capR) * t) / n, nf = Math.max(1, Math.round((want - yfV) / flV)), yk = Math.max(y0 + flV * 0.99, yfV + nf * flV);
@@ -618,7 +622,7 @@ export class CityScenery {
       M.top = 0;
       if (last && cr.cap !== 'flat') {
         const copper = cr.cap === 'copper', bt = { cx: b.cx, cz: b.cz, ux: b.ux, uz: b.uz, hl: b.hl * sOf(t), hw: b.hw * sOf(t) };
-        this.pitched(M, bt, yk, Math.max(3, yTop - yk), 'hip', copper ? C.SEAM : C.SLATE, copper ? pick(ROOF.copper, hash(R.o, 31)) : ROOF.slate, cell, st.col, 0);
+        this.pitched(M, bt, yk, Math.max(3, yTop - yk), 'hip', lit(copper ? C.SEAM : C.SLATE), copper ? pick(ROOF.copper, hash(R.o, 31)) : ROOF.slate, cell, st.col, 0);
         if (copper) RS.copper++;
       } else { M.color(look.col); M.roof(Q, [], yk, look.cell); }
       y0 = yk;
@@ -705,8 +709,7 @@ export class CityScenery {
       if (this.buildLowStep(t, budget)) this.queue.shift();
       break;
     }
-    this.mat.emissiveIntensity = this.w.night ? 1.6 : 0;
-    BLD_U.uDay.value = Math.max(0.05, Math.min(1, ((this.w.sunElev ?? 0.5) + 0.05) * 3)) * (1 - 0.5 * (this.w.W?.dark ?? 0));
+    const k = this.w.lightsK ?? (this.w.night ? 1 : 0); this.mat.emissiveIntensity = 1.6 * Math.min(1, k / 0.12); // (buildings.js updateBuildingLights: which windows, by hour)
   }
   // everything near the camera built (the loading screen waits for this on the first frames)
   get ready() { return !this.queue.length || this.queue.every((t) => !!t.low); }

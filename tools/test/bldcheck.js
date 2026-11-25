@@ -17,14 +17,18 @@
 //    roofs varied (membrane, coated and black tar, gravel, pavers), water tanks on the walk-ups and pre-war roofs,
 //    bulkheads and plant rooms, crowns on the towers; the furniture inside its footprint, its indices last (drawn near
 //    only) and every tank's staves wound outwards
+//  - lights (phase 5): the windows lit by hour (homes peak in the evening and go dark after midnight, offices empty
+//    after work but some floors stay lit, the villages earlier to bed and sparser), the lamps coming on through the dusk
+//    (not at once), floodlit programs flagged in the facade table, and New York's landmark crowns floodlit
 import * as THREE from 'three';
-import { Builder, C, WINDOW_RECTS, TIER, tierCells, facade, facadeSpec, LY0, LYS } from '../../src/buildings.js';
+import { Builder, C, WINDOW_RECTS, TIER, tierCells, facade, facadeSpec, floodlit, FAC_TEX, occupancy, lightsDark, LIGHT_PROFILES, LY0, LYS } from '../../src/buildings.js';
 
 export const nodeSuite = { files: ['src/buildings.js', 'src/realBuildings.js', 'src/realCity.js', 'src/setback.js', 'tools/test/bldcheck.js'] };
 
 export function cases() {
   return [
     { id: 'kit', cost: 0.1 },
+    { id: 'lights', cost: 0.1 },
     { id: 'decks islands', loc: 'islands', world: 'islands', cost: 3 },
     { id: 'styles islands', loc: 'islands', cost: 8 },
     { id: 'styles lauterbrunnen', loc: 'lauterbrunnen', cost: 12 },
@@ -276,12 +280,35 @@ async function roofsNyc(c) {
   }
   out.push({ name: `${c.id}: roof furniture drawn last (indices after the buildings', a draw range leaves it out)`, ok: !bad && !out0, why: `${bad} meshes with ranges out of order, ${out0} with tank cells among the buildings' indices${ex ? ` (${ex})` : ''}` });
   out.push({ name: `${c.id}: every tank's staves wound the way their normals point (outwards)`, ok: staves > 1000 && !wound, why: `${wound} of ${staves} stave triangles wound inwards` });
+  // floodlit crowns (realCity.js crown(): most of the pre-war towers' crowns, a few glass towers' screens), in the meshes
+  let lit = 0; for (const g of CS.tallMeshes) { const A = g.m.geometry.attributes.atl.array; for (let i = 0; i < A.length; i += 4) if (facadeSpec(A[i])?.flood) { lit++; } }
+  out.push({ name: `${c.id}: landmark crowns floodlit at night`, ok: RS.flood > 50 && RS.flood < RS.cake + RS.screen && lit > 1000, why: `${RS.flood} of ${RS.cake + RS.screen} crowns, ${lit} floodlit vertices` });
+  return out;
+}
+
+// The lights at night (buildings.js): the share of windows lit by hour, the dusk, the floodlit programs
+function lights() {
+  const out = [], P = LIGHT_PROFILES, at = (h, p = P.city) => occupancy(h, p);
+  const ev = at(21), late = at(3), noon = at(12), work = at(10), night = at(2);
+  out.push({ name: 'lights: homes lit most in the evening, few by 3 a.m.', ok: ev.home > 0.55 && late.home < 0.12 && noon.home < ev.home * 0.3, why: `21 h ${ev.home.toFixed(2)}, 3 h ${late.home.toFixed(2)}, noon ${noon.home.toFixed(2)}` });
+  out.push({ name: 'lights: offices full by day, some floors lit all night, shops and floodlights by the clock', ok: work.office > 0.8 && night.office > 0.08 && night.office < 0.3 && ev.office < work.office && ev.shop > 0.6 && night.shop < 0.35 && ev.flood === 1 && at(4).flood === 0, why: JSON.stringify({ work, ev, night }) });
+  const al = at(22.5, P.alps), is = at(21, P.islands);
+  out.push({ name: 'lights: Alpine villages to bed earlier, Bora Bora sparser, both warm', ok: al.home < at(22.5).home && is.home < ev.home * 0.75 && P.alps.warm > 0.5 && P.islands.warm > 0.5 && !P.alps.flood && !P.islands.flood, why: `22:30 alps ${al.home.toFixed(2)} vs city ${at(22.5).home.toFixed(2)}; 21 h islands ${is.home.toFixed(2)}` });
+  // the dusk: dark rises with the sun going down, from none in daylight to all of it after civil twilight, gradually
+  const els = [0.3, 0.16, 0.1, 0.05, 0, -0.05, -0.1, -0.13], ds = els.map((e) => lightsDark(e));
+  const mono = ds.every((d, i) => !i || d >= ds[i - 1]), mid = ds.filter((d) => d > 0.05 && d < 0.95).length;
+  out.push({ name: 'lights: the lamps come on through the dusk, not at once', ok: ds[0] === 0 && ds[ds.length - 1] === 1 && mono && mid >= 4, why: ds.map((d) => d.toFixed(2)).join(' ') });
+  // floodlit: a program flagged 64 in the facade table, the same cells as the wall it lights
+  const D = FAC_TEX.image.data, base = facade({ upper: C.LIME_WIN, ground: C.RUST, gH: 5, door: C.RUST_DOOR, cornice: true, top: C.LIME }), f = floodlit(base), r = floodlit(C.SEAM);
+  const fs = facadeSpec(f), bs = facadeSpec(base);
+  out.push({ name: 'lights: floodlit programs flagged, keeping their wall', ok: f !== base && !!(D[f * 16 + 7] & 64) && !(D[base * 16 + 7] & 64) && fs.ground === bs.ground && fs.door === bs.door && fs.upper === bs.upper && facadeSpec(r).upper === C.SEAM && !!(D[r * 16 + 7] & 64) && floodlit(base) === f, why: `base ${base}, lit ${f}, cap ${r}` });
   return out;
 }
 
 export async function runCase(c) {
   if (c.id.startsWith('roofs')) return roofsNyc(c);
   if (c.id === 'kit') return kit();
+  if (c.id === 'lights') return lights();
   if (c.id.startsWith('facades')) return facadesNyc(c);
   if (c.id.startsWith('rules')) return rules(c);
   if (c.id.startsWith('decks')) return decks(c);
