@@ -68,3 +68,36 @@ export async function fly(secs = 2, more = 3) {
 export function quick(secs = 2) {
   go(true); S.advance(secs); const s = state(); go(false); return s;
 }
+
+// ---------- for the per-map jobs (tools/test/jobs): the tour flight with fixed frame counts, no wall-clock waits ----------
+// Against the flight already running (harness T.start): full power on the real game loop for `n` drawn frames (the
+// loop runs: the flight clock moves), `more` game seconds stepped (advance), then every cockpit view drawn once as the
+// camera button steps through them, and back to the chase view. Judge it with tourChecks.
+import { frames as drawFrames, advance } from './jobs/harness.js';
+export async function tour({ frames: n = 3, more = 3 } = {}) {
+  const F = S.F; if (!F) throw new Error('no flight');
+  go(true);
+  const t0 = F.t; await drawFrames(n, { what: 'the tour flight on the real loop' });
+  const ran = S.F === F ? F.t - t0 : 0;
+  if (more && S.F === F) advance(more);
+  const ride = state();
+  const ac = F.ac; S.rig.set('cockpit', ac); const views = ac.stations.length, names = [];
+  for (let k = 0; k < views; k++) { names.push(S.rig.stationName(ac)); await drawFrames(1, { what: `cockpit view ${k + 1}` }); S.rig.next(ac); }
+  await drawFrames(1);
+  const leftCockpit = S.rig.mode !== 'cockpit';
+  S.rig.set('chase'); await drawFrames(1);
+  go(false);
+  return { name: ac.design.name, kind: F.kind, bike: !!ac.isBike, ran, frames: n, ride, views, names, leftCockpit, end: S.F === F ? state() : null };
+}
+// [[name, ok, detail]] for T.checks (smoke.py's verdicts on a tour flight; its audio check lives in the hangar job)
+export function tourChecks(f) {
+  const e = f.end, r = f.ride, out = [];
+  out.push(['still flying (the flight did not end on its own)', !!(e && r), '']);
+  if (!e || !r) return out;
+  out.push(['finite position and velocity', r.pos && r.vel && e.pos && e.vel, '']);
+  out.push(['the frame loop runs (the flight clock moved over the drawn frames)', f.ran > 0, `${f.ran.toFixed(2)} s over ${f.frames} frames`]);
+  out.push(['in one piece', e.parts > 0, `${e.alive}/${e.parts} parts`]);
+  if (f.bike) out.push(['the bike stays up and rides off', r.up >= 0.7 && r.speed >= 3, `up ${r.up.toFixed(2)}, ${r.speed.toFixed(1)} m/s`]);
+  out.push(['the camera button visits every seat and leaves the cockpit', f.leftCockpit, `${f.views} view(s): ${f.names.join(', ')}`]);
+  return out;
+}

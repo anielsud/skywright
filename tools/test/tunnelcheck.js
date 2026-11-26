@@ -114,3 +114,18 @@ export async function settle() {
   await frames(10);
   const m = window.__sky.renderer.info.memory; return { geo: m.geometries, tex: m.textures, progs: window.__sky.renderer.info.programs.length };
 }
+
+// ---------- browser, stepped (the per-map jobs' hangar job): the open tunnel's sweep and free pivot without drawing ----------
+// The tunnel's own state update (physics: the sweep's angle ramp, the pivot's swing) and curve record, at a fixed dt,
+// as its frame() runs them minus the smoke and the drawing. Returns what a check needs.
+export function sweepStepped(t, dt = 1 / 30, maxSteps = 2000) {
+  let n = 0;
+  while (t.sweep && n < maxSteps) { t.analyse(); t.physics(dt); t.recordCurve(); n++; }
+  const keys = [...t.curve.keys()], vals = [...t.curve.values()];
+  return { steps: n, done: !t.sweep, aoa: t.st.aoa, points: keys.length, from: Math.min(...keys), to: Math.max(...keys), finite: vals.every(Number.isFinite) };
+}
+export function pivotStepped(t, seconds = 3, dt = 1 / 30) {
+  const p = t.piv, th0 = p.th, ps0 = p.ps;
+  for (let k = Math.round(seconds / dt); k > 0; k--) { t.analyse(); t.physics(dt); t.recordCurve(); }
+  return { moved: Math.abs(p.th - th0) + Math.abs(p.ps - ps0), finite: [p.th, p.ps, p.thd, p.psd].every(Number.isFinite), F: t.F.toArray().every(Number.isFinite) };
+}
