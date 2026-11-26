@@ -1,4 +1,5 @@
-// Cockpit check (browser module, driven by cockpitcheck.py): builds every stock vehicle (as is, resized and mirrored),
+// Cockpit check (browser module, driven by cockpitcheck.py): builds every stock vehicle (as is; resized and mirrored
+// too for the first stock vehicle with each body and cockpit, see designs()),
 // seeded random player builds (planes, cars, fittings, motorbikes) and multi-station builds (bombers with a glass nose,
 // top, tail and belly gunner bubbles, twin cockpits, cars, capsules) as flight Aircraft, and checks every cockpit view (Aircraft.stations, stations.js):
 //   1. the eye is inside its cockpit: within the box of its seat's part (canopy, nose, cab, capsule) and its figure,
@@ -13,6 +14,7 @@
 import * as THREE from 'three';
 import { Aircraft, REALISM } from '../../src/aircraft.js';
 import { newPart, mirroredOf } from '../../src/design.js';
+import { PARTS } from '../../src/parts.js';
 import { randomBuilds, fittingBuilds, bikeBuilds } from './meshcheck.js';
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
@@ -169,10 +171,17 @@ function check(design) {
   return res;
 }
 
+// A stock vehicle's seats: its main body and its cockpits. Its resized and mirrored builds prove that those seats'
+// views hold when the parts are scaled and mirrored; a second stock vehicle with the same body and cockpits (Twin Pod,
+// Albatross and Hornet after Kestrel and Tempest, Centipede after Jumbo, Firecracker and Stardust after Viper) adds the
+// same seats in the same bodies, so only the first has them. Every stock vehicle is still checked as is. (The random
+// builds resize and mirror bubble, fighter and open canopies on every body too, and the station builds odd sizes.)
+const seatsOf = (p) => [p.parts[0]?.id, ...new Set(p.parts.filter((q) => PARTS[q.id]?.cat === 'cockpit').map((q) => q.id))].join(' ');
+export function variedPresets(presets) { const seen = new Set(); return new Set(presets.filter((p) => !seen.has(seatsOf(p)) && seen.add(seatsOf(p)))); }
 // every design the check builds (also handy to fly one: hangar.load(designs(__sky.presets).find(...)))
 export function designs(presets, random = 20, seed = 7) {
-  const out = [];
-  for (const p of presets) out.push(p, resized(p), mirrored(p));
+  const out = [], varied = variedPresets(presets);
+  for (const p of presets) out.push(p, ...(varied.has(p) ? [resized(p), mirrored(p)] : []));
   out.push(...stationBuilds(), ...randomBuilds(random, seed), ...fittingBuilds(12, seed + 24), ...bikeBuilds(8, seed + 64));
   return out;
 }
@@ -187,18 +196,20 @@ export function run({ presets, random = 20, seed = 7 } = {}) {
 // ---------- Node tier (tools/test/node/run.mjs) ----------
 // Building a vehicle (crew postures, cockpit views, the assembly pass, the cabin light) is ~90% of the work; the eye
 // checks the rest (their ray casts only test triangles within 3 m of the eye, and skip any whose box the ray misses).
-// A stock vehicle's three builds (as is, resized, mirrored) are one case, in that order, as before: what the game
-// keeps from one build (crew postures, figures, the cabin light bake: its own caches) serves the next where it
-// applies. Every other build is a case of its own. SKY_COCKPIT_RANDOM / SKY_COCKPIT_SEED: cockpitcheck.py's
-// --random / --seed.
+// A stock vehicle's builds (as is, then resized and mirrored where designs() has them) are one case, in that order, as
+// before: what the game keeps from one build (crew postures, figures, the cabin light bake: its own caches) serves the
+// next where it applies. Every other build is a case of its own. Keys: a stock vehicle's case shares 'crew:<name>'
+// with meshcheck, riders and gvision, and a random, fitting or bike build its design with meshcheck's case of the same
+// name ('design:<name>'), so the crew postures that worker solved for the first are kept for the second.
+// SKY_COCKPIT_RANDOM / SKY_COCKPIT_SEED: cockpitcheck.py's --random / --seed.
 export const nodeSuite = { files: ['src/stations.js', 'src/crew.js', 'src/body.js', 'src/partDetail.js', 'src/parts.js', 'src/cockpit*.js', 'src/interior.js', 'src/aircraft.js', 'src/planeDetail.js', 'src/cabinLight.js', 'tools/test/cockpitcheck.js', 'tools/test/meshcheck.js'], headless: false };
 const opts = () => ({ random: +(process.env.SKY_COCKPIT_RANDOM ?? 20), seed: +(process.env.SKY_COCKPIT_SEED ?? 7) });
 let list = null;
 const designList = (presets) => (list ??= designs(presets, opts().random, opts().seed));
 export function cases({ presets }) {
-  const all = designList(presets), out = [];
-  presets.forEach((p, k) => out.push({ id: `${p.name} (as is, resized, mirrored)`, is: [3 * k, 3 * k + 1, 3 * k + 2], names: all.slice(3 * k, 3 * k + 3).map((d) => d.name) }));
-  for (let i = 3 * presets.length; i < all.length; i++) out.push({ id: all[i].name, is: [i], names: [all[i].name] });
+  const all = designList(presets), out = [], varied = variedPresets(presets); let i = 0;
+  for (const p of presets) { const n = varied.has(p) ? 3 : 1, is = Array.from({ length: n }, (_, k) => i + k); out.push({ id: n === 3 ? `${p.name} (as is, resized, mirrored)` : p.name, is, names: is.map((k) => all[k].name), key: 'crew:' + p.name }); i += n; }
+  for (; i < all.length; i++) out.push({ id: all[i].name, is: [i], names: [all[i].name], ...(/^(random|fittings|bike) \d/.test(all[i].name) ? { key: 'design:' + all[i].name } : {}) });
   return out;
 }
 function checkOne(d) {
