@@ -1,35 +1,46 @@
-// Launch pad check (run in the page by padcheck.py). See padcheck.py for what it checks. The flight's own time is
-// stepped with __sky.advance (no frames drawn), one 1/60 s step at a time so every step can be checked.
+// Launch pad check (run in the page by padcheck.py; rocket()/rocketChecks() also by the per-map jobs, tools/test/jobs).
+// See padcheck.py for what it checks. The flight's own time is stepped with __sky.advance (no frames drawn), one 1/60 s
+// step at a time so every step can be checked. Every wait is on a game state (the harness's waits: no wall-clock
+// timing), with safety limits that throw.
 import { chooseStart, findWater, LAND_STARTS, BOAT_STARTS } from '../../src/startChoice.js';
+import { startFlight, until, advance } from './jobs/harness.js';
 const S = window.__sky;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const BASE = { online: false, start: 'runway', mode: 'free', weather: 'clear', time: 10 };
 
-// Load a preset and start a flight; resolves as soon as the flight exists (before its first step). Where the current
-// flight is at the same place (same World key), the vehicle is swapped in (a restart with a new design: the World is
-// kept), else a new flight builds the place.
+// Load a preset and start a flight (the harness's startFlight, its BASE config: time, weather, realism Pilot): where the
+// current flight is at the same place (same World key) the vehicle is swapped in (the World is kept), else a new flight
+// builds the place. Resolves with the flight once it runs (clock started, the loading screen's warm-up over).
 export async function start(name, location, cfg = {}) {
-  const d = S.presets.find((p) => p.name === name); if (!d) throw new Error(`no preset ${name}`);
-  const want = { ...BASE, location, ...cfg }, old = S.F;
-  S.controls.setThrottle(0); S.controls.pedal.gas = 0;
-  if (old && old.cfg.location === location && old.cfg.time === want.time && old.cfg.weather === want.weather) { Object.assign(old.cfg, want); S.swapVehicle(d); }
-  else { if (old) S.endFlight(); S.hangar.load(d); S.startFlight(want); }
-  for (let i = 0; i < 6000 && !(S.F && S.F !== old); i++) await sleep(5);
-  if (!S.F || S.F === old) throw new Error('the flight did not start');
-  return S.F;
+  return (await startFlight(name, location, cfg)).F;
 }
-// wait until the flight clock runs and the loading screen's shader warm-up is over (frames: the warm-up draws)
-export async function running(F, wall = 120000) { const t0 = performance.now(); while (!(F.t > 0) || F.warm) { if (performance.now() - t0 > wall) throw new Error('the flight clock never started'); await sleep(5); } }
-// step the flight 1/60 s at a time (advance) until done() or `limit` game seconds; false if it hit the limit
-export function steps(F, done, limit = 60) { const t0 = F.t; while (!done()) { if (F.t - t0 > limit || S.F !== F) return false; S.advance(1 / 60); } return true; }
+// the flight clock running and the loading screen's warm-up over (a game state; the timeout is only a safety net)
+export async function running(F) {
+  await until(() => { if (S.F !== F) throw new Error('the flight ended before its clock started'); return F.t > 0 && !F.warm; }, { what: 'the flight clock to start and the loading screen to go', timeout: 300 });
+}
+// step the flight 1/60 s at a time (advance) until done() or `limit` game seconds; false if it hit the limit or the
+// flight ended. Throws if the flight can't be stepped (paused, still warming up): it would never get anywhere.
+export function steps(F, done, limit = 60) {
+  const t0 = F.t;
+  while (!done()) { if (S.F !== F || F.t - t0 > limit) return false; advance(1 / 60); }
+  return true;
+}
 
 // the spawn pose exactly as buildFlight left it (no physics step has run yet)
 export async function spawn(name, location, cfg = {}) {
   const F = await start(name, location, cfg);
-  const p = F.spawnPose; if (!p) throw new Error('no spawn pose recorded (main.js buildFlight)'); // (recorded before any step: a slow machine may already have stepped it by now)
-  const r = { name, location, start: F.cfgStart, x: p.x, q: p.q, v: p.v };
-  await running(F);
-  return r;
+  const p = F.spawnPose; if (!p) throw new Error('no spawn pose recorded (main.js buildFlight)'); // (recorded before any step: the warm-up has stepped it since)
+  return { name, location, start: F.cfgStart, x: p.x, q: p.q, v: p.v };
+}
+
+// The place's answers to the start rule, as main.js buildFlight passes them (offline: nobody else on a site or the pad;
+// the pad's stand as the running flight left it)
+export function answers(W) {
+  let water;
+  return { water: () => (water === undefined ? (water = findWater(W)) : water), site: (s) => W.startSite(s), siteBusy: () => false, padOK: () => !!W.pad?.stand, landStart: (s) => W.landStart(s), waterPark: () => W.waterParks?.start ?? null };
+}
+// what buildFlight reads off the built Aircraft (whose parts take engine and gear from their PARTS entry)
+export function vehicleInfo(d) {
+  const defs = d.parts.map((p) => S.PARTS[p.id]).filter(Boolean);
+  return { gearOK: defs.some((g) => g.gear && (!g.gear.float || g.gear.skid)), hasEngine: defs.some((g) => g.engine) };
 }
 
 // Where every stock vehicle would start here, for every start choice (start, mode, land start, boat start), by the
@@ -37,11 +48,8 @@ export async function spawn(name, location, cfg = {}) {
 // [{ name, cfg, start, vertical, heli }].
 let gearInfo = null;
 export function predict(F = S.F) {
-  const W = F.world;
-  // (as buildFlight reads them off the built Aircraft, whose parts take engine and gear from their PARTS entry)
-  gearInfo ??= Object.fromEntries(S.presets.map((d) => { const defs = d.parts.map((p) => S.PARTS[p.id]).filter(Boolean); return [d.name, { gearOK: defs.some((g) => g.gear && (!g.gear.float || g.gear.skid)), hasEngine: defs.some((g) => g.engine) }]; }));
-  let water; const w = { water: () => (water === undefined ? (water = findWater(W)) : water), site: (s) => W.startSite(s), siteBusy: () => false, padOK: () => !!W.pad?.stand, landStart: (s) => W.landStart(s), waterPark: () => W.waterParks?.start ?? null };
-  const out = [];
+  gearInfo ??= Object.fromEntries(S.presets.map((d) => [d.name, vehicleInfo(d)]));
+  const w = answers(F.world), out = [];
   for (const d of S.presets) {
     const st = S.analyze(d), g = gearInfo[d.name];
     for (const start of ['runway', 'air', 'water']) for (const mode of ['free', 'rings', 'landing']) for (const landStart of st.car ? [...LAND_STARTS, 'runway', undefined] : [undefined]) for (const boatStart of st.boat ? [...BOAT_STARTS, undefined] : [undefined]) {
@@ -57,8 +65,7 @@ export async function rocket(location, { name = 'Rocket', hold = 5, burn = 10 } 
   const ev = [], emit = ac.emit.bind(ac); ac.emit = (type, data) => { ev.push(type); emit(type, data); };
   const nose = () => new T.Vector3(0, 0, -1).applyQuaternion(ac.q).y; // 1 = pointing straight up
   const dmg = () => ac.parts.reduce((a, p) => a + p.dmg, 0), alive = () => ac.parts.filter((p) => p.alive).length;
-  r.spawn = { axis: P.axisDist(ac.x.x, ac.x.z), nose: nose(), clamp: !!F.clamp };
-  await running(F);
+  r.spawn = { axis: P.axisDist(ac.x.x, ac.x.z), nose: nose(), clamp: !!F.clamp }; // (held by the clamps through the warm-up's steps)
   // 5 s on the stand with the engines off
   S.controls.setThrottle(0);
   const x0 = ac.x.clone(), q0 = ac.q.clone(), t0 = F.t; let drift = 0, tilt = 0, off = 0, n = 0, vmax = 0;

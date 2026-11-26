@@ -21,7 +21,7 @@ import argparse, fnmatch, json, os, subprocess, sys, time
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 # browser jobs (tools/test/jobs/<job>.js, run by jobs.py): the files they cover (globs, repo-relative). Every job boots
 # the game and checks every step for console errors and shader stalls, so any source change wants all of them.
-PAGE = ['src/*', 'index.html', 'style.css', 'sw.js', 'assets/*', 'vendor/*', 'tools/test/jobs.py', 'tools/test/jobs/harness.js']
+PAGE = ['src/*', 'index.html', 'style.css', 'sw.js', 'assets/*', 'vendor/*', 'tools/test/jobs.py', 'tools/test/jobs/harness.js', 'tools/test/jobs/wiring.js']
 JOBS = {
     'hangar': PAGE + ['tools/test/jobs/hangar.js', 'tools/test/tunnelcheck.js'],
     'nyc': PAGE + ['tools/test/jobs/nyc.js', 'tools/test/smoke.js', 'tools/test/padcheck.js', 'tools/test/helipadcheck.js', 'tools/test/shadercheck.js', 'tools/test/startbakes.js', 'tools/test/stunts.js', 'tools/test/waterpark.js', 'tools/test/walls.js', 'tools/bake/*'],

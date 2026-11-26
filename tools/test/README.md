@@ -98,8 +98,11 @@ streaming quiet (`T.settle`) and screenshots (`T.shot`). Each step prints PASS/F
 and game seconds stepped, its checks under it as they happen. A step fails if its code throws, a check in it fails, a
 shader program compiles mid-flight during it (a stall), or the page logs a console error, throws, or a request for a
 file of ours fails while it runs. The old suites' modules export the checks the jobs reuse against a running flight
-(`smoke.js` `tour`/`tourChecks`, `padcheck.js` `rocket`/`rocketChecks`, `shadercheck.js` `sceneDrawn`/`eventsFired`/
-`crash`/`phaseChecks`, `startbakes.js` `stuntsIn`/`stuntsChecks`, `tunnelcheck.js` `sweepStepped`/`pivotStepped`).
+(`smoke.js` `tour`/`tourChecks`, `padcheck.js` `rocket`/`rocketChecks`, `helipadcheck.js` `heliRun`/`heliChecks`,
+`shadercheck.js` `sceneDrawn`/`eventsFired`/`crash`/`phaseChecks`, `startbakes.js` `stuntsIn`/`stuntsChecks`,
+`tunnelcheck.js` `sweepStepped`/`pivotStepped`). `jobs/wiring.js` `wiringChecks(T, started)` checks the start rule's
+wiring at the place a job is in: call it once per map, while it is up, with every `{ name, location, cfg, start }` the
+job started there.
 
 The rules (#278), which keep CI fast and free of timing flakes:
 - **test only what needs testing**: for each check, the one observation that proves its claim, and only that work;
@@ -119,7 +122,22 @@ The jobs:
   sweep starts, the rest of the sweep stepped to the end (the lift curve recorded over the whole range), 5 frames on the
   free pivot and 3 s more stepped (it swings), no shader compiled while it ran, (locally) the tunnel's own work per
   frame under 12 ms, closes, GPU memory back to the hangar's. (Its lift curves and forces: the Node suite tunnelcheck.)
-- **nyc**, **islands**, **canyon-lauterbrunnen**: being written (#278); the planned steps are in each file's header.
+- **nyc** (one New York World, built once; each vehicle swapped in once; the step list is `jobs/nyc.js`'s header):
+  the stunt site New York planned == a fresh search == the bake (`stuntsIn`, right after the build); the Dragonfly in
+  Pilot on the rooftop helipad, stepped (`helipadcheck.js` `heliRun`/`heliChecks`: its spawn pose, the building under the
+  pad has no damage key, the runway resting baseline by teleporting the same Dragonfly to the runway, then 5 s parked,
+  a lift to a 25 m hover, a landing and a rest, each compared with the runway); the shader sweep's scene and events
+  (drawn: every hidden object shown, every event effect fired; this is the only job that fires them); the tour flight on
+  the real loop and every cockpit view (drawn); the Dragonfly again in Arcade; the Rocket on the pad (hold + launch,
+  stepped) and on the real loop; the Dune Buggy at the stunt park's arch, the site dry, flat and clear (tree canopy from
+  the imagery) and its kicker jump and loop run, the road start (the rule's pick, the buggy teleported there as
+  buildFlight puts it: in its lane, facing along the road), and the crash: two game-loop runs into building faces
+  (nothing gets inside), the 30 m/s one drawn (no stall, nothing waited for its shader, something broke off); the Dirt
+  Bike at the arch and on the road; the Speedboat and the Jet Ski at the water park's arch, afloat, facing down the
+  course; the start rule's wiring (`jobs/wiring.js`: every vehicle started where `chooseStart` predicts with the
+  World's answers; over every stock preset nothing but a rocket on the pad, nothing but a helicopter on the helipad);
+  no stunt site or water park warnings.
+- **islands**, **canyon-lauterbrunnen**: being written (#278); the planned steps are in each file's header.
 
 ## Run the smoke test (older script)
 
@@ -512,7 +530,7 @@ Arcade) and checks that it starts on the H of the 55 Water Street pad, level, fa
 deck, engines off, and that the building under the pad has no damage key. In calm air it then checks that:
 
 - parked with the throttle closed, it settles onto its skids exactly as it does on the runway (same attitude and
-  sink), then for 5 s it moves no more than it does there, with the rotor stopped, no contact and no damage;
+  sink; the baseline: the same Dragonfly teleported to the runway first and rested there in the game loop), then for 5 s it moves no more than it does there, with the rotor stopped, no contact and no damage;
 - it lifts off to a steady hover 25 m up with no collision;
 - it lands back on the pad gently (no hard landing) and rests there stably on both skids.
 
