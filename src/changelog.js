@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.195.0', items: [
+    "Sonic booms show their shock rings right away, even the very first one.",
+  ] },
   { v: '1.194.0', items: [
     "Walk-only streets, plazas, back alleys and gravel farm tracks now show up in every place, and you can drive on them!",
   ] },
