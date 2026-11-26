@@ -218,7 +218,8 @@ export class Destruction {
   ring(R) { const k = R.i; R.i = (R.i + 1) % R.n || 1; R.used = Math.max(R.used, k + 1); R.m.count = R.used; return k; }
 
   // ---------------- buildings: state, look, slots, flags ----------------
-  // a collision entry's box: { x, z, ux, uz, hl, hw } (towns/OSM: e.ob; New York: the box in the entry; else a square)
+  // a collision entry's box: { x, z, ux, uz, hl, hw } (towns/OSM: e.ob; New York: the box in the entry; else a square).
+  // An irregular building's is the box round its own boxes (e.parts, setback.js footBoxes: what's solid, World.wallBoxes)
   box(e) {
     if (e.ob) return e.ob;
     if (e.length >= 9) return { x: e[0], z: e[2], ux: e[5], uz: e[6], hl: e[7], hw: e[8] };
@@ -227,9 +228,10 @@ export class Destruction {
   get(e) {
     let B = this.states.get(e.dk);
     if (B) return B;
-    const ob = this.box(e), y0 = e[1], y1 = e[1] + e[3], h = Math.max(2, e[3]);
-    const V = Math.max(30, 4 * ob.hl * ob.hw * h * (e.ob || e.length >= 9 ? 1 : 0.8));
-    B = { dk: e.dk, ents: [e], ob, y0, y1, h, V, hp: V * K_BLD, E: 0, slot: 0, flag: 0, holes: [], cut: 1e9, rubble: y0, collapsed: false, top: false, anim: null, born: this.time, look: this.look(e), type: e.type, cav: [] };
+    const ob = this.box(e), y0 = e[1], y1 = e[1] + e[3], h = Math.max(2, e[3]), parts = e.parts || null;
+    const A = parts ? Math.min(4 * ob.hl * ob.hw, parts.reduce((a, q) => a + 4 * q.hl * q.hw, 0)) : 4 * ob.hl * ob.hw; // (an irregular building's boxes: setback.js footBoxes)
+    const V = Math.max(30, A * h * (e.ob || e.length >= 9 ? 1 : 0.8));
+    B = { dk: e.dk, ents: [e], ob, parts, y0, y1, h, V, hp: V * K_BLD, E: 0, slot: 0, flag: 0, holes: [], cut: 1e9, rubble: y0, collapsed: false, top: false, anim: null, born: this.time, look: this.look(e), type: e.type, cav: [] };
     this.states.set(e.dk, B);
     return B;
   }
@@ -301,6 +303,7 @@ export class Destruction {
   restore(e) {
     const B = this.states.get(e.dk); if (!B) return;
     const i = B.ents.findIndex((x) => x.dk === e.dk); if (i >= 0) B.ents[i] = e; else B.ents.push(e);
+    if (e.parts) B.parts = e.parts;
     if (B.flag) for (const [h, s, n] of e.rng || []) (h.dmgW || (h.dmgW = [])).push([s, n, B.flag]);
     if (B.cut < 1e8) this.setH(e, Math.max(0, Math.max(B.cut - 1, B.rubble) - e[1]));
   }
@@ -312,9 +315,16 @@ export class Destruction {
     for (const h of B.holes) if ((p.x - h[0]) ** 2 + (p.y - h[1]) ** 2 + (p.z - h[2]) ** 2 < (h[3] * 0.85) ** 2) return true;
     return false;
   }
+  // the box of the building at p (an irregular building's own boxes, World.wallBoxes: the one p is in, or the nearest)
+  part(B, p) {
+    if (!B.parts) return B.ob;
+    let best = B.ob, bd = Infinity;
+    for (const q of B.parts) { const dx = p.x - q.x, dz = p.z - q.z, d = Math.max(Math.abs(dx * q.ux + dz * q.uz) - q.hl, Math.abs(-dx * q.uz + dz * q.ux) - q.hw); if (d < bd) { bd = d; best = q; } }
+    return best;
+  }
   // outward normal of the building's face nearest p
   normal(B, p, out) {
-    const o = B.ob, dx = p.x - o.x, dz = p.z - o.z, u = dx * o.ux + dz * o.uz, w = -dx * o.uz + dz * o.ux;
+    const o = this.part(B, p), dx = p.x - o.x, dz = p.z - o.z, u = dx * o.ux + dz * o.uz, w = -dx * o.uz + dz * o.ux;
     const pu = o.hl - Math.abs(u), pw = o.hw - Math.abs(w), py = Math.min(B.cut, B.y1) - p.y;
     if (py < pu && py < pw) return out.set(0, 1, 0);
     if (pu < pw) return out.set(o.ux * Math.sign(u || 1), 0, o.uz * Math.sign(u || 1));
@@ -346,10 +356,10 @@ export class Destruction {
     return B.give;
   }
   onCourse(B, x, v, sp, dist) {
-    const o = B.ob, top = Math.min(B.cut, B.y1);
+    const top = Math.min(B.cut, B.y1);
     for (let s = 0; s <= dist; s += 1) {
-      const px = x.x + v.x / sp * s, py = x.y + v.y / sp * s, pz = x.z + v.z / sp * s, dx = px - o.x, dz = pz - o.z;
-      if (py > B.y0 && py < top && Math.abs(dx * o.ux + dz * o.uz) < o.hl && Math.abs(-dx * o.uz + dz * o.ux) < o.hw) return true;
+      const px = x.x + v.x / sp * s, py = x.y + v.y / sp * s, pz = x.z + v.z / sp * s;
+      if (py > B.y0 && py < top && (B.parts || [B.ob]).some((o) => { const dx = px - o.x, dz = pz - o.z; return Math.abs(dx * o.ux + dz * o.uz) < o.hl && Math.abs(-dx * o.uz + dz * o.ux) < o.hw; })) return true;
     }
     return false;
   }
@@ -376,7 +386,7 @@ export class Destruction {
     if (tall && !B.top && F >= 0.15 && F < 1.4 && hi > 0.3) { this.topCollapse(B, p, dir, n, hi > 0.6 ? 'topple' : 'pancake'); give = 0.65; }
     else if (F >= 1 || (B.top && F >= 1.4)) { this.collapse(B, p, dir); give = 0.6; }
     else {
-      const maxR = Math.min(Math.max(B.ob.hl, B.ob.hw) * 0.9, Math.min(B.ob.hl, B.ob.hw) * 1.1, tall ? 16 : 8);
+      const o = this.part(B, p), maxR = Math.min(Math.max(o.hl, o.hw) * 0.9, Math.min(o.hl, o.hw) * 1.1, tall ? 16 : 8); // (an L's wing: as thick as the wing)
       const r = Math.min(maxR, Math.cbrt((3 * E) / (4 * Math.PI * K_HOLE)));
       if (r > 0.9) {
         const c = p.clone().addScaledVector(n, -r * 0.25); // (centred a little inside: the hole goes in, not out)
@@ -417,7 +427,7 @@ export class Destruction {
   dustCol(L) { _c.setHex(L.col).lerp(new THREE.Color(0xb4aca0), 0.6); return [_c.r, _c.g, _c.b]; }
   // the burnt hollow behind a hole (roof holes: only the half below the roof)
   cavity(B, k, roof) {
-    const R = this.cav, h = B.holes[k], o = B.ob;
+    const R = this.cav, h = B.holes[k], o = this.part(B, { x: h[0], z: h[2] }); // (clipped to the wing it's in)
     let i = B.cav[k]; if (i == null) { i = this.ring(R); B.cav[k] = i; }
     R.m.setMatrixAt(i, _m.compose(_v.set(h[0], h[1], h[2]), _q.identity(), _s.setScalar(h[3] * 0.97)));
     R.A.setXYZW(i, o.x, o.z, o.ux, o.uz); R.B.setXYZW(i, o.hl + 0.15, o.hw + 0.15, B.y0 - 1, roof ? h[1] + 0.2 : Math.min(B.cut, B.y1) + 0.2);

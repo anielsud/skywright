@@ -2,7 +2,7 @@
 // inside a building. Needs a flight running (window.__sky.F) at a place with buildings.
 //
 // Buildings are read straight from the world's collision grids (towns / a real place's buildings: an entry per
-// building with its box in e.ob; New York: a box per entry; the landmarks), not through world.wallBoxes, so the test
+// building with its box in e.ob, or its own boxes in e.parts; New York: a box per entry, or its e.parts; the landmarks), not through world.wallBoxes, so the test
 // doesn't trust the code it tests. For each chosen building face, the vehicle is set down 14 m out on the street,
 // aimed at the face at an angle, given a speed and full gas, and the penetration of every hull point, wheel (centre
 // and contact patch) into every building box nearby is tracked.
@@ -19,7 +19,7 @@ function boxOf(e) {
 // every building within r of (x, z): { x, z, ux, uz, hl, hw, y0, y1, e }
 export function buildings(W, x, z, r) {
   const T = W.towns, out = [], seen = new Set();
-  const add = (e) => { if (seen.has(e) || !(e[3] > 0)) return; seen.add(e); const b = boxOf(e); if (Math.hypot(b.x - x, b.z - z) < r + Math.hypot(b.hl, b.hw)) out.push({ ...b, y0: e[1], y1: e[1] + e[3], e }); };
+  const add = (e) => { if (seen.has(e) || !(e[3] > 0)) return; seen.add(e); for (const b of e.parts || [boxOf(e)]) if (Math.hypot(b.x - x, b.z - z) < r + Math.hypot(b.hl, b.hw)) out.push({ ...b, y0: e[1], y1: e[1] + e[3], e }); }; // (an irregular building: each of its own boxes, e.parts)
   const g = T.city ? T.city.grid : T.grid;
   for (const a of g.values()) for (const e of a) if (e.solid) add(e);
   for (const e of T.landmarks?.boxes || []) add(e);
@@ -47,7 +47,7 @@ const penetration = (S, ac, boxes) => { let m = 0; for (const p of points(S, ac)
 
 // Faces with a clear, flat 16 m run-up: [{ B, nx, nz, tx, tz, cx, cz, gy }] (n: out of the face, t: along it)
 export function faces(S, near, { r = 1500, max = 3, minH = 6, angles = ANGLES } = {}) {
-  const W = S.F.world, all = buildings(W, near.x, near.z, r).filter((B) => B.hl > 3 && B.hw > 3 && B.y1 - B.y0 > minH);
+  const W = S.F.world, every = buildings(W, near.x, near.z, r), all = every.filter((B) => B.hl > 3 && B.hw > 3 && B.y1 - B.y0 > minH);
   all.sort((a, b) => Math.hypot(a.x - near.x, a.z - near.z) - Math.hypot(b.x - near.x, b.z - near.z));
   const out = [];
   for (const B of all) {
@@ -58,11 +58,11 @@ export function faces(S, near, { r = 1500, max = 3, minH = 6, angles = ANGLES } 
       // a clear lane 16 m out along each run's angle, nothing else solid in it, the ground flat and at the building's foot
       let ok = true; const g0 = W.groundAt(cx + nx * 2, cz + nz * 2).h;
       if (Math.abs(g0 - B.y0) > 2.5) ok = false;
-      for (const a of angles) for (let d = 1; d <= 16 && ok; d += 1) {
+      for (const a of angles) for (let d = 0.5; d <= 16 && ok; d += 0.5) { // (from just off the face: another of an irregular building's boxes may stand a little proud of it)
         const c = Math.cos(a * Math.PI / 180), sn = Math.sin(a * Math.PI / 180), dx = nx * c - nz * sn, dz = nz * c + nx * sn;
         const px = cx + dx * d, pz = cz + dz * d, g = W.groundAt(px, pz).h;
         if (Math.abs(g - g0) > 0.8 || g < W.waterLevel + 0.3) ok = false;
-        for (let k = -2; k <= 2 && ok; k += 1) { const q = { x: px - dz * k, y: g + 0.5, z: pz + dx * k }; for (const C of all) if (C !== B && inside(C, q) > 0) { ok = false; break; } }
+        for (let k = -2; k <= 2 && ok; k += 1) { const q = { x: px - dz * k, y: g + 0.5, z: pz + dx * k }; for (const C of every) if (C !== B && inside(C, q) > 0) { ok = false; break; } }
       }
       if (ok) { out.push({ B, nx, nz, tx: -nz, tz: nx, cx, cz, gy: g0 }); break; }
     }
@@ -133,7 +133,8 @@ export function run(S, names, { speeds = SPEEDS, angles = ANGLES, max = 3, reali
 export function registered(W) {
   const all = buildings(W, 0, 0, 1e9).filter((B) => B.e[3] > 0.3), out = [];
   let bad = 0, missing = 0, n = 0;
-  const has = (B, x, z, r) => { const got = W.wallBoxes(x, z, r).find((q) => q.e === B.e); if (!got) return 'missing'; for (const k of ['x', 'z', 'ux', 'uz', 'hl', 'hw', 'y0', 'y1']) if (Math.abs(got[k] - B[k]) > 1e-6) return `${k} ${got[k]} vs ${B[k]}`; return null; };
+  const K = ['x', 'z', 'ux', 'uz', 'hl', 'hw', 'y0', 'y1'];
+  const has = (B, x, z, r) => { const mine = W.wallBoxes(x, z, r).filter((q) => q.e === B.e); if (!mine.length) return 'missing'; if (mine.some((q) => K.every((k) => Math.abs(q[k] - B[k]) <= 1e-6))) return null; const got = mine[0]; for (const k of K) if (Math.abs(got[k] - B[k]) > 1e-6) return `${k} ${got[k]} vs ${B[k]}`; return null; }; // (an irregular building: one of its boxes)
   for (const B of all) {
     n++;
     const at = [[B.x, B.z, 0.5]];
@@ -148,7 +149,8 @@ export function registered(W) {
 // cars and bikes out of buildings, at any speed and angle; and each place's buildings reach it (world.wallBoxes gives
 // every building, with its own box). So:
 //   contact:  stand-in buildings on flat ground (one like a town's or a village's, square to the street; one turned
-//             27 degrees, like an OpenStreetMap footprint; a New York tower whose box starts 1.5 m above the street),
+//             27 degrees, like an OpenStreetMap footprint; a New York tower whose box starts 1.5 m above the street; an L
+//             of two boxes, hit where its wall passes from one box to the other),
 //             driven into by the Dune Buggy and the Dirt Bike at 5, 15, 30 and 45 m/s, straight on, at 35 degrees and at
 //             60 degrees the other way, full gas: every hull point and wheel checked against the box every frame, none
 //             more than 0.1 m inside, and the straight-on runs reach the wall;
@@ -162,6 +164,9 @@ export const STANDINS = {
   street: { x: 0, z: 0, yaw: 0, hl: 12, hw: 8, y0: 0, h: 20 },
   osm: { x: 400, z: 0, yaw: 0.47, hl: 9, hw: 6, y0: 0, h: 9 },
   tower: { x: 800, z: 0, yaw: 0, hl: 15, hw: 15, y0: 1.5, h: 120 },
+  // an L as setback.js footBoxes makes it: two boxes of one building (e.parts), overlapping; driven into where the
+  // wall they share passes from one box to the other (the seam)
+  lshape: { x: 1200, z: 0, yaw: 0.3, hl: 12, hw: 4, y0: 0, h: 15, parts: [[0, 0, 12, 4], [-8, 8, 4, 8]], seam: [-12, 4, -1, 0] },
 };
 export const nodeSuite = { files: ['src/aircraft.js', 'src/world.js', 'src/buildings.js', 'src/realBuildings.js', 'src/realCity.js', 'src/destruction.js', 'src/bike*.js', 'src/drive.js', 'tools/test/walls.js', 'tools/test/node/world.mjs'], headless: true };
 export function cases() {
@@ -173,14 +178,21 @@ export function cases() {
 // flat ground with the stand-in buildings, and main.js's env over it
 async function standInWorld() {
   const THREE = await import('three'), up = new THREE.Vector3(0, 1, 0), boxes = {};
-  for (const [k, s] of Object.entries(STANDINS)) { const e = [s.x, s.y0, s.z, s.h]; e.solid = true; boxes[k] = { x: s.x, z: s.z, ux: Math.cos(s.yaw), uz: -Math.sin(s.yaw), hl: s.hl, hw: s.hw, y0: s.y0, y1: s.y0 + s.h, e }; }
+  for (const [k, s] of Object.entries(STANDINS)) {
+    const e = [s.x, s.y0, s.z, s.h], ux = Math.cos(s.yaw), uz = -Math.sin(s.yaw); e.solid = true;
+    boxes[k] = (s.parts || [[0, 0, s.hl, s.hw]]).map(([u, v, hl, hw]) => ({ x: s.x + u * ux - v * uz, z: s.z + u * uz + v * ux, ux, uz, hl, hw, y0: s.y0, y1: s.y0 + s.h, e }));
+    if (s.parts) e.parts = boxes[k];
+  }
   const env = {
     groundAt: () => ({ h: 0, n: up.clone(), type: 'runway' }), maxGround: () => 0, windAt: () => new THREE.Vector3(), night: false, groundHeightAtSpawn: 0,
-    walls: (x, z, r, out = []) => { out.length = 0; for (const B of Object.values(boxes)) if (Math.hypot(B.x - x, B.z - z) < r + Math.hypot(B.hl, B.hw)) out.push(B); return out; },
+    walls: (x, z, r, out = []) => { out.length = 0; for (const B of Object.values(boxes).flat()) if (Math.hypot(B.x - x, B.z - z) < r + Math.hypot(B.hl, B.hw)) out.push(B); return out; },
   };
   return { boxes, env };
 }
-const faceOf = (B) => { const nx = B.ux, nz = B.uz; return { B, nx, nz, tx: -nz, tz: nx, cx: B.x + nx * B.hl, cz: B.z + nz * B.hl, gy: 0 }; }; // (its +u face: hl out from the middle)
+const faceOf = (B, sm) => { // (its +u face: hl out from the middle; an L's: at the seam, [u, v, nu, nv] in its frame)
+  if (sm) { const nx = sm[2] * B.ux - sm[3] * B.uz, nz = sm[2] * B.uz + sm[3] * B.ux, S = STANDINS.lshape; return { B, nx, nz, tx: -nz, tz: nx, cx: S.x + sm[0] * B.ux - sm[1] * B.uz, cz: S.z + sm[0] * B.uz + sm[1] * B.ux, gy: 0 }; }
+  const nx = B.ux, nz = B.uz; return { B, nx, nz, tx: -nz, tz: nx, cx: B.x + nx * B.hl, cz: B.z + nz * B.hl, gy: 0 };
+};
 export async function runCase(c, { presets }) {
   const { Aircraft, REALISM } = await import('../../src/aircraft.js'), THREE = await import('three'), d = presets.find((p) => p.name === c.name), out = [];
   const add = (name, ok, why = '') => out.push({ name, ok: !!ok, why });
@@ -190,8 +202,8 @@ export async function runCase(c, { presets }) {
     add(`${where}: ${name} reaches the wall`, runs.length && !far.length, far.length ? `${far.length} straight-on runs stopped short` : 'every straight-on run hit it');
   };
   if (c.kind === 'contact') {
-    const { boxes, env } = await standInWorld(), B = boxes[c.box], S = { F: { env, world: null }, THREE, Aircraft, REALISM, presets }, runs = [];
-    for (const v of SPEEDS) for (const a of ANGLES) runs.push({ v, a, ...physicsRun(S, d, faceOf(B), v, a, 'pilot', 2.5, [B]) });
+    const { boxes, env } = await standInWorld(), Bs = boxes[c.box], S = { F: { env, world: null }, THREE, Aircraft, REALISM, presets }, runs = [];
+    for (const v of SPEEDS) for (const a of ANGLES) runs.push({ v, a, ...physicsRun(S, d, faceOf(Bs[0], STANDINS[c.box].seam), v, a, 'pilot', 2.5, Bs) });
     judgeRuns(`stand-in ${c.box} building`, c.name, runs);
     return out;
   }

@@ -152,6 +152,20 @@ export class Debris {
 // assembly pass (fillets, pylons, doors, the crew and the cabin light) and its per-frame update (crew posing, gear
 // doors, slats). Nothing the simulation reads comes from either. Never on in the game.
 export const HEADLESS = { on: false };
+// would pushing the vehicle (corners C) out of building box B by o along (nx, nz) put its leading corners inside
+// another of the same building's boxes (an irregular building, e.parts)? Then that's no way out, but into the building
+function intoSib(walls, B, C, nx, nz, o) {
+  let dmin = Infinity, px = 0, pz = 0, k = 0;
+  for (let i = 0; i < 8; i++) dmin = Math.min(dmin, C[i].x * nx + C[i].z * nz);
+  for (let i = 0; i < 8; i++) if (C[i].x * nx + C[i].z * nz < dmin + 0.15) { px += C[i].x; pz += C[i].z; k++; }
+  px = px / k + nx * (o + 0.05); pz = pz / k + nz * (o + 0.05);
+  for (const W of walls) {
+    if (W === B || W.e !== B.e) continue;
+    const dx = px - W.x, dz = pz - W.z;
+    if (Math.abs(dx * W.ux + dz * W.uz) < W.hl - 0.02 && Math.abs(-dx * W.uz + dz * W.ux) < W.hw - 0.02) return true;
+  }
+  return false;
+}
 export class Aircraft {
   constructor(design, realism = REALISM.pilot) {
     this.design = design; this.R = realism;
@@ -992,7 +1006,9 @@ export class Aircraft {
   // through a wall), the vehicle's whole box (every hull point and wheel, body frame) is tested against each building's
   // box nearby (env.walls: world.wallBoxes) by separating axes in plan view and by height. Overlapping, it is pushed out
   // along the shallowest axis and the push is an impulse at its deepest corners (a glancing blow turns it along the
-  // wall, a corner spins it). A hole knocked in a building lets it through (env.wallPass).
+  // wall, a corner spins it). A hole knocked in a building lets it through (env.wallPass). An irregular building is a
+  // few boxes (its entry's e.parts): never pushed out of one into another, so a car sliding along a wall made of two
+  // boxes doesn't catch on the seam between them.
   bodyBox() {
     const lo = new THREE.Vector3(Infinity, Infinity, Infinity), hi = lo.clone().negate(), _p = new THREE.Vector3();
     for (const p of this.parts) {
@@ -1018,8 +1034,13 @@ export class Aircraft {
         for (let i = 0; i < 8; i++) { const d = C[i].x * ax + C[i].z * az; lo = Math.min(lo, d); hi = Math.max(hi, d); }
         const bc = B.x * ax + B.z * az, be = B.hl * Math.abs(ax * B.ux + az * B.uz) + B.hw * Math.abs(-ax * B.uz + az * B.ux);
         const o = Math.min(hi - (bc - be), bc + be - lo); if (o <= 0) { best = -1; break; }
+        if (B.e?.parts) { // (one of an irregular building's boxes: never pushed out into another of them)
+          for (let s = 1; s >= -1; s -= 2) { const os = s > 0 ? bc + be - lo : hi - (bc - be); if (os < best && !intoSib(this.walls, B, C, ax * s, az * s, os)) { best = os; nx = ax * s; nz = az * s; } }
+          continue;
+        }
         if (o < best) { best = o; const s = cx * ax + cz * az > bc ? 1 : -1; nx = ax * s; nz = az * s; }
       }
+      if (best === Infinity) continue; // (every way out of this box leads into the next: that one has it)
       if (best <= 0) continue;
       // the deepest corners (one for a corner-on hit, a whole face head-on), at a height inside the building
       let dmin = Infinity; for (let i = 0; i < 8; i++) dmin = Math.min(dmin, C[i].x * nx + C[i].z * nz);

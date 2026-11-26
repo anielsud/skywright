@@ -21,6 +21,7 @@
 //    of streets (Grand Central's train shed under Park Avenue, mapped as a building) or whose height is a guess is a
 //    mapping clash: it is cut back like any other.
 //  - the collision box (World.wallBoxes, destruction.js) is made from what's left, and fitBox keeps it off the tarmac
+//    (an irregular footprint: a few boxes that hug its walls, footBoxes)
 //    too (a box reaches past an irregular footprint's walls: over a cut-off corner, an L's yard).
 // Tunnels' tubes and bridge decks up in the air are left out (what's under them is no obstacle to the road).
 import { VERGE } from './roadgrade.js';
@@ -399,40 +400,217 @@ export function setBack(I, P, major = false, asRect = false, pass = null) {
 // does a courtyard still lie inside a cut footprint (all its corners)?
 export const holeInside = (P, h) => h.every((p) => inside(P, p[0], p[1]));
 
-// A collision box kept to its footprint's walls: an irregular footprint's oriented box (realCity.js obb, fitted off
-// the streets by fitBox) reaches past its walls (over a trapezoid's sliver on a diagonal street, into an L's yard):
-// an invisible wall out on the open ground beside it (a car driving along a building hit one 5 m short of its wall).
-// Each face moves in, half a metre at a time, while a corner or the middle of an edge stands more than OUT metres
-// outside the walls (the face that brings the worst one in most; no face further in than half way to the middle).
-// b, and the result: { cx, cz, ux, uz, hl, hw } (realCity.js's).
-export function boxInside(P, b, OUT = 1) {
-  const { ux, uz } = b, lim = [-b.hl * 0.5, b.hl * 0.5, -b.hw * 0.5, b.hw * 0.5], f = [-b.hl, b.hl, -b.hw, b.hw]; // u0 u1 v0 v1
-  const outside = (u, v) => { // metres (u, v) of the box's frame lies outside the footprint (0 inside)
-    const x = b.cx + u * ux - v * uz, z = b.cz + u * uz + v * ux; if (inside(P, x, z)) return 0;
-    let m = Infinity;
-    for (let i = 0, j = P.length - 1; i < P.length; j = i++) { const a = P[j], c = P[i], ex = c[0] - a[0], ez = c[1] - a[1], L2 = ex * ex + ez * ez || 1e-9, t = clamp01(((x - a[0]) * ex + (z - a[1]) * ez) / L2), d = hyp(a[0] + ex * t - x, a[1] + ez * t - z); if (d < m) m = d; }
-    return m;
+const clamp01 = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);
+
+// Collision boxes that hug a footprint's walls. One oriented box can't fit a cross, a U, an L's yard, a courtyard or a
+// trapezoid's sliver on a diagonal street: it reaches past the walls and a car hits an invisible wall out on the open
+// ground. So an irregular footprint gets a few boxes:
+//  - frames: the building's own (ux, uz), and up to FOOT.frames - 1 more along its longest walls that run some other
+//    way (a wing turned off the rest, a front on a diagonal street);
+//  - in each frame a grid of cells on the footprint's own lines (frameGrid: through every corner, and every FOOT.step
+//    along a slanted wall); a cell is the footprint's if its middle is inside it (holes left out);
+//  - a long wall that runs off every frame gets a strip of box along it, its outer face on the wall, as deep as fits;
+//  - then boxes are taken greedily: each time, in whichever frame, the rectangle of the footprint's cells that covers
+//    most of it still uncovered (bigger on a tie), until FOOT.cover of it is covered, FOOT.max boxes, or what's left
+//    is crumbs;
+//  - each box's faces are set on the walls before the next is taken (what's left uncovered then is what counts):
+//    rays from inside the box out across a face find the walls beyond it; the face goes onto them (a straight wall: on
+//    it; along a slanted wall out to FOOT.grow past its nearest point; over a small notch in a long wall). No point of
+//    a face may stand more than FOOT.out past the walls (the face moves in if one does);
+//  - a box inside another goes. Where two meet, a car is never pushed out of one into the other (aircraft.js).
+// -> [{ x, z, ux, uz, hl, hw }] (the building's own frame's first), or null.
+export const FOOT = { step: 1, slant: 0.3, cells: 2000, max: 12, frames: 4, strips: 6, cover: 0.97, grow: 0.5, out: 1, eager: 10000 }; // (eager: m2, a footprint so big its boxes are worked out at load, lazyParts)
+const D8 = (8 * Math.PI) / 180, D3 = (3 * Math.PI) / 180, Q90 = Math.PI / 2;
+const turn = (a, b) => { const d = Math.abs(a - b) % Q90; return Math.min(d, Q90 - d); }; // (between two wall directions, mod 90 degrees)
+// a footprint in a frame (fx, fz): its rings in (u, v), and a grid of cells on its own lines: through every corner
+// (a footprint square to the frame: its cells exactly), and every FOOT.step along a wall that runs off every frame
+// (one along another frame, that frame fits: every 3 FOOT.step)
+function frameGrid(P, holes, fx, fz, framed) {
+  const rings = [P, ...holes].map((R) => { const a = new Float64Array(R.length * 2); for (let k = 0; k < R.length; k++) { const x = R[k][0], z = R[k][1]; a[k * 2] = x * fx + z * fz; a[k * 2 + 1] = -x * fz + z * fx; } return a; });
+  const us = [], vs = []; let exact = true; // (then sorted as Float64Arrays: by number)
+  for (const a of rings) for (let n = a.length / 2, k = 0, m = n - 1; k < n; m = k++) {
+    const pu = a[m * 2], pv = a[m * 2 + 1], du = a[k * 2] - pu, dv = a[k * 2 + 1] - pv; us.push(pu); vs.push(pv);
+    if (Math.abs(du) > FOOT.slant && Math.abs(dv) > FOOT.slant) { exact = false; const n2 = Math.min(40, Math.ceil(Math.max(Math.abs(du), Math.abs(dv)) / (FOOT.step * (framed(du * fx - dv * fz, du * fz + dv * fx) ? 3 : 1)))); for (let i = 1; i < n2; i++) { us.push(pu + du * i / n2); vs.push(pv + dv * i / n2); } }
+  }
+  const lines = (x, g) => { x.sort(); const o = [x[0]]; for (const t of x) if (t - o[o.length - 1] > g) o.push(t); if (x[x.length - 1] - o[o.length - 1] > 1e-6) o[o.length - 1] = x[x.length - 1]; return o; };
+  const us2 = Float64Array.from(us), vs2 = Float64Array.from(vs);
+  let U, V, g = 0.05;
+  for (;;) { U = lines(us2, g); V = lines(vs2, g); if ((U.length - 1) * (V.length - 1) <= FOOT.cells || g > 4) break; g *= 1.5; } // (a big, round one: fewer, coarser cells)
+  const nu = U.length - 1, nv = V.length - 1; if (nu < 1 || nv < 1 || U[nu] - U[0] < 1 || V[nv] - V[0] < 1) return null;
+  const N = nu * nv, IN = new Uint8Array(N), wa = new Float64Array(N), uc = new Float64Array(nu), xs = [];
+  for (let i = 0; i < nu; i++) uc[i] = (U[i] + U[i + 1]) / 2;
+  let aIn = 0;
+  // which cells are the footprint's: a scanline through each row's middle (even-odd over every ring: the holes drop out)
+  for (let j = 0; j < nv; j++) {
+    const v = (V[j] + V[j + 1]) / 2, h = V[j + 1] - V[j]; xs.length = 0;
+    for (const a of rings) for (let n = a.length / 2, k = 0, m = n - 1; k < n; m = k++) { const av = a[m * 2 + 1], bv = a[k * 2 + 1]; if ((av > v) !== (bv > v)) xs.push(a[m * 2] + (v - av) * (a[k * 2] - a[m * 2]) / (bv - av)); }
+    xs.sort((p, q) => p - q);
+    for (let i = 0; i < nu; i++) wa[j * nu + i] = (U[i + 1] - U[i]) * h;
+    for (let k = 0, i = 0; k + 1 < xs.length; k += 2) { while (i < nu && uc[i] < xs[k]) i++; for (; i < nu && uc[i] < xs[k + 1]; i++) { IN[j * nu + i] = 1; aIn += wa[j * nu + i]; } }
+  }
+  return { ub: Infinity, exact, fx, fz, rings, U, V, nu, nv, N, IN, wa, aIn, cov: new Uint8Array(N), dead: new Uint8Array(N), S: new Float64Array((nu + 1) * (nv + 1)), h: new Int32Array(nu), st: new Int32Array(nu + 1) };
+}
+// exact geometry in a frame: inside the footprint? how far outside? how far along an axis (0 u, 1 v), direction sg, to the first wall
+const inF = (G, u, v) => { let c = false; for (const a of G.rings) for (let n = a.length / 2, k = 0, m = n - 1; k < n; m = k++) { const av = a[m * 2 + 1], bv = a[k * 2 + 1]; if ((av > v) !== (bv > v) && u < a[m * 2] + (v - av) * (a[k * 2] - a[m * 2]) / (bv - av)) c = !c; } return c; };
+function outD(G, u, v) {
+  if (inF(G, u, v)) return 0;
+  let d2 = Infinity;
+  for (const a of G.rings) for (let n = a.length / 2, k = 0, m = n - 1; k < n; m = k++) { const pu = a[m * 2], pv = a[m * 2 + 1], eu = a[k * 2] - pu, ev = a[k * 2 + 1] - pv, L2 = eu * eu + ev * ev || 1e-9, t = clamp01(((u - pu) * eu + (v - pv) * ev) / L2), du = pu + eu * t - u, dv = pv + ev * t - v, q = du * du + dv * dv; if (q < d2) d2 = q; }
+  return Math.sqrt(d2);
+}
+function ray(G, u, v, ax, sg) { // (-1: (u, v) isn't inside the footprint: an odd number of walls ahead if it is)
+  let best = Infinity, odd = false;
+  for (const a of G.rings) for (let n = a.length / 2, k = 0, m = n - 1; k < n; m = k++) {
+    const p0 = a[m * 2 + ax], q0 = a[m * 2 + 1 - ax], p1 = a[k * 2 + ax], q1 = a[k * 2 + 1 - ax], c = ax ? u : v;
+    if ((q0 > c) !== (q1 > c)) { const d = (p0 + (c - q0) * (p1 - p0) / (q1 - q0) - (ax ? v : u)) * sg; if (d > 0) { odd = !odd; if (d < best) best = d; } }
+  }
+  return odd ? best : -1;
+}
+// a box (world: x, z, ux, uz, hl, hw) marks the cells of a frame's grid whose middles it covers
+function mark(G, b) {
+  const cu = b.x * G.fx + b.z * G.fz, cv = -b.x * G.fz + b.z * G.fx, au = b.ux * G.fx + b.uz * G.fz, av = -b.ux * G.fz + b.uz * G.fx, r = b.hl + b.hw, { U, V, nu, nv } = G;
+  for (let j = 0; j < nv; j++) {
+    const y = (V[j] + V[j + 1]) / 2 - cv; if (y < -r || y > r) continue;
+    for (let i = 0; i < nu; i++) { const x = (U[i] + U[i + 1]) / 2 - cu; if (x >= -r && x <= r && Math.abs(x * au + y * av) < b.hl && Math.abs(-x * av + y * au) < b.hw) G.cov[j * nu + i] = 1; }
+  }
+}
+const toWorld = (G, cu, cv, au, av, hl, hw) => ({ x: cu * G.fx - cv * G.fz, z: cu * G.fz + cv * G.fx, ux: au * G.fx - av * G.fz, uz: au * G.fz + av * G.fx, hl, hw });
+export function footBoxes(P, holes, ux, uz) {
+  holes = holes || [];
+  const A = Math.abs(area(P)) - holes.reduce((t, h) => t + Math.abs(area(h)), 0); if (!(A > 2)) return null;
+  // the frames: the building's own, and its longest walls' that run some other way
+  const dirs = [[ux, uz]], ang = (x, z) => ((Math.atan2(z, x) % Q90) + Q90) % Q90, ed = [];
+  for (let k = 0, m = P.length - 1; k < P.length; m = k++) { const ex = P[k][0] - P[m][0], ez = P[k][1] - P[m][1], L = Math.hypot(ex, ez); if (L >= 2.5) ed.push([L, P[m], ex / L, ez / L]); }
+  ed.sort((p, q) => q[0] - p[0]);
+  for (const [L, , ex, ez] of ed) { if (dirs.length >= FOOT.frames || L < Math.max(4, 0.12 * Math.sqrt(A))) break; if (dirs.every(([x, z]) => turn(ang(x, z), ang(ex, ez)) > D8)) dirs.push([ex, ez]); }
+  const framed = (x, z) => dirs.some(([fx, fz]) => turn(ang(fx, fz), ang(x, z)) < D3), grids = dirs.map(([fx, fz]) => frameGrid(P, holes, fx, fz, framed)), G0 = grids[0], F = grids.filter(Boolean);
+  if (!G0 || !(G0.aIn > 1)) return null;
+  const out = []; // [G, cu, cv, au, av, hl, hw] in G's frame
+  // strips along the long walls no frame runs with (within 3 degrees), in the building's frame
+  for (const [L, p, ex, ez] of ed) {
+    if (out.length >= FOOT.strips) break;
+    if (F.some((G) => turn(ang(G.fx, G.fz), ang(ex, ez)) < D3)) continue;
+    const du = ex * ux + ez * uz, dv = -ex * uz + ez * ux, pu = p[0] * ux + p[1] * uz, pv = -p[0] * uz + p[1] * ux, sgA = area(P) > 0 ? 1 : -1, nu2 = -dv * sgA, nv2 = du * sgA, at = (t, d) => [pu + du * t + nu2 * d, pv + dv * t + nv2 * d];
+    for (const T of [2.5, 1.6, 1, 0.6]) {
+      const M = Math.floor(L / 0.5), good = []; for (let i = 0; i <= M; i++) { const [u, v] = at(i * 0.5, T); good.push(outD(G0, u, v) < 0.15); }
+      let b0 = -1, b1 = -1; for (let i = 0, r = -1; i <= M; i++) { if (!good[i]) { r = -1; continue; } if (r < 0) r = i; if (i - r > b1 - b0) { b0 = r; b1 = i; } }
+      if (b0 < 0) continue;
+      let t0 = b0 * 0.5, t1 = b1 * 0.5; const endOk = (t) => [0.25, 0.5, 0.75].every((f) => { const [u, v] = at(t, T * f); return outD(G0, u, v) < 0.15; });
+      for (let it = 0; it < 24 && t1 - t0 >= 2 && !endOk(t0); it++) t0 += 0.5;
+      for (let it = 0; it < 24 && t1 - t0 >= 2 && !endOk(t1); it++) t1 -= 0.5;
+      if (t1 - t0 < 2) continue;
+      const [cu, cv] = at((t0 + t1) / 2, T / 2), b = [G0, cu, cv, du, dv, (t1 - t0) / 2, T / 2]; out.push(b);
+      const w = toWorld(...b); for (const G of F) mark(G, w);
+      break;
+    }
+  }
+  const nStrips = out.length;
+  // a rectangle's faces onto the walls (in place)
+  const grow = nStrips ? 0.1 : FOOT.grow; // (not past a wall a strip lines)
+  const snap = (G, f) => {
+    const s = FOOT.step;
+    for (let pass = 0; pass < 2; pass++) for (let k = 0; k < 4; k++) { // faces: 0 u0, 1 u1, 2 v0, 3 v1 (first with the ends left out by the raster's slack: the next faces are not on their walls yet)
+      const ax = k >> 1, sg = k & 1 ? 1 : -1, lo = f[ax ? 0 : 2], hi = f[ax ? 1 : 3], len = hi - lo, depth = (f[ax * 2 + 1] - f[ax * 2]) / 2;
+      const n = Math.min(8, Math.max(2, Math.ceil(len / 2))), e = Math.min(pass ? 0.25 : 0.75 * s + 0.1, len / 4), ex = [], ends = [];
+      for (let q = 0; q < n; q++) {
+        const t = lo + e + (len - 2 * e) * q / (n - 1), p = f[k] - sg * depth, u = ax ? t : p, v = ax ? p : t;
+        const d = ray(G, u, v, ax, sg); if (d >= 0) { ex.push(p + sg * d); if (q === 0 || q === n - 1) ends.push(p + sg * d); }
+      }
+      // the walls up to just past the face (further out: more of the building, the face is inside it there); the face
+      // goes to the furthest of them that leaves the nearer ones at most grow behind it (a slanted wall), or at most
+      // FOOT.out behind it at a few points, with most of them on it (a notch in a long straight wall); else onto the nearest
+      const wl = ex.filter((x) => (x - f[k]) * sg <= 1.5 * s).sort((a, b) => (b - a) * sg);
+      if (!wl.length) continue;
+      let to = wl[wl.length - 1];
+      for (const c of wl) {
+        let mx = 0, cnt = 0, on = 0, far = 0;
+        for (const x of wl) { const o = (c - x) * sg; if (Math.abs(o) < 0.05) on++; if (o > 1e-6) { cnt++; if (o > mx) mx = o; if (o > grow && !ends.includes(x)) far++; } }
+        // (a slanted wall; a notch; or most of it on a wall and only its ends past one: a corner the next face, or the
+        // check below, takes care of)
+        if (mx <= grow || (on >= 0.5 * ex.length && ((mx <= FOOT.out && cnt <= 0.25 * ex.length) || !far))) { to = c; break; }
+      }
+      to = sg > 0 ? Math.max(to, f[k] - 1.5 * s) : Math.min(to, f[k] + 1.5 * s); // (no wild moves)
+      if ((sg > 0 ? to - f[k - 1] : f[k + 1] - to) > 0.3) f[k] = to;
+    }
+    // nothing more than FOOT.out past the walls (corners, edge middles and quarters): the worst face moves in
+    for (let it = 0; it < 16; it++) {
+      let w = FOOT.out, wf = -1, wa = 0;
+      for (let a = 0; a <= 4; a++) for (let k = 0; k < 4; k++) { const ax = k >> 1, t = ax ? f[0] + (f[1] - f[0]) * a / 4 : f[2] + (f[3] - f[2]) * a / 4, d = ax ? outD(G, t, f[k]) : outD(G, f[k], t); if (d > w) { w = d; wf = k; wa = a; } }
+      if (wf < 0) break;
+      if (wa === 0 || wa === 4) { const o = (wf >> 1 ? 0 : 2) + (wa ? 1 : 0); if ((o >> 1 ? f[1] - f[0] : f[3] - f[2]) < (wf >> 1 ? f[1] - f[0] : f[3] - f[2])) wf = o; } // (a corner: whichever of its faces is shorter moves in)
+      const ax = wf >> 1; if (f[ax * 2 + 1] - f[ax * 2] < 1) break;
+      f[wf] += wf & 1 ? -0.25 : 0.25;
+    }
   };
-  // the samples (corners, edge middles) and the faces each lies on
-  const worst = () => {
-    const um = (f[0] + f[1]) / 2, vm = (f[2] + f[3]) / 2; let w = OUT, faces = null;
-    for (const [u, v, F] of [[f[0], f[2], [0, 2]], [f[1], f[2], [1, 2]], [f[1], f[3], [1, 3]], [f[0], f[3], [0, 3]], [um, f[2], [2]], [um, f[3], [3]], [f[0], vm, [0]], [f[1], vm, [1]]]) { const d = outside(u, v); if (d > w) { w = d; faces = F; } }
-    return faces && { w, faces };
-  };
-  let moved = false;
-  for (let it = 0; it < 48; it++) {
-    const W = worst(); if (!W) break;
-    let best = null, bw = Infinity;
-    for (const k of W.faces) {
-      const s = k & 1 ? -0.5 : 0.5, to = f[k] + s; if (k & 1 ? to < lim[k] : to > lim[k]) continue; // (at its limit)
-      const was = f[k]; f[k] = to; const r = worst(); f[k] = was;
-      const v = r ? r.w : 0; if (v < bw) { bw = v; best = [k, to]; }
+  // greedy: in each frame the maximal rectangles of the footprint's cells (a histogram stack per row), scored by the
+  // footprint they cover that's still uncovered (m2); the best of all the frames
+  const crumbs = Math.max(Math.min(1.5, 0.02 * A), 0.004 * A), cov0 = () => { let t = 0; for (let c = 0; c < G0.N; c++) if (G0.IN[c] && G0.cov[c]) t += G0.wa[c]; return t; };
+  for (let tries = 0, got = cov0(); out.length < FOOT.max && tries < 2 * FOOT.max && got < FOOT.cover * G0.aIn; tries++) {
+    let best = null, ba = crumbs, bar = 0;
+    F.sort((p, q) => q.ub - p.ub);
+    for (const G of F) {
+      if (G.ub < ba) continue; // (its best last time is as much as it can give now: the uncovered footprint only shrinks)
+      const { nu, nv, IN, wa, cov, dead, S, h, st } = G, W1 = nu + 1; let gb = 0;
+      for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) { const c = j * nu + i; S[(j + 1) * W1 + i + 1] = (IN[c] && !cov[c] && !dead[c] ? wa[c] : 0) + S[j * W1 + i + 1] + S[(j + 1) * W1 + i] - S[j * W1 + i]; }
+      h.fill(0);
+      for (let j = 0; j < nv; j++) {
+        for (let i = 0; i < nu; i++) h[i] = IN[j * nu + i] ? h[i] + 1 : 0;
+        let top = 0;
+        for (let i = 0; i <= nu; i++) {
+          const hi = i < nu ? h[i] : 0;
+          while (top && h[st[top - 1]] >= hi) {
+            const H = h[st[--top]], l = top ? st[top - 1] + 1 : 0; if (!H) continue;
+            const r0 = j + 1 - H, sc = S[(j + 1) * W1 + i] - S[r0 * W1 + i] - S[(j + 1) * W1 + l] + S[r0 * W1 + l]; if (sc > gb) gb = sc;
+            if (sc > ba + 1e-9 || (Math.abs(sc - ba) <= 1e-9 && best)) { const ar = (G.U[i] - G.U[l]) * (G.V[j + 1] - G.V[r0]); if (sc > ba + 1e-9 || ar > bar) { ba = sc; bar = ar; best = [G, l, r0, i, j + 1]; } }
+          }
+          st[top++] = i;
+        }
+      }
+      G.ub = gb;
     }
     if (!best) break;
-    f[best[0]] = best[1]; moved = true;
+    const [G, c0, r0, c1, r1] = best, f = [G.U[c0], G.U[c1], G.V[r0], G.V[r1]];
+    if (!G.exact) snap(G, f); // (every wall square to the frame: its cells' edges are on them already)
+    if (f[1] - f[0] > 0.3 && f[3] - f[2] > 0.3) { const b = [G, (f[0] + f[1]) / 2, (f[2] + f[3]) / 2, 1, 0, (f[1] - f[0]) / 2, (f[3] - f[2]) / 2], w = toWorld(...b); out.push(b); for (const H of F) mark(H, w); }
+    const now = cov0(); if (now - got < crumbs) for (let j = r0; j < r1; j++) for (let i = c0; i < c1; i++) G.dead[j * G.nu + i] = 1; // (on the walls it gains nothing: not that one again)
+    got = now;
   }
-  if (!moved) return b;
-  const um = (f[0] + f[1]) / 2, vm = (f[2] + f[3]) / 2;
-  return { cx: b.cx + um * ux - vm * uz, cz: b.cz + um * uz + vm * ux, ux, uz, hl: (f[1] - f[0]) / 2, hw: (f[3] - f[2]) / 2 };
+  if (!out.length) return null;
+  // in the world, the building's own frame's first (boundBox); a box inside another one goes
+  const all = out.map((b) => toWorld(...b)).sort((a, b) => (Math.abs(b.ux * ux + b.uz * uz) > 0.9999) - (Math.abs(a.ux * ux + a.uz * uz) > 0.9999));
+  const pt = (b, l, w) => [b.x + b.ux * l - b.uz * w, b.z + b.uz * l + b.ux * w], inB = (b, p, e = 0) => { const x = p[0] - b.x, y = p[1] - b.z; return Math.abs(x * b.ux + y * b.uz) < b.hl + e && Math.abs(-x * b.uz + y * b.ux) < b.hw + e; };
+  const keep = all.filter((b, i) => !all.some((c, j) => j !== i && (c.hl * c.hw > b.hl * b.hw || (c.hl * c.hw === b.hl * b.hw && j < i)) && [[1, 1], [1, -1], [-1, 1], [-1, -1]].every(([p, q]) => inB(c, pt(b, b.hl * p, b.hw * q), 0.05))));
+  return keep.length ? keep : null;
 }
-const clamp01 = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);
+// the box round boxes in one frame (footBoxes'): the building's whole extent, for what treats it as one
+export function boundBox(B) {
+  const { ux, uz } = B[0]; let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+  for (const b of B) for (const [p, q] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) { const x = b.x + b.ux * b.hl * p - b.uz * b.hw * q, z = b.z + b.uz * b.hl * p + b.ux * b.hw * q, u = x * ux + z * uz, v = -x * uz + z * ux; if (u < u0) u0 = u; if (u > u1) u1 = u; if (v < v0) v0 = v; if (v > v1) v1 = v; }
+  const um = (u0 + u1) / 2, vm = (v0 + v1) / 2;
+  return { x: um * ux - vm * uz, z: um * uz + vm * ux, ux, uz, hl: (u1 - u0) / 2, hw: (v1 - v0) / 2 };
+}
+// is (x, z) inside one of a building's boxes?
+export const inParts = (B, x, z) => { for (const b of B) { const dx = x - b.x, dz = z - b.z; if (Math.abs(dx * b.ux + dz * b.uz) < b.hl && Math.abs(-dx * b.uz + dz * b.ux) < b.hw) return true; } return false; };
+// does one box (x, z, ux, uz, hl, hw) fit footprint P, or does a building need footBoxes? Not when every corner and
+// every quarter of its edges is within half a metre of its walls and it fills at least 90% of the box (a near-
+// rectangle, mapped a little crooked); else it does (an L, a U, a corner cut off a big building: metres of its box
+// out over the pavement)
+export function irregular(P, A, x, z, ux, uz, hl, hw) {
+  if (A < 0.9 * 4 * hl * hw) return true;
+  for (let k = 0; k < 16; k++) {
+    const t = (k & 3) / 2 - 1, side = k >> 2, a = side < 2 ? (side ? 1 : -1) : t, c = side < 2 ? t : side === 2 ? 1 : -1; // (round the edges, a quarter at a time)
+    const px = x + ux * hl * a - uz * hw * c, pz = z + uz * hl * a + ux * hw * c; if (inside(P, px, pz)) continue;
+    let d2 = Infinity; for (let i = 0, j = P.length - 1; i < P.length; j = i++) { const p = P[j], q = P[i], ex = q[0] - p[0], ez = q[1] - p[1], tt = clamp01(((px - p[0]) * ex + (pz - p[1]) * ez) / (ex * ex + ez * ez || 1e-9)), dx = p[0] + ex * tt - px, dz = p[1] + ez * tt - pz; d2 = Math.min(d2, dx * dx + dz * dz); }
+    if (d2 > 0.25) return true;
+  }
+  return false;
+}
+// An irregular building's boxes, worked out the first time anything asks for them (a car near it, a blow, a test):
+// footBoxes for a whole city at load is seconds; a car or a plane only ever meets a few hundred buildings.
+// make() -> the boxes; e.parts is then a plain property.
+export function lazyParts(e, make) {
+  Object.defineProperty(e, 'parts', { configurable: true, enumerable: true, get() { const B = make(); Object.defineProperty(e, 'parts', { value: B, writable: true, configurable: true, enumerable: true }); return B; } });
+}
+// a footprint ([[x, z], ...]) kept compact until it's wanted again (lazyParts)
+export const packRing = (P) => { const a = new Float32Array(P.length * 2); for (let k = 0; k < P.length; k++) { a[k * 2] = P[k][0]; a[k * 2 + 1] = P[k][1]; } return a; };
+export const unpackRing = (a) => { const P = []; for (let k = 0; k < a.length; k += 2) P.push([a[k], a[k + 1]]); return P; };
