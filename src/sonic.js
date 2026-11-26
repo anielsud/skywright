@@ -76,6 +76,7 @@ function diamondGeometry(flame) {
   }
   const m = mergeGeometries(parts); parts.forEach((g) => g.dispose()); return m;
 }
+const ringMat = () => new THREE.ShaderMaterial({ name: 'sonicRing', uniforms: { uA: { value: 0 } }, vertexShader: ringVert, fragmentShader: ringFrag, transparent: true, depthWrite: false, side: THREE.DoubleSide });
 const diamondMat = () => new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 1.5, 2.2), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
 
 // Hot-skin glow: patched copy of a lit material. Kinetic heating peaks where the air stagnates, so each fragment gets
@@ -155,7 +156,10 @@ export class SonicFX {
     // vapour cone + plasma sheath
     this.vapour = new THREE.Mesh(coneGeometry(), shellMaterial(false)); this.vapour.frustumCulled = false; this.vapour.visible = false; this.vapour.renderOrder = 2;
     this.plasma = new THREE.Mesh(coneGeometry(), shellMaterial(true)); this.plasma.frustumCulled = false; this.plasma.visible = false; this.plasma.renderOrder = 3;
-    scene.add(this.vapour, this.plasma);
+    // a boom's shock rings are made when it happens; this hidden one is here from the start so the loading screen's
+    // warm-up compiles their shader and the boom shows at once (#273: events are never held back)
+    this.ringWarm = new THREE.Mesh(ringGeometry(), ringMat()); this.ringWarm.visible = false; this.ringWarm.frustumCulled = false;
+    scene.add(this.vapour, this.plasma, this.ringWarm);
     // shock diamonds in every flame
     this.diamonds = [];
     for (const p of ac.parts) {
@@ -232,7 +236,7 @@ export class SonicFX {
     const ac = this.ac, fwd = this.U.fwd.value;
     _q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), fwd);
     for (const [delay, grow] of [[0, 140], [0.14, 110]]) { // bow and tail shock: the double "ba-boom"
-      const m = new THREE.Mesh(ringGeometry(), new THREE.ShaderMaterial({ uniforms: { uA: { value: 0 } }, vertexShader: ringVert, fragmentShader: ringFrag, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
+      const m = new THREE.Mesh(ringGeometry(), ringMat());
       m.position.copy(ac.x).addScaledVector(ac.v, -delay); m.quaternion.copy(_q); m.frustumCulled = false; m.renderOrder = 2;
       const r0 = Math.max(this.span, 3) * 1.2; m.scale.setScalar(r0);
       // the shock is dragged along with the plane and slides back past the chase camera
@@ -283,8 +287,8 @@ export class SonicFX {
   }
 
   dispose() {
-    this.scene.remove(this.vapour, this.plasma);
-    this.vapour.material.dispose(); this.plasma.material.dispose();
+    this.scene.remove(this.vapour, this.plasma, this.ringWarm);
+    this.vapour.material.dispose(); this.plasma.material.dispose(); this.ringWarm.material.dispose(); this.ringWarm.geometry.dispose();
     for (const r of this.rings) { this.scene.remove(r.m); r.m.material.dispose(); }
     for (const { d } of this.diamonds) { d.parent?.remove(d); d.geometry.dispose(); d.material.dispose(); }
     this.rings = [];

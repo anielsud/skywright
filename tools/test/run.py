@@ -24,6 +24,7 @@ BROWSER = {
     'padcheck': (['padcheck.py'], ['src/launchpad.js', 'src/main.js', 'src/startChoice.js', 'tools/test/padcheck.js', 'src/aircraft.js', 'src/world.js']),
     'helipadcheck': (['helipadcheck.py'], ['src/helipad.js', 'src/main.js', 'src/startChoice.js', 'tools/test/padcheck.js', 'tools/test/helipadcheck.js', 'src/aircraft.js', 'src/world.js', 'src/nyc*.js']),
     'startbakes-stunts': (['startbakes.py', '--only', 'stunts'], ['src/stuntPark.js', 'src/stuntSite.js', 'src/realworld.js', 'src/world.js', 'tools/bake/*', 'tools/test/startbakes.*']),  # (its views: the Node suite startbakes)
+    'shadercheck': (['shadercheck.py'], ['src/*', 'vendor/*', 'tools/test/shadercheck.*']),  # (the shader sweep, #273: no stalls, events never wait)
     'tunnelcheck-ui': (['tunnelcheck.py', '--ui'], ['src/windTunnel.js', 'src/tunnel*.js', 'src/main.js', 'tools/test/tunnelcheck.*']),  # (its lift curves and forces: the Node suite tunnelcheck)
 }
 # extra arguments on a CI runner (--ci; software WebGL: seconds a frame, so smaller windows, fewer repeats, no frame-time limits)
@@ -33,6 +34,7 @@ CI_ARGS = {
     # (Low: about 100 shader programs a new place instead of 140, and each takes the runner's software GPU ~0.3 s;
     # where things start and how they fly doesn't depend on the graphics tier)
     'padcheck': ['--quality', 'low'],
+    'shadercheck': ['--quality', 'low'],
     'helipadcheck': ['--quality', 'low'],
 }
 HARNESS = ['tools/test/run.py', 'tools/test/node/*', 'tools/test/smoke.py']  # changing these runs everything
