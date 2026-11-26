@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.199.0', items: [
+    "Trying again after a crash, or switching vehicles, is much quicker now.",
+    "New York runs smoother: the city draws far fewer pavement pieces you can't see.",
+  ] },
   { v: '1.198.0', items: [
     "Road junctions are smoother: forks, slip roads, steep corners and tangled crossings now get proper paved boxes, and pavements sit flat on the ground.",
   ] },
