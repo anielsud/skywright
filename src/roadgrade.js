@@ -344,6 +344,10 @@ export function carveGrid(w, roads, H, R, st, bench = 0.75, junctions = []) {
 // beyond the detail mesh the ground showed through the road.)
 const PIN = 0.05; // metres the ground stays under a road
 export const PAVE = { main: 4.5, street: 3.5 }; // a city street's pavements: metres out from the tarmac's edge (roads.js)
+// a city junction's corner pavements (junctions.js, net.junctions' pave): per corner a Float64Array of rows round the
+// kerb, PAVE_ROW numbers each: the kerb point x, z; its partner on the building line x, z; v (metres round the kerb);
+// hw; lift. (Typed: New York has ~34k junctions, and its rows as objects and arrays were most of the junctions' memory.)
+export const PAVE_ROW = 7;
 // A city's open ground (roads.js cityGround) lies CITY_TOP over the tarmac: the slabs' top (0.15 m kerb + the tarmac's
 // lift, roads.js TARMAC_LIFT) less a centimetre. Off a city street's footprint (tarmac and verge) RoadSurface.over
 // ramps up to it over PAVE_RAMP metres (under the slabs: no kerb in physics, a 4-9% rise) and from there hands over to
@@ -421,7 +425,7 @@ function pinUnder(w, roads, H, R, st, junctions = []) {
   for (const J of junctions) {
     const B = J.box, T = J.tris, r0 = J.y - PIN;
     for (let t = 0; t < T.length; t += 3) { for (let k = 0; k < 3; k++) { q[k * 2] = B[T[t + k] * 2]; q[k * 2 + 1] = B[T[t + k] * 2 + 1]; } pin(6, r0, 0, 0, r0); }
-    for (const rows of J.pave) for (let k = 1; k < rows.length; k++) { const a = rows[k - 1], b = rows[k]; q[0] = a.k[0]; q[1] = a.k[1]; q[2] = b.k[0]; q[3] = b.k[1]; q[4] = b.o[0]; q[5] = b.o[1]; q[6] = a.o[0]; q[7] = a.o[1]; pin(8, r0, 0, 0, r0); }
+    for (const R of J.pave) for (let b = PAVE_ROW; b < R.length; b += PAVE_ROW) { const a = b - PAVE_ROW; q[0] = R[a]; q[1] = R[a + 1]; q[2] = R[b]; q[3] = R[b + 1]; q[4] = R[b + 2]; q[5] = R[b + 3]; q[6] = R[a + 2]; q[7] = R[a + 3]; pin(8, r0, 0, 0, r0); } // (junctions.js PAVE_ROW: kerb x, z, building line x, z, ...)
   }
 }
 

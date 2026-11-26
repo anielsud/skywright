@@ -20,7 +20,7 @@
 // bridge or tunnel at the node, and junctions on a street too steep to level them (gradeReal: the next junction along
 // an arm out of reach at 20% from the mouths).
 import * as THREE from 'three';
-import { PAVE, VERGE, inside } from './roadgrade.js';
+import { PAVE, PAVE_ROW, VERGE, inside } from './roadgrade.js';
 
 const CMAX = 22, RK = { city: 3, country: 5 }, MIN_ANGLE = 30 * Math.PI / 180, STRAIGHT = 155 * Math.PI / 180;
 export const TARMAC_LIFT = { highway: 0.08, main: 0.06, street: 0.04 }; // metres the tarmac lies over the ground it is on (roads.js)
@@ -115,8 +115,8 @@ export function insertMouths(roads, plan) {
 }
 
 // After grading (or from a road pack): each junction's height and shapes. net.junctions = [{ nd, x, z, y, arms,
-// box: [x, z, ...] (counter-clockwise), tris (indices into box), lift (per box vertex), corners: [{ kerb: [x, z, ...],
-// outer: [x, z, ...] (the building line, a point per kerb point), hw, W, lift (per kerb point), v (metres along) }],
+// box: [x, z, ...] (counter-clockwise), tris (indices into box), lift (per box vertex), pave: a city's corner
+// pavements, per corner a Float64Array of rows round the kerb (PAVE_ROW: kerb x, z, building line x, z, v, hw, lift),
 // r: Map 'k:j:dir' -> clearance for the markings (mouth - 0.6 m) }]. Only the junctions with a box (J.ok).
 export function junctionShapes(roads, city) {
   const out = [], rk = city ? RK.city : RK.country, F = (junctionShapes.fail = { steep: 0, cross: 0, node: 0, tri: 0 }); // (fail: why junctions were left without a box)
@@ -172,7 +172,7 @@ export function junctionShapes(roads, city) {
     const pave = [];
     for (const { i, kerb: K, outer } of corners) {
       if (!outer) continue;
-      const A = J.arms[i], B = J.arms[(i + 1) % n], m = K.length, rows = [];
+      const A = J.arms[i], B = J.arms[(i + 1) % n], m = K.length, rows = new Float64Array(m * PAVE_ROW);
       // (each kerb point's partner on the building line at the same share of the way round: rows that never cross,
       // where the building line is much shorter than the kerb's round, or just its corner)
       const len = (L) => { let t = 0; for (let q = 1; q < L.length; q++) t += Math.hypot(L[q][0] - L[q - 1][0], L[q][1] - L[q - 1][1]); return t; }, Lk = len(K) || 1, Lo = len(outer);
@@ -180,7 +180,8 @@ export function junctionShapes(roads, city) {
       for (let q = 0; q < m; q++) {
         if (q) v += Math.hypot(K[q][0] - K[q - 1][0], K[q][1] - K[q - 1][1]);
         const f = m > 1 ? q / (m - 1) : 0;
-        rows.push({ k: K[q], o: q === m - 1 ? outer.at(-1) : walk(outer, Lo * v / Lk), v, hw: A.hw + (B.hw - A.hw) * f, lift: A.lift + (B.lift - A.lift) * f });
+        const o = q === m - 1 ? outer.at(-1) : walk(outer, Lo * v / Lk);
+        rows.set([K[q][0], K[q][1], o[0], o[1], v, A.hw + (B.hw - A.hw) * f, A.lift + (B.lift - A.lift) * f], q * PAVE_ROW);
       }
       pave.push(rows);
     }

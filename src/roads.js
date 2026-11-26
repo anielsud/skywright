@@ -7,7 +7,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { REGION, roadStyle, tarmacMaterial, shoulderMaterial, sidewalkMaterial } from './roadSurface.js';
 import { airportGate } from './airportKit.js';
 import { junctionPlan, insertMouths, junctionShapes, TARMAC_LIFT, along } from './junctions.js';
-import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE, CITY_TOP } from './roadgrade.js';
+import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE, PAVE_ROW, CITY_TOP } from './roadgrade.js';
 
 const RWY_HALF = 900, JGRADE = 0.2; // (JGRADE: the steepest a street may be left between two junctions' level boxes)
 
@@ -506,13 +506,13 @@ export function buildRoadMeshes(w, net) {
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('rinfo', new THREE.Float32BufferAttribute(ri, 3)); g.setAttribute('rjunc', new THREE.Float32BufferAttribute(rj, 4));
     g.setIndex(B.tris.slice()); add(tarmac, g);
     if (!sidewalk) return;
-    for (const rows of B.pave) { // rows round the kerb: the kerb's face (from the gutter up 15 cm), then the slabs out to the building line (the granite band: the shader's, uv)
+    for (const R of B.pave) { // rows round the kerb: the kerb's face (from the gutter up 15 cm), then the slabs out to the building line (the granite band: the shader's, uv)
       const p2 = [], u2 = [], r2 = [], j2 = [], idx = [];
-      rows.forEach((r, q) => {
-        const dx = r.o[0] - r.k[0], dz = r.o[1] - r.k[1], W = Math.hypot(dx, dz) || 1, y = B.y + r.lift;
-        for (const [o, h] of [[0, 0], [0, 0.15], [W, 0.15]]) { p2.push(r.k[0] + dx * o / W, y + h, r.k[1] + dz * o / W); u2.push(r.hw + o, r.v); r2.push(r.hw, 0, seed); j2.push(...NOJ); }
+      for (let q = 0; q * PAVE_ROW < R.length; q++) { // (roadgrade.js PAVE_ROW: kerb x, z, building line x, z, v, hw, lift)
+        const e = q * PAVE_ROW, kx = R[e], kz = R[e + 1], v = R[e + 4], hw = R[e + 5], dx = R[e + 2] - kx, dz = R[e + 3] - kz, W = Math.hypot(dx, dz) || 1, y = B.y + R[e + 6];
+        for (const [o, h] of [[0, 0], [0, 0.15], [W, 0.15]]) { p2.push(kx + dx * o / W, y + h, kz + dz * o / W); u2.push(hw + o, v); r2.push(hw, 0, seed); j2.push(...NOJ); }
         if (q) { const a = (q - 1) * 3, b = q * 3; for (let c = 0; c < 2; c++) idx.push(a + c, b + c, a + c + 1, a + c + 1, b + c, b + c + 1); } // (facing up, the kerb's face towards the road)
-      });
+      }
       if (!idx.length) continue;
       const g2 = new THREE.BufferGeometry();
       g2.setAttribute('position', new THREE.Float32BufferAttribute(p2, 3)); g2.setAttribute('uv', new THREE.Float32BufferAttribute(u2, 2)); g2.setAttribute('rinfo', new THREE.Float32BufferAttribute(r2, 3)); g2.setAttribute('rjunc', new THREE.Float32BufferAttribute(j2, 4));
