@@ -308,10 +308,18 @@ export function carveGrid(w, roads, H, R, st, bench = 0.75, junctions = []) {
       // (a city's streets: most of them; the 46 m search round every point was ~1 s of New York's load)
       const nearPortal = rd.tube && (rd.tube[i + 1] || rd.tube[i + 2] || rd.tube[i - 1] || rd.tube[i - 2]); // (the last of a tunnel's cutting: just its bench, or it would cut into the hill over the tube's mouth; the portal's headwall hides the face)
       const g = H[clamp(j0, 0, R) * W + clamp(i0, 0, R)], rl = nearPortal ? st * bench : Math.min(reach, st * bench + Math.abs(p.y - g) / FILL + st), rr = Math.ceil((hw + rl) / st);
-      for (let j = j0 - rr; j <= j0 + rr; j++) for (let ii = i0 - rr; ii <= i0 + rr; ii++) {
-        if (ii < 0 || j < 0 || ii > R || j > R) continue;
-        const e = Math.hypot(-half + ii * st - p.x, -half + j * st - p.z) - hw, k = j * W + ii;
-        if (e < bd[k] && e < rl) { bd[k] = e; by[k] = p.y; }
+      // (only the vertices within hw + rl can take this point, and only those it is nearer than their nearest so far:
+      // the rest are skipped on squared distances, with a margin, before the exact test, so the result is the same)
+      const L = hw + rl, L2 = L * L * (1 + 1e-9) + 1e-9;
+      for (let j = Math.max(0, j0 - rr); j <= Math.min(R, j0 + rr); j++) {
+        const dz = -half + j * st - p.z, dz2 = dz * dz; if (dz2 > L2) continue;
+        const dxm = Math.sqrt(L2 - dz2), row = j * W;
+        for (let ii = Math.max(0, i0 - rr, Math.floor((p.x - dxm + half) / st) - 1), i1 = Math.min(R, i0 + rr, Math.ceil((p.x + dxm + half) / st) + 1); ii <= i1; ii++) {
+          const dx = -half + ii * st - p.x, k = row + ii, b = bd[k], lim = (b < rl ? b : rl) + hw;
+          if (lim < -1e-6 || dx * dx + dz2 > lim * lim * (1 + 1e-9) + 1e-9) continue;
+          const e = Math.hypot(dx, dz) - hw;
+          if (e < b && e < rl) { bd[k] = e; by[k] = p.y; }
+        }
       }
     }
   }
@@ -336,6 +344,11 @@ export function carveGrid(w, roads, H, R, st, bench = 0.75, junctions = []) {
 // beyond the detail mesh the ground showed through the road.)
 const PIN = 0.05; // metres the ground stays under a road
 export const PAVE = { main: 4.5, street: 3.5 }; // a city street's pavements: metres out from the tarmac's edge (roads.js)
+// a city junction's corner pavements (junctions.js, net.junctions' pave): per corner a Float64Array of rows round the
+// kerb, PAVE_ROW numbers each: the kerb point x, z; its partner on the building line x, z; y (the kerb's height); v
+// (metres round the kerb); hw; lift. (Typed: New York has ~34k junctions, and its rows as objects and arrays were most
+// of the junctions' memory, kept for the World's life: the lazy road tiles draw them.)
+export const PAVE_ROW = 8;
 // A city's open ground (roads.js cityGround) lies CITY_TOP over the tarmac: the slabs' top (0.15 m kerb + the tarmac's
 // lift, roads.js TARMAC_LIFT) less a centimetre. Off a city street's footprint (tarmac and verge) RoadSurface.over
 // ramps up to it over PAVE_RAMP metres (under the slabs: no kerb in physics, a 4-9% rise) and from there hands over to
@@ -418,7 +431,7 @@ function pinUnder(w, roads, H, R, st, junctions = []) {
       const [r0, rx, rz] = plane(V[a * 2], V[a * 2 + 1], Y[a], V[b * 2], V[b * 2 + 1], Y[b], V[c * 2], V[c * 2 + 1], Y[c]);
       pin(6, r0 - PIN, rx, rz, Math.min(Y[a], Y[b], Y[c]) - PIN);
     }
-    for (const rows of J.pave) for (let k = 1; k < rows.length; k++) { const a = rows[k - 1], b = rows[k], r0 = Math.min(a.y, b.y) - PIN; q[0] = a.k[0]; q[1] = a.k[1]; q[2] = b.k[0]; q[3] = b.k[1]; q[4] = b.o[0]; q[5] = b.o[1]; q[6] = a.o[0]; q[7] = a.o[1]; pin(8, r0, 0, 0, r0); }
+    for (const R of J.pave) for (let b = PAVE_ROW; b < R.length; b += PAVE_ROW) { const a = b - PAVE_ROW, r0 = Math.min(R[a + 4], R[b + 4]) - PIN; q[0] = R[a]; q[1] = R[a + 1]; q[2] = R[b]; q[3] = R[b + 1]; q[4] = R[b + 2]; q[5] = R[b + 3]; q[6] = R[a + 2]; q[7] = R[a + 3]; pin(8, r0, 0, 0, r0); } // (PAVE_ROW: kerb x, z, building line x, z, y, ...)
   }
 }
 

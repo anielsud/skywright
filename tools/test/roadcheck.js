@@ -392,9 +392,9 @@ export async function pavementCheck(w, { within = null } = {}) {
       for (let s = PSTEP / 2; s < L; s += PSTEP) for (const sd of [-1, 1]) { const x = a.x + (b.x - a.x) * s / L + rx * o * sd, z = a.z + (b.z - a.z) * s / L + rz * o * sd; put(t, x, z); }
     }
   }
-  for (const B of w.net.junctions || []) for (const rows of B.pave || []) for (const r of rows) {
-    const dx = r.k[0] - r.o[0], dz = r.k[1] - r.o[1], l = Math.hypot(dx, dz); if (l < 0.5) continue;
-    put(tk(B.x, B.z), r.o[0] + dx / l * 0.1, r.o[1] + dz / l * 0.1);
+  for (const B of w.net.junctions || []) for (const R of B.pave || []) for (let e = 0; e < R.length; e += 8) { // (roadgrade.js PAVE_ROW: kerb x, z, building line x, z, ...)
+    const kx = R[e], kz = R[e + 1], ox = R[e + 2], oz = R[e + 3], dx = kx - ox, dz = kz - oz, l = Math.hypot(dx, dz); if (l < 0.5) continue;
+    put(tk(B.x, B.z), ox + dx / l * 0.1, oz + dz / l * 0.1);
   }
   const out = { n: 0, float: 0, buried: 0, worst: 0, at: '', ex: [] }, key = (a, b) => (a + 4e4) * 1e5 + (b + 4e4);
   for (const t of G.userData.tiles) {

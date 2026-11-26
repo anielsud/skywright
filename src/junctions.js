@@ -29,7 +29,7 @@
 // a bridge or tunnel at the node; roads merging on a slope (one climbing away from the other); a warped box no node
 // sees all of, climbing more than WARP across.
 import * as THREE from 'three';
-import { PAVE, VERGE, inside } from './roadgrade.js';
+import { PAVE, PAVE_ROW, VERGE, inside } from './roadgrade.js';
 
 const CMAX = 22, SPAN = 30, WARP = 1.2, RINGS = 3, RK = { city: 3, country: 5 }, MIN_ANGLE = 30 * Math.PI / 180, STRAIGHT = 155 * Math.PI / 180;
 export const TARMAC_LIFT = { highway: 0.08, main: 0.06, street: 0.04 }; // metres the tarmac lies over the ground it is on (roads.js)
@@ -43,6 +43,10 @@ function junctionNodes(roads) {
 }
 // 2D distances along a road
 export function along(P) { const S = new Float64Array(P.length); for (let i = 1; i < P.length; i++) S[i] = S[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z); return S; }
+// the first point i in 1 .. n - 1 at least s along (S: along's), else n - 1: the segment i - 1 .. i holds s
+function segAt(S, s) { let lo = 1, hi = S.length - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (S[m] < s) lo = m + 1; else hi = m; } return lo; }
+// which of a road's points are junction nodes (rd.jn): point index -> its node (the first listed)
+export function jnAt(rd) { const M = new Map(); for (const [j, nd] of rd.jn || []) if (!M.has(j)) M.set(j, nd); return M; }
 // the right vector at point i (as roads.js frame: along the neighbours' chord)
 function right2(a, b) { const dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz) || 1; return [-dz / l, dx / l]; }
 function right(P, i) { const a = P[Math.max(0, i - 1)], b = P[Math.min(P.length - 1, i + 1)], dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz) || 1; return [-dz / l, dx / l]; }
@@ -56,8 +60,8 @@ function right(P, i) { const a = P[Math.max(0, i - 1)], b = P[Math.min(P.length 
 // from), ox, oz (that node), dir (+1: the arm runs up the road's points), hw, W (pavement width, 0 none), lift, c
 // (mouth: metres along from its node) }], inner: [{ k, j, dir, c (the length: to the other node) }], ok (false: no box,
 // the roads stay as they were: a bridge or tunnel there) }].
-export function junctionPlan(roads, city) {
-  const out = [], S = new Map(), sOf = (k) => { let s = S.get(k); if (!s) S.set(k, (s = along(roads[k].pts))); return s; };
+export function junctionPlan(roads, city, S = new Map()) { // (S: road -> along(its points), kept by the caller to share)
+  const out = [], sOf = (k) => { let s = S.get(k); if (!s) S.set(k, (s = along(roads[k].pts))); return s; }, JN = new Map(), jnOf = (k) => { let m = JN.get(k); if (!m) JN.set(k, (m = jnAt(roads[k]))); return m; };
   const nodes = junctionNodes(roads), info = new Map(); // nd -> { x, z, arms, ok, hw (the widest road through it) }
   for (const [nd, L] of nodes) {
     const p0 = roads[L[0].k].pts[L[0].j], arms = []; let ok = true, hw = 0;
@@ -71,7 +75,7 @@ export function junctionPlan(roads, city) {
         // direction: to the first point at least 0.5 m away; length: to the next junction node or the road's end
         let q = j + dir; while (q + dir >= 0 && q + dir < n && Math.abs(Sk[q] - Sk[j]) < 0.5) q += dir;
         const dx = P[q].x - P[j].x, dz = P[q].z - P[j].z, l = Math.hypot(dx, dz) || 1;
-        let e = j + dir, to = null; while (e > 0 && e < n - 1 && !(rd.jn || []).some(([jj]) => jj === e)) e += dir;
+        let e = j + dir, to = null; const jm = jnOf(k); while (e > 0 && e < n - 1 && !jm.has(e)) e += dir;
         for (const [jj, n2] of rd.jn || []) if (jj === e && nodes.has(n2) && n2 !== nd) to = n2;
         const W = city && rd.kind !== 'highway' && !rd.baked ? PAVE[rd.kind] ?? 3.5 : 0;
         arms.push({ k, j, nd, ox: p0.x, oz: p0.z, dir, dx: dx / l, dz: dz / l, hw: rd.width / 2, W, lift: TARMAC_LIFT[rd.kind] ?? 0.04, len: Math.abs(Sk[e] - Sk[j]), to, a: 0, c: 0 });
@@ -141,7 +145,7 @@ export function insertMouths(roads, plan) {
     const rd = roads[k], P = rd.pts, S = along(P), ins = [];
     for (const A of L) {
       const s = S[A.j] + A.dir * A.c; if (s <= 0.3 || s >= S[P.length - 1] - 0.3) continue;
-      let i = 1; while (i < P.length - 1 && S[i] < s) i++; // (s in the segment i - 1 .. i)
+      const i = segAt(S, s); // (s in the segment i - 1 .. i)
       if (Math.abs(S[i] - s) < 0.05 || Math.abs(S[i - 1] - s) < 0.05 || ins.some((q) => Math.abs(q.s - s) < 0.05)) continue;
       ins.push({ i, s, t: (s - S[i - 1]) / (S[i] - S[i - 1]), p: P[i - 1].clone().lerp(P[i], (s - S[i - 1]) / (S[i] - S[i - 1])) });
     }
@@ -237,7 +241,8 @@ function polyDist(H, x, z) {
 // After grading (or from a road pack): each junction's shapes and heights. net.junctions = [{ nd, x, z, y, flat, arms,
 // box: [x, z, ...] (the outline, counter-clockwise), vtx: [x, z, ...] (the box's vertices: the outline's, then the
 // node where the box is a fan round it), hy (each vertex's height), tris (indices into vtx), lift (per vertex), pave:
-// [[{ k: [x, z], o: [x, z] (the building line), y, hw, lift, v (metres along) }, ...] per corner], r: Map 'k:j:dir' ->
+// per corner a Float64Array of rows round the kerb (roadgrade.js PAVE_ROW: kerb x, z, building line x, z, y, v (metres
+// along), hw, lift), r: Map 'k:j:dir' ->
 // clearance for the markings (mouth - 0.6 m) }].
 // A junction graded level (gradeReal: its arms level out to their mouths) gets a level box (flat); one left on its
 // roads' grades (a steep street, a neighbour too close to level apart from) a warped one: each vertex at its arm's
@@ -245,7 +250,7 @@ function polyDist(H, x, z) {
 export function junctionShapes(roads, city) {
   const out = [], rk = city ? RK.city : RK.country, F = (junctionShapes.fail = { warped: 0, cross: 0, node: 0, tri: 0 }); // (fail: why junctions were left without a box; warped: boxes not level)
   const SS = new Map(), sOf = (k) => { let s = SS.get(k); if (!s) SS.set(k, (s = along(roads[k].pts))); return s; };
-  for (const J of junctionPlan(roads, city)) {
+  for (const J of junctionPlan(roads, city, SS)) {
     if (!J.ok) continue;
     const n = J.arms.length, y = J.arms.reduce((a, A) => a + roads[A.k].pts[A.j].y, 0) / n; // (a cluster's nodes: one height, where it is level)
     // each arm's edges, from beside the node out to its mouth, where the ribbon's are (roads.js strip: each row's edge
@@ -254,7 +259,7 @@ export function junctionShapes(roads, city) {
     let flat = true;
     for (const A of [...J.arms, ...J.inner]) { // (a cluster's inner roads too: their edges, node to node, bound its corners)
       const P = roads[A.k].pts, S = sOf(A.k), s = S[A.j] + A.dir * A.c;
-      let i = 1; while (i < P.length - 1 && S[i] < s) i++; // (the mouth: in the segment i - 1 .. i)
+      const i = segAt(S, s); // (the mouth: in the segment i - 1 .. i)
       const t = Math.min(1, Math.max(0, (s - S[i - 1]) / ((S[i] - S[i - 1]) || 1))), rows = [];
       for (let q = A.j; A.dir > 0 ? q <= i - 1 : q >= i; q += A.dir) rows.push(q); // (the rows from the node up to the mouth's segment)
       // (at the node of a road passing through, the ribbon has a point just to this arm's side of it, roads.js
@@ -381,11 +386,11 @@ export function junctionShapes(roads, city) {
         const W0 = A.W || B.W, ka = A.edge(A.hw)[0], kb = B.edge(-B.hw)[0], oa = A.edge(A.hw + W0)[0], ob = B.edge(-(B.hw + W0))[0];
         const hk = lineX(ka, -A.dx, -A.dz, kb, -B.dx, -B.dz), ho = lineX(oa, -A.dx, -A.dz, ob, -B.dx, -B.dz);
         if (!hk || !ho || !(hk[0] > 0.01) || !(ho[0] > 0.01) || ho[0] > (A.hw + W0) * 3) continue;
-        const row = (k, o) => ({ k, o, y: flat ? y : k[2], v: 0, hw: A.hw, lift: A.lift });
-        pave.push([row(ka, oa), row([ka[0] - A.dx * hk[0], ka[1] - A.dz * hk[0], ka[2]], [oa[0] - A.dx * ho[0], oa[1] - A.dz * ho[0]]), row(kb, ob)]);
+        const R = new Float64Array(3 * PAVE_ROW), row = (q, k, o) => R.set([k[0], k[1], o[0], o[1], flat ? y : k[2], 0, A.hw, A.lift], q * PAVE_ROW);
+        row(0, ka, oa); row(1, [ka[0] - A.dx * hk[0], ka[1] - A.dz * hk[0], ka[2]], [oa[0] - A.dx * ho[0], oa[1] - A.dz * ho[0]]); row(2, kb, ob); pave.push(R);
         continue;
       }
-      const m = K.length, rows = [];
+      const m = K.length, rows = new Float64Array(m * PAVE_ROW);
       // (each kerb point's partner on the building line at the same share of the way round: rows that never cross,
       // where the building line is much shorter than the kerb's round, or just its corner)
       const len = (L) => { let t = 0; for (let q = 1; q < L.length; q++) t += Math.hypot(L[q][0] - L[q - 1][0], L[q][1] - L[q - 1][1]); return t; }, Lk = len(K) || 1, Lo = len(outer);
@@ -393,7 +398,8 @@ export function junctionShapes(roads, city) {
       for (let q = 0; q < m; q++) {
         if (q) v += Math.hypot(K[q][0] - K[q - 1][0], K[q][1] - K[q - 1][1]);
         const f = m > 1 ? q / (m - 1) : 0;
-        rows.push({ k: K[q], o: q === m - 1 ? outer.at(-1) : walk(outer, Lo * v / Lk), y: flat ? y : K[q][2], v, hw: A.hw + (B.hw - A.hw) * f, lift: A.lift + (B.lift - A.lift) * f });
+        const o = q === m - 1 ? outer.at(-1) : walk(outer, Lo * v / Lk);
+        rows.set([K[q][0], K[q][1], o[0], o[1], flat ? y : K[q][2], v, A.hw + (B.hw - A.hw) * f, A.lift + (B.lift - A.lift) * f], q * PAVE_ROW);
       }
       pave.push(rows);
     }
