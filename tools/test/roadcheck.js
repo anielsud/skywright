@@ -14,7 +14,7 @@ export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/real
 const PLACES = ['islands', 'canyon', 'lauterbrunnen', 'nyc'];
 const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3, STEP_CITY = 0.12;
 
-export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), { id: 'nyc traffic safety', loc: 'nyc', world: 'nyc', safety: true, cost: 12 }, { id: 'nyc posts', loc: 'nyc', world: 'nyc', posts: true, cost: 6 }, { id: 'traffic models face forward', models: true, cost: 0.2 }, ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 })), ...PLACES.map((loc) => ({ id: `${loc} ground under the road`, loc, world: loc, bleed: true, cost: loc === 'nyc' ? 30 : 12 })), { id: 'nyc open ground', loc: 'nyc', world: 'nyc', cityGround: true, cost: 6 }]; }
+export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), { id: 'nyc traffic safety', loc: 'nyc', world: 'nyc', safety: true, cost: 12 }, { id: 'nyc posts', loc: 'nyc', world: 'nyc', posts: true, cost: 6 }, { id: 'traffic models face forward', models: true, cost: 0.2 }, ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 })), ...PLACES.map((loc) => ({ id: `${loc} ground under the road`, loc, world: loc, bleed: true, cost: loc === 'nyc' ? 30 : 12 })), { id: 'nyc open ground', loc: 'nyc', world: 'nyc', cityGround: true, cost: 6 }, ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} junctions`, loc, world: loc, junctions: true, cost: loc === 'nyc' ? 40 : 10 }))]; }
 
 // The near-camera ground detail (World.updateDetail) at a few road points: inside, its vertices are the physics ground
 // (sampleGrid) exactly away from the roads, and never above it (under and beside a road it is let down: it is hidden
@@ -132,6 +132,136 @@ export function cityGroundCheck(w, { x0 = -9000, x1 = -3000, z0 = 4000, z1 = 120
   }
   return out;
 }
+// Junctions (#228, the 🐞 reports "ground bleedthrough" / "weird intersection"): every junction of the road graph (a
+// node where three or more road ends meet, on the ground) is one road surface with no ground in or through it. Its
+// area here doesn't come from the code under test: its arms' tarmac (a city's: and pavements) out to the old clearance
+// (the widest other road's half width + 1 m from the node) and the space between their ends beside the node, which a
+// real junction's roadway and corners cover whatever its kerbs do. Sampled every 0.5 m, against what the road meshes draw there (tarmac, a city's pavements, the solid inner part
+// of a gravel shoulder; the shaders' cut-outs at the junctions emulated, rjunc): per junction
+//   hole:   a sample with no road surface drawn (the bare ground between two arms);
+//   bleed:  the ground drawn over the road surface (more than OVER): the near-camera detail mesh (World.updateDetail,
+//           at the place's Low spacing and at Ultra's 2 m) or the patch (the baked grid);
+//   apart:  the tarmac drawn and the surface physics stands on (World.sampleGrid) more than 0.12 m apart (beyond the
+//           tarmac's lift over it).
+// Returns { n junctions, hole, bleed, apart (junctions with any), samples, worst, at (examples) }.
+export async function junctionCheck(w, { detail = true, keep = false } = {}) {
+  const { RJ_Q = 4 } = await import('../../src/roads.js'), roads = w.net.roads, lim = w.half - 600, city = !!w.loc.city;
+  const at = new Map();
+  roads.forEach((rd, k) => { for (const [j, nd] of rd.jn || []) { let L = at.get(nd); if (!L) at.set(nd, (L = [])); L.push({ k, j }); } });
+  const J = [];
+  for (const [nd, L] of at) {
+    const legs = L.reduce((a, q) => a + (q.j === 0 || q.j === roads[q.k].pts.length - 1 ? 1 : 2), 0); if (legs < 3) continue;
+    const p = roads[L[0].k].pts[L[0].j]; if (Math.abs(p.x) > lim || Math.abs(p.z) > lim) continue;
+    if (L.some(({ k, j }) => roads[k].tunnel || roads[k].baked || roads[k].kind === 'rail' || roads[k].bridge?.[j] || roads[k].tube?.[j])) continue;
+    // its area: each arm's tarmac (as its ribbon has it: each row's edge at its point +- the half width along the
+    // neighbours' chord, straight between rows) from beside the node out to the old clearance, and what lies between
+    // the arms' ends beside the node (where roads meeting at an angle left a wedge of ground)
+    const node = [], parts = [];
+    for (const { k, j } of L) {
+      const rd = roads[k], P = rd.pts, hw = rd.width / 2 + (city && rd.kind !== 'highway' ? (rd.kind === 'main' ? 4.5 : 3.5) : 0), r = Math.max(...L.filter((o) => o.k !== k).map((o) => roads[o.k].width / 2), 0) + 1; // (a city's: out to its pavements' edge, roadgrade.js PAVE)
+      const rt = (i) => { const a = P[Math.max(0, i - 1)], b = P[Math.min(P.length - 1, i + 1)], l = Math.hypot(b.x - a.x, b.z - a.z) || 1; return [-(b.z - a.z) / l, (b.x - a.x) / l]; };
+      const edge = (i, t, o) => { const a = P[i], b = P[i + 1], ra = rt(i), rb = rt(i + 1); return [a.x + ra[0] * o + (b.x + rb[0] * o - a.x - ra[0] * o) * t, a.z + ra[1] * o + (b.z + rb[1] * o - a.z - ra[1] * o) * t]; };
+      const n0 = [-hw, hw].map((o) => { const r0 = rt(j); return [p.x + r0[0] * o, p.z + r0[1] * o]; }); node.push(...n0);
+      for (const dir of [1, -1]) {
+        let i = j, s = 0; if (j + dir < 0 || j + dir >= P.length) continue;
+        const arm = [...n0];
+        while (i + dir >= 0 && i + dir < P.length) { const l = Math.hypot(P[i + dir].x - P[i].x, P[i + dir].z - P[i].z); if (s + l >= r) break; s += l; i += dir; for (const o of [-hw, hw]) { const q = rt(i); arm.push([P[i].x + q[0] * o, P[i].z + q[1] * o]); } }
+        if (i + dir >= 0 && i + dir < P.length) { const l = Math.hypot(P[i + dir].x - P[i].x, P[i + dir].z - P[i].z) || 1, t = (r - s) / l, a = dir > 0 ? i : i - 1, tt = dir > 0 ? t : 1 - t; for (const o of [-hw, hw]) arm.push(edge(a, tt, o)); }
+        parts.push(hull(arm));
+      }
+    }
+    parts.push(hull(node));
+    J.push({ nd, x: p.x, z: p.z, parts, hull: hull(parts.flat()) });
+  }
+  // the road surfaces drawn near the junctions (a square kilometre of them at a time): triangles with what their
+  // shaders cut out
+  const G = w.roadGroup, C = 4, K = 1000, key = (a, b) => (a + 4e4) * 1e5 + (b + 4e4);
+  for (const t of G.userData.tiles) if (!t.built && J.some((j) => Math.abs(j.x - t.x) < 2100 && Math.abs(j.z - t.z) < 2100)) G.userData.update({ x: t.x, y: 0, z: t.z }, 1e9, 1);
+  const meshes = [];
+  G.traverse((m) => {
+    const U = m.isMesh && !m.isInstancedMesh && m.material?.userData?.U; if (!U || m.material.userData === w.patchMat.userData) return;
+    const kind = U.rLW ? 't' : U.sD ? 'p' : U.gTint ? 's' : null; if (!kind || !m.geometry.attributes.position) return;
+    if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+    const A = m.geometry.attributes; meshes.push({ kind, bb: m.geometry.boundingBox, pos: A.position.array, uv: A.uv?.array, ri: A.rinfo?.array, rj: A.rjunc?.array, idx: m.geometry.index?.array });
+  });
+  const res = J.map((j) => ({ j, hole: 0, bleed: 0, apart: 0, n: 0, worst: 0, top: null }));
+  const each = (r, fn) => { const H = r.j.hull; let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity; for (const [a, b] of H) { x0 = Math.min(x0, a); x1 = Math.max(x1, a); z0 = Math.min(z0, b); z1 = Math.max(z1, b); }
+    let q = 0; for (let sx = Math.ceil(x0 * 2) / 2 + 0.25; sx < x1; sx += 0.5) for (let sz = Math.ceil(z0 * 2) / 2 + 0.25; sz < z1; sz += 0.5) if (r.j.parts.some((A) => inHull(A, sx, sz))) fn(sx, sz, q++); return q; };
+  const groups = new Map(); for (const r of res) { const k = key(Math.floor(r.j.x / K), Math.floor(r.j.z / K)); let L = groups.get(k); if (!L) groups.set(k, (L = [])); L.push(r); }
+  for (const L of groups.values()) {
+    const want = new Set(); let gx0 = Infinity, gx1 = -Infinity, gz0 = Infinity, gz1 = -Infinity;
+    for (const { j } of L) { gx0 = Math.min(gx0, j.x - 25); gx1 = Math.max(gx1, j.x + 25); gz0 = Math.min(gz0, j.z - 25); gz1 = Math.max(gz1, j.z + 25); for (let a = Math.floor((j.x - 22) / C); a <= Math.floor((j.x + 22) / C); a++) for (let b = Math.floor((j.z - 22) / C); b <= Math.floor((j.z + 22) / C); b++) want.add(key(a, b)); }
+    const cells = new Map(); // key -> [mesh index, triangle, ...]
+    meshes.forEach((M, mi) => {
+      if (M.bb.max.x < gx0 || M.bb.min.x > gx1 || M.bb.max.z < gz0 || M.bb.min.z > gz1) return;
+      const { pos, idx } = M, nt = idx ? idx.length / 3 : pos.length / 9;
+      for (let t = 0; t < nt; t++) {
+        const a = idx ? idx[t * 3] : t * 3, b = idx ? idx[t * 3 + 1] : t * 3 + 1, c = idx ? idx[t * 3 + 2] : t * 3 + 2;
+        const x0 = Math.min(pos[a * 3], pos[b * 3], pos[c * 3]), x1 = Math.max(pos[a * 3], pos[b * 3], pos[c * 3]), z0 = Math.min(pos[a * 3 + 2], pos[b * 3 + 2], pos[c * 3 + 2]), z1 = Math.max(pos[a * 3 + 2], pos[b * 3 + 2], pos[c * 3 + 2]);
+        if (x1 < gx0 || x0 > gx1 || z1 < gz0 || z0 > gz1 || (x1 - x0 < 1e-4 && z1 - z0 < 1e-4)) continue; // (and a kerb's face: upright)
+        for (let u = Math.floor(x0 / C); u <= Math.floor(x1 / C); u++) for (let v = Math.floor(z0 / C); v <= Math.floor(z1 / C); v++) { const k = key(u, v); if (!want.has(k)) continue; let A = cells.get(k); if (!A) cells.set(k, (A = [])); A.push(mi, t); }
+      }
+    });
+    // the top of what is drawn at (x, z): its height (NaN: nothing) and kind
+    let kind = null;
+    const drawn = (x, z) => {
+      let top = NaN; kind = null; const A = cells.get(key(Math.floor(x / C), Math.floor(z / C))) || [];
+      for (let e = 0; e < A.length; e += 2) {
+        const T = meshes[A[e]], t = A[e + 1], P = T.pos, a = T.idx ? T.idx[t * 3] : t * 3, b = T.idx ? T.idx[t * 3 + 1] : t * 3 + 1, c = T.idx ? T.idx[t * 3 + 2] : t * 3 + 2;
+        const ax = P[a * 3], az = P[a * 3 + 2], bx = P[b * 3], bz = P[b * 3 + 2], cx = P[c * 3], cz = P[c * 3 + 2];
+        const den = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz); if (Math.abs(den) < 1e-12) continue;
+        const wa = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / den, wb = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / den, wc = 1 - wa - wb;
+        if (wa < -1e-6 || wb < -1e-6 || wc < -1e-6) continue;
+        const I = (arr, n, o) => arr[a * n + o] * wa + arr[b * n + o] * wb + arr[c * n + o] * wc, y = I(P, 3, 1);
+        if (T.kind === 's') { if (Math.abs(I(T.uv, 2, 0)) - I(T.ri, 3, 0) > 0.52) continue; }
+        else if (T.rj) {
+          const jx = I(T.rj, 4, 0), jy = I(T.rj, 4, 1), dj = Math.min(jx, jy), jc = jy < jx ? I(T.rj, 4, 3) : I(T.rj, 4, 2), jr = Math.floor(jc / 32) / RJ_Q, box = RJ_Q > 4 && Math.floor(jc / 16) % 2 === 1;
+          if (T.kind === 't' && jc > 0.5 && box && dj < jr + 0.6) continue;
+          if (T.kind === 'p' && jc > 0.5 && dj < jr + 0.3 + (box ? 0.3 : 0)) continue;
+        }
+        if (!(y <= top)) { top = y; kind = T.kind; }
+      }
+      return top;
+    };
+    // the drawn surface, the physics, the patch
+    for (const r of L) {
+      const tops = []; r.n = each(r, (x, z) => {
+        const y = drawn(x, z); tops.push(y);
+        if (Number.isNaN(y)) { r.hole++; if (keep) (r.holes ??= []).push([x, z]); return; }
+        const patch = w.triAt(w.Hh, w.hR + 1, (x + w.half) / w.hStep, (z + w.half) / w.hStep) - y; if (patch > OVER) { r.bleed++; r.worst = Math.max(r.worst, patch); if (keep) (r.bleeds ??= []).push([x, z, 'patch', patch, y]); }
+        if (kind === 't') { const off = y - w.sampleGrid(x, z); if (off < -0.02 || off > 0.12) { r.apart++; if (keep) (r.aparts ??= []).push([x, z, off, y]); } }
+      });
+      r.top = Float32Array.from(tops);
+    }
+  }
+  // the detail mesh, at Low's spacing and at Ultra's (2 m): built round the middle of each square of junctions
+  const detailAt = () => { const D = w.detailD, DS = w.detailS, n = D + 1, P = w.detail.geometry.attributes.position.array, x0 = P[0], z0 = P[2], B = 6;
+    return (x, z) => { const fx = (x - x0) / DS, fz = (z - z0) / DS; if (fx < B || fz < B || fx >= D - B || fz >= D - B) return null; const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, vv = fz - j, h = (a, b) => P[((j + b) * n + i + a) * 3 + 1];
+      return u + vv <= 1 ? h(0, 0) + (h(1, 0) - h(0, 0)) * u + (h(0, 1) - h(0, 0)) * vv : h(1, 1) + (h(0, 1) - h(1, 1)) * (1 - u) + (h(1, 0) - h(1, 1)) * (1 - vv); }; };
+  const D0 = [w.detailD, w.detailS], grids = detail ? [D0, [256, 2]] : [];
+  for (const [D, DS] of grids) {
+    if (w.detailD !== D || w.detailS !== DS) { w.detailGrid = () => [D, DS]; w.group.remove(w.detail); w.buildDetail(); w.detailOn = null; } // (detailOn: sized for the grid)
+    const Q = D * DS - 16 * DS - 60, sq = new Map(); // (squares well inside the mesh's inner part)
+    for (const r of res) { const k = key(Math.floor(r.j.x / Q), Math.floor(r.j.z / Q)); let L = sq.get(k); if (!L) sq.set(k, (L = [])); L.push(r); }
+    for (const L of sq.values()) {
+      const cx = (Math.floor(L[0].j.x / Q) + 0.5) * Q, cz = (Math.floor(L[0].j.z / Q) + 0.5) * Q, cp = { x: cx, y: w.sampleGrid(cx, cz) + 3, z: cz };
+      w.detailAt = null; w.patchAt = null; w.updatePatch(cp); w.updateDetail(cp); if (!w.detail.visible) continue;
+      const det = detailAt();
+      for (const r of L) each(r, (x, z, q) => { const y = r.top[q]; if (Number.isNaN(y)) return; const g = det(x, z); if (g != null && g - y > OVER) { r.bleed++; r.worst = Math.max(r.worst, g - y); if (keep) (r.bleeds ??= []).push([x, z, 'detail' + DS, g - y, y]); } });
+    }
+  }
+  if (w.detailD !== D0[0]) { delete w.detailGrid; w.group.remove(w.detail); w.buildDetail(); w.detailOn = null; }
+  const out = { n: res.length, samples: 0, hole: 0, bleed: 0, apart: 0, worst: 0, ex: { hole: [], bleed: [], apart: [] }, per: res };
+  for (const r of res) { r.top = null; out.samples += r.n; for (const k of ['hole', 'bleed', 'apart']) if (r[k] > 0) { out[k]++; if (out.ex[k].length < 4) out.ex[k].push(`(${Math.round(r.j.x)}, ${Math.round(r.j.z)}) ${r[k]}`); } out.worst = Math.max(out.worst, r.worst); }
+  return out;
+}
+function hull(P) {
+  const p = P.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]), cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), lo = [], up = [];
+  for (const q of p) { while (lo.length >= 2 && cr(lo.at(-2), lo.at(-1), q) <= 0) lo.pop(); lo.push(q); }
+  for (const q of p.reverse()) { while (up.length >= 2 && cr(up.at(-2), up.at(-1), q) <= 0) up.pop(); up.push(q); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+function inHull(H, x, z) { for (let i = 0; i < H.length; i++) { const a = H[i], b = H[(i + 1) % H.length]; if ((b[0] - a[0]) * (z - a[1]) - (b[1] - a[1]) * (x - a[0]) < 0) return false; } return true; }
 
 export function measure(w) {
   const roads = w.net.roads.filter((r) => r.kind !== 'rail'), lim = w.half - 200, inCore = (x, z) => Math.abs(x) < lim && Math.abs(z) < lim;
@@ -340,6 +470,14 @@ export async function runCase(c, ctx) {
       { name: `${c.loc}: traffic turns onto the next road at junctions`, ok: moves > 20 && back / moves < 0.15, /* (Bora Bora has many real dead ends; before #252 every road's end was a U-turn) */ why: `${on} onto another road, ${back} turned round at a dead end, ${none} with nowhere to go (${G.lanes.length} lanes, 60 s)` },
       { name: `${c.loc}: traffic rarely has nowhere to go`, ok: none / Math.max(1, moves) < 0.02, why: `${none} of ${moves}` },
       { name: `${c.loc}: ${city ? 'traffic lights hold the cars at red, not for ever' : 'no traffic lights out of town'}`, ok: city ? lights > 100 && still / seen > 0.05 && still / seen < 0.6 : !lights, why: `${lights} signalled junctions; cars standing ${(100 * still / Math.max(1, seen)).toFixed(0)}% of the time` },
+    ];
+  }
+  if (c.junctions) {
+    const o = await junctionCheck(w), ex = (k) => (o.ex[k].length ? `, e.g. ${o.ex[k].join('; ')}` : '');
+    return [
+      { name: `${c.loc}: junctions have no bare ground between their arms`, ok: o.n > 20 && o.hole <= 0.005 * o.n, why: `${o.hole} of ${o.n} junctions with ground showing in the junction (${o.samples} samples)${ex('hole')}` },
+      { name: `${c.loc}: no ground through the road in junctions`, ok: o.n > 20 && o.bleed <= 0.005 * o.n, why: `${o.bleed} of ${o.n} junctions with the ground drawn over the road (detail mesh at Low and at 2 m, patch; worst ${o.worst.toFixed(2)} m)${ex('bleed')}` },
+      { name: `${c.loc}: junctions are drawn where physics drives`, ok: o.n > 20 && o.apart <= 0.005 * o.n, why: `${o.apart} of ${o.n} junctions with the tarmac drawn off the physics surface${ex('apart')}` },
     ];
   }
   if (c.bleed) {

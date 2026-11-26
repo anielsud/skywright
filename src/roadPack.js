@@ -14,7 +14,7 @@
 //   jn: point index (within its road) uint32, node int32
 import * as THREE from 'three';
 
-export const PACK_V = 3; // bump with any change to how roads are built or graded: older packs are then ignored
+export const PACK_V = 4; // bump with any change to how roads are built or graded: older packs are then ignored
 const KINDS = ['highway', 'main', 'street', 'rail'];
 
 export function encodeRoads(roads, key) {
