@@ -125,6 +125,7 @@ export function installFog() {
 // the tunnels' tubes near the camera (World.update fills these): the ground doesn't draw inside them, so where the
 // terrain mesh's coarse triangles dip into a tube near its portal the tube is seen, not grass (#228)
 export const TUBES = { tubeN: { value: 0 }, tubeA: { value: Array.from({ length: 24 }, () => new THREE.Vector4()) }, tubeB: { value: Array.from({ length: 24 }, () => new THREE.Vector4()) } };
+const NO_COVER = new THREE.DataTexture(new Uint8Array([255]), 1, 1, THREE.RedFormat, THREE.UnsignedByteType); NO_COVER.needsUpdate = true;
 export function terrainMaterial(maps, patch = false) {
   const detail = patch === 'detail';
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.93, metalness: 0 });
@@ -132,11 +133,13 @@ export function terrainMaterial(maps, patch = false) {
   const U = { albedoTex: { value: maps.albedo }, normTex: { value: maps.normal }, shadowTex: { value: maps.shadow },
     tOrig: { value: maps.orig }, tSpan: { value: maps.span }, sOrig: { value: maps.sOrig || maps.orig }, sSpan: { value: maps.sSpan || maps.span },
     shadowOn: { value: maps.shadowOn ?? 1 }, patchRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, detailRect: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) }, ...maps.detailU,
-    ...(maps.city ? { coverTex: { value: maps.city.tex }, coverR: { value: maps.city.rect } } : {}) };
+    coverTex: { value: maps.city?.tex ?? NO_COVER }, coverR: { value: maps.city?.rect ?? new THREE.Vector3(0, 0, 0) } }; // (no city: coverR.z = 0 switches the paving off)
   mat.userData.U = U;
   // real-world: no beach detail and no baked hydrology (the imagery has both); keeps the terrain within 16 texture
   // units with Ultra's extra shadow maps. Elsewhere the baked rivers/lakes map is one more sampler (see world.js).
-  mat.defines = real ? { TERRAIN_NO_SAND: '', ...(maps.city ? { TERRAIN_CITY: '' } : {}) } : { TERRAIN_LAND: '' }; // (TERRAIN_CITY: a city's open ground paved, CITY_GLSL)
+  // A city's paved open ground (CITY_GLSL) is a uniform, not a define: as a define, the streamed tiles (no city) were a
+  // second program the loading screen never compiled (#242). Per-place switches stay uniforms for that reason (#273).
+  mat.defines = real ? { TERRAIN_NO_SAND: '' } : { TERRAIN_LAND: '' };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, TUBES, U);
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vTW; varying vec3 vWN;')
@@ -149,9 +152,7 @@ export function terrainMaterial(maps, patch = false) {
       #endif
       ${TERRAIN_DETAIL_GLSL}
       ${real ? REAL_SAT_GLSL : ''}
-      #ifdef TERRAIN_CITY
-      ${CITY_GLSL}
-      #endif
+      ${real ? CITY_GLSL : ''}
       ${(!real && maps.detailU?.glsl) || 'vec3 fieldShade(vec2 p, float farm, vec3 base, float dist, out float isField) { isField = 0.0; return base; }'}`)
       .replace('#include <map_fragment>', `
         for (int i = 0; i < 24; i++) { if (i >= tubeN) break; vec3 a = tubeA[i].xyz, b = tubeB[i].xyz; vec2 ab = b.xz - a.xz; float tt = clamp(dot(vTW.xz - a.xz, ab) / max(dot(ab, ab), 1e-3), 0.0, 1.0); float fy = mix(a.y, b.y, tt);
@@ -163,10 +164,10 @@ export function terrainMaterial(maps, patch = false) {
         vec3 wn = ${detail ? 'normalize(vWN)' : 'normalize(nrmS.xyz * 2.0 - 1.0)'};
         ${real ? 'alb.rgb = realGround(satColor(vTW.xz, alb.rgb), wn); alb.a = mix(1.0, alb.a, 0.5); nrmS.a = 0.0;' : ''}
         float pv = 0.0; // (a city's paved open ground)
-        #ifdef TERRAIN_CITY
-        pv = cityPaved(vTW.xz, alb.rgb, length(vTW - cameraPosition));
-        alb.rgb = mix(alb.rgb, cityPave(vTW.xz, length(vTW - cameraPosition)), pv); // (not in a branch: it takes derivatives)
-        #endif
+        ${real ? `if (coverR.z > 0.0) { // (a uniform, so the same branch for every pixel: the derivatives cityPave takes stay defined)
+          pv = cityPaved(vTW.xz, alb.rgb, length(vTW - cameraPosition));
+          alb.rgb = mix(alb.rgb, cityPave(vTW.xz, length(vTW - cameraPosition)), pv);
+        }` : ''}
         float terrainShadow = mix(1.0, texture2D(shadowTex, (vTW.xz - sOrig) / sSpan).r, shadowOn);
         float dist = length(vTW - cameraPosition);
         // farm parcels (farmland mask in the normal map's alpha), crisp up close
@@ -215,7 +216,7 @@ export function terrainMaterial(maps, patch = false) {
         'getDirectionalLightInfo( directionalLight, directLight );',
         'getDirectionalLightInfo( directionalLight, directLight ); directLight.color *= terrainShadow;'));
   };
-  mat.customProgramCacheKey = () => (detail ? 'terrain3-detail-' : patch ? 'terrain3-patch-' : 'terrain3-') + (real ? (maps.city ? 'real-city' : 'real') : maps.detailU?.key || '');
+  mat.customProgramCacheKey = () => (detail ? 'terrain3-detail-' : patch ? 'terrain3-patch-' : 'terrain3-') + (real ? 'real' : maps.detailU?.key || '');
   return mat;
 }
 
