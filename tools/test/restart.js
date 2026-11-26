@@ -7,6 +7,8 @@
 //   whole(S, r): after a restart: every entry damage() touched back to its height, its dmg bytes 0, the damage slots and
 //                the debris pools empty, nothing left flattened, the stunt sites idle
 //   snap(S):     GPU memory (renderer.info), shader programs, the scene's child count, the spawn pose, the World's id
+// and, for the canyon-lauterbrunnen job (which drives the flights itself), restart.py's measuring steps (settled, upload)
+// and verdicts as [[name, ok, detail]] lists (damageChecks, memoryChecks, freshChecks, startTypeCheck): see the end.
 
 const ids = new WeakMap(); let nextId = 1;
 const worldId = (w) => { if (!ids.has(w)) ids.set(w, nextId++); return ids.get(w); };
@@ -75,4 +77,71 @@ export function whole(S) {
   const st = W.stunts; if (st?.evel && st.evel.st.phase !== 'idle') bad.push('evel jump not idle');
   if (W.space.active) bad.push('space view active');
   return bad;
+}
+
+// ---------- restart.py's driver and verdicts, in the page (the canyon-lauterbrunnen job, tools/test/jobs) ----------
+// The job drives the flights (harness T.start / T.restart / T.end); these are the measuring steps between them and
+// restart.py's verdicts as [[name, ok, detail]] lists for T.checks.
+
+// What snap() measures (GPU textures) must all be uploaded: one frame drawn (it sets up the shadow maps and the
+// post-processing targets), then every texture the scene's materials use uploaded directly (restart.py's UPLOAD).
+export async function upload(S) {
+  const r = S.renderer, seen = new Set(), up = (t) => { if (t?.isTexture && !seen.has(t) && t.image !== undefined) { seen.add(t); r.initTexture(t); } };
+  await new Promise((res) => requestAnimationFrame(res));
+  S.F.scene.traverse((o) => { for (const m of [].concat(o.material || [])) { for (const k in m) up(m[k]); for (const k in m.uniforms || {}) up(m.uniforms[k]?.value); } });
+  return seen.size;
+}
+// after a start or a restart, as restart.py's running(): one game second stepped, (for a memory snapshot) the frame and
+// the uploads, then the snapshot
+export async function settled(S, { mem = false } = {}) {
+  S.advance(1);
+  if (mem) await upload(S);
+  return snap(S);
+}
+export const sameSpawn = (a, b, tol = 1e-3) => a.spawn.every((x, i) => Math.abs(x - b.spawn[i]) <= tol);
+
+// 1. damage, restart, whole again. d: damage(); dd: damaged() before the restart; s0/s1: snap() before / after; bad: whole()
+export function damageChecks(loc, d, dd, s0, s1, bad) {
+  return [
+    [`${loc}: buildings damaged before the restart`, d.buildings > 0 && dd.buildings > 0 && dd.cut > 0 && dd.chunks > 1,
+      `${d.buildings} hit, ${dd.cut} cut down, ${dd.chunks} debris, ${dd.fires} fires, ${d.trees} trees flattened`],
+    [`${loc}: restart keeps the World`, s1.world === s0.world, `world ${s0.world} -> ${s1.world}`],
+    [`${loc}: everything whole again after the restart`, !bad.length, bad.slice(0, 6).join('; ') || 'buildings, trees, debris, slots'],
+    [`${loc}: same spawn as the first start`, sameSpawn(s0, s1) && s0.start === s1.start, `${s0.spawn.slice(0, 3).map((v) => v.toFixed(2))} / ${s1.spawn.slice(0, 3).map((v) => v.toFixed(2))} (${s0.start}/${s1.start})`],
+  ];
+}
+// 2. memory over the restarts (snaps: one per restart, each taken with settled(S, { mem: true })); world: the World's id
+export function memoryChecks(loc, snaps, world) {
+  const tail = snaps.length > 1 ? snaps.slice(1) : snaps; // (the first restart may still compile a shader the first flight hadn't drawn)
+  const out = [];
+  for (const [key, tol] of [['geometries', 3], ['textures', 1], ['programs', 2], ['kids', 0]]) {
+    const vals = tail.map((s) => s[key]);
+    // (a leak grows restart after restart; a count may drop, e.g. a block of textures the streaming lets go: no leak)
+    out.push([`${loc}: ${key} never grows over ${snaps.length} restarts`, Math.max(...vals) - vals[0] <= tol, snaps.map((s) => s[key]).join(' ')]);
+  }
+  out.push([`${loc}: one World through every restart`, snaps.every((s) => s.world === world), snaps.map((s) => s.world).join(' ')]);
+  return out;
+}
+// 3. back in the hangar (kept: __sky.kept then), a fresh start (s2) of what was restarted (s0 first start, s1 a restart,
+// last the last restart). compareMemory: restarted GPU memory as the fresh start's (off on CI: it depends on how far
+// streaming got; the flat-over-restarts checks still catch a leak)
+export function freshChecks(loc, kept, s0, s1, s2, last, { compareMemory = true } = {}) {
+  const out = [
+    [`${loc}: the hangar holds no World`, !kept, kept ? 'a World is still kept' : ''],
+    [`${loc}: fresh start builds a new World with the same spawn`, s2.world !== s0.world && sameSpawn(s2, s1), `world ${s0.world} -> ${s2.world}, spawn ${s2.spawn.slice(0, 3).map((v) => v.toFixed(2))}`],
+    // (restart.py compared the first start's child count with the restart's in the same World; here the restart's with
+    // this fresh start's: the same claim, a restart leaves the scene as a fresh start has it)
+    [`${loc}: scene child count as a fresh start`, s1.kids === s2.kids, `restarted ${s1.kids}, fresh ${s2.kids}`],
+  ];
+  if (compareMemory) out.push([`${loc}: restarted GPU memory as a fresh start`, Math.abs(last.geometries - s2.geometries) <= Math.max(8, s2.geometries * 0.05) && Math.abs(last.textures - s2.textures) <= 3,
+    `geometries ${last.geometries} vs ${s2.geometries}, textures ${last.textures} vs ${s2.textures}, kids ${last.kids} vs ${s2.kids}`]);
+  return out;
+}
+// 4. a start type: f as it started (swapped in), r restarted, e after 4 game seconds on (with throttle if thr); world: the
+// World's id it must all happen in
+export function startTypeCheck(loc, label, f, r, e, thr, world) {
+  const ok = r.world === f.world && f.world === world && r.start === f.start && sameSpawn(f, r);
+  const moved = Math.hypot(...e.pos.map((v, i) => v - r.pos[i])), go = e.alive && e.finite && (!thr || moved > 3);
+  return [`${loc}: ${label} (${f.start}): restart as swapped in, then on`, ok && go,
+    `world ${r.world === f.world && f.world === world ? 'kept' : 'NEW'}, start ${f.start}/${r.start}, spawn ${sameSpawn(f, r) ? 'same' : 'MOVED'}, moved ${moved.toFixed(0)} m${e.alive ? '' : ', DEAD'}${e.finite ? '' : ', NOT FINITE'}`];
 }

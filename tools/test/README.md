@@ -147,7 +147,19 @@ The jobs:
   intact and stops on the runway (one screenshot), then, put on the runway start, climbs to Mach 2.5+ above 60,000 ft
   with nothing broken; then crashed into the water (stepped to the impact, 5 frames drawn: parts come off, no stalls);
   last, the start-rule wiring (`wiring.js`) over every vehicle it started.
-- **canyon-lauterbrunnen**: being written (#278); the planned steps are in the file's header.
+- **canyon-lauterbrunnen** (two places in one session, each built once): the AudioContext starts without decoding the
+  clips (the engines checked are synthesized). **Grand Canyon**: the Dirt Bike from the stunt park (builds it) and the
+  Dune Buggy swapped in there, each on the tour (3 frames drawn at full power on the real loop, 3 s stepped, every
+  cockpit view drawn) with its engine voice audible right after (smoke.py's verdict); streaming quiet, the whole scene
+  drawn (no stalls, nothing waits for its shader); the Dune Buggy's ground crash (stepped to the impact, 5 frames drawn,
+  parts must come off); the Rocket swapped in on the pad (padcheck, stepped). **Lauterbrunnen**, built by the Rocket's
+  flight there: the pad check; startbakes-stunts (`stuntsIn`); streaming quiet and the whole scene drawn; #187: nothing
+  compiled mid-flight from before the second place was built to there. Then the restart suite (`restart.py`'s checks,
+  as CI ran them: 3 restarts, no fresh-start memory comparison on `--ci`): damage, restart (same World, everything
+  whole, same spawn; this restart is also the launch pad start type's), two more restarts with memory flat, back to the
+  hangar frees the World and a fresh Rocket start builds a new one (same spawn, same scene child count as the
+  restart), then runway, air, stunt park, street, marina and water park each swapped into that World, restarted (same
+  World, start and spawn) and 4 s stepped on. Last, the start-rule wiring (`wiring.js`) over every flight it started.
 
 ## Run the smoke test (older script)
 
@@ -734,7 +746,8 @@ memory); and every start type (runway, air, stunt park, street, marina, water pa
 `--places nyc`), swapped into that fresh World, restarts in the same World, the same way at the same spot, and rides /
 flies on for 4 s. The game's time is stepped with `__sky.advance` wherever the test waits for the game (buildings
 coming down, flying on); each start also draws 15 frames before it is measured (the texture count is what drawing
-uploads). About 40 s for one place.
+uploads). About 40 s for one place. On CI these checks run in the canyon-lauterbrunnen job (`restart.js`'s
+`damageChecks`/`memoryChecks`/`freshChecks`/`startTypeCheck`, driven by the job with no flight started twice).
 
 ```sh
 python3 tools/test/restart.py [--places lauterbrunnen,nyc] [--restarts 6] [--quality low]
