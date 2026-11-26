@@ -48,7 +48,7 @@ export function roadIndex(w) {
   const city = !!w.loc.city, segs = [], S = city ? TOL : SETBACK; // (a city: nothing past the pavement but the slack, TOL, that setBack leaves alone)
   let gx0 = Infinity, gx1 = -Infinity, gz0 = Infinity, gz1 = -Infinity;
   for (const rd of w.net?.roads || []) {
-    if (rd.kind === 'rail') continue;
+    if (rd.kind === 'rail' || rd.minor) continue; // (a way off the street network, roads.js rd.minor: buildings front onto a pedestrian street or a plaza, an alley runs between and under them; they don't move for it)
     const P = rd.pts, n = P.length, last = rd.closed ? n : n - 1; WORK.index += n;
     const r = rd.width / 2 + (city && rd.kind !== 'highway' && !rd.baked ? PAVE[rd.kind] ?? PAVE.street : VERGE), R = r + S;
     const jn = rd.jn || [], end0 = !rd.closed && !jn.some(([i]) => i === 0), end1 = !rd.closed && !jn.some(([i]) => i === n - 1); // (dead ends)

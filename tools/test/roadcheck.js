@@ -9,7 +9,7 @@
 //   crossings: two roads crossing on the ground without a shared node are either level (0.3 m) or clearly apart (3 m).
 // Only inside the core map (200 m in from its edge: the roads stop there).
 // The roads are read from world.net, not through the code under test's own junction logic.
-export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/realworld.js', 'src/world.js', 'src/vehicles.js', 'src/laneGraph.js', 'src/signals.js', 'src/trafficModels.js', 'tools/test/roadcheck.js'] }; // (and the ground detail: detailCheck)
+export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/realworld.js', 'src/world.js', 'src/roadnet.js', 'src/roadPack.js', 'src/junctions.js', 'src/roadSurface.js', 'src/vehicles.js', 'src/laneGraph.js', 'src/signals.js', 'src/trafficModels.js', 'tools/test/roadcheck.js'] }; // (and the ground detail: detailCheck)
 
 const PLACES = ['islands', 'canyon', 'lauterbrunnen', 'nyc'];
 const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3, STEP_CITY = 0.12;
@@ -17,7 +17,101 @@ const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3, STEP_CITY = 0.12;
 // segments + junction boxes tested per vertex (worst rebuild now: islands 5.3, canyon 2.9, lauterbrunnen 6.0, nyc 7.8)
 const DETAIL_VERTS = 12000, DETAIL_Q = 1.5, DETAIL_TESTS = 24;
 
-export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), { id: 'nyc traffic safety', loc: 'nyc', world: 'nyc', safety: true, cost: 12 }, { id: 'nyc posts', loc: 'nyc', world: 'nyc', posts: true, cost: 6 }, { id: 'traffic models face forward', models: true, cost: 0.2 }, ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 })), ...PLACES.map((loc) => ({ id: `${loc} ground under the road`, loc, world: loc, bleed: true, cost: loc === 'nyc' ? 30 : 12 })), { id: 'nyc open ground', loc: 'nyc', world: 'nyc', cityGround: true, cost: 6 }, ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} junctions`, loc, world: loc, junctions: true, cost: loc === 'nyc' ? 40 : 10 }))]; }
+export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), { id: 'nyc traffic safety', loc: 'nyc', world: 'nyc', safety: true, cost: 12 }, { id: 'nyc posts', loc: 'nyc', world: 'nyc', posts: true, cost: 6 }, { id: 'traffic models face forward', models: true, cost: 0.2 }, ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 })), ...PLACES.map((loc) => ({ id: `${loc} ground under the road`, loc, world: loc, bleed: true, cost: loc === 'nyc' ? 30 : 12 })), { id: 'nyc open ground', loc: 'nyc', world: 'nyc', cityGround: true, cost: 6 }, ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} junctions`, loc, world: loc, junctions: true, cost: loc === 'nyc' ? 40 : 10 })), ...PLACES.map((loc) => ({ id: `${loc} off the street network`, loc, world: loc, minor: true, cost: loc === 'nyc' ? 25 : 8 }))]; }
+
+// The ways off the street network (roads.js rd.minor: pedestrian streets, paved footpaths, alleys and service roads,
+// tracks) and the plazas (net.areas), every place: they are there (at least MINOR_MIN of each), drawn (the road
+// meshes: a ribbon or a plaza's fill over the sampled spot, at the ground physics stands on), drivable (World.groundAt
+// on them: paved, a track's gravel loose; a car driven along one stays on it, in one piece), and carry no traffic
+// (no lane of laneGraph.js on them, no junction box with one as an arm, no car of a running Vehicles on one away from
+// the streets).
+const MINOR_ROUGH = { joins: 0.03, steps: 1.5, steep: 1.5 }; // (a km, on adding them: Lauterbrunnen 0.77 step spots and 1.24 steep ones, Bora Bora's hillside drives 1.21 and 0.66; New York 0.021 joins or crossings off, all under half a metre)
+const MINOR_MIN = { nyc: { ped: 1000, service: 2000, plazas: 50 }, lauterbrunnen: { ped: 100, service: 1000, track: 1000, plazas: 20 }, islands: { service: 50, track: 20 }, canyon: { service: 100, track: 100 } };
+async function minorCheck(w, c, ctx) {
+  const THREE = await import('three'), { LaneGraph } = await import('../../src/laneGraph.js'), { junctionPlan } = await import('../../src/junctions.js'), { Vehicles } = await import('../../src/vehicles.js'), { envOf } = await import('./node/world.mjs');
+  const M = w.net.roads.filter((r) => r.minor), A = w.net.areas || [], count = { plazas: A.length };
+  for (const r of M) count[r.kind] = (count[r.kind] || 0) + 1;
+  const want = MINOR_MIN[c.loc] || {}, short = Object.entries(want).filter(([k, n]) => (count[k] || 0) < n).map(([k, n]) => `${k} ${count[k] || 0} < ${n}`);
+  // the spots: a point on the ground along a few hundred minor ways (not a bridge's), and inside each plaza
+  const lim = w.half - 300, spots = [];
+  for (let k = 0; k < M.length && spots.length < 300; k += Math.max(1, Math.floor(M.length / 300))) {
+    const r = M[k], i = r.pts.length >> 1, j = Math.min(r.pts.length - 1, i + 1), p = r.pts[i].clone().lerp(r.pts[j], 0.5); if (r.bridge?.[i] || r.bridge?.[j] || Math.abs(p.x) > lim || Math.abs(p.z) > lim) continue;
+    // (only where it is the one road there, the segment's four corners too: not where it overlaps a street or another
+    // way, where the surface is their blend, RoadSurface.blend, and the ribbon's corners follow it)
+    const a = r.pts[i], b = r.pts[j], dl = Math.hypot(b.x - a.x, b.z - a.z) || 1, rx = -(b.z - a.z) / dl * r.width / 2, rz = (b.x - a.x) / dl * r.width / 2;
+    if ([[p.x, p.z], [a.x + rx, a.z + rz], [a.x - rx, a.z - rz], [b.x + rx, b.z + rz], [b.x - rx, b.z - rz]].some(([x, z]) => w.roadSurf.q(x, z) && w.roadSurf.nIn > 1)) continue;
+    spots.push({ x: p.x, z: p.z, surf: r.surf || 0, what: r.kind, first: r.pts[0] });
+  }
+  const inPoly = (R, x, z) => { let c = false; for (let i = 0, n = R.length / 2, j = n - 1; i < n; j = i++) { const xi = R[i * 2], zi = R[i * 2 + 1], xj = R[j * 2], zj = R[j * 2 + 1]; if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) c = !c; } return c; };
+  for (const a of A.slice(0, 200)) { // (a point well inside: a grid point of its box that is inside)
+    let at = null; for (let t = 0; t < 25 && !at; t++) { const x = a.bb[0] + (a.bb[2] - a.bb[0]) * (0.1 + 0.8 * ((t % 5) / 4)), z = a.bb[1] + (a.bb[3] - a.bb[1]) * (0.1 + 0.8 * (Math.floor(t / 5) / 4)); if (inPoly(a.ring, x, z)) at = { x, z }; }
+    if (at) spots.push({ ...at, surf: a.surf || 0, what: 'plaza' });
+  }
+  // drawn: a ray down onto the built road meshes (ribbons and plazas), at the surface physics stands on
+  const G = w.roadGroup.userData, rc = new THREE.Raycaster(), down = new THREE.Vector3(0, -1, 0);
+  let drawn = 0, apart = 0, paved = 0, soft = 0; const ex = { drawn: [], apart: [], paved: [] };
+  { // (a road's meshes are in the tile of its first point: the tiles nearest each spot and its road's first point)
+    for (const sp of spots) { const by = (q) => G.tiles.map((t) => [Math.hypot(t.x - q.x, t.z - q.z), t]).sort((a, b) => a[0] - b[0]).map((e) => e[1]), near = [...new Set([...by(sp).slice(0, 4), ...(sp.first ? by(sp.first).slice(0, 4) : [])])];
+      for (const t of near) if (!t.built) G.update({ x: t.x, y: 0, z: t.z }, 1e9, 10);
+      sp.meshes = near.flatMap((t) => t.meshes.filter((m) => m.isMesh && !m.isInstancedMesh && /^(path3|tarmac)/.test(m.material.customProgramCacheKey?.() || ''))); }
+    for (const sp of spots) {
+      const meshes = sp.meshes;
+      const g = w.groundAt(sp.x, sp.z), at = `(${Math.round(sp.x)}, ${Math.round(sp.z)}) ${sp.what}`;
+      rc.set(new THREE.Vector3(sp.x, g.h + 20, sp.z), down); rc.far = 40;
+      const hit = rc.intersectObjects(meshes, false).filter((h) => /^path3/.test(h.object.material.customProgramCacheKey()) === (sp.surf !== 0)).sort((a, b) => Math.abs(a.point.y - g.h) - Math.abs(b.point.y - g.h))[0]; // (the one nearest the ground: not a bridge over it)
+      if (hit) { drawn++; if (Math.abs(hit.point.y - g.h) > 0.2) { apart++; if (ex.apart.length < 3) ex.apart.push(`${at} ${(hit.point.y - g.h).toFixed(2)} m`); } } else if (ex.drawn.length < 3) ex.drawn.push(at);
+      const okType = sp.surf === 2 ? g.type === 'sand' : g.type === 'runway'; if (okType) paved++; else if (ex.paved.length < 3) ex.paved.push(`${at} ${g.type}`);
+      if (sp.surf === 2) soft++;
+    }
+  }
+  // driven: a buggy along a minor way on the ground (a pedestrian street if any, else the longest), 8 s, steering along it
+  let drive = { ok: false, why: 'no way to drive' };
+  { const env = envOf(w); let best = null;
+    // (one no building stands on: they don't move for these ways, setback.js; and no sharp bend)
+    const wb = [], walled = (P) => P.some((p, i) => { if (i && Math.hypot(p.x - P[i - 1].x, p.z - P[i - 1].z) > 0) { const a = P[Math.max(0, i - 1)], c = P[Math.min(P.length - 1, i + 1)], t1 = Math.atan2(p.z - a.z, p.x - a.x), t2 = Math.atan2(c.z - p.z, c.x - p.x); if (Math.abs(Math.atan2(Math.sin(t2 - t1), Math.cos(t2 - t1))) > 0.8) return true; }
+      return w.wallBoxes(p.x, p.z, 6, wb).some((b) => Math.abs((p.x - b.x) * b.ux + (p.z - b.z) * b.uz) < b.hl + 3 && Math.abs(-(p.x - b.x) * b.uz + (p.z - b.z) * b.ux) < b.hw + 3); });
+    const cand = [];
+    for (const r of M) { if (r.bridge?.some(Boolean) || r.pts.length < 6) continue; const P = r.pts, L = P.reduce((s, p, i) => s + (i ? Math.hypot(p.x - P[i - 1].x, p.z - P[i - 1].z) : 0), 0); if (Math.abs(P[0].x) < lim && Math.abs(P[0].z) < lim && L > 80 && L < 2000) cand.push({ r, L }); }
+    cand.sort((a, b) => (b.r.kind === 'ped') - (a.r.kind === 'ped') || b.L - a.L); // (a pedestrian street if any)
+    for (const q of cand.slice(0, 200)) if (!walled(q.r.pts.slice(0, 20))) { best = q; break; }
+    if (best) {
+      const { Aircraft, REALISM } = await import('../../src/aircraft.js'), P = best.r.pts, d = new THREE.Vector3().subVectors(P[1], P[0]).setY(0).normalize();
+      const ac = new Aircraft(ctx.presets.find((x) => x.name === 'Dune Buggy'), REALISM.pilot); ac.spawn(env, new THREE.Vector3(P[0].x, P[0].y + 1, P[0].z), Math.atan2(-d.x, -d.z));
+      let off = 0, above = 0, far = 0;
+      for (let k = 0; k < 60 * 8; k++) {
+        let bi = 0, bd = 1e9; for (let i = 0; i < P.length; i++) { const dd = (P[i].x - ac.x.x) ** 2 + (P[i].z - ac.x.z) ** 2; if (dd < bd) { bd = dd; bi = i; } }
+        if (bi >= P.length - 2) break;
+        const t = P[Math.min(P.length - 1, bi + 2)], f = ac.forward, h1 = Math.atan2(-(t.x - ac.x.x), -(t.z - ac.x.z)), h0 = Math.atan2(-f.x, -f.z), e = Math.atan2(Math.sin(h1 - h0), Math.cos(h1 - h0));
+        ac.setControls({ throttle: 0.4, roll: Math.max(-1, Math.min(1, -e * 2)), pitch: 0, yaw: 0, rev: 0, hand: 0 }); ac.step(1 / 60, env);
+        off = Math.max(off, Math.sqrt(bd)); above = Math.max(above, Math.abs(ac.x.y - w.sampleGrid(ac.x.x, ac.x.z))); far = Math.hypot(ac.x.x - P[0].x, ac.x.z - P[0].z);
+      }
+      const alive = ac.parts.filter((q) => q.alive).length;
+      drive = { ok: alive === ac.parts.length && far > 25 && off < best.r.width / 2 + 6 && above < 2.5, why: `a ${best.r.kind} of ${best.L.toFixed(0)} m at (${Math.round(P[0].x)}, ${Math.round(P[0].z)}): ${far.toFixed(0)} m driven, ${off.toFixed(1)} m off its line at most, ${above.toFixed(2)} m off the ground, ${alive}/${ac.parts.length} parts` };
+    }
+  }
+  // no traffic: no lane on a minor way, no junction box with one as an arm; a running Vehicles' cars stay on the streets
+  const LG = new LaneGraph(w.net), lanes = LG.lanes.filter((L) => L.piece.rd.minor).length, arms = junctionPlan(w.net.roads, !!w.loc.city).filter((J) => J.arms.some((a) => w.net.roads[a.k].minor)).length;
+  const C = 20, cells = new Map(), put = (rd, tag) => { const P = rd.pts; for (let i = 0; i + 1 < P.length; i++) { const a = P[i], b = P[i + 1]; for (let u = Math.floor(Math.min(a.x, b.x) / C); u <= Math.floor(Math.max(a.x, b.x) / C); u++) for (let v = Math.floor(Math.min(a.z, b.z) / C); v <= Math.floor(Math.max(a.z, b.z) / C); v++) { const k = u + ',' + v; let L = cells.get(k); if (!L) cells.set(k, (L = [])); L.push([a, b, rd.width / 2 + (tag ? 0 : 3), tag]); } } };
+  for (const rd of w.net.roads) if (rd.kind !== 'rail') put(rd, rd.minor ? 1 : 0);
+  const where = (x, z) => { let m = false; for (const [a, b, hw, tag] of cells.get(Math.floor(x / C) + ',' + Math.floor(z / C)) || []) { const ex2 = b.x - a.x, ez = b.z - a.z, l = ex2 * ex2 + ez * ez, t = l ? Math.max(0, Math.min(1, ((x - a.x) * ex2 + (z - a.z) * ez) / l)) : 0; if (Math.hypot(a.x + ex2 * t - x, a.z + ez * t - z) < hw) { if (!tag) return 0; m = true; } } return m ? 1 : 0; };
+  const V = new Vehicles(new THREE.Scene(), w); let seen = 0, onMinor = 0; const oex = [];
+  for (let k = 0; k < 20 * 30; k++) { V.update(1 / 20, null); if (k % 20 === 0) for (const q of V.cars) { if (!q.path?.pts || q.path.kind === 'apron') continue; const p = new THREE.Vector3(); V.pathPoint(q.path, q.s, p, new THREE.Vector3()); seen++; if (where(p.x, p.z)) { onMinor++; if (oex.length < 3) oex.push(`(${Math.round(p.x)}, ${Math.round(p.z)})`); } } }
+  // their own grades (the streets' checks above leave them out): along them, where they join the streets and each
+  // other, where they cross. Farm tracks up the Alps' hillsides and steep driveways meeting a street are rougher than
+  // the streets: a budget per km (MINOR_ROUGH) rather than none.
+  const R = measure(w, { minor: true }), per = (L) => L.length / Math.max(1, R.km), top = (L) => [...L].sort((a, b) => b.v - a.v).slice(0, 2).map((q) => `(${q.x}, ${q.z}) ${q.v.toFixed(2)}`).join('; ');
+  const n = spots.length;
+  return [
+    { name: `${c.loc}: they are graded with the network: joined, few steps`, ok: per(R.joins) + per(R.crossings) <= MINOR_ROUGH.joins && per(R.steps) <= MINOR_ROUGH.steps && per(R.steep) <= MINOR_ROUGH.steep,
+      why: `${R.km.toFixed(0)} km: ${R.joins.length} junctions and ${R.crossings.length} crossings off by more than ${JOIN} m (${(per(R.joins) + per(R.crossings)).toFixed(3)}/km, at most ${MINOR_ROUGH.joins})${R.joins.length ? ' (' + top(R.joins) + ' m)' : ''}; ${R.steps.length} step spots (${per(R.steps).toFixed(2)}/km, at most ${MINOR_ROUGH.steps}), ${R.steep.length} steeper than ${STEEP * 100}% (${per(R.steep).toFixed(2)}/km, at most ${MINOR_ROUGH.steep})` },
+    { name: `${c.loc}: pedestrian streets, alleys, tracks and plazas are in the road network`, ok: !short.length && M.length > 0, why: `${Object.entries(count).map(([k, v]) => `${v} ${k}`).join(', ')}${short.length ? ': too few ' + short.join(', ') : ''}` },
+    { name: `${c.loc}: they are drawn, where physics drives`, ok: n > 20 && drawn >= 0.97 * n && apart <= 0.03 * n, why: `${drawn} of ${n} spots drawn${ex.drawn.length ? ' (missing e.g. ' + ex.drawn.join('; ') + ')' : ''}, ${apart} drawn more than 0.2 m off the ground physics stands on${ex.apart.length ? ' (e.g. ' + ex.apart.join('; ') + ')' : ''}` },
+    { name: `${c.loc}: they are drivable: paved, a track's gravel loose`, ok: n > 20 && paved >= 0.97 * n, why: `${paved} of ${n} spots (${soft} gravel)${ex.paved.length ? '; not, e.g. ' + ex.paved.join('; ') : ''}` },
+    { name: `${c.loc}: a car drives along one`, ok: drive.ok, why: drive.why },
+    { name: `${c.loc}: no traffic on them`, ok: !lanes && !arms && seen > 50 && onMinor === 0, why: `${lanes} lanes on them, ${arms} junction boxes with one as an arm, ${onMinor} of ${seen} car sightings on one away from the streets${oex.length ? ', e.g. ' + oex.join(' ') : ''}` },
+  ];
+}
+
 
 // The near-camera ground detail (World.updateDetail) at a few road points: inside, its vertices are the physics ground
 // (sampleGrid) exactly away from the roads, and never above it (under and beside a road it is let down: it is hidden
@@ -89,7 +183,7 @@ export function bleedCheck(w, { spots = 6, stride = 1 } = {}) {
     each(v, (x, z, y) => { if (!onGround(x, z, y)) return; tally('patch', x, z, w.triAt(w.Hh, w.hR + 1, (x + half) / w.hStep, (z + half) / w.hStep) - y); tally('coarse', x, z, w.sampleCoarse(x, z) - y); });
   }
   // the detail mesh, built round a few road points (the most bent part of the busiest roads: junctions, switchbacks)
-  const roads = w.net.roads.filter((r) => r.kind !== 'rail' && r.pts.length > 10 && !r.tunnel), D = w.detailD, DS = w.detailS, n = D + 1, B = 4;
+  const roads = w.net.roads.filter((r) => r.kind !== 'rail' && r.pts.length > 10 && !r.tunnel && !r.minor), D = w.detailD, DS = w.detailS, n = D + 1, B = 4; // (the streets: the ways off the street network are sampled in their own check)
   for (let s = 0; s < spots && roads.length; s++) {
     const r = roads[(s * 7919) % roads.length], p = r.pts[(s * 31) % r.pts.length]; if (Math.abs(p.x) > w.half - 1500 || Math.abs(p.z) > w.half - 1500) continue;
     const cp = { x: p.x, y: w.sampleGrid(p.x, p.z) + 3, z: p.z }; w.detailAt = null; w.patchAt = null; w.updatePatch(cp); w.updateDetail(cp); if (!w.detail.visible) continue;
@@ -115,7 +209,7 @@ export function cityGroundCheck(w, { x0 = -9000, x1 = -3000, z0 = 4000, z1 = 120
   const S = w.roadSurf, out = { n: 0, low: 0, high: 0, steps: 0, lines: 0, paved: 0, worst: 0, at: '', wstep: 0, sat: '' }, top = 0.18, boxes = []; // (top: roadgrade.js CITY_TOP)
   const PAVE = { main: 4.5, street: 3.5 }, free = (x, z) => w.real.bare(x, z) && !(S.q(x, z) && S.e <= 0) && !w.wallBoxes(x, z, 0.5, boxes).some((b) => { const dx = x - b.x, dz = z - b.z; return Math.abs(dx * b.ux + dz * b.uz) < b.hl + 0.5 && Math.abs(-dx * b.uz + dz * b.ux) < b.hw + 0.5; });
   for (const rd of w.net.roads) {
-    if (rd.kind === 'highway' || rd.baked || rd.tunnel || rd.kind === 'rail') continue;
+    if (rd.kind === 'highway' || rd.baked || rd.tunnel || rd.kind === 'rail' || rd.minor) continue; // (the streets, with their kerbs: not the ways off the street network)
     const P = rd.pts, hw = rd.width / 2, pv = PAVE[rd.kind] ?? 3.5, J = new Set((rd.jn || []).map(([j]) => j));
     for (let i = 2; i + 2 < P.length; i += 3) {
       const p = P[i]; if (p.x < x0 || p.x > x1 || p.z < z0 || p.z > z1 || rd.bridge?.[i] || rd.tube?.[i]) continue;
@@ -163,7 +257,7 @@ export function cityGroundCheck(w, { x0 = -9000, x1 = -3000, z0 = 4000, z1 = 120
 export async function junctionCheck(w, { detail = true, keep = false } = {}) {
   const { RJ_Q = 4 } = await import('../../src/roads.js'), roads = w.net.roads, lim = w.half - 600, city = !!w.loc.city;
   const at = new Map();
-  roads.forEach((rd, k) => { for (const [j, nd] of rd.jn || []) { let L = at.get(nd); if (!L) at.set(nd, (L = [])); L.push({ k, j }); } });
+  roads.forEach((rd, k) => { if (rd.minor) return; for (const [j, nd] of rd.jn || []) { let L = at.get(nd); if (!L) at.set(nd, (L = [])); L.push({ k, j }); } }); // (the streets' junctions: a way off the street network joins one as a driveway does, no box)
   const J = [];
   for (const [nd, L] of at) {
     const legs = L.reduce((a, q) => a + (q.j === 0 || q.j === roads[q.k].pts.length - 1 ? 1 : 2), 0); if (legs < 3) continue;
@@ -279,8 +373,8 @@ function hull(P) {
 }
 function inHull(H, x, z) { for (let i = 0; i < H.length; i++) { const a = H[i], b = H[(i + 1) % H.length]; if ((b[0] - a[0]) * (z - a[1]) - (b[1] - a[1]) * (x - a[0]) < 0) return false; } return true; }
 
-export function measure(w) {
-  const roads = w.net.roads.filter((r) => r.kind !== 'rail'), lim = w.half - 200, inCore = (x, z) => Math.abs(x) < lim && Math.abs(z) < lim;
+export function measure(w, { minor = false } = {}) { // (minor: the ways off the street network, and where they join or cross a street, instead of the streets: minorCheck)
+  const roads = w.net.roads.filter((r) => r.kind !== 'rail' && (minor || !r.minor)), mine = (rd) => !rd.minor === !minor, lim = w.half - 200, inCore = (x, z) => Math.abs(x) < lim && Math.abs(z) < lim;
   const isDeck = (rd, i) => !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % rd.pts.length]);
   const out = { km: 0, steps: [], steep: [], joins: [], crossings: [] }, nodes = new Map();
   // segment hash (20 m cells)
@@ -300,7 +394,7 @@ export function measure(w) {
     let prev = null;
     for (let i = 0; i < last; i++) {
       const a = P[i], b = P[(i + 1) % n], L = Math.hypot(b.x - a.x, b.z - a.z);
-      if (isDeck(rd, i) || L < 1e-3) { prev = null; continue; }
+      if (isDeck(rd, i) || L < 1e-3 || !mine(rd)) { prev = null; continue; }
       const dx = (b.x - a.x) / L, dz = (b.z - a.z) / L;
       for (let s = 0; s < L; s += 1) {
         const x = a.x + dx * s, z = a.z + dz * s;
@@ -319,7 +413,7 @@ export function measure(w) {
     }
     // junctions (roads.bin topology, rd.jn): every road through a node meets the others there (checked below, once
     // per node); roads without topology (the airport road): an end on another road's line meets it
-    if (!rd.jn && !rd.closed) for (const [e, ie] of [[P[0], 0], [P[n - 1], n - 2]]) {
+    if (!rd.jn && !rd.closed && mine(rd)) for (const [e, ie] of [[P[0], 0], [P[n - 1], n - 2]]) {
       if (!inCore(e.x, e.z) || isDeck(rd, ie)) continue;
       let bd = SNAP, y = null, deck = false;
       near(e.x, e.z, (sg) => {
@@ -329,14 +423,14 @@ export function measure(w) {
       });
       if (y != null && !deck && Math.abs(y - e.y) > JOIN) spot(out.joins, e.x, e.z, Math.abs(y - e.y), rd.kind);
     }
-    for (const [j, nd] of rd.jn || []) { const p = P[j]; if (!inCore(p.x, p.z)) continue; const q = nodes.get(nd); if (!q) nodes.set(nd, { y: p.y, x: p.x, z: p.z, br: !!rd.bridge?.[j] }); else if (!q.br && !rd.bridge?.[j] && Math.abs(q.y - p.y) > JOIN) spot(out.joins, p.x, p.z, Math.abs(q.y - p.y), rd.kind); }
+    for (const [j, nd] of rd.jn || []) { const p = P[j]; if (!inCore(p.x, p.z)) continue; const q = nodes.get(nd); if (!q) nodes.set(nd, { y: p.y, x: p.x, z: p.z, br: !!rd.bridge?.[j], mine: mine(rd) }); else if (!q.br && !rd.bridge?.[j] && (q.mine || mine(rd)) && Math.abs(q.y - p.y) > JOIN) spot(out.joins, p.x, p.z, Math.abs(q.y - p.y), rd.kind); }
     // crossings with the roads after it (each pair once)
     for (let i = 0; i < last; i++) {
       if (isDeck(rd, i)) continue;
       const a = P[i], b = P[(i + 1) % n]; if (!inCore(a.x, a.z)) continue;
       const dx = b.x - a.x, dz = b.z - a.z, seen = new Set();
       near((a.x + b.x) / 2, (a.z + b.z) / 2, (sg) => {
-        if (sg.ri <= ri || sg.deck || seen.has(sg)) return; seen.add(sg);
+        if (sg.ri <= ri || sg.deck || seen.has(sg) || !(mine(rd) || mine(roads[sg.ri]))) return; seen.add(sg);
         const r = sg.a, q = sg.b, ex = q.x - r.x, ez = q.z - r.z, den = dx * ez - dz * ex; if (Math.abs(den) < 1e-9) return;
         const t = ((r.x - a.x) * ez - (r.z - a.z) * ex) / den, u = ((r.x - a.x) * dz - (r.z - a.z) * dx) / den;
         if (t < 0.02 || t > 0.98 || u < 0.02 || u > 0.98) return; // (ends meeting: the joins check)
@@ -420,7 +514,7 @@ export async function safetyCheck(w) {
 export async function postsCheck(w) {
   const THREE = await import('three'), { LaneGraph } = await import('../../src/laneGraph.js'), { Signals } = await import('../../src/signals.js'), { toLocal } = await import('../../src/realworld.js');
   const C = 20, cells = new Map();
-  for (const rd of w.net.roads) { if (rd.kind === 'rail') continue; const P = rd.pts; for (let i = 0; i + 1 < P.length; i++) { if ((rd.bridge?.[i] && rd.bridge?.[i + 1]) || (rd.tube?.[i] && rd.tube?.[i + 1])) continue; const a = P[i], b = P[i + 1]; const i0 = Math.floor(Math.min(a.x, b.x) / C), i1 = Math.floor(Math.max(a.x, b.x) / C), j0 = Math.floor(Math.min(a.z, b.z) / C), j1 = Math.floor(Math.max(a.z, b.z) / C); for (let u = i0; u <= i1; u++) for (let v = j0; v <= j1; v++) { const k = u + ',' + v; let L = cells.get(k); if (!L) cells.set(k, (L = [])); L.push([a, b, rd.width / 2]); } } }
+  for (const rd of w.net.roads) { if (rd.kind === 'rail' || rd.minor) continue; const P = rd.pts; for (let i = 0; i + 1 < P.length; i++) { if ((rd.bridge?.[i] && rd.bridge?.[i + 1]) || (rd.tube?.[i] && rd.tube?.[i + 1])) continue; const a = P[i], b = P[i + 1]; const i0 = Math.floor(Math.min(a.x, b.x) / C), i1 = Math.floor(Math.max(a.x, b.x) / C), j0 = Math.floor(Math.min(a.z, b.z) / C), j1 = Math.floor(Math.max(a.z, b.z) / C); for (let u = i0; u <= i1; u++) for (let v = j0; v <= j1; v++) { const k = u + ',' + v; let L = cells.get(k); if (!L) cells.set(k, (L = [])); L.push([a, b, rd.width / 2]); } } }
   const onRoad = (x, z) => { for (const [a, b, hw] of cells.get(Math.floor(x / C) + ',' + Math.floor(z / C)) || []) { const ex = b.x - a.x, ez = b.z - a.z, l = ex * ex + ez * ez, t = l ? Math.max(0, Math.min(1, ((x - a.x) * ex + (z - a.z) * ez) / l)) : 0; if (Math.hypot(a.x + ex * t - x, a.z + ez * t - z) < hw) return true; } return false; };
   const S = new Signals(new LaneGraph(w.net), { city: !!w.loc.city }); let sig = 0, sigOn = 0; const ex = [];
   for (const n of S.nodes.values()) { S.pole(n); sig++; if (onRoad(n.px, n.pz)) { sigOn++; if (ex.length < 3) ex.push(`(${Math.round(n.x)}, ${Math.round(n.z)})`); } }
@@ -435,6 +529,7 @@ export async function runCase(c, ctx) {
   if (c.models) return modelsCheck();
   const { worldAt } = await import('./node/world.mjs');
   const w = (await worldAt(c.loc)).world;
+  if (c.minor) return minorCheck(w, c, ctx);
   if (c.tunnel) { // a car driven into the place's longest tunnel stays on its floor, under the hill or the river, in one piece
     const THREE = await import('three'), { Aircraft, REALISM } = await import('../../src/aircraft.js'), { envOf } = await import('./node/world.mjs');
     const env = envOf(w); let best = null;
@@ -471,7 +566,7 @@ export async function runCase(c, ctx) {
     const { encodeRoads, decodeRoads } = await import('../../src/roadPack.js'), roads = w.net.roads, P = decodeRoads(encodeRoads(roads, 'test'));
     let worst = 0, bad = 0;
     roads.forEach((rd, k) => { const q = P.roads[k];
-      if (!q || q.pts.length !== rd.pts.length || q.kind !== rd.kind || q.oneway !== (rd.oneway || 0) || JSON.stringify(q.jn) !== JSON.stringify(rd.jn || []) || q.bridge.some((b, i) => b !== !!rd.bridge?.[i])) { bad++; return; }
+      if (!q || q.pts.length !== rd.pts.length || q.kind !== rd.kind || !!q.minor !== !!rd.minor || (q.surf || 0) !== (rd.surf || 0) || q.oneway !== (rd.oneway || 0) || JSON.stringify(q.jn) !== JSON.stringify(rd.jn || []) || q.bridge.some((b, i) => b !== !!rd.bridge?.[i])) { bad++; return; }
       rd.pts.forEach((p, i) => { worst = Math.max(worst, Math.abs(p.x - q.pts[i].x), Math.abs(p.y - q.pts[i].y), Math.abs(p.z - q.pts[i].z)); }); });
     return [{ name: `${c.loc}: the road pack gives back its roads`, ok: !bad && worst < 0.011 && P.key === 'test', why: `${bad} roads differ, points within ${(worst * 100).toFixed(1)} cm` }];
   }

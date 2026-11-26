@@ -33,7 +33,7 @@ export function cases() { return PLACES.map((loc) => ({ id: loc, loc, world: loc
 function zones(w) {
   const city = !!w.loc.city, cells = new Map(), list = [];
   for (const rd of w.net.roads) {
-    if (rd.kind === 'rail') continue;
+    if (rd.kind === 'rail' || rd.minor) continue; // (buildings don't move for the ways off the street network: setback.js)
     const P = rd.pts, n = P.length, r = rd.width / 2 + (city && rd.kind !== 'highway' && !rd.baked ? PAVE[rd.kind] ?? PAVE.street : VERGE);
     for (let i = 0; i < (rd.closed ? n : n - 1); i++) {
       const j = (i + 1) % n, a = P[i], b = P[j];

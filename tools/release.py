@@ -28,8 +28,13 @@ def main():
         sys.exit(__doc__)
     branch, items = sys.argv[1], [a.strip() for a in sys.argv[2:]]
     sh('git fetch -q origin')
+    # run from the branch's own checkout: from anywhere else the push below would replace the PR's work with HEAD
+    if (cur := sh('git branch --show-current')) != branch:
+        sys.exit(f'✗ this checkout is on {cur or "a detached HEAD"}, not {branch}: run from a checkout of {branch}')
     if subprocess.run('git merge-base --is-ancestor origin/main HEAD', shell=True).returncode:
         sh('git rebase origin/main')
+    if not sh('git rev-list origin/main..HEAD'):
+        sys.exit(f'✗ {branch} has no changes beyond origin/main: nothing to release')
     main_ver = re.search(r"VERSION = '(\d+)\.(\d+)\.(\d+)'", sh('git show origin/main:src/version.js')).groups()
     ver = f'{main_ver[0]}.{int(main_ver[1]) + 1}.0'
     v = open('src/version.js').read()
