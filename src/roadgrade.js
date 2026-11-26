@@ -342,7 +342,7 @@ export const PAVE = { main: 4.5, street: 3.5 }; // a city street's pavements: me
 // that ground (World.cityAt) by CITY_BAND metres out (the ground between two streets at different heights is a slope
 // from one to the other, and cityAt's grid, 40-57 m, is too coarse to have it right just beside them). SLAB: how far
 // past a city street's footprint its pavement's slabs reach (roads.js roadMesh).
-export const CITY_TOP = 0.18, PAVE_RAMP = 2, CITY_BAND = 12, SLAB = PAVE.main - VERGE;
+export const CITY_TOP = 0.18, PAVE_RAMP = 2, CITY_BAND = 12, SLAB = PAVE.main - VERGE, SLAB_FALL = 0.23; // (SLAB_FALL: the steepest the ground falls away from a pavement's edge, over)
 function pinUnder(w, roads, H, R, st, junctions = []) {
   const W = R + 1, half = w.half, q = new Float64Array(8), tri = [0, 0, 0], wt = [0, 0, 0];
   let poly = new Float64Array(32), tmp = new Float64Array(32), np = 0; // (the clipped polygon: np floats, x, z pairs)
@@ -584,7 +584,7 @@ export class RoadSurface {
       const ei = R[i * 4 + 1], yi = R[i * 4 + 2], sl = R[i * 4 + 3], d = base - yi - CITY_TOP, w = (1 - smoothstep(CITY_BAND * 0.6, CITY_BAND, ei)) / ((ei + 0.5) * (ei + 0.5)), ramp = yi + CITY_TOP * smoothstep(0, PAVE_RAMP, ei);
       sw += w; sp += w * (ramp + d * smoothstep(PAVE_RAMP, CITY_BAND, ei)); sk += w * (1 - smoothstep(0.8, 1.6, Math.abs(d)));
       if (ei < SLAB + 1) cap = Math.min(cap, yi + CITY_TOP + 50 * smoothstep(SLAB, SLAB + 1, ei)); // (under a street's slabs: no higher than their top, whatever is beyond)
-      if (ei < sl + 1) floor = Math.max(floor, ramp - 50 * smoothstep(sl, sl + 1, ei)); // (and no lower than its ramp up to them: where the ground beyond falls away, a cutting or a bank, it does so past the slabs, which lie on it, #228 042034)
+      if (ei < CITY_BAND) floor = Math.max(floor, ei < sl ? ramp : yi + CITY_TOP - SLAB_FALL * (ei - sl)); // (and no lower than its ramp up to them, then down at SLAB_FALL from their edge: where the ground beyond falls away, a bank, it does so past the slabs, which lie on it, #228 042034)
     }
     if (sw < 1e-9) return h + (base - h) * (1 - smoothstep(0.8, 1.6, Math.abs(base - this.y - CITY_TOP))); // (past them all: the open ground itself)
     const r = Math.max(h + (sp / sw - h) * (sk / sw), floor);
