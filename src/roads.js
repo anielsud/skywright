@@ -6,9 +6,10 @@ import { glowTexture as glow } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { REGION, roadStyle, tarmacMaterial, shoulderMaterial, sidewalkMaterial } from './roadSurface.js';
 import { airportGate } from './airportKit.js';
+import { junctionPlan, insertMouths, junctionShapes, TARMAC_LIFT, along } from './junctions.js';
 import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE, CITY_TOP } from './roadgrade.js';
 
-const RWY_HALF = 900;
+const RWY_HALF = 900, JGRADE = 0.2; // (JGRADE: the steepest a street may be left between two junctions' level boxes)
 
 
 // evenly spaced points along a polyline
@@ -39,7 +40,7 @@ export function flattenGrid(w, net) {
     }
   };
   for (const t of net.towns) flat(t.c, 420 * t.size, t.h);
-  carveGrid(w, allRoads(net), H, N, step, 0.6);
+  carveGrid(w, allRoads(net), H, N, step, 0.6, net.junctions);
 }
 
 // Same for the hi-res bake heights: what physics, placement and the near-camera ground use
@@ -55,7 +56,7 @@ export function flattenHi(w, net, Hh, R) {
     }
   };
   for (const t of net.towns) flat(t.c, 420 * t.size, t.h);
-  carveGrid(w, allRoads(net), Hh, R, st, 0.75);
+  carveGrid(w, allRoads(net), Hh, R, st, 0.75, net.junctions);
 }
 const allRoads = (net) => [...net.roads, ...(net.rail ? [net.rail] : [])];
 // A city's open ground (the lots, plazas and pedestrian streets, the gaps between buildings and the strips between a
@@ -127,12 +128,14 @@ export function cityGround(w, net, Hh, R, levelled = null) { // (levelled(x, z):
 // embankment/cutting width beside a road on a heightfield of spacing st (physics and the skirt meshes)
 export const skirtWidth = (st) => Math.min(60, st * 0.75 + 10);
 // The road surface index World.sampleGrid / groundAt read (built once the fine heights are carved)
-export function roadSurface(w, net) { return new RoadSurface(w, allRoads(net), skirtWidth(w.hStep), w.detailGrid()[1] * 1.45); }
+export function roadSurface(w, net) { return new RoadSurface(w, allRoads(net), skirtWidth(w.hStep), w.detailGrid()[1] * 1.45, net.junctions); }
 
 // Real places: OSM roads get a profile too (smoothed, grade-limited, mapped bridges kept as straight decks), so they
 // can be carved in and driven like the planned ones. Reads the raw fine heights (w.Hh0).
 export function gradeReal(w, net) {
-  if (net.graded) return; // (the deploy's road pack: graded already, realworld.js packedNetwork)
+  const city = !!w.loc.city;
+  if (net.graded) { net.junctions = junctionShapes(net.roads, city); return; } // (the deploy's road pack: graded already, realworld.js packedNetwork)
+  const roadK = new Map(net.roads.map((r, k) => [r, k]));
   const terr = gridSampler(w, w.Hh0, w.hR0), wl = w.waterLevel;
   // Ways are graded longest first; each is pinned to the ways already done wherever it meets them (#228):
   //  - its own ends, on another way's line (OSM ways meet at shared nodes, but the resampled points are 8-16 m apart,
@@ -183,14 +186,32 @@ export function gradeReal(w, net) {
   const grounded = new Set();
   for (const rd of net.roads) if (!rd.baked) for (const [j, nd] of rd.jn || []) if ((!rd.bridge?.[j] && !rd.tunnel) || j === 0 || j === rd.pts.length - 1) grounded.add(nd); // (not out on a bridge, nor inside a tunnel; its ends, the portals, are on the ground)
   for (const rd of net.roads) if (!rd.baked) for (const [j, nd] of rd.jn || []) if (grounded.has(nd) && !nodeY.has(nd)) { const p = rd.pts[j]; nodeY.set(nd, Math.max(wl + 0.6, (terr(p.x, p.z) * 2 + terr(p.x + 9, p.z) + terr(p.x - 9, p.z) + terr(p.x, p.z + 9) + terr(p.x, p.z - 9)) / 6)); }
+  // a junction is only made level (a box) where its neighbours along each arm can still be reached at a street's
+  // grade from its mouth: on a steep street with a junction every 15-20 m, level boxes would leave a wall between
+  // them (Bora Bora's hillside lanes); those junctions keep their roads' own grades (junctionShapes: no box)
+  const keep = new Map(junctionPlan(net.roads, city).filter((J) => J.ok).map((J) => [J.nd, J]));
+  for (const J of [...keep.values()]) for (const A of J.arms) {
+    const rd = net.roads[A.k];
+    let e = A.j + A.dir; while (e > 0 && e < rd.pts.length - 1 && !(rd.jn || []).some(([jj]) => jj === e)) e += A.dir;
+    const fn = (rd.jn || []).find(([jj]) => jj === e)?.[1], y0 = nodeY.get(J.nd), y1 = fn != null ? nodeY.get(fn) : undefined; if (y0 == null || y1 == null) continue;
+    const F = keep.get(fn), c2 = F?.arms.find((B) => B.k === A.k && B.j === e)?.c ?? 0, free = A.len - A.c - c2;
+    if (Math.abs(y1 - y0) > JGRADE * Math.max(0, free) + 0.05) { keep.delete(J.nd); if (F) keep.delete(fn); }
+  }
+  // every other junction's box (junctions.js): a point on each arm at its mouth, the profile level from the node out to it
+  insertMouths(net.roads, keep.values());
+  const plan = new Map(junctionPlan(net.roads, city).filter((J) => J.ok && keep.has(J.nd)).map((J) => [J.nd, J]));
   for (const rd of chains(net.roads.filter((r) => !r.baked))) { // (longest first)
-    const fixed = rd.bridge && rd.bridge.some(Boolean) ? rd.bridge.slice() : null, pins = [], P = rd.pts, n = P.length;
+    const fixed = rd.bridge && rd.bridge.some(Boolean) ? rd.bridge.slice() : null, pins = [], level = [], P = rd.pts, n = P.length;
     const S = new Float64Array(n); for (let i = 1; i < n; i++) S[i] = S[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z);
     if (rd.members.length === 1 && rd.members[0].rd.gate) pins.push(...gatePins(rd.members[0].rd)); // (gateRoad: its own chain, never reversed)
-    for (const m of rd.members) { const k = m.rd.pts.length; for (const [j, nd] of m.rd.jn || []) if (nodeY.has(nd)) {
-      const i = m.start + (m.rev ? k - 1 - j : j), y = nodeY.get(nd), c = (nodeHW.get(nd) || 0) + VERGE + 1;
+    for (const m of rd.members) { const k = m.rd.pts.length, mk = roadK.get(m.rd); for (const [j, nd] of m.rd.jn || []) if (nodeY.has(nd)) {
+      const i = m.start + (m.rev ? k - 1 - j : j), y = nodeY.get(nd), c = (nodeHW.get(nd) || 0) + VERGE + 1, J = plan.get(nd);
       pins.push({ i, y });
-      if (!fixed?.[i]) for (const sg of [-1, 1]) { const sp = S[i] + sg * c; if (sp > 0 && sp < S[n - 1]) pins.push({ s: sp, y }); } // (the level junction)
+      // (the level junction: out to each arm's mouth, where insertMouths put a point; without a box, the widest road's
+      // half width and verge either side)
+      if (fixed?.[i]) continue;
+      if (J) { for (const A of J.arms) if (A.k === mk && A.j === j) { const sp = S[i] + (m.rev ? -A.dir : A.dir) * A.c; if (sp > 0 && sp < S[n - 1]) pins.push({ s: sp, y }); level.push([Math.min(S[i], sp), Math.max(S[i], sp), y]); } }
+      else for (const sg of [-1, 1]) { const sp = S[i] + sg * c; if (sp > 0 && sp < S[n - 1]) pins.push({ s: sp, y }); }
     } }
     const topo = rd.members.every((m) => m.rd.jn) || (rd.members.length === 1 && rd.members[0].rd.gate); // (the airport road: gatePins) // (roads.bin roads: their junctions are known, nodeY pins them; ways that cross without sharing a node are an over- or underpass, not a junction)
     if (!topo) for (const i of [0, n - 1]) { const y = onLine(P[i]); if (y != null) pins.push({ i, y }); }
@@ -228,6 +249,7 @@ export function gradeReal(w, net) {
     }
     const under = rd.members.some((m) => m.rd.tunnel) ? Uint8Array.from(P, (p, i) => (rd.members.some((m) => m.rd.tunnel && i >= m.start && i < m.start + m.rd.pts.length) ? 1 : 0)) : null; // (a tunnel's points: under the ground)
     profileRoad(rd, { g: GRADE.real, terr, wetAt: () => false, wl, clear: 0, smooth: 2, bridges: false, fixed, pins, under });
+    for (const [a, b, y] of level) for (let k = 0; k < n; k++) if (S[k] >= a - 0.01 && S[k] <= b + 0.01 && !fixed?.[k]) P[k].y = y; // (a junction's box: level from the node out to each mouth, the points between too)
     for (const m of rd.members) {
       const q = m.rd, k = q.pts.length, at = (j) => m.start + (m.rev ? k - 1 - j : j);
       for (let j = 0; j < k; j++) q.pts[j].y = P[at(j)].y;
@@ -240,6 +262,7 @@ export function gradeReal(w, net) {
       addI(q); setNodes(q);
     }
   }
+  net.junctions = junctionShapes(net.roads, city);
 }
 // OSM splits a road into ways at every tag change (a bridge, a speed limit, a name): where exactly two ways meet end
 // to end they are one road, graded as one chain (#228: two long ways graded apart, then a 15 m way between them
@@ -397,7 +420,7 @@ export function buildRoadMeshes(w, net) {
   // painted on it, a seed
   const region = REGION[w.loc.id] || 'ch', city = !!w.loc.roads?.chunk, tarmac = tarmacMaterial(region, { city: !!w.loc.city }), shoulder = shoulderMaterial(region);
   const sidewalk = w.loc.city ? sidewalkMaterial() : null; // (a city's streets: kerbs and pavements)
-  const J = net.roads.some((r) => r.jn) ? junctionsFromNodes(net.roads, region, city) : findJunctions(net.roads, region, city);
+  const J = net.roads.some((r) => r.jn) ? junctionsFromNodes(net.roads, region, city, net.junctions) : findJunctions(net.roads, region, city);
   // where a road lies on the ground its surface is the ground physics drives on (World.sampleGrid), not its own profile:
   // where two roads' footprints overlap (side by side at different heights, a slip road, the mouth of a junction)
   // that is one surface, blended between them (RoadSurface.blend), and a ribbon at its own profile sank under it: the
@@ -470,6 +493,32 @@ export function buildRoadMeshes(w, net) {
   const tileOf = (p) => Math.floor(p.x / TILE) + ',' + Math.floor(p.z / TILE), tiles = new Map();
   const tile = (key) => { let t = tiles.get(key); if (!t) { const [i, j] = key.split(',').map(Number); tiles.set(key, (t = { key, x: (i + 0.5) * TILE, z: (j + 0.5) * TILE, roads: [], built: false, meshes: [] })); } return t; };
   net.roads.forEach((rd, k) => tile(tileOf(rd.pts[0])).roads.push(k));
+  for (const B of net.junctions || []) (tile(tileOf(B)).juncs ??= []).push(B);
+  // a junction's box (junctions.js): one level slab of tarmac over the junction, out to its arms' mouths and round the
+  // kerbs' corners (the arms' ribbons stop at the mouths: rjunc's box flag); in a city the corner pavements, with their
+  // kerb, between the arms' pavements. Plain tarmac: no markings in the box (rinfo: a half width it never reaches,
+  // no style; rjunc: no junction).
+  const NOJ = [1e4, 1e4, 0, 0];
+  const junctionMesh = (B, seed) => {
+    const nb = B.box.length / 2, pos = [], uv = [], ri = [], rj = [], nor = [];
+    for (let q = 0; q < nb; q++) { const x = B.box[q * 2], z = B.box[q * 2 + 1]; pos.push(x, B.y + B.lift[q], z); uv.push(x - B.x, z - B.z); ri.push(1e4, 0, seed); rj.push(...NOJ); nor.push(0, 1, 0); }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('rinfo', new THREE.Float32BufferAttribute(ri, 3)); g.setAttribute('rjunc', new THREE.Float32BufferAttribute(rj, 4));
+    g.setIndex(B.tris.slice()); add(tarmac, g);
+    if (!sidewalk) return;
+    for (const rows of B.pave) { // rows round the kerb: the kerb's face (from the gutter up 15 cm), then the slabs out to the building line (the granite band: the shader's, uv)
+      const p2 = [], u2 = [], r2 = [], j2 = [], idx = [];
+      rows.forEach((r, q) => {
+        const dx = r.o[0] - r.k[0], dz = r.o[1] - r.k[1], W = Math.hypot(dx, dz) || 1, y = B.y + r.lift;
+        for (const [o, h] of [[0, 0], [0, 0.15], [W, 0.15]]) { p2.push(r.k[0] + dx * o / W, y + h, r.k[1] + dz * o / W); u2.push(r.hw + o, r.v); r2.push(r.hw, 0, seed); j2.push(...NOJ); }
+        if (q) { const a = (q - 1) * 3, b = q * 3; for (let c = 0; c < 2; c++) idx.push(a + c, b + c, a + c + 1, a + c + 1, b + c, b + c + 1); } // (facing up, the kerb's face towards the road)
+      });
+      if (!idx.length) continue;
+      const g2 = new THREE.BufferGeometry();
+      g2.setAttribute('position', new THREE.Float32BufferAttribute(p2, 3)); g2.setAttribute('uv', new THREE.Float32BufferAttribute(u2, 2)); g2.setAttribute('rinfo', new THREE.Float32BufferAttribute(r2, 3)); g2.setAttribute('rjunc', new THREE.Float32BufferAttribute(j2, 4));
+      g2.setIndex(idx); g2.computeVertexNormals(); add(sidewalk, g2);
+    }
+  };
   let bridgeGeos = [];
   const railGeos = [];
   // bridges: a deck slab with parapets, piers down to the ground or river bed, and abutments at both ends
@@ -561,6 +610,7 @@ export function buildRoadMeshes(w, net) {
     const lamps = [], poles = [];
     tubeGeos = []; lightGeos = [];
     for (const k of t.roads) { roadMesh(net.roads[k], k); bridgeMesh(net.roads[k]); tubeMesh(net.roads[k]); if (!net.roads[k].tunnel) lampsFor(net.roads[k], lamps, poles, J[k]); }
+    for (const B of t.juncs || []) junctionMesh(B, (B.nd * 7.31) % 97);
     if (tubeGeos.length) { const m = new THREE.Mesh(mergeAll(tubeGeos), tubeMat); m.receiveShadow = true; group.add(m); t.meshes.push(m); }
     if (lightGeos.length) { const m = new THREE.Mesh(mergeAll(lightGeos), tubeLight); group.add(m); t.meshes.push(m); }
     lampMeshes(lamps, poles, t);
@@ -588,7 +638,6 @@ export function buildRoadMeshes(w, net) {
 }
 
 // a city's road chunks (ribbons and bridges) are drawn this far on the lighter settings; High and Ultra draw them all
-const TARMAC_LIFT = { highway: 0.08, main: 0.06, street: 0.04 }; // metres the tarmac lies over the ground it is on
 const ROAD_D = { low: 4000, medium: 6000, high: 9000, ultra: 12000 }; // (road tiles drawn out to: past it the ground photo shows the roads)
 function mergeAll(geos) {
   const ni = geos.map((g) => (g.index ? g.toNonIndexed() : g));
@@ -750,21 +799,32 @@ export function findJunctions(roads, region, city) {
 }
 // A road's points for its meshes with a vertex either side of every junction (so the distances to the junctions,
 // rjunc, interpolate exactly), and per point rjunc = (metres since the previous junction, metres to the next, the
-// previous one's code, the next one's): code = round(r * 4) * 32 + stop + 2 walk + 4 (mouth on +x) + 8 (mouth on -x).
+// previous one's code, the next one's): code = round(r * 16) * 32 + stop + 2 walk + 4 (mouth on +x) + 8 (mouth on -x)
+// + 16 (a junction box, junctions.js: the ribbon stops at r + 0.6, the box's mouth). r is the arm's own on either side
+// (j.rA: the arm after the junction, along the road; j.rB: before). Distances in plan (x, z), as J's s.
+export const RJ_Q = 16; // (the clearance's steps a metre in rjunc's code; roadSurface.js decodes it)
 export function junctionPoints(rd, J) {
-  const P = rd.pts, n = P.length, S = new Float64Array(n); for (let i = 1; i < n; i++) S[i] = S[i - 1] + P[i].distanceTo(P[i - 1]);
-  const code = (j) => Math.round(j.r * 4) * 32 + (j.stop ? 1 : 0) + (j.walk ? 2 : 0) + (j.side >= 0 ? 4 : 0) + (j.side <= 0 ? 8 : 0);
+  const P = rd.pts, n = P.length, S = along(P);
+  const code = (j, r) => Math.round((r ?? j.r) * RJ_Q) * 32 + (j.stop ? 1 : 0) + (j.walk ? 2 : 0) + (j.side >= 0 ? 4 : 0) + (j.side <= 0 ? 8 : 0) + (j.box ? 16 : 0);
   const pts = [], ss = [], br = [], tb = [];
   let k = 0;
   for (let i = 0; i < n; i++) {
     if (i > 0) while (k < J.length && J[k].s < S[i] - 0.02) { const j = J[k++]; if (j.s <= S[i - 1] + 0.02) continue; const t = (j.s - S[i - 1]) / (S[i] - S[i - 1]); for (const e of [-0.01, 0.01]) { const tt = t + e / (S[i - 1] - S[i - 1] + (S[i] - S[i - 1])); pts.push(P[i - 1].clone().lerp(P[i], tt)); ss.push(j.s + e); br.push(!!(rd.bridge?.[i - 1] && rd.bridge?.[i])); tb.push(!!(rd.tube?.[i - 1] && rd.tube?.[i])); } }
+    // a junction right at a point (the topology's: every one): the point split in two either side of it, so the
+    // segment before it closes on it and the one after leaves it (one point there was the previous junction's distance
+    // on one side and 1e4 on the other: interpolated, the crossing and cut-outs landed metres off)
+    if (i > 0 && i < n - 1 && !rd.closed && J.some((j) => Math.abs(j.s - S[i]) < 0.02)) {
+      for (const [e, a, b] of [[-0.01, i - 1, i], [0.01, i, i + 1]]) { const L = S[b] - S[a]; pts.push(P[a].clone().lerp(P[b], L > 0.02 ? (S[i] + e - S[a]) / L : 0.5)); ss.push(S[i] + e); br.push(!!rd.bridge?.[i]); tb.push(!!rd.tube?.[i]); }
+      continue;
+    }
     pts.push(P[i]); ss.push(S[i]); br.push(!!rd.bridge?.[i]); tb.push(!!rd.tube?.[i]);
   }
-  const rj = [];
-  for (const s of ss) {
+  const rj = [], last = ss.length - 1;
+  for (let q = 0; q <= last; q++) {
+    const s = ss[q] - (q === last && !rd.closed ? 1e-6 : 0); // (the last point: a junction there is the one ahead)
     let a = -1; while (a + 1 < J.length && J[a + 1].s <= s) a++;
     const prev = J[a], next = J[a + 1];
-    rj.push(prev ? s - prev.s : 1e4, next ? next.s - s : 1e4, prev ? code(prev) : 0, next ? code(next) : 0);
+    rj.push(prev ? Math.max(0, s - prev.s) : 1e4, next ? Math.max(0, next.s - s) : 1e4, prev ? code(prev, prev.rA) : 0, next ? code(next, next.rB) : 0);
   }
   return { pts, bridge: br, tube: tb, rjunc: rj, closed: rd.closed };
 }
@@ -773,8 +833,10 @@ export function junctionPoints(rd, J) {
 // road ends meet (a way passing through counts twice) is a junction on every road through it. Same output as
 // findJunctions: per road a sorted list { s, r (clearance: the widest other road's half width + 1 m), stop (gives
 // way: not the major road there, by class then width; a city: every approach), walk (a crossing), side (the mouth's
-// side on a road passing through: +1 / -1, 0 both / none) }.
-export function junctionsFromNodes(roads, region, city) {
+// side on a road passing through: +1 / -1, 0 both / none) }. Where the junction has a box (junctions.js, shapes:
+// net.junctions) also rA / rB (each arm's clearance: its mouth - 0.6 m, where the crossing starts) and box.
+export function junctionsFromNodes(roads, region, city, shapes = []) {
+  const boxes = new Map(shapes.map((B) => [B.nd, B]));
   const at = new Map(), S = roads.map((rd) => { const P = rd.pts, o = new Float64Array(P.length); for (let i = 1; i < P.length; i++) o[i] = o[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z); return o; });
   roads.forEach((rd, k) => { for (const [j, nd] of rd.jn || []) { let L = at.get(nd); if (!L) at.set(nd, (L = [])); L.push({ k, j, end: j === 0 || j === rd.pts.length - 1 }); } });
   const out = roads.map(() => []), town = (rd) => rd.kind === 'street' && !rd.lane;
@@ -792,7 +854,8 @@ export function junctionsFromNodes(roads, region, city) {
         side = sp && sn ? 0 : sp ? 1 : sn ? -1 : 0;
       }
       const walk = city ? rd.width >= 6 : region !== 'us' && town(rd) && others.some((o) => town(roads[o.k])) && ((S[q.k][q.j] * 0.37 + rd.width * 13.1) % 1) < 0.6;
-      out[q.k].push({ s: S[q.k][q.j], r, stop: city || score(rd) > best + 0.01, walk, side });
+      const B = boxes.get(nd), rA = B?.r.get(q.k + ':' + q.j + ':1'), rB = B?.r.get(q.k + ':' + q.j + ':-1');
+      out[q.k].push({ s: S[q.k][q.j], r: B ? Math.max(rA ?? 0, rB ?? 0) : r, stop: city || score(rd) > best + 0.01, walk, side, ...(B ? { rA, rB, box: true } : {}) });
     }
   }
   for (const L of out) { L.sort((p, q) => p.s - q.s); for (let i = L.length - 1; i > 0; i--) if (L[i].s - L[i - 1].s < 3) { const a = L[i - 1], b = L[i]; a.r = Math.max(a.r, b.r); a.stop ||= b.stop; a.walk ||= b.walk; if (a.side !== b.side) a.side = 0; L.splice(i, 1); } }

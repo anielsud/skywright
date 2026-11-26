@@ -36,7 +36,12 @@ async def main(a):
                 ac.x.set({p[0]}, {p[1]}, {p[2]}); ac.q.set({q[0]}, {q[1]}, {q[2]}, {q[3]}); ac.v?.set(0, 0, 0); ac.w?.set?.(0, 0, 0); ac.syncVisual?.();
                 cam.position.set({c[0]}, {c[1]}, {c[2]}); cam.fov = {r.get('fov') or 'cam.fov'}; cam.updateProjectionMatrix();
                 cam.lookAt({c[0]} + {l[0]}, {c[1]} + {l[1]}, {c[2]} + {l[2]}); document.querySelectorAll('#modal-root').forEach((e) => (e.style.display = 'none')); return 1; }})()""")
-            await asyncio.sleep(a.wait)  # (terrain, roads and buildings stream in around the camera on the render loop)
+            # (terrain, roads and buildings stream in around the camera: paused, the flight loop doesn't update the world,
+            # so step it here, from the camera, until the wait is over)
+            for _ in range(max(1, int(a.wait))):
+                await cdp.js(f"""(() => {{ const F = {S}.F, cam = {S}.rig.cam; for (let i = 0; i < 20; i++) F.world.update(1 / 60, cam, cam.position.clone().set(0, 0, 0), []);
+                    F.world.roadGroup?.userData.update?.(cam.position, 1e5, 3000); return 1; }})()""", timeout=300)
+                await asyncio.sleep(1)
             shot = await cdp.send('Page.captureScreenshot', format='png')
             open(a.out, 'wb').write(base64.b64decode(shot['data'])); print(a.out)
     finally:

@@ -93,6 +93,8 @@ export function tarmacMaterial(region, { city = false } = {}) {
       .replace('#include <map_fragment>', `
         float hw = vI.x, st = vI.y, seed = vI.z, x = vR.x, v = vR.y, ax = abs(x);
         gFx = fwidth(x); gFv = fwidth(v);
+        // a junction box (junctions.js) is drawn over the junction: the ribbon stops at its mouth (r + 0.6)
+        { float dj0 = min(vJ.x, vJ.y), jc0 = vJ.y < vJ.x ? vJ.w : vJ.z; if (jc0 > 0.5 && mod(floor(jc0 / 16.0), 2.0) > 0.5 && dj0 < floor(jc0 / 32.0) / 16.0 + 0.6) discard; }
         float cKind = mod(st, 8.0), edgeOn = mod(floor(st / 8.0), 4.0), lanes = floor(st / 32.0);
         vec2 tp = vec2(x, v) / 3.2; // the photo: 3.2 m square
         vec3 grain = texture2D(rD, tp).rgb * 2.0, nrm = texture2D(rN, tp).rgb;
@@ -129,7 +131,7 @@ export function tarmacMaterial(region, { city = false } = {}) {
             paint = max(paint, lineAA(oneWay > 0.5 ? x : ax, c, lw) * dashAA(v, rDash.z, rDash.w)); }
         }
         // junctions (rjunc, roads.js junctionPoints): the nearer one, its clearance r and flags
-        bool nextNear = vJ.y < vJ.x; float dj = min(vJ.x, vJ.y), jc = nextNear ? vJ.w : vJ.z, jr = floor(jc / 32.0) / 4.0, jf = mod(jc, 32.0);
+        bool nextNear = vJ.y < vJ.x; float dj = min(vJ.x, vJ.y), jc = nextNear ? vJ.w : vJ.z, jr = floor(jc / 32.0) / 16.0, jf = mod(jc, 32.0);
         float jStop = mod(jf, 2.0), jWalk = mod(floor(jf / 2.0), 2.0), mouthP = mod(floor(jf / 4.0), 2.0), mouthN = mod(floor(jf / 8.0), 2.0);
         float inJ = jc > 0.5 ? 1.0 - smoothstep(jr - 0.3, jr + 0.3, dj) : 0.0; // inside the crossing road: no lines
         paint *= 1.0 - inJ; yel *= 1.0 - inJ;
@@ -181,7 +183,7 @@ export function tarmacMaterial(region, { city = false } = {}) {
           // the ribbon lies flat along the road: its world normal is up, tilted by the profile; add the grain on top
           normal = normalize(normal + (viewMatrix * vec4(tn.x, 0.0, tn.z, 0.0)).xyz); }`);
   };
-  mat.customProgramCacheKey = () => 'tarmac3-' + region;
+  mat.customProgramCacheKey = () => 'tarmac4-' + region;
   return mat;
 }
 
@@ -229,8 +231,8 @@ export function sidewalkMaterial() {
       .replace('#include <map_fragment>', `
         float hw = vI.x, x = abs(vR.x) - hw, v = vR.y; // x: metres out from the kerb's face
         float gFv = fwidth(v), gFx = fwidth(x);
-        float dj = min(vJ.x, vJ.y), jc = vJ.y < vJ.x ? vJ.w : vJ.z, jr = floor(jc / 32.0) / 4.0;
-        if (jc > 0.5 && dj < jr + 0.3) discard; // (the junction: the crossing's open roadway)
+        float dj = min(vJ.x, vJ.y), jc = vJ.y < vJ.x ? vJ.w : vJ.z, jr = floor(jc / 32.0) / 16.0, jBox = mod(floor(jc / 16.0), 2.0);
+        if (jc > 0.5 && dj < jr + 0.3 + 0.3 * jBox) discard; // (the junction: the crossing's open roadway; a box's mouth, where its corner pavement takes over)
         vec3 conc = vec3(0.47, 0.465, 0.45) * texture2D(sD, vec2(vR.x, v) / 2.4).rgb * 2.0;
         // slabs: joints every 1.5 m along and across, a little darker and soiled; some slabs a shade off
         vec2 sl = vec2(x - 0.35, v) / 1.5, f = abs(fract(sl) - 0.5) * 1.5;
@@ -246,6 +248,6 @@ export function sidewalkMaterial() {
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.74, 0.44) * (0.3 + 2.4 * lampPool(v, vR.x, hw, vI.z, gFv)) * rLamp;`);
   };
-  mat.customProgramCacheKey = () => 'sidewalk2';
+  mat.customProgramCacheKey = () => 'sidewalk3';
   return mat;
 }

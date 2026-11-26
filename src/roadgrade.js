@@ -295,7 +295,7 @@ function classifyBridges(rd) {
 // nearest road point; inside the bench (half width + k*st) it is set just below the road, beyond that it is
 // clamped to the embankment/cutting slopes. Water is not filled and land is not cut below the water level.
 // Then any triangle still poking up into a road's footprint is pushed down under it.
-export function carveGrid(w, roads, H, R, st, bench = 0.75) {
+export function carveGrid(w, roads, H, R, st, bench = 0.75, junctions = []) {
   const W = R + 1, half = w.half, wl = w.waterLevel, N = W * W;
   const bd = new Float32Array(N).fill(Infinity), by = new Float32Array(N);
   const reach = st * bench + 46;
@@ -324,7 +324,7 @@ export function carveGrid(w, roads, H, R, st, bench = 0.75) {
     if (h < h0) h = Math.max(h, Math.min(h0, wl + 0.3)); // no new water from cuttings
     H[k] = h;
   }
-  pinUnder(w, roads, H, R, st);
+  pinUnder(w, roads, H, R, st, junctions);
 }
 // Push grid vertices down wherever the triangulated surface would rise above a road's footprint. Exact: every
 // footprint quad between two road points (its edges where the road meshes put them, roads.js frame) is checked
@@ -343,7 +343,7 @@ export const PAVE = { main: 4.5, street: 3.5 }; // a city street's pavements: me
 // from one to the other, and cityAt's grid, 40-57 m, is too coarse to have it right just beside them). SLAB: how far
 // past a city street's footprint its pavement's slabs reach (roads.js roadMesh).
 export const CITY_TOP = 0.18, PAVE_RAMP = 2, CITY_BAND = 12, SLAB = PAVE.main - VERGE;
-function pinUnder(w, roads, H, R, st) {
+function pinUnder(w, roads, H, R, st, junctions = []) {
   const W = R + 1, half = w.half, q = new Float64Array(8), tri = [0, 0, 0], wt = [0, 0, 0];
   let poly = new Float64Array(32), tmp = new Float64Array(32), np = 0; // (the clipped polygon: np floats, x, z pairs)
   // clip the polygon to the half plane (x - ax) * nx + (z - az) * nz >= 0
@@ -357,6 +357,43 @@ function pinUnder(w, roads, H, R, st) {
     }
     const sw = poly; poly = tmp; tmp = sw; np = m;
   };
+  // the polygon q (nq floats: x, z pairs, convex) under the plane r0 + rx x + rz z (low: its lowest)
+  const pin = (nq, r0, rx, rz, low) => {
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let k = 0; k < nq; k += 2) { x0 = Math.min(x0, q[k]); x1 = Math.max(x1, q[k]); z0 = Math.min(z0, q[k + 1]); z1 = Math.max(z1, q[k + 1]); }
+    const i0 = Math.max(0, Math.floor((x0 + half) / st)), i1 = Math.min(R - 1, Math.floor((x1 + half) / st)), j0 = Math.max(0, Math.floor((z0 + half) / st)), j1 = Math.min(R - 1, Math.floor((z1 + half) / st));
+    for (let gj = j0; gj <= j1; gj++) for (let gi = i0; gi <= i1; gi++) for (let h = 0; h < 2; h++) {
+      // the cell's triangles, as World.triAt: h 0 = (a, b, d), h 1 = (b, c, d); a = (gi, gj), b = (gi, gj+1), c = (gi+1, gj+1), d = (gi+1, gj)
+      const ka = gj * W + gi, kb = ka + W;
+      if (h === 0) { tri[0] = ka; tri[1] = kb; tri[2] = ka + 1; } else { tri[0] = kb; tri[1] = kb + 1; tri[2] = ka + 1; }
+      if (Math.max(H[tri[0]], H[tri[1]], H[tri[2]]) <= low) continue; // (all three corners under the road's lowest end: most of them, carved already)
+      const xa = -half + gi * st, za = -half + gj * st;
+      for (let it = 0; it < 4; it++) {
+        // plane - road, linear: c0 + cx x + cz z
+        const px = h === 0 ? (H[ka + 1] - H[ka]) / st : (H[kb + 1] - H[kb]) / st, pz = h === 0 ? (H[kb] - H[ka]) / st : (H[kb + 1] - H[ka + 1]) / st;
+        const c0 = (h === 0 ? H[ka] : H[kb] + H[ka + 1] - H[kb + 1]) - px * xa - pz * za - r0, cx = px - rx, cz = pz - rz;
+        // under at the quad's four corners: under all over it
+        if (it === 0) { let mx = -Infinity; for (let k = 0; k < nq; k += 2) mx = Math.max(mx, c0 + cx * q[k] + cz * q[k + 1]); if (mx <= 1e-4) break; }
+        // else over the quad clipped to the triangle: the worst is at one of its corners
+        if (it === 0) {
+          for (let k = 0; k < nq; k++) poly[k] = q[k];
+          np = nq;
+          if (h === 0) { clip(xa, za, 1, 0); clip(xa, za, 0, 1); clip(xa + st, za, -1, -1); } // (x >= xa, z >= za, x + z <= xa + za + st)
+          else { clip(xa + st, za, -1, 0); clip(xa, za + st, 0, -1); clip(xa + st, za, 1, 1); } // (x <= xa + st, z <= za + st, x + z >= xa + za + st)
+          if (np < 6) break;
+        }
+        let worst = 1e-4, wx = 0, wz = 0;
+        for (let k = 0; k < np; k += 2) { const d = c0 + cx * poly[k] + cz * poly[k + 1]; if (d > worst) { worst = d; wx = poly[k]; wz = poly[k + 1]; } }
+        if (worst <= 1e-4) break;
+        if (it === 3) { for (let k = 0; k < 3; k++) H[tri[k]] -= worst; break; } // (still above: the whole triangle down)
+        // the least change that brings the worst point under: each corner down in proportion to its weight there
+        const u = (wx - xa) / st, v = (wz - za) / st;
+        if (h === 0) { wt[0] = 1 - u - v; wt[1] = v; wt[2] = u; } else { wt[0] = 1 - u; wt[1] = u + v - 1; wt[2] = 1 - v; }
+        const s2 = wt[0] * wt[0] + wt[1] * wt[1] + wt[2] * wt[2];
+        for (let k = 0; k < 3; k++) H[tri[k]] -= worst * Math.max(0, wt[k]) / s2;
+      }
+    }
+  };
   for (const rd of roads) {
     const P = rd.pts, n = P.length, closed = !!rd.closed, hw = rd.width / 2 + (w.loc?.city && (rd.kind === 'main' || rd.kind === 'street') && !rd.baked ? PAVE[rd.kind] : VERGE); // (a city street: out to its pavements' edge, roads.js)
     const F = new Float64Array(n * 2); // (each point's right vector, as roads.js frame)
@@ -369,44 +406,26 @@ function pinUnder(w, roads, H, R, st) {
       q[0] = A.x - ax * hw; q[1] = A.z - az * hw; q[2] = B.x - bx * hw; q[3] = B.z - bz * hw; q[4] = B.x + bx * hw; q[5] = B.z + bz * hw; q[6] = A.x + ax * hw; q[7] = A.z + az * hw;
       // the road over the quad: its profile along the centre line, carried straight across (linear: r0 + rx x + rz z)
       const g = (B.y - A.y) / L2, rx = g * dx, rz = g * dz, r0 = A.y - PIN - rx * A.x - rz * A.z, low = Math.min(A.y, B.y) - PIN;
-      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-      for (let k = 0; k < 8; k += 2) { x0 = Math.min(x0, q[k]); x1 = Math.max(x1, q[k]); z0 = Math.min(z0, q[k + 1]); z1 = Math.max(z1, q[k + 1]); }
-      const i0 = Math.max(0, Math.floor((x0 + half) / st)), i1 = Math.min(R - 1, Math.floor((x1 + half) / st)), j0 = Math.max(0, Math.floor((z0 + half) / st)), j1 = Math.min(R - 1, Math.floor((z1 + half) / st));
-      for (let gj = j0; gj <= j1; gj++) for (let gi = i0; gi <= i1; gi++) for (let h = 0; h < 2; h++) {
-        // the cell's triangles, as World.triAt: h 0 = (a, b, d), h 1 = (b, c, d); a = (gi, gj), b = (gi, gj+1), c = (gi+1, gj+1), d = (gi+1, gj)
-        const ka = gj * W + gi, kb = ka + W;
-        if (h === 0) { tri[0] = ka; tri[1] = kb; tri[2] = ka + 1; } else { tri[0] = kb; tri[1] = kb + 1; tri[2] = ka + 1; }
-        if (Math.max(H[tri[0]], H[tri[1]], H[tri[2]]) <= low) continue; // (all three corners under the road's lowest end: most of them, carved already)
-        const xa = -half + gi * st, za = -half + gj * st;
-        for (let it = 0; it < 4; it++) {
-          // plane - road, linear: c0 + cx x + cz z
-          const px = h === 0 ? (H[ka + 1] - H[ka]) / st : (H[kb + 1] - H[kb]) / st, pz = h === 0 ? (H[kb] - H[ka]) / st : (H[kb + 1] - H[ka + 1]) / st;
-          const c0 = (h === 0 ? H[ka] : H[kb] + H[ka + 1] - H[kb + 1]) - px * xa - pz * za - r0, cx = px - rx, cz = pz - rz;
-          // under at the quad's four corners: under all over it
-          if (it === 0 && Math.max(c0 + cx * q[0] + cz * q[1], c0 + cx * q[2] + cz * q[3], c0 + cx * q[4] + cz * q[5], c0 + cx * q[6] + cz * q[7]) <= 1e-4) break;
-          // else over the quad clipped to the triangle: the worst is at one of its corners
-          if (it === 0) {
-            for (let k = 0; k < 8; k++) poly[k] = q[k];
-            np = 8;
-            if (h === 0) { clip(xa, za, 1, 0); clip(xa, za, 0, 1); clip(xa + st, za, -1, -1); } // (x >= xa, z >= za, x + z <= xa + za + st)
-            else { clip(xa + st, za, -1, 0); clip(xa, za + st, 0, -1); clip(xa + st, za, 1, 1); } // (x <= xa + st, z <= za + st, x + z >= xa + za + st)
-            if (np < 6) break;
-          }
-          let worst = 1e-4, wx = 0, wz = 0;
-          for (let k = 0; k < np; k += 2) { const d = c0 + cx * poly[k] + cz * poly[k + 1]; if (d > worst) { worst = d; wx = poly[k]; wz = poly[k + 1]; } }
-          if (worst <= 1e-4) break;
-          if (it === 3) { for (let k = 0; k < 3; k++) H[tri[k]] -= worst; break; } // (still above: the whole triangle down)
-          // the least change that brings the worst point under: each corner down in proportion to its weight there
-          const u = (wx - xa) / st, v = (wz - za) / st;
-          if (h === 0) { wt[0] = 1 - u - v; wt[1] = v; wt[2] = u; } else { wt[0] = 1 - u; wt[1] = u + v - 1; wt[2] = 1 - v; }
-          const s2 = wt[0] * wt[0] + wt[1] * wt[1] + wt[2] * wt[2];
-          for (let k = 0; k < 3; k++) H[tri[k]] -= worst * Math.max(0, wt[k]) / s2;
-        }
-      }
+      pin(8, r0, rx, rz, low);
     }
+  }
+  // junction boxes (junctions.js): level at the node's height, their triangles; a city's corner pavements, row to row
+  for (const J of junctions) {
+    const B = J.box, T = J.tris, r0 = J.y - PIN;
+    for (let t = 0; t < T.length; t += 3) { for (let k = 0; k < 3; k++) { q[k * 2] = B[T[t + k] * 2]; q[k * 2 + 1] = B[T[t + k] * 2 + 1]; } pin(6, r0, 0, 0, r0); }
+    for (const rows of J.pave) for (let k = 1; k < rows.length; k++) { const a = rows[k - 1], b = rows[k]; q[0] = a.k[0]; q[1] = a.k[1]; q[2] = b.k[0]; q[3] = b.k[1]; q[4] = b.o[0]; q[5] = b.o[1]; q[6] = a.o[0]; q[7] = a.o[1]; pin(8, r0, 0, 0, r0); }
   }
 }
 
+// point in polygon ([x, z, ...]), and the distance to its edges (junction boxes, junctions.js)
+export function inside(poly, x, z) { let c = false; const n = poly.length / 2; for (let i = 0, j = n - 1; i < n; j = i++) { const xi = poly[i * 2], zi = poly[i * 2 + 1], xj = poly[j * 2], zj = poly[j * 2 + 1]; if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) c = !c; } return c; }
+// the distance from (x, z) to the polygon's edges
+// (edgeDist.at: the nearest edge, by the index of its first point)
+export function edgeDist(poly, x, z) {
+  let d2 = Infinity; const n = poly.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) { const ax = poly[j * 2], az = poly[j * 2 + 1], dx = poly[i * 2] - ax, dz = poly[i * 2 + 1] - az, L2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), px = ax + dx * t - x, pz = az + dz * t - z, e = px * px + pz * pz; if (e < d2) { d2 = e; edgeDist.at = j; } }
+  return Math.sqrt(d2);
+}
 // ---------------- the surface physics reads ----------------
 // Segment index over all roads (and rail) on the ground, plus bridge decks. q(x,z,deck) finds the segment whose
 // footprint edge is nearest: sets .y (road height there), .e (distance beyond the footprint edge, <= 0 inside),
@@ -414,7 +433,8 @@ function pinUnder(w, roads, H, R, st) {
 export class RoadSurface {
   // bench: metres of level ground beside the footprint before a cutting rises (World.detailBench: the near-camera
   // detail mesh samples this surface every DS metres; a cutting rising right at the road's edge reached in over it)
-  constructor(w, roads, skirt, bench = 0) {
+  // junctions: the junction boxes (junctions.js, net.junctions): inside one the surface is its level height
+  constructor(w, roads, skirt, bench = 0, junctions = []) {
     this.half = w.half; this.S = skirt; this.cell = 32; this.B = bench;
     const C = this.cell, nC = (this.nC = Math.ceil(w.size / C) + 1);
     // ax, az, bx, bz, ay, by, hw, deck, rank (the order the profiles were made in: lower = the major road); and how far
@@ -446,16 +466,29 @@ export class RoadSurface {
     const ids = new Int32Array(cnt[nC * nC]), fill = cnt.slice();
     for (let s = 0; s < ns; s++) cells(s, (c) => (ids[fill[c]++] = s));
     this.start = cnt; this.ids = ids;
+    // the junction boxes per cell
+    this.jb = junctions; const jc = new Map();
+    junctions.forEach((B, b) => { const [x0, z0, x1, z1] = B.bb; for (let cj = Math.max(0, Math.floor((z0 + this.half) / C)); cj <= Math.min(nC - 1, Math.floor((z1 + this.half) / C)); cj++) for (let ci = Math.max(0, Math.floor((x0 + this.half) / C)); ci <= Math.min(nC - 1, Math.floor((x1 + this.half) / C)); ci++) { const c = cj * nC + ci; let L = jc.get(c); if (!L) jc.set(c, (L = [])); L.push(b); } });
+    this.jcell = jc;
     this.y = 0; this.e = 0; this.g = 0; this.In = new Float64Array(40); this.ord = new Int32Array(8); this.nIn = 0; this.Out = new Float64Array(24); this.nOut = 0; // (Out: the city streets just beyond whose footprints (x, z) is, near)
   }
   // deck: bridge decks only, and where decks cross (an overpass) the highest one not above y + 2 (any, without y)
   q(x, z, deck = false, y = Infinity) {
     const C = this.cell, ci = Math.floor((x + this.half) / C), cj = Math.floor((z + this.half) / C), nC = this.nC;
     if (ci < 0 || cj < 0 || ci >= nC || cj >= nC) return false;
-    const c = cj * nC + ci, a = this.start[c], b = this.start[c + 1];
-    if (a === b) return false;
+    const c = cj * nC + ci, a = this.start[c], b = this.start[c + 1], jl = deck ? null : this.jcell.get(c);
+    if (a === b && !jl) return false;
     const S = this.seg, want = deck ? 1 : 0; this.nIn = 0; this.nOut = 0;
     let best = deck ? 0.5 : this.S, top = -Infinity, hit = false; // (decks: best = e of the current pick)
+    // in a junction's box: its level height, the major surface there (rank -1: over every road's, handing over to the
+    // arms in the last BLEND metres to its edge, where they are level with it too)
+    // (its footprint, as a road's: out to a verge beyond its kerbs, VERGE; not past its mouths, where the arms go on)
+    if (jl) for (const id of jl) {
+      const B = this.jb[id], bb = B.bb; if (x < bb[0] - VERGE || x > bb[2] + VERGE || z < bb[1] - VERGE || z > bb[3] + VERGE) continue;
+      const d = edgeDist(B.box, x, z), inB = inside(B.box, x, z); if (!inB && (d > VERGE || B.open[edgeDist.at])) continue;
+      const e = inB ? -d - VERGE : d - VERGE; this.inside(-1, e, B.y, 0, 0);
+      if (e < best) { best = e; hit = true; this.y = B.y; this.e = e; this.gx = 0; this.gz = 0; }
+    }
     for (let k = a; k < b; k++) {
       const o = this.ids[k] * SEG, f = S[o + 7]; if ((f & 1) !== want) continue;
       const ax = S[o], az = S[o + 1], dx = S[o + 2] - ax, dz = S[o + 3] - az, L2 = dx * dx + dz * dz || 1;

@@ -26,6 +26,11 @@
   "nyc: no steps along the roads": "#228",
   "nyc: no walls or ramps on the roads": "#228",
   "nyc: road ends meet the road they join": "#228",
-  "nyc: roads cross at the same height": "#228"
+  "nyc: roads cross at the same height": "#228",
+  "lauterbrunnen: junctions have no bare ground between their arms": "#228",
+  "lauterbrunnen: junctions are drawn where physics drives": "#228",
+  "nyc: junctions have no bare ground between their arms": "#228",
+  "nyc: no ground through the road in junctions": "#228",
+  "nyc: junctions are drawn where physics drives": "#228"
  }
 }
