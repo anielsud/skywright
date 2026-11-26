@@ -243,8 +243,16 @@ export class World {
     flattenGrid(this, this.net);
     for (let k = 0; k < H.length; k++) H[k] = this.shoreSnap(H[k]);
     this.road = { samples: this.net.roads[0].pts, width: 9 };
-    this.roadHash = new Map();
-    for (const rd of [...this.net.roads, ...(this.net.rail ? [this.net.rail] : [])]) { const hw = rd.width / 2; for (const p of rd.pts) { const k = Math.floor(p.x / 40) + ',' + Math.floor(p.z / 40); let a = this.roadHash.get(k); if (!a) this.roadHash.set(k, (a = [])); a.push(p.x, p.z, hw); } } // (x, z, half width per point, flat: an array per point was ~100 MB in New York)
+    // road points by 40 m cell for nearRoad: x, z, half width per point, cell by cell (cells over the roads' extent,
+    // start: where each cell's points begin in d)
+    const RH = [...this.net.roads, ...(this.net.rail ? [this.net.rail] : [])], C = 40; let i0 = Infinity, i1 = -Infinity, j0 = Infinity, j1 = -Infinity, np = 0;
+    for (const rd of RH) for (const p of rd.pts) { const i = Math.floor(p.x / C), j = Math.floor(p.z / C); if (i < i0) i0 = i; if (i > i1) i1 = i; if (j < j0) j0 = j; if (j > j1) j1 = j; np++; }
+    const nI = np ? i1 - i0 + 1 : 0, nJ = np ? j1 - j0 + 1 : 0, start = new Int32Array(nI * nJ + 1), d = new Float64Array(np * 3), cell = (p) => (Math.floor(p.z / C) - j0) * nI + Math.floor(p.x / C) - i0;
+    for (const rd of RH) for (const p of rd.pts) start[cell(p) + 1]++;
+    for (let c = 0; c < nI * nJ; c++) start[c + 1] += start[c];
+    const at = start.slice(0, nI * nJ);
+    for (const rd of RH) { const hw = rd.width / 2; for (const p of rd.pts) { const o = at[cell(p)]++ * 3; d[o] = p.x; d[o + 1] = p.z; d[o + 2] = hw; } }
+    this.roadHash = { C, i0, j0, nI, nJ, start, d }; // (was a Map of an array per point: ~100 MB in New York, and a string key per cell looked up)
     // geometry
     const geo = new THREE.PlaneGeometry(S, S, N, N);
     geo.rotateX(-Math.PI / 2); // now x,z plane; vertex order: rows along +z (j), cols along +x (i)
@@ -1083,10 +1091,10 @@ export class World {
 
   // ---------------- vegetation ----------------
   nearRoad(x, z, d) {
-    const cx = Math.floor(x / 40), cz = Math.floor(z / 40), R = Math.ceil(d / 40);
-    for (let i = cx - R; i <= cx + R; i++) for (let j = cz - R; j <= cz + R; j++) {
-      const arr = this.roadHash.get(i + ',' + j); if (!arr) continue;
-      for (let k = 0; k < arr.length; k += 3) if ((arr[k] - x) ** 2 + (arr[k + 1] - z) ** 2 < (d + arr[k + 2]) ** 2) return true;
+    const { C, i0, j0, nI, nJ, start, d: D } = this.roadHash, cx = Math.floor(x / C), cz = Math.floor(z / C), R = Math.ceil(d / C);
+    for (let i = Math.max(cx - R, i0); i <= Math.min(cx + R, i0 + nI - 1); i++) for (let j = Math.max(cz - R, j0); j <= Math.min(cz + R, j0 + nJ - 1); j++) {
+      const c = (j - j0) * nI + i - i0;
+      for (let k = start[c] * 3, e = start[c + 1] * 3; k < e; k += 3) if ((D[k] - x) ** 2 + (D[k + 1] - z) ** 2 < (d + D[k + 2]) ** 2) return true;
     }
     return false;
   }
