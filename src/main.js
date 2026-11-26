@@ -1576,6 +1576,9 @@ function flushNew() {
   if (!PARALLEL() || F.warm) return;
   const ready = (m) => { const p = renderer.properties.get(m)?.currentProgram; return !p || p.isReady(); }; // (freed meanwhile: done)
   const pend = new Set([...mats].filter((m) => !ready(m))); if (!pend.size) return;
+  // (counted for the shader sweep: an event, which must show at once, may never end up here; tools/test/shadercheck.js)
+  window.__lateShows = (window.__lateShows || 0) + pend.size;
+  console.info(`[shaders] ${pend.size} new, shown when compiled: ${[...pend].map((m) => m.name || m.type).join(', ')}`);
   const held = [];
   for (const o of objs) o.traverse((x) => { const ms = Array.isArray(x.material) ? x.material : x.material ? [x.material] : []; if (ms.some((m) => pend.has(m))) held.push(hide(x)); });
   const t0 = performance.now(), poll = () => { for (const m of pend) if (ready(m)) pend.delete(m); if (pend.size && performance.now() - t0 < 5000) setTimeout(poll, 10); else held.forEach((show) => show()); };

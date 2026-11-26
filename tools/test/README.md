@@ -666,27 +666,36 @@ python3 tools/test/restart.py [--places lauterbrunnen,nyc] [--restarts 6] [--qua
 
 ## Shader check
 
-The smoke test's tour is the shader check now (no shader compiled mid-flight on any tour flight, over four places in
-one session); `run.py` no longer runs `shadercheck.py`. It still works for a closer look at given vehicles and places:
+How shaders are kept from stalling a frame (#273):
+- **The loading screen** compiles everything in the scene (`compileAsync` in `main.js`), and its first frame draws
+  every hidden shadow caster for the shadow shaders (`warmShaders`).
+- **Things added after it** (streamed tiles, street cars, late models, other players) compile between frames and wait
+  hidden until ready (`flushNew`): at worst they show a few frames late. Nothing has to be registered.
+- **Events must show at once** (crash, explosion, collapse, splash, boom), so their objects are pooled and in the
+  scene at load (a sonic boom's rings: one hidden ring from the start). Never make an event's mesh or material when
+  it fires.
+- **Per-place switches are uniforms, not defines** (#242: a define made a second terrain program for the tiles).
+- Give custom materials a `name`: the check's messages print it.
 
-`shadercheck.py` flies vehicles at several locations one after another in ONE page session (default: the Kestrel and
-the Dirt Bike, each at islands, canyon, nyc and back to islands) and fails if any shader program compiles after a
-flight's loading screen and stalls a frame (main.js's `[shaders] N compiled in flight, stalling a frame` warning, a visible hitch). It prints how many
-programs each flight compiled behind its loading screen, and the warning's program names on a failure.
+`shadercheck.py` (run.py suite `shadercheck`, on CI for any `src/` change) sweeps each place on purpose rather than
+by luck (`sweep` in `shadercheck.js`): every object in the scene drawn (hidden ones shown, culling off), every event
+effect fired, the map's edges streamed in, and a real crash (a building in New York, water at the islands, the ground
+elsewhere). It fails on any **stall** (a program compiled during a frame's draw: `[shaders] N compiled in flight,
+stalling a frame`, `window.__inflightCompiles`) and on any event that **waited for its shader**
+(`window.__lateShows` outside the streaming phase). Before the event and crash phases the vehicle is held until
+streaming around it is quiet, so a late show there is the phase's own.
 
 ```sh
-python3 tools/test/shadercheck.py                                   # ~3 min
-python3 tools/test/shadercheck.py --plane Rocket --loc nyc --loc canyon --quality high
+python3 tools/test/shadercheck.py                      # islands, canyon, nyc, lauterbrunnen with the Kestrel, ~4 min
+python3 tools/test/shadercheck.py --loc nyc --plane Rocket --quality high
+python3 tools/test/shadercheck.py --fly                # the older check: a few seconds of flight per place in turn
 ```
 
-Run it when you change shader warm-up (`warmShaders`, `compileAsync` in `main.js`), material patches that set
-`customProgramCacheKey` (crew, cabin light, heat glow), or the lights, fog or environment a location sets up.
-What counts (#273): a program first compiled *during a frame's draw*, which stalls that frame. Objects added to the
-flight scene after the warm-up (streamed tiles, street cars, late models) compile between frames and wait hidden until
-ready (`flushNew` in `main.js`), so their new programs are not stalls. Things that must show instantly (crashes,
-explosions, splashes, booms) are pooled and in the scene at load instead.
-Note that `window.__inflightCompiles` counts over the whole page session: a test that stages extra vehicles mid-flight
-(stunts.js, waterpark.js screenshots) must count per location, or the next location gets the blame (#145, #187).
+`--fly` flies vehicles at several places one after another (default: the Kestrel and the Dirt Bike, each at
+islands, canyon, nyc and back to islands): a later place must not compile what an earlier one showed (the crew,
+#187). Note that `window.__inflightCompiles` counts over the whole page session: a test that stages extra vehicles
+mid-flight (stunts.js, waterpark.js screenshots) must count per location, or the next location gets the blame
+(#145, #187).
 
 ## Frame benchmark
 
