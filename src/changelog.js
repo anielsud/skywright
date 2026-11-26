@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.194.0', items: [
+    "Walk-only streets, plazas, back alleys and gravel farm tracks now show up in every place, and you can drive on them!",
+  ] },
   { v: '1.193.0', items: [
     "No more invisible walls: buildings shaped like an L, a U or a courtyard now only stop you where their walls really are.",
   ] },
