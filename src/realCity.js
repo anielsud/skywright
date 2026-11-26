@@ -259,7 +259,8 @@ function cityParts(city, Q, H, q, fit) {
 // not in CityScenery.building: a closure there would keep the whole tile's mesh writer alive with it)
 function lazyBoxes(city, t, P, holes, q, fit, fallback) {
   const fp = packRing(P), hp = holes.map(packRing);
-  lazyParts(t, () => { const t0 = performance.now(), B = cityParts(city, unpackRing(fp), hp.map(unpackRing), q, fit) || fallback, FS = city.footStats; FS.lazy = Math.max(FS.lazy, performance.now() - t0); return B; });
+  const parts = () => cityParts(city, unpackRing(fp), hp.map(unpackRing), q, fit) || fallback;
+  lazyParts(t, () => { const t0 = performance.now(), B = parts(), FS = city.footStats, dt = performance.now() - t0; if (dt > FS.lazy) { FS.lazy = dt; FS.lazyRedo = parts; } return B; }); // (lazyRedo: the slowest one again, for tools/test/setbacks.js)
 }
 
 // ---------------- the city ----------------
