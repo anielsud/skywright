@@ -8,7 +8,7 @@ import { toLocal } from './realworld.js';
 import { mulberry32, smoothstep } from './noise.js';
 import { CityScenery } from './realCity.js';
 import { Landmarks } from './realLandmarks.js';
-import { roadIndex, setBack, fitBox, MAJOR, streetWalls } from './setback.js';
+import { roadIndex, setBack, fitBox, footBoxes, inParts, irregular, lazyParts, FOOT, MAJOR, streetWalls } from './setback.js';
 
 const CHUNK = 1000; // m: buildings are merged per 1 km cell (one draw call each), hidden beyond VIEW
 const VIEW = { low: 4500, medium: 8000, high: 14000 };
@@ -56,6 +56,7 @@ export class RealScenery {
   // ---------------- buildings ----------------
   buildBuildings(list) {
     const t0 = performance.now(), roads = roadIndex(this.w); this.setbacks = { cut: 0, dropped: 0, through: 0, flat: 0, ms: performance.now() - t0 }; // (ms: the index and the cuts)
+    this.footStats = { n: 0, irr: 0, boxes: 0, max: 0, ms: 0, lazy: 0, load: 0 }; // (the collision boxes: ms in footBoxes, whenever; lazy: the slowest worked out after load; load: at load)
     const W = this.w, seed0 = W.loc.seed * 5 + 3, lowQ = W.qName === 'low', wl = W.waterLevel;
     // each place's own building rules (loc.osmStyle): 'tropical' Bora Bora, 'rustic' the Grand Canyon, else the Alps
     const trop = W.loc.osmStyle === 'tropical', rustic = W.loc.osmStyle === 'rustic', alpine = !trop && !rustic;
@@ -215,6 +216,9 @@ export class RealScenery {
       // cut to the footprint then
       const tb = performance.now(), cb = fitBox(roads, { x: ox, z: oz, ux, uz, hl, hw }); // (a passage under it too: its box off the road where it can be) this.setbacks.ms += performance.now() - tb;
       if (cb?.fit && (roof === 1 || roof === 2)) { roof = 5; this.setbacks.flat++; }
+      // (an irregular footprint, an L, a U, a cross: a few boxes that hug its walls instead, setback.js footBoxes, worked
+      // out when first wanted; its box till then the one round its footprint, FOOT.out wider)
+      const tf = performance.now(), irr = irregular(P, Math.abs(area), ox, oz, ux, uz, hl, hw); this.footStats.n++; this.footStats.load += performance.now() - tf;
       // ---- geometry: everything a building has goes into its chunk's builder in one run (destruction.js)
       const ch = this.chunk(cx, cz), B = ch.B, n0 = B.n;
       B.seed = seed; B.lyOff = wet ? 0 : hAbs - base; // (heights for the facade programs from the mean ground: a plinth shows its height above that, more downhill)
@@ -274,11 +278,12 @@ export class RealScenery {
       const key = Math.floor(cx / 50) + ',' + Math.floor(cz / 50);
       if (!this.grid.has(key)) this.grid.set(key, []);
       const e = [cx, base, cz, eave + rise, Math.sqrt(Math.abs(area) / Math.PI)];
-      e.solid = true; e.fp = P; if (sb.through) e.through = true; e.dk = 'r' + this.count; e.rng = [[B, n0, B.n - n0]]; e.ob = cb || { x: ox, z: oz, ux, uz, hl, hw }; // destructible (destruction.js)
+      e.solid = true; e.fp = P; if (sb.through) e.through = true; e.dk = 'r' + this.count; e.rng = [[B, n0, B.n - n0]]; e.ob = irr ? { x: ox, z: oz, ux, uz, hl: hl + FOOT.out, hw: hw + FOOT.out } : cb || { x: ox, z: oz, ux, uz, hl, hw }; if (irr) osmBoxes(this, e, ux, uz, !sb.through, roads, [cb || { x: ox, z: oz, ux, uz, hl, hw }]); if (irr && A > FOOT.eager) void e.parts; // (a big one now: not a hitch later) // destructible (destruction.js); its boxes (World.wallBoxes)
       e.kind = kind; e.roof = roof; e.rect = rect; e.walls = walls; e.chalet = chalet; e.pitch = roof === 0 ? 0 : rise / Math.max(0.1, hw); e.rise = rise; e.ridge = [ux, uz]; e.overMax = Math.hypot(chalet ? 1.2 : 0.6, overZ ?? (chalet ? 1.2 : 0.6)); e.stones = roofCell === C.ROOF_STONES; e.tagged = hTag > 0 || lv > 0; e.porch = porch || walkK >= 0; e.steeple = steeple; e.wet = wet; // (what it was built as: tools/test/bldcheck.js)
       this.grid.get(key).push(e);
       this.count++;
     }
+    this.footStats.ready = true;
     this.buildPiers(W.real.osm.piers || []);
     const mat = (this.mat = buildingMaterial({ cellPx: { low: 128, medium: 192, ultra: 384 }[W.qName] ?? 256, interiors: W.qName !== 'low' })); // the towns' atlas
     W.windowMats = W.windowMats || []; W.windowMats.push(mat);
@@ -605,8 +610,14 @@ export class RealScenery {
   hit(p) {
     const lh = this.landmarks.hit(p); if (lh) return lh;
     if (this.city) return this.city.hit(p);
-    const arr = this.grid.get(Math.floor(p.x / 50) + ',' + Math.floor(p.z / 50)); if (!arr) return null;
-    for (const t of arr) { const dx = p.x - t[0], dz = p.z - t[2]; if (dx * dx + dz * dz < t[4] * t[4] && p.y < t[1] + t[3] && p.y > t[1] - 2) return t; }
+    // its box, or its own boxes (the walls, not a disc round its middle); filed under its middle's cell, so the cells
+    // round p's too (a building reaching more than a cell from its middle: hit nearer its middle)
+    const ci = Math.floor(p.x / 50), cj = Math.floor(p.z / 50);
+    for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) for (const t of this.grid.get(i + ',' + j) || NONE) {
+      if (p.y > t[1] + t[3] || p.y < t[1] - 2) continue;
+      const o = t.ob, dx = p.x - o.x, dz = p.z - o.z;
+      if (Math.abs(dx * o.ux + dz * o.uz) < o.hl && Math.abs(-dx * o.uz + dz * o.ux) < o.hw && (!t.parts || inParts(t.parts, p.x, p.z))) return t;
+    }
     return null;
   }
   update(dt, t, fx, cam) {
@@ -619,6 +630,17 @@ export class RealScenery {
   }
 }
 
+// an irregular building's boxes (setback.js footBoxes), each kept off the roads (fitBox) unless a road runs through it,
+// worked out when something first asks for them (lazyParts; out here: a closure in the build loop would keep its
+// chunk's builder alive with it)
+function osmBoxes(S, e, ux, uz, fit, roads, fallback) {
+  lazyParts(e, () => {
+    const FS = S.footStats, t0 = performance.now(), B = footBoxes(e.fp, [], ux, uz);
+    FS.irr++; if (B) { FS.boxes += B.length; FS.max = Math.max(FS.max, B.length); } { const dt = performance.now() - t0; FS.ms += dt; if (FS.ready && dt > FS.lazy) FS.lazy = dt; }
+    return B ? (fit ? B.map((f) => fitBox(roads, f)) : B) : fallback;
+  });
+}
+const NONE = [];
 // how far (m) a point is outside a ring of [x, z] points: 0 inside
 function outsideRing(P, x, z) {
   let inside = false, d = Infinity;

@@ -1095,7 +1095,9 @@ export class World {
   // building the towns, a real place or New York has, and the landmarks, each once, with its full footprint (destruct.box:
   // the oriented box, not the disc the part-centre test above uses) and its current height (lower once knocked down).
   // Towns and real places file a building under its centre's 50 m cell only, so the search reaches as far as the
-  // biggest building does; New York files every box under each cell it covers.
+  // biggest building does; New York files every box under each cell it covers. An irregular building (an L, a U, a
+  // cross, a courtyard) is a few boxes that hug its walls (e.parts, setback.js footBoxes): one each, all with the same
+  // entry e (its damage, destruction.js, is the building's; a car is never pushed out of one into another, aircraft.js).
   // the tunnels' walls near (x, z), as wallBoxes gives buildings (what's down in a tunnel collides with these instead)
   tunnelWalls(x, z, r, out = []) {
     out.length = 0; const R = r + 12;
@@ -1109,7 +1111,9 @@ export class World {
     const add = (e) => {
       if (seen.has(e) || !(e[3] > 0.3)) return; seen.add(e);
       const b = D.box(e); if ((b.x - x) ** 2 + (b.z - z) ** 2 > (r + Math.hypot(b.hl, b.hw)) ** 2) return;
-      out.push({ x: b.x, z: b.z, ux: b.ux, uz: b.uz, hl: b.hl, hw: b.hw, y0: e[1], y1: e[1] + e[3], e });
+      if (!e.parts) { out.push({ x: b.x, z: b.z, ux: b.ux, uz: b.uz, hl: b.hl, hw: b.hw, y0: e[1], y1: e[1] + e[3], e }); return; }
+      // an irregular building's own boxes (setback.js footBoxes), the same entry e on each
+      for (const q of e.parts) if ((q.x - x) ** 2 + (q.z - z) ** 2 <= (r + Math.hypot(q.hl, q.hw)) ** 2) out.push({ x: q.x, z: q.z, ux: q.ux, uz: q.uz, hl: q.hl, hw: q.hw, y0: e[1], y1: e[1] + e[3], e });
     };
     const scan = (g, reach) => {
       if (!g) return;

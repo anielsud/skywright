@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.193.0', items: [
+    "No more invisible walls: buildings shaped like an L, a U or a courtyard now only stop you where their walls really are.",
+  ] },
   { v: '1.192.0', items: [
     "Smoother flying: new things in the distance appear when they're ready instead of making the game freeze for a moment.",
   ] },

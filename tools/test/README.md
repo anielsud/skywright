@@ -623,7 +623,10 @@ city.bin record through `CityScenery.footprint`, the low ones too) against every
 gravel verge (on a city street: tarmac and pavement), measured with the test's own sampled geometry, not `setback.js`'s.
 Tunnels' tubes and bridge decks up in the air are left out. Also: few buildings dropped (most are cut back), few big
 ones left standing over a road that runs right through them (a passage under them), and the setbacks cost little at
-load. Standalone, it prints the counts before and after and the worst spots:
+load. The collision boxes: none on a road; none reaching more than 1 m past the walls near a street (an L, a U, a cross
+or a trapezoid gets a few boxes that hug its walls, `setback.js footBoxes`, worked out when first wanted); together
+they cover the footprints (95% of their area, at most 1% of buildings under 90%); and an irregular building's boxes
+are still one building to `destruction.js`. Standalone, it prints the counts before and after and the worst spots:
 
 ```sh
 node tools/test/node/run.mjs setbacks
