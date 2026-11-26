@@ -409,22 +409,49 @@ function pinUnder(w, roads, H, R, st, junctions = []) {
       pin(8, r0, rx, rz, low);
     }
   }
-  // junction boxes (junctions.js): level at the node's height, their triangles; a city's corner pavements, row to row
+  // junction boxes (junctions.js): their triangles, each a plane (level, or a warped box's); a city's corner
+  // pavements, row to row (each row level across at its kerb's height: under the lower of the two)
   for (const J of junctions) {
-    const B = J.box, T = J.tris, r0 = J.y - PIN;
-    for (let t = 0; t < T.length; t += 3) { for (let k = 0; k < 3; k++) { q[k * 2] = B[T[t + k] * 2]; q[k * 2 + 1] = B[T[t + k] * 2 + 1]; } pin(6, r0, 0, 0, r0); }
-    for (const rows of J.pave) for (let k = 1; k < rows.length; k++) { const a = rows[k - 1], b = rows[k]; q[0] = a.k[0]; q[1] = a.k[1]; q[2] = b.k[0]; q[3] = b.k[1]; q[4] = b.o[0]; q[5] = b.o[1]; q[6] = a.o[0]; q[7] = a.o[1]; pin(8, r0, 0, 0, r0); }
+    const V = J.vtx, Y = J.hy, T = J.tris;
+    for (let t = 0; t < T.length; t += 3) {
+      const a = T[t], b = T[t + 1], c = T[t + 2]; for (let k = 0; k < 3; k++) { q[k * 2] = V[T[t + k] * 2]; q[k * 2 + 1] = V[T[t + k] * 2 + 1]; }
+      const [r0, rx, rz] = plane(V[a * 2], V[a * 2 + 1], Y[a], V[b * 2], V[b * 2 + 1], Y[b], V[c * 2], V[c * 2 + 1], Y[c]);
+      pin(6, r0 - PIN, rx, rz, Math.min(Y[a], Y[b], Y[c]) - PIN);
+    }
+    for (const rows of J.pave) for (let k = 1; k < rows.length; k++) { const a = rows[k - 1], b = rows[k], r0 = Math.min(a.y, b.y) - PIN; q[0] = a.k[0]; q[1] = a.k[1]; q[2] = b.k[0]; q[3] = b.k[1]; q[4] = b.o[0]; q[5] = b.o[1]; q[6] = a.o[0]; q[7] = a.o[1]; pin(8, r0, 0, 0, r0); }
   }
 }
 
+// the plane through three points: [r0, rx, rz] (y = r0 + rx x + rz z)
+export function plane(ax, az, ay, bx, bz, by, cx, cz, cy) {
+  const ux = bx - ax, uz = bz - az, uy = by - ay, vx = cx - ax, vz = cz - az, vy = cy - ay, den = ux * vz - uz * vx;
+  if (Math.abs(den) < 1e-9) return [(ay + by + cy) / 3, 0, 0];
+  const rx = (uy * vz - uz * vy) / den, rz = (ux * vy - uy * vx) / den; return [ay - rx * ax - rz * az, rx, rz];
+}
+// a junction box's height at (x, z) (junctions.js: its triangles, vtx and hy), and its slope (boxAt.gx, .gz); NaN off it
+export function boxAt(B, x, z) {
+  const V = B.vtx, Y = B.hy, T = B.tris;
+  for (let t = 0; t < T.length; t += 3) {
+    const a = T[t] * 2, b = T[t + 1] * 2, c = T[t + 2] * 2, ax = V[a], az = V[a + 1], bx = V[b], bz = V[b + 1], cx = V[c], cz = V[c + 1];
+    const den = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz); if (Math.abs(den) < 1e-12) continue;
+    const wa = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / den, wb = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / den, wc = 1 - wa - wb;
+    if (wa < -1e-6 || wb < -1e-6 || wc < -1e-6) continue;
+    const ya = Y[T[t]], yb = Y[T[t + 1]], yc = Y[T[t + 2]];
+    if (B.flat) { boxAt.gx = 0; boxAt.gz = 0; return ya; }
+    { const ux = bx - ax, uz = bz - az, uy = yb - ya, vx = cx - ax, vz = cz - az, vy = yc - ya, dd = ux * vz - uz * vx || 1e-9; boxAt.gx = (uy * vz - uz * vy) / dd; boxAt.gz = (ux * vy - uy * vx) / dd; } // (its slope: plane(), without the allocation)
+    return ya * wa + yb * wb + yc * wc;
+  }
+  return NaN;
+}
 // point in polygon ([x, z, ...]), and the distance to its edges (junction boxes, junctions.js)
 export function inside(poly, x, z) { let c = false; const n = poly.length / 2; for (let i = 0, j = n - 1; i < n; j = i++) { const xi = poly[i * 2], zi = poly[i * 2 + 1], xj = poly[j * 2], zj = poly[j * 2 + 1]; if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) c = !c; } return c; }
 // the distance from (x, z) to the polygon's edges
-// (edgeDist.at: the nearest edge, by the index of its first point)
+// (edgeDist.at: the nearest edge, by the index of its first point; edgeDist.t: how far along it, 0..1; edgeDist.inside:
+// whether (x, z) is inside, as inside())
 export function edgeDist(poly, x, z) {
-  let d2 = Infinity; const n = poly.length / 2;
-  for (let i = 0, j = n - 1; i < n; j = i++) { const ax = poly[j * 2], az = poly[j * 2 + 1], dx = poly[i * 2] - ax, dz = poly[i * 2 + 1] - az, L2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), px = ax + dx * t - x, pz = az + dz * t - z, e = px * px + pz * pz; if (e < d2) { d2 = e; edgeDist.at = j; } }
-  return Math.sqrt(d2);
+  let d2 = Infinity, c = false; const n = poly.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) { const ax = poly[j * 2], az = poly[j * 2 + 1], dx = poly[i * 2] - ax, dz = poly[i * 2 + 1] - az, L2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), px = ax + dx * t - x, pz = az + dz * t - z, e = px * px + pz * pz; if (e < d2) { d2 = e; edgeDist.at = j; edgeDist.t = t; } const zi = poly[i * 2 + 1]; if ((zi > z) !== (az > z) && x < (ax - poly[i * 2]) * (z - zi) / (az - zi) + poly[i * 2]) c = !c; }
+  edgeDist.inside = c; return Math.sqrt(d2);
 }
 // ---------------- the surface physics reads ----------------
 // Segment index over all roads (and rail) on the ground, plus bridge decks. q(x,z,deck) finds the segment whose
@@ -486,9 +513,13 @@ export class RoadSurface {
     // (its footprint, as a road's: out to a verge beyond its kerbs, VERGE; not past its mouths, where the arms go on)
     if (jl) for (const id of jl) {
       const B = this.jb[id], bb = B.bb; if (x < bb[0] - VERGE || x > bb[2] + VERGE || z < bb[1] - VERGE || z > bb[3] + VERGE) continue;
-      const d = edgeDist(B.box, x, z), inB = inside(B.box, x, z); if (!inB && (d > VERGE || B.open[edgeDist.at])) continue;
-      const e = inB ? -d - VERGE : d - VERGE; this.inside(-1, e, B.y, 0, 0);
-      if (e < best) { best = e; hit = true; this.y = B.y; this.e = e; this.gx = 0; this.gz = 0; }
+      const d = edgeDist(B.box, x, z), inB = edgeDist.inside, at = edgeDist.at; if (!inB && (d > VERGE || B.open[at])) continue;
+      // (its height there: the box's triangles; just outside, along its kerb, the kerb's)
+      const e = inB ? -d - VERGE : d - VERGE;
+      let yy = inB ? (B.flat ? B.y : boxAt(B, x, z)) : NaN, gx = 0, gz = 0;
+      if (Number.isNaN(yy)) { const nb = B.box.length / 2; yy = B.ey[at] + (B.ey[(at + 1) % nb] - B.ey[at]) * edgeDist.t; } else if (!B.flat) { gx = boxAt.gx; gz = boxAt.gz; }
+      this.inside(-1, inB ? -BLEND - d : -BLEND * (1 - d / VERGE), yy, gx, gz); // (in the blend: all the box inside it, so the surface is the one it draws, whatever else passes there; handing over across its verge)
+      if (e < best) { best = e; hit = true; this.y = yy; this.e = e; this.gx = gx; this.gz = gz; }
     }
     for (let k = a; k < b; k++) {
       const o = this.ids[k] * SEG, f = S[o + 7]; if ((f & 1) !== want) continue;

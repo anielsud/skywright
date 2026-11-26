@@ -7,10 +7,10 @@ import { glowTexture as glow } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { REGION, roadStyle, tarmacMaterial, shoulderMaterial, sidewalkMaterial, pathMaterial } from './roadSurface.js';
 import { airportGate } from './airportKit.js';
-import { junctionPlan, insertMouths, junctionShapes, TARMAC_LIFT, along } from './junctions.js';
+import { junctionPlan, insertMouths, insertThrough, junctionShapes, TARMAC_LIFT, along } from './junctions.js';
 import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE, CITY_TOP, inside as inPoly } from './roadgrade.js';
 
-const RWY_HALF = 900, JGRADE = 0.2, MINOR_PIN = 3; // (JGRADE: the steepest a street may be left between two junctions' level boxes; MINOR_PIN: how far off a street's height the ground under a way off the street network may be for the way to be pinned to the street where they overlap, gradeReal)
+const RWY_HALF = 900, JGRADE = 0.2, MINOR_PIN = 3, SLAB_OVER = 0.08; // (JGRADE: the steepest a street may be left between two junctions' level boxes; MINOR_PIN: how far off a street's height the ground under a way off the street network may be for the way to be pinned to the street where they overlap, gradeReal; SLAB_OVER: the most a pavement slab's outer edge may stand over the ground there: else it comes down to it, #228 042034)
 
 
 // evenly spaced points along a polyline
@@ -193,18 +193,25 @@ export function gradeReal(w, net) {
   for (const rd of net.roads) if (!rd.baked) for (const [j, nd] of rd.jn || []) if (grounded.has(nd) && !nodeY.has(nd) && carUse.get(nd) !== 1) { const p = rd.pts[j]; nodeY.set(nd, Math.max(wl + 0.6, (terr(p.x, p.z) * 2 + terr(p.x + 9, p.z) + terr(p.x - 9, p.z) + terr(p.x, p.z + 9) + terr(p.x, p.z - 9)) / 6)); }
   // a junction is only made level (a box) where its neighbours along each arm can still be reached at a street's
   // grade from its mouth: on a steep street with a junction every 15-20 m, level boxes would leave a wall between
-  // them (Bora Bora's hillside lanes); those junctions keep their roads' own grades (junctionShapes: no box)
-  const keep = new Map(junctionPlan(net.roads, city).filter((J) => J.ok).map((J) => [J.nd, J]));
-  for (const J of [...keep.values()]) for (const A of J.arms) {
+  // them (Bora Bora's hillside lanes); those junctions keep their roads' own grades (junctionShapes: a warped box)
+  const boxes = junctionPlan(net.roads, city).filter((J) => J.ok), keep = new Map(boxes.flatMap((J) => J.nds.map((nd) => [nd, J])));
+  // (a cluster of junction nodes, junctions.js: one junction, its nodes at one height, their middle's)
+  for (const J of boxes) if (J.nds.length > 1 && J.nds.every((nd) => nodeY.has(nd))) { const y = J.nds.reduce((a, nd) => a + nodeY.get(nd), 0) / J.nds.length; for (const nd of J.nds) nodeY.set(nd, y); }
+  const drop = (J) => { for (const nd of J.nds) keep.delete(nd); };
+  for (const J of boxes) for (const A of J.arms) {
     const rd = net.roads[A.k];
     let e = A.j + A.dir; while (e > 0 && e < rd.pts.length - 1 && !(rd.jn || []).some(([jj]) => jj === e)) e += A.dir;
-    const fn = (rd.jn || []).find(([jj]) => jj === e)?.[1], y0 = nodeY.get(J.nd), y1 = fn != null ? nodeY.get(fn) : undefined; if (y0 == null || y1 == null) continue;
+    const fn = (rd.jn || []).find(([jj]) => jj === e)?.[1], y0 = nodeY.get(A.nd), y1 = fn != null ? nodeY.get(fn) : undefined; if (y0 == null || y1 == null) continue;
     const F = keep.get(fn), c2 = F?.arms.find((B) => B.k === A.k && B.j === e)?.c ?? 0, free = A.len - A.c - c2;
-    if (Math.abs(y1 - y0) > JGRADE * Math.max(0, free) + 0.05) { keep.delete(J.nd); if (F) keep.delete(fn); }
+    if (Math.abs(y1 - y0) > JGRADE * Math.max(0, free) + 0.05) { drop(J); if (F) drop(F); }
   }
-  // every other junction's box (junctions.js): a point on each arm at its mouth, the profile level from the node out to it
-  insertMouths(net.roads, keep.values());
-  const plan = new Map(junctionPlan(net.roads, city).filter((J) => J.ok && keep.has(J.nd)).map((J) => [J.nd, J]));
+  // a level junction's box (junctions.js): a point on each arm at its mouth (where the box meets the arm's ribbon), the
+  // profile level from the node out to it. (The other boxes' mouth points go in after grading, on their roads' own
+  // grades: before it, points a metre apart changed how the profile was smoothed, a zigzag on Bora Bora's hill lanes.)
+  insertMouths(net.roads, [...new Set(keep.values())]);
+  const levelled = junctionPlan(net.roads, city).filter((J) => J.ok && keep.has(J.nd)), plan = new Map(levelled.flatMap((J) => J.nds.map((nd) => [nd, J])));
+  // (the roads crossing a level junction's area at its height without a node there: level across it too)
+  const through = insertThrough(net.roads, levelled, (J) => nodeY.get(J.nd), terr);
   for (const rd of chains(net.roads.filter((r) => !r.baked))) { // (longest first)
     const fixed = rd.bridge && rd.bridge.some(Boolean) ? rd.bridge.slice() : null, pins = [], level = [], P = rd.pts, n = P.length;
     const S = new Float64Array(n); for (let i = 1; i < n; i++) S[i] = S[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z);
@@ -216,9 +223,13 @@ export function gradeReal(w, net) {
       // (the level junction: out to each arm's mouth, where insertMouths put a point; without a box, the widest road's
       // half width and verge either side)
       if (fixed?.[i]) continue;
-      if (J) { for (const A of J.arms) if (A.k === mk && A.j === j) { const sp = S[i] + (m.rev ? -A.dir : A.dir) * A.c; if (sp > 0 && sp < S[n - 1]) pins.push({ s: sp, y }); level.push([Math.min(S[i], sp), Math.max(S[i], sp), y]); } }
+      if (J) { for (const A of [...J.arms, ...J.inner]) if (A.k === mk && A.j === j) { const sp = S[i] + (m.rev ? -A.dir : A.dir) * A.c; if (sp > 0 && sp < S[n - 1]) pins.push({ s: sp, y }); level.push([Math.min(S[i], sp), Math.max(S[i], sp), y]); } }
       else for (const sg of [-1, 1]) { const sp = S[i] + sg * c; if (sp > 0 && sp < S[n - 1] && !own?.some((o) => o !== S[i] && Math.abs(o - sp) < 2.1)) pins.push({ s: sp, y }); } // (not next to another of a way off the street network's close-set junctions (a car park's aisles): profileRoad would merge the two pins and lose the junction's)
     } }
+    for (const m of rd.members) { const T = through.get(roadK.get(m.rd)); if (!T) continue; // (across a level junction it isn't one of: level with it)
+      const k = m.rd.pts.length, Sl = along(m.rd.pts), at = (s) => { let j = 0; for (let q = 1; q < k; q++) if (Math.abs(Sl[q] - s) < Math.abs(Sl[j] - s)) j = q; return m.start + (m.rev ? k - 1 - j : j); };
+      for (const { s0, s1, y } of T) { const a = at(s0), b = at(s1); if (fixed?.[a] || fixed?.[b]) continue; pins.push({ i: a, y }, { i: b, y }); level.push([Math.min(S[a], S[b]), Math.max(S[a], S[b]), y]); }
+    }
     const topo = rd.members.every((m) => m.rd.jn) || (rd.members.length === 1 && rd.members[0].rd.gate); // (the airport road: gatePins) // (roads.bin roads: their junctions are known, nodeY pins them; ways that cross without sharing a node are an over- or underpass, not a junction)
     if (!topo) for (const i of [0, n - 1]) { const y = onLine(P[i]); if (y != null) pins.push({ i, y }); }
     // where its footprint overlaps a done way's on the ground (side by side: a divided road's two carriageways, a
@@ -271,6 +282,7 @@ export function gradeReal(w, net) {
       addI(q); setNodes(q);
     }
   }
+  insertMouths(net.roads, junctionPlan(net.roads, city).filter((J) => J.ok && !keep.has(J.nd))); // (the warped boxes' mouths, on the graded profiles)
   net.junctions = junctionShapes(net.roads, city);
 }
 // OSM splits a road into ways at every tag change (a bridge, a speed limit, a name): where exactly two ways meet end
@@ -490,25 +502,49 @@ export function buildRoadMeshes(w, net) {
     const hw = rd.width / 2, jp = junctionPoints(rd, J[k]), m = pathMat(rd.surf || 0), info = [hw, m === tarmac ? 32 : rd.surf, (k * 7.31) % 97]; // (the tarmac's style 32: nothing painted, one lane; pathMaterial's look)
     strip(jp, [-hw, hw], (i, x, z) => surf(jp, i, x, z) + MINOR_LIFT, () => true, m, (c, d, o) => [o, d], -1, info, jp.rjunc);
   };
+  // A road passing through a junction's box without being one of its roads (a carriageway alongside, a street whose
+  // node is just beyond): over the box physics is the box (RoadSurface), which a two-vertex ribbon 16 m between rows
+  // can't follow; its segments across a box are refined (rows and columns every REFINE metres, on the ground there).
+  const BC = 64, bcell = new Map(), bkey = (i, j) => i * 65536 + j;
+  for (const B of net.junctions || []) { const [x0, z0, x1, z1] = B.bb; for (let i = Math.floor(x0 / BC); i <= Math.floor(x1 / BC); i++) for (let j = Math.floor(z0 / BC); j <= Math.floor(z1 / BC); j++) { let L = bcell.get(bkey(i, j)); if (!L) bcell.set(bkey(i, j), (L = [])); L.push(B); } }
+  const boxMark = (jp, k, hw) => {
+    const P = jp.pts, n = P.length, last = jp.closed ? n : n - 1, r = hw + VERGE; let mark = null;
+    for (let i = 0; i < last; i++) {
+      const a = P[i], b = P[(i + 1) % n]; if ((jp.bridge[i] && jp.bridge[(i + 1) % n]) || jp.tube[i]) continue;
+      const x0 = Math.min(a.x, b.x) - r, x1 = Math.max(a.x, b.x) + r, z0 = Math.min(a.z, b.z) - r, z1 = Math.max(a.z, b.z) + r;
+      for (let ci = Math.floor(x0 / BC); ci <= Math.floor(x1 / BC) && !mark?.[i]; ci++) for (let cj = Math.floor(z0 / BC); cj <= Math.floor(z1 / BC); cj++) {
+        if ((bcell.get(bkey(ci, cj)) || []).some((B) => !B.ks.has(k) && B.bb[0] < x1 && B.bb[2] > x0 && B.bb[1] < z1 && B.bb[3] > z0 && segNearPoly(a, b, r, B.box))) { (mark ??= new Uint8Array(n))[i] = 1; break; }
+      }
+    }
+    return mark;
+  };
+  const orMark = (a, b) => { if (!a || !b) return a || b; for (let i = 0; i < a.length; i++) a[i] |= b[i]; return a; };
   const roadMesh = (rd, k) => {
     if (rd.minor) return minorMesh(rd, k);
-    const hw = rd.width / 2, info = [hw, roadStyle(region, rd, city), (k * 7.31) % 97], jp0 = junctionPoints(rd, J[k]), mark = w.loc.city ? null : overlaps(jp0, hw), // (not a city's: New York's every junction mouth, +1.4M triangles; its gentle streets are covered by the detail mesh lying under them, World.updateDetail)
+    const hw = rd.width / 2, info = [hw, roadStyle(region, rd, city), (k * 7.31) % 97], jp0 = junctionPoints(rd, J[k]), mark = orMark(w.loc.city ? null : overlaps(jp0, hw), boxMark(jp0, k, hw)), // (not a city's: New York's every junction mouth, +1.4M triangles; its gentle streets are covered by the detail mesh lying under them, World.updateDetail)
       jp = mark ? refine(jp0, mark) : jp0;
     const nc = Math.ceil(2 * hw / REFINE), fine = Array.from({ length: nc + 1 }, (_, c) => -hw + 2 * hw * c / nc), two = [-hw, hw], cols = mark ? (i) => (jp.fine[i] ? fine : two) : two;
     const lift = TARMAC_LIFT[rd.kind] ?? 0.04; // (the tarmac's: below)
-    if (!w.loc.city || rd.kind === 'highway') strip(jp, [-hw - VERGE, -hw, hw, hw + VERGE], (i, x, z) => surf(jp, i, x, z), (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]), shoulder, (c, d, o) => [o, d], 1, info, jp.rjunc);
+    // (the segments inside a junction's box, out to its mouth: not drawn at all. The shaders cut the ribbon off at the
+    // mouth, rjunc; whole segments inside it were ~40 triangles a junction drawn only to be discarded)
+    const rj = jp.rjunc, inBox = (q, s, side = 12) => { const c = rj[q * 4 + 2 + s]; return c > 0.5 && Math.floor(c / 16) % 2 === 1 && (c % 32 & side) > 0 && rj[q * 4 + s] <= Math.floor(c / 32) / RJ_Q + 0.61; };
+    const open = (i, side = 12) => { const j = (i + 1) % jp.pts.length; return !((inBox(i, 1, side) && inBox(j, 1, side)) || (inBox(i, 0, side) && inBox(j, 0, side)) || (inBox(i, 1, side) && inBox(j, 0, side))); }; // (side: a pavement's, 4 its +x side, 8 its -x: it carries on past a T on the far side)
+    if (!w.loc.city || rd.kind === 'highway') strip(jp, [-hw - VERGE, -hw, hw, hw + VERGE], (i, x, z) => surf(jp, i, x, z), (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]) && open(i), shoulder, (c, d, o) => [o, d], 1, info, jp.rjunc);
     // a city street's pavements: the kerb's face (15 cm up from the gutter) and the slabs out to the building line
     if (sidewalk && rd.kind !== 'highway' && !rd.baked) {
-      // (a slab level across, at the road's height at the kerb: out over the ground's slopes beyond the footprint, which
-      // the ground's meshes don't hold under it)
+      // (the kerb and its granite band at the road's height at the kerb; the slab from there out to the building line,
+      // level with it unless the ground at its edge (sampleGrid: beside a lone street the slabs' top, roadgrade.js CITY_TOP;
+      // where two streets meet at different heights, the open ground blended between them, #228 042034) is higher (it rises
+      // to it) or more than SLAB_OVER lower (it comes down to it): so the slab never hangs over the ground or sinks into it)
       const W = PAVE[rd.kind] ?? 3.5, kc = new Float64Array(jp.pts.length * 2).fill(NaN), kerb = (i, x, z, o) => { const s = i * 2 + (o > 0 ? 1 : 0); if (Number.isNaN(kc[s])) { const p = jp.pts[i], f = hw / Math.abs(o); kc[s] = surf(jp, i, p.x + (x - p.x) * f, p.z + (z - p.z) * f); } return kc[s]; };
-      const up = (i, x, z, o, c) => kerb(i, x, z, o) + lift + (c === 0 ? 0 : 0.15), up2 = (i, x, z, o, c) => kerb(i, x, z, o) + lift + (c === 3 ? 0 : 0.15);
-      strip(jp, [hw, hw, hw + 0.35, hw + W], up, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
-      strip(jp, [-hw - W, -hw - 0.35, -hw, -hw], up2, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      const edge = (i, x, z, o) => { const t = kerb(i, x, z, o) + lift + 0.15; if (jp.bridge[i] || jp.tube[i]) return t; const g = w.sampleGrid(x, z) + 0.01; return Math.min(Math.max(t, g), g + SLAB_OVER); };
+      const up = (i, x, z, o, c) => (c === 3 ? edge(i, x, z, o) : kerb(i, x, z, o) + lift + (c === 0 ? 0 : 0.15)), up2 = (i, x, z, o, c) => (c === 0 ? edge(i, x, z, o) : kerb(i, x, z, o) + lift + (c === 3 ? 0 : 0.15));
+      strip(jp, [hw, hw, hw + 0.35, hw + W], up, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]) && open(i, 4), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, [-hw - W, -hw - 0.35, -hw, -hw], up2, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]) && open(i, 8), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
     }
     // (lifted over every shoulder, and the bigger road over the smaller: where two lie on one surface, side by side or
     // at a junction's mouth, the major one's tarmac and markings show, not the other's gravel or edge line)
-    strip(jp, cols, (i, x, z) => surf(jp, i, x, z) + lift, () => true, tarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
+    strip(jp, cols, (i, x, z) => surf(jp, i, x, z) + lift, open, tarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
     skirts(rd);
   };
   const tileOf = (p) => Math.floor(p.x / TILE) + ',' + Math.floor(p.z / TILE), tiles = new Map();
@@ -521,24 +557,26 @@ export function buildRoadMeshes(w, net) {
   // kerb, between the arms' pavements. Plain tarmac: no markings in the box (rinfo: a half width it never reaches,
   // no style; rjunc: no junction).
   const NOJ = [1e4, 1e4, 0, 0];
-  const junctionMesh = (B, seed) => {
-    const nb = B.box.length / 2, pos = [], uv = [], ri = [], rj = [], nor = [];
-    for (let q = 0; q < nb; q++) { const x = B.box[q * 2], z = B.box[q * 2 + 1]; pos.push(x, B.y + B.lift[q], z); uv.push(x - B.x, z - B.z); ri.push(1e4, 0, seed); rj.push(...NOJ); nor.push(0, 1, 0); }
+  // (a tile's boxes, and its corner pavements, go into one geometry each: merged with its roads' per material)
+  const acc = () => ({ pos: [], uv: [], ri: [], rj: [], idx: [] }), accGeo = (A, material) => {
+    if (!A.idx.length) return;
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('rinfo', new THREE.Float32BufferAttribute(ri, 3)); g.setAttribute('rjunc', new THREE.Float32BufferAttribute(rj, 4));
-    g.setIndex(B.tris.slice()); add(tarmac, g);
+    g.setAttribute('position', new THREE.Float32BufferAttribute(A.pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(A.uv, 2)); g.setAttribute('rinfo', new THREE.Float32BufferAttribute(A.ri, 3)); g.setAttribute('rjunc', new THREE.Float32BufferAttribute(A.rj, 4));
+    g.setIndex(A.idx); g.computeVertexNormals(); add(material, g);
+  };
+  let jBox = null, jPave = null;
+  const junctionMesh = (B, seed) => {
+    const nv = B.vtx.length / 2, o = jBox.pos.length / 3;
+    for (let q = 0; q < nv; q++) { const x = B.vtx[q * 2], z = B.vtx[q * 2 + 1]; jBox.pos.push(x, B.hy[q] + B.lift[q], z); jBox.uv.push(x - B.x, z - B.z); jBox.ri.push(1e4, 0, seed); jBox.rj.push(...NOJ); }
+    for (const t of B.tris) jBox.idx.push(o + t);
     if (!sidewalk) return;
     for (const rows of B.pave) { // rows round the kerb: the kerb's face (from the gutter up 15 cm), then the slabs out to the building line (the granite band: the shader's, uv)
-      const p2 = [], u2 = [], r2 = [], j2 = [], idx = [];
+      const o2 = jPave.pos.length / 3;
       rows.forEach((r, q) => {
-        const dx = r.o[0] - r.k[0], dz = r.o[1] - r.k[1], W = Math.hypot(dx, dz) || 1, y = B.y + r.lift;
-        for (const [o, h] of [[0, 0], [0, 0.15], [W, 0.15]]) { p2.push(r.k[0] + dx * o / W, y + h, r.k[1] + dz * o / W); u2.push(r.hw + o, r.v); r2.push(r.hw, 0, seed); j2.push(...NOJ); }
-        if (q) { const a = (q - 1) * 3, b = q * 3; for (let c = 0; c < 2; c++) idx.push(a + c, b + c, a + c + 1, a + c + 1, b + c, b + c + 1); } // (facing up, the kerb's face towards the road)
+        const dx = r.o[0] - r.k[0], dz = r.o[1] - r.k[1], W = Math.hypot(dx, dz) || 1, y = r.y + r.lift, g = w.sampleGrid(r.o[0], r.o[1]) + 0.01, yo = Math.min(Math.max(y + 0.15, g), g + SLAB_OVER); // (its outer edge on the ground, as a street's own slabs)
+        for (const [d, h] of [[0, 0], [0, 0.15], [W, 0.15]]) { jPave.pos.push(r.k[0] + dx * d / W, d ? yo : y + h, r.k[1] + dz * d / W); jPave.uv.push(r.hw + d, r.v); jPave.ri.push(r.hw, 0, seed); jPave.rj.push(...NOJ); }
+        if (q) { const a = o2 + (q - 1) * 3, b = o2 + q * 3; for (let c = 0; c < 2; c++) jPave.idx.push(a + c, b + c, a + c + 1, a + c + 1, b + c, b + c + 1); } // (facing up, the kerb's face towards the road)
       });
-      if (!idx.length) continue;
-      const g2 = new THREE.BufferGeometry();
-      g2.setAttribute('position', new THREE.Float32BufferAttribute(p2, 3)); g2.setAttribute('uv', new THREE.Float32BufferAttribute(u2, 2)); g2.setAttribute('rinfo', new THREE.Float32BufferAttribute(r2, 3)); g2.setAttribute('rjunc', new THREE.Float32BufferAttribute(j2, 4));
-      g2.setIndex(idx); g2.computeVertexNormals(); add(sidewalk, g2);
     }
   };
   // a plaza (a pedestrian area, a square): its outline filled, cut into PLAZA_CELL squares (each square's piece of the
@@ -653,8 +691,10 @@ export function buildRoadMeshes(w, net) {
     const lamps = [], poles = [];
     tubeGeos = []; lightGeos = [];
     for (const k of t.roads) { roadMesh(net.roads[k], k); bridgeMesh(net.roads[k]); tubeMesh(net.roads[k]); if (!net.roads[k].tunnel) lampsFor(net.roads[k], lamps, poles, J[k]); }
+    jBox = acc(); jPave = acc();
     for (const B of t.juncs || []) junctionMesh(B, (B.nd * 7.31) % 97);
     for (const A of t.plazas || []) plazaMesh(A);
+    accGeo(jBox, tarmac); if (sidewalk) accGeo(jPave, sidewalk);
     if (tubeGeos.length) { const m = new THREE.Mesh(mergeAll(tubeGeos), tubeMat); m.receiveShadow = true; group.add(m); t.meshes.push(m); }
     if (lightGeos.length) { const m = new THREE.Mesh(mergeAll(lightGeos), tubeLight); group.add(m); t.meshes.push(m); }
     lampMeshes(lamps, poles, t);
@@ -694,6 +734,20 @@ export function plazaIndex(areas) {
   const cells = new Map();
   for (const A of areas) { const [x0, z0, x1, z1] = A.bb; for (let j = Math.floor(z0 / PCELL); j <= Math.floor(z1 / PCELL); j++) for (let i = Math.floor(x0 / PCELL); i <= Math.floor(x1 / PCELL); i++) { const k = i + ',' + j; let L = cells.get(k); if (!L) cells.set(k, (L = [])); L.push(A); } }
   return (x, z) => { const L = cells.get(Math.floor(x / PCELL) + ',' + Math.floor(z / PCELL)); if (L) for (const A of L) { const b = A.bb; if (x >= b[0] && x <= b[2] && z >= b[1] && z <= b[3] && inPoly(A.ring, x, z)) return A; } return null; };
+}
+// whether the segment a-b, r metres either side, reaches the polygon ([x, z, ...])
+function segNearPoly(a, b, r, poly) {
+  const n = poly.length / 2, dx = b.x - a.x, dz = b.z - a.z, L2 = dx * dx + dz * dz || 1;
+  const ps = (px, pz) => { const t = clamp(((px - a.x) * dx + (pz - a.z) * dz) / L2, 0, 1); return Math.hypot(a.x + dx * t - px, a.z + dz * t - pz); };
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const px = poly[j * 2], pz = poly[j * 2 + 1], qx = poly[i * 2], qz = poly[i * 2 + 1];
+    if (ps(px, pz) < r) return true;
+    const ex = qx - px, ez = qz - pz, E2 = ex * ex + ez * ez || 1;
+    for (const p of [a, b]) { const t = clamp(((p.x - px) * ex + (p.z - pz) * ez) / E2, 0, 1); if (Math.hypot(px + ex * t - p.x, pz + ez * t - p.z) < r) return true; }
+    const den = dx * ez - dz * ex; if (Math.abs(den) > 1e-12) { const s = ((px - a.x) * ez - (pz - a.z) * ex) / den, u = ((px - a.x) * dz - (pz - a.z) * dx) / den; if (s >= 0 && s <= 1 && u >= 0 && u <= 1) return true; }
+  }
+  let c = false; for (let i = 0, j = n - 1; i < n; j = i++) { const xi = poly[i * 2], zi = poly[i * 2 + 1], xj = poly[j * 2], zj = poly[j * 2 + 1]; if ((zi > a.z) !== (zj > a.z) && a.x < (xj - xi) * (a.z - zi) / (zj - zi) + xi) c = !c; }
+  return c;
 }
 function mergeAll(geos) {
   const ni = geos.map((g) => (g.index ? g.toNonIndexed() : g));
@@ -893,7 +947,7 @@ export function junctionPoints(rd, J) {
 // side on a road passing through: +1 / -1, 0 both / none) }. Where the junction has a box (junctions.js, shapes:
 // net.junctions) also rA / rB (each arm's clearance: its mouth - 0.6 m, where the crossing starts) and box.
 export function junctionsFromNodes(roads, region, city, shapes = []) {
-  const boxes = new Map(shapes.map((B) => [B.nd, B]));
+  const boxes = new Map(shapes.flatMap((B) => B.nds.map((nd) => [nd, B]))); // (a cluster's box: at each of its nodes)
   const at = new Map(), S = roads.map((rd) => { const P = rd.pts, o = new Float64Array(P.length); for (let i = 1; i < P.length; i++) o[i] = o[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z); return o; });
   roads.forEach((rd, k) => { if (rd.minor) return; for (const [j, nd] of rd.jn || []) { let L = at.get(nd); if (!L) at.set(nd, (L = [])); L.push({ k, j, end: j === 0 || j === rd.pts.length - 1 }); } }); // (rd.minor: joins a street as a driveway does, no junction: junctions.js)
   const out = roads.map(() => []), town = (rd) => rd.kind === 'street' && !rd.lane;
