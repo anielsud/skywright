@@ -244,7 +244,7 @@ export class World {
     for (let k = 0; k < H.length; k++) H[k] = this.shoreSnap(H[k]);
     this.road = { samples: this.net.roads[0].pts, width: 9 };
     this.roadHash = new Map();
-    for (const rd of [...this.net.roads, ...(this.net.rail ? [this.net.rail] : [])]) rd.pts.forEach((p) => { const k = Math.floor(p.x / 40) + ',' + Math.floor(p.z / 40); if (!this.roadHash.has(k)) this.roadHash.set(k, []); this.roadHash.get(k).push([p.x, p.z, rd.width / 2]); });
+    for (const rd of [...this.net.roads, ...(this.net.rail ? [this.net.rail] : [])]) { const hw = rd.width / 2; for (const p of rd.pts) { const k = Math.floor(p.x / 40) + ',' + Math.floor(p.z / 40); let a = this.roadHash.get(k); if (!a) this.roadHash.set(k, (a = [])); a.push(p.x, p.z, hw); } } // (x, z, half width per point, flat: an array per point was ~100 MB in New York)
     // geometry
     const geo = new THREE.PlaneGeometry(S, S, N, N);
     geo.rotateX(-Math.PI / 2); // now x,z plane; vertex order: rows along +z (j), cols along +x (i)
@@ -1086,7 +1086,7 @@ export class World {
     const cx = Math.floor(x / 40), cz = Math.floor(z / 40), R = Math.ceil(d / 40);
     for (let i = cx - R; i <= cx + R; i++) for (let j = cz - R; j <= cz + R; j++) {
       const arr = this.roadHash.get(i + ',' + j); if (!arr) continue;
-      for (const [px, pz, hw] of arr) if ((px - x) ** 2 + (pz - z) ** 2 < (d + hw) ** 2) return true;
+      for (let k = 0; k < arr.length; k += 3) if ((arr[k] - x) ** 2 + (arr[k + 1] - z) ** 2 < (d + arr[k + 2]) ** 2) return true;
     }
     return false;
   }
