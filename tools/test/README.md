@@ -13,7 +13,7 @@
    full power on the real loop (frame loop keeps running, the engine of a car, bike or boat audible), 3 game seconds
    more stepped with `__sky.advance` (finite, in one piece, a bike upright and riding off), then draws every cockpit
    view as the camera button steps through them, and must leave the cockpit after the last seat.
-5. **no shader compiles mid-flight** on a tour flight (main.js's `[shaders] N compiled in flight`; formerly
+5. **no shader stalls mid-flight** on a tour flight (main.js's `[shaders] N compiled in flight, stalling a frame`; formerly
    `shadercheck.py`): visiting the places in one session, a later place must not compile what an earlier one showed
    (the crew, #187), and the first place built again compiles nothing new either
 6. every stock vehicle built and driven in Node (`tools/test/presets.js`, run alongside Chrome): built with its cockpit
@@ -671,7 +671,7 @@ one session); `run.py` no longer runs `shadercheck.py`. It still works for a clo
 
 `shadercheck.py` flies vehicles at several locations one after another in ONE page session (default: the Kestrel and
 the Dirt Bike, each at islands, canyon, nyc and back to islands) and fails if any shader program compiles after a
-flight's loading screen (main.js's `[shaders] N compiled in flight` warning, a visible hitch). It prints how many
+flight's loading screen and stalls a frame (main.js's `[shaders] N compiled in flight, stalling a frame` warning, a visible hitch). It prints how many
 programs each flight compiled behind its loading screen, and the warning's program names on a failure.
 
 ```sh
@@ -681,6 +681,10 @@ python3 tools/test/shadercheck.py --plane Rocket --loc nyc --loc canyon --qualit
 
 Run it when you change shader warm-up (`warmShaders`, `compileAsync` in `main.js`), material patches that set
 `customProgramCacheKey` (crew, cabin light, heat glow), or the lights, fog or environment a location sets up.
+What counts (#273): a program first compiled *during a frame's draw*, which stalls that frame. Objects added to the
+flight scene after the warm-up (streamed tiles, street cars, late models) compile between frames and wait hidden until
+ready (`flushNew` in `main.js`), so their new programs are not stalls. Things that must show instantly (crashes,
+explosions, splashes, booms) are pooled and in the scene at load instead.
 Note that `window.__inflightCompiles` counts over the whole page session: a test that stages extra vehicles mid-flight
 (stunts.js, waterpark.js screenshots) must count per location, or the next location gets the blame (#145, #187).
 

@@ -826,6 +826,7 @@ function buildFlight(cfg) {
   renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null);
   const seats = warmStations(ac.stations); // (the cockpit views' own cabins and linings, hidden until you sit there)
   compileAsync(scene, flightCam).catch(() => {}).then(compiled);
+  F.live = true; // (from here on, whatever joins the scene compiles on its own and waits hidden until ready: readyFirst)
   seats();
   renderer.setRenderTarget(null);
   onResize();
@@ -907,6 +908,7 @@ function endFlight(restarting = false) {
   net.detach(); if (!restarting) net.leave();
   if (updatePending) { reloadFresh(); return; }
   gvis.grey = gvis.red = 0; gvis.draw(false);
+  fresh.length = 0;
   const f = F; F = null; CABIN.uCabinSunBake.value = 0; CABIN.uCabinNight.value = 0; // (the hangar's lamps cast their own shadows; the decks' night lamps off)
   // Collect every GPU resource the flight scene holds BEFORE the subsystems detach their groups (anything detached first
   // used to be skipped, and materials/textures were never freed: ~64 geometries + ~18 textures leaked per flight, #80).
@@ -1521,10 +1523,13 @@ function frame(now) {
       fitNearPlane(F);
       setCrewView(renderer.domElement.height, qualityTier()); // (other players' crews: their detail by size on screen)
       const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene) : null;
+      flushNew();
+      const progs = renderer.info.programs, n0 = progs.length;
       post.render(F.scene, flightCam, dt);
       if (F.wantShot) { F.wantShot = false; report(grabShot()); } // (🐞: a WebGL canvas can only be read straight after it's drawn)
-      // shader programs must all exist before take-off (the warm-up above); flag any compiled mid-flight
-      if (!F.warm) { const n = renderer.info.programs.length; if (F.progs != null && n > F.progs) { const names = renderer.info.programs.slice(F.progs).map((p) => p.name || p.cacheKey?.slice(0, 40)).join(', '); console.warn(`[shaders] ${n - F.progs} compiled in flight: ${names}`); window.__inflightCompiles = (window.__inflightCompiles || 0) + n - F.progs; } F.progs = n; }
+      // A program first made DURING the draw is a stall: the frame waits for it to compile (#273). Ones readyFirst made
+      // between frames are not: those objects wait hidden. (Under the loading screen, compiling in the draw is the point.)
+      if (!F.warm && progs.length > n0) { const names = progs.slice(n0).map((p) => `${p.name} ${p.cacheKey?.slice(-48)}`).join(' | '); console.warn(`[shaders] ${progs.length - n0} compiled in flight, stalling a frame: ${names}`); window.__inflightCompiles = (window.__inflightCompiles || 0) + progs.length - n0; }
       if (restore) { restore(); compileWith(F.scene, F.effects.boom, warm); } // and every shader as lit by a crash's explosion flash (effects.js)
       // ...and until the ground photos have arrived (their upload, and the rock impostors' re-capture, would hitch), and the street cars' models (startFlight loads them first, so this is a safety net)
       else if (warm && ((F.world.loaded?.() !== false && F.traffic.vehicles.ready) || performance.now() - warm.t > 3000)) { F.warm = null; $('#loading').classList.remove('show'); }
@@ -1543,6 +1548,46 @@ function compileAsync(scene, cam) {
   const mats = renderer.compile(scene, cam);
   if (!renderer.extensions.has('KHR_parallel_shader_compile')) return Promise.resolve(scene);
   return new Promise((res) => { const poll = () => { mats.forEach((m) => { const p = renderer.properties.get(m)?.currentProgram; if (!p || p.isReady()) mats.delete(m); }); if (mats.size) setTimeout(poll, 10); else res(scene); }; poll(); });
+}
+// Objects that join the flight scene after the warm-up (streamed tiles, street cars, late models, other players, #273)
+// compile their shaders between frames and stay hidden until those are ready, so a new shader is never a stall: at
+// worst the object appears a few frames late. Nothing registers for this: Object3D.add is watched, so new content is
+// covered automatically. Events that must show at once (crashes, explosions, splashes, booms) don't come through
+// here: they are pooled and in the scene at load, so the warm-up compiles them.
+const _add = THREE.Object3D.prototype.add, fresh = [];
+THREE.Object3D.prototype.add = function (...objs) {
+  const r = _add.apply(this, objs);
+  if (F?.live) { let p = this; while (p.parent) p = p.parent; if (p === F.scene) for (const o of objs) if (o?.parent === this) fresh.push(o); }
+  return r;
+};
+const PARALLEL = () => renderer.extensions.has('KHR_parallel_shader_compile');
+// The queued objects, compiled as one batch (renderer.compile walks the whole scene for its lights on every call, so not
+// once per add). It walks its first argument with traverse and, as here it isn't the target scene, traverseVisible for
+// lights: a stand-in that offers both over the queue.
+function flushNew() {
+  if (!fresh.length) return;
+  const objs = fresh.filter((o) => { let p = o; while (p.parent) p = p.parent; return p === F.scene; }); fresh.length = 0;
+  if (!objs.length) return;
+  const was = renderer.getRenderTarget(); renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null); // (as the scene really renders)
+  const mats = renderer.compile({ traverse: (fn) => objs.forEach((o) => o.traverse(fn)), traverseVisible() {} }, flightCam, F.scene);
+  renderer.setRenderTarget(was);
+  // (no background compile here: it links on first use whatever we do. And under the loading screen nothing is held:
+  // the screen hides it anyway, and the first frame must draw it for its shadow shaders, warmShaders)
+  if (!PARALLEL() || F.warm) return;
+  const ready = (m) => { const p = renderer.properties.get(m)?.currentProgram; return !p || p.isReady(); }; // (freed meanwhile: done)
+  const pend = new Set([...mats].filter((m) => !ready(m))); if (!pend.size) return;
+  const held = [];
+  for (const o of objs) o.traverse((x) => { const ms = Array.isArray(x.material) ? x.material : x.material ? [x.material] : []; if (ms.some((m) => pend.has(m))) held.push(hide(x)); });
+  const t0 = performance.now(), poll = () => { for (const m of pend) if (ready(m)) pend.delete(m); if (pend.size && performance.now() - t0 < 5000) setTimeout(poll, 10); else held.forEach((show) => show()); };
+  poll();
+}
+// Hidden without touching what the game sets: reads of .visible say false meanwhile, writes are kept and apply after.
+const hiding = new WeakSet();
+function hide(o) {
+  if (hiding.has(o)) return () => {}; // (re-added while still waiting: the first hold shows it)
+  hiding.add(o); let v = o.visible;
+  Object.defineProperty(o, 'visible', { configurable: true, get: () => false, set: (x) => { v = x; } });
+  return () => { delete o.visible; o.visible = v; hiding.delete(o); };
 }
 function compileWith(scene, light, warm) {
   const target = () => renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null);
