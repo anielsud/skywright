@@ -19,6 +19,7 @@ import { SpaceView } from './space.js';
 import { RealScenery } from './realBuildings.js';
 import { Destruction } from './destruction.js';
 import { Landcover } from './landcover.js';
+import { SLAB } from './roadgrade.js';
 import { LaunchPad } from './launchpad.js';
 import { buildAirfieldKit, CONNECTORS, TAXI, ALS, airportGate } from './airportKit.js';
 import { buildAirportGround, gateLevel, infieldPaint, paintInfieldImagery } from './airportGround.js';
@@ -518,7 +519,7 @@ export class World {
     this.detailAt = [i0, j0];
     const n = D + 1, P = this.detail.geometry.attributes.position.array, N = this.detail.geometry.attributes.normal.array;
     const R = this.hR, st = this.hStep, H = this.Hh, W = R + 1, B = 4; // B: blend cells at the edge
-    const hs = new Float32Array(n * n), S = this.roadSurf, on = this.detailOn ??= new Uint8Array(n * n), cover = this.loc.city ? 2 : 0; // (cover: metres past the footprint the road meshes cover, a city street's pavements)
+    const hs = new Float32Array(n * n), S = this.roadSurf, on = this.detailOn ??= new Uint8Array(n * n), cover = this.loc.city ? SLAB + 1.5 : 1; // (cover: metres past the footprint the road meshes cover, a city street's pavements: their slabs, roadgrade.js SLAB, which come down to the ground where it falls away, #228)
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const x = x0 + i * DS, z = z0 + j * DS, e = Math.min(i, j, D - i, D - j), k = j * n + i;
       const base = this.triAt(H, W, (x + half) / st, (z + half) / st), b2 = this.cityAt(x, z, base); // (what the patch draws here; the ground sampleGrid stands on, b2)

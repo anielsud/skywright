@@ -216,7 +216,7 @@ export function shoulderMaterial(region) {
 
 // A city's pavements (#228): a granite kerb 15 cm up from the gutter, then concrete slabs (1.5 m, with their joints) to
 // the building line. uv = (metres across from the road's centre line, metres along); rinfo as the tarmac's (half width);
-// rjunc as the tarmac's: the pavement stops at a junction's clearance, where the crossing is.
+// rjunc as the tarmac's: the pavement stops at a junction's clearance, where the crossing is, on the side(s) its mouth is on.
 export function sidewalkMaterial() {
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0 });
   const U = { sD: { value: tex('sidewalk_d', true) }, rLamp: ROAD_U.rLamp };
@@ -232,7 +232,8 @@ export function sidewalkMaterial() {
         float hw = vI.x, x = abs(vR.x) - hw, v = vR.y; // x: metres out from the kerb's face
         float gFv = fwidth(v), gFx = fwidth(x);
         float dj = min(vJ.x, vJ.y), jc = vJ.y < vJ.x ? vJ.w : vJ.z, jr = floor(jc / 32.0) / 16.0, jBox = mod(floor(jc / 16.0), 2.0);
-        if (jc > 0.5 && dj < jr + 0.3 + 0.3 * jBox) discard; // (the junction: the crossing's open roadway; a box's mouth, where its corner pavement takes over)
+        float jf = mod(jc, 32.0), jSide = vR.x > 0.0 ? mod(floor(jf / 4.0), 2.0) : mod(floor(jf / 8.0), 2.0); // (the mouth on this side of the road: on a road passing a T, its far side's pavement carries on)
+        if (jc > 0.5 && jSide > 0.5 && dj < jr + 0.3 + 0.3 * jBox) discard; // (the junction: the crossing's open roadway; a box's mouth, where its corner pavement takes over)
         vec3 conc = vec3(0.47, 0.465, 0.45) * texture2D(sD, vec2(vR.x, v) / 2.4).rgb * 2.0;
         // slabs: joints every 1.5 m along and across, a little darker and soiled; some slabs a shade off
         vec2 sl = vec2(x - 0.35, v) / 1.5, f = abs(fract(sl) - 0.5) * 1.5;
