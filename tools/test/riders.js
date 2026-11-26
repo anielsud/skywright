@@ -3,7 +3,8 @@
 //   - the arms hold together: each hand bone sits at the end of its forearm (a hand that can't reach its grip lets go;
 //     it never stretches the skin between forearm and hand);
 //   - nothing flies off: every bone stays within 1.5 m of the hips (rig metres);
-//   - the cost: milliseconds spent posing the crew per frame (min / mean of the run).
+//   - the cost: the posing work per frame (poses, and arm placements tried by the IK: crew.js armEvals), with the
+//     milliseconds as information only (a timing verdict depends on the machine).
 // A hard stop: the rider braces (hips back, arms straight) without letting go or going into the bike, and sits back
 // up once stopped. Full gas: they lean forward over the bars, the same way.
 // Then the bikes lose their forks (the fork part breaks off and flies away, as in a crash): the riders must let go and
@@ -26,10 +27,14 @@ export function skeletonCheck(r) {
   return { gap, far, finite: p.every((v) => Number.isFinite(v.x + v.y + v.z)) && q.every((v) => Number.isFinite(v.x + v.y + v.z + v.w)) };
 }
 
-// times every crew update of this vehicle (ms per frame, summed over its people)
+// times every crew update of this vehicle (ms per frame, summed over its people: information) and counts its work
+// (work per frame: poses + arm placements tried, crew.js armEvals, summed over its people: what a verdict reads)
 function timed(ac) {
-  const t = { ms: 0, frames: 0, per: [] };
-  for (const r of crews(ac)) { const u = r.update.bind(r); r.update = (c, dt) => { const t0 = performance.now(); const m = u(c, dt); t.ms += performance.now() - t0; return m; }; }
+  const t = { ms: 0, work: 0, frames: 0, per: [] };
+  for (const r of crews(ac)) {
+    const u = r.update.bind(r); r.update = (c, dt) => { const t0 = performance.now(), e0 = r.rig.armEvals || 0, p0 = r.rig.poses || 0; const m = u(c, dt); t.ms += performance.now() - t0; t.work += (r.rig.armEvals || 0) - e0 + (r.rig.poses || 0) - p0; return m; };
+    const pose = r.rig.pose.bind(r.rig); r.rig.pose = (s) => { r.rig.poses = (r.rig.poses || 0) + 1; return pose(s); };
+  }
   return t;
 }
 
@@ -40,7 +45,7 @@ export function run(design, { T = 6, mode = 'pilot', breakFork = false, script =
   if (spawn.alt) { ac.x.y = spawn.alt; ac.syncVisual(); }
   const people = crews(ac); if (!people.length) return null;
   const stand = !!people[0].rig.v?.hy; // (a standing rider: an attack stance, fitted when the vehicle is built)
-  const tm = timed(ac), dt = 1 / 60, out = { name: design.name, people: people.length, stand, gap: 0, far: 0, finite: true, letGo: 0, held: null, knee: [], hits: 0, msBefore: [], msAfter: [], broke: null, events: [] };
+  const tm = timed(ac), dt = 1 / 60, out = { name: design.name, people: people.length, stand, gap: 0, far: 0, finite: true, letGo: 0, held: null, knee: [], hits: 0, msBefore: [], msAfter: [], workBefore: [], workAfter: [], broke: null, events: [] };
   let deb = null;
   for (let f = 0; f * dt < T; f++) {
     const t = f * dt;
@@ -51,9 +56,9 @@ export function run(design, { T = 6, mode = 'pilot', breakFork = false, script =
       if (fork) { ac.breakPart(fork.i, 'impact'); for (const e of ac.events) if (e.type === 'debris') deb = e.debris; out.broke = fork.p.id; }
     }
     if (deb) { deb.v.set(4, 6, -25); deb.step(dt, env); deb.group.position.copy(deb.x); deb.group.quaternion.copy(deb.q); deb.group.updateMatrixWorld(true); } // (flying away fast)
-    tm.ms = 0; ac.step(dt, env);
+    tm.ms = 0; tm.work = 0; ac.step(dt, env);
     for (const e of ac.events.splice(0)) if (['msg', 'wreck'].includes(e.type)) out.events.push([+t.toFixed(2), e.type, e.text || '']);
-    if (f > 2) (deb ? out.msAfter : out.msBefore).push(tm.ms);
+    if (f > 2) { (deb ? out.msAfter : out.msBefore).push(tm.ms); (deb ? out.workAfter : out.workBefore).push(tm.work); }
     for (const r of people) { const s = skeletonCheck(r); if (f > 0) { out.gap = Math.max(out.gap, s.gap); out.far = Math.max(out.far, s.far); out.finite &&= s.finite; } }
     for (const r of people) { const q = r.rig.q, up = V(0, 1, 0), kn = Math.min(...[[7, 8], [9, 10]].map(([a, b]) => 180 - Math.acos(Math.max(-1, Math.min(1, up.clone().applyQuaternion(q[a]).dot(up.clone().applyQuaternion(q[b]))))) * 57.3)); out.knee.push(+kn.toFixed(1)); (out.hipZ ||= []).push(+r.rig.p[0].z.toFixed(4));
       if (r.rig.opts.ride) { const h = r.rig.rideHits(); const hh = Math.max(h.legs, h.torso, h.head); if (out.hitsRest == null) out.hitsRest = hh; if (hh > out.hits) out.hitsBy = Object.fromEntries(Object.entries(h).map(([a, b]) => [a, +(b * 100).toFixed(1)])); out.hits = Math.max(out.hits, hh); } }
@@ -62,7 +67,7 @@ export function run(design, { T = 6, mode = 'pilot', breakFork = false, script =
     if (ac.dead) break;
   }
   const stat = (a) => a.length ? { mean: +(a.reduce((x, y) => x + y, 0) / a.length).toFixed(3), p95: +[...a].sort((x, y) => x - y)[Math.floor(a.length * 0.95)].toFixed(3) } : null;
-  out.msBefore = stat(out.msBefore); out.msAfter = stat(out.msAfter);
+  out.msBefore = stat(out.msBefore); out.msAfter = stat(out.msAfter); out.workBefore = stat(out.workBefore); out.workAfter = stat(out.workAfter);
   const kn = out.knee; out.knee = kn.length ? { rest: kn[0], min: Math.min(...kn), max: Math.max(...kn), end: kn.at(-1) } : null; out.hits = +out.hits.toFixed(3);
   out.gap = +out.gap.toFixed(4); out.far = +out.far.toFixed(3);
   return out;
@@ -92,7 +97,9 @@ export const CHECKS = {
     common(r, bad);
     if (r.far > 1.5) bad.push(`a bone ${r.far.toFixed(2)} m from the hips`);
     if (r.held) bad.push('still holding the handlebars that flew away');
-    if (r.msAfter && r.msBefore && r.msAfter.mean > r.msBefore.mean * 2 + 0.2) bad.push(`posing cost jumped ${r.msBefore.mean} -> ${r.msAfter.mean} ms after the fork went`);
+    // (counted work, not ms: holding the bars ~105 a frame now, after the fork goes 1 (one pose, no arm to place); a
+    // hand still searching for its lost grip every frame would cost more than holding it)
+    if (r.workAfter && r.workBefore && r.workAfter.mean > r.workBefore.mean) bad.push(`posing work jumped ${r.workBefore.mean} -> ${r.workAfter.mean} per frame (poses + arm placements tried) after the fork went (${r.msBefore?.mean} -> ${r.msAfter?.mean} ms, info)`);
     return { ...r, check: 'fork lost', ok: !bad.length, why: bad.join('; ') };
   },
   // landing a jump (every bike): from 2.5 m at 15 m/s the rider's knees bend to soak it up (a standing rider's by
@@ -176,7 +183,7 @@ export function cases({ presets }) { return presets.map((d) => ({ id: d.name, na
 export function runCase(c, { presets }) {
   const d = presets.find((x) => x.name === c.name);
   return ['ride', 'dented', ...(c.bike ? BIKE_ONLY : [])].map((k) => CHECKS[k](d)).filter(Boolean).map((r) => {
-    const pose = r.msBefore ? `pose ${r.msBefore.mean} ms (p95 ${r.msBefore.p95})${r.msAfter ? `, after ${r.msAfter.mean}` : ''}` : '';
+    const pose = r.msBefore ? `pose ${r.msBefore.mean} ms (p95 ${r.msBefore.p95})${r.msAfter ? `, after ${r.msAfter.mean}` : ''}, work ${r.workBefore?.mean}${r.workAfter ? ` -> ${r.workAfter.mean}` : ''} a frame` : '';
     return { name: `${r.check} ${r.name} x${r.people}`, ok: r.ok, why: r.why, info: `hand gap ${(r.gap * 100).toFixed(2)} cm, far ${r.far} m, ${pose}${r.check === 'landing' ? `, knees ${r.knee.rest}->${r.knee.min}->${r.knee.end}` : ''}${r.back != null ? `, hips back ${(r.back * 100).toFixed(1)} cm` : ''}`, msBefore: r.msBefore, msAfter: r.msAfter };
   });
 }

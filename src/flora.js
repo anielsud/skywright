@@ -22,6 +22,7 @@
 //   flora.addTrees(list)     [{ x, z, kind?: 'conifer'|'broadleaf'|'palm'|'shrub'|..., scale? }] extra trees
 //   flora.clearTrees()       remove everything added with addTrees
 import * as THREE from 'three';
+import { STEP, slice } from './stepClock.js';
 import { mulberry32, smoothstep } from './noise.js';
 import { FOG } from './shaders.js';
 
@@ -851,9 +852,10 @@ export class Flora {
     // time-sliced generation
     const t0 = performance.now(), budget = budgetMs ?? (this.started ? this.T.budget : 40); this.started = true;
     // a cell is only started if it should fit in what's left of the budget (one is always allowed): overrunning the
-    // budget by a whole cell is what made a streaming frame miss the display's refresh
+    // budget by a whole cell is what made a streaming frame miss the display's refresh. Under the test stepper
+    // (stepClock.js): 2 cells per ms of budget instead, whatever the machine (Low 4 a step, 80 on the first)
     let done = 0;
-    while (this.queue.length && performance.now() - t0 + (done ? this.cellMs : 0) < budget) {
+    while (this.queue.length && (STEP.on ? done < budget * 2 : performance.now() - t0 + (done ? this.cellMs : 0) < budget)) {
       const c = this.queue.shift();
       if (!this.cells.has(c.key)) continue;
       if (this.tileOf(c) === undefined) continue; // outer tile not built yet: try again when it is
@@ -867,7 +869,8 @@ export class Flora {
     if (!this.impJob && this.impDirty && this.frame - this.lastImp > 12) this.impJob = this.updateImpostors();
     if (this.impJob) {
       const t1 = performance.now(), b2 = Math.max(1.2, budget - (t1 - t0)); this.impUp = 0;
-      while (performance.now() - t1 < b2) { const r = this.impJob.next(); if (r.done) { this.impJob = null; break; } if (r.value === 'frame') break; }
+      const more = slice(b2, 8); // (stepper: 8 slices of ~8000 impostors a step)
+      while (more()) { const r = this.impJob.next(); if (r.done) { this.impJob = null; break; } if (r.value === 'frame') break; }
     }
     this.placeImpostors(cam);
     this.cover.update(cam);
@@ -1085,12 +1088,12 @@ class GroundCover {
     const CS = 16, ci = Math.floor(cam.x / CS), cj = Math.floor(cam.z / CS), key = ci + ',' + cj + ':' + R;
     if (this.at === key && !this.pending) return;
     this.at = key; this.pending = false;
-    const rc = Math.ceil(R / CS), t0 = performance.now(), list = [];
+    const rc = Math.ceil(R / CS), more = slice(2.5, 48), list = []; // (stepper: 48 new cells a step)
     for (let i = ci - rc; i <= ci + rc; i++) for (let j = cj - rc; j <= cj + rc; j++) {
       const dx = Math.max(0, Math.abs((i + 0.5) * CS - cam.x) - CS / 2), dz = Math.max(0, Math.abs((j + 0.5) * CS - cam.z) - CS / 2);
       if (dx * dx + dz * dz > R * R) continue;
       const k = i + ',' + j; let c = this.cells.get(k);
-      if (!c) { if (performance.now() - t0 > 2.5) { this.pending = true; continue; } c = this.gen(i, j); this.cells.set(k, c); }
+      if (!c) { if (!more()) { this.pending = true; continue; } c = this.gen(i, j); this.cells.set(k, c); }
       c.used = this.at; list.push(c);
     }
     if (this.cells.size > list.length * 3) for (const [k, c] of this.cells) if (c.used !== this.at) this.cells.delete(k);

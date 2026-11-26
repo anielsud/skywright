@@ -10,6 +10,8 @@
 // When a tile arrives that an earlier sample had wanted and missed, the area those samples covered is handed back to
 // the World (invalidateArea) to rebuild: only ground built from something worse is ever rebuilt. Nothing here throws:
 // offline, a sample falls back to the nearest coarser level, then to the baked square's mean edge colour and height.
+import { now as clock } from './stepClock.js';
+
 const ELEV = (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
 const IMG = (z, x, y) => `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/${z}/${y}/${x}.jpg`;
 export const GEO_CACHE = 'skywright-geo-v1'; // (sw.js keeps it across releases and leaves these requests to us)
@@ -211,7 +213,7 @@ export class GeoStream {
     }
     want.sort((a, b) => a.pri - b.pri);
     this.want = new Set(); this.queue = [];
-    const now = performance.now();
+    const now = clock();
     for (const w of want) for (const kind of ['e', 'i']) {
       const k = this.key(kind, w.Z, w.tx, w.ty); this.want.add(k);
       if (this.tiles.has(k) || this.pending.has(k) || (this.failed.get(k) || 0) > now) continue;
@@ -230,7 +232,7 @@ export class GeoStream {
   }
   received(q, r) {
     this.pending.delete(q.k);
-    if (!r.ok) { this.stats.fails++; const n = (this.tries.get(q.k) || 0) + 1; this.tries.set(q.k, n); this.failed.set(q.k, performance.now() + Math.min(120000, 5000 * 2 ** n)); return; } // (back off: 10 s, 20 s ... 2 min)
+    if (!r.ok) { this.stats.fails++; const n = (this.tries.get(q.k) || 0) + 1; this.tries.set(q.k, n); this.failed.set(q.k, clock() + Math.min(120000, 5000 * 2 ** n)); return; } // (back off: 10 s, 20 s ... 2 min)
     if (r.net) { this.stats.netBytes += r.net; this.stats.netTiles++; } else this.stats.cacheTiles++;
     this.arrive(q, r.data);
   }
@@ -254,12 +256,12 @@ export class GeoStream {
   // Once a frame (World.update): re-plan now and then, keep the requests flowing, and hand arrived areas to the World
   // to rebuild, a few per frame. All of it is small: decoding happens in the worker.
   update(cam) {
-    const t0 = performance.now(); this.clock++; // (stats.ms: the main thread's share of streaming, arrivals included)
+    const t0 = performance.now(), tc = clock(); this.clock++; // (stats.ms: the main thread's share of streaming, arrivals included; tc: game time under the test stepper, stepClock.js)
     if (this.cam) {
-      const dt = (t0 - this.lastT) / 1000;
-      if (dt > 0.05) { const k = Math.min(1, dt / 2); this.vel.x += ((cam.x - this.cam.x) / dt - this.vel.x) * k; this.vel.z += ((cam.z - this.cam.z) / dt - this.vel.z) * k; this.cam = { x: cam.x, z: cam.z }; this.lastT = t0; }
-    } else { this.cam = { x: cam.x, z: cam.z }; this.lastT = t0; }
-    if (t0 - this.lastPlan > 700) { this.lastPlan = t0; this.plan(cam.x, cam.z); }
+      const dt = (tc - this.lastT) / 1000;
+      if (dt > 0.05) { const k = Math.min(1, dt / 2); this.vel.x += ((cam.x - this.cam.x) / dt - this.vel.x) * k; this.vel.z += ((cam.z - this.cam.z) / dt - this.vel.z) * k; this.cam = { x: cam.x, z: cam.z }; this.lastT = tc; }
+    } else { this.cam = { x: cam.x, z: cam.z }; this.lastT = tc; }
+    if (tc - this.lastPlan > 700) { this.lastPlan = tc; this.plan(cam.x, cam.z); }
     while (this.pending.size < INFLIGHT && this.queue.length) { const q = this.queue.shift(); if (!this.tiles.has(q.k) && !this.pending.has(q.k)) this.request(q); }
     for (let n = 0; n < 4 && this.rects.length; n++) { const r = this.rects.shift(); this.stats.invalidations++; this.onInvalidate?.(r[0] - 50, r[1] - 50, r[2] + 50, r[3] + 50); }
     this.stats.ms += performance.now() - t0; this.stats.frames++;

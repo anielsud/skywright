@@ -179,16 +179,18 @@ export async function run(T) {
 // The tour flight (smoke.js tour) and, right after it, the engine voice: cars' and bikes' engines are synthesized voices
 // (motorSound.js) that audio.update drives every step; over the tour's drawn frames at full power the audio clock runs,
 // so the voice's output gain has reached its level. Read at once (tour() lets go of the gas just before it returns; no
-// step has run since). smoke.py's verdict: audible (gain >= 0.01) unless the audio clock stalled (no output device, #180).
+// step has run since). smoke.py's verdict: audible (gain >= 0.01) unless the audio clock stalled (no output device, #180):
+// stalled meaning it ran under AUDIO_RUN s over the whole tour (an absolute advance, not a share of wall time).
+const AUDIO_RUN = 0.3;
 async function tourWithEngine(T) {
-  const S = T.S, A = S.audio, a0 = A.ctx?.currentTime ?? 0, w0 = performance.now();
+  const S = T.S, A = S.audio, a0 = A.ctx?.currentTime ?? 0;
   const f = await tour();
   const F = S.F, e = F?.ac.parts.find((p) => p.alive && p.engine && A.voices[p.engine.sound]?.motor);
   const m = e ? { kind: e.engine.sound, gain: A.voices[e.engine.sound].out.gain.value } : null;
-  const wall = (performance.now() - w0) / 1000, stalled = (A.ctx?.currentTime ?? 0) - a0 < wall * 0.25;
+  const ran = (A.ctx?.currentTime ?? 0) - a0, stalled = ran < AUDIO_RUN;
   T.checks(tourChecks(f));
   T.check('its engine voice plays, audible at full power', !!m && (m.gain >= 0.01 || stalled),
-    !m ? 'no engine voice running (audio.voices)' : `${m.kind} gain ${m.gain.toFixed(3)}${stalled ? ' (audio clock stalled: level not checked)' : ''}`);
+    !m ? 'no engine voice running (audio.voices)' : `${m.kind} gain ${m.gain.toFixed(3)}, audio clock +${ran.toFixed(2)} s${stalled ? ' (audio clock stalled: level not checked)' : ''}`);
   const r = f.ride;
   return `${f.ran.toFixed(2)} s over ${f.frames} frames; ${r ? `${r.speed.toFixed(0)} m/s, ` : ''}${f.views} cockpit view(s)${m ? `, engine ${m.gain.toFixed(2)}` : ''}`;
 }

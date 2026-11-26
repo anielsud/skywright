@@ -10,9 +10,10 @@
 // brick walk-ups and brownstones, clapboard houses with pitched roofs, warehouses; water towers and plant rooms on
 // the roofs. Collisions: an oriented box per building.
 import * as THREE from 'three';
+import { STEP } from './stepClock.js';
 import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, facade, facadeSpec, floodlit, linHex, LY0, LYS } from './buildings.js';
 import { toLocal } from './realworld.js';
-import { roadIndex, setBack, holeInside, fitBox, footBoxes, boundBox, inParts, irregular, lazyParts, packRing, unpackRing, FOOT, MAJOR, streetWalls, PASSAGE, clip, intrusion } from './setback.js';
+import { roadIndex, setBack, holeInside, fitBox, footBoxes, boundBox, inParts, irregular, lazyParts, packRing, unpackRing, FOOT, MAJOR, streetWalls, PASSAGE, clip, intrusion, WORK, workSince } from './setback.js';
 
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
 const GROUP = 2; // tall buildings: one mesh per GROUP x GROUP data tiles
@@ -260,7 +261,12 @@ function cityParts(city, Q, H, q, fit) {
 function lazyBoxes(city, t, P, holes, q, fit, fallback) {
   const fp = packRing(P), hp = holes.map(packRing);
   const parts = () => cityParts(city, unpackRing(fp), hp.map(unpackRing), q, fit) || fallback;
-  lazyParts(t, () => { const t0 = performance.now(), B = parts(), FS = city.footStats, dt = performance.now() - t0; if (dt > FS.lazy) { FS.lazy = dt; FS.lazyRedo = parts; } return B; }); // (lazyRedo: the slowest one again, for tools/test/setbacks.js)
+  lazyParts(t, () => {
+    const t0 = performance.now(), w0 = { ...WORK }, B = parts(), FS = city.footStats, dt = performance.now() - t0, w = workSince(w0);
+    if (dt > FS.lazy) { FS.lazy = dt; FS.lazyRedo = parts; } // (lazyRedo: the slowest one again, for tools/test/setbacks.js: info)
+    if (w.cells + w.verts > (FS.lazyWork?.cells ?? 0) + (FS.lazyWork?.verts ?? 0)) FS.lazyWork = { ...w, walls: fp.length / 2, boxes: B?.length ?? 0 }; // (the most work any one took: tools/test/setbacks.js)
+    return B;
+  });
 }
 
 // ---------------- the city ----------------
@@ -283,13 +289,13 @@ export class CityScenery {
     this.hole = cfg.statue ? toLocal(D.meta, cfg.statue.lat, cfg.statue.lon) : null; // footprints there: drawn as a model
     // rooftop helipads (helipad.js): the tallest flat roof at each point is found while the skyline is built (h.roof)
     this.helipads = (cfg.helipads || []).map((h) => { const [x, z] = toLocal(D.meta, h.lat, h.lon), L = h.look && toLocal(D.meta, h.look.lat, h.look.lon); return { ...h, x, z, look: L ? { x: L[0], z: L[1] } : null, roof: null }; });
-    const t0 = performance.now();
+    const t0 = performance.now(), w0 = { ...WORK };
     this.stats = { tall: 0, low: 0, tris: 0 };
     this.roads = roadIndex(W); this.setbacks = { cut: 0, dropped: 0, through: 0, ms: performance.now() - t0 }; // set back from the streets (setback.js; ms: the index and the cuts)
     this.footStats = { n: 0, irr: 0, boxes: 0, max: 0, ms: 0, lazy: 0, load: 0 }; // (the collision boxes: ms in footBoxes, whenever; lazy: the slowest worked out after load; load: at load)
     this.density(); this.sup = new Map(); this.supTiles = new Set(); this.grounded = 0; this.nested = 0; this.kiosks = 0; this.passages = []; this.gf = { front: 0, ground: 0, parts: 0, miss: [] };
     this.buildTall();
-    this.msTall = performance.now() - t0;
+    this.msTall = performance.now() - t0; this.loadWork = { ...workSince(w0), irr: this.footStats.irr, n: this.footStats.n }; // (setback.js WORK at load: tools/test/setbacks.js)
     this.queue = []; this.lastPlan = null; this.shadows = W_SHADOW(W);
   }
   tileCentre(i, j) { const H = this.city.hdr; return [H.x0 + (i + 0.5) * H.tile, H.z0 + (j + 0.5) * H.tile]; }
@@ -851,7 +857,7 @@ export class CityScenery {
 
   // ---------------- low buildings: streamed by tile ----------------
   buildLowStep(t, budget) {
-    const U = this.city.U, S = this.city.S, R = {}, t0 = performance.now();
+    const U = this.city.U, S = this.city.S, R = {}, t0 = performance.now(), r0 = t.st?.r ?? 0; // (r0: under the test stepper, 32 records per ms of budget a step, stepClock.js)
     const st = t.st || (t.st = { o: t.lowOff, r: 0, M: new MeshW(...this.tileCentre(t.i, t.j), 4096) });
     const minA = this.qn === 'low' ? 60 : this.qn === 'medium' ? 25 : 0;
     this.curTile = t.i + ',' + t.j;
@@ -860,7 +866,7 @@ export class CityScenery {
       if (this.skipped(R)) continue;
       if (minA && Math.abs(area2(R.P)) < minA) break; // sorted by area: the rest are smaller still
       this.building(st.M, R, false);
-      if ((st.r & 31) === 0 && performance.now() - t0 > budget) { this.curTile = null; return false; }
+      if ((st.r & 31) === 0 && (STEP.on ? st.r - r0 >= budget * 32 : performance.now() - t0 > budget)) { this.curTile = null; return false; }
     }
     this.curTile = null;
     const M = st.M; t.st = null;

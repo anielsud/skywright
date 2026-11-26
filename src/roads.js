@@ -1,6 +1,7 @@
 // Road networks at the real places (realworld.js maps them from OpenStreetMap): grading them (gradeReal), carving
 // them and the towns into the heightfield, painting them into the baked albedo, and their meshes.
 import * as THREE from 'three';
+import { STEP } from './stepClock.js';
 import { smoothstep, lerp, clamp } from './noise.js';
 import { glowTexture as glow } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
@@ -668,10 +669,11 @@ export function buildRoadMeshes(w, net) {
   const all = [...tiles.values()], near = (t, cam) => Math.hypot(t.x - cam.x, t.z - cam.z) - TILE * 0.71;
   // update(cam, ms): build missing tiles nearest first (those in reach: all of them away from a city) for up to ms
   // milliseconds; show / hide a city's built tiles by distance. Returns true when every tile within `within` m is built.
+  // (stepClock.js: under the test stepper, ms tiles instead of ms milliseconds)
   group.userData.update = (cam, ms = 4, within = 0) => {
-    const t0 = performance.now();
+    const t0 = performance.now(); let n = 0;
     let todo = all.filter((t) => !t.built && (!D || near(t, cam) < D));
-    if (todo.length) { todo.sort((a, b) => near(a, cam) - near(b, cam)); for (const t of todo) { if (performance.now() - t0 > ms && near(t, cam) > within) break; buildTile(t); } }
+    if (todo.length) { todo.sort((a, b) => near(a, cam) - near(b, cam)); for (const t of todo) { if ((STEP.on ? n >= Math.max(1, ms) : performance.now() - t0 > ms) && near(t, cam) > within) break; buildTile(t); n++; } }
     if (D) for (const t of all) if (t.built) { const v = near(t, cam) < D; for (const m of t.meshes) m.visible = v; }
     return !all.some((t) => !t.built && near(t, cam) < within);
   };
