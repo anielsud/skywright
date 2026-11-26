@@ -24,6 +24,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url)), REPO = fileURLToPath(new URL('../../../', import.meta.url));
 export const SUITES = ['bikeride', 'drivecheck', 'rocketcheck', 'riders', 'gvision', 'boatride', 'stunts', 'waterpark', 'walls', 'meshcheck', 'cockpitcheck', 'gearcheck', 'startbakes', 'tunnelcheck', 'startchoice', 'presets', 'roadcheck', 'airportcheck', 'bldcheck', 'setbacks']; // (tools/test/<name>.js; add a suite here once it exports nodeSuite)
+// what building a place's World costs (ms: node/world.mjs worldAt on a quiet Mac, 2026-11; New York's also ~1.2 GB): pick
+const BUILD_MS = { nyc: 13000, lauterbrunnen: 4000, islands: 2500, canyon: 2000 };
 const modUrl = (name) => pathToFileURL(`${REPO}tools/test/${name}.js`).href;
 
 async function context() { const { makePresets } = await import(pathToFileURL(REPO + 'src/design.js').href); return { presets: makePresets() }; }
@@ -79,12 +81,12 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
   // Within a shard: longest first, handed out one at a time. A case may name what it shares with others, c.world (a
   // place's World, node/world.mjs keeps one per worker) or c.key (e.g. a vehicle's built crew): a worker is handed a case
   // for something it already has if there is one, else one for something no worker has started, else one needing none.
-  const started = new Set();
+  const started = new Map(); // (affinity -> how many workers have it)
   const t0 = performance.now(), results = [], n = Math.min(jobs, queue.length);
   console.log(`${queue.length} cases${shardN > 1 ? ` (part ${shardK}/${shardN} of ${work.length})` : ''} from ${suites.join(', ')} on ${n} workers`);
   await Promise.all(Array.from({ length: n }, () => new Promise((resolve) => {
     const w = new Worker(fileURLToPath(import.meta.url)), mine = new Set();
-    const next = () => { const job = pick(queue, mine, started); if (job) { const a = aff(job); if (a != null) { mine.add(a); started.add(a); } w.postMessage(job); } else { w.terminate(); resolve(); } };
+    const next = () => { const job = pick(queue, mine, started, est, n); if (job) { const a = aff(job); if (a != null && !mine.has(a)) { mine.add(a); started.set(a, (started.get(a) || 0) + 1); } w.postMessage(job); } else { w.terminate(); resolve(); } };
     w.on('message', (m) => {
       if (m.ready) return next();
       results.push(m);
@@ -117,12 +119,25 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
 // what a case shares with others (World first: node/world.mjs caches one per worker)
 function aff(j) { return j.c.world ?? j.c.key; }
 // the case a worker takes next: one for something it already has, else for something no worker has started, else one
-// needing nothing, else the longest left (another worker's: built again here rather than idle)
-function pick(queue, mine, started) {
+// needing nothing, else the longest left (another worker's: built again here rather than idle). A place's World
+// (c.world) is costly to build, though (BUILD_MS; New York's ~1.2 GB too: four workers each building it on a 4-vCPU
+// runner made New York's cases ~6x slower there than here), so for those: a worker joins the o workers that have one
+// early, before the cases needing nothing, if that place would otherwise be the last to finish (its rem ms of cases
+// left / o over everything left / jobs, counting the builds); and at the end only if that gets its cases done sooner
+// (all finish in (rem + b) / (o + 1) instead of rem / o: while o b < rem); else this worker is done. (b is taken 1.5x:
+// a build costs more than its own time, in memory and the other workers' slowdown.) est: the cases' estimated ms.
+function pick(queue, mine, started, est, jobs = 1) {
   let k = queue.findIndex((j) => aff(j) != null && mine.has(aff(j)));
   if (k < 0) k = queue.findIndex((j) => aff(j) != null && !started.has(aff(j)));
+  const join = (j, early) => {
+    const b = BUILD_MS[j.c.world] * 1.5, o = started.get(j.c.world) || 1; if (!b || !est) return !early;
+    let rem = 0, all = 0; for (const q of queue) { const e = est(q); all += e; if (q.c.world === j.c.world) rem += e; }
+    return early ? rem / o > (all + b * (o + 1)) / jobs : o * b < rem;
+  };
+  if (k < 0) k = queue.findIndex((j) => j.c.world != null && join(j, true));
   if (k < 0) k = queue.findIndex((j) => aff(j) == null);
-  return queue.splice(Math.max(0, k), 1)[0];
+  if (k < 0) k = queue.findIndex((j) => join(j, false));
+  return k < 0 ? undefined : queue.splice(k, 1)[0];
 }
 // The work split into n shards (separate CI jobs: nothing is shared between them). Cases that share a World or a key
 // (transitively: a case with both joins the two) form a group, kept in one shard so each shard builds a place's World
@@ -156,8 +171,12 @@ export function shardPlan(work, n, est) {
 function keyOf(w) { return `${w.suite}|${w.c.id ?? w.i}`; }
 // a shard's estimated wall time on `jobs` workers, handing out cases the way the run does (pick)
 function simulate(cases, jobs, est) {
-  const queue = [...cases].sort((a, b) => est(b) - est(a)), started = new Set(), ws = Array.from({ length: Math.min(jobs, queue.length) }, () => ({ t: 0, mine: new Set() }));
-  while (queue.length) { const w = ws.reduce((m, w) => (w.t < m.t ? w : m)), j = pick(queue, w.mine, started), a = aff(j); if (a != null) { w.mine.add(a); started.add(a); } w.t += est(j); }
+  const queue = [...cases].sort((a, b) => est(b) - est(a)), started = new Map(), ws = Array.from({ length: Math.min(jobs, queue.length) }, () => ({ t: 0, mine: new Set() }));
+  while (queue.length) {
+    const w = ws.filter((w) => !w.done).reduce((m, w) => (w.t < m.t ? w : m)), j = pick(queue, w.mine, started, est, ws.length); if (!j) { w.done = true; continue; }
+    const a = aff(j); if (a != null && !w.mine.has(a)) { w.mine.add(a); started.set(a, (started.get(a) || 0) + 1); w.t += BUILD_MS[j.c.world] ?? 0; } // (and its World built)
+    w.t += est(j);
+  }
   return Math.max(0, ...ws.map((w) => w.t));
 }
 // the committed times file: one case per line, sorted (small diffs)
