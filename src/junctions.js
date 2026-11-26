@@ -110,7 +110,7 @@ export function junctionPlan(roads, city) {
         // the corner between A's left side and B's right: where their kerbs and their pavements' (or verges') outer
         // edges cross, and the round of radius rk tangent to both kerbs
         const kc = cross(A, B, A.hw, B.hw), oc = cross(A, B, A.hw + (A.W || VERGE), B.hw + (B.W || VERGE)), T = phi < MIN_ANGLE ? 0 : rk / Math.tan(phi / 2); // (a merge, under MIN_ANGLE: its corner square, the gore paved out to the mouths)
-        if (Number.isFinite(kc[0])) { A.c = Math.max(A.c, kc[0] + T, oc[0]); B.c = Math.max(B.c, kc[1] + T, oc[1]); } // (two arms from a cluster's nodes side by side, apart: no corner between them)
+        if (Number.isFinite(kc[0]) && A.nd === B.nd) { A.c = Math.max(A.c, kc[0] + T, oc[0]); B.c = Math.max(B.c, kc[1] + T, oc[1]); } // (two arms from two of a cluster's nodes: their corner is round the inner road between them, corner3; side by side, their kerbs may only meet far ahead)
       }
       for (let it = 0; it < 2; it++) for (let i = 0; i < arms.length; i++) { const A = arms[i], B = arms[(i + 1) % arms.length]; if (A.nd === B.nd && turn(A, B) < MIN_ANGLE) A.c = B.c = Math.max(A.c, B.c); } // (roads merging: their mouths at one distance out, where a box across both ends)
       for (const A of arms) A.c = Math.floor((Math.min(A.c, CMAX, A.len * 0.45) - 0.6) * 16) / 16 + 0.6; // (the markings' clearance, c - 0.6 m, in 1/16 m: rjunc's code holds it exactly)
