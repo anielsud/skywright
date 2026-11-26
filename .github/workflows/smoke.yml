@@ -1,14 +1,13 @@
 name: Tests
 
-# Boots the game in headless Chrome (WebGL via SwiftShader), tours the places flying one vehicle of each kind, and
-# fails on console errors; every preset is built and driven in Node (tools/test/presets.js).
-# Reduced check: the runner has no GPU, so software WebGL draws only about one flight frame every few seconds.
-# Each flight is still built and stepped (catches load/startup errors and NaN physics), but frame rate isn't checked.
-# Informational: not a required check. The full check is `python3 tools/test/smoke.py` on your machine.
-# The tour's places are split over 3 parallel jobs (smoke.py --shard): each boots the game and visits a third of them.
-# Alongside: the Node tier in 2 halves (every logic, physics and geometry suite, tools/test/node/run.mjs; known failures
-# listed in tools/test/known.json don't fail it), and the browser suites covering what the PR changed (run.py --changed,
-# one job per suite; all of them run nightly on main: nightly.yml). Everything at once: ~6 min.
+# Every PR runs the whole suite, as parallel jobs:
+# - the browser jobs (tools/test/jobs.py, one matrix entry each): headless Chrome with WebGL via SwiftShader (no GPU),
+#   booted once per job, each map built once and every vehicle swapped into it, game time stepped, frames drawn only
+#   for what is about drawing: hangar (boot, audio, windows, wind tunnel), nyc, islands, canyon-lauterbrunnen. Every
+#   step fails on console errors, failed requests and shader stalls. Screenshots are attached to the run.
+# - the Node tier (its job below): every logic, physics and geometry suite (known failures listed in
+#   tools/test/known.json don't fail it).
+# Informational: not a required check. Locally: python3 tools/test/run.py (or jobs.py <job>).
 on:
   pull_request:
   workflow_dispatch:
@@ -21,36 +20,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  smoke:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3]
-    name: smoke (part ${{ matrix.shard }}/3)
-    env:
-      SKY_CDP_TIMEOUT: '120' # (software WebGL: a screenshot or a step can take long)
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24' # (the Node test tier needs module.registerHooks: 22.15+)
-      - name: Install websockets
-        run: python -m pip install websockets
-      - name: Smoke test
-        run: python tools/test/smoke.py --out smoke-shots --quality low --size 512x320 --min-realtime 0 --shard ${{ matrix.shard }}/3
-      - name: Upload screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoke-screenshots-${{ matrix.shard }}
-          path: smoke-shots
-          if-no-files-found: ignore
-
   node:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -67,48 +36,29 @@ jobs:
       - name: Node suites
         run: node tools/test/node/run.mjs --jobs 4 --shard ${{ matrix.shard }}/2
 
-  # which browser suites the PR's changes need (run.py --changed), then one job each, all at once (one after another
-  # they took ~18 min; most of a suite's time is the runner's software GPU building shaders for each new place)
-  browser-plan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    name: browser suites (plan)
-    outputs:
-      suites: ${{ steps.plan.outputs.suites }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # (run.py --changed compares with origin/main)
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24' # (the Node suites list what they cover: run.mjs --files)
-      - id: plan
-        run: echo "suites=$(python tools/test/run.py --changed --tier browser --exclude smoke --exclude restart --plan)" >> "$GITHUB_OUTPUT" # (smoke: its own jobs above; restart: ~6 min on a runner, nightly only)
-
   browser:
-    needs: browser-plan
-    if: needs.browser-plan.outputs.suites != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON(needs.browser-plan.outputs.suites) }}
-    name: browser (${{ matrix.suite }})
+        job: [hangar, nyc, islands, canyon-lauterbrunnen]
+    name: browser (${{ matrix.job }})
     env:
-      SKY_CDP_TIMEOUT: '120' # (software WebGL on the runner: a frame can take seconds)
+      SKY_CDP_TIMEOUT: '120' # (software WebGL on the runner: a screenshot can take long)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
       - name: Install websockets
         run: python -m pip install websockets
-      - name: ${{ matrix.suite }}
-        run: python tools/test/run.py --ci --tier browser ${{ matrix.suite }}
+      - name: ${{ matrix.job }}
+        run: python tools/test/jobs.py ${{ matrix.job }} --quality low --ci --out job-shots
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ matrix.job }}
+          path: job-shots
+          if-no-files-found: ignore

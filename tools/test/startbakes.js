@@ -75,14 +75,28 @@ export async function stuntsAt(locId) {
   if (!cfg || cfg.atJump || cfg.x != null) return { id: locId, searched: false };
   const t0 = performance.now();
   await loadReal(loc, 'low');
-  const t1 = performance.now(), s0 = { ...siteStats }, w = new World(S.renderer, new THREE.Scene(), { location: locId, quality: 'low', time: 11, weather: 'clear' }), t2 = performance.now();
-  try {
-    const planned = noMs(w.stuntPlan?.site), fresh = noMs(findSite(w, cfg, layoutOf(cfg)));
-    const baked = noMs(JSON.parse(JSON.stringify(await bakeStuntSites({ [locId]: loc })))[locId]);
-    const s1 = { ...siteStats }, again = noMs(planStunts(w, cfg)?.site), s2 = { ...siteStats };
-    const ms = { load: Math.round(t1 - t0), world: Math.round(t2 - t1), checks: Math.round(performance.now() - t2) };
-    return { id: locId, searched: true, planned, freshSame: same(planned, fresh), bakeSame: same(planned, baked), againSame: same(planned, again), stats: [s0, s1, s2], ms };
-  } finally { w.dispose(); }
+  const t1 = performance.now(), w = new World(S.renderer, new THREE.Scene(), { location: locId, quality: 'low', time: 11, weather: 'clear' }), t2 = performance.now();
+  try { const r = await stuntsIn(w, locId); r.ms.load = Math.round(t1 - t0); r.ms.world = Math.round(t2 - t1); return r; } finally { w.dispose(); }
+}
+// The same checks in a World already built (a per-map job's flight World: S.F.world). (siteStats before the World was
+// built isn't known here: stats[0] is taken now, after it planned.)
+export async function stuntsIn(w, locId = w.loc?.id) {
+  const { LOCATIONS } = await import('../../src/world.js'), loc = LOCATIONS[locId], cfg = loc?.stunts;
+  if (!cfg || cfg.atJump || cfg.x != null) return { id: locId, searched: false };
+  const t2 = performance.now(), s0 = { ...siteStats };
+  const planned = noMs(w.stuntPlan?.site), fresh = noMs(findSite(w, cfg, layoutOf(cfg)));
+  const baked = noMs(JSON.parse(JSON.stringify(await bakeStuntSites({ [locId]: loc })))[locId]);
+  const s1 = { ...siteStats }, again = noMs(planStunts(w, cfg)?.site), s2 = { ...siteStats };
+  return { id: locId, searched: true, planned, freshSame: same(planned, fresh), bakeSame: same(planned, baked), againSame: same(planned, again), stats: [s0, s1, s2], ms: { checks: Math.round(performance.now() - t2) } };
+}
+// [[name, ok, detail]] for a job's T.checks: startbakes.py's verdicts on stuntsAt / stuntsIn
+export function stuntsChecks(r) {
+  if (!r.searched) return [[`stunts: ${r.id}: no site search here`, true, '']];
+  const p = r.planned || {}, [s0, s1, s2] = r.stats;
+  return [
+    [`stunts: ${r.id}: planned == fresh search == bake`, r.freshSame && r.bakeSame && !!r.planned, `site (${p.x}, ${p.z}) yaw ${p.yaw}; fresh ${r.freshSame}, bake ${r.bakeSame}; ${JSON.stringify(r.ms)}`],
+    [`stunts: ${r.id}: planned again from the visit's cache`, s2.kept === s1.kept + 1 && s2.found === s1.found && r.againSame, `stats ${JSON.stringify(s0)} -> ${JSON.stringify(s1)} -> ${JSON.stringify(s2)}, same site ${r.againSame}`],
+  ];
 }
 
 // boot.py: the bake as written (parsed back from its JSON) against what the game works out itself. Returns a list of

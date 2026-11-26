@@ -89,3 +89,20 @@ export async function rocket(location, { name = 'Rocket', hold = 5, burn = 10 } 
   r.inflightCompiles = window.__inflightCompiles || 0;
   return r;
 }
+
+// [[name, ok, detail]] for a job's T.checks: padcheck.py's verdicts on rocket(location)'s result. rocket() swaps the
+// Rocket into the World already there (start() above), so a per-map job runs it in the map it has built.
+export function rocketChecks(r) {
+  const s = r.spawn, h = r.hold, b = r.burn, ev = (e, k) => k.filter((x) => e.includes(x));
+  return [
+    ['Rocket starts on the pad, upright on its axis, held by the clamps', r.start === 'pad' && s.axis < 0.05 && s.nose > 0.9999 && s.clamp,
+      `start ${r.start}, axis ${s.axis.toFixed(3)} m, nose ${s.nose.toFixed(5)}, clamped ${s.clamp}`],
+    [`parked ${h.seconds.toFixed(1)} s: still, on the deck, untouched, engines off`, h.seconds >= 4.99 && h.drift < 0.002 && h.tilt < 1e-3 && h.vmax < 0.05 && h.offGround === 0
+      && h.dmg === 0 && !ev(h.events, ['impact', 'scrape', 'debris', 'wreck', 'touch']).length && !h.engines,
+      `drift ${(h.drift * 1000).toFixed(2)} mm, tilt ${h.tilt.toExponential(1)} rad, off deck ${h.offGround}/${h.frames} frames, events ${h.events.join(',') || 'none'}, dmg ${h.dmg}, engines ${h.engines}`],
+    ['launch: the clamps let go once the arm is clear, it clears the tower cleanly and climbs away', b.releasedAt != null && b.armAtRelease >= 0.8 && b.towerHits === 0 && b.towerClearance > 0.3
+      && b.tiltBelowTower < 0.05 && b.dmg === 0 && b.alive === b.parts && !b.dead && !ev(b.events, ['impact', 'scrape', 'debris', 'wreck']).length && b.height > b.towerHeight + 100 && b.arm === 1,
+      `released ${b.releasedAt == null ? 'never' : b.releasedAt.toFixed(2) + ' s'} (arm ${b.armAtRelease}), tower gap ${b.towerClearance.toFixed(2)} m, hits ${b.towerHits}, tilt ${b.tiltBelowTower.toFixed(3)} rad, `
+      + `dmg ${b.dmg.toFixed(1)}, ${b.alive}/${b.parts} parts, ${b.height.toFixed(0)} m up after ${b.seconds.toFixed(1)} s, events ${b.events.join(',') || 'none'}`],
+  ];
+}

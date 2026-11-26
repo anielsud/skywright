@@ -1,4 +1,10 @@
-# Smoke test
+# Tests
+
+`python3 tools/test/run.py` runs everything: the Node tier, then the browser jobs (`jobs.py`, below). CI runs the
+same on every pull request. The sections after those two describe each suite and the older one-suite-one-browser
+scripts, which still run on their own while their checks move into the jobs (#278).
+
+## Smoke test (older script)
 
 `smoke.py` boots Skywright in headless Chrome and checks that nothing is broken:
 
@@ -27,9 +33,10 @@ It prints PASS/FAIL per step with timings, and exits non-zero on any failure. A 
 ## Running the tests: run.py, the Node tier and the browser tier
 
 ```sh
-python3 tools/test/run.py              # everything
+python3 tools/test/run.py              # everything: the Node tier, then every browser job (in parallel)
 python3 tools/test/run.py --changed    # only suites covering what changed vs origin/main (and uncommitted files)
-python3 tools/test/run.py bikeride     # named suites;  --list shows each suite's tier and the files it covers
+python3 tools/test/run.py bikeride nyc # named suites and jobs;  --list shows each one's tier and the files it covers
+python3 tools/test/run.py --ci nyc     # a job as CI runs it (jobs.py --ci --quality low)
 ```
 
 Tests are in two tiers.
@@ -46,7 +53,8 @@ Tests are in two tiers.
   first: riders and gvision share `crew:<vehicle>`, so a crew built once is warm for the other) and a `cost` (rough
   seconds: costly cases go out first). A real location's World can be built in Node too (`node/world.mjs`, used by
   boatride's marinas; read its header for what differs from the browser's).
-- **Browser tier**: what needs a real page (boot, UI, audio, shader compiles, screenshots, the real game loop). Use
+- **Browser tier**: what needs a real page (boot, UI, audio, shader compiles, screenshots, the real game loop): the
+  browser jobs (`jobs.py`, next section). Use
   `window.__sky.advance(seconds)` to step the flight without rendering (about 25–50× faster than waiting for frames;
   streaming that works to a per-frame time budget gets less done per game second, so let it settle when a check
   depends on it), and `window.__sky.swapVehicle(design)` to fly another vehicle in the same World (about 1 s instead
@@ -54,13 +62,13 @@ Tests are in two tiers.
 
 **Known failures:** `tools/test/known.json` lists failing checks that are already tracked (suite → check name →
 issue). The Node runner reports them as `known` and doesn't count them. A listed check that passes is reported as
-`fixed` (take it off the list). **CI** (`.github/workflows/smoke.yml`, "Tests") runs on every PR as parallel
-jobs: the smoke tour (3 parts), the Node tier (2 halves, `run.mjs --shard K/N`), and the browser suites covering
-what the PR changed, one job each (`run.py --changed --tier browser --plan` lists them, then `run.py --ci <suite>`).
-In all, about 6 minutes. Every browser suite runs nightly on main (`.github/workflows/nightly.yml`).
-Where a runner's time goes: it has no GPU, so Chrome's software GPU builds every shader program a new place needs
-(~100 at Low, ~0.3 s each), and drawing is a small part. So `--ci` runs padcheck and helipadcheck at Low, and anything
-that reads a canvas back (`getImageData`) asks for `willReadFrequently`, or it waits for that shader queue.
+`fixed` (take it off the list). **CI** (`.github/workflows/smoke.yml`, "Tests") runs the whole suite on every PR, as
+parallel jobs: the four browser jobs (one matrix entry each: `jobs.py <job> --quality low --ci`, screenshots attached
+to the run) and the Node tier. There is no nightly run and no selection by what changed: everything, every time.
+Where a runner's time goes: it has no GPU, so Chrome's software GPU (SwiftShader) builds every shader program a new
+place needs (~100 at Low, ~0.3 s each) and draws a frame in 1-2 s whatever the window size; building a map takes
+22-50 s and swapping a vehicle into it 10-30 s. Hence the jobs' rules below. Anything that reads a canvas back
+(`getImageData`) asks for `willReadFrequently`, or it waits for that shader queue.
 
 `bikeride` is the reference Node suite: 77 checks in about 2.5 s, against 28 s in Chrome. Its results are identical
 with and without `headless`.
@@ -73,7 +81,47 @@ may depend on them (only New York's stunt site search does: its tree-canopy rule
 kept per worker; a case that needs one says so (`world: 'nyc'`) and the runner hands it to a worker that has it where
 it can. `SKY_WORLD_LOG=1` prints each build.
 
-## Run it
+## Browser jobs: jobs.py
+
+```sh
+python3 tools/test/jobs.py                      # every job, in parallel (one Chrome each), lines prefixed [job]
+python3 tools/test/jobs.py nyc                  # one job
+python3 tools/test/jobs.py hangar --keep        # keep the screenshots (always kept on failure)
+python3 tools/test/jobs.py nyc --quality low --ci   # as CI runs it
+```
+
+A job is one headless Chrome, booted once, running `tools/test/jobs/<job>.js`'s `run(T)` in the page against flights
+in a shared World. `T` (`tools/test/jobs/harness.js`; its header is the API reference) runs named steps (`T.step`),
+checks (`T.check`), flights (`T.start`: the first at a place builds its World, every later one there swaps the
+vehicle into it), game time stepped without drawing (`T.advance`, `T.stepUntil`), fixed frame counts (`T.frames`),
+streaming quiet (`T.settle`) and screenshots (`T.shot`). Each step prints PASS/FAIL with its wall time, frames drawn
+and game seconds stepped, its checks under it as they happen. A step fails if its code throws, a check in it fails, a
+shader program compiles mid-flight during it (a stall), or the page logs a console error, throws, or a request for a
+file of ours fails while it runs. The old suites' modules export the checks the jobs reuse against a running flight
+(`smoke.js` `tour`/`tourChecks`, `padcheck.js` `rocket`/`rocketChecks`, `shadercheck.js` `sceneDrawn`/`eventsFired`/
+`crash`/`phaseChecks`, `startbakes.js` `stuntsIn`/`stuntsChecks`, `tunnelcheck.js` `sweepStepped`/`pivotStepped`).
+
+The rules (#278), which keep CI fast and free of timing flakes:
+- **test only what needs testing**: for each check, the one observation that proves its claim, and only that work;
+- **build each map once per job, swap each vehicle in once**; keep `T.BASE`'s time and weather (they are part of the
+  World's key: changing them builds the map again);
+- **step, don't draw**: game time with `T.advance`; frames (`T.frames(n)`, fixed counts) only for claims about drawing
+  (shaders, cockpit views, the real loop running);
+- **no wall-clock waits**: every wait is on a game state (`T.until`, `T.untilFrames`, `T.stepUntil`) or a frame count.
+  Their limits are safety nets: generous, and they fail loudly naming what was awaited (a step's own safety timeout
+  skips the rest of the job: the page is in an unknown state).
+
+The jobs:
+
+- **hangar** (no map): boot; the AudioContext starts (the only job with audio; the clips decode meanwhile and are
+  checked last: every clip in `assets/sfx/index.json`); the Settings and Help windows open and close; a hangar
+  screenshot; the wind tunnel for the Kestrel and the Dragonfly: opens, 5 frames drawn with the smoke on while the angle
+  sweep starts, the rest of the sweep stepped to the end (the lift curve recorded over the whole range), 5 frames on the
+  free pivot and 3 s more stepped (it swings), no shader compiled while it ran, (locally) the tunnel's own work per
+  frame under 12 ms, closes, GPU memory back to the hangar's. (Its lift curves and forces: the Node suite tunnelcheck.)
+- **nyc**, **islands**, **canyon-lauterbrunnen**: being written (#278); the planned steps are in each file's header.
+
+## Run the smoke test (older script)
 
 ```sh
 pip install websockets          # once
@@ -101,15 +149,12 @@ On Linux it uses SwiftShader for WebGL (no GPU needed), which is how it runs in 
 
 ## When
 
-**Before every merge to main.** Several sessions and agents merge all day, so run it on your branch after rebasing on
-origin/main, right before `gh pr merge`. A FAIL means don't merge: fix it, or if the bug is someone else's, file an issue.
+**Before every merge to main.** Several sessions and agents merge all day, so run the tests (`run.py`) on your branch
+after rebasing on origin/main, right before `gh pr merge`. A FAIL means don't merge: fix it, or if the bug is someone else's, file an issue.
 
-It also runs on every pull request (`.github/workflows/smoke.yml`, not a required check; screenshots are attached to
-the run). That is a **reduced** check: GitHub's runners have no GPU, and software WebGL (SwiftShader) draws about one
-flight frame every few seconds, so CI flies at `--quality low --min-realtime 0`, in 2 parts (`--shard`), which also
-splits the tour's places between two sessions. It still catches boot errors, missing
-files, clips that don't decode, and presets that throw when a flight starts, but it doesn't really fly them. A green CI
-run is not a substitute for running it locally.
+CI (`.github/workflows/smoke.yml`, not a required check) runs the browser jobs on every pull request instead of
+smoke.py, at `--quality low --ci` on a runner with no GPU (software WebGL: a frame takes 1-2 s, so the jobs step game
+time and draw only fixed frame counts). A green CI run is not a substitute for running the tests locally.
 
 When you add a preset or a sound clip, the test picks it up automatically (the Node suite builds and drives every
 preset); a new kind of vehicle wants a tour flight (`TOUR` in smoke.py).
@@ -446,7 +491,7 @@ Run it when you change `src/boat.js`, the boat parts (`src/boatParts.js`), `src/
   angle of attack is swept from -10 to +30 degrees, or the forces or moments differ from what a real flight substep
   integrates at the same state (a fresh `Aircraft` in free flight at the same attitude, airspeed, controls and flaps,
   gravity and engine thrust taken out; subsonic and supersonic, relative error over 1e-6).
-- **Browser** (`--ui`, `run.py tunnelcheck-ui`; Kestrel, opened twice, and Dragonfly, ~25 s): opens the tunnel in
+- **Browser** (`--ui`; Kestrel, opened twice, and Dragonfly, ~25 s; on CI and in `run.py`: the hangar job, stepped): opens the tunnel in
   headless Chrome and fails if the page logs an error; it compiles a shader while it runs; it runs slower than
   `--max-ms` (default 50 ms a frame) or does more than `--max-cpu` ms of its own work a frame (default 12) while
   sweeping the angle (90 frames) and swinging on the free pivot (60 frames); or, when closed, it leaves geometries or
@@ -522,7 +567,7 @@ the visit or on the device is exactly what it would work out itself:
   with no cache, from the visit's cache, and from a bake round-tripped through JSON (as `views.json` and localStorage
   are): the same linings and the same settled eyes for every seat, and the cache really used for every seat that has
   linings;
-- **stunt park sites** (browser, `run.py startbakes-stunts`; `src/stuntSite.js` `findSite`) at every place that
+- **stunt park sites** (browser, `startbakes.py --only stunts`; moving into the map jobs as `stuntsIn`; `src/stuntSite.js` `findSite`) at every place that
   searches for one, in that place's World built as a flight builds it (at Low, no vehicle): the site the World planned
   == a fresh search on that World == the bake's (`bakeStuntSites`, as `boot.py` writes it); planning again there (what
   a second flight does) takes it from the visit's cache and gets the same site.
@@ -639,7 +684,7 @@ Run it when you change `setback.js`, road widths, verges or pavements, or how th
 
 `placecheck.py` is the browser part of the stunt park, water park and wall tests, in one headless Chrome and one New
 York World (it has the stunt park, the water park and the city), then the Grand Canyon: what needs the real page or the
-imagery (see each test above). `run.py` runs it as its own browser suite; `stunts.py`, `waterpark.py` and `walls.py`
+imagery (see each test above). Its checks are moving into the nyc and canyon jobs (#278); `stunts.py`, `waterpark.py` and `walls.py`
 run their part of it (`--only stunts|waterpark|walls`).
 
 ## Restart test
@@ -680,7 +725,7 @@ How shaders are kept from stalling a frame (#273):
 - **Per-place switches are uniforms, not defines** (#242: a define made a second terrain program for the tiles).
 - Give custom materials a `name`: the check's messages print it.
 
-`shadercheck.py` (run.py suite `shadercheck`, on CI for any `src/` change) sweeps each place on purpose rather than
+`shadercheck.py` (folding into the per-map jobs, #278: `shadercheck.js` exports the phases) sweeps each place on purpose rather than
 by luck (`sweep` in `shadercheck.js`): every object in the scene drawn (hidden ones shown, culling off), every event
 effect fired, the map's edges streamed in, and a real crash (a building in New York, water at the islands, the ground
 elsewhere). It fails on any **stall** (a program compiled during a frame's draw: `[shaders] N compiled in flight,
