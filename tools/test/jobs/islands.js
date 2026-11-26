@@ -10,8 +10,9 @@
 //       finite, in one piece (smoke.py's 'quick' steps)
 //   islands: Speedboat from the marina         the AudioContext started here (no recorded clips: a boat's motor voice
 //       is synthesized, motorSound.js, so the 131-clip decode stays in the hangar job), full gas, D frames until the
-//       motor voice's output gain is up (at most 30): the engine is audible (smoke.js fly()'s `motor` check; not
-//       judged if the audio clock is stalled, as smoke did); then the tour (D) and tourChecks; the AudioContext is
+//       motor voice's output gain is up, or the audio clock has run 0.3 s with the engine on (the gain ramps on the
+//       audio clock, not per frame): the engine is audible (smoke.js fly()'s `motor` check; not judged if the audio
+//       clock is stalled, as smoke did); then the tour (D) and tourChecks; the AudioContext is
 //       suspended again (nothing else here is heard)
 //   islands: Rocket on the pad                 padcheck.js rocket('islands') + rocketChecks (S)
 //   islands: SR-71 land from the approach, then Mach 2.5+ above 60k ft   swapped in once (the landing challenge's
@@ -36,7 +37,11 @@ import { isMotor } from '../../../src/motorSound.js';
 
 const LOC = 'islands', SR71 = 'SR-71 Blackbird';
 const MACH_MIN = 2.5, ALT_MIN_FT = 60000; // (smoke.py)
-const ENGINE_FRAMES = 30; // at most this many frames for the boat's motor voice to come up (CI: 1-2; a fast machine: a few)
+// the boat's motor voice ramps up on the audio clock (audio.set: a 0.06 s time constant): wait until it is up, or until
+// the audio clock has run ENGINE_CLOCK s since the voice exists with its engine running (5 time constants), then judge.
+// Frames are no measure of it (a fast machine draws many in that time, CI few). A clock that hasn't moved in
+// ENGINE_STALL frames is stalled (#180: not judged); ENGINE_MAX frames is only a safety stop.
+const ENGINE_CLOCK = 0.3, ENGINE_STALL = 30, ENGINE_MAX = 600;
 
 export async function run(T) {
   const started = []; // { name, location, cfg, start } per vehicle started here (wiring.js)
@@ -123,11 +128,14 @@ async function engineAudible(T) {
   if (!T.check('it has a motor-voiced engine (a car, bike or boat engine sound)', !!e, ac.parts.filter((p) => p.engine).map((p) => p.engine.sound).join(', ') || 'no engine')) return 'no motor voice';
   const kind = e.engine.sound, gain = () => A.voices[kind]?.out.gain.value ?? 0, a0 = A.ctx.currentTime;
   T.go(true);
-  let k = 0;
-  for (; k < ENGINE_FRAMES && gain() < 0.01; k++) await T.frames(1, { what: `the ${kind} motor voice to come up (frame ${k + 1})` });
-  const g = gain(), clock = A.ctx.currentTime - a0;
-  if (g < 0.01 && clock < 0.05) { T.log(`audio clock stalled (${clock.toFixed(3)} s over ${k} frames): engine sound not checked`); return 'audio clock stalled: engine not checked'; }
-  T.check(`its ${kind} engine is audible at full throttle`, g >= 0.01, `voice gain ${g.toFixed(3)} after ${k} frame(s), audio clock +${clock.toFixed(2)} s, voice ${A.voices[kind] ? 'made' : 'never made'}`);
+  let k = 0, on = null; const run = () => A.ctx.currentTime - a0, since = () => (on == null ? 0 : A.ctx.currentTime - on);
+  for (; k < ENGINE_MAX && gain() < 0.01 && since() < ENGINE_CLOCK && !(k >= ENGINE_STALL && run() < 0.01); k++) {
+    await T.frames(1, { what: `the ${kind} motor voice to come up (frame ${k + 1})` });
+    if (on == null && A.voices[kind] && ac.engineRunning !== false) on = A.ctx.currentTime; // (engineRunning: cars and boats, main.js engineSwitch)
+  }
+  const g = gain(), clock = run();
+  if (g < 0.01 && (clock < 0.01 || (on != null && since() < ENGINE_CLOCK))) { T.log(`audio clock stalled (${clock.toFixed(3)} s over ${k} frames): engine sound not checked`); return 'audio clock stalled: engine not checked'; }
+  T.check(`its ${kind} engine is audible at full throttle`, g >= 0.01, `voice gain ${g.toFixed(3)} after ${k} frame(s), audio clock +${clock.toFixed(2)} s (${since().toFixed(2)} s with the engine running), voice ${A.voices[kind] ? 'made' : 'never made'}`);
   return `${kind} engine ${g.toFixed(2)}`;
 }
 
