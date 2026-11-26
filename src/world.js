@@ -62,6 +62,7 @@ export const WEATHER = {
 };
 
 const SHORE_UNDER = 0.5, SHORE_OVER = 0.3; // metres: see World.shoreSnap
+const SHORE_CHUNK = 4000; // m: the shore water mesh is cut into squares this size (World.buildShoreWater)
 const QUALITY = {
   low: { res: 180, bake: 384, trees: 6000, shadows: false, shadowSize: 1024, clouds: 0.45, cirrus: false, pixel: 1, post: false },
   medium: { res: 220, bake: 640, trees: 12000, shadows: true, shadowSize: 1024, clouds: 0.65, cirrus: true, pixel: 1.25, post: true },
@@ -245,8 +246,16 @@ export class World {
     flattenGrid(this, this.net);
     for (let k = 0; k < H.length; k++) H[k] = this.shoreSnap(H[k]);
     this.road = { samples: this.net.roads[0].pts, width: 9 };
-    this.roadHash = new Map();
-    for (const rd of [...this.net.roads, ...(this.net.rail ? [this.net.rail] : [])]) rd.pts.forEach((p) => { const k = Math.floor(p.x / 40) + ',' + Math.floor(p.z / 40); if (!this.roadHash.has(k)) this.roadHash.set(k, []); this.roadHash.get(k).push([p.x, p.z, rd.width / 2]); });
+    // road points by 40 m cell for nearRoad: x, z, half width per point, cell by cell (cells over the roads' extent,
+    // start: where each cell's points begin in d)
+    const RH = [...this.net.roads, ...(this.net.rail ? [this.net.rail] : [])], C = 40; let i0 = Infinity, i1 = -Infinity, j0 = Infinity, j1 = -Infinity, np = 0;
+    for (const rd of RH) for (const p of rd.pts) { const i = Math.floor(p.x / C), j = Math.floor(p.z / C); if (i < i0) i0 = i; if (i > i1) i1 = i; if (j < j0) j0 = j; if (j > j1) j1 = j; np++; }
+    const nI = np ? i1 - i0 + 1 : 0, nJ = np ? j1 - j0 + 1 : 0, start = new Int32Array(nI * nJ + 1), d = new Float64Array(np * 3), cell = (p) => (Math.floor(p.z / C) - j0) * nI + Math.floor(p.x / C) - i0;
+    for (const rd of RH) for (const p of rd.pts) start[cell(p) + 1]++;
+    for (let c = 0; c < nI * nJ; c++) start[c + 1] += start[c];
+    const at = start.slice(0, nI * nJ);
+    for (const rd of RH) { const hw = rd.width / 2; for (const p of rd.pts) { const o = at[cell(p)]++ * 3; d[o] = p.x; d[o + 1] = p.z; d[o + 2] = hw; } }
+    this.roadHash = { C, i0, j0, nI, nJ, start, d }; // (was a Map of an array per point: ~100 MB in New York, and a string key per cell looked up)
     // geometry
     const geo = new THREE.PlaneGeometry(S, S, N, N);
     geo.rotateX(-Math.PI / 2); // now x,z plane; vertex order: rows along +z (j), cols along +x (i)
@@ -665,7 +674,7 @@ export class World {
       const n = wetN[j * R + i]; if (n === 0 || n === 4) continue;
       for (let b = Math.max(0, j - 1); b <= Math.min(R - 1, j + 1); b++) for (let a = Math.max(0, i - 1); a <= Math.min(R - 1, i + 1); a++) if (wetN[b * R + a]) draw[b * R + a] = 1;
     }
-    const pos = [], idx = [], ids = new Map();
+    const pos = [], ids = new Map();
     // vertices are shared by key (grid vertex, or the crossing on a grid edge), so neighbouring cells meet watertight
     const grid = (g) => { let v = ids.get(g); if (v === undefined) { v = pos.length / 3; ids.set(g, v); pos.push(o + (g % W) * st, wl, o + Math.floor(g / W) * st); } return v; };
     const cross = (g0, g1) => {
@@ -676,6 +685,7 @@ export class World {
       return v;
     };
     const poly = [];
+    let idx = null;
     const tri = (p, q, r) => { // the part of triangle p,q,r under water, as a fan
       poly.length = 0;
       for (const [g, h] of [[p, q], [q, r], [r, p]]) {
@@ -684,14 +694,24 @@ export class World {
       }
       for (let k = 1; k + 1 < poly.length; k++) idx.push(poly[0], poly[k], poly[k + 1]);
     };
+    // in SHORE_CHUNK squares (one draw each, culled off screen: the whole core's shores are ~70k triangles), sharing
+    // one vertex buffer
+    const C = Math.max(1, Math.round(SHORE_CHUNK / st)), chunks = new Map();
     for (let j = 0; j < R; j++) for (let i = 0; i < R; i++) {
       if (!draw[j * R + i]) continue;
+      const key = Math.floor(i / C) + ',' + Math.floor(j / C); idx = chunks.get(key); if (!idx) chunks.set(key, (idx = []));
       const a = j * W + i, b = a + W, c = b + 1, d = a + 1; // same split as the ground: (a,b,d) + (b,c,d)
       tri(a, b, d); tri(b, c, d);
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeBoundingSphere();
-    return new THREE.Mesh(g, mat);
+    const group = new THREE.Group(), P = new THREE.Float32BufferAttribute(pos, 3), box = new THREE.Box3(), v = new THREE.Vector3();
+    for (const ix of chunks.values()) {
+      if (!ix.length) continue;
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', P); g.setIndex(ix);
+      box.makeEmpty(); for (const k of ix) box.expandByPoint(v.fromBufferAttribute(P, k));
+      g.boundingBox = box.clone(); g.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
+      group.add(new THREE.Mesh(g, mat));
+    }
+    return group;
   }
 
   // ---------------- sky / light ----------------
@@ -884,10 +904,23 @@ export class World {
     if (!this.envDirty) return;
     this.envDirty = false;
     this.envGround.material.color.copy(this.hemi.groundColor).multiplyScalar(0.6);
+    // (applyLighting marks it dirty every time, but often nothing it draws changed: the relight after a lightning flash,
+    // and the first update of every flight, a vehicle swapped into a kept World too. The bake is a cube render plus
+    // blur passes, seconds on a software GPU: skip it when its inputs are the ones it was made from.)
+    const key = this.envKey();
+    if (this.envRT && key === this.envBaked) { this.scene.environmentIntensity = 0.25 + 0.75 * smoothstep(-0.12, 0.25, this.sunElev); return; }
+    this.envBaked = key;
     if (this.envRT) this.envRT.dispose();
     this.envRT = this.pmrem.fromScene(this.envScene, 0.02, 0.1, 200);
     this.scene.environment = this.envRT.texture;
     this.scene.environmentIntensity = 0.25 + 0.75 * smoothstep(-0.12, 0.25, this.sunElev);
+  }
+  // What the reflection environment is drawn from: the env sky's uniforms (with the sky LUT's sun and haze) and the ground's colour
+  envKey() {
+    const v = (x) => (x == null || typeof x !== 'object' ? x : x.isTexture ? `${x.uuid}:${x.version}` : x.toArray ? x.toArray() : null);
+    const U = this.envSky.material.uniforms, out = [this.atmoKey, this.envGround.material.color.toArray()];
+    for (const k of Object.keys(U).sort()) out.push(k, v(U[k].value));
+    return JSON.stringify(out);
   }
 
   // ---------------- runway & airport ----------------
@@ -1087,10 +1120,10 @@ export class World {
 
   // ---------------- vegetation ----------------
   nearRoad(x, z, d) {
-    const cx = Math.floor(x / 40), cz = Math.floor(z / 40), R = Math.ceil(d / 40);
-    for (let i = cx - R; i <= cx + R; i++) for (let j = cz - R; j <= cz + R; j++) {
-      const arr = this.roadHash.get(i + ',' + j); if (!arr) continue;
-      for (const [px, pz, hw] of arr) if ((px - x) ** 2 + (pz - z) ** 2 < (d + hw) ** 2) return true;
+    const { C, i0, j0, nI, nJ, start, d: D } = this.roadHash, cx = Math.floor(x / C), cz = Math.floor(z / C), R = Math.ceil(d / C);
+    for (let i = Math.max(cx - R, i0); i <= Math.min(cx + R, i0 + nI - 1); i++) for (let j = Math.max(cz - R, j0); j <= Math.min(cz + R, j0 + nJ - 1); j++) {
+      const c = (j - j0) * nI + i - i0;
+      for (let k = start[c] * 3, e = start[c + 1] * 3; k < e; k += 3) if ((D[k] - x) ** 2 + (D[k + 1] - z) ** 2 < (d + D[k + 2]) ** 2) return true;
     }
     return false;
   }
@@ -1257,6 +1290,7 @@ export class World {
     this.real?.stream.update(cp);
     this.tiles?.update(cp);
     this.roadCam = cp; this.roadGroup?.userData.update?.(cp, 4);
+    this.marina?.update(cp);
     // the tunnels' tubes near the camera, for the ground to leave out (TUBES, shaders.js): re-picked every 25 m
     if (this.tubeSegs && (!this.tubeAt || Math.hypot(cp.x - this.tubeAt.x, cp.z - this.tubeAt.z) > 25)) {
       this.tubeAt = { x: cp.x, z: cp.z };

@@ -289,7 +289,8 @@ python3 tools/test/meshcheck.py --json out.json     # full report
 python3 tools/test/meshcheck.py --chrome            # the old way, in headless Chrome (same results, much slower)
 ```
 
-It runs in Node (`tools/test/node/run.mjs meshcheck`, one case per design). The geometry is the game's own builders, so
+It runs in Node (`tools/test/node/run.mjs meshcheck`, one case per design, built without the cabin light bake: it
+only adds vertex attributes and material variants, which no check reads). The geometry is the game's own builders, so
 the report is identical to the Chrome run's. Floating parts put every triangle of a vehicle in one grid, and tube seams
 split big meshes into small proxies for the raycaster (`meshfast.js`). Both give the same answers as the old pairwise
 versions on every design, many times faster.
@@ -565,7 +566,9 @@ knocked down. That nothing but a helicopter starts there: startchoice (Node) and
 
 ## Cockpit check
 
-`cockpitcheck.py` builds every stock vehicle (as is, resized, mirrored), multi-station builds (a bomber with a glass
+`cockpitcheck.py` builds every stock vehicle (as is; also resized and mirrored for the first stock vehicle with each
+main body and set of cockpits: a second one with the same, like Centipede after Jumbo, adds the same seats in the same
+body, and the random builds resize and mirror every canopy kind on every body anyway), multi-station builds (a bomber with a glass
 nose, top, tail and belly gunners; twin cockpits; resized and turned canopies; an airliner nose on a cargo body; a heli
 cabin; a mirrored capsule; a build with no cockpit) and seeded random player builds as flight `Aircraft`, and checks
 every cockpit view (`Aircraft.stations`, `src/stations.js`, one per seat) the way it is drawn from that seat:
@@ -578,9 +581,11 @@ every cockpit view (`Aircraft.stations`, `src/stations.js`, one per seat) the wa
 
 It prints the stations of each vehicle ("Captain, First officer", "Pilot, Bomb aimer, Top gunner, ...").
 
-It runs on the Node tier (`cockpitcheck` suite): a stock vehicle's three builds are one case (in order, so what the
+It runs on the Node tier (`cockpitcheck` suite): a stock vehicle's builds are one case (in order, so what the
 game keeps from one build, its crew postures and cabin light bake, serves the next as before), every other build a
-case of its own. Building the vehicles (crew postures, cockpit views, the cabin light) is about 90% of the work; the
+case of its own. A stock vehicle's case shares a key with its meshcheck, riders and gvision cases, and a random,
+fitting or bike build's with meshcheck's builds of the same design (and the placed build of the same parts), so one
+worker solves their crew postures once. Building the vehicles (crew postures, cockpit views, the cabin light) is about 90% of the work; the
 ray tests only look at triangles within 3 m of the eye and skip any whose box the ray misses.
 
 ```sh
@@ -735,7 +740,9 @@ in then restarted. The old `restart.py` is gone.
 
 How shaders are kept from stalling a frame (#273):
 - **The loading screen** compiles everything in the scene (`compileAsync` in `main.js`), and its first frame draws
-  every hidden shadow caster for the shadow shaders (`warmShaders`).
+  every hidden shadow caster for the shadow shaders (`warmShaders`). A vehicle swapped into a kept World (or a restart)
+  warms only what its flight added: the World's own casters were drawn in its first flight's warm-up, and every vehicle
+  flies with the same light set (a landing light's SpotLight leaves the scene by day), so the World's programs stay valid.
 - **Things added after it** (streamed tiles, street cars, late models, other players) compile between frames and wait
   hidden until ready (`flushNew`): at worst they show a few frames late. Nothing has to be registered.
 - **Events must show at once** (crash, explosion, collapse, splash, boom), so their objects are pooled and in the

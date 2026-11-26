@@ -86,20 +86,52 @@ function liningsOverGlass(soup, e, s) {
     if (!soup.glass[i] && mat?.side === THREE.BackSide && !m.isSkinnedMesh && !m.isInstancedMesh) lin.push(i);
   }
   if (!lin.length) return out;
+  const nLin = new Set(lin.map((i) => soup.mesh[i])).size, grid = cellGrid(soup.box, lin, 0.3 * s);
   // through each pane (its centre and corners pulled in a little) from the eye: a lining within a hand's width of the
   // glass, in front of it or right behind it, hides that window
   for (let i = 0, n = soup.glass.length; i < n; i++) {
     if (!soup.glass[i]) continue;
+    if (out.size === nLin) break; // (every lining found already)
     _c.set(0, 0, 0); for (let k = 0; k < 3; k++) _c.x += P[i * 9 + k * 3] / 3, _c.y += P[i * 9 + k * 3 + 1] / 3, _c.z += P[i * 9 + k * 3 + 2] / 3;
     for (let k = -1; k < 3; k++) {
       q.copy(_c); if (k >= 0) q.lerp(_b.fromArray(P, i * 9 + k * 3), 0.85);
       const dist = q.distanceTo(e); if (dist < 1e-3) continue;
       d.subVectors(q, e).divideScalar(dist);
-      hitMeshes(soup, lin, e, d, dist - 0.3 * s, dist + 0.3 * s, out);
+      hitMeshes(soup, grid, e, d, dist - 0.3 * s, dist + 0.3 * s, out);
     }
   }
   return out;
 }
+// The triangles `list` (soup indices, ascending) binned by box into cubes of side h, so a short ray segment only looks
+// at the triangles whose boxes share a cube with its own box: every triangle whose box meets the segment's box is among
+// them (cube indices are a monotonic function of position, clamped to the triangles' extent), so the hits are the same
+// as testing the whole list. cands(lo, hi) gives those triangles, in list order.
+function cellGrid(B, list, h) {
+  const g0 = [Infinity, Infinity, Infinity], g1 = [-Infinity, -Infinity, -Infinity];
+  for (const i of list) for (let a = 0; a < 3; a++) { const l = B[i * 6 + a], u = B[i * 6 + 3 + a]; if (Number.isFinite(l)) { g0[a] = Math.min(g0[a], l); g1[a] = Math.max(g1[a], l); } if (Number.isFinite(u)) { g0[a] = Math.min(g0[a], u); g1[a] = Math.max(g1[a], u); } }
+  const lo = g0.map((v) => Math.floor(v / h)), n = g1.map((v, a) => Math.max(0, Math.floor(v / h) - lo[a]) + 1);
+  const cell = (v, a) => Math.min(n[a] - 1, Math.max(0, Math.floor(v / h) - lo[a]));
+  const cells = new Map(), seen = new Int32Array(list.length).fill(-1), found = []; let stamp = 0;
+  list.forEach((i, j) => {
+    const c0 = [], c1 = [];
+    for (let a = 0; a < 3; a++) { c0.push(cell(B[i * 6 + a], a)); c1.push(cell(B[i * 6 + 3 + a], a)); }
+    for (let x = c0[0]; x <= c1[0]; x++) for (let y = c0[1]; y <= c1[1]; y++) for (let z = c0[2]; z <= c1[2]; z++) {
+      const k = (x * n[1] + y) * n[2] + z; let l = cells.get(k); if (!l) cells.set(k, (l = [])); l.push(j);
+    }
+  });
+  const cands = (sl, sh) => {
+    stamp++; found.length = 0;
+    const c0 = [cell(sl[0], 0), cell(sl[1], 1), cell(sl[2], 2)], c1 = [cell(sh[0], 0), cell(sh[1], 1), cell(sh[2], 2)];
+    for (let x = c0[0]; x <= c1[0]; x++) for (let y = c0[1]; y <= c1[1]; y++) for (let z = c0[2]; z <= c1[2]; z++) {
+      const l = cells.get((x * n[1] + y) * n[2] + z); if (!l) continue;
+      for (const j of l) if (seen[j] !== stamp) { seen[j] = stamp; found.push(j); }
+    }
+    found.sort((a, b) => a - b);
+    return found.map((j) => list[j]);
+  };
+  return { cands };
+}
+
 // Which linings cover the windows (liningsOverGlass) takes a third of a second for an airliner's flight deck, on every
 // flight start, and the answer only depends on the triangles round the eye, which are glass, which are linings, the
 // eye and the seat's scale. So it is kept by a fingerprint of exactly those (soupKey): for the visit; on each device
@@ -145,12 +177,13 @@ function liningsKept(soup, e, s) {
   LININGS.delete(key); LININGS.set(key, ms.flatMap((m, k) => (out.has(m) ? [k] : []))); keepViews();
   return out;
 }
-// add to `out` the meshes of triangles `list` that the ray meets between t0 and t1
-function hitMeshes(soup, list, o, dir, t0, t1, out) {
-  const P = soup.p, B = soup.box, e1 = V(), e2 = V(), pv = V(), tv = V(), qv = V(), a = V(), b = V(), c = V();
-  const lo = [0, 0, 0], hi = [0, 0, 0]; // the ray segment's box
+// add to `out` the meshes of the triangles in `grid` (cellGrid) that the ray meets between t0 and t1
+const _hl = [0, 0, 0], _hh = [0, 0, 0], _e1 = V(), _e2 = V(), _pv = V(), _tv = V(), _qv = V(), _ha = V(), _hb = V(), _hc = V();
+function hitMeshes(soup, grid, o, dir, t0, t1, out) {
+  const P = soup.p, B = soup.box, e1 = _e1, e2 = _e2, pv = _pv, tv = _tv, qv = _qv, a = _ha, b = _hb, c = _hc;
+  const lo = _hl, hi = _hh; // the ray segment's box
   for (let k = 0; k < 3; k++) { const p0 = o.getComponent(k) + dir.getComponent(k) * t0, p1 = o.getComponent(k) + dir.getComponent(k) * t1; lo[k] = Math.min(p0, p1); hi[k] = Math.max(p0, p1); }
-  for (const i of list) {
+  for (const i of grid.cands(lo, hi)) {
     if (out.has(soup.mesh[i]) || B[i * 6] > hi[0] || B[i * 6 + 3] < lo[0] || B[i * 6 + 1] > hi[1] || B[i * 6 + 4] < lo[1] || B[i * 6 + 2] > hi[2] || B[i * 6 + 5] < lo[2]) continue;
     a.fromArray(P, i * 9); b.fromArray(P, i * 9 + 3); c.fromArray(P, i * 9 + 6);
     e1.subVectors(b, a); e2.subVectors(c, a); pv.crossVectors(dir, e2); const det = e1.dot(pv); if (Math.abs(det) < 1e-12) continue;

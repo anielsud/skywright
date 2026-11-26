@@ -44,8 +44,13 @@ const delta = (c0) => { const d = since(c0); return { stall: d.stall, late: d.la
 
 export async function sceneDrawn({ n = 3 } = {}) {
   const F = S.F, c0 = counters(), undo = [];
+  // Lights are not drawn things: the scene's light set is part of every lit shader, so showing a hidden one (a landing
+  // light's spot, hidden by day) would recompile the lot and test a lighting no player sees. Every light keeps the
+  // visibility it has now, also one inside a hidden group opened up below.
+  const lit = []; F.scene.traverseVisible((o) => { if (o.isLight) lit.push(o); }); const shown = new Set(lit);
   F.scene.traverse((o) => {
     if (Object.getOwnPropertyDescriptor(o, 'visible')?.get) return; // (held by flushNew: waiting for its shader)
+    if (o.isLight) { if (!shown.has(o) && o.visible) { o.visible = false; undo.push(() => (o.visible = true)); } return; }
     if (!o.visible) { o.visible = true; undo.push(() => (o.visible = false)); }
     if (o.frustumCulled) { o.frustumCulled = false; undo.push(() => (o.frustumCulled = true)); }
   });

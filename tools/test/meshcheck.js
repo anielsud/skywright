@@ -588,7 +588,11 @@ export function designs({ presets = [], random = 20, placed = 20, fittings = 12,
 export function checkDesign(d, float) {
   const root = new THREE.Group(); let res;
   try {
-    const det = buildDesign(d, root, { quick: false, near: true }); root.updateMatrixWorld(true);
+    // (no cabin light bake: it only gives meshes new vertex attributes and a material variant with the same side,
+    // blending and transparency over the same positions and index, none of which any check here reads)
+    const was = globalThis.__noCabinLight; globalThis.__noCabinLight = true;
+    let det; try { det = buildDesign(d, root, { quick: false, near: true }); } finally { globalThis.__noCabinLight = was; }
+    root.updateMatrixWorld(true);
     const open = [], seal = sealer(root);
     det.parts.forEach((o, i) => { if (!o || SKIP_CATS.has(PARTS[d.parts[i].id]?.cat)) return; o.traverse((m) => { if (skipMesh(m)) return; for (const s of openShells(m, seal)) open.push({ part: d.parts[i].id, mat: m.material.name || m.material.type, ...s }); }); });
     res = { name: d.name, open, exhaust: exhaustHits(root), nav: navLightIssues(d, det, root), seams: tubeSeams(d, det, root) };
@@ -626,9 +630,13 @@ export function describe(r) {
 // One case per design. A case carries the whole design (plain data), so --only matches part ids as well as names
 // ("--only ck_bubble": every build with a bubble cockpit).
 export const nodeSuite = { files: ['src/parts.js', 'src/partDetail.js', 'src/*Parts.js', 'src/skinBlend.js', 'src/planeDetail.js', 'src/hangar.js', 'src/interior.js', 'src/cabKit.js', 'src/bubbleCockpit.js', 'src/design.js', 'tools/test/meshcheck.js', 'tools/test/meshfast.js'] };
+// Keys (run.mjs): a stock vehicle shares 'crew:<name>' with cockpitcheck, riders and gvision; a random, fitting or
+// bike build shares 'design:<name>' with cockpitcheck's case of the same name (the same design), and a placed build
+// with the random build it was placed from (the same parts, so the same seats): one worker solves their crew postures
+// once (most of building one).
 export function cases({ presets }) {
-  const { list, floatCheck } = designs({ presets });
-  return list.map((d) => ({ id: d.name, design: JSON.parse(JSON.stringify(d)), float: floatCheck.has(d) }));
+  const { list, floatCheck } = designs({ presets }), key = (d) => (presets.includes(d) ? 'crew:' + d.name : /^(random|placed|fittings|bike) \d/.test(d.name) ? 'design:' + d.name.replace(/^placed/, 'random') : undefined);
+  return list.map((d) => ({ id: d.name, design: JSON.parse(JSON.stringify(d)), float: floatCheck.has(d), ...(key(d) ? { key: key(d) } : {}) }));
 }
 export function runCase(c) {
   const r = checkDesign(c.design, c.float), { n, head, lines } = describe(r);

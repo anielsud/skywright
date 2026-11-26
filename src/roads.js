@@ -7,8 +7,8 @@ import { glowTexture as glow } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { REGION, roadStyle, tarmacMaterial, shoulderMaterial, sidewalkMaterial, pathMaterial } from './roadSurface.js';
 import { airportGate } from './airportKit.js';
-import { junctionPlan, insertMouths, insertThrough, junctionShapes, TARMAC_LIFT, along } from './junctions.js';
-import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE, PAVE_RAMP, CITY_TOP, inside as inPoly } from './roadgrade.js';
+import { junctionPlan, insertMouths, insertThrough, junctionShapes, TARMAC_LIFT, along, jnAt } from './junctions.js';
+import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE, PAVE_ROW, PAVE_RAMP, CITY_TOP, inside as inPoly } from './roadgrade.js';
 
 const RWY_HALF = 900, JGRADE = 0.2, MINOR_PIN = 3, SLAB_OVER = 0.08; // (JGRADE: the steepest a street may be left between two junctions' level boxes; MINOR_PIN: how far off a street's height the ground under a way off the street network may be for the way to be pinned to the street where they overlap, gradeReal; SLAB_OVER: the most a pavement slab's outer edge may stand over the ground there: else it comes down to it, #228 042034)
 
@@ -198,10 +198,11 @@ export function gradeReal(w, net) {
   // (a cluster of junction nodes, junctions.js: one junction, its nodes at one height, their middle's)
   for (const J of boxes) if (J.nds.length > 1 && J.nds.every((nd) => nodeY.has(nd))) { const y = J.nds.reduce((a, nd) => a + nodeY.get(nd), 0) / J.nds.length; for (const nd of J.nds) nodeY.set(nd, y); }
   const drop = (J) => { for (const nd of J.nds) keep.delete(nd); };
+  const JN = new Map(), jnOf = (k) => { let m = JN.get(k); if (!m) JN.set(k, (m = jnAt(net.roads[k]))); return m; };
   for (const J of boxes) for (const A of J.arms) {
-    const rd = net.roads[A.k];
-    let e = A.j + A.dir; while (e > 0 && e < rd.pts.length - 1 && !(rd.jn || []).some(([jj]) => jj === e)) e += A.dir;
-    const fn = (rd.jn || []).find(([jj]) => jj === e)?.[1], y0 = nodeY.get(A.nd), y1 = fn != null ? nodeY.get(fn) : undefined; if (y0 == null || y1 == null) continue;
+    const rd = net.roads[A.k], jm = jnOf(A.k);
+    let e = A.j + A.dir; while (e > 0 && e < rd.pts.length - 1 && !jm.has(e)) e += A.dir;
+    const fn = jm.get(e), y0 = nodeY.get(A.nd), y1 = fn != null ? nodeY.get(fn) : undefined; if (y0 == null || y1 == null) continue;
     const F = keep.get(fn), c2 = F?.arms.find((B) => B.k === A.k && B.j === e)?.c ?? 0, free = A.len - A.c - c2;
     if (Math.abs(y1 - y0) > JGRADE * Math.max(0, free) + 0.05) { drop(J); if (F) drop(F); }
   }
@@ -272,8 +273,8 @@ export function gradeReal(w, net) {
     for (const [a, b, y] of level) for (let k = 0; k < n; k++) if (S[k] >= a - 0.01 && S[k] <= b + 0.01 && !fixed?.[k]) P[k].y = y; // (a junction's box: level from the node out to each mouth, the points between too)
     for (const m of rd.members) {
       const q = m.rd, k = q.pts.length, at = (j) => m.start + (m.rev ? k - 1 - j : j);
-      for (let j = 0; j < k; j++) q.pts[j].y = P[at(j)].y;
-      q.terr = Float32Array.from(q.pts, (p, j) => rd.terr[at(j)]); q.wet = Uint8Array.from(q.pts, (p, j) => rd.wet[at(j)]); q.bridge = q.pts.map((p, j) => rd.bridge[at(j)]);
+      q.terr = new Float32Array(k); q.wet = new Uint8Array(k); q.bridge = [];
+      for (let j = 0; j < k; j++) { const a = at(j); q.pts[j].y = P[a].y; q.terr[j] = rd.terr[a]; q.wet[j] = rd.wet[a]; q.bridge.push(rd.bridge[a]); }
       if (q.tunnel) { // where the tunnel is a tube: 8 m of ground over it (less: an open cutting, carved), or below the water; one tube from the first such point to the last (no portals inside it)
         const o = q.width / 2 + 3, tb = q.pts.map((p, i) => { const a = q.pts[Math.max(0, i - 1)], b = q.pts[Math.min(q.pts.length - 1, i + 1)], l = Math.hypot(b.x - a.x, b.z - a.z) || 1, rx = -(b.z - a.z) / l * o, rz = (b.x - a.x) / l * o;
           return Math.min(terr(p.x, p.z), terr(p.x + rx, p.z + rz), terr(p.x - rx, p.z - rz)) - p.y > 8 || p.y < wl - 0.3; }), a = tb.indexOf(true), b = tb.lastIndexOf(true); // (the ground clears the tube either side too: no hillside inside the opening)
@@ -538,12 +539,18 @@ export function buildRoadMeshes(w, net) {
       // to it) or more than SLAB_OVER lower (it comes down to it): so the slab never hangs over the ground or sinks into it)
       const W = PAVE[rd.kind] ?? 3.5, kc = new Float64Array(jp.pts.length * 2).fill(NaN), kerb = (i, x, z, o) => { const s = i * 2 + (o > 0 ? 1 : 0); if (Number.isNaN(kc[s])) { const p = jp.pts[i], f = hw / Math.abs(o); kc[s] = surf(jp, i, p.x + (x - p.x) * f, p.z + (z - p.z) * f); } return kc[s]; };
       const edge = (i, x, z, o) => { const t = kerb(i, x, z, o) + lift + 0.15; if (jp.bridge[i] || jp.tube[i]) return t; const g = w.sampleGrid(x, z) + 0.01; return Math.min(Math.max(t, g), g + SLAB_OVER); };
-      // (a wide pavement: a column more where the ground under it stops rising, roadgrade.js PAVE_RAMP, level to there;
-      // only beyond it does the slab come down to the ground)
-      const R = W > VERGE + PAVE_RAMP + 0.3 ? [hw, hw, hw + 0.35, hw + VERGE + PAVE_RAMP, hw + W] : [hw, hw, hw + 0.35, hw + W], E = R.length - 1;
-      const up = (i, x, z, o, c) => (c === E ? edge(i, x, z, o) : kerb(i, x, z, o) + lift + (c === 0 ? 0 : 0.15)), up2 = (i, x, z, o, c) => (c === 0 ? edge(i, x, z, o) : kerb(i, x, z, o) + lift + (c === E ? 0 : 0.15));
-      strip(jp, R, up, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]) && open(i, 4), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
-      strip(jp, R.map((o) => -o).reverse(), up2, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]) && open(i, 8), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      // (the slabs: level from the kerb's top out to where the ground under them stops rising, roadgrade.js PAVE_RAMP,
+      // then down to the ground at the outer edge; a wide pavement needs no column between (it would lie in the same
+      // plane), a narrow one keeps its 0.35 m column where the slope starts. The kerb's faces are their own strips, KERB:
+      // drawn near only, the tile's sidewalk mesh's last indices, see buildTile; separate vertices at the kerb's edge, so
+      // no normal is smeared from the face over the slab)
+      const R = W > VERGE + PAVE_RAMP + 0.3 ? [hw, hw + VERGE + PAVE_RAMP, hw + W] : [hw, hw + 0.35, hw + W], E = R.length - 1;
+      const top = (i, x, z, o) => kerb(i, x, z, o) + lift + 0.15, ok = (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]);
+      const okR = (i) => ok(i) && open(i, 4), okL = (i) => ok(i) && open(i, 8);
+      strip(jp, R, (i, x, z, o, c) => (c === E ? edge(i, x, z, o) : top(i, x, z, o)), okR, sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, R.map((o) => -o).reverse(), (i, x, z, o, c) => (c === 0 ? edge(i, x, z, o) : top(i, x, z, o)), okL, sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, [hw, hw], (i, x, z, o, c) => kerb(i, x, z, o) + lift + (c === 0 ? 0 : 0.15), okR, KERB, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, [-hw, -hw], (i, x, z, o, c) => kerb(i, x, z, o) + lift + (c === 1 ? 0 : 0.15), okL, KERB, (c, d, o) => [o, d], -1, info, jp.rjunc);
     }
     // (lifted over every shoulder, and the bigger road over the smaller: where two lie on one surface, side by side or
     // at a junction's mouth, the major one's tarmac and markings show, not the other's gravel or edge line)
@@ -573,15 +580,18 @@ export function buildRoadMeshes(w, net) {
     for (let q = 0; q < nv; q++) { const x = B.vtx[q * 2], z = B.vtx[q * 2 + 1]; jBox.pos.push(x, B.hy[q] + B.lift[q], z); jBox.uv.push(x - B.x, z - B.z); jBox.ri.push(1e4, 0, seed); jBox.rj.push(...NOJ); }
     for (const t of B.tris) jBox.idx.push(o + t);
     if (!sidewalk) return;
-    for (const rows of B.pave) { // rows round the kerb: the kerb's face (from the gutter up 15 cm), then the slabs out to the building line (the granite band: the shader's, uv)
+    for (const R of B.pave) { // rows round the kerb: the kerb's face (from the gutter up 15 cm), then the slabs out to the building line (the granite band: the shader's, uv)
       // (level out to where the ground under them stops rising, roadgrade.js PAVE_RAMP, as a street's own slabs; its
-      // outer edge on the ground)
-      const o2 = jPave.pos.length / 3, M = VERGE + PAVE_RAMP, mid = rows.some((r) => Math.hypot(r.o[0] - r.k[0], r.o[1] - r.k[1]) > M + 0.3), m = mid ? 4 : 3;
-      rows.forEach((r, q) => {
-        const dx = r.o[0] - r.k[0], dz = r.o[1] - r.k[1], W = Math.hypot(dx, dz) || 1, y = r.y + r.lift, g = w.sampleGrid(r.o[0], r.o[1]) + 0.01, yo = Math.min(Math.max(y + 0.15, g), g + SLAB_OVER);
-        for (const [d, h] of mid ? [[0, 0], [0, 0.15], [Math.min(M, W * 0.8), 0.15], [W, 0.15]] : [[0, 0], [0, 0.15], [W, 0.15]]) { jPave.pos.push(r.k[0] + dx * d / W, d === W ? yo : y + h, r.k[1] + dz * d / W); jPave.uv.push(r.hw + d, r.v); jPave.ri.push(r.hw, 0, seed); jPave.rj.push(...NOJ); }
+      // outer edge on the ground) (rows: roadgrade.js PAVE_ROW, kerb x, z, building line x, z, y, v, hw, lift)
+      const o2 = jPave.pos.length / 3, M = VERGE + PAVE_RAMP, nr = R.length / PAVE_ROW;
+      let mid = false; for (let e = 0; e < R.length && !mid; e += PAVE_ROW) mid = Math.hypot(R[e + 2] - R[e], R[e + 3] - R[e + 1]) > M + 0.3;
+      const m = mid ? 4 : 3;
+      for (let q = 0; q < nr; q++) {
+        const e = q * PAVE_ROW, kx = R[e], kz = R[e + 1], ox = R[e + 2], oz = R[e + 3], v = R[e + 5], hw = R[e + 6];
+        const dx = ox - kx, dz = oz - kz, W = Math.hypot(dx, dz) || 1, y = R[e + 4] + R[e + 7], g = w.sampleGrid(ox, oz) + 0.01, yo = Math.min(Math.max(y + 0.15, g), g + SLAB_OVER);
+        for (const [d, h] of mid ? [[0, 0], [0, 0.15], [Math.min(M, W * 0.8), 0.15], [W, 0.15]] : [[0, 0], [0, 0.15], [W, 0.15]]) { jPave.pos.push(kx + dx * d / W, d === W ? yo : y + h, kz + dz * d / W); jPave.uv.push(hw + d, v); jPave.ri.push(hw, 0, seed); jPave.rj.push(...NOJ); }
         if (q) { const a = o2 + (q - 1) * m, b = o2 + q * m; for (let c = 0; c < m - 1; c++) jPave.idx.push(a + c, b + c, a + c + 1, a + c + 1, b + c, b + c + 1); } // (facing up, the kerb's face towards the road)
-      });
+      }
     }
   };
   // a plaza (a pedestrian area, a square): its outline filled, cut into PLAZA_CELL squares (each square's piece of the
@@ -660,7 +670,7 @@ export function buildRoadMeshes(w, net) {
     if (!poles.length) return;
     const pm = new THREE.InstancedMesh(poleGeo, poleMat, poles.length / 4), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
     for (let k = 0; k < poles.length / 4; k++) pm.setMatrixAt(k, m4.compose(new THREE.Vector3(poles[k * 4], poles[k * 4 + 1] - 0.2, poles[k * 4 + 2]), q.setFromAxisAngle(up, poles[k * 4 + 3]), one));
-    pm.castShadow = w.qName === 'high' || w.qName === 'ultra'; pm.computeBoundingSphere(); group.add(pm); t.meshes.push(pm);
+    pm.castShadow = w.qName === 'high' || w.qName === 'ultra'; pm.computeBoundingSphere(); group.add(pm); t.meshes.push(pm); t.poles = pm;
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3)); const pt = new THREE.Points(lg, lampMat); group.add(pt); t.meshes.push(pt);
   };
   // tunnels: the tube (walls and a vault over the road, lined; a strip of lights along its crown) where there's
@@ -690,6 +700,7 @@ export function buildRoadMeshes(w, net) {
     if (lit.length) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(lit, 3)); lightGeos.push(g); }
   };
   // building a tile: its roads' ribbons, shoulders, skirts and bridges, merged per material
+  const KERB_D = DETAIL_D[w.qName] ?? 1000, POLE_D = KERB_D * 2, WALK_D = KERB_D * 3;
   const D = ROAD_D[w.qName] ?? 10000, warm = new Set([tarmac, shoulder, skirtMat, concrete, poleMat, tubeMat, tubeLight, ...[sidewalk, paths].filter(Boolean)]);
   const buildTile = (t) => {
     pending = new Map(); bridgeGeos = [];
@@ -703,7 +714,12 @@ export function buildRoadMeshes(w, net) {
     if (tubeGeos.length) { const m = new THREE.Mesh(mergeAll(tubeGeos), tubeMat); m.receiveShadow = true; group.add(m); t.meshes.push(m); }
     if (lightGeos.length) { const m = new THREE.Mesh(mergeAll(lightGeos), tubeLight); group.add(m); t.meshes.push(m); }
     lampMeshes(lamps, poles, t);
-    for (const [material, geos] of pending) { const m = new THREE.Mesh(mergeGeometries(geos), material); m.receiveShadow = true; group.add(m); t.meshes.push(m); }
+    for (const [material, geos] of pending) {
+      if (material === KERB) continue;
+      const kerbs = material === sidewalk ? pending.get(KERB) || [] : [], split = kerbs.length ? geos.reduce((n, g) => n + g.index.count, 0) : 0;
+      const m = new THREE.Mesh(mergeGeometries(kerbs.length ? geos.concat(kerbs) : geos), material); m.receiveShadow = true; group.add(m); t.meshes.push(m);
+      if (split) t.walk = { m, split };
+    }
     if (bridgeGeos.length) { const m = new THREE.Mesh(mergeAll(bridgeGeos), concrete); m.castShadow = m.receiveShadow = true; group.add(m); t.meshes.push(m); }
     t.built = true; pending = null;
   };
@@ -719,7 +735,11 @@ export function buildRoadMeshes(w, net) {
     const t0 = performance.now(); let n = 0;
     let todo = all.filter((t) => !t.built && (!D || near(t, cam) < D));
     if (todo.length) { todo.sort((a, b) => near(a, cam) - near(b, cam)); for (const t of todo) { if ((STEP.on ? n >= Math.max(1, ms) : performance.now() - t0 > ms) && near(t, cam) > within) break; buildTile(t); n++; } }
-    if (D) for (const t of all) if (t.built) { const v = near(t, cam) < D; for (const m of t.meshes) m.visible = v; }
+    for (const t of all) if (t.built) {
+      const d = near(t, cam), v = !D || d < D; if (D) for (const m of t.meshes) m.visible = v;
+      if (t.walk) { t.walk.m.geometry.setDrawRange(0, d < KERB_D ? Infinity : t.walk.split); t.walk.m.visible = v && d < WALK_D; } // (the kerbs' faces: near only)
+      if (t.poles) t.poles.visible = v && d < POLE_D;
+    }
     return !all.some((t) => !t.built && near(t, cam) < within);
   };
   group.userData.tiles = all;
@@ -754,6 +774,11 @@ function segNearPoly(a, b, r, poly) {
   let c = false; for (let i = 0, j = n - 1; i < n; j = i++) { const xi = poly[i * 2], zi = poly[i * 2 + 1], xj = poly[j * 2], zj = poly[j * 2 + 1]; if ((zi > a.z) !== (zj > a.z) && a.x < (xj - xi) * (a.z - zi) / (zj - zi) + xi) c = !c; }
   return c;
 }
+// A tile's sub-pixel detail is left out past this (m to the nearest point of the tile's circle): a city pavement's kerb
+// face (15 cm); past twice this, the street lamps' posts (their glow stays); past three times, the pavements (a few
+// pixels wide there: the ground photo shows them)
+const DETAIL_D = { low: 500, medium: 800, high: 1200, ultra: 1500 };
+const KERB = {}; // (pending's key for a sidewalk's kerb faces: merged after the slabs, buildTile)
 function mergeAll(geos) {
   const ni = geos.map((g) => (g.index ? g.toNonIndexed() : g));
   let n = 0; for (const g of ni) n += g.attributes.position.count;
