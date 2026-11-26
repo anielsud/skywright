@@ -13,31 +13,47 @@ export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/real
 
 const PLACES = ['islands', 'canyon', 'lauterbrunnen', 'nyc'];
 const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3, STEP_CITY = 0.12;
+// the ground detail's rebuild work caps (detailCheck): vertices (97 x 97 = 9409 now), road lookups per vertex (1 now),
+// segments + junction boxes tested per vertex (worst rebuild now: islands 5.3, canyon 2.9, lauterbrunnen 6.0, nyc 7.8)
+const DETAIL_VERTS = 12000, DETAIL_Q = 1.5, DETAIL_TESTS = 24;
 
 export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), { id: 'nyc traffic safety', loc: 'nyc', world: 'nyc', safety: true, cost: 12 }, { id: 'nyc posts', loc: 'nyc', world: 'nyc', posts: true, cost: 6 }, { id: 'traffic models face forward', models: true, cost: 0.2 }, ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 })), ...PLACES.map((loc) => ({ id: `${loc} ground under the road`, loc, world: loc, bleed: true, cost: loc === 'nyc' ? 30 : 12 })), { id: 'nyc open ground', loc: 'nyc', world: 'nyc', cityGround: true, cost: 6 }, ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} junctions`, loc, world: loc, junctions: true, cost: loc === 'nyc' ? 40 : 10 }))]; }
 
 // The near-camera ground detail (World.updateDetail) at a few road points: inside, its vertices are the physics ground
 // (sampleGrid) exactly away from the roads, and never above it (under and beside a road it is let down: it is hidden
 // there, and must not rise through the road's ribbon); its edge is the patch's own surface (no seam); rebuilding it
-// stays cheap.
+// stays cheap, counted as work, not timed (a timing verdict depends on the machine): per rebuild, its vertices and the
+// road index's work for them (RoadSurface.q calls, and the segments and junction boxes each one tests).
 export function detailCheck(w) {
-  const roads = w.net.roads.filter((r) => r.kind !== 'rail' && r.pts.length > 10), lim = w.half - 1500, out = { n: 0, inner: 0, above: 0, edge: 0, times: [], shown: 0 };
+  const roads = w.net.roads.filter((r) => r.kind !== 'rail' && r.pts.length > 10), lim = w.half - 1500, out = { n: 0, inner: 0, above: 0, edge: 0, times: [], shown: 0, work: [] };
+  const RS = w.roadSurf, q0 = RS?.q, tally = { q: 0, tests: 0 };
+  if (RS) RS.q = function (x, z, deck = false, y) { // (what q looks at, as q finds it: the segments in its cell, the junction boxes there)
+    tally.q++; const C = this.cell, ci = Math.floor((x + this.half) / C), cj = Math.floor((z + this.half) / C), nC = this.nC;
+    if (ci >= 0 && cj >= 0 && ci < nC && cj < nC) { const c = cj * nC + ci; tally.tests += this.start[c + 1] - this.start[c] + (deck ? 0 : this.jcell.get(c)?.length ?? 0); }
+    return q0.call(this, x, z, deck, y);
+  };
+  try { detailSpots(w, roads, lim, out, tally); } finally { if (RS) RS.q = q0; }
+  const T = out.times.sort((a, b) => a - b); out.ms = T.length ? T[T.length >> 1] : 0;
+  out.worst = out.work.reduce((m, k) => (k.tests > (m?.tests ?? -1) ? k : m), null) ?? { verts: 0, q: 0, tests: 0 };
+  return out;
+}
+function detailSpots(w, roads, lim, out, tally) {
   const picks = []; for (let k = 0; picks.length < 4 && k < roads.length * 4; k++) { const r = roads[(k * 7) % roads.length], p = r.pts[(k * 13) % r.pts.length]; if (Math.abs(p.x) < lim && Math.abs(p.z) < lim) picks.push(p); }
   for (const p of picks) {
     const cp = { x: p.x, y: w.sampleGrid(p.x, p.z) + 3, z: p.z };
     w.detailAt = null; w.patchAt = null; w.updatePatch(cp);
     if (!out.warm) { w.updateDetail(cp); w.detailAt = null; out.warm = true; } // (the first build compiles the code: not what a frame pays)
+    tally.q = tally.tests = 0;
     const t0 = performance.now(); w.updateDetail(cp); out.times.push(performance.now() - t0);
     if (!w.detail.visible) continue; out.shown++;
     const D = w.detailD, n = D + 1, P = w.detail.geometry.attributes.position.array, R = w.hR, st = w.hStep;
+    out.work.push({ verts: n * n, q: tally.q, tests: tally.tests });
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const o = (j * n + i) * 3, x = P[o], y = P[o + 1], z = P[o + 2], e = Math.min(i, j, D - i, D - j); out.n++;
       if (e >= 4) { const d = y - w.sampleGrid(x, z); out.above = Math.max(out.above, d); let road = 0; for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) road |= w.detailOn[(j + b) * n + i + a]; if (!road) out.inner = Math.max(out.inner, Math.abs(d)); }
       if (e === 0) out.edge = Math.max(out.edge, Math.abs(y - w.triAt(w.Hh, R + 1, (x + w.half) / st, (z + w.half) / st)));
     }
   }
-  const T = out.times.sort((a, b) => a - b); out.ms = T.length ? T[T.length >> 1] : 0;
-  return out;
 }
 
 // The ground never shows through the road (#228): over the road surfaces the game draws (roads.js buildRoadMeshes:
@@ -499,7 +515,7 @@ export async function runCase(c, ctx) {
       { name: `${c.loc}: ground detail shown at road level`, ok: d.shown > 0, why: `${d.shown} of 4 spots` },
       { name: `${c.loc}: ground detail is the ground driven on`, ok: d.inner < 0.01 && d.above < 0.001, why: `away from the roads worst ${d.inner.toFixed(3)} m off sampleGrid; at most ${d.above.toFixed(3)} m above it` },
       { name: `${c.loc}: ground detail meets the patch at its edge`, ok: d.edge < 0.01, why: `worst ${d.edge.toFixed(3)} m` },
-      { name: `${c.loc}: ground detail rebuilds in under 50 ms`, ok: d.ms < 50, why: `median ${d.ms.toFixed(1)} ms (Node, Low; a few ms on a laptop: this catches a rebuild gone 10x slower, not a slow machine)` },
+      { name: `${c.loc}: ground detail rebuild work stays small`, ok: d.shown > 0 && d.worst.verts <= DETAIL_VERTS && d.worst.q <= DETAIL_Q * d.worst.verts && d.worst.tests <= DETAIL_TESTS * d.worst.verts, why: `worst rebuild: ${d.worst.verts} vertices (at most ${DETAIL_VERTS}), ${d.worst.q} road lookups (at most ${DETAIL_Q} a vertex), ${d.worst.tests} segments and junctions tested (${(d.worst.tests / Math.max(1, d.worst.verts)).toFixed(1)} a vertex, at most ${DETAIL_TESTS}); median ${d.ms.toFixed(1)} ms (info only)` },
     ];
   }
   const m = measure(w);

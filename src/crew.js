@@ -1086,6 +1086,7 @@ class Rig {
       const SAMPLES = [[0, 1, 0.45, 0.05], [0, 1, 0.7, 0.048], [0, 1, 1.0, 0.045], [1, 2, 0.25, 0.042], [1, 2, 0.5, 0.038], [1, 2, 0.75, 0.033]];
       const OB = armObstacles(this, S, k); // (the seat's obstacles within the arm's reach: walls, canopy, panel)
       const score = (th, ph, out) => {
+        this.armEvals = (this.armEvals || 0) + 1; // (work counter: arm placements tried, for tools/test/riders.js)
         Yt.copy(Y0).multiplyScalar(Math.cos(th)).addScaledVector(Z0, Math.sin(th)); Zt.crossVectors(X, Yt);
         Wt.copy(c).addScaledVector(X, -G.x).addScaledVector(Yt, -G.y).addScaledVector(Zt, -G.z);
         d.copy(Wt).sub(S); const L0 = d.length(), L = clamp(L0, Math.abs(L1 - L2) + 0.01, L1 + L2 - 0.002), miss = Math.abs(L0 - L); d.divideScalar(L0); // (out of reach: the arm reaches as far as it can, at a large cost)
