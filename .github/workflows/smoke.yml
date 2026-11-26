@@ -35,6 +35,14 @@ jobs:
           node-version: '24'
       - name: Node suites
         run: node tools/test/node/run.mjs --jobs 4 --shard ${{ matrix.shard }}/3 # (split by place and case times: tools/test/node/times.json)
+      - name: Case times (this runner's, for tools/test/node/times.json)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-times-${{ matrix.shard }}
+          path: tools/test/node/.times.json
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   browser:
     runs-on: ubuntu-latest
