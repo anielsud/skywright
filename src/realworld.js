@@ -14,7 +14,7 @@ import { inStuntCut } from './stuntPark.js';
 import { GLTFLoader } from '../vendor/addons/GLTFLoader.js';
 import { MeshoptDecoder } from '../vendor/addons/meshopt_decoder.module.js';
 import { GeoStream } from './geostream.js';
-import { decodeRoadnet, way } from './roadnet.js';
+import { decodeRoadnet, way, plazas, MINOR, MINOR_KINDS } from './roadnet.js';
 import { decodeRoads, PACK_V } from './roadPack.js';
 import { ROADS } from './version.js';
 
@@ -439,6 +439,7 @@ class RealData {
   // height and traffic can turn from one road onto the next. Resampled to loc.roads.step metres between junctions.
   // Tunnels too (rd.tunnel: graded under the ground, roads.js; drawn as tubes). No fields, no rail line.
   network(w) {
+    const MINOR_STEP = Math.max(12, (this.loc.roads || {}).step || 8);
     if (this.roadPack) return this.packedNetwork(w);
     const lim = w.half + 300, roads = [], kinds = ['highway', 'main', 'main', 'street'], R = this.roadnet;
     const spans = (this.osm.bridges || []).map((b) => ({ ax: b.a[0], az: b.a[1], dx: b.b[0] - b.a[0], dz: b.b[1] - b.a[1] }));
@@ -446,7 +447,8 @@ class RealData {
     const ok = (x, z) => Math.abs(x) < lim && Math.abs(z) < lim && !(Math.abs(x - 100) < 520 && Math.abs(z) < 1300) && (globalThis.SKY_ROADPACK || !inStuntCut(w.stuntPlan, x, z)); // (the deploy's road pack is baked uncut: the stunt sites are cut out at load, packedNetwork) // (inside the core, off the game's airport, not across a stunt site)
     for (let k = 0; k < R.ways; k++) {
       const W = way(R, k);
-      const kind = kinds[W.cls], width = Math.min(W.width, W.cls === 0 ? 12 : 9), props = { kind, width, real: true, oneway: W.oneway, lanes: W.lanes, roundabout: W.roundabout, layer: W.layer, cls: W.cls, ...(W.tunnel ? { tunnel: true } : {}) };
+      const minor = W.cls >= MINOR, kind = minor ? MINOR_KINDS[W.cls - MINOR] : kinds[W.cls], width = Math.min(W.width, W.cls === 0 ? 12 : 9);
+      const props = { kind, width, real: true, oneway: W.oneway, lanes: W.lanes, roundabout: W.roundabout, layer: W.layer, cls: W.cls, ...(W.tunnel ? { tunnel: true } : {}), ...(minor ? { minor: true, surf: W.surf } : {}) }; // (minor: off the street network, roads.js)
       if (W.ys) { // a bridge over water with baked deck heights (bake.py bridge_profiles): keep them, no pillars under the suspended spans
         const pts = []; for (let i = 0; i < W.n; i++) pts.push(new THREE.Vector3(R.x[W.s + i], W.ys[i], R.z[W.s + i]));
         const rp = resample(pts, step), span = rp.map((p) => spans.some((b) => { const L2 = b.dx * b.dx + b.dz * b.dz, t = ((p.x - b.ax) * b.dx + (p.z - b.az) * b.dz) / L2; return t > 0.02 && t < 0.98 && Math.abs((p.x - b.ax) * b.dz - (p.z - b.az) * b.dx) / Math.sqrt(L2) < 30; }));
@@ -470,7 +472,7 @@ class RealData {
         if (!cur) cur = { pts: [], jn: [] };
         const p = new THREE.Vector3(x, 0, z);
         if (cur.pts.length) { // fill to the step from the last point (shape points are kept too: a bend stays a bend)
-          const a = cur.pts.at(-1), m = Math.ceil(Math.hypot(x - a.x, z - a.z) / step);
+          const a = cur.pts.at(-1), m = Math.ceil(Math.hypot(x - a.x, z - a.z) / (minor ? MINOR_STEP : step)); // (a way off the street network: every MINOR_STEP m, a gentle lane or track)
           for (let j = 1; j < m; j++) cur.pts.push(a.clone().lerp(p, j / m));
         }
         if (nd >= 0) cur.jn.push([cur.pts.length, nd]);
@@ -486,9 +488,23 @@ class RealData {
         roads.push({ pts: rp, ...props, bridge: rp.map(() => W.bridge), jn });
       }
     }
-    // longest first: roads[0] is what the World calls "the road"
-    roads.sort((a, b) => b.pts.length - a.pts.length);
-    return { roads, towns: [], fields: [], rail: null };
+    // longest first: roads[0] is what the World calls "the road"; the ways off the street network after every street
+    // (their rank: where one overlaps a street, RoadSurface holds the street's surface)
+    roads.sort((a, b) => (a.minor ? 1 : 0) - (b.minor ? 1 : 0) || b.pts.length - a.pts.length);
+    return { roads, towns: [], fields: [], rail: null, areas: this.plazaList(w) };
+  }
+  // the plazas (roadnet.js plazas) inside the core, off the airport and the stunt sites: [{ cls, surf, ring, bb }]
+  plazaList(w) {
+    const lim = w.half - 50, out = [];
+    for (const A of plazas(this.roadnet)) {
+      const r = A.ring; let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+      for (let i = 0; i < r.length; i += 2) { x0 = Math.min(x0, r[i]); x1 = Math.max(x1, r[i]); z0 = Math.min(z0, r[i + 1]); z1 = Math.max(z1, r[i + 1]); }
+      if (x0 < -lim || z0 < -lim || x1 > lim || z1 > lim || (x1 > -420 && x0 < 620 && z1 > -1300 && z0 < 1300)) continue;
+      const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2; if (inStuntCut(w.stuntPlan, cx, cz)) continue;
+      let wet = w.rawHeight(cx, cz) < w.waterLevel + 0.6; for (let i = 0; i < r.length && !wet; i += 2) wet = w.rawHeight(r[i], r[i + 1]) < w.waterLevel + 0.6; if (wet) continue; // (a quay or a pier's square, out over the water: the water there, not paving)
+      out.push({ ...A, bb: [x0, z0, x1, z1] });
+    }
+    return out;
   }
   // the network from the deploy's road pack (roadPack.js: built and graded already): the stunt sites cut out (the game's
   // site search needs the imagery, so the pack is baked without them), each piece keeping its points' heights and
@@ -505,7 +521,7 @@ class RealData {
         a = i + 1;
       }
     }
-    return { roads, towns: [], fields: [], rail: null, graded: true };
+    return { roads, towns: [], fields: [], rail: null, graded: true, areas: this.plazaList(w) };
   }
   // the mapped roads as plain lists (landStart: where 'On the road' starts): [{ cls, width, bridge, baked, pts: [[x, z]] }],
   // and the road tunnels' centre lines ([[x, z]] each)
