@@ -8,7 +8,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { REGION, roadStyle, tarmacMaterial, shoulderMaterial, sidewalkMaterial, pathMaterial } from './roadSurface.js';
 import { airportGate } from './airportKit.js';
 import { junctionPlan, insertMouths, insertThrough, junctionShapes, TARMAC_LIFT, along } from './junctions.js';
-import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE, CITY_TOP, inside as inPoly } from './roadgrade.js';
+import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE, PAVE_RAMP, CITY_TOP, inside as inPoly } from './roadgrade.js';
 
 const RWY_HALF = 900, JGRADE = 0.2, MINOR_PIN = 3, SLAB_OVER = 0.08; // (JGRADE: the steepest a street may be left between two junctions' level boxes; MINOR_PIN: how far off a street's height the ground under a way off the street network may be for the way to be pinned to the street where they overlap, gradeReal; SLAB_OVER: the most a pavement slab's outer edge may stand over the ground there: else it comes down to it, #228 042034)
 
@@ -538,9 +538,12 @@ export function buildRoadMeshes(w, net) {
       // to it) or more than SLAB_OVER lower (it comes down to it): so the slab never hangs over the ground or sinks into it)
       const W = PAVE[rd.kind] ?? 3.5, kc = new Float64Array(jp.pts.length * 2).fill(NaN), kerb = (i, x, z, o) => { const s = i * 2 + (o > 0 ? 1 : 0); if (Number.isNaN(kc[s])) { const p = jp.pts[i], f = hw / Math.abs(o); kc[s] = surf(jp, i, p.x + (x - p.x) * f, p.z + (z - p.z) * f); } return kc[s]; };
       const edge = (i, x, z, o) => { const t = kerb(i, x, z, o) + lift + 0.15; if (jp.bridge[i] || jp.tube[i]) return t; const g = w.sampleGrid(x, z) + 0.01; return Math.min(Math.max(t, g), g + SLAB_OVER); };
-      const up = (i, x, z, o, c) => (c === 3 ? edge(i, x, z, o) : kerb(i, x, z, o) + lift + (c === 0 ? 0 : 0.15)), up2 = (i, x, z, o, c) => (c === 0 ? edge(i, x, z, o) : kerb(i, x, z, o) + lift + (c === 3 ? 0 : 0.15));
-      strip(jp, [hw, hw, hw + 0.35, hw + W], up, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]) && open(i, 4), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
-      strip(jp, [-hw - W, -hw - 0.35, -hw, -hw], up2, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]) && open(i, 8), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      // (a wide pavement: a column more where the ground under it stops rising, roadgrade.js PAVE_RAMP, level to there;
+      // only beyond it does the slab come down to the ground)
+      const R = W > VERGE + PAVE_RAMP + 0.3 ? [hw, hw, hw + 0.35, hw + VERGE + PAVE_RAMP, hw + W] : [hw, hw, hw + 0.35, hw + W], E = R.length - 1;
+      const up = (i, x, z, o, c) => (c === E ? edge(i, x, z, o) : kerb(i, x, z, o) + lift + (c === 0 ? 0 : 0.15)), up2 = (i, x, z, o, c) => (c === 0 ? edge(i, x, z, o) : kerb(i, x, z, o) + lift + (c === E ? 0 : 0.15));
+      strip(jp, R, up, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]) && open(i, 4), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, R.map((o) => -o).reverse(), up2, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]) && open(i, 8), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
     }
     // (lifted over every shoulder, and the bigger road over the smaller: where two lie on one surface, side by side or
     // at a junction's mouth, the major one's tarmac and markings show, not the other's gravel or edge line)
@@ -571,11 +574,13 @@ export function buildRoadMeshes(w, net) {
     for (const t of B.tris) jBox.idx.push(o + t);
     if (!sidewalk) return;
     for (const rows of B.pave) { // rows round the kerb: the kerb's face (from the gutter up 15 cm), then the slabs out to the building line (the granite band: the shader's, uv)
-      const o2 = jPave.pos.length / 3;
+      // (level out to where the ground under them stops rising, roadgrade.js PAVE_RAMP, as a street's own slabs; its
+      // outer edge on the ground)
+      const o2 = jPave.pos.length / 3, M = VERGE + PAVE_RAMP, mid = rows.some((r) => Math.hypot(r.o[0] - r.k[0], r.o[1] - r.k[1]) > M + 0.3), m = mid ? 4 : 3;
       rows.forEach((r, q) => {
-        const dx = r.o[0] - r.k[0], dz = r.o[1] - r.k[1], W = Math.hypot(dx, dz) || 1, y = r.y + r.lift, g = w.sampleGrid(r.o[0], r.o[1]) + 0.01, yo = Math.min(Math.max(y + 0.15, g), g + SLAB_OVER); // (its outer edge on the ground, as a street's own slabs)
-        for (const [d, h] of [[0, 0], [0, 0.15], [W, 0.15]]) { jPave.pos.push(r.k[0] + dx * d / W, d ? yo : y + h, r.k[1] + dz * d / W); jPave.uv.push(r.hw + d, r.v); jPave.ri.push(r.hw, 0, seed); jPave.rj.push(...NOJ); }
-        if (q) { const a = o2 + (q - 1) * 3, b = o2 + q * 3; for (let c = 0; c < 2; c++) jPave.idx.push(a + c, b + c, a + c + 1, a + c + 1, b + c, b + c + 1); } // (facing up, the kerb's face towards the road)
+        const dx = r.o[0] - r.k[0], dz = r.o[1] - r.k[1], W = Math.hypot(dx, dz) || 1, y = r.y + r.lift, g = w.sampleGrid(r.o[0], r.o[1]) + 0.01, yo = Math.min(Math.max(y + 0.15, g), g + SLAB_OVER);
+        for (const [d, h] of mid ? [[0, 0], [0, 0.15], [Math.min(M, W * 0.8), 0.15], [W, 0.15]] : [[0, 0], [0, 0.15], [W, 0.15]]) { jPave.pos.push(r.k[0] + dx * d / W, d === W ? yo : y + h, r.k[1] + dz * d / W); jPave.uv.push(r.hw + d, r.v); jPave.ri.push(r.hw, 0, seed); jPave.rj.push(...NOJ); }
+        if (q) { const a = o2 + (q - 1) * m, b = o2 + q * m; for (let c = 0; c < m - 1; c++) jPave.idx.push(a + c, b + c, a + c + 1, a + c + 1, b + c, b + c + 1); } // (facing up, the kerb's face towards the road)
       });
     }
   };

@@ -30,7 +30,7 @@
   "lauterbrunnen: junctions have no bare ground between their arms": "#228",
   "lauterbrunnen: junctions are drawn where physics drives": "#228",
   "nyc: junctions have no bare ground between their arms": "#228",
-  "nyc: no ground through the road in junctions": "#228",
-  "nyc: junctions are drawn where physics drives": "#228"
+  "nyc: junctions are drawn where physics drives": "#228",
+  "nyc: pavement slabs lie on the ground": "#228"
  }
 }

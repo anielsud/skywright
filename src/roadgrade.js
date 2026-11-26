@@ -480,7 +480,7 @@ export class RoadSurface {
         const isD = (k) => !!((rd.bridge?.[(k + n) % n] && rd.bridge?.[(k + 1 + n) % n]) || (rd.tube?.[(k + n) % n] && rd.tube?.[(k + 1 + n) % n])) && (rd.closed || (k >= 0 && k < n - 1));
         const o = s0 * SEG; S[o] = a.x; S[o + 1] = a.z; S[o + 2] = b.x; S[o + 3] = b.z; S[o + 4] = a.y; S[o + 5] = b.y; S[o + 6] = br ? rd.width / 2 + 1 : rd.width / 2 + VERGE; S[o + 7] = br ? 1 + (isD(i - 1) ? 2 : 0) + (isD(i + 1) ? 4 : 0) + (tu ? 8 : 0) : 0; S[o + 8] = rd.rank ?? ri;
         reach[s0] = br || !ground ? skirt : Math.min(skirt, Math.max(Math.abs(a.y - ground(a.x, a.z)), Math.abs(b.y - ground(b.x, b.z))) / FILL + 4 + bench);
-        if (street && !br) { cs[s0] = 1; reach[s0] = Math.max(reach[s0], CITY_BAND + 1); } // (a city street: out to its hand-over to the open ground)
+        if (street && !br) { cs[s0] = rd.kind === 'main' ? 2 : 1; reach[s0] = Math.max(reach[s0], CITY_BAND + 1); } // (a city street: out to its hand-over to the open ground)
       }
     });
     const cnt = new Int32Array(nC * nC + 1), cells = (s, fn) => {
@@ -498,7 +498,7 @@ export class RoadSurface {
     this.jb = junctions; const jc = new Map();
     junctions.forEach((B, b) => { const [x0, z0, x1, z1] = B.bb; for (let cj = Math.max(0, Math.floor((z0 + this.half) / C)); cj <= Math.min(nC - 1, Math.floor((z1 + this.half) / C)); cj++) for (let ci = Math.max(0, Math.floor((x0 + this.half) / C)); ci <= Math.min(nC - 1, Math.floor((x1 + this.half) / C)); ci++) { const c = cj * nC + ci; let L = jc.get(c); if (!L) jc.set(c, (L = [])); L.push(b); } });
     this.jcell = jc;
-    this.y = 0; this.e = 0; this.g = 0; this.In = new Float64Array(40); this.ord = new Int32Array(8); this.nIn = 0; this.Out = new Float64Array(24); this.nOut = 0; // (Out: the city streets just beyond whose footprints (x, z) is, near)
+    this.y = 0; this.e = 0; this.g = 0; this.In = new Float64Array(40); this.ord = new Int32Array(8); this.nIn = 0; this.Out = new Float64Array(32); this.nOut = 0; // (Out: the city streets just beyond whose footprints (x, z) is, near)
   }
   // deck: bridge decks only, and where decks cross (an overpass) the highest one not above y + 2 (any, without y)
   q(x, z, deck = false, y = Infinity) {
@@ -530,7 +530,7 @@ export class RoadSurface {
       if (deck && (f & 8) && !(yy > y - 7)) continue; // (a tunnel's floor: only for what is down in the tunnel, not on the hill above it)
       // decks: the nearest centreline on the same level; a deck a level up (an overpass) wins outright
       if (!deck && e < 0) this.inside(S[o + 8] + (this.sf[this.ids[k]] & 4 ? MINOR_RANK : 0), e, yy, (S[o + 5] - S[o + 4]) * dx / L2, (S[o + 5] - S[o + 4]) * dz / L2);
-      else if (!deck && e < CITY_BAND && this.cs[this.ids[k]]) this.near(S[o + 8], e, yy);
+      else if (!deck && e < CITY_BAND && this.cs[this.ids[k]]) this.near(S[o + 8], e, yy, this.cs[this.ids[k]] === 2 ? SLAB : PAVE.street - VERGE);
       const eb = !deck && e > 0 && (this.sf[this.ids[k]] & 4) ? e + MINOR_EDGE : e; // (beyond the footprints: a street's embankment before a way off the street network's, where the two meet)
       if (deck ? e < ((f & 8) ? 1.5 : 0.5) && yy < y + 2 && (!hit || yy > top + 2.5 || (yy > top - 2.5 && e < best)) : eb < best) {
         best = deck ? e : eb; top = yy; hit = true; this.k = this.ids[k]; this.surf = this.sf[this.k] & 3; this.y = yy; this.e = e; this.gx = (S[o + 5] - S[o + 4]) * dx / L2; this.gz = (S[o + 5] - S[o + 4]) * dz / L2;
@@ -549,12 +549,13 @@ export class RoadSurface {
     if (k < this.nIn) { if (e >= R[k * 5 + 1]) return; } else { if (k >= 8) return; this.nIn++; }
     R[k * 5] = rank; R[k * 5 + 1] = e; R[k * 5 + 2] = y; R[k * 5 + 3] = gx; R[k * 5 + 4] = gz;
   }
-  // a city street (x, z) lies just beyond (within CITY_BAND of its footprint): each street once, its nearest segment
-  near(rank, e, y) {
+  // a city street (x, z) lies just beyond (within CITY_BAND of its footprint): each street once, its nearest segment;
+  // sl: how far past its footprint its slabs reach
+  near(rank, e, y, sl) {
     const R = this.Out; let k = 0;
-    while (k < this.nOut && R[k * 3] !== rank) k++;
-    if (k < this.nOut) { if (e >= R[k * 3 + 1]) return; } else { if (k >= 8) return; this.nOut++; }
-    R[k * 3] = rank; R[k * 3 + 1] = e; R[k * 3 + 2] = y;
+    while (k < this.nOut && R[k * 4] !== rank) k++;
+    if (k < this.nOut) { if (e >= R[k * 4 + 1]) return; } else { if (k >= 8) return; this.nOut++; }
+    R[k * 4] = rank; R[k * 4 + 1] = e; R[k * 4 + 2] = y; R[k * 4 + 3] = sl;
   }
   blend() {
     const R = this.In, n = this.nIn, ord = this.ord; for (let k = 0; k < n; k++) ord[k] = k;
@@ -578,14 +579,15 @@ export class RoadSurface {
     const e = this.e; if (e <= 0) return this.y;
     const c = clamp(base, this.y - FILL * e, this.y + CUT * Math.max(0, e - this.B)), h = c + (base - c) * smoothstep(this.S * 0.6, this.S, e);
     if (!this.cs[this.k]) return h;
-    const R = this.Out; let sw = 0, sp = 0, sk = 0, cap = Infinity;
+    const R = this.Out; let sw = 0, sp = 0, sk = 0, cap = Infinity, floor = -Infinity;
     for (let i = 0; i < this.nOut; i++) {
-      const ei = R[i * 3 + 1], yi = R[i * 3 + 2], d = base - yi - CITY_TOP, w = (1 - smoothstep(CITY_BAND * 0.6, CITY_BAND, ei)) / ((ei + 0.5) * (ei + 0.5));
-      sw += w; sp += w * (yi + CITY_TOP * smoothstep(0, PAVE_RAMP, ei) + d * smoothstep(PAVE_RAMP, CITY_BAND, ei)); sk += w * (1 - smoothstep(0.8, 1.6, Math.abs(d)));
+      const ei = R[i * 4 + 1], yi = R[i * 4 + 2], sl = R[i * 4 + 3], d = base - yi - CITY_TOP, w = (1 - smoothstep(CITY_BAND * 0.6, CITY_BAND, ei)) / ((ei + 0.5) * (ei + 0.5)), ramp = yi + CITY_TOP * smoothstep(0, PAVE_RAMP, ei);
+      sw += w; sp += w * (ramp + d * smoothstep(PAVE_RAMP, CITY_BAND, ei)); sk += w * (1 - smoothstep(0.8, 1.6, Math.abs(d)));
       if (ei < SLAB + 1) cap = Math.min(cap, yi + CITY_TOP + 50 * smoothstep(SLAB, SLAB + 1, ei)); // (under a street's slabs: no higher than their top, whatever is beyond)
+      if (ei < sl + 1) floor = Math.max(floor, ramp - 50 * smoothstep(sl, sl + 1, ei)); // (and no lower than its ramp up to them: where the ground beyond falls away, a cutting or a bank, it does so past the slabs, which lie on it, #228 042034)
     }
     if (sw < 1e-9) return h + (base - h) * (1 - smoothstep(0.8, 1.6, Math.abs(base - this.y - CITY_TOP))); // (past them all: the open ground itself)
-    const r = h + (sp / sw - h) * (sk / sw);
+    const r = Math.max(h + (sp / sw - h) * (sk / sw), floor);
     return r < cap ? r : cap;
   }
 }

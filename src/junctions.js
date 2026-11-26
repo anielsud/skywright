@@ -325,8 +325,7 @@ export function junctionShapes(roads, city) {
     if (!R) { F.cross++; continue; }
     // (the outline's points in line with their neighbours left out, at their heights too: a straight kerb's rows, each
     // a triangle more to draw and an edge more for every physics query near it)
-    const W = R.W.filter((v, q, L) => { if (v.mouth || v.open) return true; const a = L[(q + L.length - 1) % L.length].p, b = L[(q + 1) % L.length].p, p = v.p, dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz) || 1, t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / (l * l);
-      return t <= 0 || t >= 1 || Math.abs((p[0] - a[0]) * dz - (p[1] - a[1]) * dx) / l > 0.03 || Math.abs(a[2] + (b[2] - a[2]) * t - p[2]) > 0.02; });
+    const W = simplify(R.W);
     const box = W.flatMap((v) => [v.p[0], v.p[1]]), open = Uint8Array.from(W, (v) => (v.open ? 1 : 0)), corners = R.corners, nb = box.length / 2;
     if (!inside(box, J.x, J.z)) { F.node++; continue; }
     // its triangles. A level box: the outline's own triangulation. A warped one: a fan round a node (the junction's, or
@@ -464,6 +463,23 @@ function corner3(ea, em, eb, A, B) {
   path.push(lerp2(eb[X2.c], eb[X2.c + 1], X2.tc));
   for (let q = X2.c + 1; q < eb.length; q++) path.push(eb[q]);
   return dedupe(path);
+}
+// A ring's points that lie on the straight line between the points kept either side of them (within 5 mm, and 3 mm in
+// height) left out; a mouth's and an open edge's points always kept. W: [{ p: [x, z, y], mouth, open }].
+function simplify(W) {
+  const out = [], n = W.length, keep = (v) => v.mouth || v.open;
+  let s = W.findIndex(keep); if (s < 0) return W;
+  const off = (a, b, p) => { const dx = b[0] - a[0], dz = b[1] - a[1], l2 = dx * dx + dz * dz; if (l2 < 1e-9) return Infinity; const t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / l2; if (t <= 0 || t >= 1) return Infinity; return Math.max(Math.abs((p[0] - a[0]) * dz - (p[1] - a[1]) * dx) / Math.sqrt(l2), Math.abs(a[2] + (b[2] - a[2]) * t - p[2]) * 1.5); };
+  let k = s; out.push(W[s]);
+  for (let i = 1; i <= n; i++) {
+    const q = (s + i) % n; if (i === n) break;
+    const nx = W[(q + 1) % n];
+    // drop W[q] if every point from the last kept one up to it lies on the line from the last kept one to the next
+    let ok = !keep(W[q]);
+    for (let r = (k + 1) % n; ok; r = (r + 1) % n) { if (off(W[k].p, nx.p, W[r].p) > 0.005) ok = false; if (r === q) break; }
+    if (!ok) { out.push(W[q]); k = q; }
+  }
+  return out;
 }
 // The outermost of several edges from a node out (merging arms' kerbs on one side), by out(p) (how far out p is):
 // the outer one from the node until another crosses it, then that one.
