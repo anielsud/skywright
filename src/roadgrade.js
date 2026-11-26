@@ -308,10 +308,18 @@ export function carveGrid(w, roads, H, R, st, bench = 0.75, junctions = []) {
       // (a city's streets: most of them; the 46 m search round every point was ~1 s of New York's load)
       const nearPortal = rd.tube && (rd.tube[i + 1] || rd.tube[i + 2] || rd.tube[i - 1] || rd.tube[i - 2]); // (the last of a tunnel's cutting: just its bench, or it would cut into the hill over the tube's mouth; the portal's headwall hides the face)
       const g = H[clamp(j0, 0, R) * W + clamp(i0, 0, R)], rl = nearPortal ? st * bench : Math.min(reach, st * bench + Math.abs(p.y - g) / FILL + st), rr = Math.ceil((hw + rl) / st);
-      for (let j = j0 - rr; j <= j0 + rr; j++) for (let ii = i0 - rr; ii <= i0 + rr; ii++) {
-        if (ii < 0 || j < 0 || ii > R || j > R) continue;
-        const e = Math.hypot(-half + ii * st - p.x, -half + j * st - p.z) - hw, k = j * W + ii;
-        if (e < bd[k] && e < rl) { bd[k] = e; by[k] = p.y; }
+      // (only the vertices within hw + rl can take this point, and only those it is nearer than their nearest so far:
+      // the rest are skipped on squared distances, with a margin, before the exact test, so the result is the same)
+      const L = hw + rl, L2 = L * L * (1 + 1e-9) + 1e-9;
+      for (let j = Math.max(0, j0 - rr); j <= Math.min(R, j0 + rr); j++) {
+        const dz = -half + j * st - p.z, dz2 = dz * dz; if (dz2 > L2) continue;
+        const dxm = Math.sqrt(L2 - dz2), row = j * W;
+        for (let ii = Math.max(0, i0 - rr, Math.floor((p.x - dxm + half) / st) - 1), i1 = Math.min(R, i0 + rr, Math.ceil((p.x + dxm + half) / st) + 1); ii <= i1; ii++) {
+          const dx = -half + ii * st - p.x, k = row + ii, b = bd[k], lim = (b < rl ? b : rl) + hw;
+          if (lim < -1e-6 || dx * dx + dz2 > lim * lim * (1 + 1e-9) + 1e-9) continue;
+          const e = Math.hypot(dx, dz) - hw;
+          if (e < b && e < rl) { bd[k] = e; by[k] = p.y; }
+        }
       }
     }
   }
