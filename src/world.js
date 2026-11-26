@@ -61,6 +61,7 @@ export const WEATHER = {
 };
 
 const SHORE_UNDER = 0.5, SHORE_OVER = 0.3; // metres: see World.shoreSnap
+const SHORE_CHUNK = 4000; // m: the shore water mesh is cut into squares this size (World.buildShoreWater)
 const QUALITY = {
   low: { res: 180, bake: 384, trees: 6000, shadows: false, shadowSize: 1024, clouds: 0.45, cirrus: false, pixel: 1, post: false },
   medium: { res: 220, bake: 640, trees: 12000, shadows: true, shadowSize: 1024, clouds: 0.65, cirrus: true, pixel: 1.25, post: true },
@@ -661,7 +662,7 @@ export class World {
       const n = wetN[j * R + i]; if (n === 0 || n === 4) continue;
       for (let b = Math.max(0, j - 1); b <= Math.min(R - 1, j + 1); b++) for (let a = Math.max(0, i - 1); a <= Math.min(R - 1, i + 1); a++) if (wetN[b * R + a]) draw[b * R + a] = 1;
     }
-    const pos = [], idx = [], ids = new Map();
+    const pos = [], ids = new Map();
     // vertices are shared by key (grid vertex, or the crossing on a grid edge), so neighbouring cells meet watertight
     const grid = (g) => { let v = ids.get(g); if (v === undefined) { v = pos.length / 3; ids.set(g, v); pos.push(o + (g % W) * st, wl, o + Math.floor(g / W) * st); } return v; };
     const cross = (g0, g1) => {
@@ -672,6 +673,7 @@ export class World {
       return v;
     };
     const poly = [];
+    let idx = null;
     const tri = (p, q, r) => { // the part of triangle p,q,r under water, as a fan
       poly.length = 0;
       for (const [g, h] of [[p, q], [q, r], [r, p]]) {
@@ -680,14 +682,24 @@ export class World {
       }
       for (let k = 1; k + 1 < poly.length; k++) idx.push(poly[0], poly[k], poly[k + 1]);
     };
+    // in SHORE_CHUNK squares (one draw each, culled off screen: the whole core's shores are ~70k triangles), sharing
+    // one vertex buffer
+    const C = Math.max(1, Math.round(SHORE_CHUNK / st)), chunks = new Map();
     for (let j = 0; j < R; j++) for (let i = 0; i < R; i++) {
       if (!draw[j * R + i]) continue;
+      const key = Math.floor(i / C) + ',' + Math.floor(j / C); idx = chunks.get(key); if (!idx) chunks.set(key, (idx = []));
       const a = j * W + i, b = a + W, c = b + 1, d = a + 1; // same split as the ground: (a,b,d) + (b,c,d)
       tri(a, b, d); tri(b, c, d);
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeBoundingSphere();
-    return new THREE.Mesh(g, mat);
+    const group = new THREE.Group(), P = new THREE.Float32BufferAttribute(pos, 3), box = new THREE.Box3(), v = new THREE.Vector3();
+    for (const ix of chunks.values()) {
+      if (!ix.length) continue;
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', P); g.setIndex(ix);
+      box.makeEmpty(); for (const k of ix) box.expandByPoint(v.fromBufferAttribute(P, k));
+      g.boundingBox = box.clone(); g.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
+      group.add(new THREE.Mesh(g, mat));
+    }
+    return group;
   }
 
   // ---------------- sky / light ----------------
@@ -1253,6 +1265,7 @@ export class World {
     this.real?.stream.update(cp);
     this.tiles?.update(cp);
     this.roadCam = cp; this.roadGroup?.userData.update?.(cp, 4);
+    this.marina?.update(cp);
     // the tunnels' tubes near the camera, for the ground to leave out (TUBES, shaders.js): re-picked every 25 m
     if (this.tubeSegs && (!this.tubeAt || Math.hypot(cp.x - this.tubeAt.x, cp.z - this.tubeAt.z) > 25)) {
       this.tubeAt = { x: cp.x, z: cp.z };

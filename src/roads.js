@@ -481,9 +481,14 @@ export function buildRoadMeshes(w, net) {
       // (a slab level across, at the road's height at the kerb: out over the ground's slopes beyond the footprint, which
       // the ground's meshes don't hold under it)
       const W = PAVE[rd.kind] ?? 3.5, kc = new Float64Array(jp.pts.length * 2).fill(NaN), kerb = (i, x, z, o) => { const s = i * 2 + (o > 0 ? 1 : 0); if (Number.isNaN(kc[s])) { const p = jp.pts[i], f = hw / Math.abs(o); kc[s] = surf(jp, i, p.x + (x - p.x) * f, p.z + (z - p.z) * f); } return kc[s]; };
-      const up = (i, x, z, o, c) => kerb(i, x, z, o) + lift + (c === 0 ? 0 : 0.15), up2 = (i, x, z, o, c) => kerb(i, x, z, o) + lift + (c === 3 ? 0 : 0.15);
-      strip(jp, [hw, hw, hw + 0.35, hw + W], up, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
-      strip(jp, [-hw - W, -hw - 0.35, -hw, -hw], up2, (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]), sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      // (the slabs: one quad across each side, level; the kerb's faces their own strips, KERB: drawn near only, the
+      // tile's sidewalk mesh's last indices, see buildTile. Separate vertices at the kerb's edge: no normal smeared
+      // from the face over the slab)
+      const top = (i, x, z, o) => kerb(i, x, z, o) + lift + 0.15, ok = (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]);
+      strip(jp, [hw, hw + W], top, ok, sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, [-hw - W, -hw], top, ok, sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, [hw, hw], (i, x, z, o, c) => kerb(i, x, z, o) + lift + (c === 0 ? 0 : 0.15), ok, KERB, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, [-hw, -hw], (i, x, z, o, c) => kerb(i, x, z, o) + lift + (c === 1 ? 0 : 0.15), ok, KERB, (c, d, o) => [o, d], -1, info, jp.rjunc);
     }
     // (lifted over every shoulder, and the bigger road over the smaller: where two lie on one surface, side by side or
     // at a junction's mouth, the major one's tarmac and markings show, not the other's gravel or edge line)
@@ -574,7 +579,7 @@ export function buildRoadMeshes(w, net) {
     if (!poles.length) return;
     const pm = new THREE.InstancedMesh(poleGeo, poleMat, poles.length / 4), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
     for (let k = 0; k < poles.length / 4; k++) pm.setMatrixAt(k, m4.compose(new THREE.Vector3(poles[k * 4], poles[k * 4 + 1] - 0.2, poles[k * 4 + 2]), q.setFromAxisAngle(up, poles[k * 4 + 3]), one));
-    pm.castShadow = w.qName === 'high' || w.qName === 'ultra'; pm.computeBoundingSphere(); group.add(pm); t.meshes.push(pm);
+    pm.castShadow = w.qName === 'high' || w.qName === 'ultra'; pm.computeBoundingSphere(); group.add(pm); t.meshes.push(pm); t.poles = pm;
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3)); const pt = new THREE.Points(lg, lampMat); group.add(pt); t.meshes.push(pt);
   };
   // tunnels: the tube (walls and a vault over the road, lined; a strip of lights along its crown) where there's
@@ -604,6 +609,7 @@ export function buildRoadMeshes(w, net) {
     if (lit.length) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(lit, 3)); lightGeos.push(g); }
   };
   // building a tile: its roads' ribbons, shoulders, skirts and bridges, merged per material
+  const KERB_D = DETAIL_D[w.qName] ?? 1000, POLE_D = KERB_D * 2, WALK_D = KERB_D * 3;
   const D = ROAD_D[w.qName] ?? 10000, warm = new Set([tarmac, shoulder, skirtMat, concrete, poleMat, tubeMat, tubeLight, ...(sidewalk ? [sidewalk] : [])]);
   const buildTile = (t) => {
     pending = new Map(); bridgeGeos = [];
@@ -614,7 +620,12 @@ export function buildRoadMeshes(w, net) {
     if (tubeGeos.length) { const m = new THREE.Mesh(mergeAll(tubeGeos), tubeMat); m.receiveShadow = true; group.add(m); t.meshes.push(m); }
     if (lightGeos.length) { const m = new THREE.Mesh(mergeAll(lightGeos), tubeLight); group.add(m); t.meshes.push(m); }
     lampMeshes(lamps, poles, t);
-    for (const [material, geos] of pending) { const m = new THREE.Mesh(mergeGeometries(geos), material); m.receiveShadow = true; group.add(m); t.meshes.push(m); }
+    for (const [material, geos] of pending) {
+      if (material === KERB) continue;
+      const kerbs = material === sidewalk ? pending.get(KERB) || [] : [], split = kerbs.length ? geos.reduce((n, g) => n + g.index.count, 0) : 0;
+      const m = new THREE.Mesh(mergeGeometries(kerbs.length ? geos.concat(kerbs) : geos), material); m.receiveShadow = true; group.add(m); t.meshes.push(m);
+      if (split) t.walk = { m, split };
+    }
     if (bridgeGeos.length) { const m = new THREE.Mesh(mergeAll(bridgeGeos), concrete); m.castShadow = m.receiveShadow = true; group.add(m); t.meshes.push(m); }
     t.built = true; pending = null;
   };
@@ -629,7 +640,11 @@ export function buildRoadMeshes(w, net) {
     const t0 = performance.now();
     let todo = all.filter((t) => !t.built && (!D || near(t, cam) < D));
     if (todo.length) { todo.sort((a, b) => near(a, cam) - near(b, cam)); for (const t of todo) { if (performance.now() - t0 > ms && near(t, cam) > within) break; buildTile(t); } }
-    if (D) for (const t of all) if (t.built) { const v = near(t, cam) < D; for (const m of t.meshes) m.visible = v; }
+    for (const t of all) if (t.built) {
+      const d = near(t, cam), v = !D || d < D; if (D) for (const m of t.meshes) m.visible = v;
+      if (t.walk) { t.walk.m.geometry.setDrawRange(0, d < KERB_D ? Infinity : t.walk.split); t.walk.m.visible = v && d < WALK_D; } // (the kerbs' faces: near only)
+      if (t.poles) t.poles.visible = v && d < POLE_D;
+    }
     return !all.some((t) => !t.built && near(t, cam) < within);
   };
   group.userData.tiles = all;
@@ -639,6 +654,11 @@ export function buildRoadMeshes(w, net) {
 
 // a city's road chunks (ribbons and bridges) are drawn this far on the lighter settings; High and Ultra draw them all
 const ROAD_D = { low: 4000, medium: 6000, high: 9000, ultra: 12000 }; // (road tiles drawn out to: past it the ground photo shows the roads)
+// A tile's sub-pixel detail is left out past this (m to the nearest point of the tile's circle): a city pavement's kerb
+// face (15 cm); past twice this, the street lamps' posts (their glow stays); past three times, the pavements (a few
+// pixels wide there: the ground photo shows them)
+const DETAIL_D = { low: 500, medium: 800, high: 1200, ultra: 1500 };
+const KERB = {}; // (pending's key for a sidewalk's kerb faces: merged after the slabs, buildTile)
 function mergeAll(geos) {
   const ni = geos.map((g) => (g.index ? g.toNonIndexed() : g));
   let n = 0; for (const g of ni) n += g.attributes.position.count;

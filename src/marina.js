@@ -24,6 +24,7 @@ import { buildStatic, mergeByMaterial } from './traffic.js';
 
 const DECK = 0.9; // pier decks above the water (fixed piers on pilings)
 const UP = new THREE.Vector3(0, 1, 0);
+const MOORED_D = { low: 2500, medium: 4000, high: 6000, ultra: 8000 }; // (m: Marina.update)
 
 export class Marina {
   // cfg: loc.marina ({ at: [x, z] (where to look), r (how far), river (on a real river), waves (swell, m), seed })
@@ -58,6 +59,8 @@ export class Marina {
   water(lx, lz) { if (!this.river) return this.wl; const p = this.W(lx, lz); return this.world.real?.waterAt(p.x, p.z, 30) ?? this.wl; }
   bare(x, z) { const [lx, lz] = this.L(x, z); return lx > this.foot[0] && lx < this.foot[1] && lz > this.foot[2] && lz < this.foot[3]; }
   topAt(x, z) { return this.cm.topAt(x, z); }
+  // the moored boats (full stock models, ~250k triangles together) only within MOORED_D of the camera: specks past it
+  update(cam) { if (this.mooredMesh) this.mooredMesh.visible = Math.hypot(cam.x - this.x, cam.z - this.z) < (MOORED_D[this.world.qName] ?? 6000); }
   hit(p) {
     const dx = p.x - this.x, dz = p.z - this.z; if (dx * dx + dz * dz > 120 * 120) return null;
     const [lx, lz] = this.L(p.x, p.z);
@@ -205,7 +208,7 @@ export class Marina {
     if (!root.children.length) return;
     const merged = mergeByMaterial(root); merged.name = 'moored';
     merged.traverse((m) => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
-    this.group.add(merged);
+    this.group.add(merged); this.mooredMesh = merged;
     void W;
   }
 
