@@ -712,8 +712,8 @@ function freeKept() {
 }
 function buildFlight(cfg) {
   const key = World.key({ location: cfg.location, quality: qualityTier(), time: cfg.time, weather: cfg.weather, moon: cfg.moon });
-  let scene, world, kids;
-  if (kept?.key === key) { ({ scene, world, kids } = kept); kept = null; } // (already reset by endFlight)
+  let scene, world, kids, reused = false;
+  if (kept?.key === key) { ({ scene, world, kids } = kept); kept = null; reused = true; } // (already reset by endFlight)
   else {
     freeKept();
     scene = new THREE.Scene();
@@ -727,7 +727,13 @@ function buildFlight(cfg) {
   const ac = new Aircraft(design, realism);
   scene.add(ac.root);
   void ac.stations; // the cockpit views (stations.js, with a capsule's cabin): made while loading, so their shaders warm up with the rest and the camera button never waits
-  const nav = aircraftLights(ac, { spot: world.sunElev < 0.2 || world.W.dark > 0.6 }); // running lights (a real landing light after dark)
+  const spot = world.sunElev < 0.2 || world.W.dark > 0.6;
+  const nav = aircraftLights(ac, { spot }); // running lights (a real landing light after dark)
+  // By day a landing light part's own SpotLight stays dark the whole flight (Aircraft.update: lit only at night, and
+  // time and weather are fixed per World), so it leaves the scene's lights: every vehicle then flies with the same
+  // light set (none by day, the one spot after dark), and swapping one in keeps the kept World's compiled shaders
+  // (a light more or less recompiles every lit material in the scene: ~120 programs at NYC, ~0.3 s each on a software GPU).
+  if (!spot && ac.landingLight) ac.landingLight.visible = false;
   const effects = new Effects(scene);
   const sonic = new SonicFX(ac, scene);
   const traffic = new Traffic(scene, world, presets);
@@ -818,7 +824,8 @@ function buildFlight(cfg) {
   analytics.capture('flight_start', { ...F.track, design: dsum, build: buildStats.take(), parts: design.parts.length, part_types: [...new Set(design.parts.map((p) => p.id))], quality: settings.quality, touch: showTouch, control_mode: settings.controlMode });
   // The loading screen stays up while every shader compiles (the hidden things' too: tree LODs, night lights, far town
   // detail), and over the first frame, which draws the hidden shadow casters for their shadow shaders (see warmShaders)
-  const warm = (F.warm = { t: performance.now(), n: 0, pending: true }), compiled = () => { warm.pending = false; warm.t = performance.now(); };
+  // (in a kept World only what this flight added needs that: the World's own hidden casters were drawn in its first flight's warm-up)
+  const warm = (F.warm = { t: performance.now(), n: 0, pending: true, skip: reused ? kids : null }), compiled = () => { warm.pending = false; warm.t = performance.now(); };
   setTimeout(compiled, 15000); // (never stuck behind the loading screen)
   // (into the post-processing target, as the scene really renders: tone mapping and output encoding are part of a
   // shader; and with the reflection environment in place, which the first world update would otherwise add)
@@ -1522,7 +1529,7 @@ function frame(now) {
       post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: (0.97 + golden * 0.12 - w.W.dark * 0.25) * (1 - 0.7 * (gvis.shown ? smoothstep(0, 0.7, gvis.grey) : 0)), contrast: 1.12, vignette: 0.3 }); // near-neutral colour, a little more contrast: photographic rather than candy
       fitNearPlane(F);
       setCrewView(renderer.domElement.height, qualityTier()); // (other players' crews: their detail by size on screen)
-      const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene) : null;
+      const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene, warm.skip) : null;
       flushNew();
       const progs = renderer.info.programs, n0 = progs.length;
       post.render(F.scene, flightCam, dt);
@@ -1600,9 +1607,9 @@ function compileWith(scene, light, warm) {
   const finish = () => { if (!warm.pending) return; target(); renderer.compile(scene, flightCam); renderer.setRenderTarget(null); warm.pending = false; warm.t = performance.now(); };
   done.catch(() => {}).then(finish); setTimeout(finish, 15000);
 }
-function warmShaders(scene) {
+function warmShaders(scene, skip = null) {
   const undo = [];
-  scene.traverse((o) => {
+  for (const top of scene.children) if (!skip?.has(top)) top.traverse((o) => {
     if (!o.castShadow) return;
     for (let p = o; p; p = p.parent) if (!p.visible) { const q = p; q.visible = true; undo.push(() => (q.visible = false)); }
     if (o.frustumCulled) { o.frustumCulled = false; undo.push(() => (o.frustumCulled = true)); }

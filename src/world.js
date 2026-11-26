@@ -880,10 +880,23 @@ export class World {
     if (!this.envDirty) return;
     this.envDirty = false;
     this.envGround.material.color.copy(this.hemi.groundColor).multiplyScalar(0.6);
+    // (applyLighting marks it dirty every time, but often nothing it draws changed: the relight after a lightning flash,
+    // and the first update of every flight, a vehicle swapped into a kept World too. The bake is a cube render plus
+    // blur passes, seconds on a software GPU: skip it when its inputs are the ones it was made from.)
+    const key = this.envKey();
+    if (this.envRT && key === this.envBaked) { this.scene.environmentIntensity = 0.25 + 0.75 * smoothstep(-0.12, 0.25, this.sunElev); return; }
+    this.envBaked = key;
     if (this.envRT) this.envRT.dispose();
     this.envRT = this.pmrem.fromScene(this.envScene, 0.02, 0.1, 200);
     this.scene.environment = this.envRT.texture;
     this.scene.environmentIntensity = 0.25 + 0.75 * smoothstep(-0.12, 0.25, this.sunElev);
+  }
+  // What the reflection environment is drawn from: the env sky's uniforms (with the sky LUT's sun and haze) and the ground's colour
+  envKey() {
+    const v = (x) => (x == null || typeof x !== 'object' ? x : x.isTexture ? `${x.uuid}:${x.version}` : x.toArray ? x.toArray() : null);
+    const U = this.envSky.material.uniforms, out = [this.atmoKey, this.envGround.material.color.toArray()];
+    for (const k of Object.keys(U).sort()) out.push(k, v(U[k].value));
+    return JSON.stringify(out);
   }
 
   // ---------------- runway & airport ----------------

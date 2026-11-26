@@ -63,7 +63,7 @@ function sigOf(allMeshes, owners, crewOf, rootInv) {
   const str = (s) => { for (let i = 0; i < s.length; i++) add(s.charCodeAt(i)); };
   const arr = (a, step) => { if (!a) { add(-1); return; } add(a.length); for (let i = 0; i < a.length; i += step) add(a[i]); };
   for (const m of allMeshes) {
-    const g = m.geometry, mat = m.material, em = emission(mat);
+    const g = m.geometry, mat = m.material, em = emission(mat, false);
     arr(g.attributes.position.array, 5); arr(g.attributes.normal?.array, 11); arr(g.index?.array, 7);
     for (const e of _m.multiplyMatrices(rootInv, m.matrixWorld).elements) add(e);
     add(OPAQUE(mat, m) ? 1 : 0); add(LIT(mat) ? 1 : 0); add(mat.side ?? 0); add(m.userData.near ? 1 : 0); add(m.isSkinnedMesh ? 1 : 0); add(crewOf.has(m) ? 1 : 0);
@@ -196,13 +196,16 @@ function texSampler(t) {
   } catch { s = null; }
   texData.set(t, s); return s;
 }
-function emission(m) {
+// sample = false: only how bright (sigOf's fingerprint needs no more; reading a texture back is the costly part, seconds
+// on a software GPU, and a fresh build's display textures are new every time, so the fingerprint of a bake that is
+// already saved never reads one)
+function emission(m, sample = true) {
   if (!m || Array.isArray(m)) return null;
   const lum = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
-  if (m.isMeshBasicMaterial) { const k = lum(m.color); return k > 0.05 ? { k, map: m.map ? texSampler(m.map) : null } : null; } // (unlit: it is its own light)
+  if (m.isMeshBasicMaterial) { const k = lum(m.color); return k > 0.05 ? { k, map: m.map && sample ? texSampler(m.map) : null } : null; } // (unlit: it is its own light)
   if (!m.emissive) return null;
   const k = lum(m.emissive) * (m.emissiveIntensity ?? 1); if (k < 0.01) return null;
-  return { k, map: m.emissiveMap ? texSampler(m.emissiveMap) : null };
+  return { k, map: m.emissiveMap && sample ? texSampler(m.emissiveMap) : null };
 }
 
 
