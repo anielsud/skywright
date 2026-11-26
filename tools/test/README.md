@@ -113,13 +113,23 @@ The rules (#278), which keep CI fast and free of timing flakes:
 
 The jobs:
 
-- **hangar** (no map): boot; the AudioContext starts (the only job with audio; the clips decode meanwhile and are
+- **hangar** (no map): boot; the AudioContext starts (the only job that decodes the clips; they decode meanwhile and are
   checked last: every clip in `assets/sfx/index.json`); the Settings and Help windows open and close; a hangar
   screenshot; the wind tunnel for the Kestrel and the Dragonfly: opens, 5 frames drawn with the smoke on while the angle
   sweep starts, the rest of the sweep stepped to the end (the lift curve recorded over the whole range), 5 frames on the
   free pivot and 3 s more stepped (it swings), no shader compiled while it ran, (locally) the tunnel's own work per
   frame under 12 ms, closes, GPU memory back to the hangar's. (Its lift curves and forces: the Node suite tunnelcheck.)
-- **nyc**, **islands**, **canyon-lauterbrunnen**: being written (#278); the planned steps are in each file's header.
+- **islands** (Bora Bora, built once by the first flight; every vehicle swapped in once): the Kestrel from the runway
+  (the tour flight: 3 frames at full power on the real loop, 3 s stepped, every cockpit view drawn; then streaming
+  quiet and the sweep's scene and events phases: no stalls, nothing waited for its shader); startbakes-stunts; the
+  Albatross's water start and the Kite's air start (2 s stepped: finite, in one piece); the Speedboat from the marina
+  (an AudioContext with no clips decoded, as a boat's motor voice is synthesized: at full gas its voice's gain comes up
+  within a few frames, i.e. the engine is audible; then the tour flight); the Rocket on the pad (padcheck); the SR-71
+  swapped in once on the landing approach and flown by `sr71flight.js` in game time (the game loop paused): it lands
+  intact and stops on the runway (one screenshot), then, put on the runway start, climbs to Mach 2.5+ above 60,000 ft
+  with nothing broken; then crashed into the water (stepped to the impact, 5 frames drawn: parts come off, no stalls);
+  last, the start-rule wiring (`wiring.js`) over every vehicle it started.
+- **nyc**, **canyon-lauterbrunnen**: being written (#278); the planned steps are in each file's header.
 
 ## Run the smoke test (older script)
 
