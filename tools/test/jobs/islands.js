@@ -3,7 +3,7 @@
 // wait on states). The steps, in order (D = frames drawn, S = game time stepped without drawing):
 //   islands: build + Kestrel from the runway   the first T.start here builds the islands. The tour flight (smoke.js
 //       tour(): D 3 frames at full power on the real loop, S 3 s, D every cockpit view + 2) and tourChecks; then the
-//       shader sweep's scene and events phases (streaming quiet first: T.settle; sceneDrawn D 3, eventsFired D 5):
+//       shader sweep's scene phase (streaming quiet first: T.settle; sceneDrawn D 3; events: nyc job only):
 //       no stalls, nothing waited for its shader
 //   islands: startbakes-stunts                 startbakes.js stuntsIn(world) + stuntsChecks (no flight work)
 //   islands: Albatross (water start), islands: Kite (air start)   swapped in; S 2 s at full power: still flying,
@@ -30,7 +30,7 @@
 // are built again.
 import { tour, tourChecks } from '../smoke.js';
 import { rocket, rocketChecks } from '../padcheck.js';
-import { sceneDrawn, eventsFired, crash, phaseChecks } from '../shadercheck.js';
+import { sceneDrawn, crash, phaseChecks } from '../shadercheck.js'; // (event effects fire in the nyc job only: they are the same at every place)
 import { stuntsIn, stuntsChecks } from '../startbakes.js';
 import { isMotor } from '../../../src/motorSound.js';
 
@@ -50,8 +50,6 @@ export async function run(T) {
     const q = await T.settle();
     const scene = await sceneDrawn();
     T.checks(phaseChecks('scene', scene));
-    const events = await eventsFired({ settled: false });
-    T.checks(phaseChecks('events', events));
     return `${begun(s)}; ${f.ride?.speed.toFixed(0)} m/s, ${f.views} cockpit view(s); settled in ${q.rounds} rounds, ${scene.objects} hidden/culled shown`;
   });
 

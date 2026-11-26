@@ -1,5 +1,5 @@
-// Launch pad check (run in the page by padcheck.py; rocket()/rocketChecks() also by the per-map jobs, tools/test/jobs).
-// See padcheck.py for what it checks. The flight's own time is stepped with __sky.advance (no frames drawn), one 1/60 s
+// Launch pad check: rocket()/rocketChecks(), run by the per-map jobs (tools/test/jobs). See tools/test/README.md,
+// Launch pad check. The flight's own time is stepped with __sky.advance (no frames drawn), one 1/60 s
 // step at a time so every step can be checked. Every wait is on a game state (the harness's waits: no wall-clock
 // timing), with safety limits that throw.
 import { chooseStart, findWater, LAND_STARTS, BOAT_STARTS } from '../../src/startChoice.js';

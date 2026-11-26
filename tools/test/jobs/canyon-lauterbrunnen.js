@@ -92,6 +92,12 @@ export async function run(T) {
     return `start ${r.start}, ${r.burn.height.toFixed(0)} m up after ${r.burn.seconds.toFixed(1)} s`;
   });
 
+  // the start rule's wiring is checked against the World that is up (wiring.js): canyon's starts now, before it goes
+  await T.step('canyon: start-rule wiring', async () => {
+    const { wiringChecks } = await import('./wiring.js');
+    return wiringChecks(T, started.filter((s) => s.location === 'canyon'));
+  });
+
   // ---------------- Lauterbrunnen ----------------
   let c187 = null;
   await T.step(`${L}: build + Rocket on the pad`, async () => {
@@ -164,9 +170,9 @@ export async function run(T) {
   }
 
   // ---------------- the start rules, over every flight started here ----------------
-  await T.step('start-rule wiring', async () => {
+  await T.step(`${L}: start-rule wiring`, async () => {
     const { wiringChecks } = await import('./wiring.js');
-    return wiringChecks(T, started);
+    return wiringChecks(T, started.filter((s) => s.location === L));
   });
 }
 

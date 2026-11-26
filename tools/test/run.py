@@ -11,8 +11,8 @@ one Chrome per job, one World per map, the jobs run in parallel).
 
 A Node suite declares the files it covers in its module (export const nodeSuite = { files }); a browser job in JOBS
 below. A change to the test harness itself, or to a file no suite claims, runs everything (--changed).
-The old one-suite-one-browser scripts (smoke.py, placecheck.py, padcheck.py, helipadcheck.py, restart.py,
-shadercheck.py, startbakes.py's stunts part, tunnelcheck.py --ui) still run on their own, but are no longer listed here:
+The old one-suite-one-browser scripts still around (smoke.py, placecheck.py, startbakes.py's stunts part,
+tunnelcheck.py --ui) still run on their own, but are no longer listed here:
 their checks are moving into the jobs (#278).
 Exits non-zero if any suite fails.
 """

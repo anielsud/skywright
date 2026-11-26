@@ -19,8 +19,7 @@ scripts, which still run on their own while their checks move into the jobs (#27
    full power on the real loop (frame loop keeps running, the engine of a car, bike or boat audible), 3 game seconds
    more stepped with `__sky.advance` (finite, in one piece, a bike upright and riding off), then draws every cockpit
    view as the camera button steps through them, and must leave the cockpit after the last seat.
-5. **no shader stalls mid-flight** on a tour flight (main.js's `[shaders] N compiled in flight, stalling a frame`; formerly
-   `shadercheck.py`): visiting the places in one session, a later place must not compile what an earlier one showed
+5. **no shader stalls mid-flight** on a tour flight (main.js's `[shaders] N compiled in flight, stalling a frame`): visiting the places in one session, a later place must not compile what an earlier one showed
    (the crew, #187), and the first place built again compiles nothing new either
 6. every stock vehicle built and driven in Node (`tools/test/presets.js`, run alongside Chrome): built with its cockpit
    views, 6 s at full power on flat ground (water for a boat), finite and in one piece, a bike upright and moving, its
@@ -148,7 +147,7 @@ The jobs:
   no stunt site or water park warnings.
 - **islands** (Bora Bora, built once by the first flight; every vehicle swapped in once): the Kestrel from the runway
   (the tour flight: 3 frames at full power on the real loop, 3 s stepped, every cockpit view drawn; then streaming
-  quiet and the sweep's scene and events phases: no stalls, nothing waited for its shader); startbakes-stunts; the
+  quiet and the sweep's scene phase: no stalls, nothing waited for its shader); startbakes-stunts; the
   Albatross's water start and the Kite's air start (2 s stepped: finite, in one piece); the Speedboat from the marina
   (an AudioContext with no clips decoded, as a boat's motor voice is synthesized: at full gas its voice's gain comes up
   within a few frames, i.e. the engine is audible; then the tour flight); the Rocket on the pad (padcheck); the SR-71
@@ -168,7 +167,7 @@ The jobs:
   whole, same spawn; this restart is also the launch pad start type's), two more restarts with memory flat, back to the
   hangar frees the World and a fresh Rocket start builds a new one (same spawn, same scene child count as the
   restart), then runway, air, stunt park, street, marina and water park each swapped into that World, restarted (same
-  World, start and spawn) and 4 s stepped on. Last, the start-rule wiring (`wiring.js`) over every flight it started.
+  World, start and spawn) and 4 s stepped on. The start-rule wiring (`wiring.js`) runs at each place while it is up.
 
 ## Run the smoke test (older script)
 
@@ -287,23 +286,11 @@ Run it when you change part builders (`parts.js`, `partDetail.js`, `vehicleParts
 
 ## Launch pad check
 
-`padcheck.py` checks the launch complex every location has (`src/launchpad.js`). At every location it starts the stock
-Rocket and checks that it stands upright on the pad's stand, on its axis, held by the hold-down clamps with the engines
-off; that it doesn't move, leave the deck or touch anything for 5 s; and that at full throttle the clamps let go once
-the swing arm is clear and it climbs past the service tower without touching it (no hull point inside it, a gap kept),
-without damage and standing straight (the hold and the burn are stepped 1/60 s at a time with `__sky.advance`, every
-step checked). Then it asks the game's start rule (`src/startChoice.js` `chooseStart`, which `buildFlight` runs) with
-that place's real answers where every stock vehicle would start for every start choice: only rockets on the pad; and
-a plane and a car really start (swapped into the first place's World) where the rule says. The rule itself is tested
-over every vehicle, choice and kind of place in Node (`startchoice`). With `--ref URL` (a server of main) the real
-spawn poses must match main's exactly.
-
-```sh
-python3 tools/test/padcheck.py                                   # ~40 s
-python3 tools/test/padcheck.py --ref http://127.0.0.1:9000 --all-spawns   # every preset started at every location vs main
-```
-
-Run it when you change the pad, the launch stand (`uprightStage` in `hangar.js`) or the spawn code in `main.js`.
+The launch complex every place has (`src/launchpad.js`): the stock Rocket started on the pad stands on its stand,
+holds still 5 s, then the clamps let go and it climbs clear of the service tower (`padcheck.js` `rocket(loc)` /
+`rocketChecks(r)`, stepped). It runs in the per-map jobs (#278): nyc, islands, and canyon and lauterbrunnen. That
+nothing but a rocket starts on the pad, for every stock vehicle and choice: the start rule in Node (startchoice) and
+its wiring in each job (`jobs/wiring.js`). The old `padcheck.py` is gone.
 
 ## Start choice test
 
@@ -556,27 +543,11 @@ Run it when you change `aircraft.js` (the aero model), `windTunnel.js`, `tunnelF
 
 ## Rooftop helipad check
 
-`helipadcheck.py` checks New York's rooftop helipads (`src/helipad.js`). It starts the stock Dragonfly at NYC (Pilot and
-Arcade) and checks that it starts on the H of the 55 Water Street pad, level, facing the view, skids resting on the
-deck, engines off, and that the building under the pad has no damage key. In calm air it then checks that:
-
-- parked with the throttle closed, it settles onto its skids exactly as it does on the runway (same attitude and
-  sink; the baseline: the same Dragonfly teleported to the runway first and rested there in the game loop), then for 5 s it moves no more than it does there, with the rotor stopped, no contact and no damage;
-- it lifts off to a steady hover 25 m up with no collision;
-- it lands back on the pad gently (no hard landing) and rests there stably on both skids.
-
-The flight is stepped with `__sky.advance`, every step checked; Arcade is swapped into the same New York. It then asks
-the start rule (as padcheck does) with New York's real answers: only helicopters on the helipad, for every stock
-vehicle and start choice; and a plane and a car really start where the rule says. (The Dragonfly elsewhere: padcheck
-asks the rule at every place, and the Node suite `startchoice` over every kind of place. Shaders compiled mid-flight
-at New York: smoke flies the Dragonfly there on the real loop.) With `--ref URL` (a server of main) the real spawn
-poses must match main's exactly.
-
-```sh
-python3 tools/test/helipadcheck.py --ref http://127.0.0.1:9000   # ~20 s
-```
-
-Run it when you change the helipads, the city's building pipeline (`realCity.js`), ground contact or the spawn code.
+New York's rooftop helipad (`src/helipad.js`), in the nyc job (#278): the Dragonfly in Pilot and in Arcade starts on
+the H, rests like on a runway (the baseline taken by teleporting the same Dragonfly to the runway), lifts to a 25 m
+hover, lands and rests, all stepped (`helipadcheck.js` `heliRun` / `heliChecks`); the building under the pad can't be
+knocked down. That nothing but a helicopter starts there: startchoice (Node) and `jobs/wiring.js`. The old
+`helipadcheck.py` is gone.
 
 ## Cockpit check
 
@@ -738,29 +709,10 @@ run their part of it (`--only stunts|waterpark|walls`).
 
 ## Restart test
 
-`restart.py` checks that a restart (pause > Restart, or the "try again" button after a crash) keeps the World and
-looks and behaves exactly like a fresh start. `main.js` keeps the World (and its scene) for a restart when its inputs
-are unchanged (`World.key`: place, quality tier, time, weather, moon), and `World.reset()` puts back what the flight
-changed: buildings (`Destruction.reset`: collision heights, the shader's dmg bytes, damage slots, debris, mounds,
-scorch marks, cavities, fires, toppling tops, pending dominoes), flattened trees (`World.flatten`), the stunt sites,
-water park and launch pad, the space view, the clocks, gusts and cloud drift. Everything else the flight added to the
-scene (the vehicle, effects, traffic, missions, debris, other players) is removed and rebuilt. Back to the hangar
-frees the World as before.
-
-At each place (Lauterbrunnen by default) it checks: buildings knocked down and holed through the destruction API, plus
-flattened trees, are all whole after a restart in the same World, with the same spawn; 6 restarts (damage before every
-other one) keep `renderer.info` geometries / textures, the program count and the scene's child count flat (a leak of
-one a restart shows over the last five); the hangar holds no World and a fresh start matches the restarts (spawn,
-memory); and every start type (runway, air, stunt park, street, marina, water park, launch pad, and the helipad with
-`--places nyc`), swapped into that fresh World, restarts in the same World, the same way at the same spot, and rides /
-flies on for 4 s. The game's time is stepped with `__sky.advance` wherever the test waits for the game (buildings
-coming down, flying on); each start also draws 15 frames before it is measured (the texture count is what drawing
-uploads). About 40 s for one place. On CI these checks run in the canyon-lauterbrunnen job (`restart.js`'s
-`damageChecks`/`memoryChecks`/`freshChecks`/`startTypeCheck`, driven by the job with no flight started twice).
-
-```sh
-python3 tools/test/restart.py [--places lauterbrunnen,nyc] [--restarts 6] [--quality low]
-```
+A restart keeps the World and must look and behave exactly like a fresh start: in the canyon-lauterbrunnen job, at
+Lauterbrunnen (#278; `restart.js` holds the checks): damage then restart (everything whole, same spawn), memory flat
+over 3 restarts, back to the hangar frees the World and a fresh start builds a new one, and every start type swapped
+in then restarted. The old `restart.py` is gone.
 
 ## Shader check
 
@@ -773,27 +725,15 @@ How shaders are kept from stalling a frame (#273):
   scene at load (a sonic boom's rings: one hidden ring from the start). Never make an event's mesh or material when
   it fires.
 - **Per-place switches are uniforms, not defines** (#242: a define made a second terrain program for the tiles).
-- Give custom materials a `name`: the check's messages print it.
+- Give custom materials a `name`: the checks print it.
 
-`shadercheck.py` (folding into the per-map jobs, #278: `shadercheck.js` exports the phases) sweeps each place on purpose rather than
-by luck (`sweep` in `shadercheck.js`): every object in the scene drawn (hidden ones shown, culling off), every event
-effect fired, the map's edges streamed in, and a real crash (a building in New York, water at the islands, the ground
-elsewhere). It fails on any **stall** (a program compiled during a frame's draw: `[shaders] N compiled in flight,
-stalling a frame`, `window.__inflightCompiles`) and on any event that **waited for its shader**
-(`window.__lateShows` outside the streaming phase). Before the event and crash phases the vehicle is held until
-streaming around it is quiet, so a late show there is the phase's own.
-
-```sh
-python3 tools/test/shadercheck.py                      # islands, canyon, nyc, lauterbrunnen with the Kestrel, ~4 min
-python3 tools/test/shadercheck.py --loc nyc --plane Rocket --quality high
-python3 tools/test/shadercheck.py --fly                # the older check: a few seconds of flight per place in turn
-```
-
-`--fly` flies vehicles at several places one after another (default: the Kestrel and the Dirt Bike, each at
-islands, canyon, nyc and back to islands): a later place must not compile what an earlier one showed (the crew,
-#187). Note that `window.__inflightCompiles` counts over the whole page session: a test that stages extra vehicles
-mid-flight (stunts.js, waterpark.js screenshots) must count per location, or the next location gets the blame
-(#145, #187).
+Every job step fails on a **stall** (a program compiled during a frame's draw: `[shaders] N compiled in flight,
+stalling a frame`, `window.__inflightCompiles`). The sweep's phases (`shadercheck.js`) run in the per-map jobs: every
+object in each place's scene drawn once (`sceneDrawn`), every event effect fired (`eventsFired`, nyc only: they're the
+same everywhere), and a real crash (`crash`: a building in New York, water at the islands, the ground at the Grand
+Canyon), each failing on an event that **waited for its shader** (`window.__lateShows`). The canyon-lauterbrunnen job
+visits two places in one session: the second compiles nothing mid-flight that the first already showed (#187). The
+old `shadercheck.py` is gone.
 
 ## Frame benchmark
 

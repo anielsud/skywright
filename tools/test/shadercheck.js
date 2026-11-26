@@ -1,4 +1,4 @@
-// Shader check (run in the page by shadercheck.py). See shadercheck.py for what it checks.
+// Shader check phases, run in the page by the per-map jobs (tools/test/jobs). See tools/test/README.md, Shader check.
 const S = window.__sky;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const frame = () => new Promise((r) => requestAnimationFrame(r));

@@ -789,7 +789,7 @@ function buildFlight(cfg) {
   };
   sonic.onMilestone = (n) => { hud.center(`MACH ${n}!`, 1800); audio.play('ring'); };
   F = { worldKey: key, worldKids: kids, kind: vehicleKind(st), stallWarn: vehicleKind(st) === 'plane', scene, world, ac, nav, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
-  F.spawn = { x: ac.x.clone(), q: ac.q.clone() }; // (where it started: tools/test/restart.py compares restarts with fresh starts)
+  F.spawn = { x: ac.x.clone(), q: ac.q.clone() }; // (where it started: tools/test/restart.js compares restarts with fresh starts)
   if (ac.isRocket) F.streaks = new Streaks(scene); // rockets: air rushing past (a climbing rocket sees only sky)
   if (ac.isBoat) F.boatFx = new BoatFX(scene, ac); // spray and wake (before the shaders compile)
   if (start === 'pad') F.clamp = { x: ac.x.clone(), q: ac.q.clone() }; // held down on the stand until the engines lift it

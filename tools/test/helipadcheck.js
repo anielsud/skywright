@@ -1,5 +1,4 @@
-// Rooftop helipad check (run in the page by helipadcheck.py, and by the nyc job: tools/test/jobs/nyc.js). See
-// helipadcheck.py for what it checks; heliChecks(r) is its verdicts in JS. The flight's own time is stepped with
+// Rooftop helipad check, run by the nyc job (tools/test/jobs/nyc.js). See tools/test/README.md, Rooftop helipad check; heliChecks(r) is its verdicts in JS. The flight's own time is stepped with
 // __sky.advance (no frames drawn), one 1/60 s step at a time so every step can be checked; every wait is on a game
 // state (padcheck.js start/steps: the harness's waits).
 import { start, steps } from './padcheck.js';
