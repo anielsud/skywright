@@ -10,6 +10,8 @@ name: Tests
 # Informational: not a required check. Locally: python3 tools/test/run.py (or jobs.py <job>).
 on:
   pull_request:
+    paths-ignore:
+      - '**/*.md' # (a PR touching only Markdown runs nothing)
   workflow_dispatch:
 
 permissions:

@@ -22,7 +22,7 @@ export class LaneGraph {
     this.r = rand; this.lanes = []; this.out = new Map(); // node key -> lanes leaving it
     this.deg = new Map(); // node key -> road pieces meeting there (3+: a junction, where crossing traffic gives way: vehicles.js)
     net.roads.forEach((rd, ri) => {
-      const P = rd.pts, n = P.length; if (n < 2 || rd.kind === 'rail') return;
+      const P = rd.pts, n = P.length; if (n < 2 || rd.kind === 'rail' || rd.minor) return; // (no traffic off the street network: pedestrian streets, plazas, alleys, tracks)
       const S = new Float64Array(n); for (let i = 1; i < n; i++) S[i] = S[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z);
       const jAt = new Map((rd.jn || []).map(([j, nd]) => [j, nd]));
       const cuts = [0, ...[...jAt.keys()].filter((j) => j > 0 && j < n - 1).sort((a, b) => a - b), n - 1];

@@ -6,7 +6,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { FOG, FOG_GLSL, TUBES, terrainMaterial, waterMaterial, swayMaterial } from './shaders.js';
 import { Atmosphere, skyMaterial, cloudNoiseTexture } from './sky.js';
 import { CloudField, deckMaterial } from './clouds.js';
-import { flattenGrid, flattenHi, makePainter, buildRoadMeshes, gradeReal, roadSurface, cityGround } from './roads.js';
+import { flattenGrid, flattenHi, makePainter, buildRoadMeshes, gradeReal, roadSurface, cityGround, plazaIndex } from './roads.js';
 import { ROAD_U } from './roadSurface.js';
 import { Flora } from './flora.js';
 import { Builder, buildingMaterial, C, lightsDark } from './buildings.js';
@@ -19,6 +19,7 @@ import { SpaceView } from './space.js';
 import { RealScenery } from './realBuildings.js';
 import { Destruction } from './destruction.js';
 import { Landcover } from './landcover.js';
+import { SLAB } from './roadgrade.js';
 import { LaunchPad } from './launchpad.js';
 import { buildAirfieldKit, CONNECTORS, TAXI, ALS, airportGate } from './airportKit.js';
 import { buildAirportGround, gateLevel, infieldPaint, paintInfieldImagery } from './airportGround.js';
@@ -109,6 +110,7 @@ export class World {
     this.flora = new Flora(this);
     if (this.real) this.net.towns = this.real.towns(this);
     this.towns = new RealScenery(this);
+    if (this.plazaAt) { const F = this.flora, bare = F.bare, P = this.plazaAt; F.setForestMask(F.mask, (x, z) => !!P(x, z) || (bare ? bare(x, z) : false)); } // (nothing grows on a plaza)
     if (this.stuntPlan) { // the stunt park and the canyon jump (src/stuntPark.js): nothing grows on them
       this.stunts = new StuntParks(this, this.stuntPlan);
       const F = this.flora, bare = F.bare, S = this.stunts; F.setForestMask(F.mask, (x, z) => S.bare(x, z) || (bare ? bare(x, z) : false));
@@ -301,6 +303,7 @@ export class World {
     this.Hh = Hh; this.hR = R; this.hStep = st;
     this.cityD = cityGround(this, this.net, Hh, R, this.stuntPlan ? (x, z) => padsHeight(this.stuntPlan.pads, x, z, 1e4) !== 1e4 : null); // a city's open ground at its pavements' level (cityAt)
     this.roadSurf = roadSurface(this, this.net); // from here on sampleGrid/groundAt stand on the roads and bridges
+    this.plazaAt = this.net.areas?.length ? plazaIndex(this.net.areas) : null; // the plazas (pedestrian areas, squares): paved ground (groundAt)
     // tunnels' walls: a thin box along each side of every stretch of tube, for what drives in them (tunnelWalls)
     this.tunnelCells = new Map();
     for (const rd of this.net.roads) if (rd.tube) { const P = rd.pts, hw = rd.width / 2 + 1.5; for (let i = 0; i + 1 < P.length; i++) { if (!(rd.tube[i] && rd.tube[i + 1])) continue;
@@ -524,7 +527,7 @@ export class World {
     this.detailAt = [i0, j0];
     const n = D + 1, P = this.detail.geometry.attributes.position.array, N = this.detail.geometry.attributes.normal.array;
     const R = this.hR, st = this.hStep, H = this.Hh, W = R + 1, B = 4; // B: blend cells at the edge
-    const hs = new Float32Array(n * n), S = this.roadSurf, on = this.detailOn ??= new Uint8Array(n * n), cover = this.loc.city ? 2 : 0; // (cover: metres past the footprint the road meshes cover, a city street's pavements)
+    const hs = new Float32Array(n * n), S = this.roadSurf, on = this.detailOn ??= new Uint8Array(n * n), cover = this.loc.city ? SLAB + 1.5 : 1; // (cover: metres past the footprint the road meshes cover, a city street's pavements: their slabs, roadgrade.js SLAB, which come down to the ground where it falls away, #228)
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const x = x0 + i * DS, z = z0 + j * DS, e = Math.min(i, j, D - i, D - j), k = j * n + i;
       const base = this.triAt(H, W, (x + half) / st, (z + half) / st), b2 = this.cityAt(x, z, base); // (what the patch draws here; the ground sampleGrid stands on, b2)
@@ -601,13 +604,14 @@ export class World {
     if (pad) return pad;
     if (S && S.q(x, z, true, y ?? Infinity)) return { h: S.y, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: 'runway' };
     const h = this.sampleGrid(x, z);
-    if (S && S.q(x, z) && S.e <= 0) return { h, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: 'runway' }; // on a road
+    if (S && S.q(x, z) && S.e <= 0) return { h, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: S.surf === 2 ? 'sand' : 'runway' }; // on a road (a gravel track: loose, dusty)
     if (h < this.waterLevel) return { h: this.waterLevel, n: new THREE.Vector3(0, 1, 0), type: 'water' };
     const rw = this.real?.waterAt(x, z); if (rw != null && h < rw + 0.3) return { h: rw, n: new THREE.Vector3(0, 1, 0), type: 'water' }; // real rivers above the water level
     if (this.bake && !this.bake.dry && this.landAt(x, z, this.gL || (this.gL = [0, 0, 0, 0]))[0] > 0.6) return { h, n: new THREE.Vector3(0, 1, 0), type: 'water' }; // rivers, lakes
     const hx = this.sampleGrid(x + e, z), hz = this.sampleGrid(x, z + e);
     const n = new THREE.Vector3(h - hx, e, h - hz).normalize();
     if (this.cityD && this.cityPaved(x, z) > 0.5 && this.real.bare(x, z)) return { h, n, type: 'runway' }; // a city's paved ground (cityAt)
+    const pz = this.plazaAt?.(x, z); if (pz && h >= this.waterLevel) return { h, n, type: pz.surf === 2 ? 'sand' : 'runway' }; // a plaza
     let type = 'grass';
     if (Math.abs(z) < RWY.len / 2 + 30 && RUNWAYS.some((r) => Math.abs(x - r.x) < RWY.width / 2 + 2)) type = 'runway';
     else if (this.isPaved(x, z)) type = 'runway';

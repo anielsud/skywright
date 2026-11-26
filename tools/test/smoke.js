@@ -71,13 +71,15 @@ export function quick(secs = 2) {
 
 // ---------- for the per-map jobs (tools/test/jobs): the tour flight with fixed frame counts, no wall-clock waits ----------
 // Against the flight already running (harness T.start): full power on the real game loop for `n` drawn frames (the
-// loop runs: the flight clock moves), `more` game seconds stepped (advance), then every cockpit view drawn once as the
-// camera button steps through them, and back to the chase view. Judge it with tourChecks.
+// loop runs: the flight clock moves; each steps a fixed 1/60 s, __sky.fixedDt, so the ride judged after them is the
+// same game time on any machine, not min(frame time, 1/20) a frame), `more` game seconds stepped (advance), then every
+// cockpit view drawn once as the camera button steps through them, and back to the chase view. Judge it with tourChecks.
 import { frames as drawFrames, advance } from './jobs/harness.js';
 export async function tour({ frames: n = 3, more = 3 } = {}) {
   const F = S.F; if (!F) throw new Error('no flight');
   go(true);
-  const t0 = F.t; await drawFrames(n, { what: 'the tour flight on the real loop' });
+  const t0 = F.t; S.fixedDt = 1 / 60;
+  try { await drawFrames(n, { what: 'the tour flight on the real loop' }); } finally { S.fixedDt = null; }
   const ran = S.F === F ? F.t - t0 : 0;
   if (more && S.F === F) advance(more);
   const ride = state();

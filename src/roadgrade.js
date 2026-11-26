@@ -15,7 +15,7 @@ import { clamp, smoothstep } from './noise.js';
 export const GRADE = { highway: 0.08, main: 0.1, street: 0.12, lane: 0.14, rail: 0.035, real: 0.2 };
 export const VERGE = 1.5; // gravel verge beside the tarmac (part of the drivable footprint)
 const FILL = 0.6, CUT = 0.9; // embankment / cutting side slopes (rise per metre out)
-const SEG = 9, BLEND = 3, UNDER = 9; // (UNDER: a tunnel's cover, metres: profileRoad) // RoadSurface: floats per segment; metres a major road hands over to a minor one in, at its edge
+const SEG = 9, BLEND = 3, UNDER = 9, MINOR_RANK = 1e7, MINOR_EDGE = 1.5; // (UNDER: a tunnel's cover, metres: profileRoad) // RoadSurface: floats per segment; metres a major road hands over to a minor one in, at its edge
 
 // Bilinear sampler over a (R+1)^2 core grid (the raw fine heights, before any carving).
 export function gridSampler(w, H, R) {
@@ -345,16 +345,17 @@ export function carveGrid(w, roads, H, R, st, bench = 0.75, junctions = []) {
 const PIN = 0.05; // metres the ground stays under a road
 export const PAVE = { main: 4.5, street: 3.5 }; // a city street's pavements: metres out from the tarmac's edge (roads.js)
 // a city junction's corner pavements (junctions.js, net.junctions' pave): per corner a Float64Array of rows round the
-// kerb, PAVE_ROW numbers each: the kerb point x, z; its partner on the building line x, z; v (metres round the kerb);
-// hw; lift. (Typed: New York has ~34k junctions, and its rows as objects and arrays were most of the junctions' memory.)
-export const PAVE_ROW = 7;
+// kerb, PAVE_ROW numbers each: the kerb point x, z; its partner on the building line x, z; y (the kerb's height); v
+// (metres round the kerb); hw; lift. (Typed: New York has ~34k junctions, and its rows as objects and arrays were most
+// of the junctions' memory, kept for the World's life: the lazy road tiles draw them.)
+export const PAVE_ROW = 8;
 // A city's open ground (roads.js cityGround) lies CITY_TOP over the tarmac: the slabs' top (0.15 m kerb + the tarmac's
 // lift, roads.js TARMAC_LIFT) less a centimetre. Off a city street's footprint (tarmac and verge) RoadSurface.over
 // ramps up to it over PAVE_RAMP metres (under the slabs: no kerb in physics, a 4-9% rise) and from there hands over to
 // that ground (World.cityAt) by CITY_BAND metres out (the ground between two streets at different heights is a slope
 // from one to the other, and cityAt's grid, 40-57 m, is too coarse to have it right just beside them). SLAB: how far
 // past a city street's footprint its pavement's slabs reach (roads.js roadMesh).
-export const CITY_TOP = 0.18, PAVE_RAMP = 2, CITY_BAND = 12, SLAB = PAVE.main - VERGE;
+export const CITY_TOP = 0.18, PAVE_RAMP = 2, CITY_BAND = 12, SLAB = PAVE.main - VERGE, SLAB_FALL = 0.23; // (SLAB_FALL: the steepest the ground falls away from a pavement's edge, over)
 function pinUnder(w, roads, H, R, st, junctions = []) {
   const W = R + 1, half = w.half, q = new Float64Array(8), tri = [0, 0, 0], wt = [0, 0, 0];
   let poly = new Float64Array(32), tmp = new Float64Array(32), np = 0; // (the clipped polygon: np floats, x, z pairs)
@@ -421,22 +422,49 @@ function pinUnder(w, roads, H, R, st, junctions = []) {
       pin(8, r0, rx, rz, low);
     }
   }
-  // junction boxes (junctions.js): level at the node's height, their triangles; a city's corner pavements, row to row
+  // junction boxes (junctions.js): their triangles, each a plane (level, or a warped box's); a city's corner
+  // pavements, row to row (each row level across at its kerb's height: under the lower of the two)
   for (const J of junctions) {
-    const B = J.box, T = J.tris, r0 = J.y - PIN;
-    for (let t = 0; t < T.length; t += 3) { for (let k = 0; k < 3; k++) { q[k * 2] = B[T[t + k] * 2]; q[k * 2 + 1] = B[T[t + k] * 2 + 1]; } pin(6, r0, 0, 0, r0); }
-    for (const R of J.pave) for (let b = PAVE_ROW; b < R.length; b += PAVE_ROW) { const a = b - PAVE_ROW; q[0] = R[a]; q[1] = R[a + 1]; q[2] = R[b]; q[3] = R[b + 1]; q[4] = R[b + 2]; q[5] = R[b + 3]; q[6] = R[a + 2]; q[7] = R[a + 3]; pin(8, r0, 0, 0, r0); } // (junctions.js PAVE_ROW: kerb x, z, building line x, z, ...)
+    const V = J.vtx, Y = J.hy, T = J.tris;
+    for (let t = 0; t < T.length; t += 3) {
+      const a = T[t], b = T[t + 1], c = T[t + 2]; for (let k = 0; k < 3; k++) { q[k * 2] = V[T[t + k] * 2]; q[k * 2 + 1] = V[T[t + k] * 2 + 1]; }
+      const [r0, rx, rz] = plane(V[a * 2], V[a * 2 + 1], Y[a], V[b * 2], V[b * 2 + 1], Y[b], V[c * 2], V[c * 2 + 1], Y[c]);
+      pin(6, r0 - PIN, rx, rz, Math.min(Y[a], Y[b], Y[c]) - PIN);
+    }
+    for (const R of J.pave) for (let b = PAVE_ROW; b < R.length; b += PAVE_ROW) { const a = b - PAVE_ROW, r0 = Math.min(R[a + 4], R[b + 4]) - PIN; q[0] = R[a]; q[1] = R[a + 1]; q[2] = R[b]; q[3] = R[b + 1]; q[4] = R[b + 2]; q[5] = R[b + 3]; q[6] = R[a + 2]; q[7] = R[a + 3]; pin(8, r0, 0, 0, r0); } // (PAVE_ROW: kerb x, z, building line x, z, y, ...)
   }
 }
 
+// the plane through three points: [r0, rx, rz] (y = r0 + rx x + rz z)
+export function plane(ax, az, ay, bx, bz, by, cx, cz, cy) {
+  const ux = bx - ax, uz = bz - az, uy = by - ay, vx = cx - ax, vz = cz - az, vy = cy - ay, den = ux * vz - uz * vx;
+  if (Math.abs(den) < 1e-9) return [(ay + by + cy) / 3, 0, 0];
+  const rx = (uy * vz - uz * vy) / den, rz = (ux * vy - uy * vx) / den; return [ay - rx * ax - rz * az, rx, rz];
+}
+// a junction box's height at (x, z) (junctions.js: its triangles, vtx and hy), and its slope (boxAt.gx, .gz); NaN off it
+export function boxAt(B, x, z) {
+  const V = B.vtx, Y = B.hy, T = B.tris;
+  for (let t = 0; t < T.length; t += 3) {
+    const a = T[t] * 2, b = T[t + 1] * 2, c = T[t + 2] * 2, ax = V[a], az = V[a + 1], bx = V[b], bz = V[b + 1], cx = V[c], cz = V[c + 1];
+    const den = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz); if (Math.abs(den) < 1e-12) continue;
+    const wa = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / den, wb = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / den, wc = 1 - wa - wb;
+    if (wa < -1e-6 || wb < -1e-6 || wc < -1e-6) continue;
+    const ya = Y[T[t]], yb = Y[T[t + 1]], yc = Y[T[t + 2]];
+    if (B.flat) { boxAt.gx = 0; boxAt.gz = 0; return ya; }
+    { const ux = bx - ax, uz = bz - az, uy = yb - ya, vx = cx - ax, vz = cz - az, vy = yc - ya, dd = ux * vz - uz * vx || 1e-9; boxAt.gx = (uy * vz - uz * vy) / dd; boxAt.gz = (ux * vy - uy * vx) / dd; } // (its slope: plane(), without the allocation)
+    return ya * wa + yb * wb + yc * wc;
+  }
+  return NaN;
+}
 // point in polygon ([x, z, ...]), and the distance to its edges (junction boxes, junctions.js)
 export function inside(poly, x, z) { let c = false; const n = poly.length / 2; for (let i = 0, j = n - 1; i < n; j = i++) { const xi = poly[i * 2], zi = poly[i * 2 + 1], xj = poly[j * 2], zj = poly[j * 2 + 1]; if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) c = !c; } return c; }
 // the distance from (x, z) to the polygon's edges
-// (edgeDist.at: the nearest edge, by the index of its first point)
+// (edgeDist.at: the nearest edge, by the index of its first point; edgeDist.t: how far along it, 0..1; edgeDist.inside:
+// whether (x, z) is inside, as inside())
 export function edgeDist(poly, x, z) {
-  let d2 = Infinity; const n = poly.length / 2;
-  for (let i = 0, j = n - 1; i < n; j = i++) { const ax = poly[j * 2], az = poly[j * 2 + 1], dx = poly[i * 2] - ax, dz = poly[i * 2 + 1] - az, L2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), px = ax + dx * t - x, pz = az + dz * t - z, e = px * px + pz * pz; if (e < d2) { d2 = e; edgeDist.at = j; } }
-  return Math.sqrt(d2);
+  let d2 = Infinity, c = false; const n = poly.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) { const ax = poly[j * 2], az = poly[j * 2 + 1], dx = poly[i * 2] - ax, dz = poly[i * 2 + 1] - az, L2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), px = ax + dx * t - x, pz = az + dz * t - z, e = px * px + pz * pz; if (e < d2) { d2 = e; edgeDist.at = j; edgeDist.t = t; } const zi = poly[i * 2 + 1]; if ((zi > z) !== (az > z) && x < (ax - poly[i * 2]) * (z - zi) / (az - zi) + poly[i * 2]) c = !c; }
+  edgeDist.inside = c; return Math.sqrt(d2);
 }
 // ---------------- the surface physics reads ----------------
 // Segment index over all roads (and rail) on the ground, plus bridge decks. q(x,z,deck) finds the segment whose
@@ -455,16 +483,17 @@ export class RoadSurface {
     let ns = 0; for (const rd of roads) ns += rd.closed ? rd.pts.length : rd.pts.length - 1;
     const S = (this.seg = new Float32Array(ns * SEG)), reach = new Float32Array(ns), ground = w.Hh ? (x, z) => w.triAt(w.Hh, w.hR + 1, clamp((x + w.half) / w.hStep, 0, w.hR - 1e-3), clamp((z + w.half) / w.hStep, 0, w.hR - 1e-3)) : null;
     let s0 = 0;
-    const cs = (this.cs = new Uint8Array(ns)), city = !!w.loc?.city; this.k = 0; // (cs: a city street's segment, on the ground: its pavements and the open ground round it at the slabs' level, over)
+    const cs = (this.cs = new Uint8Array(ns)), sf = (this.sf = new Uint8Array(ns)), city = !!w.loc?.city; this.k = 0; this.surf = 0; // (sf: a way off the street network's surface, roadnet.js SURF: World.groundAt's gravel) // (cs: a city street's segment, on the ground: its pavements and the open ground round it at the slabs' level, over)
     roads.forEach((rd, ri) => {
-      const P = rd.pts, n = P.length, last = rd.closed ? n : n - 1, street = city && (rd.kind === 'main' || rd.kind === 'street') && !rd.baked;
+      const P = rd.pts, n = P.length, last = rd.closed ? n : n - 1, street = city && (rd.kind === 'main' || rd.kind === 'street' || rd.minor) && !rd.baked; // (a city's pedestrian streets and alleys too: the open ground beside them is at their level, with no kerb)
       for (let i = 0; i < last; i++, s0++) {
+        if (rd.minor) sf[s0] = (rd.surf || 0) | 4; // (4: off the street network)
         const a = P[i], b = P[(i + 1) % n], tu = !!(rd.tube?.[i] && rd.tube?.[(i + 1) % n]), br = tu || !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % n]); // (a tunnel's tube: a deck underground, flag 8)
         // deck flags: 1 = deck, +2 / +4 = the deck carries on before / after (a joint, round; an abutment end is square)
         const isD = (k) => !!((rd.bridge?.[(k + n) % n] && rd.bridge?.[(k + 1 + n) % n]) || (rd.tube?.[(k + n) % n] && rd.tube?.[(k + 1 + n) % n])) && (rd.closed || (k >= 0 && k < n - 1));
         const o = s0 * SEG; S[o] = a.x; S[o + 1] = a.z; S[o + 2] = b.x; S[o + 3] = b.z; S[o + 4] = a.y; S[o + 5] = b.y; S[o + 6] = br ? rd.width / 2 + 1 : rd.width / 2 + VERGE; S[o + 7] = br ? 1 + (isD(i - 1) ? 2 : 0) + (isD(i + 1) ? 4 : 0) + (tu ? 8 : 0) : 0; S[o + 8] = rd.rank ?? ri;
         reach[s0] = br || !ground ? skirt : Math.min(skirt, Math.max(Math.abs(a.y - ground(a.x, a.z)), Math.abs(b.y - ground(b.x, b.z))) / FILL + 4 + bench);
-        if (street && !br) { cs[s0] = 1; reach[s0] = Math.max(reach[s0], CITY_BAND + 1); } // (a city street: out to its hand-over to the open ground)
+        if (street && !br) { cs[s0] = rd.kind === 'main' ? 2 : 1; reach[s0] = Math.max(reach[s0], CITY_BAND + 1); } // (a city street: out to its hand-over to the open ground)
       }
     });
     const cnt = new Int32Array(nC * nC + 1), cells = (s, fn) => {
@@ -482,7 +511,7 @@ export class RoadSurface {
     this.jb = junctions; const jc = new Map();
     junctions.forEach((B, b) => { const [x0, z0, x1, z1] = B.bb; for (let cj = Math.max(0, Math.floor((z0 + this.half) / C)); cj <= Math.min(nC - 1, Math.floor((z1 + this.half) / C)); cj++) for (let ci = Math.max(0, Math.floor((x0 + this.half) / C)); ci <= Math.min(nC - 1, Math.floor((x1 + this.half) / C)); ci++) { const c = cj * nC + ci; let L = jc.get(c); if (!L) jc.set(c, (L = [])); L.push(b); } });
     this.jcell = jc;
-    this.y = 0; this.e = 0; this.g = 0; this.In = new Float64Array(40); this.ord = new Int32Array(8); this.nIn = 0; this.Out = new Float64Array(24); this.nOut = 0; // (Out: the city streets just beyond whose footprints (x, z) is, near)
+    this.y = 0; this.e = 0; this.g = 0; this.In = new Float64Array(40); this.ord = new Int32Array(8); this.nIn = 0; this.Out = new Float64Array(32); this.nOut = 0; // (Out: the city streets just beyond whose footprints (x, z) is, near)
   }
   // deck: bridge decks only, and where decks cross (an overpass) the highest one not above y + 2 (any, without y)
   q(x, z, deck = false, y = Infinity) {
@@ -490,16 +519,20 @@ export class RoadSurface {
     if (ci < 0 || cj < 0 || ci >= nC || cj >= nC) return false;
     const c = cj * nC + ci, a = this.start[c], b = this.start[c + 1], jl = deck ? null : this.jcell.get(c);
     if (a === b && !jl) return false;
-    const S = this.seg, want = deck ? 1 : 0; this.nIn = 0; this.nOut = 0;
+    const S = this.seg, want = deck ? 1 : 0; this.nIn = 0; this.nOut = 0; this.surf = 0;
     let best = deck ? 0.5 : this.S, top = -Infinity, hit = false; // (decks: best = e of the current pick)
     // in a junction's box: its level height, the major surface there (rank -1: over every road's, handing over to the
     // arms in the last BLEND metres to its edge, where they are level with it too)
     // (its footprint, as a road's: out to a verge beyond its kerbs, VERGE; not past its mouths, where the arms go on)
     if (jl) for (const id of jl) {
       const B = this.jb[id], bb = B.bb; if (x < bb[0] - VERGE || x > bb[2] + VERGE || z < bb[1] - VERGE || z > bb[3] + VERGE) continue;
-      const d = edgeDist(B.box, x, z), inB = inside(B.box, x, z); if (!inB && (d > VERGE || B.open[edgeDist.at])) continue;
-      const e = inB ? -d - VERGE : d - VERGE; this.inside(-1, e, B.y, 0, 0);
-      if (e < best) { best = e; hit = true; this.y = B.y; this.e = e; this.gx = 0; this.gz = 0; }
+      const d = edgeDist(B.box, x, z), inB = edgeDist.inside, at = edgeDist.at; if (!inB && (d > VERGE || B.open[at])) continue;
+      // (its height there: the box's triangles; just outside, along its kerb, the kerb's)
+      const e = inB ? -d - VERGE : d - VERGE;
+      let yy = inB ? (B.flat ? B.y : boxAt(B, x, z)) : NaN, gx = 0, gz = 0;
+      if (Number.isNaN(yy)) { const nb = B.box.length / 2; yy = B.ey[at] + (B.ey[(at + 1) % nb] - B.ey[at]) * edgeDist.t; } else if (!B.flat) { gx = boxAt.gx; gz = boxAt.gz; }
+      this.inside(-1, inB ? -BLEND - d : -BLEND * (1 - d / VERGE), yy, gx, gz); // (in the blend: all the box inside it, so the surface is the one it draws, whatever else passes there; handing over across its verge)
+      if (e < best) { best = e; hit = true; this.y = yy; this.e = e; this.gx = gx; this.gz = gz; }
     }
     for (let k = a; k < b; k++) {
       const o = this.ids[k] * SEG, f = S[o + 7]; if ((f & 1) !== want) continue;
@@ -509,10 +542,11 @@ export class RoadSurface {
       const e = Math.sqrt(px * px + pz * pz) - S[o + 6], yy = S[o + 4] + (S[o + 5] - S[o + 4]) * t;
       if (deck && (f & 8) && !(yy > y - 7)) continue; // (a tunnel's floor: only for what is down in the tunnel, not on the hill above it)
       // decks: the nearest centreline on the same level; a deck a level up (an overpass) wins outright
-      if (!deck && e < 0) this.inside(S[o + 8], e, yy, (S[o + 5] - S[o + 4]) * dx / L2, (S[o + 5] - S[o + 4]) * dz / L2);
-      else if (!deck && e < CITY_BAND && this.cs[this.ids[k]]) this.near(S[o + 8], e, yy);
-      if (deck ? e < ((f & 8) ? 1.5 : 0.5) && yy < y + 2 && (!hit || yy > top + 2.5 || (yy > top - 2.5 && e < best)) : e < best) {
-        best = e; top = yy; hit = true; this.k = this.ids[k]; this.y = yy; this.e = e; this.gx = (S[o + 5] - S[o + 4]) * dx / L2; this.gz = (S[o + 5] - S[o + 4]) * dz / L2;
+      if (!deck && e < 0) this.inside(S[o + 8] + (this.sf[this.ids[k]] & 4 ? MINOR_RANK : 0), e, yy, (S[o + 5] - S[o + 4]) * dx / L2, (S[o + 5] - S[o + 4]) * dz / L2);
+      else if (!deck && e < CITY_BAND && this.cs[this.ids[k]]) this.near(S[o + 8], e, yy, this.cs[this.ids[k]] === 2 ? SLAB : PAVE.street - VERGE);
+      const eb = !deck && e > 0 && (this.sf[this.ids[k]] & 4) ? e + MINOR_EDGE : e; // (beyond the footprints: a street's embankment before a way off the street network's, where the two meet)
+      if (deck ? e < ((f & 8) ? 1.5 : 0.5) && yy < y + 2 && (!hit || yy > top + 2.5 || (yy > top - 2.5 && e < best)) : eb < best) {
+        best = deck ? e : eb; top = yy; hit = true; this.k = this.ids[k]; this.surf = this.sf[this.k] & 3; this.y = yy; this.e = e; this.gx = (S[o + 5] - S[o + 4]) * dx / L2; this.gz = (S[o + 5] - S[o + 4]) * dz / L2;
       }
     }
     if (!deck && this.nIn > 1) this.blend();
@@ -528,18 +562,21 @@ export class RoadSurface {
     if (k < this.nIn) { if (e >= R[k * 5 + 1]) return; } else { if (k >= 8) return; this.nIn++; }
     R[k * 5] = rank; R[k * 5 + 1] = e; R[k * 5 + 2] = y; R[k * 5 + 3] = gx; R[k * 5 + 4] = gz;
   }
-  // a city street (x, z) lies just beyond (within CITY_BAND of its footprint): each street once, its nearest segment
-  near(rank, e, y) {
+  // a city street (x, z) lies just beyond (within CITY_BAND of its footprint): each street once, its nearest segment;
+  // sl: how far past its footprint its slabs reach
+  near(rank, e, y, sl) {
     const R = this.Out; let k = 0;
-    while (k < this.nOut && R[k * 3] !== rank) k++;
-    if (k < this.nOut) { if (e >= R[k * 3 + 1]) return; } else { if (k >= 8) return; this.nOut++; }
-    R[k * 3] = rank; R[k * 3 + 1] = e; R[k * 3 + 2] = y;
+    while (k < this.nOut && R[k * 4] !== rank) k++;
+    if (k < this.nOut) { if (e >= R[k * 4 + 1]) return; } else { if (k >= 8) return; this.nOut++; }
+    R[k * 4] = rank; R[k * 4 + 1] = e; R[k * 4 + 2] = y; R[k * 4 + 3] = sl;
   }
   blend() {
     const R = this.In, n = this.nIn, ord = this.ord; for (let k = 0; k < n; k++) ord[k] = k;
     for (let a = 1; a < n; a++) { const v = ord[a]; let b = a - 1; while (b >= 0 && R[ord[b] * 5] < R[v * 5]) { ord[b + 1] = ord[b]; b--; } ord[b + 1] = v; } // minor first
-    let k = ord[0] * 5, y = R[k + 2], gx = R[k + 3], gz = R[k + 4];
-    for (let a = 1; a < n; a++) { k = ord[a] * 5; const w = smoothstep(0, BLEND, -R[k + 1]); y += (R[k + 2] - y) * w; gx += (R[k + 3] - gx) * w; gz += (R[k + 4] - gz) * w; }
+    // (a street hands over to a way off the street network in its verge only, VERGE: never on its tarmac, whatever the
+    // way's grade where it meets the street)
+    let k = ord[0] * 5, y = R[k + 2], gx = R[k + 3], gz = R[k + 4], prev = R[k];
+    for (let a = 1; a < n; a++) { k = ord[a] * 5; const w = smoothstep(0, prev >= MINOR_RANK && R[k] < MINOR_RANK ? VERGE : BLEND, -R[k + 1]); prev = R[k]; y += (R[k + 2] - y) * w; gx += (R[k + 3] - gx) * w; gz += (R[k + 4] - gz) * w; }
     this.y = y; this.gx = gx; this.gz = gz;
   }
   // ground height with the road on it: the profile inside the footprint, then the embankment (the base surface
@@ -555,14 +592,15 @@ export class RoadSurface {
     const e = this.e; if (e <= 0) return this.y;
     const c = clamp(base, this.y - FILL * e, this.y + CUT * Math.max(0, e - this.B)), h = c + (base - c) * smoothstep(this.S * 0.6, this.S, e);
     if (!this.cs[this.k]) return h;
-    const R = this.Out; let sw = 0, sp = 0, sk = 0, cap = Infinity;
+    const R = this.Out; let sw = 0, sp = 0, sk = 0, cap = Infinity, floor = -Infinity;
     for (let i = 0; i < this.nOut; i++) {
-      const ei = R[i * 3 + 1], yi = R[i * 3 + 2], d = base - yi - CITY_TOP, w = (1 - smoothstep(CITY_BAND * 0.6, CITY_BAND, ei)) / ((ei + 0.5) * (ei + 0.5));
-      sw += w; sp += w * (yi + CITY_TOP * smoothstep(0, PAVE_RAMP, ei) + d * smoothstep(PAVE_RAMP, CITY_BAND, ei)); sk += w * (1 - smoothstep(0.8, 1.6, Math.abs(d)));
+      const ei = R[i * 4 + 1], yi = R[i * 4 + 2], sl = R[i * 4 + 3], d = base - yi - CITY_TOP, w = (1 - smoothstep(CITY_BAND * 0.6, CITY_BAND, ei)) / ((ei + 0.5) * (ei + 0.5)), ramp = yi + CITY_TOP * smoothstep(0, PAVE_RAMP, ei);
+      sw += w; sp += w * (ramp + d * smoothstep(PAVE_RAMP, CITY_BAND, ei)); sk += w * (1 - smoothstep(0.8, 1.6, Math.abs(d)));
       if (ei < SLAB + 1) cap = Math.min(cap, yi + CITY_TOP + 50 * smoothstep(SLAB, SLAB + 1, ei)); // (under a street's slabs: no higher than their top, whatever is beyond)
+      if (ei < CITY_BAND) floor = Math.max(floor, ei < sl ? ramp : yi + CITY_TOP - SLAB_FALL * (ei - sl)); // (and no lower than its ramp up to them, then down at SLAB_FALL from their edge: where the ground beyond falls away, a bank, it does so past the slabs, which lie on it, #228 042034)
     }
     if (sw < 1e-9) return h + (base - h) * (1 - smoothstep(0.8, 1.6, Math.abs(base - this.y - CITY_TOP))); // (past them all: the open ground itself)
-    const r = h + (sp / sw - h) * (sk / sw);
+    const r = Math.max(h + (sp / sw - h) * (sk / sw), floor);
     return r < cap ? r : cap;
   }
 }

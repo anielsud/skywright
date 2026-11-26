@@ -216,7 +216,7 @@ export function shoulderMaterial(region) {
 
 // A city's pavements (#228): a granite kerb 15 cm up from the gutter, then concrete slabs (1.5 m, with their joints) to
 // the building line. uv = (metres across from the road's centre line, metres along); rinfo as the tarmac's (half width);
-// rjunc as the tarmac's: the pavement stops at a junction's clearance, where the crossing is.
+// rjunc as the tarmac's: the pavement stops at a junction's clearance, where the crossing is, on the side(s) its mouth is on.
 export function sidewalkMaterial() {
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0 });
   const U = { sD: { value: tex('sidewalk_d', true) }, rLamp: ROAD_U.rLamp };
@@ -232,7 +232,8 @@ export function sidewalkMaterial() {
         float hw = vI.x, x = abs(vR.x) - hw, v = vR.y; // x: metres out from the kerb's face
         float gFv = fwidth(v), gFx = fwidth(x);
         float dj = min(vJ.x, vJ.y), jc = vJ.y < vJ.x ? vJ.w : vJ.z, jr = floor(jc / 32.0) / 16.0, jBox = mod(floor(jc / 16.0), 2.0);
-        if (jc > 0.5 && dj < jr + 0.3 + 0.3 * jBox) discard; // (the junction: the crossing's open roadway; a box's mouth, where its corner pavement takes over)
+        float jf = mod(jc, 32.0), jSide = vR.x > 0.0 ? mod(floor(jf / 4.0), 2.0) : mod(floor(jf / 8.0), 2.0); // (the mouth on this side of the road: on a road passing a T, its far side's pavement carries on)
+        if (jc > 0.5 && jSide > 0.5 && dj < jr + 0.3 + 0.3 * jBox) discard; // (the junction: the crossing's open roadway; a box's mouth, where its corner pavement takes over)
         vec3 conc = vec3(0.47, 0.465, 0.45) * texture2D(sD, vec2(vR.x, v) / 2.4).rgb * 2.0;
         // slabs: joints every 1.5 m along and across, a little darker and soiled; some slabs a shade off
         vec2 sl = vec2(x - 0.35, v) / 1.5, f = abs(fract(sl) - 0.5) * 1.5;
@@ -249,5 +250,73 @@ export function sidewalkMaterial() {
         totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.74, 0.44) * (0.3 + 2.4 * lampPool(v, vR.x, hw, vI.z, gFv)) * rLamp;`);
   };
   mat.customProgramCacheKey = () => 'sidewalk3';
+  return mat;
+}
+
+// The ways off the street network (roads.js rd.minor) and the plazas, one material for both of their looks (one draw a
+// road tile): paving (pedestrian streets, squares and paved footpaths: pavers with sanded joints, no markings, flush
+// with the ground) or gravel (farm tracks: compacted gravel with two wheel ruts and a grassy crown, ragged edges).
+// (Alleys and other asphalt ones are drawn with the tarmac, with nothing painted.) uv = (metres across, metres along)
+// on a ribbon, world (x, z) on a plaza; rinfo as the tarmac's: half width (a plaza: 1e4, no edge band), the look (1
+// paving, 2 gravel: roadnet.js SURF), seed; rjunc as the tarmac's (where it meets a street). The pavers follow each place's look: New York's
+// grey concrete pavers (60 x 30 cm, running bond), granite setts in the Swiss villages (16 x 12 cm), pale pavers in
+// Bora Bora.
+const PAVING = {
+  ch: { tint: [0.45, 0.42, 0.38], size: [0.16, 0.12], vary: 0.28, joint: 0.5 },
+  us: { tint: [0.50, 0.49, 0.47], size: [0.6, 0.3], vary: 0.12, joint: 0.35 },
+  fr: { tint: [0.58, 0.55, 0.50], size: [0.4, 0.2], vary: 0.14, joint: 0.35 },
+};
+export function pathMaterial(region) {
+  const L = LOOK[region] || LOOK.ch, P = PAVING[region] || PAVING.ch;
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 }); // (under a street's tarmac, -4, where the two overlap: the street's mouth)
+  const U = { pD: { value: tex('sidewalk_d', true) }, gD: { value: tex('gravel_d', true) }, pTint: { value: new THREE.Color(...P.tint) }, gTint: { value: new THREE.Color(...L.gravel) },
+    pSize: { value: new THREE.Vector2(...P.size) }, pVary: { value: P.vary }, pJoint: { value: P.joint }, rLamp: ROAD_U.rLamp };
+  mat.userData.U = U;
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, FOG, U); // (FOG: the game's height fog: a material with its own hook must add it)
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec3 rinfo; attribute vec4 rjunc; varying vec2 vR; varying vec3 vI; varying vec4 vJ;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvR = uv; vI = rinfo; vJ = rjunc;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+      varying vec2 vR; varying vec3 vI; varying vec4 vJ; uniform sampler2D pD; uniform sampler2D gD; uniform vec3 pTint; uniform vec3 gTint; uniform vec2 pSize; uniform float pVary; uniform float pJoint; uniform float rLamp;
+      ${NOISE}${POOL}`)
+      .replace('#include <map_fragment>', `
+        float hw = vI.x, x = vR.x, v = vR.y, ax = abs(x), seed = vI.z, gravel = step(1.5, vI.y); // (rinfo.y: 1 paving, 2 gravel)
+        float gFx = fwidth(x), gFv = fwidth(v), gF = max(gFx, gFv); // (derivatives up front: not inside branches or after a discard)
+        // where it meets a street (rjunc as the tarmac's, roads.js junctionsFromNodes: a box's flag): it stops at the street's edge
+        { float dj = min(vJ.x, vJ.y), jc = vJ.y < vJ.x ? vJ.w : vJ.z; if (jc > 0.5 && mod(floor(jc / 16.0), 2.0) > 0.5 && dj < floor(jc / 32.0) / 16.0 + 0.6) discard; }
+        vec3 col;
+        if (gravel > 0.5) {
+          float n = fbm(vec2(v * 0.5, seed + x * 0.3));
+          if (ax > hw - 0.45 * n) discard; // ragged edges, into the grass
+          col = gTint * vec3(0.92, 0.86, 0.74) * texture2D(gD, vec2(x, v) / 1.8).rgb * 2.0 * (0.8 + 0.32 * fbm(vec2(x * 0.4, v * 0.15 + seed))); // (a track's dust: browner than the shoulders' grit)
+          // two wheel ruts, compacted and darker; between them, on a narrow track, grass coming through the crown
+          float rut = smoothstep(0.35, 0.1, abs(ax - min(0.8, hw * 0.45)));
+          col *= 1.0 - 0.24 * rut;
+          float crown = (1.0 - smoothstep(0.25, 0.5, ax)) * step(hw, 2.2) * smoothstep(0.35, 0.7, fbm(vec2(x * 2.0, v * 0.8) + seed));
+          col = mix(col, vec3(0.16, 0.2, 0.08) * (0.8 + 0.4 * n), crown * 0.75);
+          float edge = smoothstep(hw - 0.9, hw - 0.2, ax) * smoothstep(0.3, 0.6, fbm(vec2(x * 1.7, v * 1.3) + seed * 2.0));
+          col = mix(col, vec3(0.17, 0.2, 0.09), edge * 0.6);
+        } else {
+          // pavers in running bond: rows across the way (v), every other row shifted half a paver
+          vec2 q = vec2(v, x) / pSize; float row = floor(q.y); q.x += 0.5 * mod(row, 2.0);
+          vec2 id = floor(q), f = fract(q), e = min(f, 1.0 - f) * pSize; // (metres to the paver's edges)
+          float fade = 1.0 - smoothstep(0.03, 0.12, gF); // (far off: the joints and the pavers' shades average out)
+          float joint = (1.0 - smoothstep(0.006, 0.006 + gF, min(e.x, e.y))) * fade;
+          col = pTint * texture2D(pD, vec2(x, v) / 2.4).rgb * 2.0;
+          col *= 1.0 + pVary * (rh(id + seed) - 0.5) * 2.0 * fade;
+          col *= 0.86 + 0.14 * fbm(vec2(x, v) * 0.3 + seed); // grime, the worn lines people walk
+          col *= 1.0 - joint * pJoint;
+          // a ribbon's edge: a band of granite kerb-stones laid flush
+          float band = step(hw - 0.22, ax) * step(hw, 9000.0);
+          col = mix(col, vec3(0.36, 0.355, 0.35) * (0.85 + 0.3 * rh(vec2(floor(v / 0.8), seed))), band);
+        }
+        diffuseColor.rgb = col;
+      `)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = mix(0.86, 1.0, gravel);`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance += diffuseColor.rgb * vec3(1.0, 0.74, 0.44) * (0.3 + 1.6 * lampPool(v, x, min(hw, 6.0), seed, gFv)) * rLamp * 0.8 * (1.0 - gravel);`);
+  };
+  mat.customProgramCacheKey = () => 'path3-' + region;
   return mat;
 }
