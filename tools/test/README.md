@@ -735,7 +735,9 @@ in then restarted. The old `restart.py` is gone.
 
 How shaders are kept from stalling a frame (#273):
 - **The loading screen** compiles everything in the scene (`compileAsync` in `main.js`), and its first frame draws
-  every hidden shadow caster for the shadow shaders (`warmShaders`).
+  every hidden shadow caster for the shadow shaders (`warmShaders`). A vehicle swapped into a kept World (or a restart)
+  warms only what its flight added: the World's own casters were drawn in its first flight's warm-up, and every vehicle
+  flies with the same light set (a landing light's SpotLight leaves the scene by day), so the World's programs stay valid.
 - **Things added after it** (streamed tiles, street cars, late models, other players) compile between frames and wait
   hidden until ready (`flushNew`): at worst they show a few frames late. Nothing has to be registered.
 - **Events must show at once** (crash, explosion, collapse, splash, boom), so their objects are pooled and in the
