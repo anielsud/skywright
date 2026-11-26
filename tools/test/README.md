@@ -55,7 +55,7 @@ Tests are in two tiers.
 **Known failures:** `tools/test/known.json` lists failing checks that are already tracked (suite → check name →
 issue). The Node runner reports them as `known` and doesn't count them. A listed check that passes is reported as
 `fixed` (take it off the list). **CI** (`.github/workflows/smoke.yml`, "Tests") runs on every PR as parallel
-jobs: the smoke tour (3 parts), the Node tier (2 halves, `run.mjs --shard K/N`), and the browser suites covering
+jobs: the smoke tour (3 parts), the Node tier (3 parts, `run.mjs --shard K/3`), and the browser suites covering
 what the PR changed, one job each (`run.py --changed --tier browser --plan` lists them, then `run.py --ci <suite>`).
 In all, about 6 minutes. Every browser suite runs nightly on main (`.github/workflows/nightly.yml`).
 Where a runner's time goes: it has no GPU, so Chrome's software GPU builds every shader program a new place needs
@@ -72,6 +72,15 @@ the same as in the browser (PNGs decode in Node: `setup.mjs`); the imagery's col
 may depend on them (only New York's stunt site search does: its tree-canopy rule). A World takes 1–5 s to build and is
 kept per worker; a case that needs one says so (`world: 'nyc'`) and the runner hands it to a worker that has it where
 it can. `SKY_WORLD_LOG=1` prints each build.
+
+**Case times and shards.** `tools/test/node/times.json` (committed) holds each case's time from a full local run
+(ms, `suite|case`); `.times.json` (not committed) is this machine's last run and wins where it has a case. A case with
+neither counts as its `cost`, else as a typical case. Refresh the committed file after adding or changing cases:
+`node tools/test/node/run.mjs --write-times` (a full run; it merges this run's times in). `--shard K/N` runs part K of
+N: cases sharing a World or a key are kept in one part (one World build per place per part; a group bigger than a
+part's share is cut), then groups go longest first to the part with the least estimated work. `--list --shard 1/N
+--jobs 4` prints the plan without running anything: each part's estimated work, its estimated wall time on that many
+workers, and its groups.
 
 ## Run it
 

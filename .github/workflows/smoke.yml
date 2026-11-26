@@ -57,15 +57,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
-    name: node tier (part ${{ matrix.shard }}/2)
+        shard: [1, 2, 3]
+    name: node tier (part ${{ matrix.shard }}/3)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
       - name: Node suites
-        run: node tools/test/node/run.mjs --jobs 4 --shard ${{ matrix.shard }}/2
+        run: node tools/test/node/run.mjs --jobs 4 --shard ${{ matrix.shard }}/3 # (split by place and case times: tools/test/node/times.json)
 
   # which browser suites the PR's changes need (run.py --changed), then one job each, all at once (one after another
   # they took ~18 min; most of a suite's time is the runner's software GPU building shaders for each new place)

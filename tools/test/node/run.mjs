@@ -2,6 +2,8 @@
 // Node test runner: runs the Node-tier suites (tools/test/<name>.js modules that export a nodeSuite) on a pool of
 // worker threads, one case at a time, and reports them together. Usage (from anywhere):
 //   node tools/test/node/run.mjs [suite ...] [--jobs N] [--shard K/N] [--only TEXT] [--json out.json] [--list]
+//   (--shard K/N: part K of N, cases sharing a World or key kept together (shardPlan); --list --shard 1/N: the plan only;
+//   --write-times: write this run's case times into the committed tools/test/node/times.json)
 // With no suite named it runs every registered suite (SUITES below). Exits non-zero on any failed check.
 //
 // A suite module exports:
@@ -42,33 +44,47 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
 } else {
   const args = process.argv.slice(2), opt = (k, d) => { const i = args.indexOf(k); if (i < 0) return d; const v = args[i + 1]; args.splice(i, 2); return v; };
   const jobs = +opt('--jobs', Math.max(1, availableParallelism() - 2)), only = opt('--only', null), jsonOut = opt('--json', null);
-  const [shardK, shardN] = (opt('--shard', '1/1')).split('/').map(Number); // (part K of N: every Nth case, longest first, for parallel CI jobs)
-  const list = args.includes('--list'), files = args.includes('--files'), names = args.filter((a) => !a.startsWith('--'));
+  const [shardK, shardN] = (opt('--shard', '1/1')).split('/').map(Number); // (part K of N, for parallel CI jobs: shardPlan below)
+  const list = args.includes('--list'), files = args.includes('--files'), writeTimes = args.includes('--write-times'), names = args.filter((a) => !a.startsWith('--'));
   const suites = names.length ? names : SUITES;
   await import(pathToFileURL(here + 'setup.mjs').href);
-  const ctx = await context(), work = [];
+  const ctx = await context(), work = [], allKeys = new Set();
   if (files) { const out = {}; for (const s of suites) out[s] = (await import(modUrl(s))).nodeSuite?.files ?? []; console.log(JSON.stringify(out)); process.exit(0); }
   for (const s of suites) {
     const m = await import(modUrl(s));
     if (!m.nodeSuite || !m.cases || !m.runCase) { console.error(`${s}: not a Node suite (needs nodeSuite, cases, runCase)`); process.exit(2); }
-    m.cases(ctx).forEach((c, i) => { if (!only || JSON.stringify(c).toLowerCase().includes(only.toLowerCase())) work.push({ suite: s, i, c }); });
+    m.cases(ctx).forEach((c, i) => { allKeys.add(`${s}|${c.id ?? i}`); if (!only || JSON.stringify(c).toLowerCase().includes(only.toLowerCase())) work.push({ suite: s, i, c }); });
   }
-  if (list) { for (const w of work) console.log(`${w.suite}  ${w.c.id ?? w.i}`); process.exit(0); }
+  // Case times (ms, by suite|case id): tools/test/node/times.json is committed (so CI's shards know them; refresh it with
+  // --write-times after a full run), .times.json is this machine's last run (not committed) and wins where it has one.
+  // Unknown: the case's own c.cost (s), else the median known case.
+  const timesFile = here + '.times.json', committedFile = here + 'times.json', key = keyOf;
+  const readJSON = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return {}; } };
+  const committed = readJSON(committedFile), local = readJSON(timesFile), times = { ...committed, ...local };
+  const knownMs = work.map((w) => times[key(w)]).filter((v) => v != null).sort((a, b) => a - b), typical = knownMs.length ? knownMs[knownMs.length >> 1] : 2000;
+  const est = (w) => times[key(w)] ?? (w.c.cost != null ? w.c.cost * 1000 : typical);
+  const plan = shardPlan(work, shardN, est), queue = plan[shardK - 1].flatMap((g) => g.cases).sort((a, b) => est(b) - est(a));
+  if (list) {
+    if (shardN === 1 && !args.includes('--shard')) { for (const w of work) console.log(`${w.suite}  ${w.c.id ?? w.i}`); process.exit(0); }
+    // (dry run: each shard's estimated work, its estimated wall time on --jobs workers, and its groups)
+    plan.forEach((gs, k) => {
+      const cs = gs.flatMap((g) => g.cases), sum = cs.reduce((s, w) => s + est(w), 0);
+      console.log(`shard ${k + 1}/${shardN}: ${cs.length} cases, ${(sum / 1000).toFixed(1)} s of work, ~${(simulate(cs, jobs, est) / 1000).toFixed(1)} s on ${jobs} workers${shardK - 1 === k && args.includes('--shard') ? '  (this shard)' : ''}`);
+      for (const g of gs) if (g.name) console.log(`  ${(g.ms / 1000).toFixed(1).padStart(6)} s  ${g.name} (${g.cases.length} cases)`);
+      const free = gs.filter((g) => !g.name); console.log(`  ${(free.reduce((s, g) => s + g.ms, 0) / 1000).toFixed(1).padStart(6)} s  ${free.length} cases with no affinity`);
+    });
+    process.exit(0);
+  }
   let knownFails = {}; try { knownFails = JSON.parse(readFileSync(REPO + 'tools/test/known.json', 'utf8')); } catch {}
-  // longest first (times from earlier runs, tools/test/node/.times.json, not committed; else a case's own c.cost in s;
-  // unknown cases count as long), handed out one at a time. A case may name what it shares with others, c.world (a
+  // Within a shard: longest first, handed out one at a time. A case may name what it shares with others, c.world (a
   // place's World, node/world.mjs keeps one per worker) or c.key (e.g. a vehicle's built crew): a worker is handed a case
   // for something it already has if there is one, else one for something no worker has started, else one needing none.
-  const timesFile = here + '.times.json', key = (w) => `${w.suite}|${w.c.id ?? w.i}`, aff = (j) => j.c.world ?? j.c.key;
-  let times = {}; try { times = JSON.parse(readFileSync(timesFile, 'utf8')); } catch {}
-  const est = (w) => times[key(w)] ?? (w.c.cost != null ? w.c.cost * 1000 : 1e9);
-  const queue = [...work].sort((a, b) => est(b) - est(a)).filter((w, i) => i % shardN === shardK - 1), started = new Set();
+  const started = new Set();
   const t0 = performance.now(), results = [], n = Math.min(jobs, queue.length);
   console.log(`${queue.length} cases${shardN > 1 ? ` (part ${shardK}/${shardN} of ${work.length})` : ''} from ${suites.join(', ')} on ${n} workers`);
   await Promise.all(Array.from({ length: n }, () => new Promise((resolve) => {
     const w = new Worker(fileURLToPath(import.meta.url)), mine = new Set();
-    const pick = () => { let k = queue.findIndex((j) => aff(j) != null && mine.has(aff(j))); if (k < 0) k = queue.findIndex((j) => aff(j) != null && !started.has(aff(j))); if (k < 0) k = queue.findIndex((j) => aff(j) == null); return queue.splice(Math.max(0, k), 1)[0]; };
-    const next = () => { const job = pick(); if (job) { const a = aff(job); if (a != null) { mine.add(a); started.add(a); } w.postMessage(job); } else { w.terminate(); resolve(); } };
+    const next = () => { const job = pick(queue, mine, started); if (job) { const a = aff(job); if (a != null) { mine.add(a); started.add(a); } w.postMessage(job); } else { w.terminate(); resolve(); } };
     w.on('message', (m) => {
       if (m.ready) return next();
       results.push(m);
@@ -77,8 +93,13 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
     });
     w.on('error', (e) => { results.push({ suite: '?', i: -1, ms: 0, checks: [{ name: 'worker crashed', ok: false, why: String(e) }] }); resolve(); });
   })));
-  for (const r of results) { const w = work.find((x) => x.suite === r.suite && x.i === r.i); if (w) times[key(w)] = Math.round(r.ms); }
-  try { writeFileSync(timesFile, JSON.stringify(times)); } catch {}
+  const measured = {}; for (const r of results) { const w = work.find((x) => x.suite === r.suite && x.i === r.i); if (w) measured[key(w)] = Math.round(r.ms); }
+  try { writeFileSync(timesFile, JSON.stringify({ ...local, ...measured })); } catch {}
+  if (writeTimes) { // (this run's times over the committed ones; a listed suite's cases that no longer exist are dropped)
+    const out = {}; for (const [k, v] of Object.entries(committed)) if (allKeys.has(k) || !suites.includes(k.split('|')[0])) out[k] = v;
+    Object.assign(out, measured);
+    writeFileSync(committedFile, timesJSON(out)); console.log(`wrote ${Object.keys(out).length} case times to tools/test/node/times.json`);
+  }
   // known failures (tools/test/known.json: suite -> check name -> issue) report as known, not as failures
   let known = {}; try { known = JSON.parse(readFileSync(REPO + 'tools/test/known.json', 'utf8')); } catch {}
   const isKnown = (c) => known[c.suite]?.[c.name];
@@ -92,3 +113,52 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
   if (jsonOut) writeFileSync(jsonOut, JSON.stringify({ per, checks }, null, 1));
   process.exit(bad.length ? 1 : 0);
 }
+
+// what a case shares with others (World first: node/world.mjs caches one per worker)
+function aff(j) { return j.c.world ?? j.c.key; }
+// the case a worker takes next: one for something it already has, else for something no worker has started, else one
+// needing nothing, else the longest left (another worker's: built again here rather than idle)
+function pick(queue, mine, started) {
+  let k = queue.findIndex((j) => aff(j) != null && mine.has(aff(j)));
+  if (k < 0) k = queue.findIndex((j) => aff(j) != null && !started.has(aff(j)));
+  if (k < 0) k = queue.findIndex((j) => aff(j) == null);
+  return queue.splice(Math.max(0, k), 1)[0];
+}
+// The work split into n shards (separate CI jobs: nothing is shared between them). Cases that share a World or a key
+// (transitively: a case with both joins the two) form a group, kept in one shard so each shard builds a place's World
+// once. A group bigger than a shard's fair share (total / n) is cut into parts that fit, else that shard would be all
+// one group. Then longest first, each group to the shard with the least estimated work. Deterministic for given times.
+export function shardPlan(work, n, est) {
+  const parent = new Map(), find = (x) => { while (parent.get(x) !== x) x = parent.get(x); return x; };
+  const tokens = (w) => [w.c.world != null && 'world ' + w.c.world, w.c.key != null && 'key ' + w.c.key].filter(Boolean);
+  for (const w of work) { const ts = tokens(w); for (const t of ts) if (!parent.has(t)) parent.set(t, t); for (const t of ts.slice(1)) parent.set(find(t), find(ts[0])); }
+  const byRoot = new Map(), groups = [];
+  for (const w of work) {
+    const ts = tokens(w);
+    if (!ts.length) { groups.push({ name: null, cases: [w], ms: est(w) }); continue; }
+    const r = find(ts[0]); if (!byRoot.has(r)) byRoot.set(r, { names: new Set(), cases: [], ms: 0 });
+    const g = byRoot.get(r); for (const t of ts) g.names.add(t); g.cases.push(w); g.ms += est(w);
+  }
+  const total = work.reduce((s, w) => s + est(w), 0), fair = total / n;
+  for (const g of byRoot.values()) {
+    const name = [...g.names].sort().join(' + ');
+    const parts = Math.min(n, Math.ceil(g.ms / fair - 1e-9)); // (a group over a fair share: cut into the fewest parts that fit)
+    if (parts <= 1) { groups.push({ name, cases: g.cases, ms: g.ms }); continue; }
+    const ps = Array.from({ length: parts }, (_, i) => ({ name: `${name} [part ${i + 1}/${parts}]`, cases: [], ms: 0 }));
+    for (const w of [...g.cases].sort((a, b) => est(b) - est(a) || keyOf(a).localeCompare(keyOf(b)))) { const p = ps.reduce((m, p) => (p.ms < m.ms ? p : m)); p.cases.push(w); p.ms += est(w); }
+    groups.push(...ps);
+  }
+  groups.sort((a, b) => b.ms - a.ms || keyOf(a.cases[0]).localeCompare(keyOf(b.cases[0])));
+  const shards = Array.from({ length: n }, () => ({ groups: [], ms: 0 }));
+  for (const g of groups) { const s = shards.reduce((m, s) => (s.ms < m.ms ? s : m)); s.groups.push(g); s.ms += g.ms; }
+  return shards.map((s) => s.groups);
+}
+function keyOf(w) { return `${w.suite}|${w.c.id ?? w.i}`; }
+// a shard's estimated wall time on `jobs` workers, handing out cases the way the run does (pick)
+function simulate(cases, jobs, est) {
+  const queue = [...cases].sort((a, b) => est(b) - est(a)), started = new Set(), ws = Array.from({ length: Math.min(jobs, queue.length) }, () => ({ t: 0, mine: new Set() }));
+  while (queue.length) { const w = ws.reduce((m, w) => (w.t < m.t ? w : m)), j = pick(queue, w.mine, started), a = aff(j); if (a != null) { w.mine.add(a); started.add(a); } w.t += est(j); }
+  return Math.max(0, ...ws.map((w) => w.t));
+}
+// the committed times file: one case per line, sorted (small diffs)
+function timesJSON(t) { return '{\n' + Object.keys(t).sort().map((k) => `  ${JSON.stringify(k)}: ${t[k]}`).join(',\n') + '\n}\n'; }
