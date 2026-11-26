@@ -38,15 +38,17 @@ export async function fly(name, location, secs = 4) {
 const count = () => ({ stall: window.__inflightCompiles || 0, late: window.__lateShows || 0 });
 const since = (c0) => { const c = count(); return { stall: c.stall - c0.stall, late: c.late - c0.late }; };
 const frames = async (n) => { for (let i = 0; i < n; i++) await frame(); };
-const wait = async (F, ms) => { const t0 = performance.now(); while (performance.now() - t0 < ms && S.F === F) await frame(); };
+// (at least `n` frames drawn as well as `ms`: on CI's software GPU a frame takes seconds, and only drawn frames compile)
+const wait = async (F, ms, n = 10) => { const t0 = performance.now(); let k = 0; while ((performance.now() - t0 < ms || k < n) && S.F === F) { await frame(); k++; } };
 
 // Hold the vehicle where it is until nothing new has needed a shader for 2 s (streaming around it has settled), so a
 // late show in the phase that follows is that phase's own, not streaming's.
 async function settle(F, ac) {
   const x = ac.x.clone(), q = ac.q.clone(); let last = count().late, t = performance.now(); const t0 = t;
-  while (S.F === F && performance.now() - t < 2000 && performance.now() - t0 < 30000) {
-    ac.x.copy(x); ac.q.copy(q); ac.v.set(0, 0, 0); ac.w?.set?.(0, 0, 0); await frame();
-    const n = count().late; if (n !== last) { last = n; t = performance.now(); }
+  let k = 0;
+  while (S.F === F && (performance.now() - t < 2000 || k < 20) && performance.now() - t0 < 60000) {
+    ac.x.copy(x); ac.q.copy(q); ac.v.set(0, 0, 0); ac.w?.set?.(0, 0, 0); await frame(); k++;
+    const n = count().late; if (n !== last) { last = n; t = performance.now(); k = 0; }
   }
 }
 
@@ -91,7 +93,7 @@ export async function sweep(name, location) {
   const far = W.half + 3000;
   for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
     ac.x.set(dx * far, W.groundAt(dx * far, dz * far).h + 700, dz * far); ac.v.set(dx * 70, 0, dz * 70);
-    await wait(F, 5000);
+    await wait(F, 5000, 30);
   }
   r.phases.streaming = since(c);
 
@@ -108,8 +110,11 @@ export async function sweep(name, location) {
   if (!target) { const g = W.groundAt(0, 0).h; ac.x.set(0, g + 40, 0); ac.v.set(30, -70, 0); target = 'ground'; }
   ac.q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0);
   const v0 = ac.v.clone(); await settle(F, ac); c = count(); ac.v.copy(v0); // (streaming round the crash site done first)
-  await wait(F, 4000);
-  r.phases.crash = { ...since(c), target, partsLost: ac.stats?.partsLost ?? null };
+  // stepped in game time up to the impact (a slow GPU would take minutes of frames to get there), then drawn
+  const lost0 = ac.stats?.partsLost ?? 0;
+  for (let i = 0; i < 40 && S.F === F && (ac.stats?.partsLost ?? 0) === lost0; i++) { S.advance(0.1); await frame(); }
+  await wait(F, 3000, 30);
+  r.phases.crash = { ...since(c), target, partsLost: (ac.stats?.partsLost ?? 0) - lost0 };
 
   r.programs = S.renderer.info.programs.length;
   if (S.F === F) S.endFlight();

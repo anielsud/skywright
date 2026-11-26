@@ -71,6 +71,8 @@ def main():
             fails = [f"{k}: {v['stall']} stalled a frame" for k, v in ph.items() if v['stall']]
             fails += [f"{k}: {v['late']} waited for their shader" for k, v in ph.items() if v['late'] and k != 'streaming']
             fails += [f'problem: {p}' for p in r['problems']]
+            if not ph['crash']['partsLost']:
+                fails.append(f"crash: nothing broke off (into {ph['crash']['target']}): the crash didn't happen, so it checked nothing")
             bad += bool(fails)
             print(f"{'FAIL' if fails else 'PASS'}  {r['name']} at {r['location']}: {r['warmed']} programs behind the loading screen; "
                   f"scene drawn ({ph['scene']['objects']} hidden/culled shown), events, streaming ({ph['streaming']['late']} new shown when ready), "
