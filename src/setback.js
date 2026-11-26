@@ -34,6 +34,12 @@ export const MAJOR = { area: 800, height: 25 }; // (m2, m) a building too big to
 // (all its centre lines' runs under the footprint added up) that is still a passage
 export const PASSAGE = { clear: 5.5, over: 4, run: 400 };
 const CELL = 32, KEEP = 0.5, MIN_A = 12, MIN_W = 2.2, TOL = 0.3; // (TOL: how far into the setback a wall may stand: it's slack, not road)
+// Work done here, counted (tools/test/setbacks.js judges how much work the setbacks and boxes take, not how long: a
+// time depends on the machine). The setbacks' work: index (road points indexed, index entries visited: roadIndex,
+// near) and tests (footprint walls tested against a road: segDist). The collision boxes': cells (footBoxes' grid cells
+// worked: frameGrid, each greedy pass over a frame) and verts (footprint walls visited: inF, outD, ray, irregular).
+export const WORK = { index: 0, tests: 0, cells: 0, verts: 0 };
+export const workSince = (w0) => ({ index: WORK.index - w0.index, tests: WORK.tests - w0.tests, cells: WORK.cells - w0.cells, verts: WORK.verts - w0.verts });
 
 // The clear zones of a World's road network: segments [ax, az, bx, bz, r, ends, x0, x1, z0, z1] (r: the clear half
 // width; ends: 1 the segment's a is a road's dead end, 2 its b is; then its box, out to r + the setback), filed in a
@@ -42,8 +48,8 @@ export function roadIndex(w) {
   const city = !!w.loc.city, segs = [], S = city ? TOL : SETBACK; // (a city: nothing past the pavement but the slack, TOL, that setBack leaves alone)
   let gx0 = Infinity, gx1 = -Infinity, gz0 = Infinity, gz1 = -Infinity;
   for (const rd of w.net?.roads || []) {
-    if (rd.kind === 'rail') continue;
-    const P = rd.pts, n = P.length, last = rd.closed ? n : n - 1;
+    if (rd.kind === 'rail' || rd.minor) continue; // (a way off the street network, roads.js rd.minor: buildings front onto a pedestrian street or a plaza, an alley runs between and under them; they don't move for it)
+    const P = rd.pts, n = P.length, last = rd.closed ? n : n - 1; WORK.index += n;
     const r = rd.width / 2 + (city && rd.kind !== 'highway' && !rd.baked ? PAVE[rd.kind] ?? PAVE.street : VERGE), R = r + S;
     const jn = rd.jn || [], end0 = !rd.closed && !jn.some(([i]) => i === 0), end1 = !rd.closed && !jn.some(([i]) => i === n - 1); // (dead ends)
     // (tubes and decks up in the air left out; straight runs merged: the roads are resampled every few metres, and New
@@ -86,6 +92,7 @@ function near(I, P, pad = 0) {
   const i0 = Math.max(0, Math.floor(x0 / CELL) - I.ox), i1 = Math.min(I.nx - 1, Math.floor(x1 / CELL) - I.ox), j0 = Math.max(0, Math.floor(z0 / CELL) - I.oz), j1 = Math.min(I.nz - 1, Math.floor(z1 / CELL) - I.oz);
   for (let cj = j0; cj <= j1; cj++) for (let ci = i0; ci <= i1; ci++) {
     const c = cj * I.nx + ci;
+    WORK.index += start[c + 1] - start[c];
     for (let m = start[c], e = start[c + 1]; m < e; m++) { const k = list[m]; if (stamp[k] === g) continue; stamp[k] = g; const s = segs[k];
       if (s[6] <= x1 && s[7] >= x0 && s[8] <= z1 && s[9] >= z0) out.push(s); }
   }
@@ -97,7 +104,7 @@ export const area = (P) => { let a = 0; for (let k = 0; k < P.length; k++) { con
 // How far a road's centre line is from a footprint: { d (0: it crosses or runs inside), t (where on the segment, 0..1) }
 // (the hot path: no allocations but the answer)
 export function segDist(s, P) {
-  const ax = s[0], az = s[1], bx = s[2], bz = s[3], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9, n = P.length;
+  const ax = s[0], az = s[1], bx = s[2], bz = s[3], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9, n = P.length; WORK.tests += n;
   let d2 = Infinity, t = 0, odd = false;
   for (let k = 0; k < n; k++) {
     const p = P[k], c = P[k + 1 === n ? 0 : k + 1], px = p[0], pz = p[1], ex = c[0] - px, ez = c[1] - pz;
@@ -437,7 +444,7 @@ function frameGrid(P, holes, fx, fz, framed) {
   let U, V, g = 0.05;
   for (;;) { U = lines(us2, g); V = lines(vs2, g); if ((U.length - 1) * (V.length - 1) <= FOOT.cells || g > 4) break; g *= 1.5; } // (a big, round one: fewer, coarser cells)
   const nu = U.length - 1, nv = V.length - 1; if (nu < 1 || nv < 1 || U[nu] - U[0] < 1 || V[nv] - V[0] < 1) return null;
-  const N = nu * nv, IN = new Uint8Array(N), wa = new Float64Array(N), uc = new Float64Array(nu), xs = [];
+  const N = nu * nv, IN = new Uint8Array(N), wa = new Float64Array(N), uc = new Float64Array(nu), xs = []; WORK.cells += N;
   for (let i = 0; i < nu; i++) uc[i] = (U[i] + U[i + 1]) / 2;
   let aIn = 0;
   // which cells are the footprint's: a scanline through each row's middle (even-odd over every ring: the holes drop out)
@@ -448,18 +455,19 @@ function frameGrid(P, holes, fx, fz, framed) {
     for (let i = 0; i < nu; i++) wa[j * nu + i] = (U[i + 1] - U[i]) * h;
     for (let k = 0, i = 0; k + 1 < xs.length; k += 2) { while (i < nu && uc[i] < xs[k]) i++; for (; i < nu && uc[i] < xs[k + 1]; i++) { IN[j * nu + i] = 1; aIn += wa[j * nu + i]; } }
   }
-  return { ub: Infinity, exact, fx, fz, rings, U, V, nu, nv, N, IN, wa, aIn, cov: new Uint8Array(N), dead: new Uint8Array(N), S: new Float64Array((nu + 1) * (nv + 1)), h: new Int32Array(nu), st: new Int32Array(nu + 1) };
+  return { ub: Infinity, exact, fx, fz, rings, nr: rings.reduce((t, a) => t + a.length / 2, 0), U, V, nu, nv, N, IN, wa, aIn, cov: new Uint8Array(N), dead: new Uint8Array(N), S: new Float64Array((nu + 1) * (nv + 1)), h: new Int32Array(nu), st: new Int32Array(nu + 1) };
 }
 // exact geometry in a frame: inside the footprint? how far outside? how far along an axis (0 u, 1 v), direction sg, to the first wall
-const inF = (G, u, v) => { let c = false; for (const a of G.rings) for (let n = a.length / 2, k = 0, m = n - 1; k < n; m = k++) { const av = a[m * 2 + 1], bv = a[k * 2 + 1]; if ((av > v) !== (bv > v) && u < a[m * 2] + (v - av) * (a[k * 2] - a[m * 2]) / (bv - av)) c = !c; } return c; };
+const inF = (G, u, v) => { let c = false; WORK.verts += G.nr; for (const a of G.rings) for (let n = a.length / 2, k = 0, m = n - 1; k < n; m = k++) { const av = a[m * 2 + 1], bv = a[k * 2 + 1]; if ((av > v) !== (bv > v) && u < a[m * 2] + (v - av) * (a[k * 2] - a[m * 2]) / (bv - av)) c = !c; } return c; };
 function outD(G, u, v) {
   if (inF(G, u, v)) return 0;
+  WORK.verts += G.nr;
   let d2 = Infinity;
   for (const a of G.rings) for (let n = a.length / 2, k = 0, m = n - 1; k < n; m = k++) { const pu = a[m * 2], pv = a[m * 2 + 1], eu = a[k * 2] - pu, ev = a[k * 2 + 1] - pv, L2 = eu * eu + ev * ev || 1e-9, t = clamp01(((u - pu) * eu + (v - pv) * ev) / L2), du = pu + eu * t - u, dv = pv + ev * t - v, q = du * du + dv * dv; if (q < d2) d2 = q; }
   return Math.sqrt(d2);
 }
 function ray(G, u, v, ax, sg) { // (-1: (u, v) isn't inside the footprint: an odd number of walls ahead if it is)
-  let best = Infinity, odd = false;
+  let best = Infinity, odd = false; WORK.verts += G.nr;
   for (const a of G.rings) for (let n = a.length / 2, k = 0, m = n - 1; k < n; m = k++) {
     const p0 = a[m * 2 + ax], q0 = a[m * 2 + 1 - ax], p1 = a[k * 2 + ax], q1 = a[k * 2 + 1 - ax], c = ax ? u : v;
     if ((q0 > c) !== (q1 > c)) { const d = (p0 + (c - q0) * (p1 - p0) / (q1 - q0) - (ax ? v : u)) * sg; if (d > 0) { odd = !odd; if (d < best) best = d; } }
@@ -550,7 +558,7 @@ export function footBoxes(P, holes, ux, uz) {
     F.sort((p, q) => q.ub - p.ub);
     for (const G of F) {
       if (G.ub < ba) continue; // (its best last time is as much as it can give now: the uncovered footprint only shrinks)
-      const { nu, nv, IN, wa, cov, dead, S, h, st } = G, W1 = nu + 1; let gb = 0;
+      const { nu, nv, IN, wa, cov, dead, S, h, st } = G, W1 = nu + 1; let gb = 0; WORK.cells += nu * nv;
       for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) { const c = j * nu + i; S[(j + 1) * W1 + i + 1] = (IN[c] && !cov[c] && !dead[c] ? wa[c] : 0) + S[j * W1 + i + 1] + S[(j + 1) * W1 + i] - S[j * W1 + i]; }
       h.fill(0);
       for (let j = 0; j < nv; j++) {
@@ -598,6 +606,7 @@ export const inParts = (B, x, z) => { for (const b of B) { const dx = x - b.x, d
 export function irregular(P, A, x, z, ux, uz, hl, hw) {
   if (A < 0.9 * 4 * hl * hw) return true;
   for (let k = 0; k < 16; k++) {
+    WORK.verts += P.length;
     const t = (k & 3) / 2 - 1, side = k >> 2, a = side < 2 ? (side ? 1 : -1) : t, c = side < 2 ? t : side === 2 ? 1 : -1; // (round the edges, a quarter at a time)
     const px = x + ux * hl * a - uz * hw * c, pz = z + uz * hl * a + ux * hw * c; if (inside(P, px, pz)) continue;
     let d2 = Infinity; for (let i = 0, j = P.length - 1; i < P.length; j = i++) { const p = P[j], q = P[i], ex = q[0] - p[0], ez = q[1] - p[1], tt = clamp01(((px - p[0]) * ex + (pz - p[1]) * ez) / (ex * ex + ez * ez || 1e-9)), dx = p[0] + ex * tt - px, dz = p[1] + ez * tt - pz; d2 = Math.min(d2, dx * dx + dz * dz); }

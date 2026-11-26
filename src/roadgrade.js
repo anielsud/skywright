@@ -15,7 +15,7 @@ import { clamp, smoothstep } from './noise.js';
 export const GRADE = { highway: 0.08, main: 0.1, street: 0.12, lane: 0.14, rail: 0.035, real: 0.2 };
 export const VERGE = 1.5; // gravel verge beside the tarmac (part of the drivable footprint)
 const FILL = 0.6, CUT = 0.9; // embankment / cutting side slopes (rise per metre out)
-const SEG = 9, BLEND = 3, UNDER = 9; // (UNDER: a tunnel's cover, metres: profileRoad) // RoadSurface: floats per segment; metres a major road hands over to a minor one in, at its edge
+const SEG = 9, BLEND = 3, UNDER = 9, MINOR_RANK = 1e7, MINOR_EDGE = 1.5; // (UNDER: a tunnel's cover, metres: profileRoad) // RoadSurface: floats per segment; metres a major road hands over to a minor one in, at its edge
 
 // Bilinear sampler over a (R+1)^2 core grid (the raw fine heights, before any carving).
 export function gridSampler(w, H, R) {
@@ -443,10 +443,11 @@ export class RoadSurface {
     let ns = 0; for (const rd of roads) ns += rd.closed ? rd.pts.length : rd.pts.length - 1;
     const S = (this.seg = new Float32Array(ns * SEG)), reach = new Float32Array(ns), ground = w.Hh ? (x, z) => w.triAt(w.Hh, w.hR + 1, clamp((x + w.half) / w.hStep, 0, w.hR - 1e-3), clamp((z + w.half) / w.hStep, 0, w.hR - 1e-3)) : null;
     let s0 = 0;
-    const cs = (this.cs = new Uint8Array(ns)), city = !!w.loc?.city; this.k = 0; // (cs: a city street's segment, on the ground: its pavements and the open ground round it at the slabs' level, over)
+    const cs = (this.cs = new Uint8Array(ns)), sf = (this.sf = new Uint8Array(ns)), city = !!w.loc?.city; this.k = 0; this.surf = 0; // (sf: a way off the street network's surface, roadnet.js SURF: World.groundAt's gravel) // (cs: a city street's segment, on the ground: its pavements and the open ground round it at the slabs' level, over)
     roads.forEach((rd, ri) => {
-      const P = rd.pts, n = P.length, last = rd.closed ? n : n - 1, street = city && (rd.kind === 'main' || rd.kind === 'street') && !rd.baked;
+      const P = rd.pts, n = P.length, last = rd.closed ? n : n - 1, street = city && (rd.kind === 'main' || rd.kind === 'street' || rd.minor) && !rd.baked; // (a city's pedestrian streets and alleys too: the open ground beside them is at their level, with no kerb)
       for (let i = 0; i < last; i++, s0++) {
+        if (rd.minor) sf[s0] = (rd.surf || 0) | 4; // (4: off the street network)
         const a = P[i], b = P[(i + 1) % n], tu = !!(rd.tube?.[i] && rd.tube?.[(i + 1) % n]), br = tu || !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % n]); // (a tunnel's tube: a deck underground, flag 8)
         // deck flags: 1 = deck, +2 / +4 = the deck carries on before / after (a joint, round; an abutment end is square)
         const isD = (k) => !!((rd.bridge?.[(k + n) % n] && rd.bridge?.[(k + 1 + n) % n]) || (rd.tube?.[(k + n) % n] && rd.tube?.[(k + 1 + n) % n])) && (rd.closed || (k >= 0 && k < n - 1));
@@ -478,7 +479,7 @@ export class RoadSurface {
     if (ci < 0 || cj < 0 || ci >= nC || cj >= nC) return false;
     const c = cj * nC + ci, a = this.start[c], b = this.start[c + 1], jl = deck ? null : this.jcell.get(c);
     if (a === b && !jl) return false;
-    const S = this.seg, want = deck ? 1 : 0; this.nIn = 0; this.nOut = 0;
+    const S = this.seg, want = deck ? 1 : 0; this.nIn = 0; this.nOut = 0; this.surf = 0;
     let best = deck ? 0.5 : this.S, top = -Infinity, hit = false; // (decks: best = e of the current pick)
     // in a junction's box: its level height, the major surface there (rank -1: over every road's, handing over to the
     // arms in the last BLEND metres to its edge, where they are level with it too)
@@ -497,10 +498,11 @@ export class RoadSurface {
       const e = Math.sqrt(px * px + pz * pz) - S[o + 6], yy = S[o + 4] + (S[o + 5] - S[o + 4]) * t;
       if (deck && (f & 8) && !(yy > y - 7)) continue; // (a tunnel's floor: only for what is down in the tunnel, not on the hill above it)
       // decks: the nearest centreline on the same level; a deck a level up (an overpass) wins outright
-      if (!deck && e < 0) this.inside(S[o + 8], e, yy, (S[o + 5] - S[o + 4]) * dx / L2, (S[o + 5] - S[o + 4]) * dz / L2);
+      if (!deck && e < 0) this.inside(S[o + 8] + (this.sf[this.ids[k]] & 4 ? MINOR_RANK : 0), e, yy, (S[o + 5] - S[o + 4]) * dx / L2, (S[o + 5] - S[o + 4]) * dz / L2);
       else if (!deck && e < CITY_BAND && this.cs[this.ids[k]]) this.near(S[o + 8], e, yy);
-      if (deck ? e < ((f & 8) ? 1.5 : 0.5) && yy < y + 2 && (!hit || yy > top + 2.5 || (yy > top - 2.5 && e < best)) : e < best) {
-        best = e; top = yy; hit = true; this.k = this.ids[k]; this.y = yy; this.e = e; this.gx = (S[o + 5] - S[o + 4]) * dx / L2; this.gz = (S[o + 5] - S[o + 4]) * dz / L2;
+      const eb = !deck && e > 0 && (this.sf[this.ids[k]] & 4) ? e + MINOR_EDGE : e; // (beyond the footprints: a street's embankment before a way off the street network's, where the two meet)
+      if (deck ? e < ((f & 8) ? 1.5 : 0.5) && yy < y + 2 && (!hit || yy > top + 2.5 || (yy > top - 2.5 && e < best)) : eb < best) {
+        best = deck ? e : eb; top = yy; hit = true; this.k = this.ids[k]; this.surf = this.sf[this.k] & 3; this.y = yy; this.e = e; this.gx = (S[o + 5] - S[o + 4]) * dx / L2; this.gz = (S[o + 5] - S[o + 4]) * dz / L2;
       }
     }
     if (!deck && this.nIn > 1) this.blend();
@@ -526,8 +528,10 @@ export class RoadSurface {
   blend() {
     const R = this.In, n = this.nIn, ord = this.ord; for (let k = 0; k < n; k++) ord[k] = k;
     for (let a = 1; a < n; a++) { const v = ord[a]; let b = a - 1; while (b >= 0 && R[ord[b] * 5] < R[v * 5]) { ord[b + 1] = ord[b]; b--; } ord[b + 1] = v; } // minor first
-    let k = ord[0] * 5, y = R[k + 2], gx = R[k + 3], gz = R[k + 4];
-    for (let a = 1; a < n; a++) { k = ord[a] * 5; const w = smoothstep(0, BLEND, -R[k + 1]); y += (R[k + 2] - y) * w; gx += (R[k + 3] - gx) * w; gz += (R[k + 4] - gz) * w; }
+    // (a street hands over to a way off the street network in its verge only, VERGE: never on its tarmac, whatever the
+    // way's grade where it meets the street)
+    let k = ord[0] * 5, y = R[k + 2], gx = R[k + 3], gz = R[k + 4], prev = R[k];
+    for (let a = 1; a < n; a++) { k = ord[a] * 5; const w = smoothstep(0, prev >= MINOR_RANK && R[k] < MINOR_RANK ? VERGE : BLEND, -R[k + 1]); prev = R[k]; y += (R[k + 2] - y) * w; gx += (R[k + 3] - gx) * w; gz += (R[k + 4] - gz) * w; }
     this.y = y; this.gx = gx; this.gz = gz;
   }
   // ground height with the road on it: the profile inside the footprint, then the embankment (the base surface

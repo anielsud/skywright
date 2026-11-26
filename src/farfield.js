@@ -4,6 +4,7 @@
 // as the bake. A cell is hidden (collapsed in the vertex shader, via a small mask texture) wherever the core map or a
 // streamed tile already draws that ground, so the two never overlap. Only for looks: physics never samples it.
 import * as THREE from 'three';
+import { now, slice } from './stepClock.js';
 import { FOG } from './shaders.js';
 
 const SEA_DROP = 100; // drowned vertices sit at least this far under the sea, so coasts can't z-fight from far away
@@ -58,8 +59,9 @@ export class FarField {
       if (!this.mesh.visible) while (!this.job.next().done); // first build: all at once (it's part of loading)
     }
     // cells dropped by invalidate(): one rebuild for them all, at most every 1.5 s, never cutting into one in progress
-    else if (this.dirty && !this.job && performance.now() - this.dirty > 1500) { this.dirty = 0; this.job = this.rebuild(cam.x / T, cam.z / T, ci, cj); }
-    if (this.job) { const t0 = performance.now(); while (performance.now() - t0 < budget) if (this.job.next().done) { this.job = null; break; } }
+    // (stepClock.js: under the test stepper, 1.5 s of game time and 4 cells a step per ms of budget)
+    else if (this.dirty && !this.job && now() - this.dirty > 1500) { this.dirty = 0; this.job = this.rebuild(cam.x / T, cam.z / T, ci, cj); }
+    if (this.job) { const more = slice(budget, Math.round(budget * 4)); while (more()) if (this.job.next().done) { this.job = null; break; } }
     if (this.maskDirty && this.origin) this.writeMask();
   }
 
@@ -110,7 +112,7 @@ export class FarField {
   invalidate(x0, z0, x1, z1) {
     const T = this.T; let any = false;
     for (const [k, c] of this.cells) if (!(c.i * T > x1 || (c.i + 1) * T < x0 || c.j * T > z1 || (c.j + 1) * T < z0)) { this.cells.delete(k); any = true; }
-    if (any && !this.dirty) this.dirty = performance.now();
+    if (any && !this.dirty) this.dirty = now();
   }
   // Per cell, 2 bits: is it already drawn by the core map or a streamed tile (a tile that is all sea counts: the sea
   // covers it), and is its ground dry land all over (then the water skips it).

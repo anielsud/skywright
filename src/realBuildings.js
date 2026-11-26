@@ -8,7 +8,7 @@ import { toLocal } from './realworld.js';
 import { mulberry32, smoothstep } from './noise.js';
 import { CityScenery } from './realCity.js';
 import { Landmarks } from './realLandmarks.js';
-import { roadIndex, setBack, fitBox, footBoxes, inParts, irregular, lazyParts, FOOT, MAJOR, streetWalls } from './setback.js';
+import { roadIndex, setBack, fitBox, footBoxes, inParts, irregular, lazyParts, FOOT, MAJOR, streetWalls, WORK, workSince } from './setback.js';
 
 const CHUNK = 1000; // m: buildings are merged per 1 km cell (one draw call each), hidden beyond VIEW
 const VIEW = { low: 4500, medium: 8000, high: 14000 };
@@ -55,7 +55,7 @@ export class RealScenery {
 
   // ---------------- buildings ----------------
   buildBuildings(list) {
-    const t0 = performance.now(), roads = roadIndex(this.w); this.setbacks = { cut: 0, dropped: 0, through: 0, flat: 0, ms: performance.now() - t0 }; // (ms: the index and the cuts)
+    const w0 = { ...WORK }, t0 = performance.now(), roads = roadIndex(this.w); this.setbacks = { cut: 0, dropped: 0, through: 0, flat: 0, ms: performance.now() - t0 }; // (ms: the index and the cuts)
     this.footStats = { n: 0, irr: 0, boxes: 0, max: 0, ms: 0, lazy: 0, load: 0 }; // (the collision boxes: ms in footBoxes, whenever; lazy: the slowest worked out after load; load: at load)
     const W = this.w, seed0 = W.loc.seed * 5 + 3, lowQ = W.qName === 'low', wl = W.waterLevel;
     // each place's own building rules (loc.osmStyle): 'tropical' Bora Bora, 'rustic' the Grand Canyon, else the Alps
@@ -283,7 +283,7 @@ export class RealScenery {
       this.grid.get(key).push(e);
       this.count++;
     }
-    this.footStats.ready = true;
+    this.footStats.ready = true; this.loadWork = { ...workSince(w0), irr: this.footStats.irr, n: this.footStats.n }; // (setback.js WORK at load: tools/test/setbacks.js)
     this.buildPiers(W.real.osm.piers || []);
     const mat = (this.mat = buildingMaterial({ cellPx: { low: 128, medium: 192, ultra: 384 }[W.qName] ?? 256, interiors: W.qName !== 'low' })); // the towns' atlas
     W.windowMats = W.windowMats || []; W.windowMats.push(mat);
@@ -635,8 +635,9 @@ export class RealScenery {
 // chunk's builder alive with it)
 function osmBoxes(S, e, ux, uz, fit, roads, fallback) {
   lazyParts(e, () => {
-    const FS = S.footStats, t0 = performance.now(), B = footBoxes(e.fp, [], ux, uz);
+    const FS = S.footStats, t0 = performance.now(), w0 = { ...WORK }, B = footBoxes(e.fp, [], ux, uz);
     FS.irr++; if (B) { FS.boxes += B.length; FS.max = Math.max(FS.max, B.length); } { const dt = performance.now() - t0; FS.ms += dt; if (FS.ready && dt > FS.lazy) FS.lazy = dt; }
+    if (FS.ready) { const w = workSince(w0); if (w.cells + w.verts > (FS.lazyWork?.cells ?? 0) + (FS.lazyWork?.verts ?? 0)) FS.lazyWork = { ...w, walls: e.fp.length, boxes: B?.length ?? 0 }; } // (the most work any one took: tools/test/setbacks.js)
     return B ? (fit ? B.map((f) => fitBox(roads, f)) : B) : fallback;
   });
 }

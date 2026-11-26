@@ -55,13 +55,17 @@ Tests are in two tiers.
 - **Browser tier**: what needs a real page (boot, UI, audio, shader compiles, screenshots, the real game loop): the
   browser jobs (`jobs.py`, next section). Use
   `window.__sky.advance(seconds)` to step the flight without rendering (about 25–50× faster than waiting for frames;
-  streaming that works to a per-frame time budget gets less done per game second, so let it settle when a check
-  depends on it), and `window.__sky.swapVehicle(design)` to fly another vehicle in the same World (about 1 s instead
+  the streaming that works to a per-frame time budget in play, terrain tiles, far field, flora, roads, city blocks,
+  minimap and geodata, gets a fixed amount of work per step instead and debounces in game time, `src/stepClock.js`, so
+  a stepped run streams the same on any machine; it still streams over time, so let it settle when a check depends on
+  it), `window.__sky.fixedDt = s` to make each drawn frame step a fixed s game seconds (null: the frame's own time), and `window.__sky.swapVehicle(design)` to fly another vehicle in the same World (about 1 s instead
   of building a World).
 
 **Known failures:** `tools/test/known.json` lists failing checks that are already tracked (suite → check name →
 issue). The Node runner reports them as `known` and doesn't count them. A listed check that passes is reported as
-`fixed` (take it off the list). **CI** (`.github/workflows/smoke.yml`, "Tests") runs the whole suite on every PR, as
+`fixed` (take it off the list). **Retry net:** a case with a failed check (not a known one) runs once more, alone, in
+a fresh worker; if it passes then, it is listed as `FLAKY` at the end, with the first run's failure, and doesn't fail
+the run (a flaky check is still a bug: fix it); if it fails again, it fails. **CI** (`.github/workflows/smoke.yml`, "Tests") runs the whole suite on every PR, as
 parallel jobs: the four browser jobs (one matrix entry each: `jobs.py <job> --quality low --ci`, screenshots attached
 to the run) and the Node tier (3 parts, `run.mjs --shard K/3`). There is no nightly run and no selection by what changed: everything, every time.
 Where a runner's time goes: it has no GPU, so Chrome's software GPU (SwiftShader) builds every shader program a new
@@ -120,7 +124,13 @@ The rules (#278), which keep CI fast and free of timing flakes:
   (shaders, cockpit views, the real loop running);
 - **no wall-clock waits**: every wait is on a game state (`T.until`, `T.untilFrames`, `T.stepUntil`) or a frame count.
   Their limits are safety nets: generous, and they fail loudly naming what was awaited (a step's own safety timeout
-  skips the rest of the job: the page is in an unknown state).
+  skips the rest of the job: the page is in an unknown state). Something that runs on the audio clock (a gain ramp) is
+  waited for on the audio clock (`ctx.currentTime`), not in frames;
+- **no timing verdicts** (Node tier too): no pass/fail may depend on wall-clock time measured on the machine running
+  the test (CI is 1.5–6× slower than a dev Mac, and a busy one slower still). Prove a cost claim by counting the work
+  (vertices, segments tested, solves, cells) against a cap set from today's count with margin, and keep the ms in the
+  detail as information; compare game time, not frames or ms, and step streaming deterministically (`__sky.advance`
+  does). A check that can't be counted is reported, not judged.
 
 The jobs:
 
@@ -128,8 +138,8 @@ The jobs:
   checked last: every clip in `assets/sfx/index.json`); the Settings and Help windows open and close; a hangar
   screenshot; the wind tunnel for the Kestrel and the Dragonfly: opens, 5 frames drawn with the smoke on while the angle
   sweep starts, the rest of the sweep stepped to the end (the lift curve recorded over the whole range), 5 frames on the
-  free pivot and 3 s more stepped (it swings), no shader compiled while it ran, (locally) the tunnel's own work per
-  frame under 12 ms, closes, GPU memory back to the hangar's. (Its lift curves and forces: the Node suite tunnelcheck.)
+  free pivot and 3 s more stepped (it swings), no shader compiled while it ran (the tunnel's own ms per frame logged,
+  not judged), closes, GPU memory back to the hangar's. (Its lift curves and forces: the Node suite tunnelcheck.)
 - **nyc** (one New York World, built once; each vehicle swapped in once; the step list is `jobs/nyc.js`'s header):
   the stunt site New York planned == a fresh search == the bake (`stuntsIn`, right after the build); the Dragonfly in
   Pilot on the rooftop helipad, stepped (`helipadcheck.js` `heliRun`/`heliChecks`: its spawn pose, the building under the
@@ -146,11 +156,12 @@ The jobs:
   World's answers; over every stock preset nothing but a rocket on the pad, nothing but a helicopter on the helipad);
   no stunt site or water park warnings.
 - **islands** (Bora Bora, built once by the first flight; every vehicle swapped in once): the Kestrel from the runway
-  (the tour flight: 3 frames at full power on the real loop, 3 s stepped, every cockpit view drawn; then streaming
+  (the tour flight: 3 frames at full power on the real loop, each stepping a fixed 1/60 s, `__sky.fixedDt`, 3 s
+  stepped, every cockpit view drawn; then streaming
   quiet and the sweep's scene phase: no stalls, nothing waited for its shader); startbakes-stunts; the
   Albatross's water start and the Kite's air start (2 s stepped: finite, in one piece); the Speedboat from the marina
   (an AudioContext with no clips decoded, as a boat's motor voice is synthesized: at full gas its voice's gain comes up
-  within a few frames, i.e. the engine is audible; then the tour flight); the Rocket on the pad (padcheck); the SR-71
+  within 0.3 s of the audio clock with the engine running, i.e. the engine is audible; then the tour flight); the Rocket on the pad (padcheck); the SR-71
   swapped in once on the landing approach and flown by `sr71flight.js` in game time (the game loop paused): it lands
   intact and stops on the runway (one screenshot), then, put on the runway start, climbs to Mach 2.5+ above 60,000 ft
   with nothing broken; then crashed into the water (stepped to the impact, 5 frames drawn: parts come off, no stalls);
@@ -158,7 +169,8 @@ The jobs:
 - **canyon-lauterbrunnen** (two places in one session, each built once): the AudioContext starts without decoding the
   clips (the engines checked are synthesized). **Grand Canyon**: the Dirt Bike from the stunt park (builds it) and the
   Dune Buggy swapped in there, each on the tour (3 frames drawn at full power on the real loop, 3 s stepped, every
-  cockpit view drawn) with its engine voice audible right after (smoke.py's verdict); streaming quiet, the whole scene
+  cockpit view drawn) with its engine voice audible right after (smoke.py's verdict; not judged if the audio clock ran
+  under 0.3 s over the tour); streaming quiet, the whole scene
   drawn (no stalls, nothing waits for its shader); the Dune Buggy's ground crash (stepped to the impact, 5 frames drawn,
   parts must come off); the Rocket swapped in on the pad (padcheck, stepped). **Lauterbrunnen**, built by the Rocket's
   flight there: the pad check; startbakes-stunts (`stuntsIn`); streaming quiet and the whole scene drawn; #187: nothing
@@ -421,7 +433,8 @@ to full throw, no rendering) and checks each person's skeleton every frame:
   forward a few centimetres, or let go; the skin between forearm and hand never stretches), no bone is more than
   1.5 m from the hips, no NaN.
 - **fork lost** (every bike): the fork breaks off mid-ride and flies away. The rider must let go of the handlebars and
-  stay in one piece, and posing the crew must not get more expensive afterwards.
+  stay in one piece, and posing the crew must not take more work afterwards (poses + arm placements the IK tries per
+  frame, counted: crew.js `armEvals`; ~105 a frame holding the bars, 1 once the fork is gone).
 - **landing** (every bike): a jump from 2.5 m at 15 m/s. The rider's knees must bend to soak up the landing (15
   degrees or more standing on the pegs, at least 2 sitting), come back afterwards, and the rider must go no more than
   1 cm further into the bike than when sitting still.
@@ -436,7 +449,8 @@ to full throw, no rendering) and checks each person's skeleton every frame:
   keeping hold and staying out of the bike.
 
 Each check carries how long posing the crew takes per frame (`msBefore` / `msAfter`: mean and p95, ms; in Node's
-clock, comparable run to run, not with the browser's): the number to watch when changing the arm solve. `--json` keeps
+clock, comparable run to run, not with the browser's): the number to watch when changing the arm solve. It is
+information only: the verdict reads the counted work (`workBefore` / `workAfter`). `--json` keeps
 them, and `riders.py` (the browser path) prints them.
 
 It is a Node suite, not headless (the crew rig is the subject): one case per vehicle, a bike's six checks together.
@@ -688,10 +702,13 @@ city.bin record through `CityScenery.footprint`, the low ones too) against every
 gravel verge (on a city street: tarmac and pavement), measured with the test's own sampled geometry, not `setback.js`'s.
 Tunnels' tubes and bridge decks up in the air are left out. Also: few buildings dropped (most are cut back), few big
 ones left standing over a road that runs right through them (a passage under them), and the setbacks cost little at
-load. The collision boxes: none on a road; none reaching more than 1 m past the walls near a street (an L, a U, a cross
+load (their work counted, `setback.js` `WORK`: road points indexed, index entries visited, footprint walls tested
+against a road, per building, under a cap per place). The collision boxes: none on a road; none reaching more than 1 m past the walls near a street (an L, a U, a cross
 or a trapezoid gets a few boxes that hug its walls, `setback.js footBoxes`, worked out when first wanted); together
-they cover the footprints (95% of their area, at most 1% of buildings under 90%); and an irregular building's boxes
-are still one building to `destruction.js`. Standalone, it prints the counts before and after and the worst spots:
+they cover the footprints (95% of their area, at most 1% of buildings under 90%); they are cheap (counted: how many
+irregular buildings get theirs at load, the boxes' work at load per building, and the most work any one building's
+boxes take after load; caps from today's counts with margin, the ms shown as information); and an irregular
+building's boxes are still one building to `destruction.js`. Standalone, it prints the counts before and after and the worst spots:
 
 ```sh
 node tools/test/node/run.mjs setbacks

@@ -28,7 +28,7 @@ export const TARMAC_LIFT = { highway: 0.08, main: 0.06, street: 0.04 }; // metre
 // the nodes where three or more road ends meet (a road passing through counts twice): Map nd -> [{ k, j }]
 function junctionNodes(roads) {
   const at = new Map();
-  roads.forEach((rd, k) => { for (const [j, nd] of rd.jn || []) { let L = at.get(nd); if (!L) at.set(nd, (L = [])); L.push({ k, j }); } });
+  roads.forEach((rd, k) => { if (rd.minor) return; for (const [j, nd] of rd.jn || []) { let L = at.get(nd); if (!L) at.set(nd, (L = [])); L.push({ k, j }); } }); // (a way off the street network, roads.js rd.minor, joins a street as a driveway does: no junction)
   for (const [nd, L] of at) if (L.reduce((a, q) => a + (q.j === 0 || q.j === roads[q.k].pts.length - 1 ? 1 : 2), 0) < 3) at.delete(nd);
   return at;
 }

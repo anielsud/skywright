@@ -5,14 +5,13 @@
 //   wind tunnel: Kestrel, wind tunnel: Dragonfly (a plane and a helicopter): opens; 5 frames drawn with the smoke on
 //                      (colour) while the angle sweep starts, the rest of the sweep stepped (no drawing) to the end;
 //                      5 frames drawn on the free pivot, 3 s more stepped: it swings; no shader compiled while it ran;
-//                      (locally, not --ci: the tunnel's own work per drawn frame under 12 ms); closes; GPU memory back
+//                      (the tunnel's own ms per drawn frame: logged, no verdict); closes; GPU memory back
 //                      to the hangar's (geometries and textures no higher than before it opened)
 //   audio: every clip decodes   every clip in assets/sfx/index.json decoded (waited on the loader's own flag)
 // (The tunnel's lift curves and forces, every stock vehicle: the Node suite tunnelcheck.)
 import { settle as hangarSettled, sweepStepped, pivotStepped } from '../tunnelcheck.js';
 
 const TUNNEL = ['Kestrel', 'Dragonfly'];
-const MAX_CPU_MS = 12; // the tunnel's own work per drawn frame (locally; a CI runner's software GPU makes it meaningless)
 
 export async function run(T) {
   const S = T.S;
@@ -75,7 +74,9 @@ async function tunnel(T, name) {
     T.check('it swings on the free pivot', pv.finite && pv.F && pv.moved > 1e-3, `moved ${pv.moved.toFixed(3)} rad in 3 s, finite ${pv.finite && pv.F}`);
     const perf = t.stats4test(), compiles = (window.__tunnelCompiles || 0) - tc0;
     T.check('no shader compiled while it ran (a stall)', compiles === 0, compiles ? `${compiles} compiled in the wind tunnel` : '');
-    if (!T.ci && perf.frames) T.check(`the tunnel's own work per frame under ${MAX_CPU_MS} ms`, perf.cpuMs <= MAX_CPU_MS, `${perf.cpuMs.toFixed(1)} ms over ${perf.frames} timed frames (${perf.lines} smoke lines)`);
+    // (the tunnel's own work per drawn frame: information, not a verdict. Its smoke retraces to a time budget per frame
+    // (tunnelFlow.js update), so neither ms nor lines per frame is a machine-independent count; no timing verdicts)
+    if (perf.frames) T.log(`${name}: the tunnel's own work ${perf.cpuMs.toFixed(1)} ms a frame over ${perf.frames} timed frames (${perf.lines} smoke lines)`);
     t.exit();
     await T.until(() => !S.tunnel && !document.getElementById('tunnel-ui'), { what: 'the tunnel to close', timeout: 30 });
     const mem1 = await hangarSettled();

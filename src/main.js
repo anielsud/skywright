@@ -28,6 +28,7 @@ import { Post } from './post.js';
 import { VERSION, COMMIT, BUILT } from './version.js';
 import { CHANGELOG, changesSince, newer } from './changelog.js';
 import { Net } from './net.js';
+import { stepping, stepTick } from './stepClock.js';
 import { Analytics } from './analytics.js';
 import { Blackbox } from './blackbox.js';
 import { designSummary, trackHangar } from './buildStats.js';
@@ -1501,6 +1502,9 @@ function fitNearPlane(f) {
   const view = w.tiles?.far.viewDist() ?? 0, far = Math.max(60000, view, p.y > 5000 ? Math.hypot(view, p.y) * 1.1 : 0); // up high: still reach the world's far edge
   if (Math.abs(near - cam.near) > 0.02 || far !== cam.far) { cam.near = near; cam.far = far; cam.updateProjectionMatrix(); }
 }
+// tests (tools/test, __sky.fixedDt): the game time each drawn frame steps, instead of the frame's own time, so what a
+// test's drawn frames do is the same on any machine (null in play: always)
+let testDt = null;
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
@@ -1514,7 +1518,7 @@ function frame(now) {
   }
   else if (state === 'tunnel') tunnel?.frame(dt);
   else if (state === 'flight' && F && !F.warm?.pending) {
-    stepFlight(dt);
+    stepFlight(testDt ?? dt); // (testDt: tests only, __sky.fixedDt)
     if (F) {
       // sun flare + per-time-of-day grade
       const w = F.world, vis = w.sunVisibility(flightCam);
@@ -1758,11 +1762,16 @@ async function boot() {
   }
   window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, restartFlight, get kept() { return kept; },
     // tests (tools/test): advance(s) steps the flight s seconds at a fixed dt with no rendering (physics, world, effects,
-    // traffic, missions: everything stepFlight does), ~50x faster than waiting for frames; streaming that works to a
-    // time budget per frame (terrain tiles, flora, map tiles) gets less done per game second, so let it settle first
-    // when a check depends on it. swapVehicle(design): fly another vehicle in the same World (a restart with a new
-    // design, so the World is kept); wait for F.t > 0 afterwards.
-    advance(seconds, dt = 1 / 60) { for (let n = Math.round(seconds / dt); n > 0 && F && !F.paused && !F.warm?.pending; n--) stepFlight(dt); return F?.t ?? 0; },
-    swapVehicle(design) { hangar.load(design); if (F) restartFlight(); }, get tunnel() { return tunnel; }, gvis, openTunnel, closeTunnel, net, presets, settings, flightCfg, controls, rig, analytics, hud };
+    // traffic, missions: everything stepFlight does), ~50x faster than waiting for frames. Streaming that works to a
+    // time budget per frame in play (terrain tiles, far field, flora, roads, city blocks, map tiles, geodata) gets a
+    // fixed amount of work per step here instead, and debounces in game time (stepClock.js): what a stepped test
+    // streams is the same on any machine. It still streams over time: let it settle first when a check depends on it.
+    // swapVehicle(design): fly another vehicle in the same World (a restart with a new design, so the World is kept);
+    // wait for F.t > 0 afterwards.
+    advance(seconds, dt = 1 / 60) { stepping(() => { for (let n = Math.round(seconds / dt); n > 0 && F && !F.paused && !F.warm?.pending; n--) { stepTick(dt); stepFlight(dt); } }); return F?.t ?? 0; },
+    swapVehicle(design) { hangar.load(design); if (F) restartFlight(); },
+    // fixedDt: the game seconds each drawn frame steps the flight (tests: deterministic drawn frames); null: the frame's
+    // own time, as in play
+    get fixedDt() { return testDt; }, set fixedDt(v) { testDt = v > 0 ? v : null; }, get tunnel() { return tunnel; }, gvis, openTunnel, closeTunnel, net, presets, settings, flightCfg, controls, rig, analytics, hud };
 }
 boot();

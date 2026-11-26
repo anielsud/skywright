@@ -7,7 +7,7 @@
 //   on a road:  how many footprints reach more than TOL into a clear zone (none), and the deepest
 //   boxes:      the collision boxes cars meet (World.wallBoxes) are off the roads too
 //   kept:       how many buildings the setbacks left out (a few per cent at most: most are cut back, not dropped)
-//   cheap:      the setbacks' own time at load (index + cuts), as a share of the World's build
+//   cheap:      the setbacks' own work at load (index + cuts: setback.js WORK, counted, not timed), per building
 //   few over:   big buildings a road runs right through are left standing only with a passage under them (setback.js
 //               MAJOR, PASSAGE; realCity.js builds it, its boxes below the underside are checked with the others); few
 //   past walls: no collision box reaches more than 1 m past every footprint near a street (an invisible wall on the
@@ -15,10 +15,13 @@
 //               irregular building a few boxes that hug its walls), every edge of every box sampled each metre
 //   cover:      the boxes cover the footprints (95% of their area; at most 1% of buildings under 90%): no gap a car
 //               could drive into a building through
-//   cheap:      the boxes at load (an irregular building's are worked out when first wanted), and the slowest one
+//   cheap:      the boxes at load (an irregular building's are worked out when first wanted: how many were, and their
+//               work per building), and the most work any one building's took after load (counted, not timed)
 //   one bldg:   an irregular building's boxes are one building to destruction.js (towns.hit, heights, damage state)
 // Standalone (counts before and after, worst spots): node --import ./tools/test/node/setup.mjs tools/test/setbacks.js [place ...]
 import { VERGE } from '../../src/roadgrade.js';
+import { FOOT } from '../../src/setback.js';
+const FS_MAX = FOOT.max;
 
 export const nodeSuite = { files: ['src/setback.js', 'src/realBuildings.js', 'src/realCity.js', 'src/destruction.js', 'src/world.js', 'tools/test/setbacks.js'] };
 const PLACES = ['lauterbrunnen', 'canyon', 'islands', 'nyc'];
@@ -30,7 +33,7 @@ export function cases() { return PLACES.map((loc) => ({ id: loc, loc, world: loc
 function zones(w) {
   const city = !!w.loc.city, cells = new Map(), list = [];
   for (const rd of w.net.roads) {
-    if (rd.kind === 'rail') continue;
+    if (rd.kind === 'rail' || rd.minor) continue; // (buildings don't move for the ways off the street network: setback.js)
     const P = rd.pts, n = P.length, r = rd.width / 2 + (city && rd.kind !== 'highway' && !rd.baked ? PAVE[rd.kind] ?? PAVE.street : VERGE);
     for (let i = 0; i < (rd.closed ? n : n - 1); i++) {
       const j = (i + 1) % n, a = P[i], b = P[j];
@@ -175,7 +178,7 @@ export async function measure(w, which = 'after') {
 export async function runCase(c) {
   const { worldAt } = await import('./node/world.mjs');
   const W = await worldAt(c.loc), w = W.world, sb = (w.towns.city || w.towns).setbacks, ms = sb.ms; // (at load: before measure builds New York's low footprints too)
-  const fs = (w.towns.city || w.towns).footStats, load = fs.load; // (before measure asks every building for its boxes)
+  const fs = (w.towns.city || w.towns).footStats, load = fs.load, LW = (w.towns.city || w.towns).loadWork; // (before measure asks every building for its boxes; LW: setback.js WORK counted at load)
   const m = await measure(w, 'after'), T0 = w.towns, d = perBuilding(w);
   const worst = m.on.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(2)} m into a ${o.kind}`).join('; ');
   const kept = m.n / Math.max(1, m.n + sb.dropped);
@@ -186,20 +189,22 @@ export async function runCase(c) {
     { name: `${c.loc}: the boxes cover the buildings`, ok: m.cover.covered >= COVER * m.cover.inside && m.cover.low.length <= m.cover.bld * 0.01, why: `${(100 * m.cover.covered / Math.max(1, m.cover.inside)).toFixed(1)}% of ${m.cover.bld} footprints' area inside a box (at least ${COVER * 100}%), ${m.cover.low.length} buildings of 40 m2 and more under 90% (at most 1%)${m.cover.low.length ? `, worst ${m.cover.low.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${(100 * o.c).toFixed(0)}%`).join('; ')}` : ''}; ${m.cover.multi} irregular ones with boxes of their own, ${(m.cover.boxes / Math.max(1, m.cover.bld)).toFixed(2)} boxes a building, at most ${m.cover.max}` },
     { name: `${c.loc}: few big buildings left over a road`, ok: m.under.length <= Math.max(3, m.n * 0.0005), why: `${m.under.length} (a passage under them, or a mapping clash: ${m.under.slice(0, 4).map((o) => `(${o.x}, ${o.z})`).join(' ')})` },
     { name: `${c.loc}: setbacks keep most buildings`, ok: kept > 0.97, why: `${sb.dropped} left out, ${m.n} kept (${(100 * kept).toFixed(1)}%)` },
-    { name: `${c.loc}: setbacks are cheap at load`, ok: ms < 0.15 * W.ms, why: `${ms.toFixed(0)} ms, ${(100 * ms / W.ms).toFixed(1)}% of the World's ${W.ms} ms build (Node, Low: the road index, the footprints and boxes built at load; New York's low ones are set back a tile at a time as they stream in. A share, not a time: a busy machine slows both)` },
-    // (at load under 8% of the build: New York's big ones built at load are 5.4-5.5% of it, here and on CI; 5% was under it)
-    { name: `${c.loc}: collision boxes cheap`, ok: load < 0.08 * W.ms && slowest(fs) < lazyLimit(c.loc, W.ms), why: `at load ${load.toFixed(0)} ms (${(100 * load / W.ms).toFixed(1)}% of the World's build: the irregular ones' boxes are worked out when first wanted, setback.js lazyParts); then ${(fs.ms / Math.max(1, fs.irr)).toFixed(2)} ms a building, the slowest of those ${slowest(fs).toFixed(1)} ms (best of 3 re-timings; at most ${lazyLimit(c.loc, W.ms).toFixed(0)}: 40 ms on the reference machine, scaled by this one's World build; a big one's are worked out at load, FOOT.eager)` },
+    { name: `${c.loc}: setbacks are cheap at load`, ok: !!LW && sbWork(LW) <= CAP[c.loc].sb * LW.n, why: `${LW ? `${sbWork(LW)} units of work for ${LW.n} buildings, ${(sbWork(LW) / Math.max(1, LW.n)).toFixed(0)} a building (at most ${CAP[c.loc].sb}): ${LW.index} road points indexed and index entries visited, ${LW.tests} footprint walls tested against a road` : 'no load work counted'} (Node, Low: the road index, the footprints and boxes built at load; New York's low ones are set back a tile at a time as they stream in). ${ms.toFixed(0)} ms, ${(100 * ms / W.ms).toFixed(1)}% of the World's ${W.ms} ms build: info only` },
+    { name: `${c.loc}: collision boxes cheap`, ok: !!LW && LW.irr <= CAP[c.loc].eager && bxWork(LW) <= CAP[c.loc].load * LW.n && bxWork(fs.lazyWork) <= LAZY_MAX, why: `${LW ? `at load ${LW.irr} irregular buildings boxed (at most ${CAP[c.loc].eager}: the big ones, FOOT.eager; the rest are worked out when first wanted, setback.js lazyParts), ${bxWork(LW)} units of box work for ${LW.n} buildings (${(bxWork(LW) / Math.max(1, LW.n)).toFixed(1)} a building, at most ${CAP[c.loc].load}: ${LW.cells} grid cells, ${LW.verts} walls visited)` : 'no load work counted'}; then the most any one took: ${bxWork(fs.lazyWork)} (at most ${LAZY_MAX}: ${fs.lazyWork?.cells ?? 0} cells, ${fs.lazyWork?.verts ?? 0} walls visited, a footprint of ${fs.lazyWork?.walls ?? 0} walls into ${fs.lazyWork?.boxes ?? 0} boxes, of at most FOOT.max ${FS_MAX}; ${fs.max} the most any had). Info: at load ${load.toFixed(0)} ms (${(100 * load / W.ms).toFixed(1)}% of the build), then ${(fs.ms / Math.max(1, fs.irr)).toFixed(2)} ms a building, the slowest ${slowest(fs).toFixed(1)} ms` },
     { name: `${c.loc}: an irregular building is still one building`, ok: d.n > 0 && !d.bad.length, why: `${d.n} buildings of ${d.boxes} boxes: each box hit is that building, knocked down to 2 m every one of its boxes is 2 m tall, one damage state each${d.bad.length ? '; ' + d.bad.slice(0, 3).join('; ') : ''}` },
   ];
 }
 
-// The slowest building's boxes worked out after load, timed again 3 times, the best taken (one timing of the slowest of
-// hundreds also catches a GC pause or a busy core)
-// 40 ms is a budget on the reference machine (a 2020s Mac, nothing else running), where these Worlds build in REF ms.
-// A slower machine (a CI runner: ~2-3x) gets a proportionally bigger budget: its World build measures how much slower
-// it is right now, as the checks above use it. (The slowest building at the islands: 16 ms here, 46 ms on CI.)
-const REF = { islands: 3115, canyon: 2487, lauterbrunnen: 4050, nyc: 11150 };
-const lazyLimit = (loc, ms) => 40 * Math.max(1, ms / (REF[loc] ?? ms));
+// The work caps (setback.js WORK, counted: a time would depend on the machine). Per place: sb, the setbacks' work at
+// load per building (index + tests); eager, irregular buildings boxed at load; load, the boxes' work at load per
+// building (cells + verts). LAZY_MAX: the most box work any one building worked out after load may take (cells + verts).
+// Counted when these caps were set (2026-11): sb islands 25, canyon 76, lauterbrunnen 30, nyc 113 (caps ~2.5x: the old
+// time share had 3-9x room); eager 0, 0, 2, 249 (New York's: ~1.5x, as the old 8% share had over its 5.5%); load 56,
+// 45, 38, 255 (~1.6-2x); the most one building took after load: nyc 258k (268 walls into 12 boxes), islands 95k,
+// lauterbrunnen 167k, canyon 68k (~2.3x over the worst).
+const CAP = { islands: { sb: 65, eager: 5, load: 120 }, canyon: { sb: 190, eager: 5, load: 100 }, lauterbrunnen: { sb: 75, eager: 10, load: 80 }, nyc: { sb: 280, eager: 375, load: 400 } }, LAZY_MAX = 600000;
+const sbWork = (w) => (w ? w.index + w.tests : 0), bxWork = (w) => (w ? w.cells + w.verts : 0);
+// (info only) the slowest building's boxes worked out after load, timed again 3 times, the best taken
 function slowest(fs) {
   if (fs._slow != null) return fs._slow;
   if (!fs.lazyRedo) return (fs._slow = fs.lazy);

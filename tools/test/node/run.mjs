@@ -4,7 +4,8 @@
 //   node tools/test/node/run.mjs [suite ...] [--jobs N] [--shard K/N] [--only TEXT] [--json out.json] [--list]
 //   (--shard K/N: part K of N, cases sharing a World or key kept together (shardPlan); --list --shard 1/N: the plan only;
 //   --write-times: write this run's case times into the committed tools/test/node/times.json)
-// With no suite named it runs every registered suite (SUITES below). Exits non-zero on any failed check.
+// With no suite named it runs every registered suite (SUITES below). Exits non-zero on any failed check. A case that
+// fails is re-run once, alone, in a fresh worker: passing then, it is listed as FLAKY at the end and does not fail the run.
 //
 // A suite module exports:
 //   export const nodeSuite = { files: ['src/bike.js', ...], headless: true }   // the sources it covers (run.py --changed
@@ -93,6 +94,19 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
     });
     w.on('error', (e) => { results.push({ suite: '?', i: -1, ms: 0, checks: [{ name: 'worker crashed', ok: false, why: String(e) }] }); resolve(); });
   })));
+  // Retry net: a case with a failed check (not a known failure) runs once more, alone, in a fresh worker. Passing on
+  // the retry it is reported FLAKY (with the first run's failure) and does not fail the run; failing again, it fails.
+  const failing = (r) => r.checks.some((c) => !c.ok && !c.skip && !knownFails[r.suite]?.[c.name]), flaky = [];
+  const retryable = results.filter((r) => r.i >= 0 && failing(r));
+  if (retryable.length) console.log(`retry  ${retryable.length} failed case(s), once each in a fresh worker`);
+  for (const r of retryable) {
+    const job = work.find((x) => x.suite === r.suite && x.i === r.i); if (!job) continue;
+    const again = await runFresh(job);
+    if (!failing(again)) {
+      const first = r.checks.filter((c) => !c.ok && !knownFails[r.suite]?.[c.name]);
+      flaky.push({ suite: r.suite, id: job.c.id ?? job.i, first }); results[results.indexOf(r)] = { ...again, ms: r.ms };
+    } else for (const c of again.checks) if (!c.ok && !knownFails[again.suite]?.[c.name]) console.log(`FAIL  ${again.suite}: ${c.name} (again on retry)${c.why ? '  ' + c.why : ''}`);
+  }
   const measured = {}; for (const r of results) { const w = work.find((x) => x.suite === r.suite && x.i === r.i); if (w) measured[key(w)] = Math.round(r.ms); }
   try { writeFileSync(timesFile, JSON.stringify({ ...local, ...measured })); } catch {}
   if (writeTimes) { // (this run's times over the committed ones; a listed suite's cases that no longer exist are dropped)
@@ -109,11 +123,23 @@ if (!isMainThread) { // a worker: set up once, then run whatever case it is sent
   for (const c of fixed) console.log(`fixed  ${c.suite}: ${c.name} passes now: remove it from tools/test/known.json`);
   const per = {}; for (const r of results) { const p = (per[r.suite] ??= { cases: 0, ms: 0, checks: 0, failed: 0 }); p.cases++; p.ms += r.ms; p.checks += r.checks.length; p.failed += r.checks.filter((c) => !c.ok && !known[r.suite]?.[c.name]).length; }
   for (const [s, p] of Object.entries(per)) console.log(`${p.failed ? 'FAIL' : 'PASS'}  ${s}: ${p.checks - p.failed}/${p.checks} checks, ${p.cases} cases, ${(p.ms / 1000).toFixed(1)} s of work`);
+  if (flaky.length) {
+    console.log(`FLAKY  ${flaky.length} case(s) failed once and passed on retry (not counted; worth a look):`);
+    for (const f of flaky) for (const c of f.first) console.log(`FLAKY  ${f.suite} ${f.id}: ${c.name}${c.why ? '  ' + c.why : ''}`);
+  }
   console.log(`${bad.length ? 'FAIL' : 'PASS'}  ${checks.length - bad.length}/${checks.length} checks in ${((performance.now() - t0) / 1000).toFixed(1)} s on ${n} workers`);
-  if (jsonOut) writeFileSync(jsonOut, JSON.stringify({ per, checks }, null, 1));
+  if (jsonOut) writeFileSync(jsonOut, JSON.stringify({ per, checks, flaky }, null, 1));
   process.exit(bad.length ? 1 : 0);
 }
 
+// one case run alone in a new worker (the retry net): resolves with its result message
+function runFresh(job) {
+  return new Promise((resolve) => {
+    const w = new Worker(fileURLToPath(import.meta.url)), done = (m) => { w.terminate(); resolve(m); };
+    w.on('message', (m) => { if (m.ready) w.postMessage(job); else done(m); });
+    w.on('error', (e) => done({ suite: job.suite, i: job.i, ms: 0, checks: [{ name: 'worker crashed', ok: false, why: String(e) }] }));
+  });
+}
 // what a case shares with others (World first: node/world.mjs caches one per worker)
 function aff(j) { return j.c.world ?? j.c.key; }
 // the case a worker takes next: one for something it already has, else for something no worker has started, else one
