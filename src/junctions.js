@@ -34,6 +34,10 @@ function junctionNodes(roads) {
 }
 // 2D distances along a road
 export function along(P) { const S = new Float64Array(P.length); for (let i = 1; i < P.length; i++) S[i] = S[i - 1] + Math.hypot(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z); return S; }
+// the first point i in 1 .. n - 1 at least s along (S: along's), else n - 1: the segment i - 1 .. i holds s
+function segAt(S, s) { let lo = 1, hi = S.length - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (S[m] < s) lo = m + 1; else hi = m; } return lo; }
+// which of a road's points are junction nodes (rd.jn): point index -> its node (the first listed)
+export function jnAt(rd) { const M = new Map(); for (const [j, nd] of rd.jn || []) if (!M.has(j)) M.set(j, nd); return M; }
 // the right vector at point i (as roads.js frame: along the neighbours' chord)
 function right2(a, b) { const dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz) || 1; return [-dz / l, dx / l]; }
 function right(P, i) { const a = P[Math.max(0, i - 1)], b = P[Math.min(P.length - 1, i + 1)], dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz) || 1; return [-dz / l, dx / l]; }
@@ -43,8 +47,8 @@ function right(P, i) { const a = P[Math.max(0, i - 1)], b = P[Math.min(P.length 
 // [{ k, j, dir (+1: the arm runs up the road's points), hw, W (pavement width, 0 none), lift, c (mouth: metres
 // along from the node) }], ok (false: no box, the roads stay as they were: a bridge or tunnel there, roads merging at
 // a shallow angle) }].
-export function junctionPlan(roads, city) {
-  const out = [], S = new Map(), sOf = (k) => { let s = S.get(k); if (!s) S.set(k, (s = along(roads[k].pts))); return s; };
+export function junctionPlan(roads, city, S = new Map()) { // (S: road -> along(its points), kept by the caller to share)
+  const out = [], sOf = (k) => { let s = S.get(k); if (!s) S.set(k, (s = along(roads[k].pts))); return s; }, JN = new Map(), jnOf = (k) => { let m = JN.get(k); if (!m) JN.set(k, (m = jnAt(roads[k]))); return m; };
   for (const [nd, L] of junctionNodes(roads)) {
     const p0 = roads[L[0].k].pts[L[0].j], arms = []; let ok = true;
     for (const { k, j } of L) {
@@ -56,7 +60,7 @@ export function junctionPlan(roads, city) {
         // direction: to the first point at least 0.5 m away; length: to the next junction node or the road's end
         let q = j + dir; while (q + dir >= 0 && q + dir < n && Math.abs(Sk[q] - Sk[j]) < 0.5) q += dir;
         const dx = P[q].x - P[j].x, dz = P[q].z - P[j].z, l = Math.hypot(dx, dz) || 1;
-        let e = j + dir; while (e > 0 && e < n - 1 && !(rd.jn || []).some(([jj]) => jj === e)) e += dir;
+        let e = j + dir; const jm = jnOf(k); while (e > 0 && e < n - 1 && !jm.has(e)) e += dir;
         const W = city && rd.kind !== 'highway' && !rd.baked ? PAVE[rd.kind] ?? 3.5 : 0;
         arms.push({ k, j, dir, dx: dx / l, dz: dz / l, hw: rd.width / 2, W, lift: TARMAC_LIFT[rd.kind] ?? 0.04, len: Math.abs(Sk[e] - Sk[j]), a: Math.atan2(dz, dx), c: 0 });
       }
@@ -101,7 +105,7 @@ export function insertMouths(roads, plan) {
     const rd = roads[k], P = rd.pts, S = along(P), ins = [];
     for (const A of L) {
       const s = S[A.j] + A.dir * A.c; if (s <= 0.3 || s >= S[P.length - 1] - 0.3) continue;
-      let i = 1; while (i < P.length - 1 && S[i] < s) i++; // (s in the segment i - 1 .. i)
+      const i = segAt(S, s); // (s in the segment i - 1 .. i)
       if (Math.abs(S[i] - s) < 0.05 || Math.abs(S[i - 1] - s) < 0.05 || ins.some((q) => Math.abs(q.s - s) < 0.05)) continue;
       ins.push({ i, s, t: (s - S[i - 1]) / (S[i] - S[i - 1]), p: P[i - 1].clone().lerp(P[i], (s - S[i - 1]) / (S[i] - S[i - 1])) });
     }
@@ -121,14 +125,14 @@ export function insertMouths(roads, plan) {
 export function junctionShapes(roads, city) {
   const out = [], rk = city ? RK.city : RK.country, F = (junctionShapes.fail = { steep: 0, cross: 0, node: 0, tri: 0 }); // (fail: why junctions were left without a box)
   const SS = new Map(), sOf = (k) => { let s = SS.get(k); if (!s) SS.set(k, (s = along(roads[k].pts))); return s; };
-  for (const J of junctionPlan(roads, city)) {
+  for (const J of junctionPlan(roads, city, SS)) {
     if (!J.ok) continue;
     const A0 = J.arms[0], y = roads[A0.k].pts[A0.j].y, n = J.arms.length;
     // each arm's edges, from beside the node out to its mouth, where the ribbon's are (roads.js strip: each row's edge
     // at p + off * right, straight between rows): A.edge(o) -> [[x, z], ...] (o: metres to the arm's left)
     for (const A of J.arms) {
       const P = roads[A.k].pts, S = sOf(A.k), s = S[A.j] + A.dir * A.c;
-      let i = 1; while (i < P.length - 1 && S[i] < s) i++; // (the mouth: in the segment i - 1 .. i)
+      const i = segAt(S, s); // (the mouth: in the segment i - 1 .. i)
       const t = Math.min(1, Math.max(0, (s - S[i - 1]) / ((S[i] - S[i - 1]) || 1))), rows = [];
       for (let q = A.j; A.dir > 0 ? q <= i - 1 : q >= i; q += A.dir) rows.push(q); // (the rows from the node up to the mouth's segment)
       // (at the node of a road passing through, the ribbon has a point just to this arm's side of it, roads.js

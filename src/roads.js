@@ -6,7 +6,7 @@ import { glowTexture as glow } from './materials.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { REGION, roadStyle, tarmacMaterial, shoulderMaterial, sidewalkMaterial } from './roadSurface.js';
 import { airportGate } from './airportKit.js';
-import { junctionPlan, insertMouths, junctionShapes, TARMAC_LIFT, along } from './junctions.js';
+import { junctionPlan, insertMouths, junctionShapes, TARMAC_LIFT, along, jnAt } from './junctions.js';
 import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE, PAVE_ROW, CITY_TOP } from './roadgrade.js';
 
 const RWY_HALF = 900, JGRADE = 0.2; // (JGRADE: the steepest a street may be left between two junctions' level boxes)
@@ -190,10 +190,11 @@ export function gradeReal(w, net) {
   // grade from its mouth: on a steep street with a junction every 15-20 m, level boxes would leave a wall between
   // them (Bora Bora's hillside lanes); those junctions keep their roads' own grades (junctionShapes: no box)
   const keep = new Map(junctionPlan(net.roads, city).filter((J) => J.ok).map((J) => [J.nd, J]));
+  const JN = new Map(), jnOf = (k) => { let m = JN.get(k); if (!m) JN.set(k, (m = jnAt(net.roads[k]))); return m; };
   for (const J of [...keep.values()]) for (const A of J.arms) {
-    const rd = net.roads[A.k];
-    let e = A.j + A.dir; while (e > 0 && e < rd.pts.length - 1 && !(rd.jn || []).some(([jj]) => jj === e)) e += A.dir;
-    const fn = (rd.jn || []).find(([jj]) => jj === e)?.[1], y0 = nodeY.get(J.nd), y1 = fn != null ? nodeY.get(fn) : undefined; if (y0 == null || y1 == null) continue;
+    const rd = net.roads[A.k], jm = jnOf(A.k);
+    let e = A.j + A.dir; while (e > 0 && e < rd.pts.length - 1 && !jm.has(e)) e += A.dir;
+    const fn = jm.get(e), y0 = nodeY.get(J.nd), y1 = fn != null ? nodeY.get(fn) : undefined; if (y0 == null || y1 == null) continue;
     const F = keep.get(fn), c2 = F?.arms.find((B) => B.k === A.k && B.j === e)?.c ?? 0, free = A.len - A.c - c2;
     if (Math.abs(y1 - y0) > JGRADE * Math.max(0, free) + 0.05) { keep.delete(J.nd); if (F) keep.delete(fn); }
   }
@@ -252,8 +253,8 @@ export function gradeReal(w, net) {
     for (const [a, b, y] of level) for (let k = 0; k < n; k++) if (S[k] >= a - 0.01 && S[k] <= b + 0.01 && !fixed?.[k]) P[k].y = y; // (a junction's box: level from the node out to each mouth, the points between too)
     for (const m of rd.members) {
       const q = m.rd, k = q.pts.length, at = (j) => m.start + (m.rev ? k - 1 - j : j);
-      for (let j = 0; j < k; j++) q.pts[j].y = P[at(j)].y;
-      q.terr = Float32Array.from(q.pts, (p, j) => rd.terr[at(j)]); q.wet = Uint8Array.from(q.pts, (p, j) => rd.wet[at(j)]); q.bridge = q.pts.map((p, j) => rd.bridge[at(j)]);
+      q.terr = new Float32Array(k); q.wet = new Uint8Array(k); q.bridge = [];
+      for (let j = 0; j < k; j++) { const a = at(j); q.pts[j].y = P[a].y; q.terr[j] = rd.terr[a]; q.wet[j] = rd.wet[a]; q.bridge.push(rd.bridge[a]); }
       if (q.tunnel) { // where the tunnel is a tube: 8 m of ground over it (less: an open cutting, carved), or below the water; one tube from the first such point to the last (no portals inside it)
         const o = q.width / 2 + 3, tb = q.pts.map((p, i) => { const a = q.pts[Math.max(0, i - 1)], b = q.pts[Math.min(q.pts.length - 1, i + 1)], l = Math.hypot(b.x - a.x, b.z - a.z) || 1, rx = -(b.z - a.z) / l * o, rz = (b.x - a.x) / l * o;
           return Math.min(terr(p.x, p.z), terr(p.x + rx, p.z + rz), terr(p.x - rx, p.z - rz)) - p.y > 8 || p.y < wl - 0.3; }), a = tb.indexOf(true), b = tb.lastIndexOf(true); // (the ground clears the tube either side too: no hillside inside the opening)
