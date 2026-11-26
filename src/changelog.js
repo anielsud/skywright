@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.192.0', items: [
+    "Smoother flying: new things in the distance appear when they're ready instead of making the game freeze for a moment.",
+  ] },
   { v: '1.191.0', items: [
     "Flying far from New York is smoother: no more tiny freeze when new ground appears in the distance.",
   ] },
