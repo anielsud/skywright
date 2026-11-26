@@ -4,6 +4,7 @@
 // Each tile bakes its own albedo/AO/normal maps with exactly the core's bake (World.bakeMaps) and draws with the
 // core's terrain material, so crossing the edge of the core map doesn't change the look of the ground.
 import * as THREE from 'three';
+import { slice } from './stepClock.js';
 import { terrainMaterial } from './shaders.js';
 import { FarField } from './farfield.js';
 
@@ -40,9 +41,10 @@ export class TerrainTiles {
       for (const [k, t] of this.tiles) if (!want.has(k)) { this.drop(t); this.tiles.delete(k); this.treesDirty = true; this.far.maskDirty = true; }
       this.queue = [...want.values()].filter((t) => { const have = this.tiles.get(this.key(t.i, t.j)); return !have || have.lod !== t.lod || have.stale; }).sort((a, b) => a.d - b.d);
     }
-    // work is time-sliced (a few ms per frame) so streaming never causes a hitch, even on a tablet
-    const t0 = performance.now(), budget = 4;
-    while (performance.now() - t0 < budget) {
+    // work is time-sliced (a few ms per frame) so streaming never causes a hitch, even on a tablet (stepClock.js:
+    // under the test stepper, 48 slices of a tile's build a step instead)
+    const more = slice(4, 48);
+    while (more()) {
       if (!this.job) {
         if (this.queue.length) { const t = this.queue.shift(), have = this.tiles.get(this.key(t.i, t.j)); if (have ? have.lod === t.lod && !have.stale : t.inv) continue; /* (rebuilt already / dropped since) */ this.job = { t, it: this.build(t.i, t.j, t.lod) }; }
         else if (this.treesDirty) { this.treesDirty = false; this.treeCam = null; this.job = { water: true, it: this.updateWaterDepth(cam) }; }

@@ -3,6 +3,7 @@
 // fixed 60 Hz, and reports what happened. Needs a flight at a location with stunts (window.__sky.F with world.stunts).
 // Physics only: the flight is paused and stepped from here. Positions are in the site's own frame (stuntKit.js Site:
 // x along the park, z across it), so it works for any placement and heading.
+import { stepping } from '../../src/stepClock.js';
 import { SonicFX } from '../../src/sonic.js'; // (a staged vehicle gets the heat-glow materials, like every vehicle the game shows: no extra shader variants)
 const DT = 1 / 60;
 const park = (S) => S.F.world.stunts.park;
@@ -260,7 +261,9 @@ export function startAt(S, name, start) {
   const w = S.F.world, s = w.landStart(start); if (!s) return null;
   const ac = new S.Aircraft(JSON.parse(JSON.stringify(S.presets.find((d) => d.name === name))), S.REALISM.pilot);
   const at = s.at ? s.at(0) : s.pos;
-  if (w.flora?.update) for (let i = 0; i < 60; i++) { w.flora.update(at, 100); if (!w.flora.queue?.some((q) => q.d < 400)) break; } // (the trees round it: Flora grows them near the camera)
+  // (the trees round it: Flora grows them near the camera; a fixed amount of work per call, not 100 ms of it, so how far
+  // it gets doesn't depend on the machine: stepClock.js)
+  if (w.flora?.update) stepping(() => { for (let i = 0; i < 60; i++) { w.flora.update(at, 100); if (!w.flora.queue?.some((q) => q.d < 400)) break; } });
   ac.spawn(S.F.env, at, s.heading);
   for (let i = 0; i < 60; i++) { ac.setControls({ pitch: 0, roll: 0, yaw: 0, throttle: 0, rev: 0, hand: 0 }); ac.brake = 1; ac.step(DT, S.F.env); }
   const f = new S.THREE.Vector3(0, 0, -1).applyQuaternion(ac.q), ax = new S.THREE.Vector3(-Math.sin(s.heading), 0, -Math.cos(s.heading)), g = w.groundAt(ac.x.x, ac.x.z);

@@ -12,11 +12,13 @@
 // second (measured, desktop, 3 min at 1 km/s: ~0.4 ms/frame at Alpine, under 0.1 at real places). The HUD draws one canvas: the tiles around the plane composited at their places on the grid (redone only
 // when a tile lands or the plane moves into the next tile), so neighbouring tiles never show a seam.
 import * as THREE from 'three';
+import { STEP } from './stepClock.js';
 
 const PX = 64, COARSE = 32, BOOT = 16; // px a side: full (~86 m/px, the old core image's scale), first pass, load-time pass
 const RANGE = 12000; // m: the widest map range (hud.js): the composite always covers this square around the plane
 const AHEAD = 8, AHEAD_MAX = 15000; // s / m of lookahead along the velocity (the SR-71 crosses a tile every ~5.5 s)
 const MS = 1; // build budget per frame (ms)
+const STEP_ROWS = 8; // rows per step instead, under the test stepper (stepClock.js)
 const KEEP = 96; // tiles kept (least recently wanted dropped first): 64x64 canvases, ~16 kB each
 export const MAP_BG = '#1d3b4a'; // where no tile is built yet
 
@@ -77,7 +79,7 @@ export class MapTiles {
     // work, a row at a time, while the next row (its cost so far, rowMs) still fits in the frame's budget; at least one
     // row a frame, so a slow device still gets there
     for (let rows = 0; ; rows++) {
-      const t = performance.now(); if (rows && t - t0 + this.rowMs > MS) break;
+      const t = performance.now(); if (rows && (STEP.on ? rows >= STEP_ROWS : t - t0 + this.rowMs > MS)) break;
       if (!this.job) { this.job = this.pick(); if (!this.job) break; }
       const r = this.job.it.next(), dt = performance.now() - t; this.rowMs += (dt - this.rowMs) * 0.1;
       if (r.done) { const J = this.job; this.job = null; this.finish(J.t, J.res, r.value); if (J.redo) this.tiles.get(J.t.key).stale = true; }
