@@ -26,7 +26,7 @@ Outputs (all little-endian):
   osm.json                buildings, roads, rail, cable cars for the hi area (see bake_osm).
   meta.json               extents and grid sizes.
 """
-import argparse, gzip, io, json, math, os, sys, time, urllib.error, urllib.parse, urllib.request
+import argparse, gzip, io, json, math, os, re, sys, time, urllib.error, urllib.parse, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
@@ -536,7 +536,7 @@ def sample_grid(L, H, x, z):
     x0, z0, S = L['hi']; n = H.shape[0]; k = (n - 1) / S
     return bilinear(H, (np.asarray(x) - x0) * k + 0.5, (np.asarray(z) - z0) * k + 0.5)
 
-def bake_roadnet(L, osm, path):
+def bake_roadnet(L, osm, path, cover=None):
     """roads.bin.gz: every road (all classes) and road tunnel with its real topology, for src/roadnet.js.
     Little-endian: a uint32 header length, then a JSON header {v, ways, points, nodes}, padded to 4 bytes, then:
       x, z      float32[points]  the ways' points, metres (local frame), way after way
@@ -544,23 +544,47 @@ def bake_roadnet(L, osm, path):
       y         float32[points]  baked deck heights (bridge_profiles), NaN where none
       start     uint32[ways]     each way's first point
       count     uint16[ways]     its number of points
-      cls       uint8[ways]      0 motorway/trunk, 1 primary/secondary, 2 tertiary, 3 residential/unclassified/living
+      cls       uint8[ways]      0 motorway/trunk, 1 primary/secondary, 2 tertiary, 3 residential/unclassified/living,
+                                 off the street network (minor_way): 4 service (alleys, parking aisles), 5 pedestrian
+                                 (pedestrian streets, paved footpaths), 6 track
       width     uint8[ways]      metres x 4
       flags     uint8[ways]      1 bridge, 2 tunnel, 4 one-way (along its points), 8 one-way against them, 16 roundabout
       lanes     uint8[ways]      OSM lanes (0: not tagged)
       layer     int8[ways]       OSM layer
-    A point is a node where two or more ways meet (or a way ends): the junctions; the ways' other points are shape."""
+    v2 adds (header: areas, apoints):
+      surf      uint8[ways]      0 asphalt, 1 paving (stone or concrete pavers), 2 gravel
+      ax, az    float32[apoints] the plazas' outlines (pedestrian areas, squares; counter-clockwise in x, z, not closed)
+      astart    uint32[areas]    each plaza's first outline point
+      acount    uint32[areas]    its number of points
+      acls      uint8[areas]     5 (pedestrian)
+      asurf     uint8[areas]     as surf
+    A point is a node where two or more ways meet (or a way ends): the junctions; the ways' other points are shape.
+    cover: a city's landcover (bake_cover): its paved footpaths are kept only off the parks (the park paths are not streets)."""
     import gzip, struct
     ways = [(r, m, False) for r, m in zip(osm['roads'], osm['road_meta'])] + [(t, m, True) for t, m in zip(osm['tunnels'], osm['tunnel_meta'])]
+    if cover is not None:  # (a city: footpaths mostly over parks, lawns or woods are park paths)
+        C = np.asarray(cover); n = C.shape[0]; x0, z0, S = L['hi']; k = n / S
+        def parky(f):
+            P = np.array(f).reshape(-1, 2); P = np.concatenate([P, (P[1:] + P[:-1]) / 2])
+            i = np.clip(((P[:, 0] - x0) * k).astype(int), 0, n - 1); j = np.clip(((P[:, 1] - z0) * k).astype(int), 0, n - 1)
+            return float(np.mean(C[j, i] > 0)) > 0.4
+        keep = [i for i, (r, (keys, tags)) in enumerate(zip(osm['minor'], osm['minor_meta'])) if not (tags.get('highway') in ('footway', 'path') and parky(r[3]))]
+        print(f'  footpaths in parks left out: {len(osm["minor"]) - len(keep)}', flush=True)
+        osm['minor'] = [osm['minor'][i] for i in keep]; osm['minor_meta'] = [osm['minor_meta'][i] for i in keep]
+        def plaza_ok(f):
+            P = np.array(f).reshape(-1, 2); c = P.mean(0); i = int(np.clip((c[0] - x0) * k, 0, n - 1)); j = int(np.clip((c[1] - z0) * k, 0, n - 1))
+            return C[j, i] == 0 or not parky(f)
+        osm['plazas'] = [a for a in osm['plazas'] if plaza_ok(a[2])]
+    ways += [(r, m, False) for r, m in zip(osm.get('minor', []), osm.get('minor_meta', []))]
     uses = {}
     for r, (keys, tags), tun in ways:
         for i, k in enumerate(keys): uses[k] = uses.get(k, 0) + (2 if i in (0, len(keys) - 1) else 1)
     node_id = {}
-    X, Z, N, Y, start, count, cls, width, flags, lanes, layer = [], [], [], [], [], [], [], [], [], [], []
+    X, Z, N, Y, start, count, cls, width, flags, lanes, layer, surf = [], [], [], [], [], [], [], [], [], [], [], []
     for k, (r, (keys, tags), tun) in enumerate(ways):
         f = r[3] if not tun else r[2]; P = np.array(f).reshape(-1, 2)
         if len(P) != len(keys) or len(P) < 2: continue
-        ys = r[4] if (not tun and len(r) > 4 and r[4]) else None
+        ys = r[4] if (not tun and r[0] < 4 and len(r) > 4 and r[4]) else None  # (bridge_profiles' deck heights; a minor way's [4] is its surface)
         start.append(len(X)); count.append(len(P))
         for i, (x, z) in enumerate(P):
             X.append(x); Z.append(z); Y.append(ys[i] if ys else float('nan'))
@@ -571,13 +595,21 @@ def bake_roadnet(L, osm, path):
         fl = (1 if (not tun and r[2]) else 0) | (2 if tun else 0) | (4 if ow in ('yes', 'true', '1') or (rb and ow != 'no') or tags.get('highway') in ('motorway',) and ow != 'no' else 0) | (8 if ow == '-1' else 0) | (16 if rb else 0)
         cls.append(r[0]); width.append(min(255, int(round((r[1]) * 4)))); flags.append(fl)
         lanes.append(min(255, int(num(tags.get('lanes'), 0) or 0))); layer.append(max(-127, min(127, int(num(tags.get('layer'), 0) or 0))))
-    hdr = json.dumps(dict(v=1, ways=len(start), points=len(X), nodes=len(node_id))).encode()
+        surf.append(r[4] if r[0] >= 4 else 2 if tags.get('surface') in ('gravel', 'unpaved', 'dirt', 'compacted', 'fine_gravel', 'ground') else 0)
+    AX, AZ, astart, acount, acls, asurf = [], [], [], [], [], []
+    for c, sf, f in osm.get('plazas', []):
+        P = np.array(f).reshape(-1, 2); astart.append(len(AX)); acount.append(len(P)); acls.append(c); asurf.append(sf)
+        AX += P[:, 0].tolist(); AZ += P[:, 1].tolist()
+    hdr = json.dumps(dict(v=2, ways=len(start), points=len(X), nodes=len(node_id), areas=len(astart), apoints=len(AX))).encode()
     hdr += b' ' * (-(len(hdr) + 4) % 4)
     buf = struct.pack('<I', len(hdr)) + hdr
-    for a, t in ((X, '<f4'), (Z, '<f4'), (N, '<i4'), (Y, '<f4'), (start, '<u4'), (count, '<u2'), (cls, 'u1'), (width, 'u1'), (flags, 'u1'), (lanes, 'u1'), (layer, 'i1')):
+    for a, t in ((X, '<f4'), (Z, '<f4'), (N, '<i4'), (Y, '<f4'), (start, '<u4'), (count, '<u2'), (cls, 'u1'), (width, 'u1'), (flags, 'u1'), (lanes, 'u1'), (layer, 'i1'),
+                 (surf, 'u1'), (AX, '<f4'), (AZ, '<f4'), (astart, '<u4'), (acount, '<u4'), (acls, 'u1'), (asurf, 'u1')):
         b = np.array(a, dtype=t).tobytes(); buf += b + b'\0' * (-len(b) % 4)
     with gzip.open(path, 'wb', compresslevel=9) as fo: fo.write(buf)
-    print(f'  roads.bin.gz {os.path.getsize(path)} bytes: {len(start)} ways, {len(X)} points, {len(node_id)} junctions', flush=True)
+    nm = sum(c >= 4 for c in cls)
+    print(f'  roads.bin.gz {os.path.getsize(path)} bytes: {len(start)} ways ({nm} off the street network: {sum(c == 4 for c in cls)} service, {sum(c == 5 for c in cls)} pedestrian, {sum(c == 6 for c in cls)} track), '
+          f'{len(X)} points, {len(node_id)} junctions, {len(astart)} plazas', flush=True)
 
 def bridge_profiles(L, H, osm):
     """Road bridges over water get real deck heights: OSM has no heights, and the ends of a bridge way are not where it
@@ -713,6 +745,23 @@ def overpass(q, path, rounds=6):
         time.sleep(min(300, 15 * 2 ** r))
     raise RuntimeError('overpass failed')
 
+def overpass_split(bb, q, path, depth=0):
+    """An Overpass query (body q, without its header) over the box bb, cached at path; when the servers give up on
+    the box (a dense corner of a city), its four quarters, merged (and cached together at path)."""
+    if os.path.exists(path): return json.load(open(path))
+    try: return overpass(f'[out:json][timeout:900][maxsize:1073741824][bbox:{bb}];' + q, path, rounds=2 if depth < 2 else 6)
+    except RuntimeError:
+        if depth >= 2: raise
+    s_, w_, n_, e_ = map(float, bb.split(',')); out, seen = [], set()
+    for i in range(2):
+        for j in range(2):
+            sub = f'{s_ + (n_ - s_) * i / 2:.5f},{w_ + (e_ - w_) * j / 2:.5f},{s_ + (n_ - s_) * (i + 1) / 2:.5f},{w_ + (e_ - w_) * (j + 1) / 2:.5f}'
+            for el in overpass_split(sub, q, path[:-5] + f'_{i}{j}.json', depth + 1)['elements']:
+                if (el['type'], el['id']) not in seen: seen.add((el['type'], el['id'])); out.append(el)
+    js = {'elements': out}
+    with open(path, 'w') as f: json.dump(js, f)
+    return js
+
 def bbox(L, sq, pad=0):
     x0, z0, S = sq
     lat, lon = to_latlon(L, np.array([x0 - pad, x0 + S + pad, x0 - pad, x0 + S + pad]), np.array([z0 - pad, z0 - pad, z0 + S + pad, z0 + S + pad]))
@@ -786,6 +835,38 @@ def in_square(p, sq, m=0):
 def in_airport(p):  # the game's own airport (runways, apron, buildings): no OSM buildings there
     return bool(((np.abs(p[:, 0] - 100) < 480) & (np.abs(p[:, 1]) < 1250)).any())
 
+# The ways off the street network (#228 follow-up): pedestrian streets and plazas, alleys and service roads, farm tracks,
+# and paved footpaths that are streets in all but name. roads.bin keeps them as their own classes (MCLASS) with a
+# surface (SURF): drawn as paving, narrow asphalt or gravel, driven on like any road, but no traffic, junction boxes,
+# markings or kerbs (src/roads.js: rd.minor).
+MINOR_Q = r'^(pedestrian|service|track)$'
+PAVED = r'^(asphalt|paved|paving_stones|concrete|concrete:plates|concrete:lanes|sett|cobblestone|unhewn_cobblestone|bricks|granite|stone|metal|wood)$'
+FOOT_SKIP = r'^(sidewalk|crossing|traffic_island|access_aisle|link)$'
+MCLASS = {'service': 4, 'pedestrian': 5, 'footway': 5, 'path': 5, 'track': 6}
+SERVICE_SKIP = ('driveway', 'drive-through', 'emergency_access')  # (driveways: short stubs into lots and garages, tens of thousands in Queens; the paved ground, cityGround, covers them)
+SERVICE_W = {'alley': 3.5, 'parking_aisle': 5}
+SURF = {'asphalt': 0, 'paved': 0, 'concrete': 1, 'concrete:plates': 1, 'concrete:lanes': 0, 'paving_stones': 1, 'sett': 1, 'cobblestone': 1, 'unhewn_cobblestone': 1,
+        'bricks': 1, 'granite': 1, 'stone': 1, 'metal': 1, 'wood': 1, 'gravel': 2, 'fine_gravel': 2, 'compacted': 2, 'unpaved': 2, 'dirt': 2, 'ground': 2, 'earth': 2,
+        'grass': 2, 'sand': 2, 'pebblestone': 2, 'mud': 2, 'rock': 2, 'grass_paver': 2}
+
+def minor_way(tags, city):
+    """(class, width, surface: 0 asphalt, 1 paving, 2 gravel) for a way off the street network, or None to leave it out."""
+    hw = tags.get('highway'); c = MCLASS.get(hw)
+    if c is None or tags.get('area') == 'yes' or tags.get('indoor') not in (None, 'no') or tags.get('level') not in (None, '0'): return None
+    if tags.get('access') in ('private', 'no') and hw == 'service' and not city: return None  # (farmyards: the paved ground isn't there)
+    if hw in ('footway', 'path'):
+        if re.match(FOOT_SKIP, tags.get('footway', '')) or not re.match(PAVED, tags.get('surface', '')) or tags.get('covered') == 'yes': return None
+    if hw == 'service' and (tags.get('service') in SERVICE_SKIP or (city and tags.get('service') == 'parking_aisle')): return None  # (a city's car parks: 23k aisles in New York, on ground cityGround paves anyway)
+    surf = SURF.get(tags.get('surface', ''))
+    if hw == 'track':
+        if surf is None: surf = 0 if tags.get('tracktype') == 'grade1' else 2
+        w = 3.0
+    elif hw == 'service': surf = 0 if surf is None else surf; w = SERVICE_W.get(tags.get('service'), 4.5)
+    elif hw == 'pedestrian': surf = 1 if surf is None or surf == 2 else surf; w = 6.0
+    else: surf = 1 if surf is None or surf == 2 else surf; w = 3.0
+    w = num(tags.get('width'), w) or w
+    return c, min(max(w, 2.5), 12), surf
+
 HWAYS = r'^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$'
 
 def osm_api(L, bb, cache, step=0.08):
@@ -831,6 +912,17 @@ def bake_osm(L, cache, api=False):
             js_b['elements'] += overpass(hdr + 'relation["building"]["type"="multipolygon"];out body geom qt;', os.path.join(cache, 'osm', 'buildings_rel.json'))['elements']
         js_w = overpass(hdr + f'(way["highway"~"{HWAYS}"];'
                         'way["railway"~"^(rail|narrow_gauge|light_rail|funicular)$"];way["aerialway"~"^(cable_car|gondola|chair_lift|mixed_lift)$"];);out tags geom qt;', os.path.join(cache, 'osm', 'ways.json'))
+        # (the ways off the street network: minor_way. Paved footpaths only; plazas as areas)
+        q_x = (f'(way["highway"~"^(pedestrian|track)$"];way["highway"="service"]["service"!~"^({"|".join(SERVICE_SKIP)})$"];way["highway"~"^(footway|path)$"]["surface"~"{PAVED}"]["footway"!~"{FOOT_SKIP}"];'
+               'way["place"="square"];way["area:highway"="pedestrian"];relation["highway"="pedestrian"];relation["place"="square"];);out tags geom qt;')
+        if city:  # (a city's: in 3 x 3 boxes, one is too much for the public servers)
+            s_, w_, n_, e_ = map(float, bb.split(',')); js_x = {'elements': []}; seen_x = set()
+            for i in range(3):
+                for j in range(3):
+                    sub = f'{s_ + (n_ - s_) * i / 3:.5f},{w_ + (e_ - w_) * j / 3:.5f},{s_ + (n_ - s_) * (i + 1) / 3:.5f},{w_ + (e_ - w_) * (j + 1) / 3:.5f}'
+                    for el in overpass_split(sub, q_x, os.path.join(cache, 'osm', f'minor_{i}_{j}.json'))['elements']:
+                        if (el['type'], el['id']) not in seen_x: seen_x.add((el['type'], el['id'])); js_x['elements'].append(el)
+        else: js_x = overpass(hdr + q_x, os.path.join(cache, 'osm', 'minor.json'))
         js_l = overpass(hdr + '(way["natural"~"^(water|wood|glacier|scrub)$"];way["landuse"~"^(forest|reservoir|basin)$"];way["waterway"="riverbank"];);out tags geom qt;', os.path.join(cache, 'osm', 'land.json'))
         js_l['elements'] += overpass(hdr + '(relation["natural"~"^(water|wood|glacier|scrub)$"];relation["landuse"~"^(forest|reservoir)$"];);out body geom qt;', os.path.join(cache, 'osm', 'land_rel.json'))['elements']
         if L.get('river'): js_r = overpass(hdr + 'way["waterway"="river"];out tags geom qt;', os.path.join(cache, 'osm', 'rivers.json'))
@@ -849,6 +941,8 @@ def bake_osm(L, cache, api=False):
         W, R, Nd = osm_api(L, bb, cache)
         has = lambda t, k, rx: k in t and re.match(rx, t[k])
         js_b = {'elements': [w for w in W if 'building' in w['tags']] + [r for r in R if 'building' in r['tags'] and r['tags'].get('type') == 'multipolygon']}
+        js_x = {'elements': [w for w in W if has(w['tags'], 'highway', MINOR_Q) or has(w['tags'], 'highway', '^(footway|path)$') or w['tags'].get('place') == 'square' or w['tags'].get('area:highway') == 'pedestrian']
+                + [r for r in R if r['tags'].get('highway') == 'pedestrian' or r['tags'].get('place') == 'square']}
         js_w = {'elements': [w for w in W if has(w['tags'], 'highway', HWAYS) or has(w['tags'], 'railway', '^(rail|narrow_gauge|light_rail|funicular)$') or has(w['tags'], 'aerialway', '^(cable_car|gondola|chair_lift|mixed_lift)$')]}
         land = lambda t: has(t, 'natural', '^(water|wood|glacier|scrub)$') or has(t, 'landuse', '^(forest|reservoir|basin)$')
         js_l = {'elements': [w for w in W if land(w['tags']) or w['tags'].get('waterway') == 'riverbank'] + [r for r in R if land(r['tags'])]}
@@ -902,9 +996,38 @@ def bake_osm(L, cache, api=False):
         x, z = to_local(L, e['lat'], e['lon'])
         if in_square(np.array([[x, z]]), sq) and t.get('name'):
             places.append([t['name'], q(x), q(z), t['place']])
+    # ---- ways off the street network (minor_way) and plazas: roads.bin (bake_roadnet)
+    minor, minor_meta, plazas = [], [], []
+    P0 = np.array([[p[1], p[2]] for p in places]) if places else np.zeros((0, 2))
+    near_place = lambda pts: len(P0) and float(np.min(np.hypot(*(pts.mean(0)[:, None] - P0.T)))) < 700
+    seen = set()
+    for e in [e for e in js_x['elements'] if e['type'] == 'way' and len(e.get('geometry', [])) > 1]:
+        if e['id'] in seen: continue
+        seen.add(e['id'])
+        tags, pts = e.get('tags', {}), local_pts(L, e['geometry'])
+        if not in_square(pts, sq, 200): continue
+        m = minor_way(tags, city)
+        if m is None: continue
+        c, w, sf = m
+        if tags.get('tunnel') not in (None, 'no') or tags.get('highway') in ('footway', 'path') and not city and not near_place(pts): continue  # (no paths in tunnels; outside a city only the villages' paved lanes, not the hiking trails)
+        br = 1 if tags.get('bridge') not in (None, 'no') else 0
+        lay = num(tags.get('layer'), 0) or 0
+        if br or lay != 0: continue  # (no footbridges, nothing on another level: a deck, a promenade over a bridge's roadway; a footbridge would be drawn as a road bridge, piers and parapets)
+        minor.append([c, q(w), br, flat(pts), sf]); minor_meta.append((geom_keys(e), tags))
+    for tags, rings in areas(L, js_x):
+        if not (tags.get('place') == 'square' or tags.get('area:highway') == 'pedestrian' or (tags.get('highway') == 'pedestrian' and tags.get('area') == 'yes') or (tags.get('highway') == 'pedestrian' and tags.get('type') == 'multipolygon')): continue
+        if tags.get('leisure') or tags.get('landuse') in ('grass', 'meadow', 'forest') or tags.get('natural') or tags.get('building') or tags.get('area') == 'no': continue  # (a park mapped as a square)
+        for r in rings:
+            r = r[:-1] if np.hypot(*(r[0] - r[-1])) < 0.5 else r
+            if len(r) < 3 or not in_square(r, sq) or in_airport(r): continue
+            a = 0.5 * np.sum(r[:, 0] * np.roll(r[:, 1], -1) - np.roll(r[:, 0], -1) * r[:, 1])
+            if abs(a) < 25 or abs(a) > 60000: continue
+            if a < 0: r = r[::-1]
+            plazas.append([5, SURF.get(tags.get('surface', ''), 1) if SURF.get(tags.get('surface', ''), 1) != 2 else 1, flat(r)])
+    print(f'  off the street network: {len(minor)} ways, {len(plazas)} plazas', flush=True)
     land = areas(L, js_l)
     print(f'  {len(blds)} buildings, {len(roads)} roads, {len(rails)} rails, {len(cables)} cable cars, {len(land)} land areas, {len(places)} places', flush=True)
-    res = dict(out=dict(buildings=blds, roads=roads, rails=rails, cables=cables, places=places, tunnels=tunnels), land=land, roads=roads, blds=blds, rails=rails, js_r=js_r, road_meta=road_meta, tunnels=tunnels, tunnel_meta=tunnel_meta)
+    res = dict(out=dict(buildings=blds, roads=roads, rails=rails, cables=cables, places=places, tunnels=tunnels), land=land, roads=roads, blds=blds, rails=rails, js_r=js_r, road_meta=road_meta, tunnels=tunnels, tunnel_meta=tunnel_meta, minor=minor, minor_meta=minor_meta, plazas=plazas)
     if city:
         res['coast'] = [pts for tags, pts in lines(L, js_c) if tags.get('natural') == 'coastline']
         res['piers'] = [rings[0] for tags, rings in areas(L, js_c) if tags.get('man_made')]
@@ -1102,7 +1225,7 @@ def main():
         old = json.load(open(os.path.join(out, 'osm.json'))) if os.path.exists(os.path.join(out, 'osm.json')) else {}
         for k in ('lakes', 'rivers', 'riverStart'):  # made with the heights
             if k not in osm['out'] and k in old: osm['out'][k] = old[k]
-        bake_roadnet(L, osm, os.path.join(out, 'roads.bin.gz'))  # (every road and tunnel, with its topology: src/roadnet.js)
+        bake_roadnet(L, osm, os.path.join(out, 'roads.bin.gz'), Image.open(os.path.join(out, 'cover.png')) if L.get('city') else None)  # (every road and tunnel, with its topology: src/roadnet.js)
         osm['out'].pop('roads', None); osm['out'].pop('tunnels', None)  # (now in roads.bin.gz)
         with open(os.path.join(out, 'osm.json'), 'w') as f: json.dump(osm['out'], f, separators=(',', ':'))
         print('  osm.json', os.path.getsize(os.path.join(out, 'osm.json')), flush=True)
