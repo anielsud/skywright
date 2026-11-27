@@ -123,21 +123,19 @@ export function memoryChecks(loc, snaps, world) {
   return out;
 }
 // 3. back in the hangar (kept: __sky.kept then), a fresh start (s2) of what was restarted (s0 first start, s1 a restart),
-// and r: that fresh World damaged and restarted. s2 and r are measured the same way (streaming finished round the
-// spawn, then settled with the uploads): a restart holds the GPU memory a fresh start holds (#291: measured against the
-// first World's restarts instead, it compared a World swept and streamed for longer with one just started). r null: no
-// memory comparison (CI skips it and the work behind it)
+// and r: that fresh World damaged and restarted. s2 and r are measured the same way (streaming quiet round the spawn
+// with the flora held still, then settled with the uploads): a restart holds the GPU memory a fresh start holds (#291: measured against the
+// first World's restarts instead, it compared a World swept and streamed for longer with one just started)
 export function freshChecks(loc, kept, s0, s1, s2, r) {
-  const out = [
+  return [
     [`${loc}: the hangar holds no World`, !kept, kept ? 'a World is still kept' : ''],
     [`${loc}: fresh start builds a new World with the same spawn`, s2.world !== s0.world && sameSpawn(s2, s1), `world ${s0.world} -> ${s2.world}, spawn ${s2.spawn.slice(0, 3).map((v) => v.toFixed(2))}`],
     // (restart.py compared the first start's child count with the restart's in the same World; here the restart's with
     // this fresh start's: the same claim, a restart leaves the scene as a fresh start has it)
     [`${loc}: scene child count as a fresh start`, s1.kids === s2.kids, `restarted ${s1.kids}, fresh ${s2.kids}`],
+    [`${loc}: restarted GPU memory as a fresh start`, r.world === s2.world && Math.abs(r.geometries - s2.geometries) <= Math.max(8, s2.geometries * 0.05) && Math.abs(r.textures - s2.textures) <= 3,
+      `geometries ${r.geometries} vs ${s2.geometries}, textures ${r.textures} vs ${s2.textures}, kids ${r.kids} vs ${s2.kids}${r.world === s2.world ? '' : ', NOT the same World'}`],
   ];
-  if (r) out.push([`${loc}: restarted GPU memory as a fresh start`, r.world === s2.world && Math.abs(r.geometries - s2.geometries) <= Math.max(8, s2.geometries * 0.05) && Math.abs(r.textures - s2.textures) <= 3,
-      `geometries ${r.geometries} vs ${s2.geometries}, textures ${r.textures} vs ${s2.textures}, kids ${r.kids} vs ${s2.kids}${r.world === s2.world ? '' : ', NOT the same World'}`]);
-  return out;
 }
 // 4. a start type: f as it started (swapped in), r restarted, e after 4 game seconds on (with throttle if thr); world: the
 // World's id it must all happen in
