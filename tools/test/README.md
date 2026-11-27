@@ -756,6 +756,13 @@ How shaders are kept from stalling a frame (#273):
   scene at load (a sonic boom's rings: one hidden ring from the start). Never make an event's mesh or material when
   it fires.
 - **Per-place switches are uniforms, not defines** (#242: a define made a second terrain program for the tiles).
+- **Every program is a compile at load** (~0.3 s each on CI's software GL): a material's set-up switch (a kind, a
+  sway amount) that only picks a snippet is a uniform, and its customProgramCacheKey names only what changes the GLSL
+  (flora.js vegPatch, cabKit.js cabFinish, crew.js crewPatch, bubbleCockpit.js relief). `python3 tools/test/jobs.py
+  progs --quality low` counts the programs each place's start compiles, by family (tools/test/jobs/progs.js).
+- **A shadow caster's depth shader doesn't depend on its map unless it alpha-tests** (shaders.js installFog, #287):
+  three's shared depth material otherwise compiled a mapped copy of the same shader whenever draw order handed it a
+  textured caster first, mid-flight.
 - Give custom materials a `name`: the checks print it.
 
 Every job step fails on a **stall** (a program compiled during a frame's draw: `[shaders] N compiled in flight,

@@ -452,6 +452,10 @@ const KIND = {
   // floors: grain plus lighter scuffs where feet go (worn towards the bare material), darker grime patches
   floor: 'float h = (cN(p * 700.0) - 0.5) * 0.25; float k = 0.0003; float sc = smoothstep(0.55, 0.8, cN(p * vec3(2.2, 1.0, 3.5)) * 0.7 + cN(p * 18.0) * 0.3); float c = 1.0 + sc * 0.28 - smoothstep(0.6, 0.85, cN(p * 4.0 + 7.0)) * 0.18 + (cN(p * 60.0) - 0.5) * 0.1; float r = sc * 0.2 + (cN(p * 30.0) - 0.5) * 0.15;',
 };
+// Every kind's snippet goes into the one shader, picked by the uCabKind uniform (each draw takes one branch throughout):
+// one program per base material set-up instead of one per kind as well (each program costs a compile at load).
+const KINDS = Object.keys(KIND);
+const byKind = (tail) => KINDS.map((kd, i) => `${i ? 'else ' : ''}if (uCabKind < ${i}.5) { ${KIND[kd]} ${tail} }`).join('\n');
 const _variants = new Map(), _noOBC = THREE.Material.prototype.onBeforeCompile, _noKey = THREE.Material.prototype.customProgramCacheKey;
 // a cab's interior meshes onto their surface variants. box: the cab's inner bounds [[x0, y0, z0], [x1, y1, z1]] (part
 // space, as the meshes are); fallback: the kind for materials that carry none (painted moulding, gelcoat)
@@ -462,18 +466,18 @@ export function cabFinish(meshes, box, { ao = 1, fallback = 'powder', key = '', 
     const vk = base.uuid + '|' + kd + '|' + key; let v = _variants.get(vk);
     if (!v) {
       v = base.clone(); const bob = base.onBeforeCompile, bkey = base.customProgramCacheKey !== _noKey ? base.customProgramCacheKey() : '';
-      const uni = { uCab0: { value: new THREE.Vector3(...box[0]) }, uCab1: { value: new THREE.Vector3(...box[1]) }, uCabAO: { value: ao } };
+      const uni = { uCab0: { value: new THREE.Vector3(...box[0]) }, uCab1: { value: new THREE.Vector3(...box[1]) }, uCabAO: { value: ao }, uCabKind: { value: KINDS.indexOf(kd) } };
       v.onBeforeCompile = (sh, r) => {
         if (bob && bob !== _noOBC) bob.call(base, sh, r);
         Object.assign(sh.uniforms, uni);
         sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCabP;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvCabP = position;');
-        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vCabP;\n' + NOISE)
-          .replace('#include <color_fragment>', `#include <color_fragment>\n{ vec3 p = vCabP; ${KIND[kd]} diffuseColor.rgb *= c * mix(1.0, cabOcc(p), 0.45); }`)
-          .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\n{ vec3 p = vCabP; ${KIND[kd]} roughnessFactor = clamp(roughnessFactor + r, 0.04, 1.0); }`)
-          .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n{ vec3 p = vCabP; ${KIND[kd]} normal = cBump(normal, -vViewPosition, h, k); }`)
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vCabP; uniform float uCabKind;\n' + NOISE)
+          .replace('#include <color_fragment>', `#include <color_fragment>\n{ vec3 p = vCabP; ${byKind('diffuseColor.rgb *= c * mix(1.0, cabOcc(p), 0.45);')} }`)
+          .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\n{ vec3 p = vCabP; ${byKind('roughnessFactor = clamp(roughnessFactor + r, 0.04, 1.0);')} }`)
+          .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n{ vec3 p = vCabP; ${byKind('normal = cBump(normal, -vViewPosition, h, k);')} }`)
           .replace('#include <aomap_fragment>', '#include <aomap_fragment>\n{ float o = cabOcc(vCabP); reflectedLight.indirectDiffuse *= o; reflectedLight.indirectSpecular *= o; }');
       };
-      v.customProgramCacheKey = () => 'cab-' + kd + '-' + bkey;
+      v.customProgramCacheKey = () => 'cab2-' + bkey;
       _variants.set(vk, v);
     }
     m.material = v;

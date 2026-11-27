@@ -402,13 +402,13 @@ function terrainShadowed(sh) {
 
 // shared tweaks for every vegetation material: alpha that survives mipmapping (no thinning with distance),
 // lighting that ignores card back-faces, translucency, wind, and the dithered hand-over to the impostors
-function vegPatch(mat, { cut = null, band = null, key = '', sway = 0, leaf = true } = {}) {
+function vegPatch(mat, { cut = null, band = null, sway = 0, leaf = true } = {}) {
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG, { uSway: { value: sway }, uTransl: { value: leaf ? 1 : 0 } });
     if (cut) Object.assign(sh.uniforms, { uLoCut: cut, uBand: band });
     sh.vertexShader = sh.vertexShader.replace('#include <common>', `#include <common>
         uniform float uTime; uniform float uSway; attribute float wind; ${cut ? 'uniform float uLoCut; uniform float uBand; varying float vFadeT;' : ''}`)
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + (sway ? WIND_GLSL : ''));
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + WIND_GLSL); // (uSway 0: it adds exactly 0)
     if (cut) {
       sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', `#ifdef USE_INSTANCING
           float iDist = distance((modelMatrix * vec4(instanceMatrix[3].xyz, 1.0)).xyz, cameraPosition);
@@ -429,7 +429,9 @@ function vegPatch(mat, { cut = null, band = null, key = '', sway = 0, leaf = tru
       .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + TRANSLUCENCY_GLSL);
     terrainShadowed(sh);
 };
-  mat.customProgramCacheKey = () => 'veg2' + key + (cut ? 'c' : '') + sway;
+  // the GLSL depends only on cut (sway, the leaf/rock key and leaf are uniforms or material parameters): every sway
+  // amount and species shares one program per cut/uncut and material set-up, not one each
+  mat.customProgramCacheKey = () => 'veg3' + (cut ? 'c' : '');
   return mat;
 }
 
@@ -532,8 +534,8 @@ export class Flora {
     TSH = TU ? { tTShadow: TU.shadowTex, uSOrig: TU.sOrig, uSSpan: TU.sSpan, uShadowOn: TU.shadowOn } : null;
     // materials
     const mats = {};
-    const leafMat = (sway, cut) => mats['l' + sway + cut] || (mats['l' + sway + cut] = vegPatch(new THREE.MeshStandardMaterial({ map: atlas, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.78 }), { cut: cut ? this.loCut : null, band: this.band, key: 'l', sway }));
-    const rockMat = (cut) => mats['r' + cut] || (mats['r' + cut] = vegPatch(new THREE.MeshStandardMaterial({ map: rockD, normalMap: rockN, vertexColors: true, roughness: 0.95 }), { cut: cut ? this.loCut : null, band: this.band, key: 'r', leaf: false }));
+    const leafMat = (sway, cut) => mats['l' + sway + cut] || (mats['l' + sway + cut] = vegPatch(new THREE.MeshStandardMaterial({ map: atlas, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.78 }), { cut: cut ? this.loCut : null, band: this.band, sway }));
+    const rockMat = (cut) => mats['r' + cut] || (mats['r' + cut] = vegPatch(new THREE.MeshStandardMaterial({ map: rockD, normalMap: rockN, vertexColors: true, roughness: 0.95 }), { cut: cut ? this.loCut : null, band: this.band, leaf: false }));
     this.mats = mats;
     // species variants
     this.groups = biome(loc.flora ? { ...loc, id: loc.flora.biome, snowline: loc.flora.snowline } : loc, W.waterLevel); this.vars = []; // real places borrow a biome (realworld.js)
