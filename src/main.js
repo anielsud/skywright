@@ -1535,6 +1535,7 @@ function frame(now) {
       setCrewView(renderer.domElement.height, qualityTier()); // (other players' crews: their detail by size on screen)
       const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene, warm.skip) : null;
       flushNew();
+      F.world.towns?.city?.occlude(flightCam, renderer); // (with the frame's final camera: realCity.js occlude)
       const progs = renderer.info.programs, n0 = progs.length;
       post.render(F.scene, flightCam, dt);
       if (F.wantShot) { F.wantShot = false; report(grabShot()); } // (🐞: a WebGL canvas can only be read straight after it's drawn)
