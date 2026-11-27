@@ -60,7 +60,7 @@ async def main(a):
                         st = await cdp.js(f"JSON.stringify({S}.F.world.layout?.stats || null)")
                         if st == 'null' or json.loads(st).get('firstRingMs') is not None: break
                         await asyncio.sleep(0.2)
-                    print(json.dumps({'location': loc, 'query': a.query, 'boot_s': round(t_go - t_nav, 2), 'load_s': round(t_fly - t_go, 2), 'layout': json.loads(st)}), flush=True)
+                    print(json.dumps({'location': loc, 'query': query, 'boot_s': round(t_go - t_nav, 2), 'load_s': round(t_fly - t_go, 2), 'layout': json.loads(st)}), flush=True)
                 for r in rs:
                     await cdp.js(f"""(() => {{ const F = {S}.F, ac = F.ac, cam = {S}.rig.cam, r = {json.dumps(r)}; F.paused = true;
                         let p = r.pos, q = r.quat || [0, 0, 0, 1], c = r.cam, l = r.look;

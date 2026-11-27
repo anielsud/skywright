@@ -9,8 +9,8 @@ import { decodeLayout, KIND } from '../../src/layout/format.js';
 import { meshChunk, latticeOf } from '../../src/layout/mesh.js';
 import { KERB } from '../../src/layout/rules.js';
 
-export const nodeSuite = { files: ['src/layout/format.js', 'src/layout/mesh.js', 'src/layout/rules.js', 'src/layout/outline.js', 'src/layout/bake.js', 'tools/test/layoutcheck.js', 'assets/real/nyc/layout/index.json', 'assets/real/lauterbrunnen/layout/index.json'] };
-const PLACES = ['nyc', 'lauterbrunnen'];
+export const nodeSuite = { files: ['src/layout/format.js', 'src/layout/mesh.js', 'src/layout/rules.js', 'src/layout/outline.js', 'src/layout/bake.js', 'tools/test/layoutcheck.js', 'assets/real/nyc/layout/index.json', 'assets/real/lauterbrunnen/layout/index.json', 'assets/real/canyon/layout/index.json'] };
+const PLACES = ['nyc', 'lauterbrunnen', 'canyon'];
 export function cases() { return PLACES.filter((p) => existsSync(`assets/real/${p}/layout/index.json`)).map((place) => ({ id: `${place} layout`, place, cost: 1 })); }
 
 function hiGrid(id) { // the hi grid as realworld.js decodes it: uint16 (h + 200) * 8, each row delta-coded
@@ -22,7 +22,7 @@ function hiGrid(id) { // the hi grid as realworld.js decodes it: uint16 (h + 200
 export async function runCase(c) {
   const dir = `assets/real/${c.place}/layout/`, idx = JSON.parse(readFileSync(dir + 'index.json', 'utf8')), G = hiGrid(c.place), out = [], meshes = new Map();
   // (a sample: the first test chunks, side by side, and Lauterbrunnen's; every chunk is checked by the bake, tools/bake/layout.mjs)
-  const SAMPLE = new Set(['-7,25', '-6,25', '-4,-3', '16,8', '16,9', '4,-13', '4,-12']); // (Lauterbrunnen: a town; the village beside a bridge's chunk; switchbacks on a valley wall)
+  const SAMPLE = new Set(['-7,25', '-6,25', '-4,-3', '16,8', '16,9', '4,-13', '4,-12', '-19,-16', '-18,-16', '-15,-1', '-14,-1']); // (Lauterbrunnen: a town; the village beside a bridge's chunk; switchbacks on a valley wall. The canyon: Grand Canyon Village on the rim; a street's hairpin on a slope)
   for (const e of idx.chunks.filter((e) => SAMPLE.has(e.ix + ',' + e.iz))) {
     const gz = readFileSync(dir + e.file), name = `${c.place} ${e.ix},${e.iz}`, buf = gunzipSync(gz), L = decodeLayout(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
     out.push({ name: `${name}: its file is named by its bytes`, ok: e.file === `${e.ix}_${e.iz}.${createHash('sha256').update(gz).digest('hex').slice(0, 10)}.bin.gz`, why: e.file });
