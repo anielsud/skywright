@@ -6,9 +6,9 @@ import { readFileSync, existsSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { decodeLayout, KIND } from '../../src/layout/format.js';
-import { meshChunk } from '../../src/layout/mesh.js';
+import { meshChunk, latticeOf } from '../../src/layout/mesh.js';
 
-export const nodeSuite = { files: ['src/layout/format.js', 'src/layout/mesh.js', 'src/layout/bake.js', 'tools/test/layoutcheck.js', 'assets/real/nyc/layout/index.json', 'assets/real/lauterbrunnen/layout/index.json'] };
+export const nodeSuite = { files: ['src/layout/format.js', 'src/layout/mesh.js', 'src/layout/rules.js', 'src/layout/outline.js', 'src/layout/bake.js', 'tools/test/layoutcheck.js', 'assets/real/nyc/layout/index.json', 'assets/real/lauterbrunnen/layout/index.json'] };
 const PLACES = ['nyc', 'lauterbrunnen'];
 export function cases() { return PLACES.filter((p) => existsSync(`assets/real/${p}/layout/index.json`)).map((place) => ({ id: `${place} layout`, place, cost: 1 })); }
 
@@ -23,17 +23,16 @@ export async function runCase(c) {
   for (const e of idx.chunks) {
     const gz = readFileSync(dir + e.file), name = `${c.place} ${e.ix},${e.iz}`, buf = gunzipSync(gz), L = decodeLayout(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
     out.push({ name: `${name}: its file is named by its bytes`, ok: e.file === `${e.ix}_${e.iz}.${createHash('sha256').update(gz).digest('hex').slice(0, 10)}.bin.gz`, why: e.file });
-    const { i0, j0, ni, nj } = L.lat, lat = new Float32Array(ni * nj); for (let j = 0; j < nj; j++) for (let i = 0; i < ni; i++) lat[j * ni + i] = G.H[(j0 + j) * G.n + i0 + i];
-    const ms = {}; for (const level of ['fine', 'coarse']) ms[level] = meshChunk(L, { x0: G.x0, z0: G.z0, sp: G.sp }, lat, level);
+    const grid = { x0: G.x0, z0: G.z0, sp: G.sp }, { i0, j0, ni, nj } = latticeOf(L, grid), lat = new Float32Array(ni * nj); for (let j = 0; j < nj; j++) for (let i = 0; i < ni; i++) lat[j * ni + i] = G.H[(j0 + j) * G.n + i0 + i];
+    const ms = {}; for (const level of ['fine', 'coarse']) ms[level] = meshChunk(L, grid, lat, level);
     meshes.set(e.ix + ',' + e.iz, ms);
     for (const level of ['fine', 'coarse']) { const s = ms[level].stats; out.push({ name: `${name}: meshes (${level}) with every fixed edge and the chunk covered`, ok: s.failed === 0 && Math.abs(s.covered - 1) < 1e-6, why: `${s.failed} of ${s.fixed + s.failed} fixed edges failed, ${(s.covered * 100).toFixed(4)}% covered, ${s.tris} triangles in ${s.totalMs.toFixed(0)} ms` }); }
     // on the tarmac physics is what's drawn; across a kerb physics has no step (it ramps under the slabs)
     const m = ms.fine, I = m.idx, P = m.pos, Y = m.phys; let off = 0, step = 0; // step: the steepest physics slope on a kerb
     for (let q = 0; q < m.tk.length; q++) { const v = [I[q * 3], I[q * 3 + 1], I[q * 3 + 2]];
       if (m.tk[q] === KIND.tarmac) for (const k of v) if (Math.abs(Y[k] - P[k * 3 + 1]) > 1e-4) off++;
-      if (m.tk[q] === KIND.kerb) { // (the slope of the physics surface on the kerb's strip: a 15 cm step over its 10 cm would be ~1.5)
-        const [a, b, cc] = v, ux = P[b * 3] - P[a * 3], uz = P[b * 3 + 2] - P[a * 3 + 2], wx = P[cc * 3] - P[a * 3], wz = P[cc * 3 + 2] - P[a * 3 + 2], uy = Y[b] - Y[a], wy = Y[cc] - Y[a], d = ux * wz - uz * wx;
-        if (Math.abs(d) > 1e-6) step = Math.max(step, Math.hypot((uy * wz - uz * wy) / d, (ux * wy - uy * wx) / d)); } }
+      if (m.tk[q] === KIND.kerb) for (let r = 0; r < 3; r++) { // (the steepest physics rise along an edge of the kerb's strip: a 15 cm step over its 10 cm would be ~1.5; a plane through a sliver's three corners says nothing)
+        const u = v[r], w = v[(r + 1) % 3], l = Math.hypot(P[u * 3] - P[w * 3], P[u * 3 + 2] - P[w * 3 + 2]); if (l >= 0.02) step = Math.max(step, Math.abs(Y[u] - Y[w]) / l); } }
     out.push({ name: `${name}: on the tarmac physics is what's drawn`, ok: off === 0, why: `${off} tarmac corners off` });
     out.push({ name: `${name}: a kerb is never physics`, ok: step < 0.35, why: `steepest physics slope on a kerb ${step.toFixed(2)} (a step would be ~1.5; the streets are graded to 0.2)` });
   }
