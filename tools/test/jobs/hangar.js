@@ -52,6 +52,18 @@ export async function run(T) {
   });
 }
 
+// the geometries and textures a scene draws with that another scene doesn't (the tunnel's own, not the hangar's it shares)
+function tunnelOwn(scene, other) {
+  const collect = (root) => { const out = new Set(); root?.traverse((o) => {
+    if (o.geometry) out.add(o.geometry);
+    if (o.skeleton?.boneTexture) out.add(o.skeleton.boneTexture);
+    for (const m of [].concat(o.material || [])) if (m) for (const v of Object.values(m)) { if (v?.isTexture) out.add(v); else if (Array.isArray(v)) v.forEach((x) => x?.isTexture && out.add(x)); }
+    if (o.isBatchedMesh) for (const k of ['_matricesTexture', '_indirectTexture', '_colorsTexture']) if (o[k]?.isTexture) out.add(o[k]);
+    for (const m of [].concat(o.material || [])) for (const v of [...Object.values(m?.uniforms || {}), ...Object.values(m?.userData?.U || {})]) if (v?.value?.isTexture) out.add(v.value);
+  }); return out; }; // (as main.js collectGpu, which the tunnel's dispose frees by; not the scene's environment, a render target it frees itself)
+  const keep = collect(other), own = collect(scene); for (const r of keep) own.delete(r); return own;
+}
+
 async function tunnel(T, name) {
   const S = T.S, d = S.presets.find((p) => p.name === name);
   if (!d) throw new Error(`no stock vehicle named ${name}`);
@@ -77,12 +89,16 @@ async function tunnel(T, name) {
     // (the tunnel's own work per drawn frame: information, not a verdict. Its smoke retraces to a time budget per frame
     // (tunnelFlow.js update), so neither ms nor lines per frame is a machine-independent count; no timing verdicts)
     if (perf.frames) T.log(`${name}: the tunnel's own work ${perf.cpuMs.toFixed(1)} ms a frame over ${perf.frames} timed frames (${perf.lines} smoke lines)`);
+    // what the tunnel holds that the hangar doesn't: each must be disposed when it closes. (Not a before/after count of
+    // the renderer's memory: textures the game is still loading in the background, e.g. the flight textures preloaded
+    // after boot, can arrive between the two counts and read as a leak on a busy machine.)
+    const own = tunnelOwn(t.scene, S.hangar.scene), freed = new Set();
+    for (const r of own) r.addEventListener('dispose', () => freed.add(r));
     t.exit();
     await T.until(() => !S.tunnel && !document.getElementById('tunnel-ui'), { what: 'the tunnel to close', timeout: 30 });
-    const mem1 = await hangarSettled();
-    // (it can end lower: the hangar only re-uploads what it still draws)
-    T.check("closing it frees what it used (GPU memory back to the hangar's)", mem1.geo <= mem0.geo && mem1.tex <= mem0.tex,
-      `geometries ${mem0.geo} -> ${mem1.geo}, textures ${mem0.tex} -> ${mem1.tex}`);
+    const mem1 = await hangarSettled(), kept = [...own].filter((r) => !freed.has(r));
+    T.check("closing it frees what it used (everything the tunnel held that the hangar doesn't)", own.size > 0 && kept.length === 0,
+      `${own.size - kept.length} of ${own.size} geometries and textures disposed${kept.length ? `; kept: ${kept.slice(0, 5).map((r) => `${r.type} ${r.name || r.uuid.slice(0, 8)}`).join(', ')}` : ''}; renderer geometries ${mem0.geo} -> ${mem1.geo}, textures ${mem0.tex} -> ${mem1.tex}`);
     return `${sw.points}-point sweep, pivot swung; geo/tex ${mem0.geo}/${mem0.tex} -> ${mem1.geo}/${mem1.tex}`;
   } finally {
     if (S.tunnel) S.tunnel.exit(); // (a failed check above: leave the hangar as the next step expects it)

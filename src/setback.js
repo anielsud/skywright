@@ -426,7 +426,7 @@ const clamp01 = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);
 //    a face may stand more than FOOT.out past the walls (the face moves in if one does);
 //  - a box inside another goes. Where two meet, a car is never pushed out of one into the other (aircraft.js).
 // -> [{ x, z, ux, uz, hl, hw }] (the building's own frame's first), or null.
-export const FOOT = { step: 1, slant: 0.3, cells: 2000, max: 12, frames: 4, strips: 6, cover: 0.97, grow: 0.5, out: 1, eager: 10000, retry: 0.95, fine: { step: 0.5, max: 32, edge: 1, crumbs: 0.5, cover: 0.99, grow: 0.5, frames: 6, turn: 3 }, tile: 60, tiled: 1500 }; // (eager: m2, a footprint so big its boxes are worked out at load, lazyParts; tile: m, the squares a big one the fine pass leaves under 90% is cut into, tiled: from how big, m2, tiledBoxes)
+export const FOOT = { step: 1, slant: 0.3, cells: 2000, max: 12, frames: 4, strips: 6, cover: 0.97, grow: 0.5, out: 1, eager: 10000, retry: 0.95, fine: { step: 0.5, max: 32, edge: 1, crumbs: 0.5, cover: 0.99, grow: 0.5, frames: 6, turn: 3 }, tile: 60, tiled: 1500 }; // (eager: m2, a footprint so big its boxes take the quick road: a first pass, then the Refiner's squares (they were worked out at load; now when first asked too, lazyParts, its footprint kept exact); tile: m, the squares a big one the fine pass leaves under 90% is cut into, tiled: from how big, m2, tiledBoxes)
 const D8 = (8 * Math.PI) / 180, D3 = (3 * Math.PI) / 180, Q90 = Math.PI / 2;
 const turn = (a, b) => { const d = Math.abs(a - b) % Q90; return Math.min(d, Q90 - d); }; // (between two wall directions, mod 90 degrees)
 // a footprint in a frame (fx, fz): its rings in (u, v), and a grid of cells on its own lines: through every corner
@@ -491,7 +491,7 @@ const toWorld = (G, cu, cv, au, av, hl, hw) => ({ x: cu * G.fx - cv * G.fz, z: c
 // in boxes. A big one (over FOOT.tiled) still under 90% then (a campus of wings, a block of courtyards: more than 32
 // boxes' worth) is cut into FOOT.tile squares, each boxed on its own (tiledBoxes): B.refine says so, and its owner has
 // a Refiner do it a piece at a time in a frame's spare time, these boxes standing till then. A huge one (over
-// FOOT.eager: boxed at load) goes straight there after its first pass.
+// FOOT.eager) goes straight there after its first pass.
 export function footBoxes(P, holes, ux, uz, tiles = true, pre = null, quick = false) {
   if (pre) return footPass(P, holes, ux, uz, FOOT.fine, pre); // (more boxes, for what pre leaves bare: fillBare)
   const B = footPass(P, holes, ux, uz, null, null, quick);
@@ -512,7 +512,7 @@ export function footBoxes(P, holes, ux, uz, tiles = true, pre = null, quick = fa
 // A building's boxes kept off the street (fit: setback.js fitBox each; one moved in off it can leave a slice of the
 // building bare, a slanted front's wedge): more boxes for what's bare, kept off it too. -> the boxes
 export function fillBare(P, holes, ux, uz, B, fit) {
-  const F = B.map(fit); if (!F.some((f) => f.fit) || B.area > FOOT.eager) return F; // (not a huge one boxed at load: the fine pass there is too slow)
+  const F = B.map(fit); if (!F.some((f) => f.fit) || B.area > FOOT.eager) return F; // (not a huge one (FOOT.eager): the fine pass there is too slow)
   const more = footPass(P, holes, ux, uz, FOOT.fine, F); return more ? F.concat(more.map(fit)) : F;
 }
 // A big footprint cut into squares FOOT.tile across (in the building's frame), each piece's boxes (footBoxes) inside
@@ -684,7 +684,7 @@ function footPass(P, holes, ux, uz, fine, pre = null, quick = false) {
   // every edge of every box checked every half metre (the first pass: every metre), and one more than FOOT.out past the
   // walls goes (its faces' own
   // check can give up on a box squeezed between spikes; the first pass's sees its faces' quarters only). Not on a huge
-  // one boxed at load: its first pass is quick, a Refiner's pieces (small) are checked
+  // one (FOOT.eager): its first pass is quick, a Refiner's pieces (small) are checked
   const fit = fine || (A <= FOOT.eager && !quick) ? keep.filter((b) => { for (const [a0, c0, a1, c1] of [[1, 1, -1, 1], [-1, 1, -1, -1], [-1, -1, 1, -1], [1, -1, 1, 1]]) { const n = Math.min(fine ? 24 : 12, Math.max(1, Math.ceil(Math.hypot((a1 - a0) * b.hl, (c1 - c0) * b.hw) / (fine ? 0.5 : 1)))); for (let i = 0; i < n; i++) { const a = a0 + (a1 - a0) * i / n, c = c0 + (c1 - c0) * i / n, [x, z] = pt(b, b.hl * a, b.hw * c); if (outD(G0, x * ux + z * uz, -x * uz + z * ux) > FOOT.out + 0.15) return false; } } return true; }) : keep;
   if (!fit.length) return null;
   fit.dropped = keep.length - fit.length; // (footBoxes: a box dropped, its part of the building bare: the fine pass then)

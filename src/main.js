@@ -1,3 +1,4 @@
+import { crewLodAll } from './crewLod.js';
 import * as THREE from 'three';
 import { PARTS, CATEGORIES, PAINTS } from './parts.js';
 import { makePresets, encodeDesign, decodeDesign, cloneDesign, analyze, sizeSliders, sizeValue, thrustScale, partPower, partBurn, POWER_RANGE, BURN_RANGE } from './design.js';
@@ -728,6 +729,7 @@ function buildFlight(cfg) {
   const ac = new Aircraft(design, realism);
   scene.add(ac.root);
   void ac.stations; // the cockpit views (stations.js, with a capsule's cabin): made while loading, so their shaders warm up with the rest and the camera button never waits
+  ac.root.userData.detail?.lod?.crewDetail({ pose: false, own: true }); // our crew: lighter as they get small on screen (the chase view), full up close (planeDetail DetailLOD); its levels simplified now, under the loading screen. Same materials and vertices, so nothing more to compile
   const spot = world.sunElev < 0.2 || world.W.dark > 0.6;
   const nav = aircraftLights(ac, { spot }); // running lights (a real landing light after dark)
   // By day a landing light part's own SpotLight stays dark the whole flight (Aircraft.update: lit only at night, and
@@ -898,6 +900,7 @@ function collectGpu(root) {
   const addTex = (v) => { if (v?.isTexture) tex.add(v); else if (Array.isArray(v)) v.forEach(addTex); };
   root.traverse((o) => {
     if (o.geometry) geo.add(o.geometry);
+    for (const g of crewLodAll(o)) geo.add(g); // (a crew figure's every detail level: crewLod.js)
     if (o.skeleton?.boneTexture) tex.add(o.skeleton.boneTexture); // the crew's bones (crew.js), uploaded as a texture
     if (o.isBatchedMesh) for (const k of ['_matricesTexture', '_indirectTexture', '_colorsTexture']) addTex(o[k]); // a batched plane's per-instance data (acBatch.js)
     for (const m of [].concat(o.material || [])) {
@@ -1532,9 +1535,10 @@ function frame(now) {
       const golden = Math.max(0, 1 - Math.abs(w.sunElev - 0.08) / 0.3);
       post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: (0.97 + golden * 0.12 - w.W.dark * 0.25) * (1 - 0.7 * (gvis.shown ? smoothstep(0, 0.7, gvis.grey) : 0)), contrast: 1.12, vignette: 0.3 }); // near-neutral colour, a little more contrast: photographic rather than candy
       fitNearPlane(F);
-      setCrewView(renderer.domElement.height, qualityTier()); // (other players' crews: their detail by size on screen)
+      setCrewView(renderer.domElement.height, qualityTier()); // (the crews' detail by size on screen: planeDetail DetailLOD)
       const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene, warm.skip) : null;
       flushNew();
+      F.world.towns?.city?.occlude(flightCam, renderer); // (with the frame's final camera: realCity.js occlude)
       const progs = renderer.info.programs, n0 = progs.length;
       post.render(F.scene, flightCam, dt);
       if (F.wantShot) { F.wantShot = false; report(grabShot()); } // (🐞: a WebGL canvas can only be read straight after it's drawn)

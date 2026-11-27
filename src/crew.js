@@ -10,7 +10,6 @@
 // Visual only: nothing here is seen by physics.
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from '../vendor/addons/BufferGeometryUtils.js';
-import { MeshoptSimplifier } from '../vendor/addons/meshopt_simplifier.module.js';
 import { PARTS } from './parts.js';
 import { COMMIT, SOLVER } from './version.js';
 import { bodyReady, body, person, poseBody, handModel, torsoPoints, bodyDims, spinePose, armRest, headSize, limbRadii } from './body.js';
@@ -2493,38 +2492,6 @@ function eyePoint(rig) {
 }
 
 const geoCache = new Map();
-// ---------- distance detail (planeDetail's DetailLOD picks the level) ----------
-// A full figure is 50k-200k triangles in 7 slots, most of it in curves and faces far finer than a pixel a few tens of
-// metres away. A far level of each slot's geometry is the same mesh simplified (meshoptimizer's edge collapse) until
-// its surface would move by up to `err` metres, colour and normals weighed in so the suit's seams, the eyes and the
-// visor's edge keep their shape. It's only a new index buffer over the same vertices (each kept vertex keeps its own
-// skin weights, and separate pieces never weld: a hand never joins the stick it holds), with the same materials and
-// the same skeleton, so swapping it in compiles nothing and uploads one small buffer.
-await MeshoptSimplifier.ready;
-const lodCache = new WeakMap();
-function simplified(g, err) {
-  const P = g.attributes.position, Nn = g.attributes.normal, C = g.attributes.color, n = P.count, attr = new Float32Array(n * 6);
-  for (let i = 0; i < n; i++) { attr[i * 6] = Nn.getX(i); attr[i * 6 + 1] = Nn.getY(i); attr[i * 6 + 2] = Nn.getZ(i); attr[i * 6 + 3] = C.getX(i); attr[i * 6 + 4] = C.getY(i); attr[i * 6 + 5] = C.getZ(i); }
-  const pos = P.array instanceof Float32Array && P.itemSize === 3 && !P.isInterleavedBufferAttribute ? P.array : Float32Array.from({ length: n * 3 }, (_, k) => P.getComponent(Math.floor(k / 3), k % 3));
-  const [ix] = MeshoptSimplifier.simplifyWithAttributes(new Uint32Array(g.index.array), pos, 3, attr, 6, [0.02, 0.02, 0.02, 0.1, 0.1, 0.1], null, 0, err, ['ErrorAbsolute']);
-  const r = new THREE.BufferGeometry();
-  for (const k of Object.keys(g.attributes)) r.setAttribute(k, g.attributes[k]); // (shared: one copy of the vertices on the GPU)
-  r.setIndex(new THREE.BufferAttribute(n > 65535 ? ix : Uint16Array.from(ix), 1));
-  return r;
-}
-// Each level's error (metres, from the full figure: level 0): 2 mm, 6 mm.
-export const CREW_LOD_ERR = [0.002, 0.006];
-// Each crew mesh's geometry per level ([full, lighter...]), cached per source geometry (figures of one build share it).
-export function crewLodGeos(mesh) {
-  const g = mesh.userData.crewGeo0 ||= mesh.geometry;
-  let L = lodCache.get(g);
-  if (!L) { // (each from the one before, by the difference: much quicker than from the full mesh every time)
-    L = [g]; const ok = g.index && g.attributes.normal && g.attributes.color && g.attributes.position.itemSize === 3;
-    CREW_LOD_ERR.forEach((e, k) => L.push(ok ? simplified(L[k], e - (CREW_LOD_ERR[k - 1] || 0)) : g));
-    lodCache.set(g, L);
-  }
-  return L;
-}
 // outfit: OUTFITS key or object; ctl: 'stick' | 'cyclic' | 'yoke' | 'wheel' | 'none'; seed picks skin/hair tones
 const sameHands = (a, b) => a === b || (!!a && !!b && a.length === b.length && a.every((v, i) => v === b[i] || (!!v && !!b[i] && v.distanceToSquared(b[i]) < 1e-8)));
 const sameSig = (a, b) => a === b || (!!a && !!b && a.every((v, i) => Math.abs(v - b[i]) < 1e-4));
@@ -2541,7 +2508,7 @@ export function buildCrew(outfitKey, ctl = 'stick', { seed = 0, colors = null, p
   for (const [k, g] of Object.entries(geos)) {
     if (!g) continue;
     const m = new THREE.SkinnedMesh(g, mats[k] || mats.fabric); m.userData.near = true; m.userData.crew = true; m.userData.cosmetic = true; m.castShadow = k !== 'clear' && k !== 'tint' && k !== 'gold'; if (k === 'gold') m.renderOrder = 1; if (k === 'tint') m.renderOrder = 2; m.receiveShadow = true; // (clear glass casts no shadow)
-    m.frustumCulled = false; // a few hundred triangles; skinned bounds would otherwise need a refresh as the pose changes
+    m.frustumCulled = false; // (skinned bounds would otherwise need a refresh as the pose changes; a figure is 50k-200k triangles up close, a few thousand at a distance: crewLod.js)
     root.add(m); m.bind(skel, new THREE.Matrix4());
   }
   const smooth = { pitch: 0, roll: 0, yaw: 0, thr: 0.4, steer: 0, look: 0, lean: 0, tuck: 0, foot: 0, bikeLean: 0, shift: 0 };

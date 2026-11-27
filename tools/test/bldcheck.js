@@ -241,9 +241,10 @@ async function rules(c) {
 async function facadesNyc(c) {
   const { worldAt } = await import('./node/world.mjs'), { world } = await worldAt(c.loc), out = [];
   const n = { shop: 0, rust: 0, cornice: 0, door: 0, walls: 0 }; let clamped = 0, inf = 0, ex = '';
+  const seen = new Set(); // (a group's cell meshes share its vertices: realCity.js buildTall)
   for (const m of world.towns.city.tallMeshes) {
     const g = m.m.geometry, A = g.attributes.atl.array, U = g.attributes.uv.array, I = g.index.array;
-    for (let i = 0; i < U.length; i++) if ((U[i] & 0x7c00) === 0x7c00) inf++;
+    if (!seen.has(U)) { seen.add(U); for (let i = 0; i < U.length; i++) if ((U[i] & 0x7c00) === 0x7c00) inf++; }
     for (let k = 0; k + 5 < I.length; k += 3) {
       const a = I[k]; if (I[k + 1] !== a + 1 || I[k + 2] !== a + 2 || I[k + 3] !== a || I[k + 5] !== a + 3) continue; // (a wall: MeshW.wall's quad)
       const f = facadeSpec(A[a * 4]); if (!f) continue;
@@ -282,7 +283,7 @@ async function roofsNyc(c) {
   out.push({ name: `${c.id}: roof furniture drawn last (indices after the buildings', a draw range leaves it out)`, ok: !bad && !out0, why: `${bad} meshes with ranges out of order, ${out0} with tank cells among the buildings' indices${ex ? ` (${ex})` : ''}` });
   out.push({ name: `${c.id}: every tank's staves wound the way their normals point (outwards)`, ok: staves > 1000 && !wound, why: `${wound} of ${staves} stave triangles wound inwards` });
   // floodlit crowns (realCity.js crown(): most of the pre-war towers' crowns, a few glass towers' screens), in the meshes
-  let lit = 0; for (const g of CS.tallMeshes) { const A = g.m.geometry.attributes.atl.array; for (let i = 0; i < A.length; i += 4) if (facadeSpec(A[i])?.flood) { lit++; } }
+  let lit = 0; for (const A of new Set(CS.tallMeshes.map((g) => g.m.geometry.attributes.atl.array))) { for (let i = 0; i < A.length; i += 4) if (facadeSpec(A[i])?.flood) { lit++; } }
   out.push({ name: `${c.id}: landmark crowns floodlit at night`, ok: RS.flood > 50 && RS.flood < RS.cake + RS.screen && lit > 1000, why: `${RS.flood} of ${RS.cake + RS.screen} crowns, ${lit} floodlit vertices` });
   return out;
 }
@@ -305,7 +306,7 @@ async function streetsNyc(c) {
   // the low tiles round Midtown built (the kiosks, the Times Square booth), then every tile's walls read back
   for (const t of CS.tiles.values()) { const [x, z] = CS.tileCentre(t.i, t.j); if (Math.hypot(x + 6300, z - 6600) < 1300 && !t.low) while (!CS.buildLowStep(t, 1e9)); }
   let clap = 0, steep = 0, glassSlope = 0, ceil = 0, ex = '';
-  const meshes = [...CS.tallMeshes.map((m) => m.m), ...[...CS.tiles.values()].filter((t) => t.low && t.low !== true).map((t) => t.low)];
+  const meshes = [...CS.tallMeshes.map((m) => m.m), ...[...CS.tiles.values()].flatMap((t) => t.meshes || [])];
   for (const m of meshes) {
     const g = m.geometry, P = g.attributes.position.array, A = g.attributes.atl.array, I = g.index.array, ox = m.position.x, oz = m.position.z;
     for (let k = 0; k < I.length; k += 3) {

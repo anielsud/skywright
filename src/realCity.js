@@ -13,14 +13,20 @@ import * as THREE from 'three';
 import { STEP } from './stepClock.js';
 import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, facade, facadeSpec, floodlit, linHex, LY0, LYS } from './buildings.js';
 import { toLocal } from './realworld.js';
+import { OcclusionBuffer, OCC_LAYER, inscribedBox, binBounds, worldBounds, shadowsSeeOccluded } from './occlusion.js';
 import { roadIndex, setBack, holeInside, fitBox, footBoxes, boundBox, inParts, irregular, lazyParts, packRing, unpackRing, FOOT, MAJOR, streetWalls, PASSAGE, clip, intrusion, WORK, workSince, Refiner, fillBare } from './setback.js';
 
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
-const GROUP = 2; // tall buildings: one mesh per GROUP x GROUP data tiles
+const GROUP = 2; // tall buildings: the far ones drawn by height, by their distance to these GROUP x GROUP data tiles
+const TALL_CELL = 500, LOW_CELL = 500; // (m) one mesh per cell (by a footprint's middle): culled each on its own
 const LOW_R = { low: 900, medium: 1600, high: 2400, ultra: 2600 }; // low buildings within this distance of the camera
 const DENSE = 12; // tall buildings within ~300 m (CityScenery.dense): a built-up spot
 const SUP = 25; // (m) the cells base() looks for what stands under a part in
 const REACH = 24, FRONT = 40, CONE = 0; // (m) a wall facing a street within REACH of its pavement (CONE: setback.js streetWalls, out in front of it at any angle) is a street front (shop fronts, doors: the city's streets are drawn narrower than the real ones, and a forecourt or plaza can stand between); else the walls facing the nearest street within FRONT
+// occlusion culling (occlude(), occlusion.js): with the camera within h m of the ground, the occluders within r m, at most
+// max of them (the biggest on screen first) and about `corners` pixel corners' worth of rays a frame; low buildings
+// occlude from lowA m2 of footprint (tall ones whatever their size)
+export const OCC = { on: true, h: 150, r: 1000, max: 64, corners: 40000, lowA: 300 };
 const LEVELS = [150, 70, 35, 0]; // tall meshes, sorted by height: a far mesh draws only buildings >= LEVELS[k] m
 const LEVEL_D = { low: [5000, 3000, 1800], medium: [8000, 5000, 3000], high: [14000, 8000, 5000], ultra: [15000, 9000, 5500] };
 const FURN_D = { low: 1300, medium: 2400, high: 4000, ultra: 4500 }; // roof furniture (late indices) drawn within this of a tall mesh
@@ -66,14 +72,16 @@ export class MeshW {
   growI(k) { if (this.ni + k > this.idx.length) { const b = new Uint32Array(Math.max(this.ni + k, this.idx.length * 2)); b.set(this.idx); this.idx = b; } }
   color(hex) { this.cr = (hex >> 16) & 255; this.cg = (hex >> 8) & 255; this.cb = hex & 255; }
   v(x, y, z, nx, ny, nz, u, w, cell) {
-    const i = this.n++, P = this.pos, k = i * 3;
+    const i = this.n++, P = this.pos, N = this.nor, Cl = this.col, A = this.atl, U = this.uv, k = i * 3, a = i * 4;
     P[k] = Math.round((x - this.cx) * PQ); P[k + 1] = Math.round(y * PQ); P[k + 2] = Math.round((z - this.cz) * PQ);
-    this.nor[k] = nx * 127; this.nor[k + 1] = ny * 127; this.nor[k + 2] = nz * 127;
-    this.uv[i * 2] = half(u); this.uv[i * 2 + 1] = half(w);
-    this.col[k] = this.cr; this.col[k + 1] = this.cg; this.col[k + 2] = this.cb;
-    const a = i * 4; this.atl[a] = cell; this.atl[a + 1] = this.seed; this.atl[a + 2] = Math.max(0, Math.min(255, (y - this.yg + LY0) * LYS)); this.atl[a + 3] = this.top;
+    N[k] = nx * 127; N[k + 1] = ny * 127; N[k + 2] = nz * 127;
+    U[i * 2] = half(u); U[i * 2 + 1] = half(w);
+    Cl[k] = this.cr; Cl[k + 1] = this.cg; Cl[k + 2] = this.cb;
+    A[a] = cell; A[a + 1] = this.seed; A[a + 2] = Math.max(0, Math.min(255, (y - this.yg + LY0) * LYS)); A[a + 3] = this.top;
     return i;
   }
+  // room for k more vertices and m more indices (the checks inline: grow / growI only when it's full)
+  room(k, m) { if (this.n + k > this.cap) this.grow(this.n + k); if (this.ni + m > this.idx.length) this.growI(m); }
   // vertical wall seen from outside, a -> b: u counts bays (from u0: a facade program's door is bay 0), v floors (from
   // yf, the floor datum)
   // (t0, t1: only that stretch of it, its bays where the whole wall's are: a wall broken by a passage)
@@ -83,10 +91,19 @@ export class MeshW {
     // (a facade program's ground floor reads the height above the floor, atl.z, which stops 60 m up: a taller wall is
     // two quads, so the lower one's heights interpolate true)
     const ys = this.yg + 255 / LYS - LY0 - 4; if (y1 > ys + 1 && y0 < ys - 1 && facadeSpec(cell)?.gH > 0) { this.wall(ax, az, bx, bz, y0, ys, yf, cell, bay, fl, u0, t0, t1); this.wall(ax, az, bx, bz, ys, y1, yf, cell, bay, fl, u0, t0, t1); return; }
-    this.grow(this.n + 4); this.growI(6);
+    if (this.n + 4 > this.cap) this.grow(this.n + 4); if (this.ni + 6 > this.idx.length) this.growI(6);
     const o = this.n, x0 = ax + (bx - ax) * t0, z0 = az + (bz - az) * t0, x1 = ax + (bx - ax) * t1, z1 = az + (bz - az) * t1, ua = u0 + nb * t0, ub = u0 + nb * t1;
-    this.v(x0, y0, z0, nx, 0, nz, ua, v0, cell); this.v(x1, y0, z1, nx, 0, nz, ub, v0, cell); this.v(x1, y1, z1, nx, 0, nz, ub, v1, cell); this.v(x0, y1, z0, nx, 0, nz, ua, v1, cell);
-    const I = this.idx, k = this.ni; I[k] = o; I[k + 1] = o + 1; I[k + 2] = o + 2; I[k + 3] = o; I[k + 4] = o + 2; I[k + 5] = o + 3; this.ni += 6;
+    // the four corners written straight in (what v() writes: (x0, y0) (x1, y0) (x1, y1) (x0, y1), each value once)
+    const P = this.pos, N = this.nor, U = this.uv, Cl = this.col, A = this.atl, k = o * 3, a = o * 4, w = o * 2;
+    const px0 = Math.round((x0 - this.cx) * PQ), pz0 = Math.round((z0 - this.cz) * PQ), px1 = Math.round((x1 - this.cx) * PQ), pz1 = Math.round((z1 - this.cz) * PQ), py0 = Math.round(y0 * PQ), py1 = Math.round(y1 * PQ);
+    P[k] = px0; P[k + 1] = py0; P[k + 2] = pz0; P[k + 3] = px1; P[k + 4] = py0; P[k + 5] = pz1; P[k + 6] = px1; P[k + 7] = py1; P[k + 8] = pz1; P[k + 9] = px0; P[k + 10] = py1; P[k + 11] = pz0;
+    const qx = nx * 127, qz = nz * 127; for (let j = k; j < k + 12; j += 3) { N[j] = qx; N[j + 1] = 0; N[j + 2] = qz; }
+    const ha = half(ua), hb = half(ub), h0 = half(v0), h1 = half(v1); U[w] = ha; U[w + 1] = h0; U[w + 2] = hb; U[w + 3] = h0; U[w + 4] = hb; U[w + 5] = h1; U[w + 6] = ha; U[w + 7] = h1;
+    const cr = this.cr, cg = this.cg, cb = this.cb; for (let j = k; j < k + 12; j += 3) { Cl[j] = cr; Cl[j + 1] = cg; Cl[j + 2] = cb; }
+    const l0 = Math.max(0, Math.min(255, (y0 - this.yg + LY0) * LYS)), l1 = Math.max(0, Math.min(255, (y1 - this.yg + LY0) * LYS)), sd = this.seed, tp = this.top;
+    for (let j = 0; j < 4; j++) { const b = a + j * 4; A[b] = cell; A[b + 1] = sd; A[b + 2] = j < 2 ? l0 : l1; A[b + 3] = tp; }
+    this.n = o + 4;
+    const I = this.idx, i = this.ni; I[i] = o; I[i + 1] = o + 1; I[i + 2] = o + 2; I[i + 3] = o; I[i + 4] = o + 2; I[i + 5] = o + 3; this.ni += 6;
   }
   // any planar polygon (counter-clockwise from its front), uv in metres / s from its first point
   poly(P, cell, s = 3) {
@@ -97,7 +114,7 @@ export class MeshW {
     // in-plane axes for the uv
     let tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2]; const tl = Math.hypot(tx, ty, tz) || 1; tx /= tl; ty /= tl; tz /= tl;
     const bx = ny * tz - nz * ty, by = nz * tx - nx * tz, bz = nx * ty - ny * tx;
-    this.grow(this.n + n); this.growI((n - 2) * 3);
+    this.room(n, (n - 2) * 3);
     const o = this.n;
     for (const p of P) { const dx = p[0] - a[0], dy = p[1] - a[1], dz = p[2] - a[2]; this.v(p[0], p[1], p[2], nx, ny, nz, (dx * tx + dy * ty + dz * tz) / s, (dx * bx + dy * by + dz * bz) / s, cell); }
     for (let k = 1; k < n - 1; k++) { const I = this.idx, j = this.ni; I[j] = o; I[j + 1] = o + k; I[j + 2] = o + k + 1; this.ni += 3; }
@@ -107,7 +124,7 @@ export class MeshW {
     const n = P.length, a = P[0], b = P[1], c = P[n - 1];
     let nx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]), ny = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]), nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
     const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
-    this.grow(this.n + n); this.growI((n - 2) * 3);
+    this.room(n, (n - 2) * 3);
     const o = this.n;
     for (let k = 0; k < n; k++) this.v(P[k][0], P[k][1], P[k][2], nx, ny, nz, UV[k][0], UV[k][1], cell);
     for (let k = 1; k < n - 1; k++) { const I = this.idx, j = this.ni; I[j] = o; I[j + 1] = o + k; I[j + 2] = o + k + 1; this.ni += 3; }
@@ -116,7 +133,7 @@ export class MeshW {
   // sides, smooth (the vertices shared round it and down it); u from 0 to uMax round it. apex: the last row is a point
   // (one vertex, its normal straight up)
   lathe(x, z, rows, seg, cell, uMax, apex = false) {
-    const m = seg + 1, nr = rows.length - (apex ? 1 : 0); this.grow(this.n + m * nr + 1); this.growI(seg * (rows.length - 1) * 6);
+    const m = seg + 1, nr = rows.length - (apex ? 1 : 0); this.room(m * nr + 1, seg * (rows.length - 1) * 6);
     const o = this.n;
     for (let j = 0; j < nr; j++) { const [r, y, v, no, nu] = rows[j]; for (let k = 0; k <= seg; k++) { const a = (k / seg) * Math.PI * 2, s = Math.sin(a), c = Math.cos(a); this.v(x + s * r, y, z + c * r, s * no, nu, c * no, (k / seg) * uMax, v, cell); } }
     if (apex) { const [, y, v] = rows[nr]; this.v(x, y, z, 0, 1, 0, uMax / 2, v, cell); }
@@ -128,15 +145,28 @@ export class MeshW {
   }
   // flat roof over a footprint (x, z pairs) with holes, at height y, facing up (down: a ceiling, facing down)
   roof(P, holes, y, cell, down = false) {
-    const ct = P.map((p) => new THREE.Vector2(p[0], p[1])), hs = holes.map((h) => h.map((p) => new THREE.Vector2(p[0], p[1])));
-    let tris; try { tris = THREE.ShapeUtils.triangulateShape(ct, hs); } catch (e) { return; }
-    const all = [...P, ...holes.flat()], n = all.length, ox = P[0][0], oz = P[0][1];
-    this.grow(this.n + n); this.growI(tris.length * 3);
-    const o = this.n;
-    for (const p of all) this.v(p[0], y, p[1], 0, down ? -1 : 1, 0, (p[0] - ox) / 3, (p[1] - oz) / 3, cell);
-    for (const [a, b, c] of tris) {
-      const A = all[a], B = all[b], Cc = all[c], up = ((B[1] - A[1]) * (Cc[0] - A[0]) - (B[0] - A[0]) * (Cc[1] - A[1]) > 0) !== down;
-      const I = this.idx, j = this.ni; I[j] = o + a; I[j + 1] = o + (up ? b : c); I[j + 2] = o + (up ? c : b); this.ni += 3;
+    let tris = !holes.length && earFast(P);
+    if (!tris) {
+      const ct = P.map((p) => new THREE.Vector2(p[0], p[1])), hs = holes.map((h) => h.map((p) => new THREE.Vector2(p[0], p[1])));
+      try { tris = THREE.ShapeUtils.triangulateShape(ct, hs).flat(); } catch (e) { return; }
+    }
+    const all = holes.length ? [...P, ...holes.flat()] : P, n = all.length, ox = P[0][0], oz = P[0][1], nt = tris.length;
+    this.room(n, nt);
+    const o = this.n, Pp = this.pos, N = this.nor, U = this.uv, Cl = this.col, A = this.atl, py = Math.round(y * PQ), ny = (down ? -1 : 1) * 127;
+    const ly = Math.max(0, Math.min(255, (y - this.yg + LY0) * LYS)), cr = this.cr, cg = this.cg, cb = this.cb, sd = this.seed, tp = this.top;
+    for (let j = 0; j < n; j++) { // (v(p[0], y, p[1], 0, +-1, 0, ...), written straight in)
+      const p = all[j], i = o + j, k = i * 3, a = i * 4;
+      Pp[k] = Math.round((p[0] - this.cx) * PQ); Pp[k + 1] = py; Pp[k + 2] = Math.round((p[1] - this.cz) * PQ);
+      N[k] = 0; N[k + 1] = ny; N[k + 2] = 0;
+      U[i * 2] = half((p[0] - ox) / 3); U[i * 2 + 1] = half((p[1] - oz) / 3);
+      Cl[k] = cr; Cl[k + 1] = cg; Cl[k + 2] = cb;
+      A[a] = cell; A[a + 1] = sd; A[a + 2] = ly; A[a + 3] = tp;
+    }
+    this.n = o + n;
+    const I = this.idx;
+    for (let t = 0; t < nt; t += 3) {
+      const a = tris[t], b = tris[t + 1], c = tris[t + 2], Aa = all[a], B = all[b], Cc = all[c], up = ((B[1] - Aa[1]) * (Cc[0] - Aa[0]) - (B[0] - Aa[0]) * (Cc[1] - Aa[1]) > 0) !== down;
+      const j = this.ni; I[j] = o + a; I[j + 1] = o + (up ? b : c); I[j + 2] = o + (up ? c : b); this.ni += 3;
     }
   }
   // oriented box (centre, axis u, half sizes), sides + top
@@ -182,6 +212,41 @@ export class MeshW {
     m.position.set(this.cx, 0, this.cz); m.scale.setScalar(1 / PQ); m.matrixAutoUpdate = false; m.updateMatrix();
     return m;
   }
+}
+
+// A roof's triangles without holes, as THREE.ShapeUtils.triangulateShape gives them (its earcut, 2.2.4, in three r170):
+// the same linked ring, the same ear tests in the same order, so the same triangles, flat [a, b, c, ...]. Only the
+// common case: no holes, at most 80 points (earcut's z-order hashing starts past that), no repeated end point
+// (triangulateShape drops it), every ear found in earcut's first pass; null otherwise (the full triangulateShape then).
+const EAR = { nx: new Int32Array(81), pv: new Int32Array(81) };
+function earFast(P) {
+  const n = P.length; if (n < 3 || n > 80) return null;
+  const L = P[n - 1], F = P[0]; if (L[0] === F[0] && L[1] === F[1]) return null;
+  let sum = 0; for (let i = 0, j = n - 1; i < n; j = i++) sum += (P[j][0] - P[i][0]) * (P[i][1] + P[j][1]);
+  const nx = EAR.nx, pv = EAR.pv, fwd = sum > 0; // (earcut's linkedList(.., clockwise = true): in order if its signed area > 0, else backwards)
+  for (let i = 0; i < n; i++) { if (fwd) { nx[i] = (i + 1) % n; pv[i] = (i + n - 1) % n; } else { nx[i] = (i + n - 1) % n; pv[i] = (i + 1) % n; } }
+  let ear = fwd ? n - 1 : 0; // (the last node inserted)
+  const del = (e) => { nx[pv[e]] = nx[e]; pv[nx[e]] = pv[e]; };
+  if (P[ear][0] === P[nx[ear]][0] && P[ear][1] === P[nx[ear]][1]) { del(ear); ear = nx[ear]; }
+  if (nx[ear] === pv[ear]) return [];
+  const area = (p, q, r) => (P[q][1] - P[p][1]) * (P[r][0] - P[q][0]) - (P[q][0] - P[p][0]) * (P[r][1] - P[q][1]);
+  const out = []; let stop = ear;
+  while (pv[ear] !== nx[ear]) {
+    const a = pv[ear], b = ear, c = nx[ear];
+    let ok = area(a, b, c) < 0;
+    if (ok) { // (earcut isEar: no other point of the ring in the triangle)
+      const ax = P[a][0], ay = P[a][1], bx = P[b][0], by = P[b][1], cx = P[c][0], cy = P[c][1];
+      const x0 = ax < bx ? (ax < cx ? ax : cx) : (bx < cx ? bx : cx), y0 = ay < by ? (ay < cy ? ay : cy) : (by < cy ? by : cy), x1 = ax > bx ? (ax > cx ? ax : cx) : (bx > cx ? bx : cx), y1 = ay > by ? (ay > cy ? ay : cy) : (by > cy ? by : cy);
+      for (let m = nx[c]; m !== a; m = nx[m]) {
+        const px = P[m][0], py = P[m][1];
+        if (px >= x0 && px <= x1 && py >= y0 && py <= y1 && (cx - px) * (ay - py) >= (ax - px) * (cy - py) && (ax - px) * (by - py) >= (bx - px) * (ay - py) && (bx - px) * (cy - py) >= (cx - px) * (by - py) && area(pv[m], m, nx[m]) >= 0) { ok = false; break; }
+      }
+    }
+    if (ok) { out.push(a, b, c); del(b); ear = nx[c]; stop = nx[c]; continue; }
+    ear = c;
+    if (ear === stop) return null; // (earcut's later passes: filtering, curing, splitting)
+  }
+  return out;
 }
 
 // ---------------- reading city.bin ----------------
@@ -258,15 +323,17 @@ function cityParts(city, Q, H, q, fit, quick = false) {
   return out;
 }
 // ...worked out when something first asks (setback.js lazyParts), from its footprint kept compact till then (out here,
-// not in CityScenery.building: a closure there would keep the whole tile's mesh writer alive with it)
-function lazyBoxes(city, t, P, holes, q, fit, fallback) {
-  const fp = packRing(P), hp = holes.map(packRing);
-  const parts = () => cityParts(city, unpackRing(fp), hp.map(unpackRing), q, fit) || fallback;
+// not in CityScenery.building: a closure there would keep the whole tile's mesh writer alive with it). exact: the
+// footprint kept as it is (a big one, FOOT.eager: a few hundred of them, its boxes exactly what they'd be at load;
+// packRing's floats would move its points a millimetre)
+function lazyBoxes(city, t, P, holes, q, fit, fallback, exact = false) {
+  const fp = exact ? P : packRing(P), hp = exact ? holes : holes.map(packRing), un = exact ? (a) => a : unpackRing;
+  const parts = () => cityParts(city, un(fp), hp.map(un), q, fit) || fallback;
   lazyParts(t, () => {
     const t0 = performance.now(), w0 = { ...WORK }, B = parts(), FS = city.footStats, dt = performance.now() - t0, w = workSince(w0);
-    if (B?.refine) city.refiner.add(unpackRing(fp), hp.map(unpackRing), q.ux, q.uz, (T) => { if (city.w.destruct?.states.has(t.dk)) return; t.parts = fit ? T.map((f) => fitBox(city.roads, f)) : T; FS.boxes += T.length; FS.max = Math.max(FS.max, T.length); }); // (still bare: cut into squares, a piece at a time, setback.js Refiner)
+    if (B?.refine) city.refiner.add(un(fp), hp.map(un), q.ux, q.uz, (T) => { if (city.w.destruct?.states.has(t.dk)) return; t.parts = fit ? T.map((f) => fitBox(city.roads, f)) : T; FS.boxes += T.length; FS.max = Math.max(FS.max, T.length); }); // (still bare: cut into squares, a piece at a time, setback.js Refiner)
     if (dt > FS.lazy) { FS.lazy = dt; FS.lazyRedo = parts; } // (lazyRedo: the slowest one again, for tools/test/setbacks.js: info)
-    if (w.cells + w.verts > (FS.lazyWork?.cells ?? 0) + (FS.lazyWork?.verts ?? 0)) FS.lazyWork = { ...w, walls: fp.length / 2, boxes: B?.length ?? 0 }; // (the most work any one took: tools/test/setbacks.js)
+    if (w.cells + w.verts > (FS.lazyWork?.cells ?? 0) + (FS.lazyWork?.verts ?? 0)) FS.lazyWork = { ...w, walls: exact ? fp.length : fp.length / 2, boxes: B?.length ?? 0, big: exact }; // (the most work any one took: tools/test/setbacks.js)
     return B;
   });
 }
@@ -312,7 +379,7 @@ export class CityScenery {
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(t);
     }
-    this.tallMeshes = [];
+    this.tallGroups = [];
     const R = {};
     for (const [k, ts] of groups) {
       // all the group's tall records, tallest first
@@ -320,31 +387,81 @@ export class CityScenery {
       for (const t of ts) {
         const [cx, cz] = this.tileCentre(t.i, t.j);
         let o = t.off;
-        for (let r = 0; r < t.nTall; r++) { readRec(U, S, o, this.q, cx, cz, R); recs.push({ o, cx, cz, top: R.top + R.mh * 0 }); o = R.next; }
+        for (let r = 0; r < t.nTall; r++) { readRec(U, S, o, this.q, cx, cz, R); recs.push({ o, cx, cz, top: R.top + R.mh * 0, t }); o = R.next; }
         t.lowOff = o;
       }
       recs.sort((a, b) => b.top - a.top);
+      // The group's buildings, written into one vertex buffer (one writer: destruction.js finds a building's vertices
+      // through it), are drawn two ways, each through an index buffer of its own over those vertices:
+      //  - near (all heights drawn): one mesh per TALL_CELL cell, each culled on its own by three's frustum test (in
+      //    every pass: the shadow map's too), its buildings tallest first, its roof furniture last;
+      //  - far (only the tall ones): the whole group, tallest first, so a draw range by height level is one draw call.
       const [gi, gj] = k.split(',').map(Number), gcx = H.x0 + (gi + 0.5) * GROUP * H.tile, gcz = H.z0 + (gj + 0.5) * GROUP * H.tile;
-      const M = new MeshW(gcx, gcz, 16384), lv = [];
+      const M = new MeshW(gcx, gcz, 16384), lv = [], cells = new Map(), occ = [];
       let li = 0;
       for (const rc of recs) {
         while (li < LEVELS.length - 1 && rc.top < LEVELS[li]) { lv.push(M.ni); li++; }
         readRec(U, S, rc.o, this.q, rc.cx, rc.cz, R);
         if (this.skipped(R)) continue;
-        this.building(M, R, true);
+        const ck = this.cellKey(R.P, TALL_CELL), a = M.ni, la = M.lni, v0 = M.n;
+        this.lastFoot = this.lastBase = null; this.building(M, R, true);
+        const ob = M.n > v0 && this.occluder(R, true); if (ob) { ob.ck = ck; occ.push(ob); (rc.t.occ || (rc.t.occ = [])).push(ob); }
+        let c = cells.get(ck); if (!c) cells.set(ck, (c = []));
+        c.push(a, M.ni, la, M.lni, rc.top); // (its main and late index runs)
         this.stats.tall++;
       }
       while (lv.length < LEVELS.length - 1) lv.push(M.ni);
       if (!M.n) continue;
-      const mesh = M.mesh(this.mat);
-      mesh.castShadow = W_SHADOW(this.w); mesh.receiveShadow = true;
-      this.group.add(mesh);
+      const far = M.mesh(this.mat), G = far.geometry, I = G.index.array, P = G.attributes.position.array;
+      far.castShadow = W_SHADOW(this.w); far.receiveShadow = true;
+      const g = { m: far, x: gcx, z: gcz, lv, all: M.ni, main: M.main, cells: [] }, cellM = new Map();
+      // (far: only what is drawn far, the levels down to the lowest a far group draws; no roof furniture)
+      G.setIndex(new THREE.BufferAttribute(I.slice(0, lv[LEVELS.length - 2]), 1)); G.index.onUpload(function () { this.array = new this.array.constructor(0); });
+      binBounds(far, P, G.index.array, G.index.count, 8); // (its bounds in columns, while its vertices are here: occlude())
+      for (const [ck, c] of cells) {
+        let n = 0; for (let q = 0; q < c.length; q += 5) n += c[q + 1] - c[q] + c[q + 3] - c[q + 2];
+        const J = new (I.constructor)(n), clv = [];
+        let o = 0, cli = 0;
+        for (let q = 0; q < c.length; q += 5) {
+          while (cli < LEVELS.length - 1 && c[q + 4] < LEVELS[cli]) { clv.push(o); cli++; }
+          J.set(I.subarray(c[q], c[q + 1]), o); o += c[q + 1] - c[q];
+        }
+        while (clv.length < LEVELS.length - 1) clv.push(o);
+        const main = o;
+        for (let q = 0; q < c.length; q += 5) { J.set(I.subarray(M.main + c[q + 2], M.main + c[q + 3]), o); o += c[q + 3] - c[q + 2]; }
+        if (!n) continue;
+        const cg = new THREE.BufferGeometry();
+        for (const [nm, at] of Object.entries(G.attributes)) cg.setAttribute(nm, at); // (shared: uploaded once)
+        cg.setIndex(new THREE.BufferAttribute(J, 1)); cg.index.onUpload(function () { this.array = new this.array.constructor(0); });
+        // its bounds: its own vertices' (three's culling test; the shared buffer's would be the whole group's)
+        let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+        for (let q = 0; q < n; q++) { const v = J[q] * 3, x = P[v], y = P[v + 1], z = P[v + 2]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+        cg.boundingBox = new THREE.Box3(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1)); cg.boundingSphere = cg.boundingBox.getBoundingSphere(new THREE.Sphere());
+        const m = new THREE.Mesh(cg, this.mat); m.customDepthMaterial = far.customDepthMaterial; binBounds(m, P, J, n, 4);
+        m.position.copy(far.position); m.scale.copy(far.scale); m.matrixAutoUpdate = false; m.updateMatrix();
+        m.castShadow = far.castShadow; m.receiveShadow = true; m.visible = false;
+        this.group.add(m);
+        const [x, z] = this.cellCentre(ck, TALL_CELL); g.cells.push({ m, x, z, lv: clv, all: n, main }); cellM.set(ck, m);
+      }
+      for (const ob of occ) ob.m = cellM.get(ob.ck); // (an occluder counts only while its cell mesh is drawn)
+      this.group.add(far);
       this.stats.tris += M.ni / 3;
-      this.tallMeshes.push({ m: mesh, x: gcx, z: gcz, lv, all: M.ni, main: M.main });
+      this.tallGroups.push(g);
     }
+    this.tallMeshes = this.tallGroups.flatMap((g) => g.cells); // (the near meshes: every building of the group once)
     for (const t of this.tiles.values()) if (t.lowOff == null) t.lowOff = t.off; // (tiles with no tall buildings)
   }
 
+  // the cell (e m square) a footprint's middle is in: (i + 32768) * 65536 + j + 32768
+  // (t: within that data tile's cells, a footprint whose middle is past its edge too)
+  cellKey(P, e, t = null) {
+    const H = this.city.hdr; let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const p of P) { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < z0) z0 = p[1]; if (p[1] > z1) z1 = p[1]; }
+    let i = Math.floor(((x0 + x1) / 2 - H.x0) / e), j = Math.floor(((z0 + z1) / 2 - H.z0) / e);
+    if (t) { const n = Math.round(H.tile / e); i = Math.min(Math.max(i, t.i * n), t.i * n + n - 1); j = Math.min(Math.max(j, t.j * n), t.j * n + n - 1); }
+    return (i + 32768) * 65536 + j + 32768;
+  }
+  cellCentre(k, e) { const H = this.city.hdr; return [H.x0 + (Math.floor(k / 65536) - 32768 + 0.5) * e, H.z0 + ((k % 65536) - 32768 + 0.5) * e]; }
   skipped(R) { if (!this.hole) return false; const p = R.P[0]; return Math.hypot(p[0] - this.hole[0], p[1] - this.hole[1]) < 60; }
 
   // How built-up a spot is: the tall buildings (city.bin's tall flag: 20 m and up, or big) counted in 100 m cells, once
@@ -374,7 +491,8 @@ export class CityScenery {
   //    wedding cake's tiers all from the ground): its walls start on the podium's roof (returns that height), so the
   //    podium's ground floor is the one on the street and the walls don't fight over it.
   // Else its own min_height.
-  base(R, P, mh, top) {
+  base(R, P, mh, top) { return (this.lastBase = this.baseOf(R, P, mh, top)); } // (the last one kept: occluder())
+  baseOf(R, P, mh, top) {
     let cx = 0, cz = 0; for (const p of P) { cx += p[0]; cz += p[1]; } cx /= P.length; cz /= P.length;
     const pts = [[cx, cz]], step = Math.max(1, Math.floor(P.length / 8));
     for (let k = 0; k < P.length; k += step) pts.push([cx + (P[k][0] - cx) * 0.6, cz + (P[k][1] - cz) * 0.6]);
@@ -417,7 +535,8 @@ export class CityScenery {
   // ---------------- one building (or part) ----------------
   // a record's footprint as built: simplified, counter-clockwise, set back from the streets (setback.js: cut back off the
   // roadway and pavement; null if too little is left), its courtyards (those the cut reaches are filled in)
-  footprint(R, tall) {
+  footprint(R, tall) { return (this.lastFoot = this.footprintOf(R, tall)); } // (the last one kept: occluder())
+  footprintOf(R, tall) {
     let P = simplify(R.P, tall ? 0.35 : 0.5);
     if (P.length < 3) return null;
     if (area2(P) < 0) P.reverse();
@@ -617,13 +736,10 @@ export class CityScenery {
     }
     const y0 = cut ? yPass : raised ? yBase : R.g0 - 1, O = FOOT.out;
     const t = lazy ? this.addBox({ cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz, hl: b0.hl + O, hw: b0.hw + O }, y0, yTop, this.curTile) : this.addParts(one, y0, yTop, this.curTile);
-    if (lazy && A > FOOT.eager) { // (a big one now: its boxes take a while, not a hitch later)
-      t.parts = cityParts(this, P, holes, b0, !F.through) || one;
-      // under FOOT.retry covered (a campus of wings, a block of courtyards): its first pass's boxes for now, then the
-      // footprint cut into squares a piece at a time after load (setback.js Refiner), unless it's been hit by then
-      if (t.parts.refine) this.refiner.add(P, holes, b0.ux, b0.uz, (B) => { if (W.destruct?.states.has(t.dk)) return; t.parts = F.through ? B : B.map((f) => fitBox(this.roads, f)); this.footStats.boxes += B.length; this.footStats.max = Math.max(this.footStats.max, B.length); });
-    }
-    else if (lazy) lazyBoxes(this, t, P, holes, { cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz }, !F.through, one);
+    // (a big one too (FOOT.eager): its footprint kept exact. Under FOOT.retry covered (a campus of wings, a block of
+    // courtyards): its first pass's boxes, then the footprint cut into squares a piece at a time (setback.js Refiner),
+    // unless it's been hit by then)
+    if (lazy) lazyBoxes(this, t, P, holes, { cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz }, !F.through, one, A > FOOT.eager);
     this.footStats.n++; this.footStats.load += performance.now() - tb;
     if (F.through) t.through = true;
     if (cut) t.passage = true;
@@ -866,27 +982,33 @@ export class CityScenery {
   // ---------------- low buildings: streamed by tile ----------------
   buildLowStep(t, budget) {
     const U = this.city.U, S = this.city.S, R = {}, t0 = performance.now(), r0 = t.st?.r ?? 0; // (r0: under the test stepper, 32 records per ms of budget a step, stepClock.js)
-    const st = t.st || (t.st = { o: t.lowOff, r: 0, M: new MeshW(...this.tileCentre(t.i, t.j), 4096) });
+    const st = t.st || (t.st = { o: t.lowOff, r: 0, cells: new Map() }); // (one writer per LOW_CELL cell of the tile)
     const minA = this.qn === 'low' ? 60 : this.qn === 'medium' ? 25 : 0;
     this.curTile = t.i + ',' + t.j;
     while (st.r < t.nLow) {
       readRec(U, S, st.o, this.q, ...this.tileCentre(t.i, t.j), R); st.o = R.next; st.r++;
       if (this.skipped(R)) continue;
       if (minA && Math.abs(area2(R.P)) < minA) break; // sorted by area: the rest are smaller still
-      this.building(st.M, R, false);
+      const ck = this.cellKey(R.P, LOW_CELL, t); let M = st.cells.get(ck);
+      if (!M) st.cells.set(ck, (M = new MeshW(...this.cellCentre(ck, LOW_CELL), 4096)));
+      const v0 = M.n; this.lastFoot = this.lastBase = null; this.building(M, R, false);
+      const ob = M.n > v0 && this.occluder(R, false); if (ob) { ob.ck = ck; (st.occ || (st.occ = [])).push(ob); }
       if ((st.r & 31) === 0 && (STEP.on ? st.r - r0 >= budget * 32 : performance.now() - t0 > budget)) { this.curTile = null; return false; }
     }
     this.curTile = null;
-    const M = st.M; t.st = null;
-    if (M.n) {
-      t.low = M.mesh(this.mat); t.low.castShadow = W_SHADOW(this.w); t.low.receiveShadow = true;
-      t.tris = M.ni / 3; this.group.add(t.low);
-    } else t.low = true;
+    t.st = null; t.low = true; t.meshes = []; t.tris = 0; // (t.low: built; t.meshes: its cells' meshes)
+    const cellM = new Map();
+    for (const [ck, M] of st.cells) {
+      if (!M.n) continue;
+      const m = M.mesh(this.mat); m.castShadow = W_SHADOW(this.w); m.receiveShadow = true; binBounds(m, m.geometry.attributes.position.array, m.geometry.index.array, m.geometry.index.count, 4); // (its bounds in columns: occlude())
+      t.tris += M.ni / 3; t.meshes.push(m); this.group.add(m); cellM.set(ck, m);
+    }
+    t.occL = (st.occ || []).filter((ob) => (ob.m = cellM.get(ob.ck)));
     return true;
   }
   dropLow(t) {
-    if (t.low && t.low !== true) { this.group.remove(t.low); t.low.geometry.dispose(); }
-    t.low = null; t.st = null; t.tris = 0;
+    for (const m of t.meshes || []) { this.group.remove(m); m.geometry.dispose(); }
+    t.low = null; t.meshes = null; t.st = null; t.tris = 0; t.occL = null;
     const key = t.i + ',' + t.j;
     if (t.keys) for (const k of t.keys) { const a = this.grid.get(k); if (a) { const b = a.filter((x) => x.tile !== key); if (b.length) this.grid.set(k, b); else this.grid.delete(k); } }
     t.keys = null;
@@ -894,13 +1016,14 @@ export class CityScenery {
   update(dt, cam) {
     if (!cam) return;
     const H = this.city.hdr, T = H.tile;
-    // tall meshes: fewer buildings far away (draw range by height level)
-    for (const g of this.tallMeshes) {
-      const d = Math.hypot(g.x - cam.x, g.z - cam.z) - T * GROUP * 0.7;
-      let n = d > this.furnD ? g.main : g.all; // (the roof furniture only near: its indices come last)
-      for (let k = 0; k < this.levelD.length; k++) if (d > this.levelD[this.levelD.length - 1 - k]) n = g.lv[this.levelD.length - 1 - k];
-      g.m.geometry.setDrawRange(0, n); g.m.visible = n > 0;
-      g.m.castShadow = this.shadows && d < 2500; // (shadow maps reach a few km: no need to draw the far skyline into them)
+    // tall buildings: fewer far away (draw range by height level, the whole group one mesh); near, every height, a
+    // mesh per cell (culled each on its own), the roof furniture (its indices last) only nearer still
+    const nl = this.levelD.length;
+    for (const g of this.tallGroups) {
+      const d = Math.hypot(g.x - cam.x, g.z - cam.z) - T * GROUP * 0.7, near = d <= this.levelD[nl - 1], sh = this.shadows && d < 2500; // (shadow maps reach a few km: no need to draw the far skyline into them)
+      for (const c of g.cells) { c.m.visible = near; if (near) { c.m.geometry.setDrawRange(0, d > this.furnD ? c.main : c.all); c.m.castShadow = sh; } }
+      let n = 0; if (!near) for (let k = 0; k < nl; k++) if (d > this.levelD[nl - 1 - k]) n = g.lv[nl - 1 - k];
+      g.m.geometry.setDrawRange(0, n); g.m.visible = n > 0; g.m.castShadow = sh;
     }
     // low tiles: plan every ~100 m of camera movement, build one tile at a time (a few ms a frame)
     const R = this.lowR;
@@ -925,11 +1048,77 @@ export class CityScenery {
     if (!this.queue.length && this.refiner.jobs.length) this.refiner.step(STEP.on ? Infinity : 1, STEP.on ? 2 : Infinity); // (the low tiles first; then a huge footprint's boxes, a millisecond a frame)
     const k = this.w.lightsK ?? (this.w.night ? 1 : 0); this.mat.emissiveIntensity = 1.6 * Math.min(1, k / 0.12); // (buildings.js updateBuildingLights: which windows, by hour)
   }
+  // A box wholly inside the building just built (its walls from footprint(), its record): from the ground to under its
+  // eave, inscribed in its footprint 2 m in from the walls (occlusion.js inscribedBox; not its collision boxes, which
+  // can stand out past its walls, #295). None for what doesn't stand on the street all the way up (a passage or a road
+  // through it, a part raised off the ground or standing on a podium), one too small to matter, or one whose height
+  // building() doesn't take from the record (untagged; a kiosk). Its eave is taken as low as building() could put it:
+  // under the tallest crown it could get, a pitched roof's or a spire's rise at its most. (occlude() also leaves it out
+  // while the camera is in the building, its walls seen from inside, or within a metre of it: the near plane.)
+  occluder(R, tall) {
+    const F = this.lastFoot; if (!F || F.through || F.pass?.length || !(R.top > 0 || R.lv > 0)) return null;
+    const part = R.flags & 1, mh = part ? this.lastBase ?? R.mh : R.mh;
+    if (part && mh > 0.5) return null;
+    let top = R.top > 0 ? R.top : R.lv * 3.2 + 1; if (top < 7) return null;
+    const A = Math.abs(area2(F.P)) - F.holes.reduce((s, h) => s + Math.abs(area2(h)), 0); if (A < (tall ? 120 : OCC.lowA)) return null;
+    top = Math.max(top, mh + 2.5);
+    const rc = R.roof, H = top - (part ? mh : 0);
+    let cut = rc === 0 || rc === 11 ? (tall && !part && rc === 0 && top > 70 ? Math.max(12, Math.min(45, top * 0.2)) : 0) : R.rh > 0 ? R.rh : Math.max(5, H * 0.6);
+    if (top < 11.5) cut = Math.max(cut, 5); // (a house's pitched roof)
+    const y0 = R.g0, y1 = (R.g0 + R.g1) / 2 + top - cut - 0.5;
+    if (y1 - y0 < 5) return null;
+    const b = obb(F.P), q = b && inscribedBox(F.P, F.holes, b, 2); if (!q) return null;
+    const hh = (y1 - y0) / 2;
+    return { x: q.cx, y: y0 + hh, z: q.cz, ux: q.ux, uz: q.uz, hl: q.hl, hw: q.hw, hh, r: Math.hypot(q.hl, q.hw, hh), a: (q.hl + q.hw) * hh, dk: 'c' + R.o, ck: 0, m: null, s: 0, b: [b.cx, b.cz, b.ux, b.uz, b.hl + 1, b.hw + 1, (R.g0 + R.g1) / 2 + top + 1] };
+  }
+  // Occlusion culling near the ground (occlusion.js): the building meshes behind the nearest buildings taken off the
+  // camera's layers for this frame (still in the shadow maps). With the frame's final camera, right before it's drawn
+  // (main.js; not from update(): traffic calls that before the camera has moved for the frame).
+  occlude(cam, renderer) {
+    if (renderer) shadowsSeeOccluded(renderer);
+    const hid = this.occHidden || (this.occHidden = []), W = this.w;
+    for (const m of hid) m.layers.set(0);
+    hid.length = 0;
+    const S = this.occStats || (this.occStats = { on: false, cands: 0, occluders: 0, corners: 0, pixels: 0, tested: 0, hidden: 0, tris: 0, ms: 0 });
+    cam.updateMatrixWorld();
+    const e = cam.matrixWorld.elements, x = e[12], y = e[13], z = e[14];
+    S.on = OCC.on && y - W.heightAt(x, z) < OCC.h;
+    if (!S.on) { S.cands = S.occluders = S.corners = S.pixels = S.tested = S.hidden = S.tris = S.ms = 0; return; }
+    const t0 = performance.now(), B = this.occBuf || (this.occBuf = new OcclusionBuffer());
+    B.begin(cam);
+    // the occluders of the tiles within r: in front of the camera, standing undamaged (destruction.js), drawn
+    const fx = -e[8], fy = -e[9], fz = -e[10], H = this.city.hdr, T = H.tile, R = OCC.r, ds = W.destruct?.states;
+    const C = this.occCand || (this.occCand = []); C.length = 0;
+    for (let i = Math.floor((x - R - H.x0) / T); i <= Math.floor((x + R - H.x0) / T); i++) for (let j = Math.floor((z - R - H.z0) / T); j <= Math.floor((z + R - H.z0) / T); j++) {
+      const t = this.tiles.get(i + ',' + j); if (!t) continue;
+      for (const L of [t.occ, t.occL]) if (L) for (const o of L) {
+        const dx = o.x - x, dy = o.y - y, dz = o.z - z, d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > R * R || dx * fx + dy * fy + dz * fz < -o.r || !o.m?.visible || !o.m.parent || ds?.has(o.dk)) continue;
+        const b = o.b, bx = x - b[0], bz = z - b[1]; // (the camera in the building, or within a metre of its walls: its walls don't hide anything from it)
+        if (y < b[6] && Math.abs(bx * b[2] + bz * b[3]) < b[4] && Math.abs(-bx * b[3] + bz * b[2]) < b[5]) continue;
+        o.s = o.a / Math.max(d2, 1); C.push(o);
+      }
+    }
+    C.sort((a, b) => b.s - a.s);
+    const st = B.stats;
+    for (let k = 0; k < C.length && k < OCC.max * 2 && st.occluders < OCC.max && st.corners < OCC.corners; k++) { const o = C[k]; B.box(o.x, o.y, o.z, o.ux, o.uz, o.hl, o.hw, o.hh); }
+    // the building meshes being drawn: hidden where wholly behind them
+    let tris = 0;
+    const test = (m) => {
+      if (!m.visible || !B.hidden(worldBounds(m))) return;
+      m.layers.set(OCC_LAYER); hid.push(m);
+      const g = m.geometry; tris += Math.min(g.index.count, g.drawRange.count) / 3;
+    };
+    for (const g of this.tallGroups) { test(g.m); for (const c of g.cells) test(c.m); }
+    for (const t of this.tiles.values()) if (t.meshes) for (const m of t.meshes) test(m);
+    Object.assign(S, { cands: C.length, occluders: st.occluders, corners: st.corners, pixels: st.pixels, tested: st.tested, hidden: st.hidden, tris, ms: performance.now() - t0 });
+  }
   // everything near the camera built (the loading screen waits for this on the first frames)
   get ready() { return !this.queue.length || this.queue.every((t) => !!t.low); }
   info() {
-    let lowTris = 0, lowTiles = 0; for (const t of this.tiles.values()) if (t.low && t.low !== true) { lowTris += t.tris; lowTiles++; }
-    return { tall: this.stats.tall, tallTris: this.stats.tris, tallMeshes: this.tallMeshes.length, lowTiles, lowTris, msTall: this.msTall };
+    let lowTris = 0, lowTiles = 0, lowMeshes = 0; for (const t of this.tiles.values()) if (t.meshes?.length) { lowTris += t.tris; lowTiles++; lowMeshes += t.meshes.length; }
+    let occT = 0, occL = 0; for (const t of this.tiles.values()) { occT += t.occ?.length ?? 0; occL += t.occL?.length ?? 0; }
+    return { tall: this.stats.tall, tallTris: this.stats.tris, tallMeshes: this.tallMeshes.length, lowTiles, lowMeshes, lowTris, msTall: this.msTall, occluders: { tall: occT, low: occL } };
   }
 }
 const W_SHADOW = (W) => W.qBase === 'high';
