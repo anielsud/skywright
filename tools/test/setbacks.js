@@ -13,8 +13,10 @@
 //   past walls: no collision box reaches more than 1 m past every footprint near a street (an invisible wall on the
 //               open ground: an L's yard, a U's courtyard, a trapezoid's sliver; setback.js footBoxes gives an
 //               irregular building a few boxes that hug its walls), every edge of every box sampled each metre
-//   cover:      the boxes cover the footprints (95% of their area; at most 1% of buildings under 90%): no gap a car
-//               could drive into a building through
+//               and none more than 2 m (EXEMPT aside: a building no boxes can fit, by id, with why)
+//   cover:      the boxes cover the footprints (95% of their area; no building under 90%, EXEMPT aside): no gap a car
+//               could drive into a building through (a big one still bare is cut into squares after load, setback.js
+//               Refiner: measured once that's done)
 //   cheap:      the boxes at load (an irregular building's are worked out when first wanted: how many were, and their
 //               work per building), and the most work any one building's took after load (counted, not timed)
 //   one bldg:   an irregular building's boxes are one building to destruction.js (towns.hit, heights, damage state)
@@ -105,6 +107,9 @@ export async function footprints(w, which) {
 }
 
 export async function measure(w, which = 'after') {
+  if (which === 'after') { // (every building's boxes, and the big ones still bare cut into squares a piece at a time after (setback.js Refiner): as they are once a car has come near, a few seconds on)
+    const T = w.towns.city || w.towns; for (const a of T.grid.values()) for (const e of a) void e.parts; T.refiner?.flush();
+  }
   const Z = zones(w), F = await footprints(w, which), on = [], under = [];
   for (const f of F) {
     const d = depth(Z, f.P); if (d.worst <= TOL) continue;
@@ -154,7 +159,7 @@ export async function measure(w, which = 'after') {
           const L = Math.hypot((a1 - a0) * b.hl, (c1 - c0) * b.hw), n = Math.max(1, Math.ceil(L));
           for (let i = 0; i < n; i++) { const a = a0 + (a1 - a0) * i / n, c = c0 + (c1 - c0) * i / n, x = b.x + b.ux * b.hl * a - b.uz * b.hw * c, z = b.z + b.uz * b.hl * a + b.ux * b.hw * c, d = off(x, z); if (d === Infinity) continue; if (d > wAny) wAny = d; if (d > worst && street(x, z)) worst = d; }
         }
-        const o = { x: Math.round(b.x), z: Math.round(b.z), d: worst };
+        const o = { x: Math.round(b.x), z: Math.round(b.z), d: worst, dk: e.dk };
         if (worst > OUT_TOL) out.push(o); if (worst > OUT_1) out1.push(o); if (wAny > OUT_1) outAny.push({ ...o, d: wAny });
       }
     }
@@ -181,22 +186,27 @@ export async function runCase(c) {
   const { worldAt } = await import('./node/world.mjs');
   const W = await worldAt(c.loc), w = W.world, sb = (w.towns.city || w.towns).setbacks, ms = sb.ms; // (at load: before measure builds New York's low footprints too)
   const fs = (w.towns.city || w.towns).footStats, load = fs.load, LW = (w.towns.city || w.towns).loadWork; // (before measure asks every building for its boxes; LW: setback.js WORK counted at load)
-  const m = await measure(w, 'after'), T0 = w.towns, d = perBuilding(w), tp = c.loc === 'nyc' ? await topples(w, m.F) : null;
+  const m = await measure(w, 'after'), RF = (w.towns.city || w.towns).refiner, T0 = w.towns, d = perBuilding(w), tp = c.loc === 'nyc' ? await topples(w, m.F) : null;
   const worst = m.on.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(2)} m into a ${o.kind}`).join('; ');
-  const kept = m.n / Math.max(1, m.n + sb.dropped);
+  const kept = m.n / Math.max(1, m.n + sb.dropped), ex = EXEMPT[c.loc] || {}, low = m.cover.low.filter((o) => !ex[o.dk]), out2 = m.out.filter((o) => !ex[o.dk]);
   return [
     { name: `${c.loc}: no building footprint on a road`, ok: !m.on.length, why: m.on.length ? `${m.on.length} of ${m.n} footprints reach in, worst ${worst}` : `${m.n} footprints clear of ${m.segs} road segments (${sb.cut} cut back, ${sb.dropped} left out; ${m.under.length} big ones over a road through them)` },
     { name: `${c.loc}: no collision box on a road`, ok: !m.boxes.length, why: m.boxes.length ? `${m.boxes.length} of ${m.nBoxes} boxes reach in, worst ${m.boxes.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(2)} m into a ${o.kind}`).join('; ')}` : `${m.nBoxes} boxes (World.wallBoxes${c.loc === 'nyc' ? ': the tall buildings built at load' : ''})` },
     { name: `${c.loc}: no collision box reaches more than ${OUT_1} m past its walls`, ok: m.out1.length <= m.nBoxes * OUT_MAX, why: `${m.out1.length} of ${m.nBoxes} boxes reach more than ${OUT_1} m past every footprint within ${NEAR} m of a street (${m.out.length} more than ${OUT_TOL} m; ${m.outAny.length} more than ${OUT_1} m anywhere, courtyards and notches too). At most ${OUT_MAX * 100}%: an invisible wall on the open ground beside it. 1,344 of 37,585 reached more than 2 m in New York before irregular buildings got boxes of their own (setback.js footBoxes)${m.out1.length ? `; worst ${m.out1.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(1)} m`).join('; ')}` : ''}` },
-    { name: `${c.loc}: the boxes cover the buildings`, ok: m.cover.covered >= COVER * m.cover.inside && m.cover.low.length <= m.cover.bld * 0.01, why: `${(100 * m.cover.covered / Math.max(1, m.cover.inside)).toFixed(1)}% of ${m.cover.bld} footprints' area inside a box (at least ${COVER * 100}%), ${m.cover.low.length} buildings of 40 m2 and more under 90% (at most 1%)${m.cover.low.length ? `, worst ${m.cover.low.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${(100 * o.c).toFixed(0)}%`).join('; ')}` : ''}; ${m.cover.multi} irregular ones with boxes of their own, ${(m.cover.boxes / Math.max(1, m.cover.bld)).toFixed(2)} boxes a building, at most ${m.cover.max}` },
+    { name: `${c.loc}: no collision box reaches more than ${OUT_TOL} m past its walls`, ok: !out2.length, why: `${out2.length} of ${m.nBoxes} boxes reach more than ${OUT_TOL} m past every footprint within ${NEAR} m of a street (none: 20 did in New York, 10 in Lauterbrunnen, 1 on Bora Bora before setback.js irregular sampled every corner and looked between its points)${out2.length ? `; worst ${out2.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(1)} m`).join('; ')}` : ''}${m.out.length > out2.length ? `; ${m.out.length - out2.length} exempt (EXEMPT)` : ''}` },
+    { name: `${c.loc}: the boxes cover the buildings`, ok: m.cover.covered >= COVER * m.cover.inside && !low.length, why: `${(100 * m.cover.covered / Math.max(1, m.cover.inside)).toFixed(1)}% of ${m.cover.bld} footprints' area inside a box (at least ${COVER * 100}%), ${low.length} buildings of 40 m2 and more under 90% (none: 25 in New York, 8 in Lauterbrunnen, 1 on Bora Bora before)${low.length ? `, worst ${low.slice(0, 3).map((o) => `${o.dk} (${o.x}, ${o.z}) ${(100 * o.c).toFixed(0)}%`).join('; ')}` : ''}${m.cover.low.length > low.length ? `; ${m.cover.low.length - low.length} exempt (EXEMPT)` : ''}; ${m.cover.multi} irregular ones with boxes of their own, ${(m.cover.boxes / Math.max(1, m.cover.bld)).toFixed(2)} boxes a building, at most ${m.cover.max}` },
     { name: `${c.loc}: few big buildings left over a road`, ok: m.under.length <= Math.max(3, m.n * 0.0005), why: `${m.under.length} (a passage under them, or a mapping clash: ${m.under.slice(0, 4).map((o) => `(${o.x}, ${o.z})`).join(' ')})` },
     { name: `${c.loc}: setbacks keep most buildings`, ok: kept > 0.97, why: `${sb.dropped} left out, ${m.n} kept (${(100 * kept).toFixed(1)}%)` },
     { name: `${c.loc}: setbacks are cheap at load`, ok: !!LW && sbWork(LW) <= CAP[c.loc].sb * LW.n, why: `${LW ? `${sbWork(LW)} units of work for ${LW.n} buildings, ${(sbWork(LW) / Math.max(1, LW.n)).toFixed(0)} a building (at most ${CAP[c.loc].sb}): ${LW.index} road points indexed and index entries visited, ${LW.tests} footprint walls tested against a road` : 'no load work counted'} (Node, Low: the road index, the footprints and boxes built at load; New York's low ones are set back a tile at a time as they stream in). ${ms.toFixed(0)} ms, ${(100 * ms / W.ms).toFixed(1)}% of the World's ${W.ms} ms build: info only` },
-    { name: `${c.loc}: collision boxes cheap`, ok: !!LW && LW.irr <= CAP[c.loc].eager && bxWork(LW) <= CAP[c.loc].load * LW.n && bxWork(fs.lazyWork) <= LAZY_MAX, why: `${LW ? `at load ${LW.irr} irregular buildings boxed (at most ${CAP[c.loc].eager}: the big ones, FOOT.eager; the rest are worked out when first wanted, setback.js lazyParts), ${bxWork(LW)} units of box work for ${LW.n} buildings (${(bxWork(LW) / Math.max(1, LW.n)).toFixed(1)} a building, at most ${CAP[c.loc].load}: ${LW.cells} grid cells, ${LW.verts} walls visited)` : 'no load work counted'}; then the most any one took: ${bxWork(fs.lazyWork)} (at most ${LAZY_MAX}: ${fs.lazyWork?.cells ?? 0} cells, ${fs.lazyWork?.verts ?? 0} walls visited, a footprint of ${fs.lazyWork?.walls ?? 0} walls into ${fs.lazyWork?.boxes ?? 0} boxes, of at most FOOT.max ${FS_MAX}, ${FOOT.fine?.max ?? FS_MAX} in the fine pass; ${fs.max} the most any had). Info: at load ${load.toFixed(0)} ms (${(100 * load / W.ms).toFixed(1)}% of the build), then ${(fs.ms / Math.max(1, fs.irr)).toFixed(2)} ms a building, the slowest ${slowest(fs).toFixed(1)} ms` },
+    { name: `${c.loc}: collision boxes cheap`, ok: !!LW && LW.irr <= CAP[c.loc].eager && bxWork(LW) <= CAP[c.loc].load * LW.n && bxWork(fs.lazyWork) <= LAZY_MAX, why: `${LW ? `at load ${LW.irr} irregular buildings boxed (at most ${CAP[c.loc].eager}: the big ones, FOOT.eager; the rest are worked out when first wanted, setback.js lazyParts), ${bxWork(LW)} units of box work for ${LW.n} buildings (${(bxWork(LW) / Math.max(1, LW.n)).toFixed(1)} a building, at most ${CAP[c.loc].load}: ${LW.cells} grid cells, ${LW.verts} walls visited)` : 'no load work counted'}; then the most any one took: ${bxWork(fs.lazyWork)} (at most ${LAZY_MAX}: ${fs.lazyWork?.cells ?? 0} cells, ${fs.lazyWork?.verts ?? 0} walls visited, a footprint of ${fs.lazyWork?.walls ?? 0} walls into ${fs.lazyWork?.boxes ?? 0} boxes, of at most FOOT.max ${FS_MAX}, ${FOOT.fine?.max ?? FS_MAX} in the fine pass; ${fs.max} the most any had). Info: at load ${load.toFixed(0)} ms (${(100 * load / W.ms).toFixed(1)}% of the build), then ${(fs.ms / Math.max(1, fs.irr)).toFixed(2)} ms a building, the slowest ${slowest(fs).toFixed(1)} ms${RF?.done ? `; the big ones still bare cut into squares after (setback.js Refiner): ${RF.done} buildings, ${RF.pieces} pieces, ${RF.ms.toFixed(0)} ms in all, the slowest piece ${RF.slowest.toFixed(1)} ms` : ''}` },
     { name: `${c.loc}: an irregular building is still one building`, ok: d.n > 0 && !d.bad.length, why: `${d.n} buildings of ${d.boxes} boxes: each box hit is that building, knocked down to 2 m every one of its boxes is 2 m tall, one damage state each${d.bad.length ? '; ' + d.bad.slice(0, 3).join('; ') : ''}` },
     ...(tp ? [{ name: `${c.loc}: a toppling top collides as its own shape`, ok: tp.n >= 2 && tp.inside >= 0.9 && tp.off <= 0.01, why: `${tp.n} tall towers' tops knocked off (${tp.boxes} boxes in all), sampled ${tp.frames} times while they fall: ${(100 * tp.inside).toFixed(1)}% of points inside the footprints above the cut hit the piece (at least 90%; planes hit nothing of a falling top before), ${(100 * tp.off).toFixed(1)}% of points more than 2 m off its walls do (at most 1%; ${(100 * 0.417).toFixed(0)}% did inside the one box round the whole building it was before)` }] : []),
   ];
 }
+
+// Buildings the checks above leave out, by damage key, each with why (a footprint no boxes can fit: say so here, don't
+// loosen the limits). None so far.
+const EXEMPT = { nyc: {}, lauterbrunnen: {}, canyon: {}, islands: {} };
 
 // The work caps (setback.js WORK, counted: a time would depend on the machine). Per place: sb, the setbacks' work at
 // load per building (index + tests); eager, irregular buildings boxed at load; load, the boxes' work at load per

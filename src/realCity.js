@@ -13,7 +13,7 @@ import * as THREE from 'three';
 import { STEP } from './stepClock.js';
 import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, facade, facadeSpec, floodlit, linHex, LY0, LYS } from './buildings.js';
 import { toLocal } from './realworld.js';
-import { roadIndex, setBack, holeInside, fitBox, footBoxes, boundBox, inParts, irregular, lazyParts, packRing, unpackRing, FOOT, MAJOR, streetWalls, PASSAGE, clip, intrusion, WORK, workSince } from './setback.js';
+import { roadIndex, setBack, holeInside, fitBox, footBoxes, boundBox, inParts, irregular, lazyParts, packRing, unpackRing, FOOT, MAJOR, streetWalls, PASSAGE, clip, intrusion, WORK, workSince, Refiner, fillBare } from './setback.js';
 
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
 const GROUP = 2; // tall buildings: one mesh per GROUP x GROUP data tiles
@@ -250,9 +250,10 @@ const c565 = (c) => { const r = (c >> 11) & 31, g = (c >> 5) & 63, b = c & 31; r
 const pick = (a, h) => a[Math.floor(h * a.length) % a.length];
 
 // an irregular building's boxes (setback.js footBoxes), each kept off the street (fitBox) unless a road runs through
-// the building (fit: false); null if footBoxes has none
-function cityParts(city, Q, H, q, fit) {
-  const FS = city.footStats, t0 = performance.now(), B = footBoxes(Q, H, q.ux, q.uz), out = B && fit ? B.map((f) => fitBox(city.roads, f)) : B;
+// the building (fit: false); null if footBoxes has none. quick: the boxes beside a passage, at load (footBoxes quick)
+function cityParts(city, Q, H, q, fit, quick = false) {
+  const FS = city.footStats, t0 = performance.now(), B = footBoxes(Q, H, q.ux, q.uz, true, null, quick), out = B && fit ? (quick ? B.map((f) => fitBox(city.roads, f)) : fillBare(Q, H, q.ux, q.uz, B, (f) => fitBox(city.roads, f))) : B;
+  if (out && B.refine) out.refine = true; // (a huge one under FOOT.retry: cut into squares after load, CityScenery.refiner)
   FS.irr++; if (B) { FS.boxes += B.length; FS.max = Math.max(FS.max, B.length); } FS.ms += performance.now() - t0;
   return out;
 }
@@ -263,6 +264,7 @@ function lazyBoxes(city, t, P, holes, q, fit, fallback) {
   const parts = () => cityParts(city, unpackRing(fp), hp.map(unpackRing), q, fit) || fallback;
   lazyParts(t, () => {
     const t0 = performance.now(), w0 = { ...WORK }, B = parts(), FS = city.footStats, dt = performance.now() - t0, w = workSince(w0);
+    if (B?.refine) city.refiner.add(unpackRing(fp), hp.map(unpackRing), q.ux, q.uz, (T) => { if (city.w.destruct?.states.has(t.dk)) return; t.parts = fit ? T.map((f) => fitBox(city.roads, f)) : T; FS.boxes += T.length; FS.max = Math.max(FS.max, T.length); }); // (still bare: cut into squares, a piece at a time, setback.js Refiner)
     if (dt > FS.lazy) { FS.lazy = dt; FS.lazyRedo = parts; } // (lazyRedo: the slowest one again, for tools/test/setbacks.js: info)
     if (w.cells + w.verts > (FS.lazyWork?.cells ?? 0) + (FS.lazyWork?.verts ?? 0)) FS.lazyWork = { ...w, walls: fp.length / 2, boxes: B?.length ?? 0 }; // (the most work any one took: tools/test/setbacks.js)
     return B;
@@ -293,6 +295,7 @@ export class CityScenery {
     this.stats = { tall: 0, low: 0, tris: 0 };
     this.roads = roadIndex(W); this.setbacks = { cut: 0, dropped: 0, through: 0, ms: performance.now() - t0 }; // set back from the streets (setback.js; ms: the index and the cuts)
     this.footStats = { n: 0, irr: 0, boxes: 0, max: 0, ms: 0, lazy: 0, load: 0 }; // (the collision boxes: ms in footBoxes, whenever; lazy: the slowest worked out after load; load: at load)
+    this.refiner = new Refiner(); // (a huge footprint's boxes, a piece at a time after load: setback.js tiledBoxes)
     this.density(); this.sup = new Map(); this.supTiles = new Set(); this.grounded = 0; this.nested = 0; this.kiosks = 0; this.passages = []; this.gf = { front: 0, ground: 0, parts: 0, miss: [] };
     this.buildTall();
     this.msTall = performance.now() - t0; this.loadWork = { ...workSince(w0), irr: this.footStats.irr, n: this.footStats.n }; // (setback.js WORK at load: tools/test/setbacks.js)
@@ -602,19 +605,24 @@ export class CityScenery {
     // its footprint, a metre out (FOOT.out: no box of its own reaches further), for the grid and the quick tests
     const tb = performance.now(), irr = (Q, H, q) => H.length || irregular(Q, Math.abs(area2(Q)) - H.reduce((m, h) => m + Math.abs(area2(h)), 0), q.cx, q.cz, q.ux, q.uz, q.hl, q.hw);
     let one = { cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz, hl: b0.hl, hw: b0.hw }; // (a near-rectangle: its box, off the street)
-    if (!F.through) { const f = fit(one); one = { cx: f.x, cz: f.z, ux: f.ux, uz: f.uz, hl: f.hl, hw: f.hw }; }
+    let cut1 = false; if (!F.through) { const f = fit(one); cut1 = !!f.fit && 4 * f.hl * f.hw < 0.93 * A; one = { cx: f.x, cz: f.z, ux: f.ux, uz: f.uz, hl: f.hl, hw: f.hw }; }
     one = [{ x: one.cx, z: one.cz, ux: one.ux, uz: one.uz, hl: one.hl, hw: one.hw }];
-    const lazy = irr(P, holes, b0);
+    const lazy = cut1 || irr(P, holes, b0); // (cut1: its box moved in off the street leaves a slice of it bare, a trapezoid's along a slanted front: boxes that hug its walls)
     // over a passage: the whole building from the passage's underside up; below it, the parts either side of the road
     // (boxes kept off it: they stay standing, the rubble covers them if it comes down)
     if (cut) for (const Q of this.besidePass(P, pass)) {
       const q = obb(Q); if (!q) continue;
-      const C = ((irr(Q, [], q) && cityParts(this, Q, [], q, true)) || [fit(q)]).filter((f) => intrusion(this.roads, [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([u, v]) => [f.x + f.ux * f.hl * u - f.uz * f.hw * v, f.z + f.uz * f.hl * u + f.ux * f.hw * v])) < 0.25);
+      const C = ((irr(Q, [], q) && cityParts(this, Q, [], q, true, true)) || [fit(q)]).filter((f) => intrusion(this.roads, [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([u, v]) => [f.x + f.ux * f.hl * u - f.uz * f.hw * v, f.z + f.uz * f.hl * u + f.ux * f.hw * v])) < 0.25);
       if (C.length) this.addParts(C, R.g0 - 1, yPass, this.curTile).below = true;
     }
     const y0 = cut ? yPass : raised ? yBase : R.g0 - 1, O = FOOT.out;
     const t = lazy ? this.addBox({ cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz, hl: b0.hl + O, hw: b0.hw + O }, y0, yTop, this.curTile) : this.addParts(one, y0, yTop, this.curTile);
-    if (lazy && A > FOOT.eager) t.parts = cityParts(this, P, holes, b0, !F.through) || one; // (a big one now: its boxes take a while, not a hitch later)
+    if (lazy && A > FOOT.eager) { // (a big one now: its boxes take a while, not a hitch later)
+      t.parts = cityParts(this, P, holes, b0, !F.through) || one;
+      // under FOOT.retry covered (a campus of wings, a block of courtyards): its first pass's boxes for now, then the
+      // footprint cut into squares a piece at a time after load (setback.js Refiner), unless it's been hit by then
+      if (t.parts.refine) this.refiner.add(P, holes, b0.ux, b0.uz, (B) => { if (W.destruct?.states.has(t.dk)) return; t.parts = F.through ? B : B.map((f) => fitBox(this.roads, f)); this.footStats.boxes += B.length; this.footStats.max = Math.max(this.footStats.max, B.length); });
+    }
     else if (lazy) lazyBoxes(this, t, P, holes, { cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz }, !F.through, one);
     this.footStats.n++; this.footStats.load += performance.now() - tb;
     if (F.through) t.through = true;
@@ -914,6 +922,7 @@ export class CityScenery {
       if (this.buildLowStep(t, budget)) this.queue.shift();
       break;
     }
+    if (!this.queue.length && this.refiner.jobs.length) this.refiner.step(STEP.on ? Infinity : 1, STEP.on ? 2 : Infinity); // (the low tiles first; then a huge footprint's boxes, a millisecond a frame)
     const k = this.w.lightsK ?? (this.w.night ? 1 : 0); this.mat.emissiveIntensity = 1.6 * Math.min(1, k / 0.12); // (buildings.js updateBuildingLights: which windows, by hour)
   }
   // everything near the camera built (the loading screen waits for this on the first frames)

@@ -8,7 +8,7 @@ import { toLocal } from './realworld.js';
 import { mulberry32, smoothstep } from './noise.js';
 import { CityScenery } from './realCity.js';
 import { Landmarks } from './realLandmarks.js';
-import { roadIndex, setBack, fitBox, footBoxes, inParts, irregular, lazyParts, FOOT, MAJOR, streetWalls, WORK, workSince } from './setback.js';
+import { roadIndex, setBack, fitBox, footBoxes, inParts, irregular, lazyParts, FOOT, MAJOR, streetWalls, WORK, workSince, Refiner, fillBare } from './setback.js';
 
 const CHUNK = 1000; // m: buildings are merged per 1 km cell (one draw call each), hidden beyond VIEW
 const VIEW = { low: 4500, medium: 8000, high: 14000 };
@@ -57,6 +57,7 @@ export class RealScenery {
   buildBuildings(list) {
     const w0 = { ...WORK }, t0 = performance.now(), roads = roadIndex(this.w); this.setbacks = { cut: 0, dropped: 0, through: 0, flat: 0, ms: performance.now() - t0 }; // (ms: the index and the cuts)
     this.footStats = { n: 0, irr: 0, boxes: 0, max: 0, ms: 0, lazy: 0, load: 0 }; // (the collision boxes: ms in footBoxes, whenever; lazy: the slowest worked out after load; load: at load)
+    this.refiner = new Refiner(); // (a huge footprint's boxes, a piece at a time after load: setback.js tiledBoxes)
     const W = this.w, seed0 = W.loc.seed * 5 + 3, lowQ = W.qName === 'low', wl = W.waterLevel;
     // each place's own building rules (loc.osmStyle): 'tropical' Bora Bora, 'rustic' the Grand Canyon, else the Alps
     const trop = W.loc.osmStyle === 'tropical', rustic = W.loc.osmStyle === 'rustic', alpine = !trop && !rustic;
@@ -217,8 +218,9 @@ export class RealScenery {
       const tb = performance.now(), cb = fitBox(roads, { x: ox, z: oz, ux, uz, hl, hw }); // (a passage under it too: its box off the road where it can be) this.setbacks.ms += performance.now() - tb;
       if (cb?.fit && (roof === 1 || roof === 2)) { roof = 5; this.setbacks.flat++; }
       // (an irregular footprint, an L, a U, a cross: a few boxes that hug its walls instead, setback.js footBoxes, worked
-      // out when first wanted; its box till then the one round its footprint, FOOT.out wider)
-      const tf = performance.now(), irr = irregular(P, Math.abs(area), ox, oz, ux, uz, hl, hw); this.footStats.n++; this.footStats.load += performance.now() - tf;
+      // out when first wanted; its box till then the one round its footprint, FOOT.out wider. So is one whose box moved
+      // in off the road, cb.fit, leaving a slice of it bare)
+      const tf = performance.now(), irr = (cb?.fit && 4 * cb.hl * cb.hw < 0.93 * Math.abs(area)) || irregular(P, Math.abs(area), ox, oz, ux, uz, hl, hw); this.footStats.n++; this.footStats.load += performance.now() - tf;
       // ---- geometry: everything a building has goes into its chunk's builder in one run (destruction.js)
       const ch = this.chunk(cx, cz), B = ch.B, n0 = B.n;
       B.seed = seed; B.lyOff = wet ? 0 : hAbs - base; // (heights for the facade programs from the mean ground: a plinth shows its height above that, more downhill)
@@ -625,6 +627,7 @@ export class RealScenery {
     if (this.river) this.river.material.normalMap.offset.y = -(t || 0) * 0.06; // flowing downstream
     if (cam && this.railChunks) for (const c of this.railChunks) c.m.visible = Math.hypot(c.x - cam.x, c.z - cam.z) - c.r < (c.steel ? this.railView.steel : this.railView.ballast);
     if (this.city) { this.city.update(dt, cam); this.landmarks.update(dt, cam); return; }
+    if (this.refiner?.jobs.length) this.refiner.step(1); // (a huge footprint's boxes, a millisecond a frame)
     if (!cam || !this.chunkList) return;
     for (const c of this.chunkList) c.m.visible = Math.hypot(c.x - cam.x, c.z - cam.z) < this.view + c.r;
   }
@@ -638,7 +641,9 @@ function osmBoxes(S, e, ux, uz, fit, roads, fallback) {
     const FS = S.footStats, t0 = performance.now(), w0 = { ...WORK }, B = footBoxes(e.fp, [], ux, uz);
     FS.irr++; if (B) { FS.boxes += B.length; FS.max = Math.max(FS.max, B.length); } { const dt = performance.now() - t0; FS.ms += dt; if (FS.ready && dt > FS.lazy) FS.lazy = dt; }
     if (FS.ready) { const w = workSince(w0); if (w.cells + w.verts > (FS.lazyWork?.cells ?? 0) + (FS.lazyWork?.verts ?? 0)) FS.lazyWork = { ...w, walls: e.fp.length, boxes: B?.length ?? 0 }; } // (the most work any one took: tools/test/setbacks.js)
-    return B ? (fit ? B.map((f) => fitBox(roads, f)) : B) : fallback;
+    // (a huge one under FOOT.retry covered: these for now, then cut into squares a piece at a time, RealScenery.refiner)
+    if (B?.refine) S.refiner.add(e.fp, [], ux, uz, (T) => { if (S.w.destruct?.states.has(e.dk)) return; e.parts = fit ? T.map((f) => fitBox(roads, f)) : T; FS.boxes += T.length; FS.max = Math.max(FS.max, T.length); });
+    return B ? (fit ? fillBare(e.fp, [], ux, uz, B, (f) => fitBox(roads, f)) : B) : fallback;
   });
 }
 const NONE = [];
