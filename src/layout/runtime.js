@@ -4,7 +4,7 @@
 // with the terrain's own material, the streets with the layout's and today's pavement), and physics (World.sampleGrid /
 // groundAt) reading its fine mesh. Inside an active chunk, today's roads, kerbs, junction boxes, pavements and ground
 // (coarse, patch and detail) don't draw (clip: a mask of the active chunks their shaders read); where an active chunk
-// meets today's ground (a chunk not baked: a bridge, a tunnel, no roads; or not in yet), a skirt closes the gap.
+// meets today's ground (a chunk not baked: the airport, past the core, no roads; or not in yet). Bridges' decks and tunnels' tubes stay today's (roads.js), the layout meeting them at their heights, a skirt closes the gap.
 import * as THREE from 'three';
 import { decodeLayout, KIND } from './format.js';
 import { meshChunk, physIndex, physAt, latticeOf } from './mesh.js';

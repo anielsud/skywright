@@ -7,6 +7,7 @@ import { decodeLayout, KIND } from '../../src/layout/format.js';
 import { KERB, makeRules, latticeGround } from '../../src/layout/rules.js';
 import { meshChunk, physIndex, physAt, latticeOf } from '../../src/layout/mesh.js';
 import { markCheck } from './markcheck.mjs';
+import { offChecks } from './layout-off.mjs';
 
 const HOLE_STEP = 2;
 parentPort.on('message', ({ jobs, grid }) => {
@@ -23,10 +24,14 @@ parentPort.on('message', ({ jobs, grid }) => {
       for (let q = 0; q < m.tk.length; q++) { const v = [I[q * 3], I[q * 3 + 1], I[q * 3 + 2]];
         if (m.tk[q] === KIND.tarmac) for (const k of v) off = Math.max(off, Math.abs(Y[k] - P[k * 3 + 1]));
         if (m.tk[q] === KIND.kerb) for (let a = 0; a < 3; a++) { const u = v[a], w = v[(a + 1) % 3], l = Math.hypot(P[u * 3] - P[w * 3], P[u * 3 + 2] - P[w * 3 + 2]); const top = (q) => P[q * 3 + 1] - Y[q] > 0.1, gut = (q) => Math.abs(P[q * 3 + 1] - Y[q]) < 1e-4; if (l < 0.5 && ((top(u) && gut(w)) || (top(w) && gut(u)))) { const t = top(u) ? u : w, gg = t === u ? w : u; kerb = Math.max(kerb, Math.abs((Y[t] - Y[gg]) - (P[t * 3 + 1] - KERB - P[gg * 3 + 1]))); } } } // (across the kerb, a gutter's point to a top's: how far physics rises past the surface the kerb stands on (drawn less the kerb); the surface's own slope isn't the kerb: on a 20% street a gutter 0.4 m along rises 0.08 m)
+      // (a portal's lip is an opening, no hole: its triangles indexed on their own)
+      const lipIdx = []; for (let q = 0; q < m.tk.length; q++) if (m.tk[q] === KIND.lip) lipIdx.push(I[q * 3], I[q * 3 + 1], I[q * 3 + 2]); const mLip = { pos: P, phys: Y, idx: Uint32Array.from(lipIdx), tk: new Uint8Array(lipIdx.length / 3) }, lipIx = physIndex(L, mLip);
       const ixx = physIndex(L, m); let holes = 0, samples = 0;
-      for (let x = L.x0 + HOLE_STEP / 2; x < L.x0 + L.size; x += HOLE_STEP) for (let z = L.z0 + HOLE_STEP / 2; z < L.z0 + L.size; z += HOLE_STEP) { samples++; const h = physAt(L, m, ixx, x, z); if (!(h === h)) holes++; }
+      for (let x = L.x0 + HOLE_STEP / 2; x < L.x0 + L.size; x += HOLE_STEP) for (let z = L.z0 + HOLE_STEP / 2; z < L.z0 + L.size; z += HOLE_STEP) { samples++; const h = physAt(L, m, ixx, x, z); if (!(h === h) && !(physAt(L, mLip, lipIx, x, z) === physAt(L, mLip, lipIx, x, z))) holes++; }
       // the markings, the crossings and the slabs, as the material draws them (markcheck.mjs)
       const mk = markCheck(L, m); Object.assign(r.fine, { tarmacOff: off, kerbSlope: kerb, holes, samples, drift: mk.drift, driftSamples: mk.samples, lost: mk.lost, mouths: mk.mouths, whole: mk.whole, tight: mk.tight, kerbErr: mk.kerbErr, bendMissed: s.bendMissed });
+      const oc = offChecks(L, m, ixx, lipIdx), ends = oc.ends, mx = (a) => (a.length ? Math.max(...a) : 0); if (oc.badAt.length) (r.badAt ||= []).push(...oc.badAt); const { rimBad, rimN, noLip, portals } = oc;
+      Object.assign(r.fine, { deckEnds: ends.deck.length, deckGap: mx(ends.deck), deckBad: ends.deck.filter((d) => d >= 0.02).length, portalEnds: ends.tube.length, portalGap: mx(ends.tube), portalBad: ends.tube.filter((d) => d >= 0.02).length, portals, rimN, rimBad, noLip });
       // the shore: every point of the drawn ground against the natural ground and the water level: dry ground pushed below the
       // water (must be 0), ground raised where it's under water, paved points below the water; and how many bank points the
       // shore rule changed (against the same rules without it)

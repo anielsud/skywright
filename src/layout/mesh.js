@@ -14,7 +14,7 @@ import { makeRules, latticeGround, KERB, KERB_W, PAVE_RAMP, painted, zebra } fro
 import { chunkOutlines } from './outline.js';
 
 const NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, LANE_STEP = 6, ZEBRA = [0.5, 3.5]; // (ZEBRA: a crossing's band, m out from a junction's circle, as roadMat paints it)
-const PAVED = [KIND.tarmac, KIND.kerb, KIND.pave, KIND.alley, KIND.pavers, KIND.gravel, KIND.verge]; // (the order a point is classed in)
+const PAVED = [KIND.lip, KIND.tarmac, KIND.kerb, KIND.pave, KIND.alley, KIND.pavers, KIND.gravel, KIND.verge]; // (the order a point is classed in)
 const RIBBON = new Set([KIND.tarmac, KIND.kerb, KIND.pave]); // (drawn with a street's coordinates: markings, the pavement's slabs)
 
 // the hi grid's points a chunk's ground uses (and one more round it, for the bilinear ground): lat
@@ -83,7 +83,7 @@ export function meshChunk(L, grid, G, level = 'fine') {
       if (clear(X, Z, (L.city ? 2 : 1.5) * 100)) putP(add(X, Z)); }
     // along each street's centre line, points every LANE_STEP m (every metre near a junction's circle): its carriageway's
     // triangles short strips across that one street, so its markings stop at the junction's mouth and nowhere else
-    L.net.runs.forEach((r, ri) => { if (r.minor) return; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3], l = Math.hypot(bx - ax, bz - az);
+    L.net.runs.forEach((r, ri) => { if (r.minor || r.off) return; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3], l = Math.hypot(bx - ax, bz - az);
       let dj0 = null, tSide = -Infinity; const ux = (bx - ax) / (l || 1), uz = (bz - az) / (l || 1);
       for (let t = 0; t < l;) { const x = ax + (bx - ax) * t / l, z = az + (bz - az) * t / l, X = Math.round(x * 100), Z = Math.round(z * 100); let step = LANE_STEP;
         const onT = inside(X, Z, 50) && classify(X, Z) === KIND.tarmac;
@@ -115,11 +115,11 @@ export function meshChunk(L, grid, G, level = 'fine') {
   idxs.forEach((p, k) => {
     const x = PX[p] / 100, z = PZ[p] / 100, K = kinds[p]; X[k] = x; Z[k] = z;
     if (kerbFrom.has(p) && kOf.has(kerbFrom.get(p)) && kOf.get(kerbFrom.get(p)) < k) { const g = kOf.get(kerbFrom.get(p)); Y[k] = Y[g] + KERB; PY[k] = PY[g] + KERB * Math.min(1, KERB_W / PAVE_RAMP); return; } // (a kerb's top: its gutter's height, plus the kerb drawn; in physics the start of the ramp)
-    let kind = K & (1 << KIND.tarmac) ? KIND.tarmac : K & ((1 << KIND.kerb) | (1 << KIND.pave)) ? KIND.pave : PAVED.find((q) => K & (1 << q)) ?? null;
+    let kind = K & (1 << KIND.tarmac) ? KIND.tarmac : K & ((1 << KIND.kerb) | (1 << KIND.pave)) ? KIND.pave : PAVED.find((q) => q !== KIND.lip && K & (1 << q)) ?? (K & (1 << KIND.lip) ? KIND.lip : null);
     if (kind == null && !(PX[p] === X0 || PZ[p] === Z0 || PX[p] === X0 + S || PZ[p] === Z0 + S)) kind = classify(PX[p], PZ[p]); // (inside: its region)
     if (kind == null) { // (a point of the chunk's edge: its region by the rules (the nearest road's widths), not this chunk's polygons, so the chunk beside works it out the same)
       kind = R.region(x, z); } // (the outlines' own order, every road's widths)
-    if (kind === KIND.ground) { Y[k] = PY[k] = R.ground(x, z); return; }
+    if (kind === KIND.ground || kind === KIND.lip) { Y[k] = PY[k] = R.ground(x, z); return; } // (a portal's lip's rim: the ground's, held within the headwall, rules.js)
     Y[k] = R.drawn(x, z, kind);
     PY[k] = kind === KIND.pave && !(K & (1 << KIND.tarmac)) ? Y[k] - KERB * (1 - Math.min(1, tarmacD(PX[p], PZ[p], PAVE_RAMP * 100) / (PAVE_RAMP * 100))) : Y[k]; // (the slabs: physics ramps up to them from the carriageway's edge: a kerb is never physics)
   });
@@ -173,10 +173,10 @@ export function physIndex(L, m) {
   const nc = Math.ceil(L.size / CELL), cnt = new Uint32Array(nc * nc + 1), P = m.pos, I = m.idx, nt = I.length / 3, box = (q) => {
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity; for (let r = 0; r < 3; r++) { const v = I[q * 3 + r]; x0 = Math.min(x0, P[v * 3]); x1 = Math.max(x1, P[v * 3]); z0 = Math.min(z0, P[v * 3 + 2]); z1 = Math.max(z1, P[v * 3 + 2]); }
     const c = (v, o) => Math.max(0, Math.min(nc - 1, Math.floor((v - o) / CELL))); return [c(x0, L.x0), c(x1, L.x0), c(z0, L.z0), c(z1, L.z0)]; };
-  for (let q = 0; q < nt; q++) { const [a, b, c, d] = box(q); for (let i = a; i <= b; i++) for (let j = c; j <= d; j++) cnt[j * nc + i + 1]++; }
+  for (let q = 0; q < nt; q++) { if (m.tk[q] === KIND.lip) continue; const [a, b, c, d] = box(q); for (let i = a; i <= b; i++) for (let j = c; j <= d; j++) cnt[j * nc + i + 1]++; } // (a portal's lip: no surface)
   for (let k = 1; k < cnt.length; k++) cnt[k] += cnt[k - 1];
   const list = new Uint32Array(cnt[nc * nc]), fill = cnt.slice(0, nc * nc);
-  for (let q = 0; q < nt; q++) { const [a, b, c, d] = box(q); for (let i = a; i <= b; i++) for (let j = c; j <= d; j++) list[fill[j * nc + i]++] = q; }
+  for (let q = 0; q < nt; q++) { if (m.tk[q] === KIND.lip) continue; const [a, b, c, d] = box(q); for (let i = a; i <= b; i++) for (let j = c; j <= d; j++) list[fill[j * nc + i]++] = q; }
   return { nc, start: cnt, list };
 }
 // the physics height at (x, z) on a chunk's fine mesh (NaN outside it); out (optional): [triangle, nx, ny, nz]

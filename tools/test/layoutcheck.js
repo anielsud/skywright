@@ -6,10 +6,11 @@ import { readFileSync, existsSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { decodeLayout, KIND } from '../../src/layout/format.js';
-import { meshChunk, latticeOf } from '../../src/layout/mesh.js';
+import { meshChunk, latticeOf, physIndex } from '../../src/layout/mesh.js';
+import { offChecks } from '../bake/layout-off.mjs';
 import { KERB } from '../../src/layout/rules.js';
 
-export const nodeSuite = { files: ['src/layout/format.js', 'src/layout/mesh.js', 'src/layout/rules.js', 'src/layout/outline.js', 'src/layout/bake.js', 'tools/test/layoutcheck.js', 'assets/real/nyc/layout/index.json', 'assets/real/lauterbrunnen/layout/index.json', 'assets/real/canyon/layout/index.json', 'assets/real/islands/layout/index.json'] };
+export const nodeSuite = { files: ['src/layout/format.js', 'src/layout/mesh.js', 'src/layout/rules.js', 'src/layout/outline.js', 'src/layout/bake.js', 'tools/bake/layout-off.mjs', 'tools/test/layoutcheck.js', 'assets/real/nyc/layout/index.json', 'assets/real/lauterbrunnen/layout/index.json', 'assets/real/canyon/layout/index.json', 'assets/real/islands/layout/index.json'] };
 const PLACES = ['nyc', 'lauterbrunnen', 'canyon', 'islands'], SHORE = new Set(['islands']); // (SHORE: the places on the sea, realworld.js loc.shore: the layout's shore rules at meta.json's water level)
 export function cases() { return PLACES.filter((p) => existsSync(`assets/real/${p}/layout/index.json`)).map((place) => ({ id: `${place} layout`, place, cost: 1 })); }
 
@@ -22,7 +23,7 @@ function hiGrid(id) { // the hi grid as realworld.js decodes it: uint16 (h + 200
 export async function runCase(c) {
   const dir = `assets/real/${c.place}/layout/`, idx = JSON.parse(readFileSync(dir + 'index.json', 'utf8')), G = hiGrid(c.place), out = [], meshes = new Map();
   // (a sample: the first test chunks, side by side, and Lauterbrunnen's; every chunk is checked by the bake, tools/bake/layout.mjs)
-  const SAMPLE = new Set(['-7,25', '-6,25', '-4,-3', '16,8', '16,9', '4,-13', '4,-12', '-19,-16', '-18,-16', '-15,-1', '-14,-1', '11,-12', '12,-12', '11,-9']); // (Lauterbrunnen: a town; the village beside a bridge's chunk; switchbacks on a valley wall. The canyon: Grand Canyon Village on the rim; a street's hairpin on a slope. Bora Bora: the ring road at the shore; Vaitape beside the marina's chunk)
+  const SAMPLE = new Set(['-7,25', '-6,25', '-4,-3', '16,8', '16,9', '4,-13', '4,-12', '-19,-16', '-18,-16', '-15,-1', '-14,-1', '11,-12', '12,-12', '11,-9', '-1,-14', '-20,-8', '-3,4']); // (Lauterbrunnen: a town; the village beside a bridge's chunk; switchbacks on a valley wall. The canyon: Grand Canyon Village on the rim; a street's hairpin on a slope. Bridges and tunnels: New York's decks over ground and over the water; Lauterbrunnen's mountain tunnel and bridge. Bora Bora: the ring road at the shore; Vaitape beside the marina's chunk)
   for (const e of idx.chunks.filter((e) => SAMPLE.has(e.ix + ',' + e.iz))) {
     const gz = readFileSync(dir + e.file), name = `${c.place} ${e.ix},${e.iz}`, buf = gunzipSync(gz), L = decodeLayout(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
     out.push({ name: `${name}: its file is named by its bytes`, ok: e.file === `${e.ix}_${e.iz}.${createHash('sha256').update(gz).digest('hex').slice(0, 10)}.bin.gz`, why: e.file });
@@ -38,6 +39,10 @@ export async function runCase(c) {
         const u = v[r], w = v[(r + 1) % 3], l = Math.hypot(P[u * 3] - P[w * 3], P[u * 3 + 2] - P[w * 3 + 2]); const top = (q) => P[q * 3 + 1] - Y[q] > 0.1, gut = (q) => Math.abs(P[q * 3 + 1] - Y[q]) < 1e-4; if (l < 0.5 && ((top(u) && gut(w)) || (top(w) && gut(u)))) { const t = top(u) ? u : w, g = t === u ? w : u; step = Math.max(step, Math.abs((Y[t] - Y[g]) - (P[t * 3 + 1] - KERB - P[g * 3 + 1]))); } } } // (across the kerb, a gutter's point to a top's: how far physics rises past the surface the kerb stands on (drawn less the kerb), as tools/bake/layout-check.mjs: the surface's own slope isn't the kerb)
     out.push({ name: `${name}: on the tarmac physics is what's drawn`, ok: off === 0, why: `${off} tarmac corners off` });
     out.push({ name: `${name}: a kerb is never physics`, ok: step <= 0.05, why: `largest physics rise across a kerb ${step.toFixed(3)} m (drawn 0.15)` });
+    // bridges and tunnels: no step where a road meets a deck or a portal; a portal's opening rimmed by its tube and headwall
+    const lip = []; for (let q = 0; q < m.tk.length; q++) if (m.tk[q] === KIND.lip) lip.push(I[q * 3], I[q * 3 + 1], I[q * 3 + 2]);
+    const oc = offChecks(L, m, physIndex(L, m), lip), all = [...oc.ends.deck, ...oc.ends.tube];
+    if (all.length || oc.portals) out.push({ name: `${name}: roads meet their decks and portals without a step, each portal opens onto its tube`, ok: all.every((d) => d < 0.02) && !oc.rimBad && !oc.noLip, why: `${oc.ends.deck.length} deck ends, ${oc.ends.tube.length} portal ends, largest step ${Math.max(0, ...all).toFixed(4)} m; ${oc.portals} portals, ${oc.rimBad} of ${oc.rimN} rim points uncovered, ${oc.noLip} with no opening` });
   }
   // chunks side by side: the shared edge's segments, positions and heights, the same from both sides at every pair of levels
   for (const e of idx.chunks.filter((e) => meshes.has(e.ix + ',' + e.iz))) { const b = meshes.get(e.ix + 1 + ',' + e.iz), a = meshes.get(e.ix + ',' + e.iz); if (!b) continue;

@@ -442,6 +442,7 @@ export function buildRoadMeshes(w, net) {
   // painted on it, a seed
   const region = REGION[w.loc.id] || 'ch', city = !!w.loc.roads?.chunk, tarmac = tarmacMaterial(region, { city: !!w.loc.city }), shoulder = shoulderMaterial(region);
   const sidewalk = w.loc.city ? sidewalkMaterial() : null; // (a city's streets: kerbs and pavements)
+  const deckTarmac = w.layout ? tarmacMaterial(region, { city: !!w.loc.city }) : null; // (decks' and tubes' tarmac: not clipped by the layout, #294)
   // the ways off the street network (rd.minor) and the plazas (net.areas): paving, gravel, or the tarmac with nothing
   // painted on it (an alley); made only for the surfaces this place has
   const used = new Set([...net.roads.filter((r) => r.minor).map((r) => r.surf || 0), ...(net.areas || []).map((a) => a.surf || 0)]);
@@ -557,7 +558,12 @@ export function buildRoadMeshes(w, net) {
     }
     // (lifted over every shoulder, and the bigger road over the smaller: where two lie on one surface, side by side or
     // at a junction's mouth, the major one's tarmac and markings show, not the other's gravel or edge line)
-    strip(jp, cols, (i, x, z) => surf(jp, i, x, z) + lift, open, tarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
+    if (!deckTarmac) strip(jp, cols, (i, x, z) => surf(jp, i, x, z) + lift, open, tarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
+    else { // (a baked layout chunk draws the ground's roads, not a deck's or a tube's: those keep today's, at the profile the layout meets, #294)
+      const offSeg = (i) => isBr(jp, i) || !!(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]);
+      strip(jp, cols, (i, x, z) => surf(jp, i, x, z) + lift, (i) => open(i) && !offSeg(i), tarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, cols, (i, x, z) => surf(jp, i, x, z) + lift, (i) => open(i) && offSeg(i), deckTarmac, (c, d, o) => [o, d], -1, info, jp.rjunc);
+    }
     skirts(rd);
   };
   const tileOf = (p) => Math.floor(p.x / TILE) + ',' + Math.floor(p.z / TILE), tiles = new Map();
@@ -720,7 +726,7 @@ export function buildRoadMeshes(w, net) {
       for (const [p, r, out] of [[A, ra, i === 0 || !rd.tube[i - 1]], [B, rb, i + 2 >= n || !rd.tube[i + 2]]]) {
         if (!out) continue;
         const W = hw + 5, top = H + 6, t = 0.7, d = new THREE.Vector3(-r.z, 0, r.x), wall = (o0, o1, y0, y1) => { const g = new THREE.BoxGeometry(o1 - o0, y1 - y0, t); g.rotateY(Math.atan2(r.x, r.z) + Math.PI / 2); g.translate(p.x + r.x * (o0 + o1) / 2, p.y + (y0 + y1) / 2, p.z + r.z * (o0 + o1) / 2); tubeGeos.push(g); };
-        wall(-W, -hw, -1, top); wall(hw, W, -1, top); wall(-hw, hw, H, top); void d;
+        wall(-W, -hw, -3, top); wall(hw, W, -3, top); wall(-hw, hw, H, top); void d; // (down to 3 m under the road: the baked layout's ground beside a portal can lie a little under it, rules.js PORTAL_*)
       }
     }
     if (pos.length) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.computeVertexNormals(); tubeGeos.push(g); }
@@ -728,7 +734,7 @@ export function buildRoadMeshes(w, net) {
   };
   // building a tile: its roads' ribbons, shoulders, skirts and bridges, merged per material
   const KERB_D = DETAIL_D[w.qName] ?? 1000, POLE_D = KERB_D * 2, WALK_D = KERB_D * 3;
-  const D = ROAD_D[w.qName] ?? 10000, warm = new Set([tarmac, shoulder, skirtMat, concrete, poleMat, tubeMat, tubeLight, ...[sidewalk, paths].filter(Boolean)]);
+  const D = ROAD_D[w.qName] ?? 10000, warm = new Set([tarmac, shoulder, skirtMat, concrete, poleMat, tubeMat, tubeLight, ...[sidewalk, paths, deckTarmac].filter(Boolean)]);
   w.layout?.clip(tarmac, shoulder, skirtMat, sidewalk, paths); // (inside a baked layout chunk the layout draws the roads, #294)
   const buildTile = (t) => {
     pending = new Map(); bridgeGeos = [];

@@ -24,11 +24,11 @@ export function markCheck(L, m, detail = false) {
   const lerp = (h, c) => h[1] * R.road[h[0] * 4 + c] + h[2] * R.road[(h[0] + 1) * 4 + c] + h[3] * R.road[(h[0] + 2) * 4 + c];
   const jd = (x, z) => { let d = Infinity; for (const j of J) d = Math.min(d, Math.hypot(x - j.x, z - j.z) - j.r); return d; };
   // (another street's carriageway over this point too (two that merge, or overlap at a junction): which one's markings show is a choice, not drift)
-  const shared = (x, z, ri) => { for (let q = 0; q < runs.length; q++) { const rd = runs[q]; if (q === ri || rd.minor) continue; for (let s = 0; s + 1 < rd.h.length; s++) { const ax = rd.pts[s * 2], az = rd.pts[s * 2 + 1], dx = rd.pts[s * 2 + 2] - ax, dz = rd.pts[s * 2 + 3] - az; if (Math.abs(x - ax) > 80 || Math.abs(z - az) > 80) continue; const L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)); if (Math.hypot(x - ax - dx * t, z - az - dz * t) < rd.hw) return true; } } return false; };
+  const shared = (x, z, ri) => { for (let q = 0; q < runs.length; q++) { const rd = runs[q]; if (q === ri || rd.minor || rd.off) continue; for (let s = 0; s + 1 < rd.h.length; s++) { const ax = rd.pts[s * 2], az = rd.pts[s * 2 + 1], dx = rd.pts[s * 2 + 2] - ax, dz = rd.pts[s * 2 + 3] - az; if (Math.abs(x - ax) > 80 || Math.abs(z - az) > 80) continue; const L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)); if (Math.hypot(x - ax - dx * t, z - az - dz * t) < rd.hw) return true; } } return false; };
   const inC = (x, z, e = 0.5) => x > L.x0 + e && z > L.z0 + e && x < L.x0 + L.size - e && z < L.z0 + L.size - e;
   let drift = 0, samples = 0, lost = 0, atSharp = 0, worst = null; const lostAt = [];
   let mouths = 0, whole = 0, tight = 0; const broken = [];
-  runs.forEach((rd, ri) => { if (rd.minor) return; const n = rd.h.length;
+  runs.forEach((rd, ri) => { if (rd.minor || rd.off) return; const n = rd.h.length;
     const sharp = []; let pd = null; for (let s = 0; s + 1 < n; s++) { const dx = rd.pts[s * 2 + 2] - rd.pts[s * 2], dz = rd.pts[s * 2 + 3] - rd.pts[s * 2 + 1], l = Math.hypot(dx, dz); if (l < 1e-3) continue; if (pd && pd[0] * dx / l + pd[1] * dz / l < Math.cos(SHARP)) sharp.push([rd.pts[s * 2], rd.pts[s * 2 + 1]]); pd = [dx / l, dz / l]; }
     for (let s = 0; s + 1 < n; s++) { const ax = rd.pts[s * 2], az = rd.pts[s * 2 + 1], bx = rd.pts[s * 2 + 2], bz = rd.pts[s * 2 + 3], l = Math.hypot(bx - ax, bz - az); if (l < 1e-3) continue; const ux = (bx - ax) / l, uz = (bz - az) / l;
       for (let d = 0.5; d < l; d += 1) { const x = ax + ux * d, z = az + uz * d; if (!inC(x, z, 1) || jd(x, z) < MARK_OUT) continue; // (1 m: a bend's points (mesh.js) stay 0.5 m off the chunk's edge)
@@ -45,7 +45,7 @@ export function markCheck(L, m, detail = false) {
           if (!inC(x, z, 1)) continue; let other = Infinity; for (const k of J) if (k !== j) other = Math.min(other, Math.hypot(x - k.x, z - k.z) - k.r); if (other + ZEBRA_AT[1] < 2 * ZEBRA_BAND + 0.5) { tight++; continue; } // (two junctions' circles closer than two crossings' bands: no room for both)
           let ok = true, why = null;
           for (const dz of ZEBRA_AT) { let lo = Infinity, hi = -Infinity; for (let v = -(rd.hw - 0.4); v <= rd.hw - 0.4 + 1e-6 && ok; v += 0.25) { const t = tm + sg * dz, px = ax + ux * t - uz * v, pz = az + uz * t + ux * v, h = at(px, pz);
-              if (!inC(px, pz, 0.05) || shared(px, pz, ri)) { ok = null; break; } // (the chunk beside's, or another street's carriageway too) if (!h || R.kind[h[0]] !== KIND.tarmac) { ok = false; why = 'not carriageway'; break; } if (R.id[h[0]] !== ri) { ok = false; why = 'cross street'; break; } if (!R.road[h[0] * 4 + 2]) { ok = false; why = 'unpainted'; break; }
+              if (!inC(px, pz, 0.05) || shared(px, pz, ri)) { ok = null; break; } if (!h || R.kind[h[0]] !== KIND.tarmac) { ok = false; why = 'not carriageway'; break; } if (R.id[h[0]] !== ri) { ok = false; why = 'cross street'; break; } if (!R.road[h[0] * 4 + 2]) { ok = false; why = 'unpainted'; break; } // (off it: the chunk beside's, or another street's carriageway too)
               const g = lerp(h, 3); lo = Math.min(lo, g); hi = Math.max(hi, g); }
             if (ok && (Math.abs(lo - dz) > ZEBRA_TOL || Math.abs(hi - dz) > ZEBRA_TOL)) { ok = false; why = `dj ${lo.toFixed(2)}..${hi.toFixed(2)} want ${dz}`; } if (!ok) break; }
           if (ok === null) continue; mouths++; // (a crossing over another street's carriageway too: not counted)
