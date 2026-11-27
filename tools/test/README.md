@@ -153,13 +153,13 @@ The jobs:
   Pilot on the rooftop helipad, stepped (`helipadcheck.js` `heliRun`/`heliChecks`: its spawn pose, the building under the
   pad has no damage key, the runway resting baseline by teleporting the same Dragonfly to the runway, then 5 s parked,
   a lift to a 25 m hover, a landing and a rest, each compared with the runway); the shader sweep's scene and events
-  (drawn: every hidden object shown, every event effect fired, then stepped until they've died out; this is the only
+  (drawn once each: every hidden object shown, every event effect fired, then stepped until they've died out; this is the only
   job that fires them); the tour flight on
   the real loop and every cockpit view (drawn); the Dragonfly again in Arcade; the Rocket on the pad (hold + launch,
   stepped) and on the real loop; the Dune Buggy at the stunt park's arch, the site dry, flat and clear (tree canopy from
   the imagery) and its kicker jump and loop run, the road start (the rule's pick, the buggy teleported there as
   buildFlight puts it: in its lane, facing along the road), and the crash: two game-loop runs into building faces
-  (nothing gets inside), the 30 m/s one drawn (no stall, nothing waited for its shader, something broke off); the Dirt
+  (nothing gets inside), the 30 m/s one stepped to its end and drawn once (no stall, nothing waited for its shader, something broke off); the Dirt
   Bike at the arch and on the road; the Speedboat and the Jet Ski at the water park's arch, afloat, facing down the
   course; the start rule's wiring (`jobs/wiring.js`: every vehicle started where `chooseStart` predicts with the
   World's answers; over every stock preset nothing but a rocket on the pad, nothing but a helicopter on the helipad);

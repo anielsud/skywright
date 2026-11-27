@@ -3,7 +3,7 @@
 // wait on states). The steps, in order (D = frames drawn, S = game time stepped without drawing):
 //   islands: build + Kestrel from the runway   the first T.start here builds the islands. The tour flight (smoke.js
 //       tour(): D every cockpit view at full power on the real loop, at least 2 frames; S 3 s) and tourChecks; then the
-//       shader sweep's scene phase (streaming quiet first: T.settle; sceneDrawn D 3; events: nyc job only):
+//       shader sweep's scene phase (streaming quiet first: T.settle; sceneDrawn D 1; events: nyc job only):
 //       no stalls, nothing waited for its shader
 //   islands: startbakes-stunts                 startbakes.js stuntsIn(world) + stuntsChecks (no flight work)
 //   islands: Albatross (water start), islands: Kite (air start)   swapped in; S 2 s at full power: still flying,

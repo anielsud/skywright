@@ -27,7 +27,7 @@ export async function fly(name, location, secs = 4) {
 // Everything a flight can show, on purpose and in a fixed order, so the result never depends on timing or on how far a
 // flight happens to get. The phases run against the flight already going (S.F), so a per-map job (tools/test/jobs)
 // runs them in the World it has built; each returns its own stall and late-show counts:
-//   sceneDrawn():   everything already in the scene drawn: every hidden object shown and culling off for a few frames
+//   sceneDrawn():   everything already in the scene drawn: every hidden object shown and culling off for one frame
 //                   (LODs, pools, cockpit cabins, night lights, effects' meshes) - covers new content automatically;
 //   eventsFired():  every event effect fired (explosion, splash, sparks, dust on each surface, smoke, flame, sonic
 //                   boom...): these must show at once, so they may neither stall a frame nor be held back to compile
@@ -42,7 +42,10 @@ import { frames, settle, counters, since, stepUntil, advance } from './jobs/harn
 
 const delta = (c0) => { const d = since(c0); return { stall: d.stall, late: d.late, messages: d.messages }; };
 
-export async function sceneDrawn({ n = 3 } = {}) {
+// One frame is the whole proof for sceneDrawn and eventsFired: a program missing
+// for something drawn is compiled in that frame's render (main.js counts it as a stall), and an object added since the
+// last frame is checked by flushNew before that render (a late show); a second frame of the same scene adds neither.
+export async function sceneDrawn({ n = 1 } = {}) {
   const F = S.F, c0 = counters(), undo = [];
   // Lights are not drawn things: the scene's light set is part of every lit shader, so showing a hidden one (a landing
   // light's spot, hidden by day) would recompile the lot and test a lighting no player sees. Every light keeps the
@@ -58,7 +61,7 @@ export async function sceneDrawn({ n = 3 } = {}) {
   return { ...delta(c0), objects: undo.length };
 }
 
-export async function eventsFired({ n = 5, settled = true } = {}) {
+export async function eventsFired({ n = 1, settled = true } = {}) {
   const F = S.F, { ac, world: W, effects: E } = F, THREE = S.THREE;
   if (settled) await settle();
   const c0 = counters();

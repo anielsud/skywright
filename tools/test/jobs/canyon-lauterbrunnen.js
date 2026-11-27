@@ -8,7 +8,7 @@
 //   - Dirt Bike from the stunt park (builds the canyon), then its tour (smoke.js tour(): full power on the real loop
 //     over every cockpit view drawn, at least 2 frames; 3 s stepped) and its engine voice audible
 //   - Dune Buggy swapped in at the stunt park: the same tour and engine check (then the AudioContext is suspended)
-//   - the shader sweep: streaming quiet, the whole scene drawn (3 frames); the Dune Buggy's ground crash (stepped to the
+//   - the shader sweep: streaming quiet, the whole scene drawn (1 frame); the Dune Buggy's ground crash (stepped to the
 //     impact, 5 frames drawn; parts must come off)
 //   - Rocket swapped in on the pad: padcheck.js rocket() (stepped)
 //   lauterbrunnen (built by the Rocket's flight there: the pad check needs no extra swap):
