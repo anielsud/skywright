@@ -8,7 +8,7 @@
 import * as THREE from 'three';
 import { decodeLayout, KIND } from './format.js';
 import { meshChunk, physIndex, physAt, latticeOf } from './mesh.js';
-import { sidewalkMaterial } from '../roadSurface.js';
+import { sidewalkMaterial, regionLook } from '../roadSurface.js';
 import { terrainMaterial, FOG } from '../shaders.js';
 
 const FINE_D = 900, LOAD_D = 2500; // metres from the camera to a chunk's middle: fine within FINE_D; fetched within LOAD_D
@@ -44,13 +44,15 @@ export class Layout {
   }
   // maps: the terrain's (World.terrainMaps) for the ground's material
   start(maps) {
-    const yellow = this.w.loc.id === 'nyc' ? 1 : 0, skirt = terrainMaterial(maps, 'detail'); skirt.side = THREE.DoubleSide;
+    const loc = this.w.loc, look = regionLook(loc.id), yellow = look.yellow ? 1 : 0, skirt = terrainMaterial(maps, 'detail'); skirt.side = THREE.DoubleSide;
     // (the ground: the terrain's own material, a city's paving turned to each triangle's street (aAng), not the world's axes)
     const ground = terrainMaterial(maps, 'detail'), ob = ground.onBeforeCompile; ground.onBeforeCompile = function (sh, r) { ob.call(this, sh, r);
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aAng; varying float vAng;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvAng = aAng;');
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vAng; vec2 layRot(vec2 p) { float c = cos(vAng), s = sin(vAng); return vec2(c * p.x + s * p.y, -s * p.x + c * p.y); }').replace('cityPave(vTW.xz,', 'cityPave(layRot(vTW.xz),'); }; // (only the slabs turned: cityPaved reads the land cover where the point really is)
     ground.customProgramCacheKey = () => 'layoutGround';
-    this.mats = { skirt, ground, tarmac: roadMat('asphalt_d', 0x5a5a5c, true, yellow), alley: roadMat('asphalt_d', 0x5a5a5c), gravel: roadMat('gravel_d', 0xa09684), pavers: roadMat('sidewalk_d', 0xa89a88), walk: sidewalkMaterial() };
+    // (yellow centre lines where today's roads paint them, the US places (roadSurface.js LOOK); a desert's verges and dirt
+    // tracks a warm brown, not the Alps' grey gravel)
+    this.mats = { skirt, ground, tarmac: roadMat('asphalt_d', 0x5a5a5c, true, yellow), alley: roadMat('asphalt_d', 0x5a5a5c), gravel: roadMat('gravel_d', loc.desert ? 0x9c8468 : 0xa09684), pavers: roadMat('sidewalk_d', 0xa89a88), walk: sidewalkMaterial() };
     this.matList = [this.mats.ground, this.mats.alley, this.mats.gravel, this.mats.pavers];
     this.worker = typeof Worker !== 'undefined' ? new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }) : null;
     if (this.worker) this.worker.onmessage = (ev) => { this.busy = false; const c = this.chunks.get(ev.data.id); if (c) this.got(c, ev.data.level, ev.data.m); this.pump(); };
@@ -164,7 +166,7 @@ export class Layout {
     const o = this.out, c = this.active.get(Math.floor(x / this.size) + ',' + Math.floor(z / this.size)); if (!c) return null;
     const h = physAt(c.L, c.m.fine, c.phys, x, z, o); if (!(h === h)) return null;
     const k = c.m.fine.tk[o[0]], w = this.w, n = new THREE.Vector3(o[1], o[2], o[3]), lot = k <= KIND.bank && w.cityD && w.cityPaved(x, z) > 0.5 && w.real.bare(x, z); // (a city's paved lots, as World.groundAt says)
-    const type = k === KIND.verge || k === KIND.gravel ? 'sand' : k >= KIND.tarmac || lot ? 'runway' : n.y < 0.8 ? 'rock' : 'grass';
+    const type = k === KIND.verge || k === KIND.gravel ? 'sand' : k >= KIND.tarmac || lot ? 'runway' : n.y < 0.8 ? 'rock' : w.loc.desert && !(w.real && w.real.forest(x, z) > 0.45) ? 'sand' : 'grass'; // (a desert's ground: sand, but pine needles under the rims' forests, as World.groundAt)
     return { h, n: type === 'runway' ? new THREE.Vector3(0, 1, 0) : n, type };
   }
   dispose() { this.worker?.terminate(); for (const c of this.chunks.values()) for (const o of c.mesh?.children || []) o.geometry.dispose(); for (const s of this.skirts.values()) s.geometry.dispose(); this.mask.dispose(); }
