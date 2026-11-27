@@ -16,7 +16,8 @@ import { toLocal } from './realworld.js';
 import { roadIndex, setBack, holeInside, fitBox, footBoxes, boundBox, inParts, irregular, lazyParts, packRing, unpackRing, FOOT, MAJOR, streetWalls, PASSAGE, clip, intrusion, WORK, workSince, Refiner, fillBare } from './setback.js';
 
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
-const GROUP = 2; // tall buildings: one mesh per GROUP x GROUP data tiles
+const GROUP = 2; // tall buildings: the far ones drawn by height, by their distance to these GROUP x GROUP data tiles
+const TALL_CELL = 500, LOW_CELL = 500; // (m) one mesh per cell (by a footprint's middle): culled each on its own
 const LOW_R = { low: 900, medium: 1600, high: 2400, ultra: 2600 }; // low buildings within this distance of the camera
 const DENSE = 12; // tall buildings within ~300 m (CityScenery.dense): a built-up spot
 const SUP = 25; // (m) the cells base() looks for what stands under a part in
@@ -312,7 +313,7 @@ export class CityScenery {
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(t);
     }
-    this.tallMeshes = [];
+    this.tallGroups = [];
     const R = {};
     for (const [k, ts] of groups) {
       // all the group's tall records, tallest first
@@ -324,27 +325,74 @@ export class CityScenery {
         t.lowOff = o;
       }
       recs.sort((a, b) => b.top - a.top);
+      // The group's buildings, written into one vertex buffer (one writer: destruction.js finds a building's vertices
+      // through it), are drawn two ways, each through an index buffer of its own over those vertices:
+      //  - near (all heights drawn): one mesh per TALL_CELL cell, each culled on its own by three's frustum test (in
+      //    every pass: the shadow map's too), its buildings tallest first, its roof furniture last;
+      //  - far (only the tall ones): the whole group, tallest first, so a draw range by height level is one draw call.
       const [gi, gj] = k.split(',').map(Number), gcx = H.x0 + (gi + 0.5) * GROUP * H.tile, gcz = H.z0 + (gj + 0.5) * GROUP * H.tile;
-      const M = new MeshW(gcx, gcz, 16384), lv = [];
+      const M = new MeshW(gcx, gcz, 16384), lv = [], cells = new Map();
       let li = 0;
       for (const rc of recs) {
         while (li < LEVELS.length - 1 && rc.top < LEVELS[li]) { lv.push(M.ni); li++; }
         readRec(U, S, rc.o, this.q, rc.cx, rc.cz, R);
         if (this.skipped(R)) continue;
+        const ck = this.cellKey(R.P, TALL_CELL), a = M.ni, la = M.lni;
         this.building(M, R, true);
+        let c = cells.get(ck); if (!c) cells.set(ck, (c = []));
+        c.push(a, M.ni, la, M.lni, rc.top); // (its main and late index runs)
         this.stats.tall++;
       }
       while (lv.length < LEVELS.length - 1) lv.push(M.ni);
       if (!M.n) continue;
-      const mesh = M.mesh(this.mat);
-      mesh.castShadow = W_SHADOW(this.w); mesh.receiveShadow = true;
-      this.group.add(mesh);
+      const far = M.mesh(this.mat), G = far.geometry, I = G.index.array, P = G.attributes.position.array;
+      far.castShadow = W_SHADOW(this.w); far.receiveShadow = true;
+      const g = { m: far, x: gcx, z: gcz, lv, all: M.ni, main: M.main, cells: [] };
+      // (far: only what is drawn far, the levels down to the lowest a far group draws; no roof furniture)
+      G.setIndex(new THREE.BufferAttribute(I.slice(0, lv[LEVELS.length - 2]), 1)); G.index.onUpload(function () { this.array = new this.array.constructor(0); });
+      for (const [ck, c] of cells) {
+        let n = 0; for (let q = 0; q < c.length; q += 5) n += c[q + 1] - c[q] + c[q + 3] - c[q + 2];
+        const J = new (I.constructor)(n), clv = [];
+        let o = 0, cli = 0;
+        for (let q = 0; q < c.length; q += 5) {
+          while (cli < LEVELS.length - 1 && c[q + 4] < LEVELS[cli]) { clv.push(o); cli++; }
+          J.set(I.subarray(c[q], c[q + 1]), o); o += c[q + 1] - c[q];
+        }
+        while (clv.length < LEVELS.length - 1) clv.push(o);
+        const main = o;
+        for (let q = 0; q < c.length; q += 5) { J.set(I.subarray(M.main + c[q + 2], M.main + c[q + 3]), o); o += c[q + 3] - c[q + 2]; }
+        if (!n) continue;
+        const cg = new THREE.BufferGeometry();
+        for (const [nm, at] of Object.entries(G.attributes)) cg.setAttribute(nm, at); // (shared: uploaded once)
+        cg.setIndex(new THREE.BufferAttribute(J, 1)); cg.index.onUpload(function () { this.array = new this.array.constructor(0); });
+        // its bounds: its own vertices' (three's culling test; the shared buffer's would be the whole group's)
+        let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+        for (let q = 0; q < n; q++) { const v = J[q] * 3, x = P[v], y = P[v + 1], z = P[v + 2]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+        cg.boundingBox = new THREE.Box3(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1)); cg.boundingSphere = cg.boundingBox.getBoundingSphere(new THREE.Sphere());
+        const m = new THREE.Mesh(cg, this.mat); m.customDepthMaterial = far.customDepthMaterial;
+        m.position.copy(far.position); m.scale.copy(far.scale); m.matrixAutoUpdate = false; m.updateMatrix();
+        m.castShadow = far.castShadow; m.receiveShadow = true; m.visible = false;
+        this.group.add(m);
+        const [x, z] = this.cellCentre(ck, TALL_CELL); g.cells.push({ m, x, z, lv: clv, all: n, main });
+      }
+      this.group.add(far);
       this.stats.tris += M.ni / 3;
-      this.tallMeshes.push({ m: mesh, x: gcx, z: gcz, lv, all: M.ni, main: M.main });
+      this.tallGroups.push(g);
     }
+    this.tallMeshes = this.tallGroups.flatMap((g) => g.cells); // (the near meshes: every building of the group once)
     for (const t of this.tiles.values()) if (t.lowOff == null) t.lowOff = t.off; // (tiles with no tall buildings)
   }
 
+  // the cell (e m square) a footprint's middle is in: (i + 32768) * 65536 + j + 32768
+  // (t: within that data tile's cells, a footprint whose middle is past its edge too)
+  cellKey(P, e, t = null) {
+    const H = this.city.hdr; let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const p of P) { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < z0) z0 = p[1]; if (p[1] > z1) z1 = p[1]; }
+    let i = Math.floor(((x0 + x1) / 2 - H.x0) / e), j = Math.floor(((z0 + z1) / 2 - H.z0) / e);
+    if (t) { const n = Math.round(H.tile / e); i = Math.min(Math.max(i, t.i * n), t.i * n + n - 1); j = Math.min(Math.max(j, t.j * n), t.j * n + n - 1); }
+    return (i + 32768) * 65536 + j + 32768;
+  }
+  cellCentre(k, e) { const H = this.city.hdr; return [H.x0 + (Math.floor(k / 65536) - 32768 + 0.5) * e, H.z0 + ((k % 65536) - 32768 + 0.5) * e]; }
   skipped(R) { if (!this.hole) return false; const p = R.P[0]; return Math.hypot(p[0] - this.hole[0], p[1] - this.hole[1]) < 60; }
 
   // How built-up a spot is: the tall buildings (city.bin's tall flag: 20 m and up, or big) counted in 100 m cells, once
@@ -866,27 +914,30 @@ export class CityScenery {
   // ---------------- low buildings: streamed by tile ----------------
   buildLowStep(t, budget) {
     const U = this.city.U, S = this.city.S, R = {}, t0 = performance.now(), r0 = t.st?.r ?? 0; // (r0: under the test stepper, 32 records per ms of budget a step, stepClock.js)
-    const st = t.st || (t.st = { o: t.lowOff, r: 0, M: new MeshW(...this.tileCentre(t.i, t.j), 4096) });
+    const st = t.st || (t.st = { o: t.lowOff, r: 0, cells: new Map() }); // (one writer per LOW_CELL cell of the tile)
     const minA = this.qn === 'low' ? 60 : this.qn === 'medium' ? 25 : 0;
     this.curTile = t.i + ',' + t.j;
     while (st.r < t.nLow) {
       readRec(U, S, st.o, this.q, ...this.tileCentre(t.i, t.j), R); st.o = R.next; st.r++;
       if (this.skipped(R)) continue;
       if (minA && Math.abs(area2(R.P)) < minA) break; // sorted by area: the rest are smaller still
-      this.building(st.M, R, false);
+      const ck = this.cellKey(R.P, LOW_CELL, t); let M = st.cells.get(ck);
+      if (!M) st.cells.set(ck, (M = new MeshW(...this.cellCentre(ck, LOW_CELL), 4096)));
+      this.building(M, R, false);
       if ((st.r & 31) === 0 && (STEP.on ? st.r - r0 >= budget * 32 : performance.now() - t0 > budget)) { this.curTile = null; return false; }
     }
     this.curTile = null;
-    const M = st.M; t.st = null;
-    if (M.n) {
-      t.low = M.mesh(this.mat); t.low.castShadow = W_SHADOW(this.w); t.low.receiveShadow = true;
-      t.tris = M.ni / 3; this.group.add(t.low);
-    } else t.low = true;
+    t.st = null; t.low = true; t.meshes = []; t.tris = 0; // (t.low: built; t.meshes: its cells' meshes)
+    for (const M of st.cells.values()) {
+      if (!M.n) continue;
+      const m = M.mesh(this.mat); m.castShadow = W_SHADOW(this.w); m.receiveShadow = true;
+      t.tris += M.ni / 3; t.meshes.push(m); this.group.add(m);
+    }
     return true;
   }
   dropLow(t) {
-    if (t.low && t.low !== true) { this.group.remove(t.low); t.low.geometry.dispose(); }
-    t.low = null; t.st = null; t.tris = 0;
+    for (const m of t.meshes || []) { this.group.remove(m); m.geometry.dispose(); }
+    t.low = null; t.meshes = null; t.st = null; t.tris = 0;
     const key = t.i + ',' + t.j;
     if (t.keys) for (const k of t.keys) { const a = this.grid.get(k); if (a) { const b = a.filter((x) => x.tile !== key); if (b.length) this.grid.set(k, b); else this.grid.delete(k); } }
     t.keys = null;
@@ -894,13 +945,14 @@ export class CityScenery {
   update(dt, cam) {
     if (!cam) return;
     const H = this.city.hdr, T = H.tile;
-    // tall meshes: fewer buildings far away (draw range by height level)
-    for (const g of this.tallMeshes) {
-      const d = Math.hypot(g.x - cam.x, g.z - cam.z) - T * GROUP * 0.7;
-      let n = d > this.furnD ? g.main : g.all; // (the roof furniture only near: its indices come last)
-      for (let k = 0; k < this.levelD.length; k++) if (d > this.levelD[this.levelD.length - 1 - k]) n = g.lv[this.levelD.length - 1 - k];
-      g.m.geometry.setDrawRange(0, n); g.m.visible = n > 0;
-      g.m.castShadow = this.shadows && d < 2500; // (shadow maps reach a few km: no need to draw the far skyline into them)
+    // tall buildings: fewer far away (draw range by height level, the whole group one mesh); near, every height, a
+    // mesh per cell (culled each on its own), the roof furniture (its indices last) only nearer still
+    const nl = this.levelD.length;
+    for (const g of this.tallGroups) {
+      const d = Math.hypot(g.x - cam.x, g.z - cam.z) - T * GROUP * 0.7, near = d <= this.levelD[nl - 1], sh = this.shadows && d < 2500; // (shadow maps reach a few km: no need to draw the far skyline into them)
+      for (const c of g.cells) { c.m.visible = near; if (near) { c.m.geometry.setDrawRange(0, d > this.furnD ? c.main : c.all); c.m.castShadow = sh; } }
+      let n = 0; if (!near) for (let k = 0; k < nl; k++) if (d > this.levelD[nl - 1 - k]) n = g.lv[nl - 1 - k];
+      g.m.geometry.setDrawRange(0, n); g.m.visible = n > 0; g.m.castShadow = sh;
     }
     // low tiles: plan every ~100 m of camera movement, build one tile at a time (a few ms a frame)
     const R = this.lowR;
@@ -928,8 +980,8 @@ export class CityScenery {
   // everything near the camera built (the loading screen waits for this on the first frames)
   get ready() { return !this.queue.length || this.queue.every((t) => !!t.low); }
   info() {
-    let lowTris = 0, lowTiles = 0; for (const t of this.tiles.values()) if (t.low && t.low !== true) { lowTris += t.tris; lowTiles++; }
-    return { tall: this.stats.tall, tallTris: this.stats.tris, tallMeshes: this.tallMeshes.length, lowTiles, lowTris, msTall: this.msTall };
+    let lowTris = 0, lowTiles = 0, lowMeshes = 0; for (const t of this.tiles.values()) if (t.meshes?.length) { lowTris += t.tris; lowTiles++; lowMeshes += t.meshes.length; }
+    return { tall: this.stats.tall, tallTris: this.stats.tris, tallMeshes: this.tallMeshes.length, lowTiles, lowMeshes, lowTris, msTall: this.msTall };
   }
 }
 const W_SHADOW = (W) => W.qBase === 'high';
