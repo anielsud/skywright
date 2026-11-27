@@ -281,8 +281,10 @@ export class GeoStream {
       }
     } catch (e) { this.seeded.clear(); }
   }
-  // Before the World is built: fetch what the first view needs (the coarse backdrop, and anything near the start past
-  // the baked squares), waiting at most `ms`. Never rejects.
+  // Before the World is built: start fetching what the first view needs (the coarse backdrop, and anything near the
+  // start past the baked squares), keeping requests flowing for at most `ms`; resolves then or when all are in. Never
+  // rejects. Not awaited (realworld.js loadReal): the World may already be built from what it sampled when this
+  // resolves, so it leaves miss/rects alone (attach's reset() starts them afresh for each World).
   prime(ms = 3000) {
     this.plan(0, 0);
     while (this.pending.size < INFLIGHT && this.queue.length) this.request(this.queue.shift());
@@ -290,7 +292,7 @@ export class GeoStream {
       const t0 = performance.now();
       const tick = () => {
         while (this.pending.size < INFLIGHT && this.queue.length) this.request(this.queue.shift());
-        if ((!this.pending.size && !this.queue.length) || performance.now() - t0 > ms) { this.rects.length = 0; this.miss.clear(); res(); } else setTimeout(tick, 50);
+        if ((!this.pending.size && !this.queue.length) || performance.now() - t0 > ms) res(); else setTimeout(tick, 50);
       };
       tick();
     });

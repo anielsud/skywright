@@ -172,7 +172,7 @@ function pixels(bmp, size) {
 // Load (once) everything a real location needs. quality: the World's tier (smaller imagery textures on low/medium).
 export async function loadReal(loc, quality = 'high', onProgress) {
   const id = loc.id, key = id + ':' + quality;
-  if (cache.get(id)?.key === key) { await cache.get(id).stream.prime(1500); return cache.get(id); }
+  if (cache.get(id)?.key === key) { cache.get(id).stream.prime(1500); return cache.get(id); } // (not awaited: see below)
   const dir = BASE + id + '/';
   const files = [get(dir + 'meta.json', 'json'), get(dir + 'hi.bin.gz'), get(dir + 'far.bin.gz'), get(dir + (loc.img?.[quality] || 'hi.jpg'), 'blob'), get(dir + 'far.jpg', 'blob'), get(dir + 'cover.png', 'blob'), get(dir + 'osm.json', 'json'), get(dir + 'roads.bin.gz'), get(dir + 'geo.bin').catch(() => null)]; // (geo.bin: the streamed coarse backdrop, GeoStream.seed)
   if (loc.city) files.push(get(dir + 'city.bin.gz')); // a city's buildings (realCity.js)
@@ -187,8 +187,11 @@ export async function loadReal(loc, quality = 'high', onProgress) {
     createImageBitmap(farB, texSize < 4096 ? fit : {}), createImageBitmap(coverB, opt),
   ]);
   const D = new RealData(loc, meta, decodeHeights(await gunzip(hiZ), meta.hi.n), decodeHeights(await gunzip(farZ), meta.far.n), hiBmp, farBmp, coverBmp, osm);
-  if (geoB) D.stream.seed(geoB);
-  await D.stream.prime(); // the streamed land the first view reaches past the coarse square (a few seconds at most; never fails)
+  if (geoB) D.stream.seed(geoB); // (the shipped coarse backdrop: decoded like fetched tiles, no outside fetch)
+  // the streamed land the first view reaches past the coarse square: requested now, not waited for (up to 3 s on a cold
+  // cache). Ground built before a tile arrives samples a coarser level or the edge means, and is rebuilt when it does
+  // (geostream.js miss/rects -> World.invalidateArea; World's attach starts that bookkeeping afresh). Never fails.
+  D.stream.prime();
   { const b = await gunzip(roadsZ); D.roadnet = decodeRoadnet(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); } // every road, with its junctions (roadnet.js)
   // the roads already built and graded, baked at deploy for this build (roadPack.js; none locally)
   const packKey = ROADS !== 'dev' ? ROADS : globalThis.SKY_ROADPACK_KEY; // (tests: a dev build loads packs baked with that key)
