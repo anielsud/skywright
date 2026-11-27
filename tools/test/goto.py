@@ -9,6 +9,8 @@ Chrome starts once; the game starts once per place (and quality, time, weather, 
   python3 tools/test/goto.py poses.json other.json --out shots/      (one PNG per pose, named by its 'name')
   python3 tools/test/goto.py poses.json --out after/ --query layout=1 (the page's query string: a flag to try)
 A pose's own 'query' (e.g. "" or "layout=1") overrides --query for it: one launch can shoot with and without a flag.
+A query with a path first (e.g. "_main/?layout=1") loads the copy of the game served there (say, main's, put under the
+root): one launch can shoot two versions.
 
 (The report JSON is what tools/analytics/reports.py saves.) Same requirements as smoke.py.
 """
@@ -44,7 +46,7 @@ async def main(a):
             cdp = CDP(ws); await cdp.send('Runtime.enable')
             for (loc, tier, tod, weather, vehicle, query), rs in groups.items():
                 t_nav = time.time()
-                await cdp.send('Page.navigate', url=origin + '/' + ('?' + query if query else ''))
+                await cdp.send('Page.navigate', url=origin + '/' + (query if '?' in query else '?' + query if query else ''))  # (a query with its own '?': a path first, another copy of the game under the root)
                 await cdp.wait_for(f'{S} && {S}.hangar && {S}.presets.length', 60, 'boot')
                 await cdp.wait_for("!document.getElementById('splash')", 30, 'splash')
                 cfg = {'location': loc, 'online': False, 'mode': 'free', 'start': rs[0].get('start') or 'runway'}

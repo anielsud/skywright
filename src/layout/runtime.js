@@ -9,10 +9,10 @@ import * as THREE from 'three';
 import { decodeLayout, KIND } from './format.js';
 import { meshChunk, physIndex, physAt, latticeOf } from './mesh.js';
 import { groundGrid, latticeHeights } from './rules.js';
-import { sidewalkMaterial, regionLook, REGION } from '../roadSurface.js';
+import { sidewalkMaterial, pathMaterial, regionLook, REGION } from '../roadSurface.js';
 // the gravel (tracks and verges): a region's own where it differs (Bora Bora's tracks and verges are coral sand and dirt)
 const GRAVEL = { fr: 0xc8b48e };
-import { terrainMaterial, FOG } from '../shaders.js';
+import { terrainMaterial, waterMaterial, FOG } from '../shaders.js';
 
 const FINE_D = 900, LOAD_D = 2500; // metres from the camera to a chunk's middle: fine within FINE_D; fetched within LOAD_D
 const loader = new THREE.TextureLoader(), texCache = new Map();
@@ -50,6 +50,34 @@ export class Layout {
       m.customProgramCacheKey = () => key + '|layout2';
     }
   }
+  // today's water materials (World.buildWater: ShaderMaterials, their world position vW): not drawn inside an active chunk
+  clipWater(...mats) {
+    const U = this.U;
+    for (const m of mats) {
+      if (!m || m.userData.layoutClip) continue; m.userData.layoutClip = true;
+      const key = m.customProgramCacheKey();
+      m.onBeforeCompile = (sh) => { Object.assign(sh.uniforms, U);
+        sh.fragmentShader = sh.fragmentShader.replace('void main() {', 'uniform sampler2D layMask; uniform vec4 layGrid;\nvoid main() {\n  { vec2 lc = floor((vW.xz - layGrid.xy) / layGrid.z); if (lc.x >= 0.0 && lc.y >= 0.0 && lc.x < layGrid.w && lc.y < layGrid.w && texture2D(layMask, (lc + 0.5) / layGrid.w).r > 0.5) discard; }'); };
+      m.customProgramCacheKey = () => key + '|layoutWater';
+    }
+  }
+  // a chunk's water: the part of its ground (the shown level's) under the water level, cut along it through the very
+  // triangles the ground is drawn with (as World.buildShoreWater does on today's grid), each corner given the depth of
+  // the ground under it (the shallows, the foam); null if none of it is under water
+  water(m) {
+    const wl = this.w.waterLevel, P = m.pos, I = m.idx, out = [], dep = [], poly = [];
+    if (!(wl > -Infinity)) return null;
+    for (let q = 0; q < m.tk.length; q++) { if (m.tk[q] > KIND.bank) continue; // (the ground and its banks: a paved region is never water, World.groundAt)
+      const v = [I[q * 3], I[q * 3 + 1], I[q * 3 + 2]]; if (P[v[0] * 3 + 1] >= wl && P[v[1] * 3 + 1] >= wl && P[v[2] * 3 + 1] >= wl) continue;
+      poly.length = 0;
+      for (let r = 0; r < 3; r++) { const a = v[r], b = v[(r + 1) % 3], ya = P[a * 3 + 1], yb = P[b * 3 + 1];
+        if (ya < wl) poly.push(P[a * 3], P[a * 3 + 2], wl - ya);
+        if ((ya < wl) !== (yb < wl)) { const t = (ya - wl) / (ya - yb); poly.push(P[a * 3] + (P[b * 3] - P[a * 3]) * t, P[a * 3 + 2] + (P[b * 3 + 2] - P[a * 3 + 2]) * t, 0); } }
+      for (let k = 1; k + 1 < poly.length / 3; k++) for (const e of [0, k, k + 1]) { out.push(poly[e * 3], wl, poly[e * 3 + 1]); dep.push(poly[e * 3 + 2]); } }
+    if (!out.length) return null;
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(out, 3)); g.setAttribute('aDepth', new THREE.Float32BufferAttribute(dep, 1)); g.computeBoundingSphere();
+    const me = new THREE.Mesh(g, this.mats.water); me.name = 'layout water'; return me;
+  }
   // maps: the terrain's (World.terrainMaps) for the ground's material
   start(maps) {
     const loc = this.w.loc, look = regionLook(loc.id), yellow = look.yellow ? 1 : 0, skirt = terrainMaterial(maps, 'detail'); skirt.side = THREE.DoubleSide;
@@ -60,8 +88,11 @@ export class Layout {
     ground.customProgramCacheKey = () => 'layoutGround';
     // (yellow centre lines where today's roads paint them, the US places (roadSurface.js LOOK); a desert's verges and dirt
     // tracks a warm brown, the islands' coral sand, not the Alps' grey gravel)
-    this.mats = { skirt, ground, tarmac: roadMat('asphalt_d', 0x5a5a5c, true, yellow), alley: roadMat('asphalt_d', 0x5a5a5c), gravel: roadMat('gravel_d', loc.desert ? 0x9c8468 : GRAVEL[REGION[loc.id]] ?? 0xa09684), pavers: roadMat('sidewalk_d', 0xa89a88), walk: sidewalkMaterial() };
+    this.mats = { skirt, ground, tarmac: roadMat('asphalt_d', 0x5a5a5c, true, yellow), alley: roadMat('asphalt_d', 0x5a5a5c), gravel: roadMat('gravel_d', loc.desert ? 0x9c8468 : GRAVEL[REGION[loc.id]] ?? 0xa09684), pavers: roadMat('sidewalk_d', 0xa89a88), walk: sidewalkMaterial(), track: pathMaterial(REGION[loc.id]) }; // (track: the gravel's, today's tracks' look, its ruts)
     this.matList = [this.mats.ground, this.mats.alley, this.mats.gravel, this.mats.pavers];
+    // the water: today's plane and shore mesh (World.buildWater) don't draw inside an active chunk, whose own water is its
+    // surface's part under the water level (water()), so the shore is the layout's ground's, not today's carved grid's
+    const w = this.w; if (w.waterMat) { this.clipWater(w.waterMat, ...(w.shoreWater?.children || []).map((o) => o.material)); this.mats.water = waterMaterial({ U: w.waterMat.userData.U, shore: true, vdepth: true }); }
     this.worker = typeof Worker !== 'undefined' ? new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }) : null;
     if (this.worker) this.worker.onmessage = (ev) => { this.busy = false; const c = this.chunks.get(ev.data.id); if (c) this.got(c, ev.data.level, ev.data.m); this.pump(); };
   }
@@ -128,9 +159,10 @@ export class Layout {
     for (let k = 0; k < N0; k++) ang[k] = vAng[k] === vAng[k] ? vAng[k] : 0; dup.forEach((v, i) => { pos.set(m.pos.subarray(v * 3, v * 3 + 3), (N0 + i) * 3); nrm.set(m.nrm.subarray(v * 3, v * 3 + 3), (N0 + i) * 3); ang[N0 + i] = dAng[i]; });
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); g.setAttribute('aAng', new THREE.BufferAttribute(ang, 1)); g.setIndex(new THREE.BufferAttribute(idx, 1));
-    const matOf = (k) => (k === KIND.ground || k === KIND.bank ? 0 : k === KIND.alley ? 1 : k === KIND.verge || k === KIND.gravel ? 2 : k === KIND.pavers ? 3 : -1);
+    const ribG = m.rib.kind.includes(KIND.gravel), matOf = (k) => (k === KIND.ground || k === KIND.bank ? 0 : k === KIND.alley ? 1 : k === KIND.verge || (k === KIND.gravel && !ribG) ? 2 : k === KIND.pavers ? 3 : -1); // (the gravel: with the streets' ribbons below when it's there)
     for (let q = 0; q < m.tk.length;) { const mi = matOf(m.tk[q]); let e = q; while (e < m.tk.length && matOf(m.tk[e]) === mi) e++; if (mi >= 0) g.addGroup(q * 3, (e - q) * 3, mi); q = e; }
     g.computeBoundingSphere(); const surf = new THREE.Mesh(g, this.matList); surf.receiveShadow = true; c.mesh.add(surf);
+    if (this.mats.water) { const wm = this.water(m); if (wm) c.mesh.add(wm); }
     const r = m.rib, n = r.kind.length; if (n) {
       const pick = (want) => { const at = []; for (let v = 0; v < n; v += 3) if (want(r.kind[v])) at.push(v); return at; };
       const part = (vs, mat, attrs) => { const k = vs.length * 3, P = new Float32Array(k * 3), N = new Float32Array(k * 3), A = attrs.map(([, size]) => new Float32Array(k * size));
@@ -140,6 +172,9 @@ export class Layout {
       part(pick((k) => k === KIND.tarmac), this.mats.tarmac, [['aRoad', 4, (v) => r.road.subarray(v * 4, v * 4 + 4)], ['aLane', 1, (v) => [r.lane[v]]]]);
       // (the pavement and its kerb with today's material: uv = metres across from the street's centre line, along; rinfo = half width, -, seed)
       part(pick((k) => k === KIND.kerb || k === KIND.pave), this.mats.walk, [['uv', 2, (v) => [r.road[v * 4 + 1], r.road[v * 4]]], ['rinfo', 3, (v) => [r.road[v * 4 + 2], 0, 3]], ['rjunc', 4, () => [99, 99, 0, 0]]]);
+      // (the gravel with today's tracks' material: uv = across, along; rinfo = half width (half a metre more: its ragged edge
+      // stays inside the gravel's own triangles, there's nothing under it), the gravel look 2, seed)
+      const trk = pick((k) => k === KIND.gravel); if (trk.length) part(trk, this.mats.track, [['uv', 2, (v) => [r.road[v * 4 + 1], r.road[v * 4]]], ['rinfo', 3, (v) => [r.road[v * 4 + 2] + 0.5, 2, r.id[v] % 97]], ['rjunc', 4, () => [99, 99, 0, 0]]]);
     }
     c.shown = level;
   }

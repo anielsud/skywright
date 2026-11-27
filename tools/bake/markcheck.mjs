@@ -53,7 +53,7 @@ export function markCheck(L, m, detail = false) {
   });
   // the slabs: each pavement / kerb corner's across against its distance from its street's centre line (where that's
   // a segment's middle, out of the junctions: a corner's pavement is the nearest street's)
-  let kerbErr = 0, kerbN = 0; for (let t = 0; t < R.kind.length; t++) { if (R.kind[t] === KIND.tarmac) continue; const rd = runs[R.id[t]], x = R.pos[t * 3], z = R.pos[t * 3 + 2]; let best = Infinity, mid = false;
+  let kerbErr = 0, kerbN = 0; for (let t = 0; t < R.kind.length; t++) { if (R.kind[t] !== KIND.kerb && R.kind[t] !== KIND.pave) continue; const rd = runs[R.id[t]], x = R.pos[t * 3], z = R.pos[t * 3 + 2]; let best = Infinity, mid = false;
     for (let s = 0; s + 1 < rd.h.length; s++) { const ax = rd.pts[s * 2], az = rd.pts[s * 2 + 1], dx = rd.pts[s * 2 + 2] - ax, dz = rd.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9, q0 = ((x - ax) * dx + (z - az) * dz) / L2, q = Math.max(0, Math.min(1, q0)), d = Math.hypot(x - ax - dx * q, z - az - dz * q); if (d < best) { best = d; mid = q0 > 0 && q0 < 1; } }
     if (mid && best < rd.hw + rd.pave + 1 && jd(x, z) > 1) { kerbErr = Math.max(kerbErr, Math.abs(Math.abs(R.road[t * 4 + 1]) - best)); kerbN++; } }
   const r = { drift, samples, lost, atSharp, mouths, whole, tight, kerbErr, kerbN };
