@@ -8,7 +8,9 @@
 import * as THREE from 'three';
 import { decodeLayout, KIND } from './format.js';
 import { meshChunk, physIndex, physAt, latticeOf } from './mesh.js';
-import { sidewalkMaterial, regionLook } from '../roadSurface.js';
+import { sidewalkMaterial, regionLook, REGION } from '../roadSurface.js';
+// the gravel (tracks and verges): a region's own where it differs (Bora Bora's tracks and verges are coral sand and dirt)
+const GRAVEL = { fr: 0xc8b48e };
 import { terrainMaterial, FOG } from '../shaders.js';
 
 const FINE_D = 900, LOAD_D = 2500; // metres from the camera to a chunk's middle: fine within FINE_D; fetched within LOAD_D
@@ -51,15 +53,15 @@ export class Layout {
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vAng; vec2 layRot(vec2 p) { float c = cos(vAng), s = sin(vAng); return vec2(c * p.x + s * p.y, -s * p.x + c * p.y); }').replace('cityPave(vTW.xz,', 'cityPave(layRot(vTW.xz),'); }; // (only the slabs turned: cityPaved reads the land cover where the point really is)
     ground.customProgramCacheKey = () => 'layoutGround';
     // (yellow centre lines where today's roads paint them, the US places (roadSurface.js LOOK); a desert's verges and dirt
-    // tracks a warm brown, not the Alps' grey gravel)
-    this.mats = { skirt, ground, tarmac: roadMat('asphalt_d', 0x5a5a5c, true, yellow), alley: roadMat('asphalt_d', 0x5a5a5c), gravel: roadMat('gravel_d', loc.desert ? 0x9c8468 : 0xa09684), pavers: roadMat('sidewalk_d', 0xa89a88), walk: sidewalkMaterial() };
+    // tracks a warm brown, the islands' coral sand, not the Alps' grey gravel)
+    this.mats = { skirt, ground, tarmac: roadMat('asphalt_d', 0x5a5a5c, true, yellow), alley: roadMat('asphalt_d', 0x5a5a5c), gravel: roadMat('gravel_d', loc.desert ? 0x9c8468 : GRAVEL[REGION[loc.id]] ?? 0xa09684), pavers: roadMat('sidewalk_d', 0xa89a88), walk: sidewalkMaterial() };
     this.matList = [this.mats.ground, this.mats.alley, this.mats.gravel, this.mats.pavers];
     this.worker = typeof Worker !== 'undefined' ? new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }) : null;
     if (this.worker) this.worker.onmessage = (ev) => { this.busy = false; const c = this.chunks.get(ev.data.id); if (c) this.got(c, ev.data.level, ev.data.m); this.pump(); };
   }
   // the hi grid's heights at a chunk's grid points (the natural ground the layout meets)
   lattice(L) {
-    const H = this.w.real.hi, grid = { x0: H.x0, z0: H.z0, sp: H.sp }, lat = latticeOf(L, grid), out = new Float32Array(lat.ni * lat.nj);
+    const H = this.w.real.hi, grid = { x0: H.x0, z0: H.z0, sp: H.sp, wl: this.w.loc.shore ? this.w.waterLevel : -Infinity }, lat = latticeOf(L, grid), out = new Float32Array(lat.ni * lat.nj);
     for (let j = 0; j < lat.nj; j++) for (let i = 0; i < lat.ni; i++) out[j * lat.ni + i] = H.H[Math.max(0, Math.min(H.n - 1, lat.j0 + j)) * H.n + Math.max(0, Math.min(H.n - 1, lat.i0 + i))];
     return { grid, G: out };
   }

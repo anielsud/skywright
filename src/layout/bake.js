@@ -26,11 +26,16 @@ const JR_K = 1.5, JR_ADD = 1.5, JR_MIN = 4;
 // a footpath steps up the hillside: its OSM line is coarser than its zigzags), and kept within MINOR_OFF m of the ground
 const GRADE = { highway: 0.18, main: 0.18, street: 0.22 }, GRADE_MINOR = { service: 0.3, track: 0.35, ped: 0.6 }, MINOR_OFF = 1.5; // (alpine: Swiss pass and valley roads reach 15-20%)
 const GRADE_CITY = { highway: 0.07, main: 0.12, street: 0.2 }; // (a city's: as roadgrade.js)
+// the shore (a place on the sea, loc.shore): a road (none of them bridges here) is held at least FREEBOARD m above the
+// world's water level: the height grid blurs a coastal road's narrow strip of land between the hillside and the lagoon,
+// and a motu's paths, down into the water
+const FREEBOARD = 0.5, WET = 0.5;
+const PLANE_ACROSS = 0.5, CROSS_MAX = 0.3;
 const RELAX_OFF = 2, RELAX_HOPS = 3, RELAX_MAX = 1, RELAX_WG = 1, RELAX_ROUNDS = 4;
 const cm = (v) => Math.round(v * 100);
 
 export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
-  const T = {}, tic = (k, t0) => { T[k] = (T[k] || 0) + performance.now() - t0; log(`  [layout] ${k} ${Math.round(T[k])} ms`); }, city = !!w.loc.city, g = (x, z) => w.real.height(x, z);
+  const T = {}, tic = (k, t0) => { T[k] = (T[k] || 0) + performance.now() - t0; log(`  [layout] ${k} ${Math.round(T[k])} ms`); }, city = !!w.loc.city, g = (x, z) => w.real.height(x, z), wl = w.loc.shore ? w.waterLevel : -Infinity;
   const ix0 = Math.min(...chunks.map((c) => c[0])), ix1 = Math.max(...chunks.map((c) => c[0])), iz0 = Math.min(...chunks.map((c) => c[1])), iz1 = Math.max(...chunks.map((c) => c[1]));
   const R = { x0: ix0 * CHUNK - MARGIN, x1: (ix1 + 1) * CHUNK + MARGIN, z0: iz0 * CHUNK - MARGIN, z1: (iz1 + 1) * CHUNK + MARGIN }, inR = (p, m = 0) => p.x > R.x0 - m && p.x < R.x1 + m && p.z > R.z0 - m && p.z < R.z1 + m;
   // ---- 1. network
@@ -45,7 +50,9 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
     a = Math.max(0, a - 1); b = Math.min(n - 1, b + 1);
     // (a road's stretches on bridges or in tunnels aren't the layout's: the chunks they're in keep today's roads (bakeChunks'
     // fallback); the stretches either side of one are roads of their own here)
-    const bad = (i) => !!(rd.bridge?.[i % n0] || rd.tube?.[i % n0] || rd.span?.[i % n0]), jn = new Map(rd.jn || []);
+    // (on the sea, loc.shore: a way off the street network out in the water isn't the layout's either: a resort's walkway out
+    // to its overwater bungalows, on a pier the game draws as its deck)
+    const bad = (i) => !!(rd.bridge?.[i % n0] || rd.tube?.[i % n0] || rd.span?.[i % n0]) || (rd.minor && g(P[i % n0].x, P[i % n0].z) < wl - WET), jn = new Map(rd.jn || []);
     for (let s0 = a; s0 <= b;) {
       if (bad(s0)) { s0++; continue; } let e0 = s0; while (e0 + 1 <= b && !bad(e0 + 1)) e0++;
       if (e0 > s0) {
@@ -87,22 +94,27 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   tic('networkMs', t0);
   // ---- 2. height solve
   t0 = performance.now();
-  const nv = V.length, h = Float64Array.from(V, (v) => v.g), edges = [], nb = V.map(() => []);
+  const nv = V.length, floor = wl + FREEBOARD, gt = Float64Array.from(V, (v) => Math.max(v.g, floor)), h = Float64Array.from(gt), edges = [], nb = V.map(() => []); // (gt: the ground each station is pulled to: the natural ground, above the water)
+  const lift = () => { let n = 0; for (let k = 0; k < nv; k++) if (h[k] < floor) { h[k] = floor; n++; } return n; };
   for (const r of runs) for (let i = 0; i + 1 < r.vars.length; i++) { const a = r.vars[i], b = r.vars[i + 1]; if (a === b) continue; const l = Math.max(0.5, r.s[i + 1] - r.s[i]); edges.push([a, b, l, r.grade]); nb[a].push([b, 1 / l]); nb[b].push([a, 1 / l]); }
   const vGrid = new Map(), VC = 10; V.forEach((v, k) => { const key = Math.floor(v.x / VC) * 100003 + Math.floor(v.z / VC); (vGrid.get(key) || vGrid.set(key, []).get(key)).push(k); });
   const varsNear = (x, z, r) => { const out = []; for (let i = Math.floor((x - r) / VC); i <= Math.floor((x + r) / VC); i++) for (let j = Math.floor((z - r) / VC); j <= Math.floor((z + r) / VC); j++) for (const k of vGrid.get(i * 100003 + j) || []) if (Math.hypot(V[k].x - x, V[k].z - z) <= r) out.push(k); return out; };
   const JN = [], hwAt = new Map(); for (const r of runs) if (!r.minor) for (const v of r.vars) hwAt.set(v, Math.max(hwAt.get(v) || 0, r.hw));
   for (const j of w.net.junctions) { if (!inR(j)) continue; let r = 0; for (let q = 0; q < j.box.length; q += 2) r = Math.max(r, Math.hypot(j.box[q] - j.x, j.box[q + 1] - j.z)); r = Math.min(35, Math.max(6, r)); if (!city) { const v = node.get(j.nd), hw = v != null ? hwAt.get(v) : null; if (hw) r = Math.min(r, Math.max(JR_MIN, JR_K * hw + JR_ADD)); } const m = varsNear(j.x, j.z, r); if (m.length >= 2) JN.push({ x: j.x, z: j.z, r, m, a: 0, b: 0, c: 0 }); }
   const plane = (J) => { const n = J.m.length; let mx = 0, mz = 0, my = 0; for (const k of J.m) { mx += V[k].x; mz += V[k].z; my += h[k]; } mx /= n; mz /= n; my /= n; let a = 0, b = 0, c = 0, d = 0, e = 0;
-    for (const k of J.m) { const X = V[k].x - mx, Z = V[k].z - mz, Y = h[k] - my; a += X * X; b += X * Z; c += Z * Z; d += X * Y; e += Z * Y; } const det = a * c - b * b; const gx = n >= 3 && Math.abs(det) > 1e-6 ? (d * c - e * b) / det : 0, gz = n >= 3 && Math.abs(det) > 1e-6 ? (e * a - d * b) / det : 0;
+    for (const k of J.m) { const X = V[k].x - mx, Z = V[k].z - mz, Y = h[k] - my; a += X * X; b += X * Z; c += Z * Z; d += X * Y; e += Z * Y; } const det = a * c - b * b; let gx = n >= 3 && Math.abs(det) > 1e-6 ? (d * c - e * b) / det : 0, gz = n >= 3 && Math.abs(det) > 1e-6 ? (e * a - d * b) / det : 0;
+    // (members nearly in a line (less than PLANE_ACROSS m RMS across it: a small junction's few stations along a road that runs
+    // through it): the slope across that line isn't known from them. Where it came out steeper than CROSS_MAX (up to 220%:
+    // a village's pavement 12 m under its street) the plane takes the slope along the line only, level across it)
+    { const m2 = (a + c) / 2, r2 = Math.hypot((a - c) / 2, b), lmin = m2 - r2, lmax = m2 + r2; const th = 0.5 * Math.atan2(2 * b, a - c), ux = Math.cos(th), uz = Math.sin(th); J.line = n >= 3 && lmax > 1e-6 && lmin < PLANE_ACROSS * PLANE_ACROSS * n && Math.abs(gz * ux - gx * uz) > CROSS_MAX; if (J.line) { J.wasLine = true; const sl = (d * ux + e * uz) / lmax; gx = sl * ux; gz = sl * uz; } }
     J.mx = mx; J.mz = mz; J.my = my; J.gx = gx; J.gz = gz; };
   const toPlane = () => { for (const J of JN) { plane(J); for (const k of J.m) h[k] = J.my + J.gx * (V[k].x - J.mx) + J.gz * (V[k].z - J.mz); } };
   const clampGrades = (passes) => { for (let p = 0; p < passes; p++) for (const [a, b, l, G] of edges) { const d = h[a] - h[b], lim = G * l; if (Math.abs(d) > lim) { const ex = (Math.abs(d) - lim) / 2 * Math.sign(d); h[a] -= ex; h[b] += ex; } } };
   const WG = opts.WG ?? 0.1; // (the natural ground's pull against the neighbours' 1/l, per station: a weaker pull smoothed hairpins metres off the ground, #297)
   let iters = 0; const wg = new Float64Array(nv).fill(WG);
   const smooth = (n) => { for (let it = 0; it < n; it++, iters++) {
-    for (let k = 0; k < nv; k++) { const N = nb[k]; if (!N.length) continue; let s = wg[k] * V[k].g, ws = wg[k]; for (const [o, wt] of N) { s += wt * h[o]; ws += wt; } h[k] = s / ws; }
-    toPlane(); clampGrades(2);
+    for (let k = 0; k < nv; k++) { const N = nb[k]; if (!N.length) continue; let s = wg[k] * gt[k], ws = wg[k]; for (const [o, wt] of N) { s += wt * h[o]; ws += wt; } h[k] = s / ws; }
+    toPlane(); clampGrades(2); lift();
   } };
   smooth(600);
   // (last: each junction on its plane, then every road within its grade limit, away from the junctions: a junction's own
@@ -110,16 +122,16 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   toPlane(); const memberOf = new Map(); JN.forEach((J, q) => { for (const k of J.m) memberOf.set(k, q); });
   const member = { has: (k) => memberOf.has(k) }, inOne = (a, b) => memberOf.has(a) && memberOf.get(a) === memberOf.get(b);
   const enforce = () => { for (let p = 0; p < 400; p++) { let moved = 0; for (const [a, b, l, G] of edges) { if (inOne(a, b)) continue; const d = h[a] - h[b], lim = G * l; if (Math.abs(d) <= lim + 1e-4) continue; const ex = Math.abs(d) - lim, sg = Math.sign(d);
-    if (member.has(a)) h[b] += ex * sg; else if (member.has(b)) h[a] -= ex * sg; else { h[a] -= ex / 2 * sg; h[b] += ex / 2 * sg; } moved++; } if (!moved) break; } };
+    if (member.has(a)) h[b] += ex * sg; else if (member.has(b)) h[a] -= ex * sg; else { h[a] -= ex / 2 * sg; h[b] += ex / 2 * sg; } moved++; } moved += lift(); if (!moved) break; } };
   enforce();
   // (where holding a road to its limit puts it more than RELAX_OFF m off the ground (a pitch steeper than its limit, or a
   // cliff the height grid blurs over it), the limit gives way there: each edge within RELAX_HOPS stations of such a point
   // takes the ground's own grade along it (up to RELAX_MAX) and those points pull to the ground harder; re-solved warm)
   const relaxed = new Set(); T.relax = [];
   for (let round = 0; round < (city ? 0 : RELAX_ROUNDS); round++) { // (a country place's: a city's streets are flat enough)
-    let off = new Set(); for (let k = 0; k < nv; k++) if (Math.abs(h[k] - V[k].g) > RELAX_OFF) off.add(k); T.relax.push(off.size); if (!off.size) break;
+    let off = new Set(); for (let k = 0; k < nv; k++) if (Math.abs(h[k] - gt[k]) > RELAX_OFF) off.add(k); T.relax.push(off.size); if (!off.size) break;
     for (let hop = 0; hop < RELAX_HOPS; hop++) { const more = new Set(off); for (const k of off) for (const [o] of nb[k]) more.add(o); off = more; }
-    for (const e of edges) { const [a, b, l] = e; if (!off.has(a) && !off.has(b)) continue; const gg = Math.min(RELAX_MAX, Math.abs(V[a].g - V[b].g) / l * 1.15 + 0.01); if (gg > e[3]) { e[3] = gg; relaxed.add(e); } }
+    for (const e of edges) { const [a, b, l] = e; if (!off.has(a) && !off.has(b)) continue; const gg = Math.min(RELAX_MAX, Math.abs(gt[a] - gt[b]) / l * 1.15 + 0.01); if (gg > e[3]) { e[3] = gg; relaxed.add(e); } }
     for (const k of off) wg[k] = Math.max(wg[k], RELAX_WG);
     smooth(150); toPlane(); enforce();
   }
@@ -127,10 +139,12 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   // (a way off the street network that its limit would hold off the ground (a footpath's or a track's zigzags finer than
   // its OSM line, up a hillside steeper than any track): kept within MINOR_OFF m of the ground, over its limit there)
   { const street = new Set(); for (const r of runs) if (!r.minor) for (const v of r.vars) street.add(v); let held = 0;
-    for (const r of runs) if (r.minor) for (const v of r.vars) if (!street.has(v) && !member.has(v) && Math.abs(h[v] - V[v].g) > MINOR_OFF) { h[v] = V[v].g + Math.sign(h[v] - V[v].g) * MINOR_OFF; held++; }
+    for (const r of runs) if (r.minor) for (const v of r.vars) if (!street.has(v) && !member.has(v) && Math.abs(h[v] - gt[v]) > MINOR_OFF) { h[v] = gt[v] + Math.sign(h[v] - gt[v]) * MINOR_OFF; held++; }
     T.minorHeld = held; }
+  lift();
+  { let low = 0, lifted = 0; for (let k = 0; k < nv; k++) { if (h[k] < floor - 1e-6) low++; if (V[k].g < floor) lifted++; } T.shore = { below: low, overWater: lifted }; } // (stations below the floor after all (0); stations whose ground is under it)
   let dev = 0, over = 0; for (let k = 0; k < nv; k++) dev = Math.max(dev, Math.abs(h[k] - V[k].g)); for (const [a, b, l, G] of edges) if (!inOne(a, b) && G < 0.3) over = Math.max(over, Math.abs(h[a] - h[b]) / l - G);
-  T.solve = { relax: T.relax, relaxedEdges: T.relaxedEdges, minorHeld: T.minorHeld, vars: nv, junctions: JN.length, iters, maxFromGround: +dev.toFixed(2), worstOverGrade: +Math.max(0, over).toFixed(3) };
+  T.solve = { linePlanes: JN.filter((J) => J.wasLine).length, shore: T.shore, relax: T.relax, relaxedEdges: T.relaxedEdges, minorHeld: T.minorHeld, vars: nv, junctions: JN.length, iters, maxFromGround: +dev.toFixed(2), worstOverGrade: +Math.max(0, over).toFixed(3) };
   { // (the worst edges over their limit: between which junctions, how long, how far the planes' ends are apart)
     const ov = edges.filter(([a, b]) => !inOne(a, b)).map(([a, b, l, G]) => [Math.abs(h[a] - h[b]) / l - G, a, b, l, G]).filter((e) => e[0] > 1e-3).sort((p, q) => q[0] - p[0]);
     T.overGrade = { edges: ov.length, bothJunctions: ov.filter(([, a, b]) => memberOf.has(a) && memberOf.has(b)).length, worst: ov.slice(0, 4).map(([o, a, b, l, G]) => ({ x: +V[a].x.toFixed(1), z: +V[a].z.toFixed(1), over: +o.toFixed(3), l: +l.toFixed(1), limit: G, rise: +Math.abs(h[a] - h[b]).toFixed(2), ends: [memberOf.has(a) ? 'junction' : V[a].tie ? 'tie' : 'road', memberOf.has(b) ? 'junction' : V[b].tie ? 'tie' : 'road'] })) }; }
