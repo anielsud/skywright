@@ -31,6 +31,7 @@ import { roadStart } from './landStart.js';
 import { Marina } from './marina.js';
 import { WaterParks } from './waterPark.js';
 import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
+import { Layout } from './layout/runtime.js';
 
 export const RWY = { len: 1800, width: 45 };
 export { airportGate } from './airportKit.js'; // where the airport's landside road meets the road network (roads.js)
@@ -101,6 +102,7 @@ export class World {
     // real location: satellite imagery is the ground colour, OSM drives roads, buildings and forests
     this.real = this.loc.real ? realData(this.loc) : null;
     if (this.loc.real && !this.real) throw new Error('location data not loaded');
+    this.layout = this.real?.layout?.length ? new Layout(this, this.real.layout) : null; // the baked road layout's chunks (#294; ?layout=1)
     if (this.real) { this.real.paintHi = (bmp, r, gain) => paintInfieldImagery(this, bmp, r, gain); Object.assign(this.detailU, this.real.uniforms()); } // (the airport's infield painted into the imagery: airportGround.js)
     this.real?.attach(this); // land past its baked squares streams in while flying (src/geostream.js) and rebuilds what it changes
     this.landUniforms(); // no bake on real places: rivers/lakes off (and compiled out of the terrain shader)
@@ -283,10 +285,12 @@ export class World {
     const sst = S / (this.shadowR - 1), maps = { detailU: this.detailU, albedo: this.albedoTex, normal: this.normalTex, shadow: this.shadowTex, orig: new THREE.Vector2(-half - this.hStep / 2, -half - this.hStep / 2), span: S + this.hStep, sOrig: new THREE.Vector2(-half - sst / 2, -half - sst / 2), sSpan: S + sst, city: this.cityD ? this.coverTex() : null };
     const mat = terrainMaterial(maps);
     this.terrainMat = mat; this.patchMat = terrainMaterial(maps, true); this.detailMat = terrainMaterial(maps, 'detail');
+    this.terrainMaps = maps; this.layout?.clip(mat, this.patchMat, this.detailMat); // (inside a layout chunk the layout draws the ground)
     const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true;
     this.terrain = mesh; this.group.add(mesh);
     this.roadGroup = buildRoadMeshes(this, this.net); this.group.add(this.roadGroup);
     this.buildPatch(); this.buildDetail();
+    if (this.layout) { this.layout.start(maps); this.group.add(this.layout.group); }
   }
   // a city's land cover (cover.png: 0 paved, else parks, lawns and woods) for the terrain shader, which paves the open
   // ground near the camera (shaders.js cityPaved)
@@ -449,6 +453,7 @@ export class World {
   // Roads: inside a road's footprint the ground is the road's own profile (the grid is too coarse to hold an 8 m
   // road exactly), and just beside it the embankment/cutting down to the grid (roads.js draws both the same way).
   sampleGrid(x, z) {
+    if (this.layout?.on) { const y = this.layout.heightAt(x, z); if (y === y) return y; } // (a baked layout chunk: its surface)
     if (this.Hh) {
       const R = this.hR, st = this.hStep, fx = (x + this.half) / st, fz = (z + this.half) / st;
       if (fx >= 0 && fz >= 0 && fx < R && fz < R) { const h = this.cityAt(x, z, this.triAt(this.Hh, R + 1, fx, fz)), S = this.roadSurf; return S && S.q(x, z) ? S.over(h) : h; }
@@ -624,6 +629,7 @@ export class World {
   groundAt(x, z, y) {
     const e = 1.5, S = this.roadSurf, pad = this.pad?.ground(x, z, y); // the launch pad's slab, trench and stand deck
     if (pad) return pad;
+    if (this.layout?.on) { const L = this.layout.ground(x, z); if (L) return L; }
     if (S && S.q(x, z, true, y ?? Infinity)) return { h: S.y, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: 'runway' };
     const h = this.sampleGrid(x, z);
     if (S && S.q(x, z) && S.e <= 0) return { h, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: S.surf === 2 ? 'sand' : 'runway' }; // on a road (a gravel track: loose, dusty)
@@ -1300,6 +1306,7 @@ export class World {
 
   update(dt, camera, camVel, events) {
     this.t += dt;
+    this.layout?.update(camera);
     // gusts / turbulence
     const W = this.W;
     if (Math.random() < dt * 1.5) this.gustT.set((Math.random() - 0.5) * 2, (Math.random() - 0.5) * 1.2, (Math.random() - 0.5) * 2).multiplyScalar(W.turb * 4);
@@ -1397,7 +1404,7 @@ export class World {
     this.real?.detach();
     this.cascades?.dispose(this.scene);
     this.scene.remove(this.group, this.sky, this.sun, this.sun.target, this.hemi, this.deck, this.deck2, this.clouds.mesh, this.rain, this.snow);
-    this.tiles?.dispose(); this.space.dispose(); this.stunts?.dispose(); this.waterParks?.dispose(); this.helipads?.dispose();
+    this.tiles?.dispose(); this.layout?.dispose(); this.space.dispose(); this.stunts?.dispose(); this.waterParks?.dispose(); this.helipads?.dispose();
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.envScene.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); }); // (the reflection environment's own sky and ground: not in the flight scene, so nothing else frees them, #213)
     if (this.envRT) this.envRT.dispose();

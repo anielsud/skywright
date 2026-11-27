@@ -1,0 +1,47 @@
+// The baked road layout's chunks (#294; assets/real/<id>/layout/, tools/bake/layout.mjs), checked as committed: each
+// meshes (src/layout/mesh.js, fine and coarse, against the place's hi grid) with every fixed edge taken and the chunk
+// covered; its file is named by its bytes; on the tarmac physics is what's drawn; a kerb is never physics; and two
+// chunks side by side share their edge exactly, at every pair of levels. No World is built: the files and the hi grid.
+import { readFileSync, existsSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
+import { decodeLayout, KIND } from '../../src/layout/format.js';
+import { meshChunk } from '../../src/layout/mesh.js';
+
+export const nodeSuite = { files: ['src/layout/format.js', 'src/layout/mesh.js', 'src/layout/bake.js', 'tools/test/layoutcheck.js', 'assets/real/nyc/layout/index.json', 'assets/real/lauterbrunnen/layout/index.json'] };
+const PLACES = ['nyc', 'lauterbrunnen'];
+export function cases() { return PLACES.filter((p) => existsSync(`assets/real/${p}/layout/index.json`)).map((place) => ({ id: `${place} layout`, place, cost: 1 })); }
+
+function hiGrid(id) { // the hi grid as realworld.js decodes it: uint16 (h + 200) * 8, each row delta-coded
+  const m = JSON.parse(readFileSync(`assets/real/${id}/meta.json`)), { x0, z0, size, n } = m.hi, b = gunzipSync(readFileSync(`assets/real/${id}/hi.bin.gz`)), u = new Uint16Array(b.buffer, b.byteOffset, n * n), H = new Float32Array(n * n);
+  for (let j = 0; j < n; j++) { let v = 0; for (let i = 0; i < n; i++) { v = i ? (v + u[j * n + i]) & 65535 : u[j * n]; H[j * n + i] = v / 8 - 200; } }
+  return { x0, z0, n, sp: size / (n - 1), H };
+}
+
+export async function runCase(c) {
+  const dir = `assets/real/${c.place}/layout/`, idx = JSON.parse(readFileSync(dir + 'index.json', 'utf8')), G = hiGrid(c.place), out = [], meshes = new Map();
+  for (const e of idx.chunks) {
+    const gz = readFileSync(dir + e.file), name = `${c.place} ${e.ix},${e.iz}`, buf = gunzipSync(gz), L = decodeLayout(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+    out.push({ name: `${name}: its file is named by its bytes`, ok: e.file === `${e.ix}_${e.iz}.${createHash('sha256').update(gz).digest('hex').slice(0, 10)}.bin.gz`, why: e.file });
+    const { i0, j0, ni, nj } = L.lat, lat = new Float32Array(ni * nj); for (let j = 0; j < nj; j++) for (let i = 0; i < ni; i++) lat[j * ni + i] = G.H[(j0 + j) * G.n + i0 + i];
+    const ms = {}; for (const level of ['fine', 'coarse']) ms[level] = meshChunk(L, { x0: G.x0, z0: G.z0, sp: G.sp }, lat, level);
+    meshes.set(e.ix + ',' + e.iz, ms);
+    for (const level of ['fine', 'coarse']) { const s = ms[level].stats; out.push({ name: `${name}: meshes (${level}) with every fixed edge and the chunk covered`, ok: s.failed === 0 && Math.abs(s.covered - 1) < 1e-6, why: `${s.failed} of ${s.fixed + s.failed} fixed edges failed, ${(s.covered * 100).toFixed(4)}% covered, ${s.tris} triangles in ${s.totalMs.toFixed(0)} ms` }); }
+    // on the tarmac physics is what's drawn; across a kerb physics has no step (it ramps under the slabs)
+    const m = ms.fine, I = m.idx, P = m.pos, Y = m.phys; let off = 0, step = 0; // step: the steepest physics slope on a kerb
+    for (let q = 0; q < m.tk.length; q++) { const v = [I[q * 3], I[q * 3 + 1], I[q * 3 + 2]];
+      if (m.tk[q] === KIND.tarmac) for (const k of v) if (Math.abs(Y[k] - P[k * 3 + 1]) > 1e-4) off++;
+      if (m.tk[q] === KIND.kerb) { // (the slope of the physics surface on the kerb's strip: a 15 cm step over its 10 cm would be ~1.5)
+        const [a, b, cc] = v, ux = P[b * 3] - P[a * 3], uz = P[b * 3 + 2] - P[a * 3 + 2], wx = P[cc * 3] - P[a * 3], wz = P[cc * 3 + 2] - P[a * 3 + 2], uy = Y[b] - Y[a], wy = Y[cc] - Y[a], d = ux * wz - uz * wx;
+        if (Math.abs(d) > 1e-6) step = Math.max(step, Math.hypot((uy * wz - uz * wy) / d, (ux * wy - uy * wx) / d)); } }
+    out.push({ name: `${name}: on the tarmac physics is what's drawn`, ok: off === 0, why: `${off} tarmac corners off` });
+    out.push({ name: `${name}: a kerb is never physics`, ok: step < 0.35, why: `steepest physics slope on a kerb ${step.toFixed(2)} (a step would be ~1.5; the streets are graded to 0.2)` });
+  }
+  // chunks side by side: the shared edge's segments, positions and heights, the same from both sides at every pair of levels
+  for (const e of idx.chunks) { const b = meshes.get(e.ix + 1 + ',' + e.iz), a = meshes.get(e.ix + ',' + e.iz); if (!b) continue;
+    const X = (e.ix + 1) * idx.size, segs = (m) => { const s = new Set(), P = m.pos, I = m.idx; for (let q = 0; q < I.length; q += 3) for (let r = 0; r < 3; r++) { const u = I[q + r], v = I[q + (r + 1) % 3]; if (P[u * 3] === X && P[v * 3] === X) s.add([[P[u * 3 + 2], P[u * 3 + 1]], [P[v * 3 + 2], P[v * 3 + 1]]].sort((p, q) => p[0] - q[0]).join('|')); } return s; };
+    for (const [la, lb] of [['fine', 'fine'], ['fine', 'coarse'], ['coarse', 'fine']]) { const A = segs(a[la]), B = segs(b[lb]), miss = [...A].filter((k) => !B.has(k)).length + [...B].filter((k) => !A.has(k)).length;
+      out.push({ name: `${c.place} ${e.ix},${e.iz} | ${e.ix + 1},${e.iz}: their edge meets (${la} | ${lb})`, ok: A.size > 0 && miss === 0, why: `${A.size} and ${B.size} segments, ${miss} unmatched` }); }
+  }
+  return out;
+}
