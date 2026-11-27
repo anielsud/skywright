@@ -66,14 +66,16 @@ export class MeshW {
   growI(k) { if (this.ni + k > this.idx.length) { const b = new Uint32Array(Math.max(this.ni + k, this.idx.length * 2)); b.set(this.idx); this.idx = b; } }
   color(hex) { this.cr = (hex >> 16) & 255; this.cg = (hex >> 8) & 255; this.cb = hex & 255; }
   v(x, y, z, nx, ny, nz, u, w, cell) {
-    const i = this.n++, P = this.pos, k = i * 3;
+    const i = this.n++, P = this.pos, N = this.nor, Cl = this.col, A = this.atl, U = this.uv, k = i * 3, a = i * 4;
     P[k] = Math.round((x - this.cx) * PQ); P[k + 1] = Math.round(y * PQ); P[k + 2] = Math.round((z - this.cz) * PQ);
-    this.nor[k] = nx * 127; this.nor[k + 1] = ny * 127; this.nor[k + 2] = nz * 127;
-    this.uv[i * 2] = half(u); this.uv[i * 2 + 1] = half(w);
-    this.col[k] = this.cr; this.col[k + 1] = this.cg; this.col[k + 2] = this.cb;
-    const a = i * 4; this.atl[a] = cell; this.atl[a + 1] = this.seed; this.atl[a + 2] = Math.max(0, Math.min(255, (y - this.yg + LY0) * LYS)); this.atl[a + 3] = this.top;
+    N[k] = nx * 127; N[k + 1] = ny * 127; N[k + 2] = nz * 127;
+    U[i * 2] = half(u); U[i * 2 + 1] = half(w);
+    Cl[k] = this.cr; Cl[k + 1] = this.cg; Cl[k + 2] = this.cb;
+    A[a] = cell; A[a + 1] = this.seed; A[a + 2] = Math.max(0, Math.min(255, (y - this.yg + LY0) * LYS)); A[a + 3] = this.top;
     return i;
   }
+  // room for k more vertices and m more indices (the checks inline: grow / growI only when it's full)
+  room(k, m) { if (this.n + k > this.cap) this.grow(this.n + k); if (this.ni + m > this.idx.length) this.growI(m); }
   // vertical wall seen from outside, a -> b: u counts bays (from u0: a facade program's door is bay 0), v floors (from
   // yf, the floor datum)
   // (t0, t1: only that stretch of it, its bays where the whole wall's are: a wall broken by a passage)
@@ -83,10 +85,19 @@ export class MeshW {
     // (a facade program's ground floor reads the height above the floor, atl.z, which stops 60 m up: a taller wall is
     // two quads, so the lower one's heights interpolate true)
     const ys = this.yg + 255 / LYS - LY0 - 4; if (y1 > ys + 1 && y0 < ys - 1 && facadeSpec(cell)?.gH > 0) { this.wall(ax, az, bx, bz, y0, ys, yf, cell, bay, fl, u0, t0, t1); this.wall(ax, az, bx, bz, ys, y1, yf, cell, bay, fl, u0, t0, t1); return; }
-    this.grow(this.n + 4); this.growI(6);
+    if (this.n + 4 > this.cap) this.grow(this.n + 4); if (this.ni + 6 > this.idx.length) this.growI(6);
     const o = this.n, x0 = ax + (bx - ax) * t0, z0 = az + (bz - az) * t0, x1 = ax + (bx - ax) * t1, z1 = az + (bz - az) * t1, ua = u0 + nb * t0, ub = u0 + nb * t1;
-    this.v(x0, y0, z0, nx, 0, nz, ua, v0, cell); this.v(x1, y0, z1, nx, 0, nz, ub, v0, cell); this.v(x1, y1, z1, nx, 0, nz, ub, v1, cell); this.v(x0, y1, z0, nx, 0, nz, ua, v1, cell);
-    const I = this.idx, k = this.ni; I[k] = o; I[k + 1] = o + 1; I[k + 2] = o + 2; I[k + 3] = o; I[k + 4] = o + 2; I[k + 5] = o + 3; this.ni += 6;
+    // the four corners written straight in (what v() writes: (x0, y0) (x1, y0) (x1, y1) (x0, y1), each value once)
+    const P = this.pos, N = this.nor, U = this.uv, Cl = this.col, A = this.atl, k = o * 3, a = o * 4, w = o * 2;
+    const px0 = Math.round((x0 - this.cx) * PQ), pz0 = Math.round((z0 - this.cz) * PQ), px1 = Math.round((x1 - this.cx) * PQ), pz1 = Math.round((z1 - this.cz) * PQ), py0 = Math.round(y0 * PQ), py1 = Math.round(y1 * PQ);
+    P[k] = px0; P[k + 1] = py0; P[k + 2] = pz0; P[k + 3] = px1; P[k + 4] = py0; P[k + 5] = pz1; P[k + 6] = px1; P[k + 7] = py1; P[k + 8] = pz1; P[k + 9] = px0; P[k + 10] = py1; P[k + 11] = pz0;
+    const qx = nx * 127, qz = nz * 127; for (let j = k; j < k + 12; j += 3) { N[j] = qx; N[j + 1] = 0; N[j + 2] = qz; }
+    const ha = half(ua), hb = half(ub), h0 = half(v0), h1 = half(v1); U[w] = ha; U[w + 1] = h0; U[w + 2] = hb; U[w + 3] = h0; U[w + 4] = hb; U[w + 5] = h1; U[w + 6] = ha; U[w + 7] = h1;
+    const cr = this.cr, cg = this.cg, cb = this.cb; for (let j = k; j < k + 12; j += 3) { Cl[j] = cr; Cl[j + 1] = cg; Cl[j + 2] = cb; }
+    const l0 = Math.max(0, Math.min(255, (y0 - this.yg + LY0) * LYS)), l1 = Math.max(0, Math.min(255, (y1 - this.yg + LY0) * LYS)), sd = this.seed, tp = this.top;
+    for (let j = 0; j < 4; j++) { const b = a + j * 4; A[b] = cell; A[b + 1] = sd; A[b + 2] = j < 2 ? l0 : l1; A[b + 3] = tp; }
+    this.n = o + 4;
+    const I = this.idx, i = this.ni; I[i] = o; I[i + 1] = o + 1; I[i + 2] = o + 2; I[i + 3] = o; I[i + 4] = o + 2; I[i + 5] = o + 3; this.ni += 6;
   }
   // any planar polygon (counter-clockwise from its front), uv in metres / s from its first point
   poly(P, cell, s = 3) {
@@ -97,7 +108,7 @@ export class MeshW {
     // in-plane axes for the uv
     let tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2]; const tl = Math.hypot(tx, ty, tz) || 1; tx /= tl; ty /= tl; tz /= tl;
     const bx = ny * tz - nz * ty, by = nz * tx - nx * tz, bz = nx * ty - ny * tx;
-    this.grow(this.n + n); this.growI((n - 2) * 3);
+    this.room(n, (n - 2) * 3);
     const o = this.n;
     for (const p of P) { const dx = p[0] - a[0], dy = p[1] - a[1], dz = p[2] - a[2]; this.v(p[0], p[1], p[2], nx, ny, nz, (dx * tx + dy * ty + dz * tz) / s, (dx * bx + dy * by + dz * bz) / s, cell); }
     for (let k = 1; k < n - 1; k++) { const I = this.idx, j = this.ni; I[j] = o; I[j + 1] = o + k; I[j + 2] = o + k + 1; this.ni += 3; }
@@ -107,7 +118,7 @@ export class MeshW {
     const n = P.length, a = P[0], b = P[1], c = P[n - 1];
     let nx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]), ny = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]), nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
     const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
-    this.grow(this.n + n); this.growI((n - 2) * 3);
+    this.room(n, (n - 2) * 3);
     const o = this.n;
     for (let k = 0; k < n; k++) this.v(P[k][0], P[k][1], P[k][2], nx, ny, nz, UV[k][0], UV[k][1], cell);
     for (let k = 1; k < n - 1; k++) { const I = this.idx, j = this.ni; I[j] = o; I[j + 1] = o + k; I[j + 2] = o + k + 1; this.ni += 3; }
@@ -116,7 +127,7 @@ export class MeshW {
   // sides, smooth (the vertices shared round it and down it); u from 0 to uMax round it. apex: the last row is a point
   // (one vertex, its normal straight up)
   lathe(x, z, rows, seg, cell, uMax, apex = false) {
-    const m = seg + 1, nr = rows.length - (apex ? 1 : 0); this.grow(this.n + m * nr + 1); this.growI(seg * (rows.length - 1) * 6);
+    const m = seg + 1, nr = rows.length - (apex ? 1 : 0); this.room(m * nr + 1, seg * (rows.length - 1) * 6);
     const o = this.n;
     for (let j = 0; j < nr; j++) { const [r, y, v, no, nu] = rows[j]; for (let k = 0; k <= seg; k++) { const a = (k / seg) * Math.PI * 2, s = Math.sin(a), c = Math.cos(a); this.v(x + s * r, y, z + c * r, s * no, nu, c * no, (k / seg) * uMax, v, cell); } }
     if (apex) { const [, y, v] = rows[nr]; this.v(x, y, z, 0, 1, 0, uMax / 2, v, cell); }
@@ -128,15 +139,28 @@ export class MeshW {
   }
   // flat roof over a footprint (x, z pairs) with holes, at height y, facing up (down: a ceiling, facing down)
   roof(P, holes, y, cell, down = false) {
-    const ct = P.map((p) => new THREE.Vector2(p[0], p[1])), hs = holes.map((h) => h.map((p) => new THREE.Vector2(p[0], p[1])));
-    let tris; try { tris = THREE.ShapeUtils.triangulateShape(ct, hs); } catch (e) { return; }
-    const all = [...P, ...holes.flat()], n = all.length, ox = P[0][0], oz = P[0][1];
-    this.grow(this.n + n); this.growI(tris.length * 3);
-    const o = this.n;
-    for (const p of all) this.v(p[0], y, p[1], 0, down ? -1 : 1, 0, (p[0] - ox) / 3, (p[1] - oz) / 3, cell);
-    for (const [a, b, c] of tris) {
-      const A = all[a], B = all[b], Cc = all[c], up = ((B[1] - A[1]) * (Cc[0] - A[0]) - (B[0] - A[0]) * (Cc[1] - A[1]) > 0) !== down;
-      const I = this.idx, j = this.ni; I[j] = o + a; I[j + 1] = o + (up ? b : c); I[j + 2] = o + (up ? c : b); this.ni += 3;
+    let tris = !holes.length && earFast(P);
+    if (!tris) {
+      const ct = P.map((p) => new THREE.Vector2(p[0], p[1])), hs = holes.map((h) => h.map((p) => new THREE.Vector2(p[0], p[1])));
+      try { tris = THREE.ShapeUtils.triangulateShape(ct, hs).flat(); } catch (e) { return; }
+    }
+    const all = holes.length ? [...P, ...holes.flat()] : P, n = all.length, ox = P[0][0], oz = P[0][1], nt = tris.length;
+    this.room(n, nt);
+    const o = this.n, Pp = this.pos, N = this.nor, U = this.uv, Cl = this.col, A = this.atl, py = Math.round(y * PQ), ny = (down ? -1 : 1) * 127;
+    const ly = Math.max(0, Math.min(255, (y - this.yg + LY0) * LYS)), cr = this.cr, cg = this.cg, cb = this.cb, sd = this.seed, tp = this.top;
+    for (let j = 0; j < n; j++) { // (v(p[0], y, p[1], 0, +-1, 0, ...), written straight in)
+      const p = all[j], i = o + j, k = i * 3, a = i * 4;
+      Pp[k] = Math.round((p[0] - this.cx) * PQ); Pp[k + 1] = py; Pp[k + 2] = Math.round((p[1] - this.cz) * PQ);
+      N[k] = 0; N[k + 1] = ny; N[k + 2] = 0;
+      U[i * 2] = half((p[0] - ox) / 3); U[i * 2 + 1] = half((p[1] - oz) / 3);
+      Cl[k] = cr; Cl[k + 1] = cg; Cl[k + 2] = cb;
+      A[a] = cell; A[a + 1] = sd; A[a + 2] = ly; A[a + 3] = tp;
+    }
+    this.n = o + n;
+    const I = this.idx;
+    for (let t = 0; t < nt; t += 3) {
+      const a = tris[t], b = tris[t + 1], c = tris[t + 2], Aa = all[a], B = all[b], Cc = all[c], up = ((B[1] - Aa[1]) * (Cc[0] - Aa[0]) - (B[0] - Aa[0]) * (Cc[1] - Aa[1]) > 0) !== down;
+      const j = this.ni; I[j] = o + a; I[j + 1] = o + (up ? b : c); I[j + 2] = o + (up ? c : b); this.ni += 3;
     }
   }
   // oriented box (centre, axis u, half sizes), sides + top
@@ -182,6 +206,41 @@ export class MeshW {
     m.position.set(this.cx, 0, this.cz); m.scale.setScalar(1 / PQ); m.matrixAutoUpdate = false; m.updateMatrix();
     return m;
   }
+}
+
+// A roof's triangles without holes, as THREE.ShapeUtils.triangulateShape gives them (its earcut, 2.2.4, in three r170):
+// the same linked ring, the same ear tests in the same order, so the same triangles, flat [a, b, c, ...]. Only the
+// common case: no holes, at most 80 points (earcut's z-order hashing starts past that), no repeated end point
+// (triangulateShape drops it), every ear found in earcut's first pass; null otherwise (the full triangulateShape then).
+const EAR = { nx: new Int32Array(81), pv: new Int32Array(81) };
+function earFast(P) {
+  const n = P.length; if (n < 3 || n > 80) return null;
+  const L = P[n - 1], F = P[0]; if (L[0] === F[0] && L[1] === F[1]) return null;
+  let sum = 0; for (let i = 0, j = n - 1; i < n; j = i++) sum += (P[j][0] - P[i][0]) * (P[i][1] + P[j][1]);
+  const nx = EAR.nx, pv = EAR.pv, fwd = sum > 0; // (earcut's linkedList(.., clockwise = true): in order if its signed area > 0, else backwards)
+  for (let i = 0; i < n; i++) { if (fwd) { nx[i] = (i + 1) % n; pv[i] = (i + n - 1) % n; } else { nx[i] = (i + n - 1) % n; pv[i] = (i + 1) % n; } }
+  let ear = fwd ? n - 1 : 0; // (the last node inserted)
+  const del = (e) => { nx[pv[e]] = nx[e]; pv[nx[e]] = pv[e]; };
+  if (P[ear][0] === P[nx[ear]][0] && P[ear][1] === P[nx[ear]][1]) { del(ear); ear = nx[ear]; }
+  if (nx[ear] === pv[ear]) return [];
+  const area = (p, q, r) => (P[q][1] - P[p][1]) * (P[r][0] - P[q][0]) - (P[q][0] - P[p][0]) * (P[r][1] - P[q][1]);
+  const out = []; let stop = ear;
+  while (pv[ear] !== nx[ear]) {
+    const a = pv[ear], b = ear, c = nx[ear];
+    let ok = area(a, b, c) < 0;
+    if (ok) { // (earcut isEar: no other point of the ring in the triangle)
+      const ax = P[a][0], ay = P[a][1], bx = P[b][0], by = P[b][1], cx = P[c][0], cy = P[c][1];
+      const x0 = ax < bx ? (ax < cx ? ax : cx) : (bx < cx ? bx : cx), y0 = ay < by ? (ay < cy ? ay : cy) : (by < cy ? by : cy), x1 = ax > bx ? (ax > cx ? ax : cx) : (bx > cx ? bx : cx), y1 = ay > by ? (ay > cy ? ay : cy) : (by > cy ? by : cy);
+      for (let m = nx[c]; m !== a; m = nx[m]) {
+        const px = P[m][0], py = P[m][1];
+        if (px >= x0 && px <= x1 && py >= y0 && py <= y1 && (cx - px) * (ay - py) >= (ax - px) * (cy - py) && (ax - px) * (by - py) >= (bx - px) * (ay - py) && (bx - px) * (cy - py) >= (cx - px) * (by - py) && area(pv[m], m, nx[m]) >= 0) { ok = false; break; }
+      }
+    }
+    if (ok) { out.push(a, b, c); del(b); ear = nx[c]; stop = nx[c]; continue; }
+    ear = c;
+    if (ear === stop) return null; // (earcut's later passes: filtering, curing, splitting)
+  }
+  return out;
 }
 
 // ---------------- reading city.bin ----------------
@@ -258,15 +317,17 @@ function cityParts(city, Q, H, q, fit, quick = false) {
   return out;
 }
 // ...worked out when something first asks (setback.js lazyParts), from its footprint kept compact till then (out here,
-// not in CityScenery.building: a closure there would keep the whole tile's mesh writer alive with it)
-function lazyBoxes(city, t, P, holes, q, fit, fallback) {
-  const fp = packRing(P), hp = holes.map(packRing);
-  const parts = () => cityParts(city, unpackRing(fp), hp.map(unpackRing), q, fit) || fallback;
+// not in CityScenery.building: a closure there would keep the whole tile's mesh writer alive with it). exact: the
+// footprint kept as it is (a big one, FOOT.eager: a few hundred of them, its boxes exactly what they'd be at load;
+// packRing's floats would move its points a millimetre)
+function lazyBoxes(city, t, P, holes, q, fit, fallback, exact = false) {
+  const fp = exact ? P : packRing(P), hp = exact ? holes : holes.map(packRing), un = exact ? (a) => a : unpackRing;
+  const parts = () => cityParts(city, un(fp), hp.map(un), q, fit) || fallback;
   lazyParts(t, () => {
     const t0 = performance.now(), w0 = { ...WORK }, B = parts(), FS = city.footStats, dt = performance.now() - t0, w = workSince(w0);
-    if (B?.refine) city.refiner.add(unpackRing(fp), hp.map(unpackRing), q.ux, q.uz, (T) => { if (city.w.destruct?.states.has(t.dk)) return; t.parts = fit ? T.map((f) => fitBox(city.roads, f)) : T; FS.boxes += T.length; FS.max = Math.max(FS.max, T.length); }); // (still bare: cut into squares, a piece at a time, setback.js Refiner)
+    if (B?.refine) city.refiner.add(un(fp), hp.map(un), q.ux, q.uz, (T) => { if (city.w.destruct?.states.has(t.dk)) return; t.parts = fit ? T.map((f) => fitBox(city.roads, f)) : T; FS.boxes += T.length; FS.max = Math.max(FS.max, T.length); }); // (still bare: cut into squares, a piece at a time, setback.js Refiner)
     if (dt > FS.lazy) { FS.lazy = dt; FS.lazyRedo = parts; } // (lazyRedo: the slowest one again, for tools/test/setbacks.js: info)
-    if (w.cells + w.verts > (FS.lazyWork?.cells ?? 0) + (FS.lazyWork?.verts ?? 0)) FS.lazyWork = { ...w, walls: fp.length / 2, boxes: B?.length ?? 0 }; // (the most work any one took: tools/test/setbacks.js)
+    if (w.cells + w.verts > (FS.lazyWork?.cells ?? 0) + (FS.lazyWork?.verts ?? 0)) FS.lazyWork = { ...w, walls: exact ? fp.length : fp.length / 2, boxes: B?.length ?? 0, big: exact }; // (the most work any one took: tools/test/setbacks.js)
     return B;
   });
 }
@@ -617,13 +678,10 @@ export class CityScenery {
     }
     const y0 = cut ? yPass : raised ? yBase : R.g0 - 1, O = FOOT.out;
     const t = lazy ? this.addBox({ cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz, hl: b0.hl + O, hw: b0.hw + O }, y0, yTop, this.curTile) : this.addParts(one, y0, yTop, this.curTile);
-    if (lazy && A > FOOT.eager) { // (a big one now: its boxes take a while, not a hitch later)
-      t.parts = cityParts(this, P, holes, b0, !F.through) || one;
-      // under FOOT.retry covered (a campus of wings, a block of courtyards): its first pass's boxes for now, then the
-      // footprint cut into squares a piece at a time after load (setback.js Refiner), unless it's been hit by then
-      if (t.parts.refine) this.refiner.add(P, holes, b0.ux, b0.uz, (B) => { if (W.destruct?.states.has(t.dk)) return; t.parts = F.through ? B : B.map((f) => fitBox(this.roads, f)); this.footStats.boxes += B.length; this.footStats.max = Math.max(this.footStats.max, B.length); });
-    }
-    else if (lazy) lazyBoxes(this, t, P, holes, { cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz }, !F.through, one);
+    // (a big one too (FOOT.eager): its footprint kept exact. Under FOOT.retry covered (a campus of wings, a block of
+    // courtyards): its first pass's boxes, then the footprint cut into squares a piece at a time (setback.js Refiner),
+    // unless it's been hit by then)
+    if (lazy) lazyBoxes(this, t, P, holes, { cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz }, !F.through, one, A > FOOT.eager);
     this.footStats.n++; this.footStats.load += performance.now() - tb;
     if (F.through) t.through = true;
     if (cut) t.passage = true;
