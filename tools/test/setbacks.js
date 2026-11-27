@@ -18,6 +18,8 @@
 //   cheap:      the boxes at load (an irregular building's are worked out when first wanted: how many were, and their
 //               work per building), and the most work any one building's took after load (counted, not timed)
 //   one bldg:   an irregular building's boxes are one building to destruction.js (towns.hit, heights, damage state)
+//   topple:     a tall tower's toppling top (destruction.js topple) is its own boxes above the cut, moved with it: a
+//               plane hits the piece (pieceHit) and not the air beside it (New York: a few towers, while they fall)
 // Standalone (counts before and after, worst spots): node --import ./tools/test/node/setup.mjs tools/test/setbacks.js [place ...]
 import { VERGE } from '../../src/roadgrade.js';
 import { FOOT } from '../../src/setback.js';
@@ -71,7 +73,7 @@ function depth(Z, P) {
 }
 
 // the place's footprints: [{ P, x, z }] as built ('after'), or as mapped ('before', what the World starts from)
-async function footprints(w, which) {
+export async function footprints(w, which) {
   const out = [], T = w.towns;
   if (T.city) {
     const { readRec } = await import('../../src/realCity.js'), city = T.city, H = city.city.hdr, U = city.city.U, S = city.city.S, R = {}, minA = w.qName === 'low' ? 60 : w.qName === 'medium' ? 25 : 0;
@@ -167,19 +169,19 @@ export async function measure(w, which = 'after') {
       for (let x = x0 + 0.35; x < x1; x += 0.7) for (let z = z0 + 0.35; z < z1; z += 0.7) if (inPoly(f.P, x, z) && !(f.holes || []).some((h) => inPoly(h, x, z))) { n++; if (inB(x, z)) k++; }
       if (!n) continue;
       cover.inside += n; cover.covered += k; cover.bld++; cover.boxes += B.length; cover.max = Math.max(cover.max, B.length); if (B.length > 1) cover.multi++;
-      if (k < 0.9 * n && n * 0.49 >= 40) { let cx = 0, cz = 0; for (const p of f.P) { cx += p[0] / f.P.length; cz += p[1] / f.P.length; } cover.low.push({ x: Math.round(cx), z: Math.round(cz), c: k / n, dk: f.dk }); }
+      if (k < 0.9 * n && n * 0.49 >= 40) { let cx = 0, cz = 0; for (const p of f.P) { cx += p[0] / f.P.length; cz += p[1] / f.P.length; } cover.low.push({ x: Math.round(cx), z: Math.round(cz), c: k / n, dk: f.dk, nb: B.length, nv: f.P.length, A: Math.round(n * 0.49), P: f.P, holes: f.holes }); }
     }
     cover.low.sort((a, b) => a.c - b.c);
   }
   const hist = [0.5, 1, 2, 4, Infinity].map((lim, i, L) => [i ? L[i - 1] : TOL, lim, on.filter((o) => o.d > (i ? L[i - 1] : TOL) && o.d <= lim).length]);
-  return { n: F.length, on, under, hist, segs: Z.n, boxes, nBoxes, out, out1, outAny, cover };
+  return { n: F.length, on, under, hist, segs: Z.n, boxes, nBoxes, out, out1, outAny, cover, F };
 }
 
 export async function runCase(c) {
   const { worldAt } = await import('./node/world.mjs');
   const W = await worldAt(c.loc), w = W.world, sb = (w.towns.city || w.towns).setbacks, ms = sb.ms; // (at load: before measure builds New York's low footprints too)
   const fs = (w.towns.city || w.towns).footStats, load = fs.load, LW = (w.towns.city || w.towns).loadWork; // (before measure asks every building for its boxes; LW: setback.js WORK counted at load)
-  const m = await measure(w, 'after'), T0 = w.towns, d = perBuilding(w);
+  const m = await measure(w, 'after'), T0 = w.towns, d = perBuilding(w), tp = c.loc === 'nyc' ? await topples(w, m.F) : null;
   const worst = m.on.slice(0, 3).map((o) => `(${o.x}, ${o.z}) ${o.d.toFixed(2)} m into a ${o.kind}`).join('; ');
   const kept = m.n / Math.max(1, m.n + sb.dropped);
   return [
@@ -190,8 +192,9 @@ export async function runCase(c) {
     { name: `${c.loc}: few big buildings left over a road`, ok: m.under.length <= Math.max(3, m.n * 0.0005), why: `${m.under.length} (a passage under them, or a mapping clash: ${m.under.slice(0, 4).map((o) => `(${o.x}, ${o.z})`).join(' ')})` },
     { name: `${c.loc}: setbacks keep most buildings`, ok: kept > 0.97, why: `${sb.dropped} left out, ${m.n} kept (${(100 * kept).toFixed(1)}%)` },
     { name: `${c.loc}: setbacks are cheap at load`, ok: !!LW && sbWork(LW) <= CAP[c.loc].sb * LW.n, why: `${LW ? `${sbWork(LW)} units of work for ${LW.n} buildings, ${(sbWork(LW) / Math.max(1, LW.n)).toFixed(0)} a building (at most ${CAP[c.loc].sb}): ${LW.index} road points indexed and index entries visited, ${LW.tests} footprint walls tested against a road` : 'no load work counted'} (Node, Low: the road index, the footprints and boxes built at load; New York's low ones are set back a tile at a time as they stream in). ${ms.toFixed(0)} ms, ${(100 * ms / W.ms).toFixed(1)}% of the World's ${W.ms} ms build: info only` },
-    { name: `${c.loc}: collision boxes cheap`, ok: !!LW && LW.irr <= CAP[c.loc].eager && bxWork(LW) <= CAP[c.loc].load * LW.n && bxWork(fs.lazyWork) <= LAZY_MAX, why: `${LW ? `at load ${LW.irr} irregular buildings boxed (at most ${CAP[c.loc].eager}: the big ones, FOOT.eager; the rest are worked out when first wanted, setback.js lazyParts), ${bxWork(LW)} units of box work for ${LW.n} buildings (${(bxWork(LW) / Math.max(1, LW.n)).toFixed(1)} a building, at most ${CAP[c.loc].load}: ${LW.cells} grid cells, ${LW.verts} walls visited)` : 'no load work counted'}; then the most any one took: ${bxWork(fs.lazyWork)} (at most ${LAZY_MAX}: ${fs.lazyWork?.cells ?? 0} cells, ${fs.lazyWork?.verts ?? 0} walls visited, a footprint of ${fs.lazyWork?.walls ?? 0} walls into ${fs.lazyWork?.boxes ?? 0} boxes, of at most FOOT.max ${FS_MAX}; ${fs.max} the most any had). Info: at load ${load.toFixed(0)} ms (${(100 * load / W.ms).toFixed(1)}% of the build), then ${(fs.ms / Math.max(1, fs.irr)).toFixed(2)} ms a building, the slowest ${slowest(fs).toFixed(1)} ms` },
+    { name: `${c.loc}: collision boxes cheap`, ok: !!LW && LW.irr <= CAP[c.loc].eager && bxWork(LW) <= CAP[c.loc].load * LW.n && bxWork(fs.lazyWork) <= LAZY_MAX, why: `${LW ? `at load ${LW.irr} irregular buildings boxed (at most ${CAP[c.loc].eager}: the big ones, FOOT.eager; the rest are worked out when first wanted, setback.js lazyParts), ${bxWork(LW)} units of box work for ${LW.n} buildings (${(bxWork(LW) / Math.max(1, LW.n)).toFixed(1)} a building, at most ${CAP[c.loc].load}: ${LW.cells} grid cells, ${LW.verts} walls visited)` : 'no load work counted'}; then the most any one took: ${bxWork(fs.lazyWork)} (at most ${LAZY_MAX}: ${fs.lazyWork?.cells ?? 0} cells, ${fs.lazyWork?.verts ?? 0} walls visited, a footprint of ${fs.lazyWork?.walls ?? 0} walls into ${fs.lazyWork?.boxes ?? 0} boxes, of at most FOOT.max ${FS_MAX}, ${FOOT.fine?.max ?? FS_MAX} in the fine pass; ${fs.max} the most any had). Info: at load ${load.toFixed(0)} ms (${(100 * load / W.ms).toFixed(1)}% of the build), then ${(fs.ms / Math.max(1, fs.irr)).toFixed(2)} ms a building, the slowest ${slowest(fs).toFixed(1)} ms` },
     { name: `${c.loc}: an irregular building is still one building`, ok: d.n > 0 && !d.bad.length, why: `${d.n} buildings of ${d.boxes} boxes: each box hit is that building, knocked down to 2 m every one of its boxes is 2 m tall, one damage state each${d.bad.length ? '; ' + d.bad.slice(0, 3).join('; ') : ''}` },
+    ...(tp ? [{ name: `${c.loc}: a toppling top collides as its own shape`, ok: tp.n >= 2 && tp.inside >= 0.9 && tp.off <= 0.01, why: `${tp.n} tall towers' tops knocked off (${tp.boxes} boxes in all), sampled ${tp.frames} times while they fall: ${(100 * tp.inside).toFixed(1)}% of points inside the footprints above the cut hit the piece (at least 90%; planes hit nothing of a falling top before), ${(100 * tp.off).toFixed(1)}% of points more than 2 m off its walls do (at most 1%; ${(100 * 0.417).toFixed(0)}% did inside the one box round the whole building it was before)` }] : []),
   ];
 }
 
@@ -202,7 +205,10 @@ export async function runCase(c) {
 // time share had 3-9x room); eager 0, 0, 2, 249 (New York's: ~1.5x, as the old 8% share had over its 5.5%); load 56,
 // 45, 38, 255 (~1.6-2x); the most one building took after load: nyc 258k (268 walls into 12 boxes), islands 95k,
 // lauterbrunnen 167k, canyon 68k (~2.3x over the worst).
-const CAP = { islands: { sb: 65, eager: 5, load: 120 }, canyon: { sb: 190, eager: 5, load: 100 }, lauterbrunnen: { sb: 75, eager: 10, load: 80 }, nyc: { sb: 280, eager: 375, load: 400 } }, LAZY_MAX = 600000;
+// LAZY_MAX raised from 600k when the under-covered footprints got a second, finer pass (setback.js FOOT.fine): its
+// checks walk the walls more (every face at up to 16 points, every edge at up to 24); the worst counted 1.94M (nyc, 268
+// walls into 28 boxes; 8.6 ms, below the 12 ms the slowest took before), 1.67M lauterbrunnen (~2.3x over the worst).
+const CAP = { islands: { sb: 65, eager: 5, load: 120 }, canyon: { sb: 190, eager: 5, load: 100 }, lauterbrunnen: { sb: 75, eager: 10, load: 80 }, nyc: { sb: 280, eager: 375, load: 400 } }, LAZY_MAX = 4500000;
 const sbWork = (w) => (w ? w.index + w.tests : 0), bxWork = (w) => (w ? w.cells + w.verts : 0);
 // (info only) the slowest building's boxes worked out after load, timed again 3 times, the best taken
 function slowest(fs) {
@@ -210,6 +216,39 @@ function slowest(fs) {
   if (!fs.lazyRedo) return (fs._slow = fs.lazy);
   let best = Infinity; for (let k = 0; k < 3; k++) { const t0 = performance.now(); fs.lazyRedo(); best = Math.min(best, performance.now() - t0); }
   return (fs._slow = best);
+}
+
+// A tall tower's top knocked off (destruction.js topCollapse 'topple'): its true shape is the footprints above the cut
+// (its own and the parts stacked on it), moved with the piece; points inside them, and points more than 2 m off their
+// walls, sampled at the start and every 1/3 s of its fall, against what a plane meets (destruction.js pieceHit)
+async function topples(w, F) {
+  const THREE = await import('three'), D = w.destruct, T = w.towns.city, byDk = new Map(F.map((f) => [f.dk, f]));
+  const noop = new Proxy(function () {}, { get: () => noop, apply: () => noop });
+  D.reset(); D.fx = noop;
+  const inPoly = (P, x, z) => { let c = false; for (let i = 0, j = P.length - 1; i < P.length; j = i++) { const a = P[i], b = P[j]; if ((a[1] > z) !== (b[1] > z) && x < (b[0] - a[0]) * (z - a[1]) / (b[1] - a[1]) + a[0]) c = !c; } return c; };
+  const dPoly = (P, x, z) => { let d = 1e9; for (let k = 0, m = P.length - 1; k < P.length; m = k++) d = Math.min(d, ptSeg(x, z, { ax: P[m][0], az: P[m][1], bx: P[k][0], bz: P[k][1] })); return d; };
+  const ents = new Map(), pick = []; for (const a of T.grid.values()) for (const e of a) if (e.dk && !e.through) ents.set(e.dk, e);
+  for (const e of [...ents.values()].filter((e) => e[3] > 90 && byDk.has(e.dk) && e.parts?.length >= 3).sort((a, b) => b.parts.length - a.parts.length || b[3] - a[3])) { if (pick.length >= 4) break; if (pick.every((q) => Math.hypot(q[0] - e[0], q[2] - e[2]) > 400)) pick.push(e); }
+  let inN = 0, inH = 0, offN = 0, offH = 0, frames = 0, boxes = 0, n = 0; const v = new THREE.Vector3();
+  for (const e of pick) {
+    const B = D.get(e), q = e.parts.reduce((m, p) => (p.hl * p.hw > m.hl * m.hw ? p : m)), dir = new THREE.Vector3(1, 0, 0);
+    const k0 = D.proxies.length; D.topCollapse(B, new THREE.Vector3(q.x, e[1] + e[3] * 0.75, q.z), dir, dir.clone().negate(), 'topple');
+    const P = D.proxies[k0]; if (!P) continue; n++; boxes += P.boxes.length;
+    const shape = []; for (const dk of P.hit) { const f = byDk.get(dk), C = D.states.get(dk); if (f && C && C.y1 > B.cut) shape.push({ P: f.P, holes: f.holes || [], y0: Math.max(B.cut, C.y0), y1: C.y1 }); }
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, ya = 1e9, yb = -1e9; for (const s of shape) { for (const p of s.P) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); } ya = Math.min(ya, s.y0); yb = Math.max(yb, s.y1); }
+    P.mesh.updateMatrixWorld(); const M0i = new THREE.Matrix4().copy(P.mesh.matrixWorld).invert(), IN = [], OFF = [], st = Math.max(1.5, Math.sqrt((x1 - x0) * (z1 - z0) / 900));
+    for (let x = x0 - 6; x < x1 + 6; x += st) for (let z = z0 - 6; z < z1 + 6; z += st) for (let k = 0; k < 4; k++) {
+      const y = ya + (yb - ya) * (k + 0.5) / 4, l = new THREE.Vector3(x, y, z).applyMatrix4(M0i);
+      if (shape.some((s) => y > s.y0 && y < s.y1 && inPoly(s.P, x, z) && !s.holes.some((h) => inPoly(h, x, z)))) IN.push(l);
+      else if (shape.every((s) => !inPoly(s.P, x, z) && dPoly(s.P, x, z) > 2)) OFF.push(l);
+    }
+    for (let t = 0, fr = 0; D.proxies.includes(P) && t < 15; t += 1 / 60, fr++) {
+      if (fr % 20 === 0) { frames++; for (const l of IN) { inN++; if (D.pieceHit(v.copy(l).applyMatrix4(P.mesh.matrixWorld)) === P.solid) inH++; } for (const l of OFF) { offN++; if (D.pieceHit(v.copy(l).applyMatrix4(P.mesh.matrixWorld)) === P.solid) offH++; } }
+      D.update(1 / 60, noop, { x: 0, y: 0, z: 0 }, null);
+    }
+  }
+  D.reset();
+  return { n, boxes, frames, inside: inH / Math.max(1, inN), off: offH / Math.max(1, offN) };
 }
 
 // An irregular building's boxes are one building to destruction.js: a point in any of them hits its entry

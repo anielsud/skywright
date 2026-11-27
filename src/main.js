@@ -1179,7 +1179,7 @@ function stepFlight(dtReal) {
   }
   if (stunt) for (const m of stunt) { if (m.track) trackStunt(f, m.track); if (m.center) hud.center(m.center, 1200); if (m.toast) hud.toast(m.toast, m.good ? 'good' : ''); if (m.slowmo && f.t - f.lastSlowmo > 4) { f.slowmo = m.slowmo; f.lastSlowmo = f.t; } if (m.splash) effects.splash(m.splash, m.power || 6); }
   // trees
-  if (!ac.dead && (ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), 0) < 30 || world.towns.tall)) { // (a city's towers reach far higher)
+  if (!ac.dead && (ac.x.y - Math.max(world.heightAt(ac.x.x, ac.x.z), 0) < 30 || world.towns.tall || world.destruct.proxies.length)) { // (a city's towers reach far higher; a toppling top falls from them)
     for (const p of ac.parts) {
       if (!p.alive) continue;
       const wp = ac.worldPoint(p.center, _v);

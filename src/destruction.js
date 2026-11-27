@@ -15,8 +15,10 @@
 //
 // Effects, all pooled and sized per quality tier: debris chunks wearing the building's own facade (instanced, the
 // building material), glass shards, dust (the shared smoke particles), a rubble mound, a scorch mark, small fires
-// and lingering smoke, a burnt cavity behind each hole, and for a toppling top section one rigid proxy box drawn with
-// the building material. Damage lasts the whole flight (New York's low tiles stream out and back in: their damage is
+// and lingering smoke, a burnt cavity behind each hole, and for a toppling top section a rigid proxy drawn with the
+// building material: the building's own collision boxes above the cut (setback.js footBoxes, e.parts; and the parts
+// stacked on it), so it has the building's shape, and a plane flying into it hits it (pieceHit, World.treeHit) and
+// not the air beside it. Damage lasts the whole flight (New York's low tiles stream out and back in: their damage is
 // re-applied by restore()).
 //
 // Events for sound (pushed to the flight's events, see main.js): {type: 'building_hit', pos, power 0..1, glass,
@@ -467,13 +469,14 @@ export class Destruction {
     const cutY = Math.max(B.y0 + B.h * 0.25, p.y - 4), jag = 3;
     if (mode === 'topple' && this.proxies.length < 3) {
       this.setCut(B, cutY, jag);
-      let top = B.y1, hl = B.ob.hl, hw = B.ob.hw; const o = B.ob, same = [B.dk];
+      // the piece: the building's own boxes above the cut, and those of the parts stacked on it (each to its own top)
+      const same = [B.dk], boxes = (B.parts || [B.ob]).map((q) => ({ ...q, y0: cutY, y1: B.y1 }));
       for (const C2 of this.stacked(B, cutY)) {
         same.push(C2.dk);
-        top = Math.max(top, C2.y1); C2.top = true; this.dropCavities(C2); this.setCut(C2, cutY, jag); C2.collapsed = C2.y0 >= cutY;
-        const b = C2.ob; for (const [su, sw] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) { const x = b.x + b.ux * b.hl * su - b.uz * b.hw * sw - o.x, z = b.z + b.uz * b.hl * su + b.ux * b.hw * sw - o.z; hl = Math.max(hl, Math.abs(x * o.ux + z * o.uz)); hw = Math.max(hw, Math.abs(-x * o.uz + z * o.ux)); }
+        C2.top = true; this.dropCavities(C2); this.setCut(C2, cutY, jag); C2.collapsed = C2.y0 >= cutY;
+        for (const q of C2.parts || [C2.ob]) boxes.push({ ...q, y0: Math.max(cutY, C2.y0), y1: C2.y1 });
       }
-      this.topple(B, cutY, dir, top, hl, hw, same);
+      this.topple(B, cutY, dir, boxes, same);
       this.burst(B, new THREE.Vector3(p.x, cutY, p.z), dir, n, 3e7, 1);
       B.anim = null;
       this.mound(B, cutY - jag * 0.6, Math.min(4, B.ob.hw * 0.3), 1);
@@ -596,23 +599,45 @@ export class Destruction {
       this.anims.push(C2);
     }
   }
-  // ---------------- the toppling top section: one rigid box drawn with the building material ----------------
-  topple(B, cutY, dir, top, hl, hw, same) {
-    const o = { ...B.ob, hl, hw }, H = top - cutY; if (H < 3) return;
+  // ---------------- the toppling top section: the building's boxes above the cut, one rigid body ----------------
+  // boxes: [{ x, z, ux, uz, hl, hw, y0, y1 }] in the world (B.parts, setback.js footBoxes, and the stacked parts'). In
+  // the piece's own frame (the building's: x along ob.ux, z across, y up from its middle) each is { x, y, z, cu, cv,
+  // hl, hh, hw } (cu, cv: its own direction in that frame); drawn as one mesh, and what a plane meets (pieceHit)
+  topple(B, cutY, dir, boxes, same) {
+    const ux = B.ob.ux, uz = B.ob.uz; let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity, top = -Infinity;
+    for (const b of boxes) { top = Math.max(top, b.y1); for (const [su, sw] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) { const x = b.x + b.ux * b.hl * su - b.uz * b.hw * sw, z = b.z + b.uz * b.hl * su + b.ux * b.hw * sw, u = x * ux + z * uz, v = -x * uz + z * ux; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); } }
+    const H = top - cutY; if (H < 3) return;
     const mat = this.w.towns.mat || this.w.towns.city?.mat; if (!mat) return;
-    const geo = proxyGeo(o.hl * 2, H, o.hw * 2, B.look);
+    const um = (u0 + u1) / 2, vm = (v0 + v1) / 2, o = { x: um * ux - vm * uz, z: um * uz + vm * ux, ux, uz, hl: (u1 - u0) / 2, hw: (v1 - v0) / 2 }, yc = cutY + H / 2;
+    const L = boxes.filter((b) => b.y1 - b.y0 > 0.5).map((b) => { const dx = b.x - o.x, dz = b.z - o.z; return { x: dx * ux + dz * uz, z: -dx * uz + dz * ux, y: (b.y0 + b.y1) / 2 - yc, cu: b.ux * ux + b.uz * uz, cv: -b.ux * uz + b.uz * ux, hl: b.hl, hh: (b.y1 - b.y0) / 2, hw: b.hw }; });
+    const geo = pieceGeo(L, B.look);
     const mesh = new THREE.Mesh(geo, mat); mesh.customDepthMaterial = buildingDepthMaterial(); mesh.castShadow = this.T.shadows; mesh.receiveShadow = true;
     const yaw = Math.atan2(-o.uz, o.ux);
     mesh.quaternion.setFromAxisAngle(_v.set(0, 1, 0), yaw);
-    mesh.position.set(o.x, cutY + H / 2, o.z);
-    this.group.add(mesh);
+    mesh.position.set(o.x, yc, o.z);
+    this.group.add(mesh); mesh.updateMatrixWorld();
     const d = new THREE.Vector3(dir.x, 0, dir.z); if (d.lengthSq() < 1e-4) d.set(1, 0, 0); d.normalize();
-    // pivot: the bottom edge on the side it falls toward (the box's support point along d)
-    const ax = new THREE.Vector3(o.ux, 0, o.uz), az = new THREE.Vector3(-o.uz, 0, o.ux);
-    const reach = Math.abs(d.dot(ax)) * o.hl + Math.abs(d.dot(az)) * o.hw;
+    // pivot: the bottom edge on the side it falls toward (the boxes' support point along d)
+    const du = d.x * ux + d.z * uz, dv = -d.x * uz + d.z * ux; let reach = 0;
+    for (const b of L) reach = Math.max(reach, b.x * du + b.z * dv + Math.abs(du * b.cu + dv * b.cv) * b.hl + Math.abs(-du * b.cv + dv * b.cu) * b.hw);
     const pivot = new THREE.Vector3(o.x, cutY, o.z).addScaledVector(d, reach * 0.8);
     const axis = new THREE.Vector3(0, 1, 0).cross(d).normalize();
-    this.proxies.push({ mesh, B, H, hx: o.hl, hz: o.hw, pivot, axis, q0: mesh.quaternion.clone(), c0: mesh.position.clone(), th: 0, om: 0.15, phase: 0, v: new THREE.Vector3(), w: new THREE.Vector3(), t: 0, mass: 4 * o.hl * o.hw * H * 220, hit: new Set(same) /* (not its own stumps) */, release: 0.35 + Math.random() * 0.25 });
+    // the corners (local): what lands first, what hits the buildings on the way down. Only the outermost (furthest out
+    // along any of 48 directions: at most 48 of them, however many boxes; those inside the rest never touch first)
+    const all = []; for (const b of L) for (let k = 0; k < 8; k++) { const a = k & 1 ? b.hl : -b.hl, c = k & 4 ? b.hw : -b.hw; all.push(new THREE.Vector3(b.x + a * b.cu - c * b.cv, b.y + (k & 2 ? b.hh : -b.hh), b.z + a * b.cv + c * b.cu)); }
+    const keep = new Set(); for (let i = 0; i < 48; i++) { const y = 1 - (2 * i + 1) / 48, r = Math.sqrt(1 - y * y), t = i * 2.39996, dx = Math.cos(t) * r, dz = Math.sin(t) * r; let bi = 0, bd = -Infinity; for (let k = 0; k < all.length; k++) { const q = all[k], dd = q.x * dx + q.y * y + q.z * dz; if (dd > bd) { bd = dd; bi = k; } } keep.add(bi); }
+    const corners = [...keep].map((k) => all[k]);
+    const vol = L.reduce((t, b) => t + 8 * b.hl * b.hh * b.hw, 0), rad = L.reduce((m, b) => Math.max(m, Math.hypot(b.x, b.y, b.z) + Math.hypot(b.hl, b.hh, b.hw)), 0);
+    this.proxies.push({ mesh, B, H, hx: o.hl, hz: o.hw, boxes: L, corners, rad, inv: new THREE.Matrix4().copy(mesh.matrixWorld).invert(), pivot, axis, q0: mesh.quaternion.clone(), c0: mesh.position.clone(), th: 0, om: 0.15, phase: 0, v: new THREE.Vector3(), w: new THREE.Vector3(), t: 0, vol, mass: vol * 220, hit: new Set(same) /* (not its own stumps) */, release: 0.35 + Math.random() * 0.25, solid: { solid: true, piece: true } });
+  }
+  // a point in a falling top (its boxes, moved with it): what the plane hit (World.treeHit), or null
+  pieceHit(p) {
+    for (const P of this.proxies) {
+      const c = P.mesh.position; if ((p.x - c.x) ** 2 + (p.y - c.y) ** 2 + (p.z - c.z) ** 2 > P.rad * P.rad) continue;
+      const l = _v2.set(p.x, p.y, p.z).applyMatrix4(P.inv);
+      for (const b of P.boxes) { const x = l.x - b.x, z = l.z - b.z; if (Math.abs(l.y - b.y) < b.hh && Math.abs(x * b.cu + z * b.cv) < b.hl && Math.abs(-x * b.cv + z * b.cu) < b.hw) return P.solid; }
+    }
+    return null;
   }
   stepProxy(P, dt) {
     const W = this.w, m = P.mesh; P.t += dt;
@@ -629,11 +654,11 @@ export class Destruction {
       P.v.y -= G * dt; m.position.addScaledVector(P.v, dt);
       const wl = P.w.length(); if (wl > 1e-4) { _q.setFromAxisAngle(_v.copy(P.w).divideScalar(wl), wl * dt); m.quaternion.premultiply(_q); }
     }
-    m.updateMatrixWorld();
+    m.updateMatrixWorld(); P.inv.copy(m.matrixWorld).invert();
     // the lowest corner: on the ground (or in the water), or into another building on the way down
     let low = Infinity, lp = null;
-    for (let k = 0; k < 8; k++) {
-      _v.set(k & 1 ? P.hx : -P.hx, k & 2 ? P.H / 2 : -P.H / 2, k & 4 ? P.hz : -P.hz).applyMatrix4(m.matrixWorld);
+    for (let k = 0; k < P.corners.length; k++) {
+      _v.copy(P.corners[k]).applyMatrix4(m.matrixWorld);
       const g = Math.max(W.heightAt(_v.x, _v.z), W.waterLevel ?? -1e9), d = _v.y - g;
       if (d < low) { low = d; lp = _v.clone(); }
       if (P.phase === 1 && k % 2 === 0) { const e = W.towns.hit(_v); if (e?.dk && !P.hit.has(e.dk)) { P.hit.add(e.dk); const B2 = this.get(e); const vv = P.v.length(); this.damage(B2, Math.min(0.5 * P.mass * vv * vv * 0.4, B2.hp * 1.5), _v.clone(), P.v.clone().normalize(), this.normal(B2, _v, new THREE.Vector3()), vv, true); } }
@@ -643,14 +668,14 @@ export class Destruction {
   shatter(P, at) {
     const fx = this.fx, m = P.mesh, B = P.B, L = B.look, T = this.T;
     this.proxies.splice(this.proxies.indexOf(P), 1); this.group.remove(m); m.geometry.dispose();
-    const vol = 8 * P.hx * P.hz * P.H / 8, big = Math.min(1, Math.sqrt(vol) / 250);
+    const vol = P.vol, big = Math.min(1, Math.sqrt(vol) / 250);
     const look = this.lookArr(L.cell, L.col), n = Math.round(T.chunks * (0.25 + 0.35 * big));
     for (let i = 0; i < n; i++) {
-      _v.set(rnd(P.hx), rnd(P.H / 2), rnd(P.hz)).applyMatrix4(m.matrixWorld);
+      inPiece(P, _v).applyMatrix4(m.matrixWorld);
       const s = 0.8 + Math.random() * (1.5 + 3 * big);
       this.spawn(this.chunks, _v.x, Math.max(_v.y, at.y + 0.5), _v.z, P.v.x * 0.3 + rnd(8), Math.random() * 9, P.v.z * 0.3 + rnd(8), s, s * (0.4 + Math.random() * 0.5), s * (0.6 + Math.random() * 0.5), Math.random() < 0.2 ? this.lookArr(C.SLATE, L.rcol, 1.6) : look, 4);
     }
-    if (L.glass) for (let i = 0; i < T.shards * 0.4; i++) { _v.set(rnd(P.hx), rnd(P.H / 2), rnd(P.hz)).applyMatrix4(m.matrixWorld); this.spawn(this.shards, _v.x, _v.y, _v.z, rnd(12), Math.random() * 8, rnd(12), 0.3 + Math.random() * 0.6, 0.3 + Math.random() * 0.6, 1, glassCol(L), 10); }
+    if (L.glass) for (let i = 0; i < T.shards * 0.4; i++) { inPiece(P, _v).applyMatrix4(m.matrixWorld); this.spawn(this.shards, _v.x, _v.y, _v.z, rnd(12), Math.random() * 8, rnd(12), 0.3 + Math.random() * 0.6, 0.3 + Math.random() * 0.6, 1, glassCol(L), 10); }
     const dc = this.dustCol(L), gy = this.w.heightAt(at.x, at.z);
     for (let i = 0; i < (60 + 120 * big) * T.dust; i++) { const a = Math.random() * 6.28, sp = 4 + Math.random() * (10 + 16 * big); fx.smoke.add(at.x + Math.cos(a) * 4, gy + 1 + Math.random() * 6, at.z + Math.sin(a) * 4, Math.cos(a) * sp, 1 + Math.random() * 5, Math.sin(a) * sp, 8 + Math.random() * 8, 5 + 4 * big, 20 + 30 * big, dc[0], dc[1], dc[2], 0.8, 0.5, -0.1); }
     // the pile where it landed, a scorch, a fire
@@ -690,6 +715,8 @@ export class Destruction {
   info() { let s = 0; for (const B of this.states.values()) if (B.slot) s++; return { buildings: this.states.size, slots: s, chunks: this.chunks.used, anims: this.anims.length, proxies: this.proxies.length, fires: this.fires.length }; }
 }
 
+// a random point in a falling top's boxes (its own frame)
+const inPiece = (P, v) => { const b = P.boxes[(Math.random() * P.boxes.length) | 0], a = rnd(b.hl), c = rnd(b.hw); return v.set(b.x + a * b.cu - c * b.cv, b.y + rnd(b.hh), b.z + a * b.cv + c * b.cu); };
 const glassCol = (L) => (L.glass ? { r: 0.75 + Math.random() * 0.25, g: 0.9 + Math.random() * 0.1, b: 1 } : { r: 0.85, g: 0.92, b: 1 });
 
 // ---------------- geometry ----------------
@@ -725,14 +752,26 @@ function moundGeo() {
   g.computeVertexNormals();
   return g;
 }
-// the toppling top: a box W x H x D (centred) with the building's facade on its sides, roof on top, a broken base
-function proxyGeo(Wd, H, D, L) {
+// the toppling top: its boxes ({ x, y, z, cu, cv, hl, hh, hw }, Topple), each with the building's facade on its sides,
+// roof on top, a broken base
+function pieceGeo(boxes, L) {
   const pos = [], nor = [], uv = [], col = [], atl = [], idx = [];
-  const hw = Wd / 2, hh = H / 2, hd = D / 2, bay = L.glass ? 6 : 3, fl = L.glass ? 4 : 3;
+  for (const b of boxes) proxyBox(b, L, pos, nor, uv, col, atl, idx);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(col.map((x) => x | 0)), 3, true));
+  g.setAttribute('atl', new THREE.BufferAttribute(new Uint8Array(atl), 4, false)); g.setAttribute('dmg', new THREE.BufferAttribute(new Uint8Array(pos.length / 3), 1));
+  g.setIndex(idx); g.computeBoundingSphere();
+  return g;
+}
+// one box W x H x D, turned (cu, cv) and placed (x, y, z) in the piece
+function proxyBox(b, L, pos, nor, uv, col, atl, idx) {
+  const Wd = 2 * b.hl, H = 2 * b.hh, D = 2 * b.hw, hw = b.hl, hh = b.hh, hd = b.hw, bay = L.glass ? 6 : 3, fl = L.glass ? 4 : 3;
+  const at = (p) => [b.x + p[0] * b.cu - p[2] * b.cv, b.y + p[1], b.z + p[0] * b.cv + p[2] * b.cu], dn = (n) => [n[0] * b.cu - n[2] * b.cv, n[1], n[0] * b.cv + n[2] * b.cu];
   _c.setHex(L.col); const wc = [_c.r * 255, _c.g * 255, _c.b * 255]; _c.setHex(L.rcol ?? 0x5c5a56); const rcc = [_c.r * 255, _c.g * 255, _c.b * 255];
   const face = (P, n, u1, v1, cell, cc) => {
     const o = pos.length / 3;
-    for (let k = 0; k < 4; k++) { pos.push(...P[k]); nor.push(...n); col.push(...cc); atl.push(cell, 77, 200, 0); }
+    const N = dn(n); for (let k = 0; k < 4; k++) { pos.push(...at(P[k])); nor.push(...N); col.push(...cc); atl.push(cell, 77, 200, 0); }
     uv.push(0, 0, u1, 0, u1, v1, 0, v1);
     idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
   };
@@ -743,10 +782,4 @@ function proxyGeo(Wd, H, D, L) {
   face([[-hw, -hh, -hd], [-hw, -hh, hd], [-hw, hh, hd], [-hw, hh, -hd]], [-1, 0, 0], nb(D), v1, L.cell, wc);
   face([[-hw, hh, hd], [hw, hh, hd], [hw, hh, -hd], [-hw, hh, -hd]], [0, 1, 0], Wd / 3, D / 3, L.glass ? C.SEAM : C.ASPHALT, rcc);
   face([[-hw, -hh, -hd], [hw, -hh, -hd], [hw, -hh, hd], [-hw, -hh, hd]], [0, -1, 0], Wd / 3, D / 3, C.CONCRETE, [70, 64, 58]);
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
-  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(col.map((x) => x | 0)), 3, true));
-  g.setAttribute('atl', new THREE.BufferAttribute(new Uint8Array(atl), 4, false)); g.setAttribute('dmg', new THREE.BufferAttribute(new Uint8Array(24), 1));
-  g.setIndex(idx); g.computeBoundingSphere();
-  return g;
 }
