@@ -16,22 +16,21 @@
   "seams 15 (fus_cargo: ck_heli)": "#173"
  },
  "roadcheck": {
-  "islands: no walls or ramps on the roads": "#228",
-  "canyon: no steps along the roads": "#228",
-  "canyon: no walls or ramps on the roads": "#228",
-  "lauterbrunnen: no steps along the roads": "#228",
-  "lauterbrunnen: no walls or ramps on the roads": "#228",
-  "lauterbrunnen: road ends meet the road they join": "#228",
-  "lauterbrunnen: roads cross at the same height": "#228",
-  "nyc: no steps along the roads": "#228",
-  "nyc: no walls or ramps on the roads": "#228",
-  "nyc: road ends meet the road they join": "#228",
-  "nyc: roads cross at the same height": "#228",
-  "lauterbrunnen: junctions have no bare ground between their arms": "#228",
-  "lauterbrunnen: junctions are drawn where physics drives": "#228",
-  "nyc: junctions have no bare ground between their arms": "#228",
-  "nyc: junctions are drawn where physics drives": "#228",
-  "nyc: pavement slabs lie on the ground": "#228",
-  "nyc: no ground through the road in junctions": "#228"
+  "islands: no walls or ramps on the roads": "#228 (16 spots)",
+  "canyon: no steps along the roads": "#228 (3 spots)",
+  "canyon: no walls or ramps on the roads": "#228 (5 spots)",
+  "lauterbrunnen: no steps along the roads": "#228 (204 spots)",
+  "lauterbrunnen: no walls or ramps on the roads": "#228 (354 spots)",
+  "lauterbrunnen: road ends meet the road they join": "#228 (1 end)",
+  "lauterbrunnen: roads cross at the same height": "#228 (7 crossings)",
+  "nyc: no steps along the roads": "#228 (605 spots)",
+  "nyc: no walls or ramps on the roads": "#228 (1,235 spots)",
+  "nyc: road ends meet the road they join": "#228 (20 ends)",
+  "nyc: roads cross at the same height": "#228 (272 crossings)",
+  "lauterbrunnen: junctions have no bare ground between their arms": "#228 (71 of 893 junctions)",
+  "lauterbrunnen: junctions are drawn where physics drives": "#228 (110 of 893 junctions)",
+  "nyc: junctions have no bare ground between their arms": "#228 (2,136 of 38,199 junctions)",
+  "nyc: junctions are drawn where physics drives": "#228 (1,949 of 38,199 junctions)",
+  "nyc: pavement slabs lie on the ground": "#228 (1.25% over, 0.37% under)"
  }
 }

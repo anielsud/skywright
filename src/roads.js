@@ -10,7 +10,7 @@ import { airportGate } from './airportKit.js';
 import { junctionPlan, insertMouths, insertThrough, junctionShapes, TARMAC_LIFT, along, jnAt } from './junctions.js';
 import { GRADE, VERGE, gridSampler, planGrid, unloop, route, smoothPath, relaxCurves, profileRoad, carveGrid, RoadSurface, PAVE, PAVE_ROW, PAVE_RAMP, CITY_TOP, inside as inPoly } from './roadgrade.js';
 
-const RWY_HALF = 900, JGRADE = 0.2, MINOR_PIN = 3, SLAB_OVER = 0.08; // (JGRADE: the steepest a street may be left between two junctions' level boxes; MINOR_PIN: how far off a street's height the ground under a way off the street network may be for the way to be pinned to the street where they overlap, gradeReal; SLAB_OVER: the most a pavement slab's outer edge may stand over the ground there: else it comes down to it, #228 042034)
+const RWY_HALF = 900, JGRADE = 0.2, MINOR_PIN = 3, SLAB_OVER = 0.08, SLAB_STEP = 2, SLAB_MISS = 0.06, SLAB_DEPTH = 4; // (SLAB_STEP, SLAB_MISS, SLAB_DEPTH: junctionMesh's corner slabs) // (JGRADE: the steepest a street may be left between two junctions' level boxes; MINOR_PIN: how far off a street's height the ground under a way off the street network may be for the way to be pinned to the street where they overlap, gradeReal; SLAB_OVER: the most a pavement slab's outer edge may stand over the ground there: else it comes down to it, #228 042034)
 
 
 // evenly spaced points along a polyline
@@ -544,11 +544,14 @@ export function buildRoadMeshes(w, net) {
       // plane), a narrow one keeps its 0.35 m column where the slope starts. The kerb's faces are their own strips, KERB:
       // drawn near only, the tile's sidewalk mesh's last indices, see buildTile; separate vertices at the kerb's edge, so
       // no normal is smeared from the face over the slab)
-      const R = W > VERGE + PAVE_RAMP + 0.3 ? [hw, hw + VERGE + PAVE_RAMP, hw + W] : [hw, hw + 0.35, hw + W], E = R.length - 1;
+      // (and a wide pavement's middle column, where the ramp under it ends, held to the ground as its outer edge is:
+      // where another street's slabs or embankment meet this one's at another height, #228, the slab's level part hung
+      // over the ground there)
+      const wide = W > VERGE + PAVE_RAMP + 0.3, R = wide ? [hw, hw + VERGE + PAVE_RAMP, hw + W] : [hw, hw + 0.35, hw + W], E = R.length - 1;
       const top = (i, x, z, o) => kerb(i, x, z, o) + lift + 0.15, ok = (i) => !isBr(jp, i) && !(jp.tube[i] && jp.tube[(i + 1) % jp.pts.length]);
       const okR = (i) => ok(i) && open(i, 4), okL = (i) => ok(i) && open(i, 8);
-      strip(jp, R, (i, x, z, o, c) => (c === E ? edge(i, x, z, o) : top(i, x, z, o)), okR, sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
-      strip(jp, R.map((o) => -o).reverse(), (i, x, z, o, c) => (c === 0 ? edge(i, x, z, o) : top(i, x, z, o)), okL, sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, R, (i, x, z, o, c) => (c === E || (wide && c > 0) ? edge(i, x, z, o) : top(i, x, z, o)), okR, sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
+      strip(jp, R.map((o) => -o).reverse(), (i, x, z, o, c) => (c === 0 || (wide && c < E) ? edge(i, x, z, o) : top(i, x, z, o)), okL, sidewalk, (c, d, o) => [o, d], -1, info, jp.rjunc);
       strip(jp, [hw, hw], (i, x, z, o, c) => kerb(i, x, z, o) + lift + (c === 0 ? 0 : 0.15), okR, KERB, (c, d, o) => [o, d], -1, info, jp.rjunc);
       strip(jp, [-hw, -hw], (i, x, z, o, c) => kerb(i, x, z, o) + lift + (c === 1 ? 0 : 0.15), okL, KERB, (c, d, o) => [o, d], -1, info, jp.rjunc);
     }
@@ -580,7 +583,24 @@ export function buildRoadMeshes(w, net) {
     for (let q = 0; q < nv; q++) { const x = B.vtx[q * 2], z = B.vtx[q * 2 + 1]; jBox.pos.push(x, B.hy[q] + B.lift[q], z); jBox.uv.push(x - B.x, z - B.z); jBox.ri.push(1e4, 0, seed); jBox.rj.push(...NOJ); }
     for (const t of B.tris) jBox.idx.push(o + t);
     if (!sidewalk) return;
-    for (const R of B.pave) { // rows round the kerb: the kerb's face (from the gutter up 15 cm), then the slabs out to the building line (the granite band: the shader's, uv)
+    for (const R0 of B.pave) { // rows round the kerb: the kerb's face (from the gutter up 15 cm), then the slabs out to the building line (the granite band: the shader's, uv)
+      // (more rows where the ground along the building line leaves the straight line between two rows' outer edges by
+      // more than SLAB_MISS: one at the worst spot, then again either side of it, down to SLAB_STEP * 1.5 apart; #228,
+      // the slab hung over the ground or sank into it between its rows. Not a street's own slabs: there it was ~1 row
+      // in 3, +45% pavement triangles)
+      const ex = (x, z, t) => { const g = w.sampleGrid(x, z) + 0.01; return Math.min(Math.max(t, g), g + SLAB_OVER); };
+      let R = R0;
+      for (let q = R0.length / PAVE_ROW - 2, more = null; q >= 0; q--) {
+        const a = q * PAVE_ROW, b = a + PAVE_ROW, L = Math.hypot(R0[b + 2] - R0[a + 2], R0[b + 3] - R0[a + 3]); if (L < SLAB_STEP * 1.5) continue;
+        const ya = R0[a + 4] + R0[a + 7] + 0.15, yb = R0[b + 4] + R0[b + 7] + 0.15, E = (t) => ex(R0[a + 2] + (R0[b + 2] - R0[a + 2]) * t, R0[a + 3] + (R0[b + 3] - R0[a + 3]) * t, ya + (yb - ya) * t), memo = new Map(), Em = (t) => { let v = memo.get(t); if (v === undefined) memo.set(t, (v = E(t))); return v; }, ts = [];
+        const split = (t0, t1, depth) => { if ((t1 - t0) * L < SLAB_STEP * 1.5 || depth > SLAB_DEPTH) return; let worst = SLAB_MISS, tw = -1;
+          for (const u of [0.25, 0.5, 0.75]) { const t = t0 + (t1 - t0) * u, d = Math.abs(Em(t) - (Em(t0) + (Em(t1) - Em(t0)) * u)); if (d > worst) { worst = d; tw = t; } }
+          if (tw < 0) return; split(t0, tw, depth + 1); ts.push(tw); split(tw, t1, depth + 1); };
+        split(0, 1, 0); if (!ts.length) continue;
+        if (!more) more = Array.from(R0);
+        const ins = []; for (const t of ts) for (let f = 0; f < PAVE_ROW; f++) ins.push(R0[a + f] + (R0[b + f] - R0[a + f]) * t);
+        more.splice(b, 0, ...ins); R = more;
+      }
       // (level out to where the ground under them stops rising, roadgrade.js PAVE_RAMP, as a street's own slabs; its
       // outer edge on the ground) (rows: roadgrade.js PAVE_ROW, kerb x, z, building line x, z, y, v, hw, lift)
       const o2 = jPave.pos.length / 3, M = VERGE + PAVE_RAMP, nr = R.length / PAVE_ROW;
@@ -589,7 +609,7 @@ export function buildRoadMeshes(w, net) {
       for (let q = 0; q < nr; q++) {
         const e = q * PAVE_ROW, kx = R[e], kz = R[e + 1], ox = R[e + 2], oz = R[e + 3], v = R[e + 5], hw = R[e + 6];
         const dx = ox - kx, dz = oz - kz, W = Math.hypot(dx, dz) || 1, y = R[e + 4] + R[e + 7], g = w.sampleGrid(ox, oz) + 0.01, yo = Math.min(Math.max(y + 0.15, g), g + SLAB_OVER);
-        for (const [d, h] of mid ? [[0, 0], [0, 0.15], [Math.min(M, W * 0.8), 0.15], [W, 0.15]] : [[0, 0], [0, 0.15], [W, 0.15]]) { jPave.pos.push(kx + dx * d / W, d === W ? yo : y + h, kz + dz * d / W); jPave.uv.push(hw + d, v); jPave.ri.push(hw, 0, seed); jPave.rj.push(...NOJ); }
+        for (const [d, h] of mid ? [[0, 0], [0, 0.15], [Math.min(M, W * 0.8), 0.15], [W, 0.15]] : [[0, 0], [0, 0.15], [W, 0.15]]) { const px = kx + dx * d / W, pz = kz + dz * d / W; jPave.pos.push(px, d === W ? yo : d > 0 ? ex(px, pz, y + h) : y + h, pz); jPave.uv.push(hw + d, v); jPave.ri.push(hw, 0, seed); jPave.rj.push(...NOJ); }
         if (q) { const a = o2 + (q - 1) * m, b = o2 + q * m; for (let c = 0; c < m - 1; c++) jPave.idx.push(a + c, b + c, a + c + 1, a + c + 1, b + c, b + c + 1); } // (facing up, the kerb's face towards the road)
       }
     }

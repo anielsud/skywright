@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.203.0', items: [
+    "Street corners in the city are neater: no more dark gaps where pavements meet, and pavements sit flatter on the ground.",
+  ] },
   { v: '1.202.0', items: [
     "When you knock the top off a tower, the falling piece now has the building's real shape and you can crash into it, and spiky or curved buildings no longer have gaps you can fly into.",
   ] },

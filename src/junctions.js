@@ -238,20 +238,20 @@ function polyDist(H, x, z) {
   return inside ? 0 : d;
 }
 
-// After grading (or from a road pack): each junction's shapes and heights. net.junctions = [{ nd, x, z, y, flat, arms,
+// After grading (or from a road pack): each junction's shapes and heights. net.junctions = [{ how (its outline: 'ring', 'square' or 'hull'), nd, x, z, y, flat, arms,
 // box: [x, z, ...] (the outline, counter-clockwise), vtx: [x, z, ...] (the box's vertices: the outline's, then the
 // node where the box is a fan round it), hy (each vertex's height), tris (indices into vtx), lift (per vertex), pave:
-// per corner a Float64Array of rows round the kerb (roadgrade.js PAVE_ROW: kerb x, z, building line x, z, y, v (metres
+// per corner an array of rows round the kerb (roadgrade.js PAVE_ROW: kerb x, z, building line x, z, y, v (metres
 // along), hw, lift), r: Map 'k:j:dir' ->
 // clearance for the markings (mouth - 0.6 m) }].
 // A junction graded level (gradeReal: its arms level out to their mouths) gets a level box (flat); one left on its
 // roads' grades (a steep street, a neighbour too close to level apart from) a warped one: each vertex at its arm's
 // height there, so it meets every arm at its mouth and along its kerbs all the same.
 export function junctionShapes(roads, city) {
-  const out = [], rk = city ? RK.city : RK.country, F = (junctionShapes.fail = { warped: 0, cross: 0, node: 0, tri: 0 }); // (fail: why junctions were left without a box; warped: boxes not level)
+  const out = [], rk = city ? RK.city : RK.country, F = (junctionShapes.fail = { warped: 0, cross: 0, node: 0, tri: 0, why: new Map() }); // (fail: why junctions were left without a box, why: per junction node; warped: boxes not level)
   const SS = new Map(), sOf = (k) => { let s = SS.get(k); if (!s) SS.set(k, (s = along(roads[k].pts))); return s; };
   for (const J of junctionPlan(roads, city, SS)) {
-    if (!J.ok) continue;
+    if (!J.ok) { F.why.set(J.nd, 'notok'); continue; }
     const n = J.arms.length, y = J.arms.reduce((a, A) => a + roads[A.k].pts[A.j].y, 0) / n; // (a cluster's nodes: one height, where it is level)
     // each arm's edges, from beside the node out to its mouth, where the ribbon's are (roads.js strip: each row's edge
     // at p + off * right, straight between rows), with the arm's height there: A.edge(o) -> [[x, z, y], ...] (o:
@@ -280,7 +280,7 @@ export function junctionShapes(roads, city) {
     const merged = J.arms.map((A, i) => { const B = J.arms[(i + 1) % n]; if (A.nd !== B.nd || turn(A, B) >= MIN_ANGLE) return false;
       return (B.R[0] - A.L[0]) * -A.dz + (B.R[1] - A.L[1]) * A.dx < 0.5 || (A.L[0] - B.R[0]) * B.dz + (A.L[1] - B.R[1]) * -B.dx < 0.5; });
     if (merged.every(Boolean)) merged.fill(false);
-    if (!flat && merged.some(Boolean)) { F.merge = (F.merge || 0) + 1; continue; } // (roads merging on a slope, one climbing away from the other: their own surfaces, blended, RoadSurface; one level box across both would be a step onto the one at its mouth)
+    if (!flat && merged.some(Boolean)) { F.merge = (F.merge || 0) + 1; F.why.set(J.nd, 'merge'); continue; } // (roads merging on a slope, one climbing away from the other: their own surfaces, blended, RoadSurface; one level box across both would be a step onto the one at its mouth)
     // (the units round the box: an arm, or a merging run of them, whose outermost right and left edges bound it: where
     // a wider road merges with a narrower one, its edge, not the narrower one's, is the kerb)
     const units = [];
@@ -314,7 +314,7 @@ export function junctionShapes(roads, city) {
       const W = []; for (const v of V) { const l = W.at(-1); if (l && !v.mouth && Math.hypot(v.p[0] - l.p[0], v.p[1] - l.p[1]) < 0.1) continue; W.push(v); }
       while (W.length > 3 && !W.at(-1).mouth && Math.hypot(W.at(-1).p[0] - W[0].p[0], W.at(-1).p[1] - W[0].p[1]) < 0.1) W.pop();
       const U = selfCrosses(W.flatMap((v) => [v.p[0], v.p[1]])) ? untangle(W) : W; if (!U) { ring.corners = corners; return null; }
-      return { box: U.flatMap((v) => [v.p[0], v.p[1]]), W: U, open: Uint8Array.from(U, (v) => (v.open ? 1 : 0)), corners };
+      return { W: U, corners };
     };
     // (last: where the kerbs tangle whatever is done (arms crossing each other's mouths, a cluster's roads every which
     // way), the hull of every arm and inner road out to its mouth: no kerb corners, but no ground in it either)
@@ -324,15 +324,15 @@ export function junctionShapes(roads, city) {
       const H = hull2(pts.map((v) => [v.p[0], v.p[1], v]));
       const W = H.map((h) => { const v = h[2]; return { p: v.p, lift: v.A.lift, mouth: !!v.end, end: v.end, A: v.A }; });
       W.forEach((v, q) => { const u = W[(q + 1) % W.length]; v.open = v.end === 'R' && u.end === 'L' && u.A === v.A; });
-      return { box: W.flatMap((v) => [v.p[0], v.p[1]]), W, open: Uint8Array.from(W, (v) => (v.open ? 1 : 0)), corners: ring.corners || [] }; // (the corner pavements as the square ring had them)
+      return { W, corners: ring.corners || [] }; // (the corner pavements as the square ring had them)
     };
-    const R = ring(rk) || ring(0) || hullRing();
+    let how = 'ring'; const R = ring(rk) || ((how = 'square'), ring(0)) || ((how = 'hull'), hullRing());
     if (!R) { F.cross++; continue; }
     // (the outline's points in line with their neighbours left out, at their heights too: a straight kerb's rows, each
     // a triangle more to draw and an edge more for every physics query near it)
     const W = simplify(R.W);
-    const box = W.flatMap((v) => [v.p[0], v.p[1]]), open = Uint8Array.from(W, (v) => (v.open ? 1 : 0)), corners = R.corners, nb = box.length / 2;
-    if (!inside(box, J.x, J.z)) { F.node++; continue; }
+    const box = W.flatMap((v) => [v.p[0], v.p[1]]), open = W.map((v) => (v.open ? 1 : 0)), corners = R.corners, nb = box.length / 2; // (plain arrays, not typed ones, here and below: ~37k junctions in New York, and a typed array each costs an allocation of its own)
+    if (!inside(box, J.x, J.z)) { F.node++; F.why.set(J.nd, 'node'); continue; }
     // its triangles. A level box: the outline's own triangulation. A warped one: a fan round a node (the junction's, or
     // one of a cluster's) that sees the whole outline, in RINGS rings out to it; each vertex inside at its arms' height
     // there (a weighted mean of their profiles, each arm's own inside its footprint: so the box follows every road's
@@ -343,11 +343,11 @@ export function junctionShapes(roads, city) {
     let tris, vtx, hy, lift;
     if (flat) {
       tris = THREE.ShapeUtils.triangulateShape(Array.from({ length: nb }, (_, q) => new THREE.Vector2(box[q * 2], box[q * 2 + 1])), []).flat();
-      if (tris.length < 3 * (nb - 2)) { F.tri++; continue; }
-      vtx = Float64Array.from(box); hy = new Float64Array(nb).fill(y); lift = Float32Array.from(W, (v) => v.lift);
+      if (tris.length < 3 * (nb - 2)) { F.tri++; F.why.set(J.nd, 'tri'); continue; }
+      vtx = box; hy = new Array(nb).fill(y); lift = W.map((v) => v.lift);
     } else {
       let lo = Infinity, hi = -Infinity; for (const v of W) { lo = Math.min(lo, v.p[2]); hi = Math.max(hi, v.p[2]); }
-      if (!C) { if (hi - lo > WARP) { F.steep = (F.steep || 0) + 1; continue; } F.nofan = (F.nofan || 0) + 1; }
+      if (!C) { if (hi - lo > WARP) { F.steep = (F.steep || 0) + 1; F.why.set(J.nd, 'steep'); continue; } F.nofan = (F.nofan || 0) + 1; }
       // (the arms' centre lines, node to mouth, with their heights; the height at (x, z): each arm's profile where
       // (x, z) is level with it, weighted by how far outside its footprint (x, z) is)
       const CL = [...J.arms, ...J.inner].map((A) => ({ E: A.edge(0), hw: A.hw }));
@@ -367,11 +367,11 @@ export function junctionShapes(roads, city) {
         const c0 = nb * RINGS, at = (q, r) => (r === 0 ? c0 : (q % nb) * RINGS + r - 1); V.push(C[0], C[1]); Y.push(C[2]); L.push(ln);
         tris = [];
         for (let q = 0; q < nb; q++) { if (cr(C[0], C[1], q) <= 1e-3) continue; for (let r = 0; r < RINGS; r++) { if (r === 0) tris.push(at(q, 0), at(q, 1), at(q + 1, 1)); else tris.push(at(q, r), at(q, r + 1), at(q + 1, r + 1), at(q, r), at(q + 1, r + 1), at(q + 1, r)); } }
-        vtx = Float64Array.from(V); hy = Float64Array.from(Y); lift = Float32Array.from(L);
+        vtx = V; hy = Y; lift = L;
       } else {
         tris = THREE.ShapeUtils.triangulateShape(Array.from({ length: nb }, (_, q) => new THREE.Vector2(box[q * 2], box[q * 2 + 1])), []).flat();
         if (tris.length < 3 * (nb - 2)) { F.tri++; continue; }
-        vtx = Float64Array.from(box); hy = Float64Array.from(W, (v) => v.p[2]); lift = Float32Array.from(W, (v) => v.lift);
+        vtx = box; hy = W.map((v) => v.p[2]); lift = W.map((v) => v.lift);
       }
       F.warped++;
     }
@@ -386,25 +386,37 @@ export function junctionShapes(roads, city) {
         const W0 = A.W || B.W, ka = A.edge(A.hw)[0], kb = B.edge(-B.hw)[0], oa = A.edge(A.hw + W0)[0], ob = B.edge(-(B.hw + W0))[0];
         const hk = lineX(ka, -A.dx, -A.dz, kb, -B.dx, -B.dz), ho = lineX(oa, -A.dx, -A.dz, ob, -B.dx, -B.dz);
         if (!hk || !ho || !(hk[0] > 0.01) || !(ho[0] > 0.01) || ho[0] > (A.hw + W0) * 3) continue;
-        const R = new Float64Array(3 * PAVE_ROW), row = (q, k, o) => R.set([k[0], k[1], o[0], o[1], flat ? y : k[2], 0, A.hw, A.lift], q * PAVE_ROW);
+        const R = [], row = (q, k, o) => R.push(k[0], k[1], o[0], o[1], flat ? y : k[2], 0, A.hw, A.lift);
         row(0, ka, oa); row(1, [ka[0] - A.dx * hk[0], ka[1] - A.dz * hk[0], ka[2]], [oa[0] - A.dx * ho[0], oa[1] - A.dz * ho[0]]); row(2, kb, ob); pave.push(R);
         continue;
       }
-      const m = K.length, rows = new Float64Array(m * PAVE_ROW);
-      // (each kerb point's partner on the building line at the same share of the way round: rows that never cross,
-      // where the building line is much shorter than the kerb's round, or just its corner)
-      const len = (L) => { let t = 0; for (let q = 1; q < L.length; q++) t += Math.hypot(L[q][0] - L[q - 1][0], L[q][1] - L[q - 1][1]); return t; }, Lk = len(K) || 1, Lo = len(outer);
-      let v = 0;
-      for (let q = 0; q < m; q++) {
-        if (q) v += Math.hypot(K[q][0] - K[q - 1][0], K[q][1] - K[q - 1][1]);
-        const f = m > 1 ? q / (m - 1) : 0;
-        const o = q === m - 1 ? outer.at(-1) : walk(outer, Lo * v / Lk);
-        rows.set([K[q][0], K[q][1], o[0], o[1], flat ? y : K[q][2], v, A.hw + (B.hw - A.hw) * f, A.lift + (B.lift - A.lift) * f], q * PAVE_ROW);
-      }
+      // (rows at every kerb point and at every corner of the building line, each partnered with the point at the same
+      // share of the way round the other: rows that never cross, where the building line is much shorter than the
+      // kerb's round, or just its corner; and the building line's corner kept, not cut off by a row across it)
+      const len = (L) => { let t = 0; for (let q = 1; q < L.length; q++) t += Math.hypot(L[q][0] - L[q - 1][0], L[q][1] - L[q - 1][1]); return t; }, Lk = len(K) || 1, Lo = len(outer) || 1;
+      const ksh = []; { let v = 0; for (let q = 0; q < K.length; q++) { if (q) v += Math.hypot(K[q][0] - K[q - 1][0], K[q][1] - K[q - 1][1]); ksh.push(Math.min(1, v / Lk)); } }
+      const osh = []; { let v = 0; for (let q = 1; q < outer.length - 1; q++) { v += Math.hypot(outer[q][0] - outer[q - 1][0], outer[q][1] - outer[q - 1][1]); osh.push(v / Lo); } }
+      const build = (fs, strict) => { const rows = [];
+        for (const f of fs) {
+          const k = f >= 1 ? K.at(-1) : walk(K, Lk * f), o = f >= 1 ? outer.at(-1) : walk(outer, Lo * f);
+          if (strict && rows.length) { const h = segX([rows[rows.length - 8], rows[rows.length - 7]], [rows[rows.length - 6], rows[rows.length - 5]], k, o); if (h && Math.min(h[0], h[1]) > 0.05 && Math.max(h[0], h[1]) < 0.95) return null; } // (two rows crossing: a building line that doubles back, round a cluster's inner road; meeting at an end is fine: rows fanning out from one kerb point or into one building corner)
+          rows.push(k[0], k[1], o[0], o[1], flat ? y : k[2], Lk * f, A.hw + (B.hw - A.hw) * f, A.lift + (B.lift - A.lift) * f);
+        }
+        return rows; };
+      const fs = [...ksh, ...osh.filter((f) => ksh.every((k) => Math.abs(k - f) >= 0.01))].sort((a, b) => a - b); // (the kerb's own points always: its corner exact)
+      // (where even those cross, a building line that doubles back on itself (round a cluster's short inner road): the
+      // building line the kerb's own, offset out by the pavement's width; the ring runs counter-clockwise, its outside
+      // to the right)
+      const offset = () => { const rows = [], m = K.length, W0 = A.W || B.W, W1 = B.W || A.W;
+        for (let q = 0; q < m; q++) { const a = K[Math.max(0, q - 1)], b = K[Math.min(m - 1, q + 1)], dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz) || 1, f = ksh[q], W = W0 + (W1 - W0) * f;
+          rows.push(K[q][0], K[q][1], K[q][0] + dz / l * W, K[q][1] - dx / l * W, flat ? y : K[q][2], Lk * f, A.hw + (B.hw - A.hw) * f, A.lift + (B.lift - A.lift) * f); }
+        return rows; };
+      let rows = osh.length && build(fs, true), made = 'union'; if (!rows) { rows = build(ksh, true); made = 'kerb'; } if (!rows) { rows = offset(); made = 'offset'; } // (else as before: the kerb's points only)
+      F.rows ??= {}; F.rows[made] = (F.rows[made] || 0) + 1; // (how the corner pavements' rows were made)
       pave.push(rows);
     }
     const r = new Map(); for (const A of [...J.arms, ...J.inner]) r.set(A.k + ':' + A.j + ':' + A.dir, A.c - 0.6);
-    out.push({ nd: J.nd, nds: J.nds, ks: new Set([...J.arms, ...J.inner].map((A) => A.k)), x: J.x, z: J.z, y, flat, arms: J.arms.map(({ k, j, dir, hw, W, lift, c }) => ({ k, j, dir, hw, W, lift, c })), box: Float64Array.from(box), ey: Float64Array.from(W, (v) => (flat ? y : v.p[2])), vtx, hy, open, tris, lift, pave, r, bb: [x0, z0, x1, z1] });
+    out.push({ how, nd: J.nd, nds: J.nds, ks: new Set([...J.arms, ...J.inner].map((A) => A.k)), x: J.x, z: J.z, y, flat, arms: J.arms.map(({ k, j, dir, hw, W, lift, c }) => ({ k, j, dir, hw, W, lift, c })), box, ey: W.map((v) => (flat ? y : v.p[2])), vtx, hy, open, tris, lift, pave, r, bb: [x0, z0, x1, z1] });
   }
   return out;
 }
