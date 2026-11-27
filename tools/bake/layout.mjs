@@ -8,8 +8,8 @@
 //     one height solve)
 // A chunk with a bridge or a tunnel, the airport's roads, a stunt site, past the World's core, or that fails a check isn't baked: it keeps today's roads,
 // listed in the index's fallback with why. Every baked chunk is checked the game's way (layout-check.mjs, on a worker
-// per core): fixed edges, cover, holes, tarmac drawn - physics, kerbs not physics, and each shared edge between two
-// baked chunks, at every pair of levels. Writes each chunk as <ix>_<iz>.<hash>.bin.gz (hash: of its bytes) and the
+// per core): fixed edges, cover, holes, tarmac drawn - physics, kerbs not physics, the markings on their street's centre
+// line (markcheck.mjs: within DRIFT_MAX), and each shared edge between two baked chunks, at every pair of levels. Writes each chunk as <ix>_<iz>.<hash>.bin.gz (hash: of its bytes) and the
 // place's index.json; removes the files the new index no longer names.
 import { writeFileSync, readdirSync, unlinkSync, mkdirSync, readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
@@ -21,6 +21,7 @@ import { bakeLayout } from '../../src/layout/bake.js';
 import { CHUNK, LAYOUT_V } from '../../src/layout/format.js';
 import { latticeOf } from '../../src/layout/mesh.js';
 import { RWY } from '../../src/world.js';
+import { DRIFT_MAX } from './markcheck.mjs';
 
 const args = process.argv.slice(2);
 if (!args.length) { console.error(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).join('\n')); process.exit(1); }
@@ -53,11 +54,11 @@ for (const a of args) {
     return { ix, iz, buf: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), G }; });
   const N = Math.max(1, Math.min(cpus().length - 1, Math.ceil(jobs.length / 4))), parts = Array.from({ length: N }, () => []); jobs.forEach((j, q) => parts[q % N].push(j));
   const results = (await Promise.all(parts.map((p) => new Promise((res, rej) => { const wk = new Worker(new URL('./layout-check.mjs', import.meta.url)); wk.once('message', (m) => { res(m); wk.terminate(); }); wk.once('error', rej); wk.postMessage({ jobs: p, grid }); })))).flat();
-  const td = performance.now(), byKey = new Map(results.map((c) => [key(c.ix, c.iz), c]));
+  const td = performance.now(), byKey = new Map(results.map((c) => [key(c.ix, c.iz), c])), sum = (f) => results.reduce((n, c) => n + (f(c) || 0), 0);
   // a chunk failing a check keeps today's roads
   const failed = new Map();
   for (const c of results) { const f = c.fine, co = c.coarse, bad = [];
-    if (f.failed || co.failed) bad.push('fixed edges'); if (Math.abs(f.covered - 1) > 1e-6 || Math.abs(co.covered - 1) > 1e-6) bad.push('cover'); if (f.holes) bad.push('holes'); if (f.tarmacOff > 1e-4) bad.push('tarmac off physics'); if (f.kerbSlope > 0.05) bad.push('kerb in physics');
+    if (f.failed || co.failed) bad.push('fixed edges'); if (Math.abs(f.covered - 1) > 1e-6 || Math.abs(co.covered - 1) > 1e-6) bad.push('cover'); if (f.holes) bad.push('holes'); if (f.tarmacOff > 1e-4) bad.push('tarmac off physics'); if (f.kerbSlope > 0.05) bad.push('kerb in physics'); if (f.drift > DRIFT_MAX) bad.push('markings off the centre line');
     if (bad.length) failed.set(key(c.ix, c.iz), bad.join('+')); }
   // shared edges between two baked chunks: the same points and heights from both sides, at every pair of levels
   let pairs = 0, seamBad = 0; const seamList = [];
@@ -78,7 +79,7 @@ for (const a of args) {
   // ---- the report
   const st = (f) => { const v = results.map(f).sort((p, q) => p - q); return `p50 ${v[v.length >> 1].toFixed(0)}, p90 ${v[Math.floor(v.length * 0.9)].toFixed(0)}, max ${v[v.length - 1].toFixed(0)}`; };
   console.log(`${id}: ${chunksOut.length} chunk files, ${(bytesAll / 1e6).toFixed(2)} MB (${(bytesAll / lenAll).toFixed(2)} bytes/m of road over ${(lenAll / 1000).toFixed(0)} km); fallback ${fallback.size}: ${count([...fallback.values()])}`);
-  console.log(`  checks: ${results.length} chunks; failed ${failed.size} (${count([...failed.values()])}); holes ${results.reduce((s, c) => s + c.fine.holes, 0)} of ${results.reduce((s, c) => s + c.fine.samples, 0)} samples; tarmac drawn - physics max ${Math.max(...results.map((c) => c.fine.tarmacOff)).toFixed(4)} m; kerb physics rise max ${Math.max(...results.map((c) => c.fine.kerbSlope)).toFixed(3)} m (drawn 0.15); markings off the centre line max ${Math.max(...results.map((c) => c.fine.drift)).toFixed(3)} m over ${results.reduce((n, c) => n + c.fine.driftSamples, 0)} samples; seams ${pairs - seamBad}/${pairs} match${seamBad ? ' (' + seamList.slice(0, 10).join(' ') + ')' : ''}`);
+  console.log(`  checks: ${results.length} chunks; failed ${failed.size} (${count([...failed.values()])}); holes ${results.reduce((s, c) => s + c.fine.holes, 0)} of ${results.reduce((s, c) => s + c.fine.samples, 0)} samples; tarmac drawn - physics max ${Math.max(...results.map((c) => c.fine.tarmacOff)).toFixed(4)} m; kerb physics rise max ${Math.max(...results.map((c) => c.fine.kerbSlope)).toFixed(3)} m (drawn 0.15); markings off the centre line max ${Math.max(...results.map((c) => c.fine.drift)).toFixed(4)} m (fails over ${DRIFT_MAX}) over ${sum((c) => c.fine.driftSamples)} samples, ${sum((c) => c.fine.lost)} lost to another street's triangle; crossings whole ${sum((c) => c.fine.whole)}/${sum((c) => c.fine.mouths)} mouths (${sum((c) => c.fine.tight)} too close to another junction); slabs' across off the kerb max ${Math.max(...results.map((c) => c.fine.kerbErr)).toFixed(3)} m; bends' bisectors left soft ${sum((c) => c.fine.bendMissed)}; seams ${pairs - seamBad}/${pairs} match${seamBad ? ' (' + seamList.slice(0, 10).join(' ') + ')' : ''}`);
   { const W = {}; for (const c of results) for (const [k, n] of Object.entries(c.fine.why || {})) W[k] = (W[k] || 0) + n; if (Object.keys(W).length) console.log('  fixed edges failed, by what and why:', JSON.stringify(W)); }
   console.log(`  kerb top lines left soft (would cross another line): ${results.reduce((n, c) => n + (c.fine.softMissed || 0), 0)} segments in ${results.filter((c) => c.fine.softMissed).length} chunks`);
   console.log(`  mesh ms fine ${st((c) => c.fine.ms)} (outlines ${st((c) => c.fine.outlineMs)}); coarse ${st((c) => c.coarse.ms)}; triangles fine ${st((c) => c.fine.tris)}`);

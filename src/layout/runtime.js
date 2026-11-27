@@ -45,10 +45,10 @@ export class Layout {
   // maps: the terrain's (World.terrainMaps) for the ground's material
   start(maps) {
     const yellow = this.w.loc.id === 'nyc' ? 1 : 0, skirt = terrainMaterial(maps, 'detail'); skirt.side = THREE.DoubleSide;
-    // (the ground: the terrain's own material, a city's paving turned to each corner's street (aAng), not the world's axes)
+    // (the ground: the terrain's own material, a city's paving turned to each triangle's street (aAng), not the world's axes)
     const ground = terrainMaterial(maps, 'detail'), ob = ground.onBeforeCompile; ground.onBeforeCompile = function (sh, r) { ob.call(this, sh, r);
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aAng; varying float vAng;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvAng = aAng;');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vAng; vec2 layRot(vec2 p) { float c = cos(vAng), s = sin(vAng); return vec2(c * p.x + s * p.y, -s * p.x + c * p.y); }').replace('cityPaved(vTW.xz,', 'cityPaved(layRot(vTW.xz),').replace('cityPave(vTW.xz,', 'cityPave(layRot(vTW.xz),'); };
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vAng; vec2 layRot(vec2 p) { float c = cos(vAng), s = sin(vAng); return vec2(c * p.x + s * p.y, -s * p.x + c * p.y); }').replace('cityPave(vTW.xz,', 'cityPave(layRot(vTW.xz),'); }; // (only the slabs turned: cityPaved reads the land cover where the point really is)
     ground.customProgramCacheKey = () => 'layoutGround';
     this.mats = { skirt, ground, tarmac: roadMat('asphalt_d', 0x5a5a5c, true, yellow), alley: roadMat('asphalt_d', 0x5a5a5c), gravel: roadMat('gravel_d', 0xa09684), pavers: roadMat('sidewalk_d', 0xa89a88), walk: sidewalkMaterial() };
     this.matList = [this.mats.ground, this.mats.alley, this.mats.gravel, this.mats.pavers];
@@ -114,8 +114,13 @@ export class Layout {
     if (!c.mesh) { c.mesh = new THREE.Group(); c.mesh.name = 'layout ' + c.L.ix + ',' + c.L.iz; this.group.add(c.mesh); }
     for (const o of c.mesh.children) o.geometry.dispose(); c.mesh.clear();
     // the surface (ground, alleys, gravel, pavers); the carriageway, kerbs and pavements from the street ribbons below
+    // (the paving's angle is a triangle's (mesh.js ang): a corner shared by triangles of two angles gets a copy for each)
+    const N0 = m.pos.length / 3, vAng = new Float32Array(N0).fill(NaN), dup = [], dAng = [], idx = m.idx.slice();
+    for (let q = 0; q < m.tk.length; q++) { if (m.tk[q] > KIND.bank) continue; const a = m.ang[q]; for (let r = 0; r < 3; r++) { const v = idx[q * 3 + r]; if (vAng[v] !== vAng[v]) vAng[v] = a; else if (vAng[v] !== a) { idx[q * 3 + r] = N0 + dup.length; dup.push(v); dAng.push(a); } } }
+    const n1 = N0 + dup.length, pos = new Float32Array(n1 * 3), nrm = new Float32Array(n1 * 3), ang = new Float32Array(n1); pos.set(m.pos); nrm.set(m.nrm);
+    for (let k = 0; k < N0; k++) ang[k] = vAng[k] === vAng[k] ? vAng[k] : 0; dup.forEach((v, i) => { pos.set(m.pos.subarray(v * 3, v * 3 + 3), (N0 + i) * 3); nrm.set(m.nrm.subarray(v * 3, v * 3 + 3), (N0 + i) * 3); ang[N0 + i] = dAng[i]; });
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(m.nrm, 3)); g.setAttribute('aAng', new THREE.BufferAttribute(m.ang, 1)); g.setIndex(new THREE.BufferAttribute(m.idx, 1));
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); g.setAttribute('aAng', new THREE.BufferAttribute(ang, 1)); g.setIndex(new THREE.BufferAttribute(idx, 1));
     const matOf = (k) => (k === KIND.ground || k === KIND.bank ? 0 : k === KIND.alley ? 1 : k === KIND.verge || k === KIND.gravel ? 2 : k === KIND.pavers ? 3 : -1);
     for (let q = 0; q < m.tk.length;) { const mi = matOf(m.tk[q]); let e = q; while (e < m.tk.length && matOf(m.tk[e]) === mi) e++; if (mi >= 0) g.addGroup(q * 3, (e - q) * 3, mi); q = e; }
     g.computeBoundingSphere(); const surf = new THREE.Mesh(g, this.matList); surf.receiveShadow = true; c.mesh.add(surf);
@@ -181,7 +186,7 @@ function roadMat(texName, color, marks = false, yellow = 0) {
           float v = vRoad.y, u = vRoad.x, hw = vRoad.z, dj = vRoad.w, aa = fwidth(v) * 0.8 + 0.005, ua = fwidth(u) * 0.8 + 0.005;
           float lanes = max(1.0, mod(vLane, 16.0)), oneway = mod(floor(vLane / 16.0), 2.0), painted = mod(floor(vLane / 32.0), 2.0), zebra = step(64.0, vLane);
           float paint = 0.0; vec3 col = vec3(0.92);
-          if (hw > 0.5 && (dj < -0.5 || dj > 0.5)) {
+          if (hw > 0.5 && dj > 0.5) { // (dj below 0: inside the junction's circle)
             float dash = step(fract(u / 9.0), 0.45) * painted;
             if (oneway < 0.5) { // two-way: the centre line, and lane lines each side
               float c = uYellow > 0.5 ? max(1.0 - smoothstep(0.05, 0.05 + aa, abs(abs(v) - 0.12)), 0.0) : (1.0 - smoothstep(0.06, 0.06 + aa, abs(v))) * dash;
