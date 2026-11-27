@@ -38,8 +38,9 @@ export function install() {
   CityScenery.prototype.buildLowStep = function (t, budget) {
     const t0 = performance.now(), done = step.call(this, t, budget); rec.lowMs += performance.now() - t0;
     if (done) {
-      const key = t.i + ',' + t.j, h = t.low && t.low !== true ? hashArrays(rec.meshes.get(t.low)) : 'empty';
-      if (t.low !== true) rec.lows.add(t.low); rec.meshes.delete(t.low); rec.lowTiles++;
+      const key = t.i + ',' + t.j, ms = t.meshes || (t.low && t.low !== true ? [t.low] : []); // (a tile's meshes: one per 500 m cell, realCity.js LOW_CELL)
+      const h = ms.length ? combine(ms.map((m) => hashArrays(rec.meshes.get(m)))) : 'empty';
+      for (const m of ms) { rec.lows.add(m); rec.meshes.delete(m); } rec.lowTiles++;
       const was = rec.low.get(key); if (was && was !== h) rec.lowBad.push(key); else rec.low.set(key, h);
     }
     return done;
@@ -47,13 +48,13 @@ export function install() {
   rec.uninstall = () => { MeshW.prototype.mesh = mesh; CityScenery.prototype.buildLowStep = step; };
   return rec;
 }
-export function tallHash(city, rec) {
-  const hs = city.tallMeshes.map((g) => hashArrays(rec.meshes.get(g.m)) + ':' + g.lv.join('/') + '/' + g.main + '/' + g.all);
+export function tallHash(city, rec) { // (each 2 km group's arrays as its writer wrote them: the far mesh, before its index is cut down; the cell meshes share its vertices)
+  const hs = (city.tallGroups || city.tallMeshes).map((g) => hashArrays(rec.meshes.get(g.m)) + ':' + g.lv.join('/') + '/' + g.main + '/' + g.all);
   return { n: hs.length, hash: combine(hs) };
 }
 // every other mesh MeshW wrote so far (the landmarks: realLandmarks.js), in the order written
 export function otherHash(city, rec) {
-  const tall = new Set(city.tallMeshes.map((g) => g.m)), hs = [];
+  const tall = new Set([...(city.tallGroups || []), ...city.tallMeshes].map((g) => g.m)), hs = [];
   for (const r of rec.list) { const m = r.deref(); if (m && !tall.has(m) && !rec.lows.has(m) && rec.meshes.has(m)) hs.push(hashArrays(rec.meshes.get(m))); }
   return { n: hs.length, hash: combine(hs) };
 }
