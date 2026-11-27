@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { decodeLayout, KIND } from './format.js';
 import { meshChunk, physIndex, physAt, latticeOf } from './mesh.js';
+import { groundGrid, latticeHeights } from './rules.js';
 import { sidewalkMaterial, regionLook, REGION } from '../roadSurface.js';
 // the gravel (tracks and verges): a region's own where it differs (Bora Bora's tracks and verges are coral sand and dirt)
 const GRAVEL = { fr: 0xc8b48e };
@@ -23,8 +24,9 @@ export class Layout {
   constructor(w, index, dir) {
     this.w = w; this.on = false; this.dir = dir; this.size = index.size; this.group = new THREE.Group(); this.group.name = 'layout';
     this.index = new Map(index.chunks.map((c) => [c.ix + ',' + c.iz, c])); this.chunks = new Map(); this.active = new Map(); this.queue = new Map(); this.busy = false; this.cam = { x: 0, z: 0 };
-    // the active chunks' mask, a texel a chunk over the hi square (today's materials don't draw where it's set)
-    const H = w.real.hi, S = this.size; this.gx0 = Math.floor(H.x0 / S) * S; this.gz0 = Math.floor(H.z0 / S) * S; this.gn = Math.ceil((H.x0 + H.size - this.gx0) / S) + 1;
+    // the active chunks' mask, a texel a chunk over the square holding every baked chunk (today's materials don't draw where
+    // it's set; New York's reach past the hi square)
+    const S = this.size, cs = index.chunks, ix0 = Math.min(0, ...cs.map((c) => c.ix)), iz0 = Math.min(0, ...cs.map((c) => c.iz)); this.gx0 = ix0 * S; this.gz0 = iz0 * S; this.gn = Math.max(1, ...cs.map((c) => Math.max(c.ix - ix0, c.iz - iz0) + 1));
     this.maskData = new Uint8Array(this.gn * this.gn); this.mask = new THREE.DataTexture(this.maskData, this.gn, this.gn, THREE.RedFormat, THREE.UnsignedByteType); this.mask.needsUpdate = true;
     this.U = { layMask: { value: this.mask }, layGrid: { value: new THREE.Vector4(this.gx0, this.gz0, S, this.gn) } };
     this.out = [0, 0, 1, 0]; this.skirts = new Map(); this.subs = []; this.o2 = [0, 0, 0, 0];
@@ -63,12 +65,8 @@ export class Layout {
     this.worker = typeof Worker !== 'undefined' ? new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }) : null;
     if (this.worker) this.worker.onmessage = (ev) => { this.busy = false; const c = this.chunks.get(ev.data.id); if (c) this.got(c, ev.data.level, ev.data.m); this.pump(); };
   }
-  // the hi grid's heights at a chunk's grid points (the natural ground the layout meets)
-  lattice(L) {
-    const H = this.w.real.hi, grid = { x0: H.x0, z0: H.z0, sp: H.sp, wl: this.w.loc.shore ? this.w.waterLevel : -Infinity }, lat = latticeOf(L, grid), out = new Float32Array(lat.ni * lat.nj);
-    for (let j = 0; j < lat.nj; j++) for (let i = 0; i < lat.ni; i++) out[j * lat.ni + i] = H.H[Math.max(0, Math.min(H.n - 1, lat.j0 + j)) * H.n + Math.max(0, Math.min(H.n - 1, lat.i0 + i))];
-    return { grid, G: out };
-  }
+  // the natural ground at a chunk's grid points (rules.js groundNode: today's terrain base without the roads' carving)
+  lattice(L) { const grid = groundGrid(this.w); return { grid, G: latticeHeights(this.w, grid, latticeOf(L, grid)) }; }
   // a chunk's file, fetched and decoded (once)
   load(k) {
     let c = this.chunks.get(k); if (c) return c.ready.then(() => c); const e = this.index.get(k);
