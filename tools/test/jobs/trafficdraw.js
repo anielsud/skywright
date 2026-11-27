@@ -5,7 +5,7 @@
 // before culling, is not what a frame draws. At each view: the instances dealt (by LOD), their triangles before
 // three's per-instance frustum culling, the multi-draw left after it (BatchedMesh _multiDrawCount/_multiDrawCounts),
 // and the frame's triangles (renderer.info) with the batch shown and hidden. The first view is also measured after
-// 60 s of traffic there (cars are dealt onto lanes 270-600 m out, LOD by horizontal distance: vehicles.js LOD).
+// 60 s of traffic there (cars are dealt onto lanes 270-600 m out, LOD by 3D distance to the camera: vehicles.js LOD).
 import { toLocal } from '../../../src/realworld.js';
 const POSES = [
   { long: 1, name: 'street 7th Ave/Times Sq', from: [40.7560, -73.9866, 2], to: [40.7630, -73.9830, 2] },
