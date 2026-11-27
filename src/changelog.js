@@ -2,6 +2,11 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.217.0', items: [
+    "Train tracks are finally visible! Railways were hidden from above until now.",
+    "Flights start a little faster: the game builds fewer graphics programs while loading.",
+    "Faraway skyscrapers in New York are drawn more simply, so flying over the city is smoother.",
+  ] },
   { v: '1.216.0', items: [
     "Behind the scenes: the new road surface being tried out now covers Bora Bora too, with the coast road kept clear of the lagoon.",
   ] },

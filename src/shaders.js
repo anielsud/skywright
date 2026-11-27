@@ -115,6 +115,14 @@ export function installFog() {
   #endif`;
   // attach shared uniforms by reference to every material that doesn't define its own hook
   THREE.Material.prototype.onBeforeCompile = function (shader) { Object.assign(shader.uniforms, FOG); };
+  // Shadow depth (#287): three hands a caster's map to the shadow pass's depth material even when nothing alpha-tests it,
+  // and the map's presence is part of the program key, though the depth pass then never reads it. So one depth shader
+  // compiled as two programs, and which one a caster got depended on the order things were drawn in: a rooftop deck in
+  // New York first drawn in a different order than at the warm-up compiled the other one mid-flight. A depth material's
+  // map now reads as none unless it alpha-tests (what the depth pass draws is the same).
+  for (const C of [THREE.MeshDepthMaterial, THREE.MeshDistanceMaterial]) {
+    Object.defineProperty(C.prototype, 'map', { configurable: true, get() { return this.alphaTest > 0 ? this._map : null; }, set(v) { this._map = v; } });
+  }
 }
 
 // ---------- terrain material ----------

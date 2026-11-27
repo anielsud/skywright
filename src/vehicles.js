@@ -258,7 +258,10 @@ export class Vehicles {
     const draw = (c, mdl, dist2) => { // (false: not drawn, the pool is full or the type has no model)
       if (!B || nb >= NS - NW) return false;
       const G = this.gid[c.type]; if (!G) return false;
-      const lod = dist2 < d1 * d1 ? 0 : dist2 < d2 * d2 ? 1 : 2, k = S[nb++];
+      // LOD (and so blob shadow and wheels) by 3D distance to the camera: dist2 is horizontal (the draw-distance cull),
+      // so from height the cars right below would get full detail; m4's translation is the car's position
+      const dy = camPos ? m4.elements[13] - camPos.y : 0, d3 = dist2 + dy * dy;
+      const lod = d3 < d1 * d1 ? 0 : d3 < d2 * d2 ? 1 : 2, k = S[nb++];
       B.setGeometryIdAt(k, G.lod[lod]); B.setMatrixAt(k, m4); B.setColorAt(k, col.set(c.color)); B.setVisibleAt(k, true);
       if (lod < 2) { this._bs.set(mdl.W * 1.8, 1, mdl.L * 1.3); this._b4.makeScale(this._bs.x, 1, this._bs.z).premultiply(m4); this.blobs.setMatrixAt(this.nBlob++, this._b4); } // (far: too small to matter)
       if (lod === 0) for (let j = 0; j < mdl.wheels.length && nw < NW; j++) {
