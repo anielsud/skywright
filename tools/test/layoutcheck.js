@@ -7,6 +7,7 @@ import { gunzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { decodeLayout, KIND } from '../../src/layout/format.js';
 import { meshChunk, latticeOf } from '../../src/layout/mesh.js';
+import { KERB } from '../../src/layout/rules.js';
 
 export const nodeSuite = { files: ['src/layout/format.js', 'src/layout/mesh.js', 'src/layout/rules.js', 'src/layout/outline.js', 'src/layout/bake.js', 'tools/test/layoutcheck.js', 'assets/real/nyc/layout/index.json', 'assets/real/lauterbrunnen/layout/index.json'] };
 const PLACES = ['nyc', 'lauterbrunnen'];
@@ -34,7 +35,7 @@ export async function runCase(c) {
     for (let q = 0; q < m.tk.length; q++) { const v = [I[q * 3], I[q * 3 + 1], I[q * 3 + 2]];
       if (m.tk[q] === KIND.tarmac) for (const k of v) if (Math.abs(Y[k] - P[k * 3 + 1]) > 1e-4) off++;
       if (m.tk[q] === KIND.kerb) for (let r = 0; r < 3; r++) { // (the steepest physics rise along an edge of the kerb's strip: a 15 cm step over its 10 cm would be ~1.5; a plane through a sliver's three corners says nothing)
-        const u = v[r], w = v[(r + 1) % 3], l = Math.hypot(P[u * 3] - P[w * 3], P[u * 3 + 2] - P[w * 3 + 2]); const top = (q) => P[q * 3 + 1] - Y[q] > 0.1, gut = (q) => Math.abs(P[q * 3 + 1] - Y[q]) < 1e-4; if (l < 0.5 && ((top(u) && gut(w)) || (top(w) && gut(u)))) step = Math.max(step, Math.abs(Y[u] - Y[w])); } } // (across the kerb: a gutter's point to a top's) // (the largest physics rise along a short edge of the kerb's strip: drawn it's 0.15 m)
+        const u = v[r], w = v[(r + 1) % 3], l = Math.hypot(P[u * 3] - P[w * 3], P[u * 3 + 2] - P[w * 3 + 2]); const top = (q) => P[q * 3 + 1] - Y[q] > 0.1, gut = (q) => Math.abs(P[q * 3 + 1] - Y[q]) < 1e-4; if (l < 0.5 && ((top(u) && gut(w)) || (top(w) && gut(u)))) { const t = top(u) ? u : w, g = t === u ? w : u; step = Math.max(step, Math.abs((Y[t] - Y[g]) - (P[t * 3 + 1] - KERB - P[g * 3 + 1]))); } } } // (across the kerb, a gutter's point to a top's: how far physics rises past the surface the kerb stands on (drawn less the kerb), as tools/bake/layout-check.mjs: the surface's own slope isn't the kerb)
     out.push({ name: `${name}: on the tarmac physics is what's drawn`, ok: off === 0, why: `${off} tarmac corners off` });
     out.push({ name: `${name}: a kerb is never physics`, ok: step <= 0.05, why: `largest physics rise across a kerb ${step.toFixed(3)} m (drawn 0.15)` });
   }
