@@ -22,6 +22,8 @@ const LOOK = {
   us: { tint: [0.13, 0.125, 0.118], wear: 0.7, lw: 0.13, dash: [3, 9, 3, 9], yellow: true, gravel: [0.48, 0.40, 0.31] },
   fr: { tint: [0.2, 0.192, 0.18], wear: 0.45, lw: 0.12, dash: [3, 10, 3, 10], yellow: false, gravel: [0.55, 0.52, 0.45] },
 };
+// a place's region's look (the baked layout's materials, layout/runtime.js, follow today's roads')
+export const regionLook = (id) => LOOK[REGION[id]] || LOOK.ch;
 // centre line kinds
 const C_NONE = 0, C_DASH = 1, C_DOUBLE = 2, C_LANES = 3; // C_LANES: one-way, dashed white lane lines only
 // edge: 0 none, 1 white both sides, 2 / 3: one carriageway of a divided road, its median on the +x / -x side (US:

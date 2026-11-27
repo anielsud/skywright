@@ -23,7 +23,7 @@ const LAT_PAD = 56; // (m past the chunk: the rules read the ground at a road's 
 
 // L: a decoded chunk; grid: { x0, z0, sp } the hi grid; G: its heights at latticeOf(L, grid)'s points (ni * nj)
 export function meshChunk(L, grid, G, level = 'fine') {
-  const t0 = performance.now(), fine = level === 'fine', lat = latticeOf(L, grid), g = latticeGround(grid, lat, G), R = makeRules(L.net, g, !!L.city);
+  const t0 = performance.now(), fine = level === 'fine', lat = latticeOf(L, grid), g = latticeGround(grid, lat, G), R = makeRules(L.net, g, !!L.city, grid.wl ?? -Infinity);
   const X0 = Math.round(L.x0 * 100), Z0 = Math.round(L.z0 * 100), S = Math.round(L.size * 100);
   // ---- the points (centimetres while they're gathered)
   const PX = [], PZ = [], key = new Map(), kinds = [];

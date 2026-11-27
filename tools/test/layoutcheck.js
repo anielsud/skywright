@@ -9,24 +9,24 @@ import { decodeLayout, KIND } from '../../src/layout/format.js';
 import { meshChunk, latticeOf } from '../../src/layout/mesh.js';
 import { KERB } from '../../src/layout/rules.js';
 
-export const nodeSuite = { files: ['src/layout/format.js', 'src/layout/mesh.js', 'src/layout/rules.js', 'src/layout/outline.js', 'src/layout/bake.js', 'tools/test/layoutcheck.js', 'assets/real/nyc/layout/index.json', 'assets/real/lauterbrunnen/layout/index.json'] };
-const PLACES = ['nyc', 'lauterbrunnen'];
+export const nodeSuite = { files: ['src/layout/format.js', 'src/layout/mesh.js', 'src/layout/rules.js', 'src/layout/outline.js', 'src/layout/bake.js', 'tools/test/layoutcheck.js', 'assets/real/nyc/layout/index.json', 'assets/real/lauterbrunnen/layout/index.json', 'assets/real/canyon/layout/index.json', 'assets/real/islands/layout/index.json'] };
+const PLACES = ['nyc', 'lauterbrunnen', 'canyon', 'islands'], SHORE = new Set(['islands']); // (SHORE: the places on the sea, realworld.js loc.shore: the layout's shore rules at meta.json's water level)
 export function cases() { return PLACES.filter((p) => existsSync(`assets/real/${p}/layout/index.json`)).map((place) => ({ id: `${place} layout`, place, cost: 1 })); }
 
 function hiGrid(id) { // the hi grid as realworld.js decodes it: uint16 (h + 200) * 8, each row delta-coded
   const m = JSON.parse(readFileSync(`assets/real/${id}/meta.json`)), { x0, z0, size, n } = m.hi, b = gunzipSync(readFileSync(`assets/real/${id}/hi.bin.gz`)), u = new Uint16Array(b.buffer, b.byteOffset, n * n), H = new Float32Array(n * n);
   for (let j = 0; j < n; j++) { let v = 0; for (let i = 0; i < n; i++) { v = i ? (v + u[j * n + i]) & 65535 : u[j * n]; H[j * n + i] = v / 8 - 200; } }
-  return { x0, z0, n, sp: size / (n - 1), H };
+  return { x0, z0, n, sp: size / (n - 1), H, water: m.water };
 }
 
 export async function runCase(c) {
   const dir = `assets/real/${c.place}/layout/`, idx = JSON.parse(readFileSync(dir + 'index.json', 'utf8')), G = hiGrid(c.place), out = [], meshes = new Map();
   // (a sample: the first test chunks, side by side, and Lauterbrunnen's; every chunk is checked by the bake, tools/bake/layout.mjs)
-  const SAMPLE = new Set(['-7,25', '-6,25', '-4,-3', '16,8', '16,9', '4,-13', '4,-12']); // (Lauterbrunnen: a town; the village beside a bridge's chunk; switchbacks on a valley wall)
+  const SAMPLE = new Set(['-7,25', '-6,25', '-4,-3', '16,8', '16,9', '4,-13', '4,-12', '-19,-16', '-18,-16', '-15,-1', '-14,-1', '11,-12', '12,-12', '11,-9']); // (Lauterbrunnen: a town; the village beside a bridge's chunk; switchbacks on a valley wall. The canyon: Grand Canyon Village on the rim; a street's hairpin on a slope. Bora Bora: the ring road at the shore; Vaitape beside the marina's chunk)
   for (const e of idx.chunks.filter((e) => SAMPLE.has(e.ix + ',' + e.iz))) {
     const gz = readFileSync(dir + e.file), name = `${c.place} ${e.ix},${e.iz}`, buf = gunzipSync(gz), L = decodeLayout(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
     out.push({ name: `${name}: its file is named by its bytes`, ok: e.file === `${e.ix}_${e.iz}.${createHash('sha256').update(gz).digest('hex').slice(0, 10)}.bin.gz`, why: e.file });
-    const grid = { x0: G.x0, z0: G.z0, sp: G.sp }, { i0, j0, ni, nj } = latticeOf(L, grid), lat = new Float32Array(ni * nj); for (let j = 0; j < nj; j++) for (let i = 0; i < ni; i++) lat[j * ni + i] = G.H[(j0 + j) * G.n + i0 + i];
+    const grid = { x0: G.x0, z0: G.z0, sp: G.sp, wl: SHORE.has(c.place) ? G.water : -Infinity }, { i0, j0, ni, nj } = latticeOf(L, grid), lat = new Float32Array(ni * nj); for (let j = 0; j < nj; j++) for (let i = 0; i < ni; i++) lat[j * ni + i] = G.H[(j0 + j) * G.n + i0 + i];
     const ms = {}; for (const level of ['fine', 'coarse']) ms[level] = meshChunk(L, grid, lat, level);
     meshes.set(e.ix + ',' + e.iz, ms);
     for (const level of ['fine', 'coarse']) { const s = ms[level].stats; out.push({ name: `${name}: meshes (${level}) with every fixed edge and the chunk covered`, ok: s.failed === 0 && Math.abs(s.covered - 1) < 1e-6, why: `${s.failed} of ${s.fixed + s.failed} fixed edges failed, ${(s.covered * 100).toFixed(4)}% covered, ${s.tris} triangles in ${s.totalMs.toFixed(0)} ms` }); }

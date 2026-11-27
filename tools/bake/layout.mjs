@@ -40,16 +40,19 @@ for (const a of args) {
   // (a stunt site's cut and what's past the World's core: ground the layout's natural ground doesn't know (the stunt
   // site levelled; past the core, the streamed tiles' ground and no roads))
   const cut = (x, z) => (world.stuntPlan?.cut || []).some((R) => { const ex = x - R.x, ez = z - R.z; return Math.abs(ex * R.c - ez * R.s) < R.hx && Math.abs(ex * R.s + ez * R.c) < R.hz; });
+  // (the marina's docks and the water park's ramps: their own solid ground at the shore, within 50 m of the chunk)
+  const sites = [...(world.marina ? [['marina', world.marina.cm]] : []), ...(world.waterParks?.sites || []).map((s) => ['water park', s.cm])];
   for (const k of seen.keys()) { const [ix, iz] = k.split(',').map(Number), x0 = ix * CHUNK, z0 = iz * CHUNK, add = (w) => (why.get(k) || why.set(k, new Set()).get(k)).add(w);
     if (world.half && (x0 < -world.half || z0 < -world.half || x0 + CHUNK > world.half || z0 + CHUNK > world.half)) add('outside the core');
-    let c = false; for (let x = x0 - 50; x <= x0 + CHUNK + 50 && !c; x += 10) for (let z = z0 - 50; z <= z0 + CHUNK + 50 && !c; z += 10) c = cut(x, z); if (c) add('stunt site'); }
+    let c = false; for (let x = x0 - 50; x <= x0 + CHUNK + 50 && !c; x += 10) for (let z = z0 - 50; z <= z0 + CHUNK + 50 && !c; z += 10) c = cut(x, z); if (c) add('stunt site');
+    for (const [name, cm] of sites) if (cm.hi[0] >= cm.lo[0] && x0 - 50 < cm.hi[0] && x0 + CHUNK + 50 > cm.lo[0] && z0 - 50 < cm.hi[2] && z0 + CHUNK + 50 > cm.lo[2]) add(name); }
   const fallback = new Map(), chunks = [];
   for (const k of wanted) { if (why.has(k)) fallback.set(k, [...why.get(k)].sort().join('+')); else if (seen.has(k)) chunks.push(k.split(',').map(Number)); }
   console.log(`${id}: ${wanted.length} chunks with roads; ${chunks.length} to bake, ${fallback.size} keep today's roads (${count([...fallback.values()])})`);
   // ---- the bake (one height solve for them all)
   const r = bakeLayout(world, chunks, (...m) => { if (!/^\s+\[layout\]\s{3}/.test(m[0])) console.log(...m); }), tc = performance.now();
   // ---- the checks, the game's way, a worker per core
-  const H = world.real.hi, grid = { x0: H.x0, z0: H.z0, sp: H.sp }, jobs = r.chunks.map(({ ix, iz, bytes }) => { const L = { x0: ix * CHUNK, z0: iz * CHUNK, size: CHUNK }, lat = latticeOf(L, grid), G = new Float32Array(lat.ni * lat.nj);
+  const H = world.real.hi, grid = { x0: H.x0, z0: H.z0, sp: H.sp, wl: world.loc.shore ? world.waterLevel : -Infinity }, jobs = r.chunks.map(({ ix, iz, bytes }) => { const L = { x0: ix * CHUNK, z0: iz * CHUNK, size: CHUNK }, lat = latticeOf(L, grid), G = new Float32Array(lat.ni * lat.nj);
     for (let j = 0; j < lat.nj; j++) for (let i = 0; i < lat.ni; i++) G[j * lat.ni + i] = H.H[Math.max(0, Math.min(H.n - 1, lat.j0 + j)) * H.n + Math.max(0, Math.min(H.n - 1, lat.i0 + i))];
     return { ix, iz, buf: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), G }; });
   const N = Math.max(1, Math.min(cpus().length - 1, Math.ceil(jobs.length / 4))), parts = Array.from({ length: N }, () => []); jobs.forEach((j, q) => parts[q % N].push(j));
@@ -80,6 +83,7 @@ for (const a of args) {
   const st = (f) => { const v = results.map(f).sort((p, q) => p - q); return `p50 ${v[v.length >> 1].toFixed(0)}, p90 ${v[Math.floor(v.length * 0.9)].toFixed(0)}, max ${v[v.length - 1].toFixed(0)}`; };
   console.log(`${id}: ${chunksOut.length} chunk files, ${(bytesAll / 1e6).toFixed(2)} MB (${(bytesAll / lenAll).toFixed(2)} bytes/m of road over ${(lenAll / 1000).toFixed(0)} km); fallback ${fallback.size}: ${count([...fallback.values()])}`);
   console.log(`  checks: ${results.length} chunks; failed ${failed.size} (${count([...failed.values()])}); holes ${results.reduce((s, c) => s + c.fine.holes, 0)} of ${results.reduce((s, c) => s + c.fine.samples, 0)} samples; tarmac drawn - physics max ${Math.max(...results.map((c) => c.fine.tarmacOff)).toFixed(4)} m; kerb physics rise max ${Math.max(...results.map((c) => c.fine.kerbSlope)).toFixed(3)} m (drawn 0.15); markings off the centre line max ${Math.max(...results.map((c) => c.fine.drift)).toFixed(4)} m (fails over ${DRIFT_MAX}) over ${sum((c) => c.fine.driftSamples)} samples, ${sum((c) => c.fine.lost)} lost to another street's triangle; crossings whole ${sum((c) => c.fine.whole)}/${sum((c) => c.fine.mouths)} mouths (${sum((c) => c.fine.tight)} too close to another junction); slabs' across off the kerb max ${Math.max(...results.map((c) => c.fine.kerbErr)).toFixed(3)} m; bends' bisectors left soft ${sum((c) => c.fine.bendMissed)}; seams ${pairs - seamBad}/${pairs} match${seamBad ? ' (' + seamList.slice(0, 10).join(' ') + ')' : ''}`);
+  { const S = (k) => results.reduce((n, c) => n + c.fine.shore[k], 0); if (grid.wl > -Infinity) console.log(`  shore (water level ${grid.wl}): ground pushed below the water by banks ${S('under')}; ground raised in the water ${S('raised')}; paved points below the water ${S('pavedWet')}; bank points the shore rule changed ${S('limited')} in ${results.filter((c) => c.fine.shore.limited).length} chunks`);  const ex = results.flatMap((c) => c.fine.shore.ex); if (ex.length) console.log('    e.g.', JSON.stringify(ex.slice(0, 16))); }
   { const W = {}; for (const c of results) for (const [k, n] of Object.entries(c.fine.why || {})) W[k] = (W[k] || 0) + n; if (Object.keys(W).length) console.log('  fixed edges failed, by what and why:', JSON.stringify(W)); }
   console.log(`  kerb top lines left soft (would cross another line): ${results.reduce((n, c) => n + (c.fine.softMissed || 0), 0)} segments in ${results.filter((c) => c.fine.softMissed).length} chunks`);
   console.log(`  mesh ms fine ${st((c) => c.fine.ms)} (outlines ${st((c) => c.fine.outlineMs)}); coarse ${st((c) => c.coarse.ms)}; triangles fine ${st((c) => c.fine.tris)}`);

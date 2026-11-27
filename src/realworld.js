@@ -62,6 +62,7 @@ export const REAL_LOCATIONS = {
     marina: { at: [5300, -3900], r: 2400, waves: 0.05 }, // boats: a marina in the lagoon off Vaitape
     waterPark: { theme: 'tropical', near: [4540, 580], r: 1200, shallow: 5, distW: 6 }, // the water park (waterPark.js): in the turquoise lagoon off the stunt park's shore
     padBlend: 160, // the airport sits on a narrow reef islet: its apron meets the sea within ~160 m
+    shore: true, // the baked road layout (src/layout, #294): roads held above the sea, banks that don't fill into the lagoon
     // the stunt park: a palm-lined sand track with a tiki arch on the island's east shore (stuntSite.js), the water park in the lagoon beside it
     roadStart: { place: 'Vaitape', maxClass: 1 }, // 'On the road': the island's ring road at Vaitape (landStart.js)
     stunts: { theme: 'tropical', layout: 'compact', near: [4540, 580], r: 400, distW: 8, maxForest: 1, minAbove: 1.0, forestW: 0, seed: 117 },
