@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.223.0', items: [
+    "Behind the scenes: the new road surface being tested now also covers airports, the countryside beyond the main area, stunt parks and the marina.",
+  ] },
   { v: '1.222.0', items: [
     "Behind the scenes: on the new road surface being tested, dirt tracks have their wheel ruts back and water meets the shore properly.",
   ] },
