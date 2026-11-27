@@ -70,6 +70,12 @@ export function roadIndex(w) {
       a = -1;
     }
   }
+  return indexSegs(segs, S, gx0, gx1, gz0, gz1);
+}
+// segments (as roadIndex makes them) filed in the dense grid; S: the setback past their clear zones (the baked setbacks
+// stage files the layout's own building lines with it: layout/setbacks.js)
+export function indexSegs(segs, S, gx0 = Infinity, gx1 = -Infinity, gz0 = Infinity, gz1 = -Infinity) {
+  if (gx0 === Infinity) for (const sg of segs) { gx0 = Math.min(gx0, sg[6]); gx1 = Math.max(gx1, sg[7]); gz0 = Math.min(gz0, sg[8]); gz1 = Math.max(gz1, sg[9]); }
   if (!segs.length) return { segs, set: S };
   const ox = Math.floor(gx0 / CELL), oz = Math.floor(gz0 / CELL), nx = Math.floor(gx1 / CELL) - ox + 1, nz = Math.floor(gz1 / CELL) - oz + 1;
   const start = new Uint32Array(nx * nz + 1); let list = null, fill = null;
