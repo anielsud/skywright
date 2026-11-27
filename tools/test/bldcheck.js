@@ -15,8 +15,8 @@
 //  - roofs (phase 4): Swiss chalets low-pitched with wide eaves, their gables to the valley on a slope, some roofs
 //    weighted with stones; Bora Bora's thatch steep (or at the 5.5 m cap), its eaves thatch (no white fascia, no gutters); New York's flat
 //    roofs varied (membrane, coated and black tar, gravel, pavers), water tanks on the walk-ups and pre-war roofs,
-//    bulkheads and plant rooms, crowns on the towers; the furniture inside its footprint, its indices last (drawn near
-//    only) and every tank's staves wound outwards
+//    bulkheads and plant rooms, crowns on the towers; the furniture instanced (realCity.js FurnK: none of it in the
+//    buildings' meshes, an instance for every piece roofStats counted) and every tank's staves wound outwards
 //  - lights (phase 5): the windows lit by hour (homes peak in the evening and go dark after midnight, offices empty
 //    after work but some floors stay lit, the villages earlier to bed and sparser), the lamps coming on through the dusk
 //    (not at once), floodlit programs flagged in the facade table, and New York's landmark crowns floodlit
@@ -264,23 +264,29 @@ async function roofsNyc(c) {
   const cells = RS.cells, total = Object.values(cells).reduce((a, b) => a + b, 0), share = (k) => (cells[k] || 0) / Math.max(1, total);
   out.push({ name: `${c.id}: flat roofs varied (membrane, tar, gravel, pavers; many colours)`, ok: total > 20000 && [C.ROOF_MEMBRANE, C.ROOF_TAR, C.ROOF_GRAVEL, C.PAVERS].every((k) => share(k) > 0.04) && RS.cols.size >= 12, why: `${total} roofs: ${Object.entries(cells).map(([k, n]) => `cell ${k} ${(n / total * 100).toFixed(0)}%`).join(', ')}; ${RS.cols.size} colours` });
   out.push({ name: `${c.id}: water tanks, bulkheads and plant rooms on the roofs, crowns on the towers`, ok: RS.tanks > 3000 && RS.bulkheads > 3000 && RS.plant > 2000 && RS.cake > 50 && RS.copper > 15 && RS.screen > 50, why: JSON.stringify({ tanks: RS.tanks, bulkheads: RS.bulkheads, plant: RS.plant, cake: RS.cake, copper: RS.copper, screen: RS.screen }) });
-  // the furniture: indices after every building's (a draw range to main leaves it out), inside its building's footprint
-  // box, and the tanks' staves wound outwards (their normals out from the tank's axis)
+  // the furniture: instances (realCity.js FurnK), one for every piece roofStats counted, none of it left in the buildings'
+  // meshes; and the tanks' staves wound outwards (their normals out from the tank's axis), counted over the instances
   let bad = 0, out0 = 0, wound = 0, staves = 0, ex = '';
   for (const g of CS.tallMeshes) {
     if (!(g.main <= g.all && g.lv.every((v) => v <= g.main))) { bad++; continue; }
-    const G = g.m.geometry, P = G.attributes.position.array, A = G.attributes.atl.array, N = G.attributes.normal.array, I = G.index.array;
-    const late = new Set(); for (let k = g.main; k < g.all; k++) late.add(I[k]);
-    for (let k = 0; k < g.main; k++) if (A[I[k] * 4] === C.WTANK || A[I[k] * 4] === C.FRAME) { out0++; ex ||= `tank cell in the main range of a mesh`; break; }
-    for (let k = g.main; k + 2 < g.all; k += 3) {
-      const a = I[k]; if (A[a * 4] !== C.WTANK) continue;
-      staves++;
-      const ux = P[I[k + 1] * 3] - P[a * 3], uz = P[I[k + 1] * 3 + 2] - P[a * 3 + 2], vx = P[I[k + 2] * 3] - P[a * 3], vy = P[I[k + 2] * 3 + 1] - P[a * 3 + 1], vz = P[I[k + 2] * 3 + 2] - P[a * 3 + 2];
-      const uy = P[I[k + 1] * 3 + 1] - P[a * 3 + 1], wx = uy * vz - uz * vy, wz = ux * vy - uy * vx; // (the winding's normal, horizontal part)
-      if (wx * N[a * 3] + wz * N[a * 3 + 2] <= 0) wound++;
+    const G = g.m.geometry, A = G.attributes.atl.array, I = G.index.array;
+    for (let k = 0; k < g.all; k++) if (A[I[k] * 4] === C.WTANK || A[I[k] * 4] === C.FRAME) { out0++; ex ||= `tank cell in a building mesh`; break; }
+  }
+  for (const g of CS.tallGroups) {
+    for (const f of g.furn) {
+      if (f.userData.kind !== 'tank') continue;
+      const F = f.geometry, P = F.attributes.position.array, V = F.attributes.fv.array, N = F.attributes.normal.array, J = F.index.array;
+      for (let k = 0; k + 2 < J.length; k += 3) {
+        const a = J[k]; if (V[a * 4] !== C.WTANK) continue;
+        staves += f.count;
+        const ux = P[J[k + 1] * 3] - P[a * 3], uy = P[J[k + 1] * 3 + 1] - P[a * 3 + 1], uz = P[J[k + 1] * 3 + 2] - P[a * 3 + 2], vx = P[J[k + 2] * 3] - P[a * 3], vy = P[J[k + 2] * 3 + 1] - P[a * 3 + 1], vz = P[J[k + 2] * 3 + 2] - P[a * 3 + 2];
+        const wx = uy * vz - uz * vy, wz = ux * vy - uy * vx; // (the winding's normal, horizontal part)
+        if (wx * N[a * 3] + wz * N[a * 3 + 2] <= 0) wound += f.count;
+      }
     }
   }
-  out.push({ name: `${c.id}: roof furniture drawn last (indices after the buildings', a draw range leaves it out)`, ok: !bad && !out0, why: `${bad} meshes with ranges out of order, ${out0} with tank cells among the buildings' indices${ex ? ` (${ex})` : ''}` });
+  const FC = CS.furnCount(), boxes = RS.plant + RS.bulkheads + RS.units + RS.hatches + RS.crownBox;
+  out.push({ name: `${c.id}: roof furniture instanced (none in the buildings' meshes; an instance for every piece counted)`, ok: !bad && !out0 && FC.made.tank === RS.tanks && FC.made.box === boxes && FC.tall.tank + FC.low.tank === RS.tanks, why: `${bad} meshes with ranges out of order, ${out0} with tank cells in them${ex ? ` (${ex})` : ''}; instances ${JSON.stringify(FC)}, counted: tanks ${RS.tanks}, boxes ${boxes}` });
   out.push({ name: `${c.id}: every tank's staves wound the way their normals point (outwards)`, ok: staves > 1000 && !wound, why: `${wound} of ${staves} stave triangles wound inwards` });
   // floodlit crowns (realCity.js crown(): most of the pre-war towers' crowns, a few glass towers' screens), in the meshes
   let lit = 0; for (const A of new Set(CS.tallMeshes.map((g) => g.m.geometry.attributes.atl.array))) { for (let i = 0; i < A.length; i += 4) if (facadeSpec(A[i])?.flood) { lit++; } }

@@ -13,6 +13,7 @@
 import { toLocal } from '../../../src/realworld.js';
 import { OCC } from '../../../src/realCity.js';
 import { OCC_LAYER, BW, BH } from '../../../src/occlusion.js';
+import { furnShaped } from '../../../src/buildings.js';
 
 const POSES = [
   { name: 'street: 7th Ave at Times Square', from: [40.7560, -73.9866, 2], to: [40.7630, -73.9830, 2] },
@@ -37,11 +38,13 @@ export async function run(T) {
   const settle = async () => { // stream around the camera (paused flight: step the world from here, as goto.py does; the city's update is the towns')
     for (let k = 0; k < 400; k++) { for (let i = 0; i < 10; i++) { W.update(1 / 60, cam, new THREE.Vector3(), []); W.towns.update(1 / 60, W.t, null, cam.position); W.flora?.update(cam.position); } W.roadGroup?.userData.update?.(cam.position, 1e5, 3000); if (k > 20 && city.ready) break; await new Promise((r) => setTimeout(r, 0)); }
   };
-  const trisOf = (o) => { const g = o.geometry, ic = g.index ? g.index.count : g.attributes.position?.count ?? 0; return Math.min(ic, g.drawRange?.count ?? Infinity) / 3; };
-  // every building mesh: [mesh, x, z, kind]
+  const trisOf = (o) => { const g = o.geometry, ic = g.index ? g.index.count : g.attributes.position?.count ?? 0; return (Math.min(ic, g.drawRange?.count ?? Infinity) / 3) * (o.isInstancedMesh ? o.count : 1); };
+  // every building mesh: [mesh, x, z, kind] (furn: the roof furniture's instances, realCity.js FurnK)
+  const furn = (L) => (L || []).map((f) => [f, f.position.x + f.boundingSphere.center.x, f.position.z + f.boundingSphere.center.z, 'furn']);
   const meshes = () => [
     ...(city.tallGroups || []).map((g) => [g.m, g.x, g.z, 'tall']), ...city.tallMeshes.map((g) => [g.m, g.x, g.z, 'tall']),
     ...[...city.tiles.values()].flatMap((t) => (t.meshes || []).map((m) => [m, m.position.x, m.position.z, 'low'])),
+    ...(city.tallGroups || []).flatMap((g) => furn(g.furn)), ...[...city.tiles.values()].flatMap((t) => furn(t.furn)),
   ];
   const ci = city.info(); T.log(`tall buildings ${ci.tall}, ${ci.occluders.tall} of them occluders; built in ${(ci.msTall / 1e3).toFixed(1)} s`);
   const rt = new THREE.WebGLRenderTarget(512, 312), px = new Uint8Array(512 * 312 * 4);
@@ -49,13 +52,15 @@ export async function run(T) {
   const truth = (c) => {
     cam.layers.enable(OCC_LAYER);
     const fr = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse)), sph = new THREE.Sphere();
-    const vis = (o) => { for (let v = o; v; v = v.parent) if (!v.visible) return false; if (!o.frustumCulled) return true; const g = o.geometry; if (!g.boundingSphere) g.computeBoundingSphere(); sph.copy(g.boundingSphere).applyMatrix4(o.matrixWorld); return fr.intersectsSphere(sph); };
-    const band = (d) => BANDS.findIndex((b) => d < b), B = { tall: BANDS.map(() => 0), low: BANDS.map(() => 0) }, drawn = [];
+    const vis = (o) => { for (let v = o; v; v = v.parent) if (!v.visible) return false; if (!o.frustumCulled) return true; const g = o.geometry; if (!g.boundingSphere) g.computeBoundingSphere(); sph.copy(o.isInstancedMesh ? o.boundingSphere : g.boundingSphere).applyMatrix4(o.matrixWorld); return fr.intersectsSphere(sph); };
+    const band = (d) => BANDS.findIndex((b) => d < b), B = { tall: BANDS.map(() => 0), low: BANDS.map(() => 0), furn: BANDS.map(() => 0) }, drawn = [];
     for (const e of meshes()) { const [m, x, z, k] = e; if (!vis(m) || !trisOf(m)) continue; B[k][band(Math.hypot(x - c.x, z - c.z))] += trisOf(m); drawn.push(e); }
     const keep = new Map(), mats = [];
     F.scene.traverse((o) => { if (o.visible) keep.set(o, o.material); });
     for (const o of keep.keys()) if (o.isMesh || o.isPoints || o.isLine || o.isSprite) o.visible = false;
-    drawn.forEach(([m], i) => { const k = i + 1, mt = new THREE.MeshBasicMaterial({ fog: false, toneMapped: false }); mt.color.setRGB((k & 255) / 255, ((k >> 8) & 255) / 255, ((k >> 16) & 255) / 255, THREE.LinearSRGBColorSpace); mats.push(mt); m.material = mt; m.visible = true; });
+    drawn.forEach(([m], i) => {
+      const k = i + 1, mt = new THREE.MeshBasicMaterial({ fog: false, toneMapped: false }); mt.color.setRGB((k & 255) / 255, ((k >> 8) & 255) / 255, ((k >> 16) & 255) / 255, THREE.LinearSRGBColorSpace); mats.push(mt); m.material = m.isInstancedMesh ? furnShaped(mt) : mt; m.visible = true;
+    });
     const bg = F.scene.background, fog = F.scene.fog; F.scene.background = null; F.scene.fog = null;
     R.setRenderTarget(rt); R.setClearColor(0, 0); R.clear(); R.render(F.scene, cam); R.readRenderTargetPixels(rt, 0, 0, 512, 312, px); R.setRenderTarget(null);
     F.scene.background = bg; F.scene.fog = fog;
@@ -109,7 +114,7 @@ export async function run(T) {
     let warm = 0; if (S.on) { const t0 = performance.now(); for (let r = 0; r < 20; r++) city.occlude(cam, R); warm = (performance.now() - t0) / 20; } // (its time again, warm: information)
     let left = 0; g.drawn.forEach(([m], i) => { if (!g.seen.has(i + 1) && m.layers.mask !== 1 << OCC_LAYER) left += trisOf(m); });
     T.log(`VIEW ${p.name} (camera y ${Math.round(c.y)} m): frame ${k(tris)} tris, ${calls} calls | buildings ${k(g.all)} tris in ${g.drawn.length} meshes; behind other buildings ${k(hid)} (${(100 * hid / Math.max(1, g.all)).toFixed(0)}%) in ${g.hidM} meshes`);
-    T.log(`     by distance <250 / <500 / <1k / <2k / <5k / 5k+ m:  tall ${g.B.tall.map(k).join(' / ')}   low ${g.B.low.map(k).join(' / ')}`);
+    T.log(`     by distance <250 / <500 / <1k / <2k / <5k / 5k+ m:  tall ${g.B.tall.map(k).join(' / ')}   low ${g.B.low.map(k).join(' / ')}   roof furniture ${g.B.furn.map(k).join(' / ')}`);
     T.log(`     occlusion ${S.on ? 'on' : 'off (camera too high)'}: frame ${k(on.tris)} tris, ${on.calls} calls | hid ${k(S.tris)} tris in ${S.hidden} meshes; still drawn though behind buildings ${k(left)} (${(100 * left / Math.max(1, g.all)).toFixed(0)}% of buildings') | work: ${S.cands} candidates, ${S.occluders} occluders drawn, ${S.corners} corners cast, ${S.pixels} pixels written, ${S.tested} meshes tested, ${S.ms.toFixed(2)} ms (warm ${warm.toFixed(2)}) | hidden but seen: ${bad.n}, closest margin ${bad.margin.toFixed(1)} m | picture off vs on: ${pxd} pixels differ`);
     T.check(`${p.name}: nothing hidden that shows`, bad.n === 0, bad.list);
     // hidden meshes still cast shadows: each one that casts and is in a shadow camera's view drawn into its shadow map
