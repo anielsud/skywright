@@ -1144,7 +1144,7 @@ export class World {
     }
     return false;
   }
-  treeHit(p) { return this.flora.hit(p) || this.towns.hit(p) || this.tiles?.treeHit(p) || this.pad?.hit(p) || this.helipads?.hit(p) || this.marina?.hit(p); }
+  treeHit(p) { return this.flora.hit(p) || this.towns.hit(p) || (this.destruct.proxies.length ? this.destruct.pieceHit(p) : null) || this.tiles?.treeHit(p) || this.pad?.hit(p) || this.helipads?.hit(p) || this.marina?.hit(p); }
   // Buildings within r of (x, z), as solid boxes for a car's or bike's wall contacts (aircraft.js wallContacts): every
   // building the towns, a real place or New York has, and the landmarks, each once, with its full footprint (destruct.box:
   // the oriented box, not the disc the part-centre test above uses) and its current height (lower once knocked down).

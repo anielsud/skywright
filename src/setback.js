@@ -426,18 +426,18 @@ const clamp01 = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);
 //    a face may stand more than FOOT.out past the walls (the face moves in if one does);
 //  - a box inside another goes. Where two meet, a car is never pushed out of one into the other (aircraft.js).
 // -> [{ x, z, ux, uz, hl, hw }] (the building's own frame's first), or null.
-export const FOOT = { step: 1, slant: 0.3, cells: 2000, max: 12, frames: 4, strips: 6, cover: 0.97, grow: 0.5, out: 1, eager: 10000 }; // (eager: m2, a footprint so big its boxes are worked out at load, lazyParts)
+export const FOOT = { step: 1, slant: 0.3, cells: 2000, max: 12, frames: 4, strips: 6, cover: 0.97, grow: 0.5, out: 1, eager: 10000, retry: 0.93, fine: { step: 0.5, max: 32, edge: 1, crumbs: 0.5, cover: 0.99, grow: 0.5, frames: 6 } }; // (eager: m2, a footprint so big its boxes are worked out at load, lazyParts)
 const D8 = (8 * Math.PI) / 180, D3 = (3 * Math.PI) / 180, Q90 = Math.PI / 2;
 const turn = (a, b) => { const d = Math.abs(a - b) % Q90; return Math.min(d, Q90 - d); }; // (between two wall directions, mod 90 degrees)
 // a footprint in a frame (fx, fz): its rings in (u, v), and a grid of cells on its own lines: through every corner
 // (a footprint square to the frame: its cells exactly), and every FOOT.step along a wall that runs off every frame
 // (one along another frame, that frame fits: every 3 FOOT.step)
-function frameGrid(P, holes, fx, fz, framed) {
+function frameGrid(P, holes, fx, fz, framed, step = FOOT.step, fk = 3) {
   const rings = [P, ...holes].map((R) => { const a = new Float64Array(R.length * 2); for (let k = 0; k < R.length; k++) { const x = R[k][0], z = R[k][1]; a[k * 2] = x * fx + z * fz; a[k * 2 + 1] = -x * fz + z * fx; } return a; });
   const us = [], vs = []; let exact = true; // (then sorted as Float64Arrays: by number)
   for (const a of rings) for (let n = a.length / 2, k = 0, m = n - 1; k < n; m = k++) {
     const pu = a[m * 2], pv = a[m * 2 + 1], du = a[k * 2] - pu, dv = a[k * 2 + 1] - pv; us.push(pu); vs.push(pv);
-    if (Math.abs(du) > FOOT.slant && Math.abs(dv) > FOOT.slant) { exact = false; const n2 = Math.min(40, Math.ceil(Math.max(Math.abs(du), Math.abs(dv)) / (FOOT.step * (framed(du * fx - dv * fz, du * fz + dv * fx) ? 3 : 1)))); for (let i = 1; i < n2; i++) { us.push(pu + du * i / n2); vs.push(pv + dv * i / n2); } }
+    if (Math.abs(du) > FOOT.slant && Math.abs(dv) > FOOT.slant) { exact = false; const n2 = Math.min(40, Math.ceil(Math.max(Math.abs(du), Math.abs(dv)) / (step * (framed(du * fx - dv * fz, du * fz + dv * fx) ? fk : 1)))); for (let i = 1; i < n2; i++) { us.push(pu + du * i / n2); vs.push(pv + dv * i / n2); } }
   }
   const lines = (x, g) => { x.sort(); const o = [x[0]]; for (const t of x) if (t - o[o.length - 1] > g) o.push(t); if (x[x.length - 1] - o[o.length - 1] > 1e-6) o[o.length - 1] = x[x.length - 1]; return o; };
   const us2 = Float64Array.from(us), vs2 = Float64Array.from(vs);
@@ -483,15 +483,27 @@ function mark(G, b) {
   }
 }
 const toWorld = (G, cu, cv, au, av, hl, hw) => ({ x: cu * G.fx - cv * G.fz, z: cu * G.fz + cv * G.fx, ux: au * G.fx - av * G.fz, uz: au * G.fz + av * G.fx, hl, hw });
+// A footprint the first pass leaves under FOOT.retry covered (sampled, not by cells: a spiky tower, a curved front, a
+// sliver of a trapezoid; its walls run off the 1 m grid, or it needs more than FOOT.max boxes) gets a second, finer pass
+// (FOOT.fine: every slanted wall cut every half metre in every frame, up to 6 frames and 32 boxes, smaller crumbs taken,
+// faces checked against FOOT.out every metre instead of at their quarters, and a box past it dropped), kept if it covers
+// more. Only those few hundred buildings pay for it, in time and in boxes; not the huge ones boxed at load.
 export function footBoxes(P, holes, ux, uz) {
+  const B = footPass(P, holes, ux, uz, null);
+  if (!B || !(B.cov < FOOT.retry) || !FOOT.fine || B.area > FOOT.eager) return B; // (not a huge one: boxed at load, a fine pass there is 3-60 ms each, ~0.2 s more on New York's load)
+  const F = footPass(P, holes, ux, uz, FOOT.fine);
+  return F && F.cov > B.cov + 0.01 ? F : B;
+}
+function footPass(P, holes, ux, uz, fine) {
   holes = holes || [];
+  const STEP = fine?.step ?? FOOT.step, MAX = fine?.max ?? FOOT.max;
   const A = Math.abs(area(P)) - holes.reduce((t, h) => t + Math.abs(area(h)), 0); if (!(A > 2)) return null;
   // the frames: the building's own, and its longest walls' that run some other way
   const dirs = [[ux, uz]], ang = (x, z) => ((Math.atan2(z, x) % Q90) + Q90) % Q90, ed = [];
   for (let k = 0, m = P.length - 1; k < P.length; m = k++) { const ex = P[k][0] - P[m][0], ez = P[k][1] - P[m][1], L = Math.hypot(ex, ez); if (L >= 2.5) ed.push([L, P[m], ex / L, ez / L]); }
   ed.sort((p, q) => q[0] - p[0]);
-  for (const [L, , ex, ez] of ed) { if (dirs.length >= FOOT.frames || L < Math.max(4, 0.12 * Math.sqrt(A))) break; if (dirs.every(([x, z]) => turn(ang(x, z), ang(ex, ez)) > D8)) dirs.push([ex, ez]); }
-  const framed = (x, z) => dirs.some(([fx, fz]) => turn(ang(fx, fz), ang(x, z)) < D3), grids = dirs.map(([fx, fz]) => frameGrid(P, holes, fx, fz, framed)), G0 = grids[0], F = grids.filter(Boolean);
+  for (const [L, , ex, ez] of ed) { if (dirs.length >= (fine?.frames ?? FOOT.frames) || L < Math.max(4, 0.12 * Math.sqrt(A))) break; if (dirs.every(([x, z]) => turn(ang(x, z), ang(ex, ez)) > D8)) dirs.push([ex, ez]); }
+  const framed = (x, z) => dirs.some(([fx, fz]) => turn(ang(fx, fz), ang(x, z)) < D3), grids = dirs.map(([fx, fz]) => frameGrid(P, holes, fx, fz, framed, STEP, fine ? 1 : 3)), G0 = grids[0], F = grids.filter(Boolean);
   if (!G0 || !(G0.aIn > 1)) return null;
   const out = []; // [G, cu, cv, au, av, hl, hw] in G's frame
   // strips along the long walls no frame runs with (within 3 degrees), in the building's frame
@@ -514,9 +526,9 @@ export function footBoxes(P, holes, ux, uz) {
   }
   const nStrips = out.length;
   // a rectangle's faces onto the walls (in place)
-  const grow = nStrips ? 0.1 : FOOT.grow; // (not past a wall a strip lines)
+  const grow = fine ? fine.grow : nStrips ? 0.1 : FOOT.grow; // (not past a wall a strip lines)
   const snap = (G, f) => {
-    const s = FOOT.step;
+    const s = STEP;
     for (let pass = 0; pass < 2; pass++) for (let k = 0; k < 4; k++) { // faces: 0 u0, 1 u1, 2 v0, 3 v1 (first with the ends left out by the raster's slack: the next faces are not on their walls yet)
       const ax = k >> 1, sg = k & 1 ? 1 : -1, lo = f[ax ? 0 : 2], hi = f[ax ? 1 : 3], len = hi - lo, depth = (f[ax * 2 + 1] - f[ax * 2]) / 2;
       const n = Math.min(8, Math.max(2, Math.ceil(len / 2))), e = Math.min(pass ? 0.25 : 0.75 * s + 0.1, len / 4), ex = [], ends = [];
@@ -543,7 +555,7 @@ export function footBoxes(P, holes, ux, uz) {
     // nothing more than FOOT.out past the walls (corners, edge middles and quarters): the worst face moves in
     for (let it = 0; it < 16; it++) {
       let w = FOOT.out, wf = -1, wa = 0;
-      for (let a = 0; a <= 4; a++) for (let k = 0; k < 4; k++) { const ax = k >> 1, t = ax ? f[0] + (f[1] - f[0]) * a / 4 : f[2] + (f[3] - f[2]) * a / 4, d = ax ? outD(G, t, f[k]) : outD(G, f[k], t); if (d > w) { w = d; wf = k; wa = a; } }
+      for (let k = 0; k < 4; k++) { const ax = k >> 1, lo = ax ? f[0] : f[2], len = ax ? f[1] - f[0] : f[3] - f[2], na = fine ? Math.min(16, Math.max(4, Math.ceil(len / fine.edge))) : 4; for (let a = 0; a <= na; a++) { const t = lo + len * a / na, d = ax ? outD(G, t, f[k]) : outD(G, f[k], t); if (d > w) { w = d; wf = k; wa = a === 0 ? 0 : a === na ? 4 : 2; } } }
       if (wf < 0) break;
       if (wa === 0 || wa === 4) { const o = (wf >> 1 ? 0 : 2) + (wa ? 1 : 0); if ((o >> 1 ? f[1] - f[0] : f[3] - f[2]) < (wf >> 1 ? f[1] - f[0] : f[3] - f[2])) wf = o; } // (a corner: whichever of its faces is shorter moves in)
       const ax = wf >> 1; if (f[ax * 2 + 1] - f[ax * 2] < 1) break;
@@ -552,8 +564,9 @@ export function footBoxes(P, holes, ux, uz) {
   };
   // greedy: in each frame the maximal rectangles of the footprint's cells (a histogram stack per row), scored by the
   // footprint they cover that's still uncovered (m2); the best of all the frames
-  const crumbs = Math.max(Math.min(1.5, 0.02 * A), 0.004 * A), cov0 = () => { let t = 0; for (let c = 0; c < G0.N; c++) if (G0.IN[c] && G0.cov[c]) t += G0.wa[c]; return t; };
-  for (let tries = 0, got = cov0(); out.length < FOOT.max && tries < 2 * FOOT.max && got < FOOT.cover * G0.aIn; tries++) {
+  const crumbs = fine ? Math.max(Math.min(fine.crumbs, 0.01 * A), 0.002 * A) : Math.max(Math.min(1.5, 0.02 * A), 0.004 * A), cov0 = () => { let t = 0; for (let c = 0; c < G0.N; c++) if (G0.IN[c] && G0.cov[c]) t += G0.wa[c]; return t; };
+  let got = cov0();
+  for (let tries = 0; out.length < MAX && tries < 2 * MAX && got < (fine?.cover ?? FOOT.cover) * G0.aIn; tries++) {
     let best = null, ba = crumbs, bar = 0;
     F.sort((p, q) => q.ub - p.ub);
     for (const G of F) {
@@ -588,7 +601,28 @@ export function footBoxes(P, holes, ux, uz) {
   const all = out.map((b) => toWorld(...b)).sort((a, b) => (Math.abs(b.ux * ux + b.uz * uz) > 0.9999) - (Math.abs(a.ux * ux + a.uz * uz) > 0.9999));
   const pt = (b, l, w) => [b.x + b.ux * l - b.uz * w, b.z + b.uz * l + b.ux * w], inB = (b, p, e = 0) => { const x = p[0] - b.x, y = p[1] - b.z; return Math.abs(x * b.ux + y * b.uz) < b.hl + e && Math.abs(-x * b.uz + y * b.ux) < b.hw + e; };
   const keep = all.filter((b, i) => !all.some((c, j) => j !== i && (c.hl * c.hw > b.hl * b.hw || (c.hl * c.hw === b.hl * b.hw && j < i)) && [[1, 1], [1, -1], [-1, 1], [-1, -1]].every(([p, q]) => inB(c, pt(b, b.hl * p, b.hw * q), 0.05))));
-  return keep.length ? keep : null;
+  // the fine pass: every edge of every box checked every half metre, and one more than FOOT.out past the walls goes
+  // (its faces' own check can give up on a box squeezed between spikes)
+  const fit = fine ? keep.filter((b) => { for (const [a0, c0, a1, c1] of [[1, 1, -1, 1], [-1, 1, -1, -1], [-1, -1, 1, -1], [1, -1, 1, 1]]) { const n = Math.min(24, Math.max(1, Math.ceil(Math.hypot((a1 - a0) * b.hl, (c1 - c0) * b.hw) / 0.5))); for (let i = 0; i < n; i++) { const a = a0 + (a1 - a0) * i / n, c = c0 + (c1 - c0) * i / n, [x, z] = pt(b, b.hl * a, b.hw * c); if (outD(G0, x * ux + z * uz, -x * uz + z * ux) > FOOT.out + 0.15) return false; } } return true; }) : keep;
+  if (!fit.length) return null;
+  fit.cov = sampled(G0, fit, A); fit.area = A; // (how much of the footprint it covers: footBoxes, a second pass under FOOT.retry)
+  return fit;
+}
+// how much of a footprint (its grid in the building's frame, G0) boxes cover: points on rows about 0.7 m apart (at most
+// ~1500 of them), inside the footprint by the row's crossings, then in a box or not. (Not the grid's cells: a cell along
+// a slanted wall is counted whole when its middle is in a box.)
+function sampled(G, B, A) {
+  const s = Math.max(0.7, Math.sqrt(A / 1500)), { U, V, rings, fx, fz } = G, xs = [], L = B.map((b) => ({ u: b.x * fx + b.z * fz, v: -b.x * fz + b.z * fx, au: b.ux * fx + b.uz * fz, av: -b.ux * fz + b.uz * fx, hl: b.hl, hw: b.hw }));
+  let n = 0, k = 0; WORK.verts += G.nr * Math.ceil((V[V.length - 1] - V[0]) / s);
+  for (let v = V[0] + s / 2; v < V[V.length - 1]; v += s) {
+    xs.length = 0;
+    for (const a of rings) for (let m = a.length / 2, i = 0, j = m - 1; i < m; j = i++) { const av = a[j * 2 + 1], bv = a[i * 2 + 1]; if ((av > v) !== (bv > v)) xs.push(a[j * 2] + (v - av) * (a[i * 2] - a[j * 2]) / (bv - av)); }
+    xs.sort((p, q) => p - q);
+    for (let i = 0; i + 1 < xs.length; i += 2) for (let u = U[0] + s / 2 + Math.ceil((xs[i] - U[0] - s / 2) / s) * s; u < xs[i + 1]; u += s) {
+      n++; for (const b of L) { const du = u - b.u, dv = v - b.v; if (Math.abs(du * b.au + dv * b.av) < b.hl && Math.abs(-du * b.av + dv * b.au) < b.hw) { k++; break; } }
+    }
+  }
+  return n ? k / n : 1;
 }
 // the box round boxes in one frame (footBoxes'): the building's whole extent, for what treats it as one
 export function boundBox(B) {
