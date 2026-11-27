@@ -79,6 +79,7 @@ export class Layout {
   }
   got(c, level, m) {
     c.m[level] = m;
+    const st = this.stats; if (st && st.firstRingMs == null && st.ring.every((k) => this.chunks.get(k)?.m.fine)) st.firstRingMs = performance.now() - st.t0;
     if (level === 'fine' && !c.phys) { // physics, the mask and the skirts start with the fine mesh
       c.phys = physIndex(c.L, m); this.active.set(c.k, c); this.on = true;
       const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 255; this.mask.needsUpdate = true; }
@@ -133,6 +134,7 @@ export class Layout {
   // each frame: the chunks about the camera fetched and asked for (fine near, coarse further); each drawn at its level
   update(cam) {
     const x = cam.position.x, z = cam.position.z; this.cam.x = x; this.cam.z = z;
+    if (!this.stats) { const S = this.size, ring = []; for (const k of this.index.keys()) { const [i, j] = k.split(',').map(Number); if (Math.hypot((i + 0.5) * S - x, (j + 0.5) * S - z) < FINE_D) ring.push(k); } this.stats = { t0: performance.now(), ring, firstRingMs: null }; } // (the first ring: the chunks fine about the first camera, meshed: goto.py --stats)
     if (!this.lastScan || Math.hypot(x - this.lastScan[0], z - this.lastScan[1]) > 100) { this.lastScan = [x, z]; // (about every 100 m: which are in reach)
       const S = this.size, r = Math.ceil(LOAD_D / S);
       for (let i = Math.floor(x / S) - r; i <= Math.floor(x / S) + r; i++) for (let j = Math.floor(z / S) - r; j <= Math.floor(z / S) + r; j++) {
