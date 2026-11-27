@@ -1,3 +1,4 @@
+import { crewLodAll } from './crewLod.js';
 import * as THREE from 'three';
 import { PARTS, CATEGORIES, PAINTS } from './parts.js';
 import { makePresets, encodeDesign, decodeDesign, cloneDesign, analyze, sizeSliders, sizeValue, thrustScale, partPower, partBurn, POWER_RANGE, BURN_RANGE } from './design.js';
@@ -899,6 +900,7 @@ function collectGpu(root) {
   const addTex = (v) => { if (v?.isTexture) tex.add(v); else if (Array.isArray(v)) v.forEach(addTex); };
   root.traverse((o) => {
     if (o.geometry) geo.add(o.geometry);
+    for (const g of crewLodAll(o)) geo.add(g); // (a crew figure's every detail level: crewLod.js)
     if (o.skeleton?.boneTexture) tex.add(o.skeleton.boneTexture); // the crew's bones (crew.js), uploaded as a texture
     if (o.isBatchedMesh) for (const k of ['_matricesTexture', '_indirectTexture', '_colorsTexture']) addTex(o[k]); // a batched plane's per-instance data (acBatch.js)
     for (const m of [].concat(o.material || [])) {

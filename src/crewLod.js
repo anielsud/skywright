@@ -27,6 +27,9 @@ function simplified(g, err) {
 // at 4 px the faces soften and the 35 mm level's arms and harness go lumpy, so it's only for figures a few tens of
 // pixels tall.)
 export const CREW_LOD_ERR = [0.002, 0.006, 0.015, 0.035];
+// Every level geometry made for a crew mesh so far (none: []): main.js collectGpu frees them all with the flight, not
+// just the level the mesh draws now (the others, and the full figure while a lighter level shows, aren't in the scene).
+export const crewLodAll = (mesh) => (mesh.userData.crewGeo0 && lodCache.get(mesh.userData.crewGeo0)) || [];
 // Each crew mesh's geometry per level ([full, lighter...]), cached per source geometry (figures of one build share it).
 export function crewLodGeos(mesh) {
   const g = mesh.userData.crewGeo0 ||= mesh.geometry;
