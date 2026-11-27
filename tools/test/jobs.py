@@ -15,9 +15,10 @@ its code throws or a check in it fails, if it compiles a shader mid-flight (a st
 error, throws, or a request for a file of ours fails while it runs. No step waits for wall-clock time: waits are on
 game states or frame counts, with safety timeouts that fail loudly (the page-side one names what it waited for; if the
 page stops answering altogether this side gives up on it too). Exits non-zero on any failure.
+Geodata tiles come from tools/test/fixtures/geo, never the outside network (--geo; see GeoTiles).
 Needs Python 3.9+, the `websockets` package (pip install websockets) and Chrome/Chromium. See tools/test/README.md.
 """
-import argparse, asyncio, json, os, shutil, subprocess, sys, tempfile, threading, time
+import argparse, asyncio, base64, json, os, re, shutil, subprocess, sys, tempfile, threading, time, urllib.request
 
 import websockets
 
@@ -28,6 +29,88 @@ JOBS = ['hangar', 'nyc', 'islands', 'canyon-lauterbrunnen']
 TAG = '\u0001T'
 S = 'window.__sky'
 GRACE = 120  # s past a step's own (page-side) safety timeout before this side calls the page hung
+GEO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures', 'geo')
+# src/geostream.js's two tile hosts: Terrarium heights (z/x/y.png) and EOX Sentinel-2 imagery (z/y/x.jpg)
+GEO_URLS = [(re.compile(r'^https://s3\.amazonaws\.com/elevation-tiles-prod/terrarium/(\d+)/(\d+)/(\d+)\.png$'), 'png', False),
+            (re.compile(r'^https://tiles\.maps\.eox\.at/wmts/1\.0\.0/s2cloudless_3857/default/g/(\d+)/(\d+)/(\d+)\.jpg$'), 'jpg', True)]
+GEO_PATTERNS = ['https://s3.amazonaws.com/elevation-tiles-prod/*', 'https://tiles.maps.eox.at/*']
+
+
+class GeoTiles:
+    """Serves geostream.js's tile requests (made from its Web Worker; a page-level Fetch.enable sees those too) from
+    tools/test/fixtures/geo/<z>/<x>/<y>.png|jpg, so no job touches the outside network for geodata. A tile not in the
+    set gets a 404, which the game handles as offline (the next coarser level, then the baked edge colour). mode:
+    'fixtures' (default), 'record' (fixtures, else the real host, saving what it returns), 'net' (no interception)."""
+
+    def __init__(self, cdp, mode):
+        self.cdp, self.mode = cdp, mode
+        self.served, self.fetched, self.missed = 0, 0, {}  # missed: fixture path -> times
+
+    async def enable(self):
+        if self.mode == 'net':
+            return
+        self.cdp.handlers.append(self.on)
+        await self.cdp.send('Fetch.enable', patterns=[{'urlPattern': u, 'requestStage': 'Request'} for u in GEO_PATTERNS])
+
+    @staticmethod
+    def path_of(url):
+        for rx, ext, yx in GEO_URLS:
+            m = rx.match(url)
+            if m:
+                z, a, b = m.groups()
+                x, y = (b, a) if yx else (a, b)
+                return os.path.join(GEO_DIR, z, x, f'{y}.{ext}'), ext
+        return None, None
+
+    def on(self, method, p):
+        if method == 'Fetch.requestPaused':
+            asyncio.ensure_future(self.answer(p['requestId'], p['request']['url']))
+
+    async def answer(self, rid, url):
+        path, ext = self.path_of(url)
+        body = None
+        if path and os.path.exists(path):
+            with open(path, 'rb') as f:
+                body = f.read()
+            self.served += 1
+        elif path and self.mode == 'record':
+            body = await asyncio.get_event_loop().run_in_executor(None, self.download, url, path)
+            if body is not None:
+                self.fetched += 1
+        if body is None:
+            key = os.path.relpath(path, GEO_DIR) if path else url
+            self.missed[key] = self.missed.get(key, 0) + 1
+        hdrs = [{'name': 'Access-Control-Allow-Origin', 'value': '*'}]  # (the worker fetches with mode: 'cors')
+        try:
+            if body is None:
+                await self.cdp.send('Fetch.fulfillRequest', requestId=rid, responseCode=404, responseHeaders=hdrs, body='')
+            else:
+                png = body[:4] == b'\x89PNG'  # (EOX answers some empty-sea .jpg tiles with a PNG)
+                hdrs.append({'name': 'Content-Type', 'value': 'image/png' if png else 'image/jpeg'})
+                await self.cdp.send('Fetch.fulfillRequest', requestId=rid, responseCode=200, responseHeaders=hdrs, body=base64.b64encode(body).decode())
+        except Exception:  # noqa: BLE001 - the page went away / navigated: nothing waits for this answer
+            pass
+
+    @staticmethod
+    def download(url, path):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'skywright-tests'}), timeout=30) as r:
+                body = r.read()
+        except Exception:  # noqa: BLE001 - a host error is recorded as a miss
+            return None
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'wb') as f:
+            f.write(body)
+        return body
+
+    def summary(self):
+        if self.mode == 'net':
+            return 'geodata: real network (--geo net)'
+        n = sum(self.missed.values())
+        s = f'geodata: {self.served} served from fixtures' + (f', {self.fetched} recorded from the hosts' if self.mode == 'record' else '') + f', {n} fell back (404, {len(self.missed)} tiles)'
+        if self.missed:
+            s += ': ' + ' '.join(sorted(self.missed)[:12]) + (' ...' if len(self.missed) > 12 else '')
+        return s
 
 
 def clean(name):
@@ -42,6 +125,7 @@ class Job:
         self.results = []  # (name, ok, seconds)
         self.events = None  # (made in run(): a Queue binds to the running loop on Python 3.9)
         self.cur = None  # the step running: {'name', 'timeout', 't0'}
+        self.geo = None
 
     def on_console(self, method, p):
         if method != 'Runtime.consoleAPICalled' or p.get('type') != 'debug':
@@ -93,6 +177,8 @@ class Job:
             cdp.handlers.append(self.on_console)
             for d in ('Page', 'Runtime', 'Log', 'Network'):
                 await cdp.send(f'{d}.enable')
+            self.geo = GeoTiles(cdp, self.a.geo)
+            await self.geo.enable()
             # boot: this side's own step (the page has no harness until it is up)
             t0 = time.time()
             try:
@@ -213,6 +299,8 @@ def run_one(a, job):
             srv.shutdown()
         shutil.rmtree(profile, ignore_errors=True)
     failed = [n for n, ok, _ in j.results if not ok]
+    if j.geo:
+        print(j.geo.summary(), flush=True)
     print('-' * 72)
     if failed or not j.results:
         print(f'FAIL  {job}: {len(failed)} of {len(j.results)} failed in {time.time() - t0:.0f} s: {", ".join(failed)}')
@@ -228,7 +316,7 @@ def run_one(a, job):
 def run_many(a, jobs):
     """Each job in its own jobs.py (own server, Chrome and screenshot folder), all at once; lines prefixed as they come."""
     t0, procs = time.time(), {}
-    base = [sys.executable, os.path.abspath(__file__), '--size', a.size] + (['--quality', a.quality] if a.quality else []) + (['--ci'] if a.ci else []) + (['--keep'] if a.keep else []) + (['--url', a.url] if a.url else [])
+    base = [sys.executable, os.path.abspath(__file__), '--size', a.size] + (['--quality', a.quality] if a.quality else []) + (['--ci'] if a.ci else []) + (['--keep'] if a.keep else []) + (['--url', a.url] if a.url else []) + ['--geo', a.geo]
     for job in jobs:
         cmd = base + [job] + (['--out', os.path.join(os.path.abspath(a.out), job)] if a.out else [])
         procs[job] = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -257,6 +345,7 @@ def main():
     ap.add_argument('--out', metavar='DIR', help='screenshot directory (implies --keep; per job DIR/<job> when several run)')
     ap.add_argument('--keep', action='store_true', help='keep the screenshots (always kept on failure)')
     ap.add_argument('--url', help='test an already running server instead of serving this checkout')
+    ap.add_argument('--geo', choices=['fixtures', 'record', 'net'], default='fixtures', help="geodata tiles: from tools/test/fixtures/geo, 404 past them (default); record: fetch and save the missing ones; net: the real hosts")
     ap.add_argument('--port', type=int, default=0, help='static server port (default: a free one)')
     ap.add_argument('--cdp-port', type=int, default=0, help='Chrome debugging port (default: a free one)')
     a = ap.parse_args()

@@ -116,6 +116,13 @@ file of ours fails while it runs. The old suites' modules export the checks the 
 wiring at the place a job is in: call it once per map, while it is up, with every `{ name, location, cfg, start }` the
 job started there.
 
+Geodata (`src/geostream.js`'s tiles from AWS Terrain Tiles and EOX, fetched in its Web Worker) never comes from the
+outside network: jobs.py intercepts both hosts over CDP (`Fetch`) and serves `tools/test/fixtures/geo/<z>/<x>/<y>.png|jpg`,
+answering 404 for a tile not in the set (the game's offline fallback: the next coarser level, then the baked edge
+colour). Each job ends with `geodata: N served from fixtures, M fell back (404, ...)`, naming the missing tiles; when a
+change makes jobs ask for new tiles, `--geo record` fetches and saves them (commit them), `--geo net` uses the real
+hosts for a manual check.
+
 The rules (#278), which keep CI fast and free of timing flakes:
 - **test only what needs testing**: for each check, the one observation that proves its claim, and only that work;
 - **build each map once per job, swap each vehicle in once**; keep `T.BASE`'s time and weather (they are part of the
