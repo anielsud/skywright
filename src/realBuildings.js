@@ -511,7 +511,7 @@ export class RealScenery {
           const p = pts[i], a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)], dx = b[0] - a[0], dz = b[1] - a[1], L = Math.hypot(dx, dz) || 1;
           const nx = -dz / L * width / 2, nz = dx / L * width / 2;
           out.push(p[0] - nx, ys[i] + lift, p[1] - nz, p[0] + nx, ys[i] + lift, p[1] + nz);
-          if (i > i0) { const k = o + (i - 1 - i0) * 2; oi.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
+          if (i > i0) { const k = o + (i - 1 - i0) * 2; oi.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); } // (counter-clockwise from above: facing up)
         }
         i0 = i1;
       }
