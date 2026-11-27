@@ -14,10 +14,11 @@
 //   lauterbrunnen (built by the Rocket's flight there: the pad check needs no extra swap):
 //   - Rocket on the pad (padcheck); startbakes-stunts (stuntsIn: no flight needed); streaming quiet and the whole scene
 //     drawn; #187: nothing compiled mid-flight from before the build to here
-//   - the restart suite (restart.py's checks, driven here; CI ran it with --restarts 3 --no-fresh-compare), ordered so
+//   - the restart suite (restart.py's checks, driven here; the fresh-start memory comparison local only), ordered so
 //     no flight is started twice: damage, restart (also the launch pad start type's restart), whole again; 2 more
 //     restarts (damage before the last): memory flat; back to the hangar frees the World, a fresh Rocket start builds
-//     a new one with the same spawn; one start type per kind of spawn (air, stunt park, water park: see STARTS), each
+//     a new one with the same spawn, and (local runs only) holds the same GPU memory as that World damaged and restarted
+//     (both measured with streaming quiet round the spawn and the flora held still, #291); one start type per kind of spawn (air, stunt park, water park: see STARTS), each
 //     swapped into that World, restarted, then 4 s stepped on (runway, street and marina: the startchoice Node suite)
 //   - start-rule wiring (wiring.js wiringChecks) over every flight started here
 // Keep BASE's time and weather (T.start's cfg: start, mode, realism, landStart, boatStart only), or a place is built
@@ -158,10 +159,26 @@ export async function run(T) {
     await T.end();
     const kept = !!S.kept;
     const s = await T.start('Rocket', L); rec('Rocket');
-    if (!T.ci) await memQuiet(T); // (only for the memory comparison, which CI skips: see freshChecks)
-    s2 = await settled(S, { mem: !T.ci });
-    T.checks(freshChecks(L, kept, s0, s1, s2, snaps[snaps.length - 1], { compareMemory: !T.ci }));
-    return `${s.how} in ${(s.ms / 1000).toFixed(1)} s, start ${s.start}`;
+    // the memory comparison, like with like (#291): this World measured, then damaged, restarted and measured the same
+    // way. The flora (trees: its cells and impostors, the slowest streamer, ~23 game s to finish at Low) is held still
+    // for both, so neither has more of it streamed in than the other, without waiting for it; everything else streams
+    // quiet round the spawn (T.settle) before each. Local runs only (compareMemory): its ~11 more drawn frames, 6 game s
+    // and a restart are still ~25-50 s under SwiftShader, on a CI job near the critical path; CI skips that work, not
+    // just the verdict (its flat-over-restarts checks still catch a leak)
+    if (T.ci) {
+      s2 = await settled(S);
+      T.checks(freshChecks(L, kept, s0, s1, s2, null));
+      return `${s.how} in ${(s.ms / 1000).toFixed(1)} s, start ${s.start}; GPU memory comparison skipped (CI)`;
+    }
+    const fl = T.F.world.flora; if (fl) fl.update = () => {}; // (held: what it has built at the start stays as it is)
+    let r;
+    try {
+      await T.settle(); await memQuiet(T); s2 = await settled(S, { mem: true });
+      damage(S); T.advance(3); await T.restart();
+      await T.settle(); await memQuiet(T); r = await settled(S, { mem: true });
+    } finally { if (fl) delete fl.update; }
+    T.checks(freshChecks(L, kept, s0, s1, s2, r));
+    return `${s.how} in ${(s.ms / 1000).toFixed(1)} s, start ${s.start}; geometries ${s2.geometries} / ${r.geometries}, textures ${s2.textures} / ${r.textures}`;
   });
   for (const [label, name, cfg] of STARTS) {
     await T.step(`${L}: restart: ${label} (${name})`, async () => {
@@ -201,8 +218,8 @@ async function tourWithEngine(T) {
   return `${f.ran.toFixed(2)} s over ${f.frames} frames; ${r ? `${r.speed.toFixed(0)} m/s, ` : ''}${f.views} cockpit view(s)${m ? `, engine ${m.gain.toFixed(2)}` : ''}`;
 }
 
-// (local runs only, for the fresh-start memory comparison) a new World's textures stream in over its first moments:
-// drawn frames until GPU memory holds still for 3 in a row (restart.py waited 600 ms of wall clock for the same)
+// a new World's textures stream in over its first moments: drawn frames until GPU memory holds still for 3 in a row
+// (restart.py waited 600 ms of wall clock for the same)
 async function memQuiet(T) {
   const m = () => { const i = T.S.renderer.info.memory; return `${i.textures}/${i.geometries}`; };
   let last = m(), calm = 0;

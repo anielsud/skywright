@@ -495,16 +495,18 @@ export class RealScenery {
     // screen are frustum culled, and update() shows the thin steel rails only near the camera (sub-pixel beyond) and
     // the ballast out to a few km.
     const W = this.w, CELL = 2000, cells = new Map();
-    const cellOf = (x, z) => { const k = Math.floor(x / CELL) + ',' + Math.floor(z / CELL); let c = cells.get(k); if (!c) cells.set(k, (c = { pos: [], idx: [], steel: [], sIdx: [] })); return c; };
-    const ribbon = (pts, br, width, lift, which) => {
-      const ys = pts.map((p) => W.sampleGrid(p[0], p[1]));
-      if (br) { const a = ys[0], b = ys.at(-1); ys.forEach((_, i) => (ys[i] = a + (b - a) * (i / (ys.length - 1)) + 1)); }
+    const cellOf = (x, z) => { const k = Math.floor(x / CELL) + ',' + Math.floor(z / CELL); let c = cells.get(k); if (!c) cells.set(k, (c = { pos: grow(Float32Array), idx: grow(Uint32Array), steel: grow(Float32Array), sIdx: grow(Uint32Array) })); return c; };
+    // ys given: the heights to use (the steel rails reuse their bed's: below); returns the heights it used
+    const ribbon = (pts, br, width, lift, which, ys) => {
+      // (a bridge: straight between its ends' ground, so only the ends are sampled)
+      if (!ys && br) { const a = W.sampleGrid(pts[0][0], pts[0][1]), b = W.sampleGrid(pts.at(-1)[0], pts.at(-1)[1]); ys = pts.map((_, i) => a + (b - a) * (i / (pts.length - 1)) + 1); }
+      else if (!ys) ys = pts.map((p) => W.sampleGrid(p[0], p[1]));
       // runs of points in one square (consecutive runs share their boundary point, so the ribbon stays closed)
       let i0 = 0;
       while (i0 < pts.length - 1) {
         const c = cellOf(pts[i0][0], pts[i0][1]), k0 = Math.floor(pts[i0][0] / CELL), m0 = Math.floor(pts[i0][1] / CELL);
         let i1 = i0 + 1; while (i1 < pts.length - 1 && Math.floor(pts[i1][0] / CELL) === k0 && Math.floor(pts[i1][1] / CELL) === m0) i1++;
-        const out = which ? c.steel : c.pos, oi = which ? c.sIdx : c.idx, o = out.length / 3;
+        const out = which ? c.steel : c.pos, oi = which ? c.sIdx : c.idx, o = out.n / 3;
         for (let i = i0; i <= i1; i++) {
           const p = pts[i], a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)], dx = b[0] - a[0], dz = b[1] - a[1], L = Math.hypot(dx, dz) || 1;
           const nx = -dz / L * width / 2, nz = dx / L * width / 2;
@@ -513,18 +515,22 @@ export class RealScenery {
         }
         i0 = i1;
       }
+      return ys;
     };
     for (const [kind, br, flat] of list) {
       const raw = []; for (let k = 0; k < flat.length; k += 2) raw.push([flat[k], flat[k + 1]]);
       const pts = densify(raw, 6);
       if (pts.length < 2) continue;
-      ribbon(pts, br, 3.6, 0.25, 0);
-      for (const s of [-0.55, 0.55]) ribbon(offset(pts, s), br, 0.14, 0.45, 1);
+      // the two steel rails at the bed's centre height (+0.2 m): the bed is level across, so they sit on it exactly,
+      // whatever the ground's cross-slope does under them (sampling the ground at each rail cost ~100 ms in New York)
+      const ys = ribbon(pts, br, 3.6, 0.25, 0);
+      for (const s of [-0.55, 0.55]) ribbon(offset(pts, s), br, 0.14, 0.45, 1, ys);
     }
     const ballast = new THREE.MeshStandardMaterial({ color: 0x4e463e, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
     const steelM = new THREE.MeshStandardMaterial({ color: 0x8b9097, metalness: 0.8, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6 });
     this.railChunks = [];
-    const mk = (p, i, m, steel) => { if (!p.length) return; const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3)); g.setIndex(i); g.computeVertexNormals(); g.computeBoundingSphere(); const mesh = new THREE.Mesh(g, m); mesh.receiveShadow = true; this.group.add(mesh); this.railChunks.push({ m: mesh, x: g.boundingSphere.center.x, z: g.boundingSphere.center.z, r: g.boundingSphere.radius, steel }); };
+    const mk = (p, i, m, steel) => { if (!p.n) return; const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(p.a.slice(0, p.n), 3)); g.setIndex(new THREE.BufferAttribute(p.n / 3 > 65535 ? i.a.slice(0, i.n) : Uint16Array.from(i.a.subarray(0, i.n)), 1)); // (setIndex's rule: 32-bit once an index reaches 65535; every vertex is used, the last one too)
+      g.setAttribute('normal', new THREE.BufferAttribute(vertexNormals(g.attributes.position.array, g.index.array), 3)); g.computeBoundingSphere(); const mesh = new THREE.Mesh(g, m); mesh.receiveShadow = true; this.group.add(mesh); this.railChunks.push({ m: mesh, x: g.boundingSphere.center.x, z: g.boundingSphere.center.z, r: g.boundingSphere.radius, steel }); };
     for (const c of cells.values()) { mk(c.pos, c.idx, ballast, false); mk(c.steel, c.sIdx, steelM, true); }
     // empty stand-ins, always there, so both shaders compile behind the loading screen even when no rails are in view
     // yet (a compile mid-flight is a hitch on the tablet)
@@ -677,6 +683,30 @@ export const buildingRng = (seed, x, z) => mulberry32((Math.imul(Math.round(x * 
 
 // railways: how far the steel rails (14 cm wide: under a pixel beyond this) and the ballast bed (3.6 m) are drawn
 const RAIL_STEEL_D = { low: 600, medium: 900, high: 1500, ultra: 1500 }, RAIL_BALLAST_D = { low: 4000, medium: 6000, high: 10000, ultra: 12000 };
+// a growing typed array: push(6 values), the first n are written (a rail mesh's millions of numbers without a JS
+// array's boxing and the copy into a typed one after; the same float32 rounding)
+function grow(T) {
+  return {
+    a: new T(4096), n: 0,
+    push(p, q, r, s, t, u) { if (this.n + 6 > this.a.length) { const b = new T(this.a.length * 2); b.set(this.a); this.a = b; } const a = this.a, n = this.n; a[n] = p; a[n + 1] = q; a[n + 2] = r; a[n + 3] = s; a[n + 4] = t; a[n + 5] = u; this.n = n + 6; },
+  };
+}
+// three's computeVertexNormals (indexed) on the arrays: the same sums in the same order, stored as float32 at the same
+// points, so byte for byte the same normals, without its per-vertex Vector3/attribute calls (~10x faster on New York's
+// 1.4M rail vertices)
+function vertexNormals(P, I) {
+  const N = new Float32Array(P.length);
+  for (let t = 0; t < I.length; t += 3) {
+    const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3, bx = P[b], by = P[b + 1], bz = P[b + 2];
+    const cx = P[c] - bx, cy = P[c + 1] - by, cz = P[c + 2] - bz, ax = P[a] - bx, ay = P[a + 1] - by, az = P[a + 2] - bz;
+    const x = cy * az - cz * ay, y = cz * ax - cx * az, z = cx * ay - cy * ax;
+    // (all three read before any is written, as three does: a repeated vertex sums the same)
+    const a0 = N[a] + x, a1 = N[a + 1] + y, a2 = N[a + 2] + z, b0 = N[b] + x, b1 = N[b + 1] + y, b2 = N[b + 2] + z, c0 = N[c] + x, c1 = N[c + 1] + y, c2 = N[c + 2] + z;
+    N[a] = a0; N[a + 1] = a1; N[a + 2] = a2; N[b] = b0; N[b + 1] = b1; N[b + 2] = b2; N[c] = c0; N[c + 1] = c1; N[c + 2] = c2;
+  }
+  for (let k = 0; k < N.length; k += 3) { const x = N[k], y = N[k + 1], z = N[k + 2], s = 1 / (Math.sqrt(x * x + y * y + z * z) || 1); N[k] = x * s; N[k + 1] = y * s; N[k + 2] = z * s; }
+  return N;
+}
 function densify(pts, step) {
   const out = [pts[0]];
   for (let i = 1; i < pts.length; i++) {
