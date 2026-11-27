@@ -62,24 +62,30 @@ const BUMP_GLSL = /* glsl */`
     vec3 r1 = cross(dpy, n), r2 = cross(n, dpx); float det = dot(dpx, r1);
     vec3 g = sign(det) * (dhx * r1 + dhy * r2); return normalize(abs(det) * n - k * g);
   }`;
+const CREW_FIELD = {
+  // jersey knit: fine crossed ribs plus a soft low-frequency drape (both fade out when smaller than a pixel)
+  fabric: 'float fw = length(fwidth(vRest)) * 700.0; float rib = sin(vRest.y * 1400.0 + sin(vRest.x * 900.0) * 1.2) * sin(vRest.x * 1300.0 + vRest.z * 1300.0); float h = mix(rib * 0.3, 0.0, clamp(fw, 0.0, 1.0)) + (vn(vRest * 38.0) - 0.5) * 1.2 + (vn(vRest * 9.0) - 0.5) * 1.6; float k = 0.0008;',
+  skin: 'float h = (vn(vRest * 520.0) - 0.5) * 0.25 + (vn(vRest * 90.0) - 0.5) * 0.25; float k = 0.00028;',
+  rubber: 'float h = (vn(vRest * 300.0) - 0.5) * 1.0 + (vn(vRest * 30.0) - 0.5) * 1.2; float k = 0.0007;',
+  hair: 'float fwh = clamp(length(fwidth(vRest)) * 1500.0, 0.0, 1.0); float h = mix(sin(vRest.x * 2600.0 + vn(vRest * 70.0) * 8.0) * 0.35, 0.0, fwh) + (vn(vRest * vec3(18.0, 30.0, 12.0)) - 0.5) * 1.6; float k = 0.0009;',
+  paint: 'float h = (vn(vRest * 900.0) - 0.5) * 0.15; float k = 0.0004;', // orange peel
+};
+const CREW_KINDS = Object.keys(CREW_FIELD);
+// Every kind's bump goes into the one shader, picked by the uCrewK uniform (one branch per draw): the kinds that share
+// their material set-up (fabric and hair: sheen; paint and rubber: clearcoat) share a program instead of one each.
+const crewPick = (f) => CREW_KINDS.map((k, i) => `${i ? 'else ' : ''}if (uCrewK < ${i}.5) { ${f(k)} }`).join('\n');
 function crewPatch(m, kind) {
+  const K = { value: CREW_KINDS.indexOf(kind) };
   m.onBeforeCompile = (sh) => {
+    sh.uniforms.uCrewK = K;
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vRest; varying vec3 vRestN;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = position; vRestN = normal;');
-    const field = {
-      // jersey knit: fine crossed ribs plus a soft low-frequency drape (both fade out when smaller than a pixel)
-      fabric: 'float fw = length(fwidth(vRest)) * 700.0; float rib = sin(vRest.y * 1400.0 + sin(vRest.x * 900.0) * 1.2) * sin(vRest.x * 1300.0 + vRest.z * 1300.0); float h = mix(rib * 0.3, 0.0, clamp(fw, 0.0, 1.0)) + (vn(vRest * 38.0) - 0.5) * 1.2 + (vn(vRest * 9.0) - 0.5) * 1.6; float k = 0.0008;',
-      skin: 'float h = (vn(vRest * 520.0) - 0.5) * 0.25 + (vn(vRest * 90.0) - 0.5) * 0.25; float k = 0.00028;',
-      rubber: 'float h = (vn(vRest * 300.0) - 0.5) * 1.0 + (vn(vRest * 30.0) - 0.5) * 1.2; float k = 0.0007;',
-      hair: 'float fwh = clamp(length(fwidth(vRest)) * 1500.0, 0.0, 1.0); float h = mix(sin(vRest.x * 2600.0 + vn(vRest * 70.0) * 8.0) * 0.35, 0.0, fwh) + (vn(vRest * vec3(18.0, 30.0, 12.0)) - 0.5) * 1.6; float k = 0.0009;',
-      paint: 'float h = (vn(vRest * 900.0) - 0.5) * 0.15; float k = 0.0004;', // orange peel
-    }[kind];
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + BUMP_GLSL)
-      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n{ ${field} normal = crewBump(normal, -vViewPosition, h, k); }`);
-    if (kind === 'skin') sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
-      diffuseColor.rgb *= vec3(1.0) + (vn(vRest * 28.0) - 0.5) * vec3(0.1, 0.16, 0.16) - (vn(vRest * 7.0) - 0.5) * vec3(-0.04, 0.05, 0.06);`); // blotchy warmth
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uCrewK;\n' + BUMP_GLSL)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${crewPick((k) => `${CREW_FIELD[k]} normal = crewBump(normal, -vViewPosition, h, k);`)}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+      if (abs(uCrewK - ${CREW_KINDS.indexOf('skin')}.0) < 0.5) diffuseColor.rgb *= vec3(1.0) + (vn(vRest * 28.0) - 0.5) * vec3(0.1, 0.16, 0.16) - (vn(vRest * 7.0) - 0.5) * vec3(-0.04, 0.05, 0.06);`); // blotchy warmth (skin)
   };
-  m.customProgramCacheKey = () => 'crew-' + kind;
+  m.customProgramCacheKey = () => 'crew2';
   return m;
 }
 export function crewMaterials() {

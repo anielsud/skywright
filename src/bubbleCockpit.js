@@ -40,14 +40,20 @@ const RELIEF = /* glsl */`
                mix(mix(rH(i + vec3(0,0,1)), rH(i + vec3(1,0,1)), f.x), mix(rH(i + vec3(0,1,1)), rH(i + vec3(1,1,1)), f.x), f.y), f.z); }
   vec3 rBump(vec3 n, vec3 vp, float h, float k) { vec3 dpx = dFdx(vp), dpy = dFdy(vp); float dhx = dFdx(h), dhy = dFdy(h);
     vec3 r1 = cross(dpy, n), r2 = cross(n, dpx); float det = dot(dpx, r1); return normalize(abs(det) * n - k * sign(det) * (dhx * r1 + dhy * r2)); }`;
-function relief(m, field, key, tint = '', rough = '') {
+// Every relief material compiles to ONE program: the kinds' snippets all go into the shader, picked by a uniform (a
+// branch every pixel of a draw takes the same way), instead of one program per kind (each costs a compile at load).
+const RELIEFS = [];
+function relief(m, field, key, tint = '', rough = '') { // (key: which kind, for reading)
+  const K = { value: RELIEFS.length }; RELIEFS.push({ field, tint, rough });
   m.onBeforeCompile = (sh) => {
+    sh.uniforms.uRelK = K;
+    const pick = (f) => RELIEFS.map((r, i) => `${i ? 'else ' : ''}if (uRelK < ${i}.5) { ${f(r)} }`).join('\n');
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vRelP;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvRelP = position;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + RELIEF).replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n{ ${field} normal = rBump(normal, -vViewPosition, h, k); }`)
-      .replace('#include <color_fragment>', `#include <color_fragment>\n{ ${tint} }`)
-      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\n{ ${rough} }`);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uRelK;\n' + RELIEF).replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${pick((r) => `${r.field} normal = rBump(normal, -vViewPosition, h, k);`)}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>\n${pick((r) => r.tint)}`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\n${pick((r) => r.rough)}`);
   };
-  m.customProgramCacheKey = () => 'relief-' + key; return m;
+  m.customProgramCacheKey = () => 'relief2-bub'; return m;
 }
 // saddle-tan leather: a fine grain, and horizontal channels sewn every 3.8 cm (tuck and roll: on the side panels and
 // the seat back they read as pleats; on the flat cushion tops they don't show)
@@ -74,6 +80,7 @@ const coaming = () => mat('coaming', () => relief(new THREE.MeshStandardMaterial
 const carpet = () => mat('carpet', () => relief(new THREE.MeshStandardMaterial({ color: 0x3a3c40, metalness: 0, roughness: 0.97 }),
   'float h = (rN(vRelP * 700.0) - 0.5) * 0.8 + (rN(vRelP * 90.0) - 0.5) * 0.3; float k = 0.0007;', 'bubCarpet',
   'diffuseColor.rgb *= (0.82 + 0.3 * rN(vRelP * 30.0)) * mix(1.0, 0.62, smoothstep(0.12, 0.3, abs(vRelP.x))) * mix(0.7, 1.0, smoothstep(-0.68, -0.45, vRelP.y));'));
+leather(); interior(); coaming(); carpet(); // (all registered before anything compiles: every relief program holds every kind)
 const black = () => M.black(), matte = () => PM.exhaust(); // (kit fittings: one draw call once merged)
 
 // ---------- the panel atlas ----------
