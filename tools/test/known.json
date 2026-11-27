@@ -1,20 +1,5 @@
 {
  "_": "Known failures: a failed check listed here reports as 'known' and doesn't fail the run; a listed check that passes says so (remove it). Keys: suite -> check name -> the issue tracking it.",
- "meshcheck": {
-  "Dragonfly": "#173",
-  "fittings 6 (fus_heli)": "#173",
-  "fittings 1 (fus_heli)": "#173",
-  "speed 0 (fus_chine, under engines, fin on body)": "#173",
-  "speed 1 (fus_fighter, under engines, fin on body)": "#173",
-  "speed 5 (fus_pod, under engines, fins on engines)": "#173",
-  "speed 4 (fus_chine, mid engines, fins on engines)": "#173",
-  "speed 2 (fus_chine, top engines, fin on body)": "#173",
-  "speed 8 (fus_chine, top engines, fin on body)": "#173",
-  "seams 2 (fus_airliner: ck_heli, fus_light)": "#173",
-  "speed 7 (fus_fighter, top engines, fin on body)": "#173",
-  "seams 6 (fus_heli: ck_heli)": "#173",
-  "seams 15 (fus_cargo: ck_heli)": "#173"
- },
  "roadcheck": {
   "islands: no walls or ramps on the roads": "#228 (16 spots)",
   "canyon: no steps along the roads": "#228 (3 spots)",
