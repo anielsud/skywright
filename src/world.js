@@ -73,6 +73,14 @@ const QUALITY = {
 // Tables keyed by tier that predate Ultra: look Ultra up as High (World.qBase). Content that wants more on Ultra checks qName.
 export const baseTier = (q) => (q === 'ultra' ? 'high' : q);
 export { QUALITY };
+// the close-up ground's under-road filter (World.updateDetail) at vertex k of a grid n wide: h0 its vertices' heights
+// (World.detailVert), on whether a road covers them. Under a road: the lowest of it and its neighbours also under one;
+// beside one: no higher than the lowest of those plus `lift`; else its own.
+export function detailLow(h0, on, k, n, lift) {
+  let m = Infinity;
+  for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) { const q = k + b * n + a; if (on[q] && h0[q] < m) m = h0[q]; }
+  return m === Infinity ? h0[k] : on[k] ? Math.min(h0[k], m) : Math.min(h0[k], m + lift);
+}
 
 export class World {
   constructor(renderer, scene, opts) {
@@ -513,8 +521,22 @@ export class World {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nor, 3)); g.setIndex(idx);
     const mesh = new THREE.Mesh(g, this.detailMat); mesh.receiveShadow = true; mesh.visible = false; mesh.frustumCulled = false;
-    this.detail = mesh; this.group.add(mesh); this.detailAt = null;
+    this.detail = mesh; this.group.add(mesh); this.detailAt = null; this.dvBase = 0; this.dvOn = 0; // (detailVert's)
   }
+  // a close-up ground vertex at (x, z) before the under-road filter (detailLow): returns the ground physics stands on
+  // there (sampleGrid's: the baked grid, a city's open ground, a road's surface) and leaves in dvBase what the patch
+  // draws there (the baked grid alone: the mesh's edge blends to it) and in dvOn whether a road mesh covers it (1:
+  // within `cover` metres of a road's footprint, detailCover). It depends only on (x, z), and the mesh's vertices lie
+  // on a world-wide lattice (multiples of detailS), so its inner part can be had without building it (roadcheck.js
+  // junctionCheck). Called per vertex: no allocation.
+  detailVert(x, z, cover) {
+    const half = this.half, st = this.hStep, base = this.triAt(this.Hh, this.hR + 1, (x + half) / st, (z + half) / st), b2 = this.cityAt(x, z, base), S = this.roadSurf;
+    this.dvBase = base;
+    if (S && S.q(x, z)) { this.dvOn = S.e < cover ? 1 : 0; return S.over(b2); }
+    this.dvOn = 0; return b2;
+  }
+  // (cover: metres past the footprint the road meshes cover, a city street's pavements: their slabs, roadgrade.js SLAB, which come down to the ground where it falls away, #228)
+  detailCover() { return this.loc.city ? SLAB + 1.5 : 1; }
   updateDetail(cp) {
     if (!this.detail) return;
     const D = this.detailD, DS = this.detailS, ext = D * DS, half = this.half, hide = () => { if (this.detail.visible) { this.detail.visible = false; this.patchMat.userData.U.detailRect.value.set(1e9, 1e9, -1e9, -1e9); } };
@@ -527,12 +549,11 @@ export class World {
     if (x0 < pr.x || z0 < pr.y || x0 + ext > pr.z || z0 + ext > pr.w) return hide();
     this.detailAt = [i0, j0];
     const n = D + 1, P = this.detail.geometry.attributes.position.array, N = this.detail.geometry.attributes.normal.array;
-    const R = this.hR, st = this.hStep, H = this.Hh, W = R + 1, B = 4; // B: blend cells at the edge
-    const hs = new Float32Array(n * n), S = this.roadSurf, on = this.detailOn ??= new Uint8Array(n * n), cover = this.loc.city ? SLAB + 1.5 : 1; // (cover: metres past the footprint the road meshes cover, a city street's pavements: their slabs, roadgrade.js SLAB, which come down to the ground where it falls away, #228)
+    const B = 4; // B: blend cells at the edge
+    const hs = new Float32Array(n * n), on = this.detailOn ??= new Uint8Array(n * n), cover = this.detailCover();
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
-      const x = x0 + i * DS, z = z0 + j * DS, e = Math.min(i, j, D - i, D - j), k = j * n + i;
-      const base = this.triAt(H, W, (x + half) / st, (z + half) / st), b2 = this.cityAt(x, z, base); // (what the patch draws here; the ground sampleGrid stands on, b2)
-      const g = S && S.q(x, z) ? ((on[k] = S.e < cover ? 1 : 0), S.over(b2)) : ((on[k] = 0), b2); // (sampleGrid; on: under a road)
+      const e = Math.min(i, j, D - i, D - j), k = j * n + i;
+      const g = this.detailVert(x0 + i * DS, z0 + j * DS, cover), base = this.dvBase; on[k] = this.dvOn; // (sampleGrid; base: what the patch draws here; on: under a road)
       hs[k] = e >= B ? g : e === 0 ? base : base + (g - base) * smoothstep(0, B, e);
     }
     // under the roads (hidden by their ribbons, which lie on this ground at their own vertices, 8 m apart): each vertex
@@ -542,11 +563,7 @@ export class World {
     // another's embankment (a switchback: the next leg's fill slope coming down onto it) the ground steps up between
     // them by metres, and a triangle across that step leant in over the lower road's edge.
     const hs0 = hs.slice(), lift = DS * 0.15;
-    for (let j = B; j <= D - B; j++) for (let i = B; i <= D - B; i++) {
-      const k = j * n + i; let m = Infinity;
-      for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) { const q = k + b * n + a; if (on[q] && hs0[q] < m) m = hs0[q]; }
-      if (m < Infinity) hs[k] = on[k] ? Math.min(hs0[k], m) : Math.min(hs0[k], m + lift);
-    }
+    for (let j = B; j <= D - B; j++) for (let i = B; i <= D - B; i++) { const k = j * n + i; hs[k] = detailLow(hs0, on, k, n, lift); }
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const k = j * n + i, o = k * 3;
       P[o] = x0 + i * DS; P[o + 1] = hs[k]; P[o + 2] = z0 + j * DS;

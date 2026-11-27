@@ -345,24 +345,52 @@ export async function junctionCheck(w, { detail = true, keep = false, within = n
       r.top = Float32Array.from(tops);
     }
   }
-  // the detail mesh, at Low's spacing and at Ultra's (2 m): built round the middle of each square of junctions
-  const detailAt = () => { const D = w.detailD, DS = w.detailS, n = D + 1, P = w.detail.geometry.attributes.position.array, x0 = P[0], z0 = P[2], B = 6;
-    return (x, z) => { const fx = (x - x0) / DS, fz = (z - z0) / DS; if (fx < B || fz < B || fx >= D - B || fz >= D - B) return null; const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, vv = fz - j, h = (a, b) => P[((j + b) * n + i + a) * 3 + 1];
-      return u + vv <= 1 ? h(0, 0) + (h(1, 0) - h(0, 0)) * u + (h(0, 1) - h(0, 0)) * vv : h(1, 1) + (h(0, 1) - h(1, 1)) * (1 - u) + (h(1, 0) - h(1, 1)) * (1 - vv); }; };
-  const D0 = [w.detailD, w.detailS], grids = detail ? [D0, [256, 2]] : [];
+  // the detail mesh, at Low's spacing and at Ultra's (2 m), as built round the middle of each square of junctions. Its
+  // inner vertices (more than 4 cells from its edge) lie on a world-wide lattice (multiples of DS) and their heights
+  // depend only on where they are (World.detailVert, then detailLow over their neighbours), so they are read off that
+  // lattice, each worked out once, instead of building the mesh per square (10,144 builds in New York). A few real
+  // builds check that it is the same ground (match).
+  const { detailLow } = await import('../../src/world.js');
+  const lattice = (DS) => { // (I, J) -> the height updateDetail draws at (I * DS, J * DS) away from its edge
+    const BS = 64, raw = new Map(), low = new Map(), cover = w.detailCover(), lift = DS * 0.15, h9 = new Float32Array(9), o9 = new Uint8Array(9);
+    const blk = (M, I, J, mk) => { const k = key(Math.floor(I / BS), Math.floor(J / BS)); let b = M.get(k); if (!b) M.set(k, (b = mk())); return b; };
+    const fill = (I, J, s) => { const b = blk(raw, I, J, () => ({ h: new Float32Array(BS * BS), on: new Uint8Array(BS * BS).fill(2) })), k = (J - Math.floor(J / BS) * BS) * BS + I - Math.floor(I / BS) * BS;
+      if (b.on[k] === 2) { b.h[k] = w.detailVert(I * DS, J * DS, cover); b.on[k] = w.dvOn; } h9[s] = b.h[k]; o9[s] = b.on[k]; };
+    return (I, J) => { const b = blk(low, I, J, () => new Float32Array(BS * BS).fill(NaN)), k = (J - Math.floor(J / BS) * BS) * BS + I - Math.floor(I / BS) * BS;
+      if (Number.isNaN(b[k])) { for (let jb = -1; jb <= 1; jb++) for (let ia = -1; ia <= 1; ia++) fill(I + ia, J + jb, (jb + 1) * 3 + ia + 1); b[k] = detailLow(h9, o9, 4, 3, lift); }
+      return b[k]; };
+  };
+  const D0 = [w.detailD, w.detailS], grids = detail ? [D0, [256, 2]] : [], match = { squares: 0, verts: 0, bad: 0, worst: 0, at: null };
   for (const [D, DS] of grids) {
-    if (w.detailD !== D || w.detailS !== DS) { w.detailGrid = () => [D, DS]; w.group.remove(w.detail); w.buildDetail(); w.detailOn = null; } // (detailOn: sized for the grid)
-    const Q = D * DS - 16 * DS - 60, sq = new Map(); // (squares well inside the mesh's inner part)
+    const lat = lattice(DS), B = 6, Q = D * DS - 16 * DS - 60, sq = new Map(), shown = []; // (squares well inside the mesh's inner part)
     for (const r of res) { const k = key(Math.floor(r.j.x / Q), Math.floor(r.j.z / Q)); let L = sq.get(k); if (!L) sq.set(k, (L = [])); L.push(r); }
     for (const L of sq.values()) {
       const cx = (Math.floor(L[0].j.x / Q) + 0.5) * Q, cz = (Math.floor(L[0].j.z / Q) + 0.5) * Q, cp = { x: cx, y: w.sampleGrid(cx, cz) + 3, z: cz };
-      w.detailAt = null; w.patchAt = null; w.updatePatch(cp); w.updateDetail(cp); if (!w.detail.visible) continue;
-      const det = detailAt();
+      // where updateDetail would put the mesh, and whether it would show it (in the core, inside the patch)
+      const i0 = Math.round(cx / DS) - D / 2, j0 = Math.round(cz / DS) - D / 2, x0 = i0 * DS, z0 = j0 * DS, ext = D * DS, lim = w.half - ext / 2 - 10;
+      w.patchAt = null; w.updatePatch(cp); const pr = w.terrainMat.userData.U.patchRect.value;
+      if (!(Math.abs(cx) < lim && Math.abs(cz) < lim) || !w.patch?.visible || x0 < pr.x || z0 < pr.y || x0 + ext > pr.z || z0 + ext > pr.w) continue;
+      shown.push(cp);
+      const det = (x, z) => { const fx = (x - x0) / DS, fz = (z - z0) / DS; if (fx < B || fz < B || fx >= D - B || fz >= D - B) return null; const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, vv = fz - j, h = (a, b) => lat(i0 + i + a, j0 + j + b);
+        return u + vv <= 1 ? h(0, 0) + (h(1, 0) - h(0, 0)) * u + (h(0, 1) - h(0, 0)) * vv : h(1, 1) + (h(0, 1) - h(1, 1)) * (1 - u) + (h(1, 0) - h(1, 1)) * (1 - vv); };
       for (const r of L) each(r, (x, z, q) => { const y = r.top[q]; if (Number.isNaN(y)) return; const g = det(x, z); if (g != null && g - y > OVER) { r.bleed++; r.worst = Math.max(r.worst, g - y); if (keep) (r.bleeds ??= []).push([x, z, 'detail' + DS, g - y, y]); } });
+    }
+    // the check on that: the real mesh at 4 of those squares spread over the place, vertex by vertex where the lattice was read
+    if (!shown.length) continue;
+    if (w.detailD !== D || w.detailS !== DS) { w.detailGrid = () => [D, DS]; w.group.remove(w.detail); w.buildDetail(); w.detailOn = null; } // (detailOn: sized for the grid)
+    for (let t = 0; t < Math.min(4, shown.length); t++) {
+      const cp = shown[Math.floor(((t + 0.5) * shown.length) / Math.min(4, shown.length))], n = D + 1;
+      w.detailAt = null; w.patchAt = null; w.updatePatch(cp); w.updateDetail(cp); match.squares++;
+      if (!w.detail.visible) { match.bad++; match.at ??= `(${Math.round(cp.x)}, ${Math.round(cp.z)}) not shown`; continue; }
+      const P = w.detail.geometry.attributes.position.array, i0 = Math.round(P[0] / DS), j0 = Math.round(P[2] / DS);
+      for (let j = B - 1; j <= D - B + 1; j++) for (let i = B - 1; i <= D - B + 1; i++) {
+        const d = Math.abs(P[(j * n + i) * 3 + 1] - lat(i0 + i, j0 + j)); match.verts++;
+        if (d > 0) { match.bad++; if (d > match.worst) { match.worst = d; match.at = `(${(i0 + i) * DS}, ${(j0 + j) * DS}) ${DS} m grid`; } }
+      }
     }
   }
   if (w.detailD !== D0[0]) { delete w.detailGrid; w.group.remove(w.detail); w.buildDetail(); w.detailOn = null; }
-  const out = { n: res.length, samples: 0, hole: 0, bleed: 0, apart: 0, worst: 0, ex: { hole: [], bleed: [], apart: [] }, per: res };
+  const out = { n: res.length, samples: 0, hole: 0, bleed: 0, apart: 0, worst: 0, ex: { hole: [], bleed: [], apart: [] }, per: res, match };
   for (const r of res) { r.top = null; out.samples += r.n; for (const k of ['hole', 'bleed', 'apart']) if (r[k] > 0) { out[k]++; if (out.ex[k].length < 4) out.ex[k].push(`(${Math.round(r.j.x)}, ${Math.round(r.j.z)}) ${r[k]}`); } out.worst = Math.max(out.worst, r.worst); }
   return out;
 }
@@ -656,6 +684,7 @@ export async function runCase(c, ctx) {
       { name: `${c.loc}: junctions have no bare ground between their arms`, ok: o.n > 20 && o.hole <= 0.005 * o.n, why: `${o.hole} of ${o.n} junctions with ground showing in the junction (${o.samples} samples)${ex('hole')}` },
       { name: `${c.loc}: no ground through the road in junctions`, ok: o.n > 20 && o.bleed <= 0.005 * o.n, why: `${o.bleed} of ${o.n} junctions with the ground drawn over the road (detail mesh at Low and at 2 m, patch; worst ${o.worst.toFixed(2)} m)${ex('bleed')}` },
       { name: `${c.loc}: junctions are drawn where physics drives`, ok: o.n > 20 && o.apart <= 0.005 * o.n, why: `${o.apart} of ${o.n} junctions with the tarmac drawn off the physics surface${ex('apart')}` },
+      { name: `${c.loc}: junction check's ground heights match the close-up mesh`, ok: o.match.squares >= 2 && o.match.verts > 0 && !o.match.bad, why: `${o.match.bad} of ${o.match.verts} inner vertices of ${o.match.squares} real World.updateDetail builds (Low's grid and 2 m) off the lattice heights the check reads (World.detailVert, detailLow)${o.match.bad ? `, worst ${o.match.worst} m at ${o.match.at}` : ''}` },
     ];
   }
   if (c.pavements) {
