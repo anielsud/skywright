@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.204.0', items: [
+    "Every building now has a solid shape that matches its walls, from tiny chalets to giant hospital campuses: no invisible walls and no gaps to slip through.",
+  ] },
   { v: '1.203.0', items: [
     "Street corners in the city are neater: no more dark gaps where pavements meet, and pavements sit flatter on the ground.",
   ] },
