@@ -1,7 +1,7 @@
 // A worker of tools/bake/layout.mjs: checks baked chunks the game's way (src/layout/mesh.js, fine and coarse) and
 // measures them: fixed edges failed, cover, holes (physics sampled every HOLE_STEP m), tarmac drawn - physics, the
 // steepest physics rise along a kerb, the markings off their street's centre line, the crossings, timings; and each level's points on each of the chunk's four edges (the caller
-// compares neighbours': their shared edge must match).
+// compares neighbours': their shared edge must match). A job's Q (x, z, ...): the fine mesh's heights there, given back (H).
 import { parentPort } from 'node:worker_threads';
 import { decodeLayout, KIND } from '../../src/layout/format.js';
 import { KERB, makeRules, latticeGround } from '../../src/layout/rules.js';
@@ -12,7 +12,7 @@ import { offChecks } from './layout-off.mjs';
 const HOLE_STEP = 2;
 parentPort.on('message', ({ jobs, grid }) => {
   const out = [];
-  for (const { ix, iz, buf, G } of jobs) {
+  for (const { ix, iz, buf, G, Q } of jobs) {
     const L = decodeLayout(buf), r = { ix, iz }, edges = {};
     for (const level of ['fine', 'coarse']) {
       const m = meshChunk(L, grid, G, level), s = m.stats; r[level] = { failed: s.failed, why: s.why, softMissed: s.softMissed, covered: s.covered, tris: s.tris, ms: s.totalMs, outlineMs: s.outlineMs };
@@ -27,6 +27,7 @@ parentPort.on('message', ({ jobs, grid }) => {
       // (a portal's lip is an opening, no hole: its triangles indexed on their own)
       const lipIdx = []; for (let q = 0; q < m.tk.length; q++) if (m.tk[q] === KIND.lip) lipIdx.push(I[q * 3], I[q * 3 + 1], I[q * 3 + 2]); const mLip = { pos: P, phys: Y, idx: Uint32Array.from(lipIdx), tk: new Uint8Array(lipIdx.length / 3) }, lipIx = physIndex(L, mLip);
       const ixx = physIndex(L, m); let holes = 0, samples = 0;
+      if (Q) { r.H = new Float64Array(Q.length / 2); for (let i = 0; i < r.H.length; i++) r.H[i] = physAt(L, m, ixx, Q[i * 2], Q[i * 2 + 1]); } // (heights asked for: setbacks.mjs, as Layout.heightAt)
       for (let x = L.x0 + HOLE_STEP / 2; x < L.x0 + L.size; x += HOLE_STEP) for (let z = L.z0 + HOLE_STEP / 2; z < L.z0 + L.size; z += HOLE_STEP) { samples++; const h = physAt(L, m, ixx, x, z); if (!(h === h) && !(physAt(L, mLip, lipIx, x, z) === physAt(L, mLip, lipIx, x, z))) holes++; }
       // the markings, the crossings and the slabs, as the material draws them (markcheck.mjs)
       const mk = markCheck(L, m); Object.assign(r.fine, { tarmacOff: off, kerbSlope: kerb, holes, samples, drift: mk.drift, driftSamples: mk.samples, lost: mk.lost, mouths: mk.mouths, whole: mk.whole, tight: mk.tight, kerbErr: mk.kerbErr, bendMissed: s.bendMissed });

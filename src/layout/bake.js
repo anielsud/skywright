@@ -110,23 +110,29 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   const nv = V.length, floor = wl + FREEBOARD, gt = Float64Array.from(V, (v) => Math.max(v.g, floor)), h = Float64Array.from(gt), edges = [], nb = V.map(() => []); // (gt: the ground each station is pulled to: the natural ground, above the water)
   const lift = () => { let n = 0; for (let k = 0; k < nv; k++) if (h[k] < floor && !pins.has(k)) { h[k] = floor; n++; } return n; };
   for (const r of runs) for (let i = 0; i + 1 < r.vars.length; i++) { const a = r.vars[i], b = r.vars[i + 1]; if (a === b) continue; const l = Math.max(0.5, r.s[i + 1] - r.s[i]); edges.push([a, b, l, r.grade]); nb[a].push([b, 1 / l]); nb[b].push([a, 1 / l]); }
+  // (the solve's inner loops read typed copies, in the same order with the same values: the same arithmetic, faster. EG
+  // is each edge's grade limit (edges[e][3] kept with it); nbAt/nbO/nbW each station's neighbours, as nb's; isPin: pins)
+  const ne = edges.length, EA = Int32Array.from(edges, (e) => e[0]), EB = Int32Array.from(edges, (e) => e[1]), EL = Float64Array.from(edges, (e) => e[2]), EG = Float64Array.from(edges, (e) => e[3]);
+  const nbAt = new Int32Array(nv + 1); for (let k = 0; k < nv; k++) nbAt[k + 1] = nbAt[k] + nb[k].length; const nbO = new Int32Array(nbAt[nv]), nbW = new Float64Array(nbAt[nv]);
+  for (let k = 0; k < nv; k++) nb[k].forEach(([o, wt], q) => { nbO[nbAt[k] + q] = o; nbW[nbAt[k] + q] = wt; });
+  const VX = Float64Array.from(V, (v) => v.x), VZ = Float64Array.from(V, (v) => v.z), isPin = new Uint8Array(nv); for (const k of pins.keys()) isPin[k] = 1;
   const vGrid = new Map(), VC = 10; V.forEach((v, k) => { const key = Math.floor(v.x / VC) * 100003 + Math.floor(v.z / VC); (vGrid.get(key) || vGrid.set(key, []).get(key)).push(k); });
   const varsNear = (x, z, r) => { const out = []; for (let i = Math.floor((x - r) / VC); i <= Math.floor((x + r) / VC); i++) for (let j = Math.floor((z - r) / VC); j <= Math.floor((z + r) / VC); j++) for (const k of vGrid.get(i * 100003 + j) || []) if (Math.hypot(V[k].x - x, V[k].z - z) <= r) out.push(k); return out; };
   const JN = [], hwAt = new Map(); for (const r of runs) if (!r.minor) for (const v of r.vars) hwAt.set(v, Math.max(hwAt.get(v) || 0, r.hw));
   for (const j of w.net.junctions) { if (!inR(j)) continue; let r = 0; for (let q = 0; q < j.box.length; q += 2) r = Math.max(r, Math.hypot(j.box[q] - j.x, j.box[q + 1] - j.z)); r = Math.min(35, Math.max(6, r)); if (!city) { const v = node.get(j.nd), hw = v != null ? hwAt.get(v) : null; if (hw) r = Math.min(r, Math.max(JR_MIN, JR_K * hw + JR_ADD)); } const m = varsNear(j.x, j.z, r); if (m.length >= 2) JN.push({ x: j.x, z: j.z, r, m, a: 0, b: 0, c: 0 }); }
-  const plane = (J) => { const n = J.m.length; let mx = 0, mz = 0, my = 0, W = 0; for (const k of J.m) { const q = pins.has(k) ? PIN_W : 1; mx += q * V[k].x; mz += q * V[k].z; my += q * h[k]; W += q; } mx /= W; mz /= W; my /= W; let a = 0, b = 0, c = 0, d = 0, e = 0; // (a pinned point, a deck's or tube's end, weighs PIN_W: the plane passes through it)
-    for (const k of J.m) { const q = pins.has(k) ? PIN_W : 1, X = V[k].x - mx, Z = V[k].z - mz, Y = h[k] - my; a += q * X * X; b += q * X * Z; c += q * Z * Z; d += q * X * Y; e += q * Z * Y; } const det = a * c - b * b; let gx = n >= 3 && Math.abs(det) > 1e-6 ? (d * c - e * b) / det : 0, gz = n >= 3 && Math.abs(det) > 1e-6 ? (e * a - d * b) / det : 0;
+  const plane = (J) => { const n = J.m.length; let mx = 0, mz = 0, my = 0, W = 0; for (const k of J.m) { const q = isPin[k] ? PIN_W : 1; mx += q * VX[k]; mz += q * VZ[k]; my += q * h[k]; W += q; } mx /= W; mz /= W; my /= W; let a = 0, b = 0, c = 0, d = 0, e = 0; // (a pinned point, a deck's or tube's end, weighs PIN_W: the plane passes through it)
+    for (const k of J.m) { const q = isPin[k] ? PIN_W : 1, X = VX[k] - mx, Z = VZ[k] - mz, Y = h[k] - my; a += q * X * X; b += q * X * Z; c += q * Z * Z; d += q * X * Y; e += q * Z * Y; } const det = a * c - b * b; let gx = n >= 3 && Math.abs(det) > 1e-6 ? (d * c - e * b) / det : 0, gz = n >= 3 && Math.abs(det) > 1e-6 ? (e * a - d * b) / det : 0;
     // (members nearly in a line (less than PLANE_ACROSS m RMS across it: a small junction's few stations along a road that runs
     // through it): the slope across that line isn't known from them. Where it came out steeper than CROSS_MAX (up to 220%:
     // a village's pavement 12 m under its street) the plane takes the slope along the line only, level across it)
     { const m2 = (a + c) / 2, r2 = Math.hypot((a - c) / 2, b), lmin = m2 - r2, lmax = m2 + r2; const th = 0.5 * Math.atan2(2 * b, a - c), ux = Math.cos(th), uz = Math.sin(th); J.line = n >= 3 && lmax > 1e-6 && lmin < PLANE_ACROSS * PLANE_ACROSS * n && Math.abs(gz * ux - gx * uz) > CROSS_MAX; if (J.line) { J.wasLine = true; const sl = (d * ux + e * uz) / lmax; gx = sl * ux; gz = sl * uz; } }
     J.mx = mx; J.mz = mz; J.my = my; J.gx = gx; J.gz = gz; };
-  const toPlane = () => { for (const J of JN) { plane(J); for (const k of J.m) h[k] = J.my + J.gx * (V[k].x - J.mx) + J.gz * (V[k].z - J.mz); } pinAll(); };
-  const clampGrades = (passes) => { for (let p = 0; p < passes; p++) for (const [a, b, l, G] of edges) { const d = h[a] - h[b], lim = G * l; if (Math.abs(d) > lim) { const ex = (Math.abs(d) - lim) / 2 * Math.sign(d); h[a] -= ex; h[b] += ex; } } pinAll(); };
+  const toPlane = () => { for (const J of JN) { plane(J); const { my, gx, gz, mx, mz } = J; for (const k of J.m) h[k] = my + gx * (VX[k] - mx) + gz * (VZ[k] - mz); } pinAll(); };
+  const clampGrades = (passes) => { for (let p = 0; p < passes; p++) for (let e = 0; e < ne; e++) { const a = EA[e], b = EB[e], d = h[a] - h[b], lim = EG[e] * EL[e]; if (Math.abs(d) > lim) { const ex = (Math.abs(d) - lim) / 2 * Math.sign(d); h[a] -= ex; h[b] += ex; } } pinAll(); };
   const WG = opts.WG ?? 0.1; // (the natural ground's pull against the neighbours' 1/l, per station: a weaker pull smoothed hairpins metres off the ground, #297)
   let iters = 0; const wg = new Float64Array(nv).fill(WG); pinAll();
   const smooth = (n) => { for (let it = 0; it < n; it++, iters++) {
-    for (let k = 0; k < nv; k++) { const N = nb[k]; if (!N.length) continue; let s = wg[k] * gt[k], ws = wg[k]; for (const [o, wt] of N) { s += wt * h[o]; ws += wt; } h[k] = s / ws; }
+    for (let k = 0; k < nv; k++) { const q0 = nbAt[k], q1 = nbAt[k + 1]; if (q0 === q1) continue; let s = wg[k] * gt[k], ws = wg[k]; for (let q = q0; q < q1; q++) { const wt = nbW[q]; s += wt * h[nbO[q]]; ws += wt; } h[k] = s / ws; }
     toPlane(); clampGrades(2); lift();
   } };
   smooth(600);
@@ -134,8 +140,9 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   // slope is its ground's; the clamp leaves a junction's points where they are and moves the road's next to it)
   toPlane(); const memberOf = new Map(); JN.forEach((J, q) => { for (const k of J.m) memberOf.set(k, q); });
   const member = { has: (k) => memberOf.has(k) || pins.has(k) }, inOne = (a, b) => memberOf.has(a) && memberOf.get(a) === memberOf.get(b);
-  const enforce = () => { for (let p = 0; p < 400; p++) { let moved = 0; for (const [a, b, l, G] of edges) { if (inOne(a, b)) continue; const d = h[a] - h[b], lim = G * l; if (Math.abs(d) <= lim + 1e-4) continue; const ex = Math.abs(d) - lim, sg = Math.sign(d);
-    if ((pins.has(a) && member.has(b)) || (pins.has(b) && member.has(a))) continue; if (member.has(a)) h[b] += ex * sg; else if (member.has(b)) h[a] -= ex * sg; else { h[a] -= ex / 2 * sg; h[b] += ex / 2 * sg; } moved++; } moved += lift(); if (!moved) break; } };
+  const isMem = new Uint8Array(nv), one = new Uint8Array(ne); for (let k = 0; k < nv; k++) isMem[k] = member.has(k) ? 1 : 0; for (let e = 0; e < ne; e++) one[e] = inOne(EA[e], EB[e]) ? 1 : 0; // (enforce's: typed, as above)
+  const enforce = () => { for (let p = 0; p < 400; p++) { let moved = 0; for (let e = 0; e < ne; e++) { if (one[e]) continue; const a = EA[e], b = EB[e], d = h[a] - h[b], lim = EG[e] * EL[e]; if (Math.abs(d) <= lim + 1e-4) continue; const ex = Math.abs(d) - lim, sg = Math.sign(d);
+    if ((isPin[a] && isMem[b]) || (isPin[b] && isMem[a])) continue; if (isMem[a]) h[b] += ex * sg; else if (isMem[b]) h[a] -= ex * sg; else { h[a] -= ex / 2 * sg; h[b] += ex / 2 * sg; } moved++; } moved += lift(); if (!moved) break; } };
   enforce();
   // (where holding a road to its limit puts it more than RELAX_OFF m off the ground (a pitch steeper than its limit, or a
   // cliff the height grid blurs over it), the limit gives way there: each edge within RELAX_HOPS stations of such a point
@@ -144,7 +151,7 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   for (let round = 0; round < (city ? 0 : RELAX_ROUNDS); round++) { // (a country place's: a city's streets are flat enough)
     let off = new Set(); for (let k = 0; k < nv; k++) if (Math.abs(h[k] - gt[k]) > RELAX_OFF) off.add(k); T.relax.push(off.size); if (!off.size) break;
     for (let hop = 0; hop < RELAX_HOPS; hop++) { const more = new Set(off); for (const k of off) for (const [o] of nb[k]) more.add(o); off = more; }
-    for (const e of edges) { const [a, b, l] = e; if (!off.has(a) && !off.has(b)) continue; const gg = Math.min(RELAX_MAX, Math.abs(gt[a] - gt[b]) / l * 1.15 + 0.01); if (gg > e[3]) { e[3] = gg; relaxed.add(e); } }
+    edges.forEach((e, q) => { const [a, b, l] = e; if (!off.has(a) && !off.has(b)) return; const gg = Math.min(RELAX_MAX, Math.abs(gt[a] - gt[b]) / l * 1.15 + 0.01); if (gg > e[3]) { e[3] = EG[q] = gg; relaxed.add(e); } });
     for (const k of off) wg[k] = Math.max(wg[k], RELAX_WG);
     smooth(150); toPlane(); enforce();
   }
@@ -165,7 +172,8 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
     const grade = (k) => { let gmax = 0; for (const [o] of nb[k]) { const l = Math.hypot(V[o].x - V[k].x, V[o].z - V[k].z); if (l > 0.5) gmax = Math.max(gmax, Math.abs(V[o].g - V[k].g) / l); } return gmax; };
     const cset = new Set(chunks.map(([ix, iz]) => ix * 100003 + iz)), inC = (k) => cset.has(Math.floor(V[k].x / CHUNK) * 100003 + Math.floor(V[k].z / CHUNK));
     // forced: the steepest the natural ground climbs along the road over 80 m about the point, against its limit
-    const forced = (k) => { for (const r of runs) { const i = r.vars.indexOf(k); if (i < 0) continue; let a = i, b = i; while (a > 0 && r.s[i] - r.s[a] < 40) a--; while (b < r.vars.length - 1 && r.s[b] - r.s[i] < 40) b++; const l = r.s[b] - r.s[a]; return l > 20 ? +(Math.abs(V[r.vars[b]].g - V[r.vars[a]].g) / l).toFixed(2) : null; } return null; };
+    const firstAt = new Map(); for (const r of runs) r.vars.forEach((v, i) => { if (!firstAt.has(v)) firstAt.set(v, [r, i]); }); // (each station's first road and place on it, as runs.find + indexOf)
+    const forced = (k) => { const f = firstAt.get(k); if (!f) return null; const [r, i] = f; let a = i, b = i; while (a > 0 && r.s[i] - r.s[a] < 40) a--; while (b < r.vars.length - 1 && r.s[b] - r.s[i] < 40) b++; const l = r.s[b] - r.s[a]; return l > 20 ? +(Math.abs(V[r.vars[b]].g - V[r.vars[a]].g) / l).toFixed(2) : null; };
     const ins = [...V.keys()].filter(inC); T.inChunk = { vars: ins.length, maxFromGround: +ins.reduce((m, k) => Math.max(m, Math.abs(h[k] - V[k].g)), 0).toFixed(2), over1m: ins.filter((k) => Math.abs(h[k] - V[k].g) > 1).length, over2m: ins.filter((k) => Math.abs(h[k] - V[k].g) > 2).length, over3m: ins.filter((k) => Math.abs(h[k] - V[k].g) > 3).length, over2mBy: {} };
     { const kindOf = []; for (const r of runs) for (const v of r.vars) if (!kindOf[v] || !r.minor) kindOf[v] = r.kind; for (const k of ins) if (Math.abs(h[k] - V[k].g) > 2) T.inChunk.over2mBy[kindOf[k]] = (T.inChunk.over2mBy[kindOf[k]] || 0) + 1; }
     // (why each is over 2 m: the ground along the road climbs faster than its limit over 80 m (forced); within 150 m of
