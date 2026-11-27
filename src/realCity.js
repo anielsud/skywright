@@ -14,6 +14,7 @@ import { STEP, slice } from './stepClock.js';
 import { buildingMaterial, buildingDepthMaterial, furnMaterial, furnDepthMaterial, dmgAttr, C, facade, facadeSpec, floodlit, linHex, LY0, LYS } from './buildings.js';
 import { toLocal } from './realworld.js';
 import { OcclusionBuffer, OCC_LAYER, inscribedBox, binBounds, worldBounds, shadowsSeeOccluded } from './occlusion.js';
+import { SNAP } from './layout/setbacks.js';
 import { roadIndex, setBack, holeInside, fitBox, footBoxes, boundBox, inParts, irregular, lazyParts, packRing, unpackRing, FOOT, MAJOR, streetWalls, PASSAGE, clip, intrusion, WORK, workSince, Refiner, fillBare } from './setback.js';
 
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
@@ -505,6 +506,9 @@ function lazyBoxes(city, t, P, holes, q, fit, fallback, exact = false) {
   });
 }
 
+// o[k] worked out by make the first time it's read (then a plain property)
+const lazy = (o, k, make) => Object.defineProperty(o, k, { configurable: true, enumerable: true, get() { const v = make(); Object.defineProperty(o, k, { value: v, writable: true, configurable: true, enumerable: true }); return v; }, set(v) { Object.defineProperty(o, k, { value: v, writable: true, configurable: true, enumerable: true }); } });
+
 // ---------------- the city ----------------
 export class CityScenery {
   constructor(world, D, group) {
@@ -521,7 +525,7 @@ export class CityScenery {
     const mo = { cellPx: { low: 128, medium: 192, ultra: 384 }[W.qName] ?? 256, interiors: W.qName !== 'low', glass: true };
     this.mat = buildingMaterial(mo); this.fmat = furnMaterial(mo, TANK.steel); // (fmat: the roof furniture's instances, FurnK)
     // (lit windows: set in update, dimmer than a village's; thousands of them in view)
-    this.tiles = new Map(); for (const t of H.tiles) this.tiles.set(t[0] + ',' + t[1], { i: t[0], j: t[1], off: t[2], nTall: t[3], nLow: t[4], low: null });
+    this.tiles = new Map(); let ord0 = 0; for (const t of H.tiles) { this.tiles.set(t[0] + ',' + t[1], { i: t[0], j: t[1], off: t[2], nTall: t[3], nLow: t[4], low: null, ord0 }); ord0 += t[3]; } // (ord0: its first tall record's place in city.bin's order)
     const cfg = W.loc.city || {};
     this.masts = (cfg.masts || []).map((m) => { const [x, z] = toLocal(D.meta, m.lat, m.lon); return { ...m, x, z }; });
     this.hole = cfg.statue ? toLocal(D.meta, cfg.statue.lat, cfg.statue.lon) : null; // footprints there: drawn as a model
@@ -529,12 +533,18 @@ export class CityScenery {
     this.helipads = (cfg.helipads || []).map((h) => { const [x, z] = toLocal(D.meta, h.lat, h.lon), L = h.look && toLocal(D.meta, h.look.lat, h.look.lon); return { ...h, x, z, look: L ? { x: L[0], z: L[1] } : null, roof: null }; });
     const t0 = performance.now(), w0 = { ...WORK };
     this.stats = { tall: 0, low: 0, tris: 0 };
-    this.roads = roadIndex(W); this.setbacks = { cut: 0, dropped: 0, through: 0, ms: performance.now() - t0 }; // set back from the streets (setback.js; ms: the index and the cuts)
+    // the baked setbacks (#294, ?layout=1: layout/setbacks.js): what each tall building's road checks answered, against
+    // the layout's building lines, and its ground from the layout's surface (tap); then the road index and the density
+    // map are made only when something else first asks (a low tile, a lazy collision box). Recording: the bake's run.
+    const BK = CityScenery.bake; this.ov = BK ? null : D.setbacks?.n === H.tiles.reduce((n, t) => n + t[3], 0) ? D.setbacks : null; this.tp = null; this.ovStats = { used: 0, miss: 0 };
+    if (BK) { this.roads = BK.roads; this.tapes = []; } else if (this.ov) lazy(this, 'roads', () => { const t1 = performance.now(), I = roadIndex(W); this.setbacks.ms += performance.now() - t1; return I; });
+    else this.roads = roadIndex(W);
+    this.setbacks = { cut: 0, dropped: 0, through: 0, ms: performance.now() - t0 }; // set back from the streets (setback.js; ms: the index and the cuts)
     this.footStats = { n: 0, irr: 0, boxes: 0, max: 0, ms: 0, lazy: 0, load: 0 }; // (the collision boxes: ms in footBoxes, whenever; lazy: the slowest worked out after load; load: at load)
     this.refiner = new Refiner(); // (a huge footprint's boxes, a piece at a time after load: setback.js tiledBoxes)
     this.farStats = { tris: 0, groupTris: 0, verts: 0, nearVerts: 0, room: 0, over: 0, ms: 0, maxMs: 0, steps: 0, built: 0, done: 0, kept: 0, keptI: 0, hash: 0, groupNear: 0 }; // (the far copies, made after load: farStep)
     this.farQ = null; // (their jobs, nearest their switch first: farPlan)
-    this.density(); this.sup = new Map(); this.supTiles = new Set(); this.grounded = 0; this.nested = 0; this.kiosks = 0; this.passages = []; this.gf = { front: 0, ground: 0, parts: 0, miss: [] };
+    if (!this.ov) this.density(); this.sup = new Map(); this.supTiles = new Set(); this.grounded = 0; this.nested = 0; this.kiosks = 0; this.passages = []; this.gf = { front: 0, ground: 0, parts: 0, miss: [] };
     this.buildTall();
     this.msTall = performance.now() - t0; this.loadWork = { ...workSince(w0), irr: this.footStats.irr, n: this.footStats.n }; // (setback.js WORK at load: tools/test/setbacks.js)
     this.queue = []; this.lastPlan = null; this.shadows = W_SHADOW(W);
@@ -558,7 +568,7 @@ export class CityScenery {
       for (const t of ts) {
         const [cx, cz] = this.tileCentre(t.i, t.j);
         let o = t.off;
-        for (let r = 0; r < t.nTall; r++) { readRec(U, S, o, this.q, cx, cz, R); recs.push({ o, cx, cz, top: R.top + R.mh * 0, t }); o = R.next; }
+        for (let r = 0; r < t.nTall; r++) { readRec(U, S, o, this.q, cx, cz, R); recs.push({ o, cx, cz, top: R.top + R.mh * 0, t, ord: t.ord0 + r }); o = R.next; } // (ord: its place in city.bin's order, the baked setbacks')
         t.lowOff = o;
       }
       recs.sort((a, b) => b.top - a.top);
@@ -581,7 +591,7 @@ export class CityScenery {
         const ck = this.cellKey(R.P, TALL_CELL), a = M.ni, la = M.lni, v0 = M.n;
         pk.cell = ckOf.get(ck) ?? ckOf.set(ck, ckOf.size).get(ck); pk.top = rc.top;
         const fk = this.cellKey(R.P, FURN_CELL); M.fw = fws.get(fk); if (!M.fw) fws.set(fk, (M.fw = furnW(...this.cellCentre(fk, FURN_CELL))));
-        this.lastFoot = this.lastBase = null; this.building(M, R, true);
+        this.lastFoot = this.lastBase = null; this.curOrd = rc.ord; this.building(M, R, true); this.curOrd = null; this.tp = null;
         const ob = M.n > v0 && this.occluder(R, true); if (ob) { ob.ck = ck; occ.push(ob); (rc.t.occ || (rc.t.occ = [])).push(ob); }
         let c = cells.get(ck); if (!c) cells.set(ck, (c = []));
         c.push(a, M.ni, la, M.lni, rc.top); // (its main and late index runs)
@@ -707,6 +717,7 @@ export class CityScenery {
     }
   }
   dense(x, z) {
+    if (!this.dens) this.density(); // (the baked setbacks: made when a low tile first asks)
     const i = Math.floor(x / 100), j = Math.floor(z / 100); let n = 0;
     for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) n += this.dens.get(i + a + ',' + (j + b)) || 0;
     return n >= DENSE;
@@ -722,7 +733,17 @@ export class CityScenery {
   //    wedding cake's tiers all from the ground): its walls start on the podium's roof (returns that height), so the
   //    podium's ground floor is the one on the street and the walls don't fight over it.
   // Else its own min_height.
-  base(R, P, mh, top) { return (this.lastBase = this.baseOf(R, P, mh, top)); } // (the last one kept: occluder())
+  base(R, P, mh, top) { return (this.lastBase = this.tap('base', () => { const b = this.baseOf(R, P, mh, top); return b === mh ? null : b; }) ?? mh); } // (the last one kept: occluder(); the baked setbacks keep only one that moved)
+  // A road-dependent answer for the building being built (k: which; f: works it out): the baked setbacks' (this.tp: its
+  // tape, layout/setbacks.js) if there are any, else f's. The bake's run (tp.rec) records each. An answer the tape
+  // hasn't got: worked out (g, base, box: none stored means none). (raw: today's answers as they are, for checks)
+  tap(k, f) {
+    const T = this.tp; if (!T) return f();
+    if (T.rec) { const v = SNAP[k] && !T.raw ? SNAP[k](f()) : f(); (T[k] || (T[k] = [])).push(v); return v; } // (as the overlay keeps it: the bake builds with what the game will)
+    const q = T[k], i = T.at[k] || 0; if (q && i < q.length) { T.at[k] = i + 1; return q[i]; }
+    if (k === 'g' || k === 'base' || k === 'box') return null;
+    this.ovStats.miss++; return f();
+  }
   baseOf(R, P, mh, top) {
     let cx = 0, cz = 0; for (const p of P) { cx += p[0]; cz += p[1]; } cx /= P.length; cz /= P.length;
     const pts = [[cx, cz]], step = Math.max(1, Math.floor(P.length / 8));
@@ -774,7 +795,7 @@ export class CityScenery {
     let holes = R.holes.map((h) => { const Q = simplify(h, 0.5); if (area2(Q) < 0) Q.reverse(); return Q; }).filter((h) => h.length >= 3);
     const major = R.top >= MAJOR.height || R.lv >= 8 || Math.abs(area2(P)) >= MAJOR.area;
     const pass = { h: (R.top > 0 ? R.top : R.lv * 3.2 + 1) - R.mh, tagged: R.top > 0 || R.lv > 0 }; // (a passage under it: setback.js PASSAGE)
-    const ts = performance.now(), sb = setBack(this.roads, P, major, false, pass); this.setbacks.ms += performance.now() - ts;
+    const ts = performance.now(), sb = this.tap('sb', () => setBack(this.roads, P, major, false, pass)); this.setbacks.ms += performance.now() - ts;
     if (sb.drop) { this.setbacks.dropped++; return null; }
     if (sb.through) { this.setbacks.through++; return { P, holes, p0: P[0], through: true, pass: sb.pass }; }
     const p0 = P[0]; // (the building's look is seeded from its mapped corner: a cut one keeps it)
@@ -782,7 +803,12 @@ export class CityScenery {
     return { P, holes, p0, cut: sb.cut };
   }
   building(M, R, tall) {
-    const W = this.w, F = this.footprint(R, tall);
+    const W = this.w;
+    // a tall one's tape (the baked setbacks: tap), its ground from the layout's surface first
+    this.tp = !tall || this.curOrd == null ? null : this.tapes ? (this.tapes[this.curOrd] = { rec: true, raw: !!CityScenery.bake?.raw }) : this.ov ? this.ov.tapes[this.curOrd] && { ...this.ov.tapes[this.curOrd], at: {} } : null;
+    if (this.tp && !this.tp.rec) this.ovStats.used++;
+    const g = this.tap('g', () => CityScenery.bake?.ground.get(R.o) ?? null); if (g) { R.g0 = (R.g0 * 4 + g[0]) / 4; R.g1 = (R.g1 * 4 + g[1]) / 4; } // (quarter metres, from city.bin's)
+    const F = this.footprint(R, tall);
     if (!F) return;
     const { P, holes, p0 } = F;
     const A = Math.abs(area2(P)) - holes.reduce((s, h) => s + Math.abs(area2(h)), 0);
@@ -796,7 +822,7 @@ export class CityScenery {
     // a part up in the air with nothing under it: down to the street; one on the ground inside a lower one: on its roof (base())
     let mh = R.mh;
     if (part) { const b = this.base(R, P, mh, R.top > 0 ? R.top : R.lv * 3.2 + 1); if (b !== mh) { if (b < mh) this.grounded++; else this.nested++; mh = b; } }
-    const kind = R.kind, dense = this.dense(mx, mz), tagged = R.top > 0 || R.lv > 0;
+    const kind = R.kind, dense = this.tap('dense', () => this.dense(mx, mz)), tagged = R.top > 0 || R.lv > 0;
     // a small structure in a built-up spot (a kiosk, a newsstand, a booth, a pavilion in a plaza: Times Square's police
     // booth, the cafe kiosks in Bryant Park): one storey of shop windows under a flat roof, not a clapboard house
     const kiosk = !part && dense && A < 120 && kind !== 0 && kind !== 1 && kind !== 3 && (!tagged || R.top < 7);
@@ -845,7 +871,7 @@ export class CityScenery {
     if (st.kiosk) roof = 'flat';
     let box = null;
     const fit = (b) => { const t0 = performance.now(), f = fitBox(this.roads, { x: b.cx, z: b.cz, ux: b.ux, uz: b.uz, hl: b.hl, hw: b.hw }); this.setbacks.ms += performance.now() - t0; return f; }; // (a box kept off the street, setback.js: an irregular footprint's reaches past its walls)
-    if (roof === 'gable' || roof === 'hip' || roof === 'skillion') { box = obb(P); if (!box || box.hw > 14 || A / box.ar < 0.7 || (!F.through && fit(box).fit)) roof = 'flat'; } // (no pitched roof over the pavement)
+    if (roof === 'gable' || roof === 'hip' || roof === 'skillion') { box = obb(P); if (!box || box.hw > 14 || A / box.ar < 0.7 || (!F.through && this.tap('roof', () => !!fit(box).fit))) roof = 'flat'; } // (no pitched roof over the pavement)
     // a glass tower's sloped top (a skillion, a gable: the slanted crowns of Midtown's curtain walls) is its curtain wall
     // carried up at a slant, not a slate roof; a masonry building's pitched roof keeps to a roof's pitch (a roof:height
     // tag as tall as the building made its whole front a wall of slates)
@@ -883,11 +909,11 @@ export class CityScenery {
     const F2 = raised ? null : this.facades(st, kind, parapet > 0, eave - yFloor);
     let yfV = yFloor, flV = st.fl;
     if (F2) { const up = eave - yFloor - F2.gH, nU = Math.max(1, Math.round(up / st.fl)); flV = up / nU; yfV = F2.gH > 0 ? yFloor + F2.gH - flV : yFloor; M.top = parapet ? nU + (F2.gH > 0 ? 1 : 0) : 0; }
-    const street = F2 ? streetWalls(this.roads, P, REACH, F2.gH > 0 && !st.row && st.cell !== C.CLAP_WIN ? FRONT : 0, CONE) : null, wTop = eave + parapet; // (the fallback: not for a house)
+    const street = F2 ? this.tap('walls', () => streetWalls(this.roads, P, REACH, F2.gH > 0 && !st.row && st.cell !== C.CLAP_WIN ? FRONT : 0, CONE)) : null, wTop = eave + parapet; // (the fallback: not for a house)
     // (what the streets got, for tools/test/bldcheck.js: the buildings other than houses and sheds standing on the
     // street with a wall facing one, and those whose street walls have a ground floor of their own)
     if (!raised && !st.kiosk && !st.row && st.cell !== C.CLAP_WIN && kind !== 2 && eave - yFloor >= 7) {
-      const fr = street || streetWalls(this.roads, P, REACH, FRONT, CONE), G = this.gf;
+      const fr = street || this.tap('walls', () => streetWalls(this.roads, P, REACH, FRONT, CONE)), G = this.gf;
       if (fr.some(Boolean)) { G.front++; if (part) G.parts++; if (F2?.gH > 0) G.ground++; else if (G.miss.length < 5) G.miss.push([Math.round(mx), Math.round(mz), st.cell, Math.round(eave - yFloor)]); }
     }
     // a passage under it (setback.js PASSAGE: a road through a tall building): its walls stop at the passage's
@@ -964,14 +990,13 @@ export class CityScenery {
     // its footprint, a metre out (FOOT.out: no box of its own reaches further), for the grid and the quick tests
     const tb = performance.now(), irr = (Q, H, q) => H.length || irregular(Q, Math.abs(area2(Q)) - H.reduce((m, h) => m + Math.abs(area2(h)), 0), q.cx, q.cz, q.ux, q.uz, q.hl, q.hw);
     let one = { cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz, hl: b0.hl, hw: b0.hw }; // (a near-rectangle: its box, off the street)
-    let cut1 = false; if (!F.through) { const f = fit(one); cut1 = !!f.fit && 4 * f.hl * f.hw < 0.93 * A; one = { cx: f.x, cz: f.z, ux: f.ux, uz: f.uz, hl: f.hl, hw: f.hw }; }
+    let cut1 = false; if (!F.through) { const fb = this.tap('box', () => { const f = fit(one); return f.fit ? [f.x, f.z, f.hl, f.hw] : null; }), f = fb ? { x: fb[0], z: fb[1], ux: one.ux, uz: one.uz, hl: fb[2], hw: fb[3], fit: true } : { x: one.cx, z: one.cz, ux: one.ux, uz: one.uz, hl: one.hl, hw: one.hw }; cut1 = !!f.fit && 4 * f.hl * f.hw < 0.93 * A; one = { cx: f.x, cz: f.z, ux: f.ux, uz: f.uz, hl: f.hl, hw: f.hw }; }
     one = [{ x: one.cx, z: one.cz, ux: one.ux, uz: one.uz, hl: one.hl, hw: one.hw }];
     const lazy = cut1 || irr(P, holes, b0); // (cut1: its box moved in off the street leaves a slice of it bare, a trapezoid's along a slanted front: boxes that hug its walls)
     // over a passage: the whole building from the passage's underside up; below it, the parts either side of the road
     // (boxes kept off it: they stay standing, the rubble covers them if it comes down)
-    if (cut) for (const Q of this.besidePass(P, pass)) {
-      const q = obb(Q); if (!q) continue;
-      const C = ((irr(Q, [], q) && cityParts(this, Q, [], q, true, true)) || [fit(q)]).filter((f) => intrusion(this.roads, [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([u, v]) => [f.x + f.ux * f.hl * u - f.uz * f.hw * v, f.z + f.uz * f.hl * u + f.ux * f.hw * v])) < 0.25);
+    if (cut) for (const C of this.tap('bp', () => this.besidePass(P, pass).map((Q) => { const q = obb(Q); if (!q) return [];
+      return ((irr(Q, [], q) && cityParts(this, Q, [], q, true, true)) || [fit(q)]).filter((f) => intrusion(this.roads, [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([u, v]) => [f.x + f.ux * f.hl * u - f.uz * f.hw * v, f.z + f.uz * f.hl * u + f.ux * f.hw * v])) < 0.25); }))) {
       if (C.length) this.addParts(C, R.g0 - 1, yPass, this.curTile).below = true;
     }
     const y0 = cut ? yPass : raised ? yBase : R.g0 - 1, O = FOOT.out;
