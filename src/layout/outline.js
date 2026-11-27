@@ -8,7 +8,7 @@ import CL from '../../vendor/layout/clipper1.mjs';
 import { KIND } from './format.js';
 import { VERGE } from './rules.js';
 
-const ARC = 15, EDGE_STEP = 4, CLIP = 25; // (CLIP: m about the chunk a road's stretches are kept: past a road's widest reach, its half width and pavement) // (ARC: cm a round join's arc may cut inside; EDGE_STEP: m between the chunk's edge points)
+const ARC = 15, EDGE_STEP = 4, CLIP = 25, SNAP = 50; // (CLIP: m about the chunk a road's stretches are kept: past a road's widest reach, its half width and pavement) // (ARC: cm a round join's arc may cut inside; EDGE_STEP: m between the chunk's edge points)
 const cm = (v) => Math.round(v * 100);
 
 export function chunkOutlines(net, areas, L) {
@@ -34,14 +34,30 @@ export function chunkOutlines(net, areas, L) {
   // the chunk's: clipped to it (each region split where it crosses a chunk line first: neighbours clip the same points)
   const box = [[[X0, Z0], [X0 + S, Z0], [X0 + S, Z0 + S], [X0, Z0 + S]]];
   const key = new Map(), P = []; const add = (X, Z) => { X = Math.max(X0, Math.min(X0 + S, X)); Z = Math.max(Z0, Math.min(Z0 + S, Z)); const k = X * 1e7 + Z; let i = key.get(k); if (i == null) { i = P.length; key.set(k, i); P.push([X, Z]); } return i; };
-  let E = []; for (const [k, Ps] of REG) for (const p of inter(splitAtGrid(Ps, S), box)) { if (p.length < 3) continue; for (let q = 0; q < p.length; q++) { const a = add(p[q][0], p[q][1]), b = add(p[(q + 1) % p.length][0], p[(q + 1) % p.length][1]); if (a !== b) E.push([a, b, k]); } }
+  // (Clipper's intersection with the box can move a vertex lying on the chunk's edge by a centimetre, differently on
+  // either side: each vertex it gives on the edge is put back on the region's own point there, the same for both chunks)
+  const onEdge = (X, Z) => X === X0 || X === X0 + S || Z === Z0 || Z === Z0 + S;
+  const pre = []; let E = []; for (const [k, Ps] of REG) { const sp = splitAtGrid(Ps, S), own = new Map(); pre.push([k, sp]); for (const r of sp) for (const [X, Z] of r) { if (X === X0 || X === X0 + S) own.set('x' + X + ',' + Z, [X, Z]); if (Z === Z0 || Z === Z0 + S) own.set('z' + Z + ',' + X, [X, Z]); }
+    const snap = ([X, Z]) => { if (!onEdge(X, Z) || ((X === X0 || X === X0 + S) && (Z === Z0 || Z === Z0 + S))) return [X, Z]; for (let d = 0; d <= SNAP; d++) for (const s of d ? [d, -d] : [0]) { const o = X === X0 || X === X0 + S ? own.get('x' + X + ',' + (Z + s)) : own.get('z' + Z + ',' + (X + s)); if (o) return o; } return [X, Z]; };
+    for (const p0 of inter(sp, box)) { if (p0.length < 3) continue; const p = p0.map(snap); for (let q = 0; q < p.length; q++) { const a = add(p[q][0], p[q][1]), b = add(p[(q + 1) % p.length][0], p[(q + 1) % p.length][1]); if (a !== b) E.push([a, b, k]); } } }
   for (let s = 0; s <= S; s += EDGE_STEP * 100) for (const [X, Z] of [[X0 + s, Z0], [X0 + s, Z0 + S], [X0, Z0 + s], [X0 + S, Z0 + s]]) add(X, Z);
   // edges split at the points that lie on them (Clipper's rounded crossings; the chunk's edge points), and where two cross
-  const split = () => { const PI = pointIndex(P), out = [], seen = new Set();
-    for (const [a, b, k] of E) { const chain = [a, ...PI.onSegment(a, b, 1.01), b]; for (let q = 0; q + 1 < chain.length; q++) { const u = chain[q], v = chain[q + 1]; if (u === v) continue; const kk = (u < v ? u * 1e7 + v : v * 1e7 + u) * 16 + k; if (!seen.has(kk)) { seen.add(kk); out.push([u, v, k]); } } }
-    E = out; };
+  const onLine = (a, b) => (P[a][0] === P[b][0] && (P[a][0] === X0 || P[a][0] === X0 + S)) || (P[a][1] === P[b][1] && (P[a][1] === Z0 || P[a][1] === Z0 + S));
+  // (a point on the chunk's edge splits only an edge along it: one reaching the line 1 cm from it would be split there on
+  // one side only)
+  // (an edge a region has twice, two of its rings touching along it, is no edge of it: kept once it would turn the inside
+  // out for every point whose ray crosses it (classify, even-odd); so an edge is kept only if a region has it an odd number of times)
+  const split = () => { const PI = pointIndex(P), out = [], n = new Map();
+    for (const [a, b, k] of E) { const along = onLine(a, b), chain = [a, ...PI.onSegment(a, b, 1.01).filter((i) => along || !onEdge(P[i][0], P[i][1])), b]; for (let q = 0; q + 1 < chain.length; q++) { const u = chain[q], v = chain[q + 1]; if (u === v) continue; const kk = (u < v ? u * 1e7 + v : v * 1e7 + u) * 16 + k; if (!n.has(kk)) out.push([u, v, k, kk]); n.set(kk, (n.get(kk) || 0) + 1); } }
+    E = out.filter((e) => n.get(e[3]) % 2).map(([u, v, k]) => [u, v, k]); };
+  // (and every point the regions have on the chunk's edge, used by this side's polygons or not: the chunk beside has them too)
+  for (const [, sp] of pre) for (const r of sp) for (const [X, Z] of r) if (onEdge(X, Z) && X >= X0 && X <= X0 + S && Z >= Z0 && Z <= Z0 + S) add(X, Z);
   split(); for (let pass = 0; pass < 4; pass++) { if (!crossings(P, E, add)) break; split(); }
-  return { P, E };
+  // the regions a point on the chunk's edge is in (a bit per kind): from the regions before they're clipped to the chunk,
+  // which both chunks have alike (on a region's edge or corner counts as in), not from this side's polygons
+  const edgeBits = new Map(), ins = pre.map(([k, sp]) => [k, ringsIndex(sp)]);
+  P.forEach(([X, Z], i) => { if (!onEdge(X, Z)) return; let m = 0; for (const [k, ix] of ins) if (ix.has(X, Z)) m |= 1 << k; edgeBits.set(i, m); });
+  return { P, E, edgeBits };
 }
 
 // rings with a vertex wherever they cross a chunk line (x or z a multiple of S cm), at a crossing worked out the
@@ -58,6 +74,14 @@ function splitAtGrid(paths, S) {
   return out;
 }
 
+// a set of rings (cm): has(X, Z): the point is on one of their edges or inside them (even-odd)
+function ringsIndex(rings) {
+  const RW = 200, rows = new Map();
+  for (const p of rings) for (let k = 0; k < p.length; k++) { const [ax, az] = p[k], [bx, bz] = p[(k + 1) % p.length]; for (let r = Math.floor(Math.min(az, bz) / RW); r <= Math.floor(Math.max(az, bz) / RW); r++) (rows.get(r) || rows.set(r, []).get(r)).push([ax, az, bx, bz]); }
+  return { has(X, Z) { let c = false; for (const [ax, az, bx, bz] of rows.get(Math.floor(Z / RW)) || []) {
+    if ((bx - ax) * (Z - az) - (bz - az) * (X - ax) === 0 && X >= Math.min(ax, bx) && X <= Math.max(ax, bx) && Z >= Math.min(az, bz) && Z <= Math.max(az, bz)) return true;
+    if ((az > Z) !== (bz > Z) && X < ax + (bx - ax) * (Z - az) / (bz - az)) c = !c; } return c; } };
+}
 // points near a point or lying on a segment (cm)
 function pointIndex(P) {
   const C = 400, g = new Map(); P.forEach(([x, z], i) => { const k = Math.floor(x / C) * 1e6 + Math.floor(z / C); (g.get(k) || g.set(k, []).get(k)).push(i); });

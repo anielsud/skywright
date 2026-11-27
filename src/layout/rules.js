@@ -36,15 +36,24 @@ export function makeRules(net, g, city) {
   // the nearest junction within JBLEND of its circle: [junction, distance past its circle]
   const junction = (x, z) => { let best = null, bd = Infinity; for (const q of jGrid.get(key(Math.floor(x / SC), Math.floor(z / SC))) || []) { const J = JN[q], d = Math.hypot(x - J.x, z - J.z) - J.r; if (d < JBLEND && d < bd) { bd = d; best = J; } } return best ? [best, bd] : null; };
   // the street surface at (x, z) given its street's height h there: a junction's plane inside it, blending into the street's
-  const streetH = (x, z, h) => { const j = junction(x, z); if (!j) return h; const [J, d] = j, ph = J.y0 + J.gx * (x - J.x) + J.gz * (z - J.z); if (d <= 0) return ph; const t = d / JBLEND, w = t * t * (3 - 2 * t); return ph + (h - ph) * w; };
+  // (where junctions' circles overlap or nearly: their planes blended by how far inside each the point is, so the surface
+  // doesn't step where one stops being the nearest)
+  const streetH = (x, z, h) => { let sw = 0, sp = 0, dmin = Infinity; for (const q of jGrid.get(key(Math.floor(x / SC), Math.floor(z / SC))) || []) { const J = JN[q], d = Math.hypot(x - J.x, z - J.z) - J.r; if (d >= JBLEND) continue; const u = (JBLEND - d) / JBLEND, wt = u * u; sw += wt; sp += wt * (J.y0 + J.gx * (x - J.x) + J.gz * (z - J.z)); if (d < dmin) dmin = d; }
+    if (!sw) return h; const ph = sp / sw; if (dmin <= 0) return ph; const t = dmin / JBLEND, w = t * t * (3 - 2 * t); return ph + (h - ph) * w; };
+  // the streets' height at (x, z) away from a junction: every street segment within SBLEND of the nearest (by distance past
+  // its tarmac's edge) blended, each weighted down to nothing as it falls SBLEND behind. Per segment, not per road: a
+  // segment's distance and height change smoothly, so the blend does too, wherever streets (or a road's own two sides of a
+  // sharp bend) meet, and whichever way the roads are split into ways
+  const blended = (x, z) => { const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return null; const c = []; let dmin = Infinity;
+    for (let q = 0; q < L.length; q += 2) { const r = runs[L[q]], s = L[q + 1]; if (r.minor) continue; const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw; c.push(d, r.h[s] + (r.h[s + 1] - r.h[s]) * t); if (d < dmin) dmin = d; }
+    let sw = 0, sh = 0; for (let q = 0; q < c.length; q += 2) { const u = 1 - (c[q] - dmin) / SBLEND; if (u <= 0) continue; const wt = u * u * (3 - 2 * u); sw += wt; sh += wt * c[q + 1]; } return sw ? sh / sw : null; };
   const minorKind = (k) => k === KIND.alley || k === KIND.pavers || k === KIND.gravel;
   const base = (x, z, k) => {
     const n = nearest(x, z, minorKind(k) ? any : street) || nearest(x, z, any); if (!n) return g(x, z);
     if (minorKind(k) && n.d > 0) { const f = Math.min(1, n.d / 20); return n.h + (g(x, z) - n.h) * f; } // (a plaza's middle, away from its ways: towards the ground)
     if (n.r.minor) return n.h;
-    const two = nearest2(x, z, street); let hh = n.h; // (where two streets meet away from a junction: blended across the line between them)
-    if (two.length === 2 && two[1].d - two[0].d < SBLEND) { const t = (two[1].d - two[0].d) / SBLEND, w = 0.5 + 0.5 * t * t * (3 - 2 * t); hh = two[0].h * w + two[1].h * (1 - w); }
-    return streetH(x, z, hh);
+    return streetH(x, z, blended(x, z));
   };
   const drawn = (x, z, k) => base(x, z, k) + (k === KIND.pave || k === KIND.kerb ? KERB : 0);
   const lot = (x, z) => { const two = nearest2(x, z, (r) => !r.minor && r.pave).filter((n, i) => i === 0 || n.d <= LOT_PAIR); if (!two.length) return null; /* (the second only if it's near: past that, which it is depends on how far the stored network reaches) */ let s = 0, ws = 0; for (const n of two) { const wt = 1 / Math.max(0.5, n.d); s += (streetH(x, z, n.h) + KERB) * wt; ws += wt; } return { y: s / ws, d: two[0].d }; };

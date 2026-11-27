@@ -4,6 +4,7 @@
 // compares neighbours': their shared edge must match).
 import { parentPort } from 'node:worker_threads';
 import { decodeLayout, KIND } from '../../src/layout/format.js';
+import { KERB } from '../../src/layout/rules.js';
 import { meshChunk, physIndex, physAt } from '../../src/layout/mesh.js';
 
 const HOLE_STEP = 2;
@@ -20,7 +21,7 @@ parentPort.on('message', ({ jobs, grid }) => {
       const I = m.idx, Y = m.phys; let off = 0, kerb = 0;
       for (let q = 0; q < m.tk.length; q++) { const v = [I[q * 3], I[q * 3 + 1], I[q * 3 + 2]];
         if (m.tk[q] === KIND.tarmac) for (const k of v) off = Math.max(off, Math.abs(Y[k] - P[k * 3 + 1]));
-        if (m.tk[q] === KIND.kerb) for (let a = 0; a < 3; a++) { const u = v[a], w = v[(a + 1) % 3], l = Math.hypot(P[u * 3] - P[w * 3], P[u * 3 + 2] - P[w * 3 + 2]); const top = (q) => P[q * 3 + 1] - Y[q] > 0.1, gut = (q) => Math.abs(P[q * 3 + 1] - Y[q]) < 1e-4; if (l < 0.5 && ((top(u) && gut(w)) || (top(w) && gut(u)))) kerb = Math.max(kerb, Math.abs(Y[u] - Y[w])); } } // (across the kerb: a gutter's point to a top's) // (kerb: the largest physics rise along a short edge of its strip: drawn it's 0.15)
+        if (m.tk[q] === KIND.kerb) for (let a = 0; a < 3; a++) { const u = v[a], w = v[(a + 1) % 3], l = Math.hypot(P[u * 3] - P[w * 3], P[u * 3 + 2] - P[w * 3 + 2]); const top = (q) => P[q * 3 + 1] - Y[q] > 0.1, gut = (q) => Math.abs(P[q * 3 + 1] - Y[q]) < 1e-4; if (l < 0.5 && ((top(u) && gut(w)) || (top(w) && gut(u)))) { const t = top(u) ? u : w, gg = t === u ? w : u; kerb = Math.max(kerb, Math.abs((Y[t] - Y[gg]) - (P[t * 3 + 1] - KERB - P[gg * 3 + 1]))); } } } // (across the kerb, a gutter's point to a top's: how far physics rises past the surface the kerb stands on (drawn less the kerb); the surface's own slope isn't the kerb: on a 20% street a gutter 0.4 m along rises 0.08 m)
       const ixx = physIndex(L, m); let holes = 0, samples = 0;
       for (let x = L.x0 + HOLE_STEP / 2; x < L.x0 + L.size; x += HOLE_STEP) for (let z = L.z0 + HOLE_STEP / 2; z < L.z0 + L.size; z += HOLE_STEP) { samples++; const h = physAt(L, m, ixx, x, z); if (!(h === h)) holes++; }
       // the markings: along each street's centre line (every 2 m in the chunk, out of junctions), the across coordinate the
