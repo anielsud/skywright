@@ -8,6 +8,7 @@ import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { Vehicles } from './vehicles.js';
 import { assemble, kitify } from './planeDetail.js';
 import { NavLights, lightLayout, heliLamps } from './navLights.js';
+import { FarLOD, standIn, standInMesh } from './farLod.js';
 
 // Merge a static object tree into one mesh per material (huge draw-call saving for parked planes etc.).
 export function mergeByMaterial(root, skip = () => false) {
@@ -58,12 +59,13 @@ export function buildStatic(design) {
 // buildStatic merged into one mesh per material (the airport's parked planes). Each design is built once per session
 // and later flights get a clone sharing its geometry and materials (World.dispose may dispose that geometry: three.js
 // uploads it again when it is next drawn). Keyed by the whole design, so an edited copy of a stock design gets its own.
+const PATTERN_FAR = 800; // m: where the Kestrel (11 m span) is ~8 px across at 720p, its stand-in's error well under one
 const _parked = new Map();
 export function parkedStatic(design) {
   const k = JSON.stringify(design);
   let t = _parked.get(k);
-  if (!t) { if (_parked.size >= 16) _parked.delete(_parked.keys().next().value); _parked.set(k, (t = mergeByMaterial(buildStatic(design)))); }
-  return t.clone();
+  if (!t) { if (_parked.size >= 16) _parked.delete(_parked.keys().next().value); const g = buildStatic(design); _parked.set(k, (t = { m: mergeByMaterial(g), far: standIn(g.children, g, 1) })); }
+  const c = t.m.clone(); c.userData.far = t.far; return c; // (userData.far: its far stand-in's faces, standIn: World.addParked draws them from a distance)
 }
 
 function colored(geo, c) { const g = geo.index ? geo.toNonIndexed() : geo; const n = g.attributes.position.count, a = new Float32Array(n * 3), cc = new THREE.Color(c); for (let i = 0; i < n; i++) { a[i * 3] = cc.r; a[i * 3 + 1] = cc.g; a[i * 3 + 2] = cc.b; } g.setAttribute('color', new THREE.BufferAttribute(a, 3)); return g; }
@@ -206,12 +208,14 @@ export class Traffic {
     obj.updateMatrixWorld(true);
     for (const pr of props) { const mw = pr.matrixWorld.clone(); merged.add(pr); mw.decompose(pr.position, pr.quaternion, pr.scale); }
     merged.userData.props = props;
+    // from PATTERN_FAR on, a stand-in of a few hundred triangles instead (farLod.js); the lights stay on either way
+    const lod = new FarLOD(PATTERN_FAR); lod.near.add(merged); lod.far.add(standInMesh(standIn(obj.children, obj, 0.4), this.world.windowMats[0])); lod.userData.props = props;
     const h = this.world.loc.rwyH + 320;
     const pts = [[-700, -1400], [-700, 1400], [-450, 1900], [0, 2050], [450, 1900], [700, 1400], [700, -1400], [450, -1900], [0, -2050], [-450, -1900]].map(([x, z]) => new THREE.Vector3(x - 600, h, z));
-    this.pattern = { obj: merged, curve: new THREE.CatmullRomCurve3(pts, true), t: 0, speed: 52 };
+    this.pattern = { obj: lod, curve: new THREE.CatmullRomCurve3(pts, true), t: 0, speed: 52 };
     this.pattern.len = this.pattern.curve.getLength();
-    this.pattern.nav = new NavLights(merged, lightLayout(obj, design.parts.map((p, i) => ({ obj: obj.children[i], d: PARTS[p.id], i })), 'plane'), { phase: 0.5 }); // running lights, landing lights on in the circuit
-    this.group.add(merged);
+    this.pattern.nav = new NavLights(lod, lightLayout(obj, design.parts.map((p, i) => ({ obj: obj.children[i], d: PARTS[p.id], i })), 'plane'), { phase: 0.5 }); // running lights, landing lights on in the circuit
+    this.group.add(lod);
   }
   updatePattern(dt) {
     const P = this.pattern; if (!P) return;

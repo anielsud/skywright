@@ -10,6 +10,7 @@ import { flattenGrid, flattenHi, makePainter, buildRoadMeshes, gradeReal, roadSu
 import { ROAD_U } from './roadSurface.js';
 import { Flora } from './flora.js';
 import { Builder, buildingMaterial, C, lightsDark } from './buildings.js';
+import { FarLOD, standInInto } from './farLod.js';
 import { TerrainTiles } from './tiles.js';
 import { MapTiles } from './maptiles.js';
 import { terrainDetailUniforms } from './terrainTex.js';
@@ -62,7 +63,11 @@ export const WEATHER = {
 };
 
 const SHORE_UNDER = 0.5, SHORE_OVER = 0.3; // metres: see World.shoreSnap
+// the airport's far stand-in (World.buildAirport, addParked): from AIRPORT_FAR m (at the flight camera's 60°: 0.25 px a
+// metre at 720p) only its faces of AIRPORT_FAR_FACE m² and up, and the parked planes as a prism a part (farLod.js)
+const AIRPORT_FAR = 2500, AIRPORT_FAR_FACE = 8;
 const SHORE_CHUNK = 4000; // m: the shore water mesh is cut into squares this size (World.buildShoreWater)
+const CORE_CHUNKS = 8; // the core terrain mesh is cut into this many squares a side (World.coreChunks)
 const QUALITY = {
   low: { res: 180, bake: 384, trees: 6000, shadows: false, shadowSize: 1024, clouds: 0.45, cirrus: false, pixel: 1, post: false },
   medium: { res: 220, bake: 640, trees: 12000, shadows: true, shadowSize: 1024, clouds: 0.65, cirrus: true, pixel: 1.25, post: true },
@@ -283,10 +288,31 @@ export class World {
     const sst = S / (this.shadowR - 1), maps = { detailU: this.detailU, albedo: this.albedoTex, normal: this.normalTex, shadow: this.shadowTex, orig: new THREE.Vector2(-half - this.hStep / 2, -half - this.hStep / 2), span: S + this.hStep, sOrig: new THREE.Vector2(-half - sst / 2, -half - sst / 2), sSpan: S + sst, city: this.cityD ? this.coverTex() : null };
     const mat = terrainMaterial(maps);
     this.terrainMat = mat; this.patchMat = terrainMaterial(maps, true); this.detailMat = terrainMaterial(maps, 'detail');
-    const mesh = new THREE.Mesh(geo, mat); mesh.receiveShadow = true;
-    this.terrain = mesh; this.group.add(mesh);
+    this.terrain = this.coreChunks(geo, mat); this.group.add(this.terrain);
     this.roadGroup = buildRoadMeshes(this, this.net); this.group.add(this.roadGroup);
     this.buildPatch(); this.buildDetail();
+  }
+  // The core mesh cut into CORE_CHUNKS x CORE_CHUNKS meshes, each with its own bounds, so the renderer culls those off
+  // screen (as one mesh, 33 km across in New York, it was always drawn whole: its bounds always met the view). Each
+  // chunk is the very same vertices, normals and triangles as that stretch of the whole grid (the vertices along a
+  // chunk's edge are copied into both chunks, so they meet exactly), with the one material and its uniforms.
+  coreChunks(geo, mat) {
+    const N = this.N, W = N + 1, A = geo.attributes, K = Math.min(CORE_CHUNKS, N), cut = (k) => Math.round((k * N) / K), g = new THREE.Group();
+    g.name = 'terrain core';
+    for (let cj = 0; cj < K; cj++) for (let ci = 0; ci < K; ci++) {
+      const i0 = cut(ci), i1 = cut(ci + 1), j0 = cut(cj), j1 = cut(cj + 1), n = i1 - i0 + 1, m = j1 - j0 + 1, c = new THREE.BufferGeometry();
+      for (const [k, a] of Object.entries(A)) {
+        const s = a.itemSize, out = new Float32Array(n * m * s);
+        for (let j = 0; j < m; j++) out.set(a.array.subarray(((j0 + j) * W + i0) * s, ((j0 + j) * W + i1 + 1) * s), j * n * s);
+        c.setAttribute(k, new THREE.BufferAttribute(out, s));
+      }
+      const idx = new Uint16Array((n - 1) * (m - 1) * 6); let q = 0; // (PlaneGeometry's own triangles: a b d, b c d)
+      for (let j = 0; j < m - 1; j++) for (let i = 0; i < n - 1; i++) { const a = j * n + i, b = a + n, d = a + 1; idx[q++] = a; idx[q++] = b; idx[q++] = d; idx[q++] = b; idx[q++] = b + 1; idx[q++] = d; }
+      c.setIndex(new THREE.BufferAttribute(idx, 1)); c.computeBoundingSphere(); c.computeBoundingBox();
+      const mesh = new THREE.Mesh(c, mat); mesh.receiveShadow = true; g.add(mesh);
+    }
+    geo.dispose();
+    return g;
   }
   // a city's land cover (cover.png: 0 paved, else parks, lawns and woods) for the terrain shader, which paves the open
   // ground near the camera (shaders.js cityPaved)
@@ -755,7 +781,7 @@ export class World {
       this.cascades = new CascadedShadows(this.scene, this.sun, { sizes: [this.q.shadowSize, 2048, 2048, 2048] });
       // the core terrain casts too, so houses and trees in a mountain's shadow are shaded like the ground around them.
       // Back faces only: a heightfield then never shadows its own sunlit slopes (no acne at any cascade's texel size).
-      for (const m of [this.terrain, this.patch]) if (m) { m.castShadow = true; m.material.shadowSide = THREE.BackSide; }
+      for (const m of [...this.terrain.children, this.patch]) if (m) { m.castShadow = true; m.material.shadowSide = THREE.BackSide; }
     }
     this.hemi = new THREE.HemisphereLight(0xbcd6ff, 0x5a5040, 0.8); this.scene.add(this.hemi);
     this.pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -1084,6 +1110,19 @@ export class World {
   }
   buildAirport() {
     const y = this.loc.rwyH, A = new Builder(), F = -Math.PI / 2; // F: buildings whose front faces the apron (-x)
+    // the far stand-in (AIRPORT_FAR): every face the Builder writes that is big enough to show from there (at least
+    // AIRPORT_FAR_FACE m² and on average 1.2 m across, or 15 m long) goes into a second Builder too; the rest (mullions,
+    // doors, fittings, ground equipment, signs: under a pixel from there) stays near only
+    const AF = new Builder(), poly = A._poly;
+    A._poly = function (P, uvs, cell, col) {
+      poly.call(this, P, uvs, cell, col);
+      let ar = 0, me = 0; const p0 = P[0];
+      for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length]; me = Math.max(me, Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2])); }
+      for (let i = 1; i + 1 < P.length; i++) { const a = P[i], b = P[i + 1], ux = a[0] - p0[0], uy = a[1] - p0[1], uz = a[2] - p0[2], vx = b[0] - p0[0], vy = b[1] - p0[1], vz = b[2] - p0[2]; ar += Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2; }
+      if ((ar < AIRPORT_FAR_FACE || ar / me < 1.2) && me < 15) return; // (long ones stay however thin: a mast, a kerb, a railing still draws a line)
+      AF.fx = this.fx; AF.fy = this.fy; AF.fz = this.fz; AF.cs = this.cs; AF.sn = this.sn; AF.seed = this.seed; AF.lyOff = this.lyOff;
+      poly.call(AF, P, uvs, cell, col);
+    };
     // hangars, T-hangars, cargo shed, fire station (src/airportBuildings.js)
     buildHangars(A, y);
     // terminal, control tower and radar (src/airportBuildings.js)
@@ -1123,7 +1162,9 @@ export class World {
     const kit = buildAirfieldKit(this, A, y, TA.signs);
     this.airfield = kit; this.windowMats.push(kit.signMat); kit.signs.receiveShadow = true; this.group.add(kit.signs);
     { const g = new THREE.BufferGeometry(), c = new THREE.Color(); g.setAttribute('position', new THREE.Float32BufferAttribute(kit.points.flatMap((p) => p.slice(0, 3)), 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(kit.points.flatMap((p) => c.set(p[3]).toArray()), 3)); this.group.add(new THREE.Points(g, this.rwyLightsMat)); }
-    const shell = new THREE.Mesh(A.toGeometry(), mat); shell.castShadow = shell.receiveShadow = true; this.group.add(shell);
+    const shell = new THREE.Mesh(A.toGeometry(), mat); shell.castShadow = shell.receiveShadow = true;
+    const lod = (this.airportLOD = new FarLOD(AIRPORT_FAR, new THREE.Vector3(270, y + 10, 0))); lod.near.add(shell); this.group.add(lod);
+    const far = new THREE.Mesh(AF.toGeometry(), mat); far.receiveShadow = true; far.name = 'airport far'; lod.far.add(far); this.airportMat = mat;
     // windsock
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 8, 8), M.paint(0xdddddd)); pole.position.set(-45, y + 4, 600); this.group.add(pole);
     const sockG = new THREE.ConeGeometry(0.7, 4, 12, 5, true); sockG.rotateX(-Math.PI / 2); sockG.translate(0, 0, 2);
@@ -1134,9 +1175,13 @@ export class World {
   // Ultra: small things cast into the nearer shadow cascades only (see cascades.js NEAR_SHADOW)
   nearShadow(o) { if (this.cascades) o.traverse((c) => c.layers.set(NEAR_SHADOW)); return o; }
   addParked(objs) { // place parked aircraft meshes on the apron stands (painted in apronTexture)
-    const spots = STANDS;
-    const all = spots.map((s, i) => (i < objs.length ? objs[i] : objs[i % objs.length].clone()));
-    spots.forEach((s, i) => { const o = all[i]; o.position.x += s[0]; o.position.y += this.loc.rwyH; o.position.z += s[1]; o.rotation.y = s[2]; this.group.add(this.nearShadow(o)); });
+    const spots = STANDS, lod = this.airportLOD, B = new Builder(); // (B: their far stand-ins, traffic.js parkedStatic, in one mesh)
+    const all = spots.map((s, i) => (i < objs.length ? objs[i] : objs[i % objs.length].clone())); // (a clone shares its original's geometry and materials)
+    spots.forEach((s, i) => {
+      const o = all[i]; o.position.x += s[0]; o.position.y += this.loc.rwyH; o.position.z += s[1]; o.rotation.y = s[2]; (lod?.near ?? this.group).add(this.nearShadow(o));
+      if (o.userData.far) standInInto(B, o.userData.far, o.position.x, o.position.y, o.position.z, s[2]);
+    });
+    if (lod && B.n) { const m = new THREE.Mesh(B.toGeometry(), this.airportMat); m.receiveShadow = true; m.name = 'parked far'; lod.far.add(m); }
   }
 
   // ---------------- vegetation ----------------
