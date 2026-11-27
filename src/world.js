@@ -679,6 +679,8 @@ export class World {
     const rw = this.real?.waterAt(x, z); if (rw != null && h < rw + 0.3) return { h: rw, n: new THREE.Vector3(0, 1, 0), type: 'water' }; // real rivers above the water level
     return null;
   }
+  // the airfield's own paving at (x, z): a runway (and its shoulders), a taxiway, the apron, a link (groundAt's 'runway' off the roads)
+  airfieldPaved(x, z) { return (Math.abs(z) < RWY.len / 2 + 30 && RUNWAYS.some((r) => Math.abs(x - r.x) < RWY.width / 2 + 2)) || this.isPaved(x, z); }
   isPaved(x, z) {
     if (x > 60 && x < 100 && Math.abs(z) < RWY.len / 2) return true; // taxiway
     if (x > 20 && x < 100 && (Math.abs(z - RWY.len / 2 + 20) < 15 || Math.abs(z + RWY.len / 2 - 20) < 15 || Math.abs(z) < 15)) return true;

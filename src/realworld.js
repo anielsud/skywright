@@ -116,7 +116,7 @@ export const REAL_LOCATIONS = {
     // the stunt park: concrete, containers and graffiti on the open lawns of Liberty State Park, Jersey City (no buildings,
     // roads, water or tree canopy: stuntSite.js findSite), beside the water park; about lat 40.7044, lon -74.0452
     roadStart: { near: { lat: 40.7587, lon: -73.9787 }, maxClass: 1 }, // 'On the road': a Midtown Manhattan avenue (landStart.js)
-    stunts: { theme: 'urban', layout: 'compact', near: [-7650, 14350], r: 500, distW: 8, canopy: true, maxCanopy: 0.2, maxForest: 0.2, seed: 117 },
+    stunts: { theme: 'urban', layout: 'compact', near: [-7650, 14350], r: 500, distW: 8, canopy: true, maxCanopy: 0.2, maxForest: 0.2, seed: 117, x: -7685.4, z: 14364.7, yaw: 1.1870929182497219 }, // (x, z, yaw: where the search puts it in the browser, pinned: its tree-canopy rule reads the imagery, which Node can't, and the baked road layout (#294) is made in Node)
     satGain: 1.0, sat: { deshade: 0.2, detail: 0.3 }, // aerial photos (NAIP): little photo grass on top of them, less de-shading
     city: {
       // antenna masts / spires (top above the ground, m) on the tallest building at that point

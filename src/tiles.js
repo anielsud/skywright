@@ -107,6 +107,7 @@ export class TerrainTiles {
     yield* W.bakeMaps(Hp, R, pad, x0, z0, st, null, maps);
     const albedo = W.dataTex(maps.alb, TW, true), normal = W.dataTex(maps.nor, TW);
     const mat = terrainMaterial({ detailU: W.detailU, albedo, normal, shadow: this.white, shadowOn: 0, orig: new THREE.Vector2(x0 - st / 2, z0 - st / 2), span: T + st }, true);
+    W.layout?.clip(mat); // (a baked layout chunk across the core's edge draws its own ground there, #294)
     // mesh (normals and colour come from the baked maps)
     const pos = new Float32Array(n * n * 3);
     for (let b = 0; b < n; b++) for (let a = 0; a < n; a++) { const k = b * n + a; pos[k * 3] = x0 + a * 2 * st; pos[k * 3 + 1] = H[k]; pos[k * 3 + 2] = z0 + b * 2 * st; }

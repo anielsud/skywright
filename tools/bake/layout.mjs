@@ -6,7 +6,7 @@
 //   node --import ./tools/test/node/setup.mjs tools/bake/layout.mjs lauterbrunnen:-4,-3 nyc:-7,25:-6,25
 //     (place:all: every CHUNK-metre square with roads; or place:ix,iz[:ix,iz...]. A place's chunks are baked together:
 //     one height solve)
-// A chunk with the airport's roads, a stunt site, past the World's core, or that fails a check isn't baked: it keeps today's roads,
+// A chunk that fails a check isn't baked: it keeps today's roads,
 // listed in the index's fallback with why. Every baked chunk is checked the game's way (layout-check.mjs, on a worker
 // per core): fixed edges, cover, holes, tarmac drawn - physics, kerbs not physics, the markings on their street's centre
 // line (markcheck.mjs: within DRIFT_MAX), and each shared edge between two baked chunks, at every pair of levels. Writes each chunk as <ix>_<iz>.<hash>.bin.gz (hash: of its bytes) and the
@@ -21,7 +21,6 @@ import { bakeLayout } from '../../src/layout/bake.js';
 import { CHUNK, LAYOUT_V, decodeLayout } from '../../src/layout/format.js';
 import { latticeOf } from '../../src/layout/mesh.js';
 import { groundGrid, latticeHeights } from '../../src/layout/rules.js';
-import { RWY } from '../../src/world.js';
 import { DRIFT_MAX } from './markcheck.mjs';
 import { groundVsBase } from './groundcheck.mjs';
 
@@ -37,17 +36,9 @@ for (const a of args) {
     for (let s = 0; s < n; s++) { const x = p.x + (q.x - p.x) * s / n, z = p.z + (q.z - p.z) * s / n, k = key(Math.floor(x / CHUNK), Math.floor(z / CHUNK)); seen.set(k, (seen.get(k) || 0) + Math.hypot(q.x - p.x, q.z - p.z) / n);
       const b = rd.baked ? 'bridge' : rd.bridge?.[i] || rd.bridge?.[i + 1] || rd.span?.[i] || rd.span?.[i + 1] ? 'bridge' : rd.tube?.[i] || rd.tube?.[i + 1] ? 'tunnel' : null; if (b) (bt.get(k) || bt.set(k, new Set()).get(k)).add(b); } } } // (bt: the chunks with a bridge or a tunnel: baked, their decks and tubes today's (roads.js) at the layout's heights)
   const wanted = cs[0] === 'all' ? [...seen.keys()] : cs.map((c) => c.split(',').map(Number).join(','));
-  // (the airport: its runways, apron and roads are World's own ground, World.groundAt: the chunks about it keep today's)
-  for (const k of seen.keys()) { const [ix, iz] = k.split(',').map(Number), x0 = ix * CHUNK, z0 = iz * CHUNK; if (x0 < 700 && x0 + CHUNK > -500 && z0 < RWY.len / 2 + 400 && z0 + CHUNK > -RWY.len / 2 - 400) (why.get(k) || why.set(k, new Set()).get(k)).add('airport'); }
-  // (a stunt site's cut and what's past the World's core: ground the layout's natural ground doesn't know (the stunt
-  // site levelled; past the core, the streamed tiles' ground and no roads))
-  const cut = (x, z) => (world.stuntPlan?.cut || []).some((R) => { const ex = x - R.x, ez = z - R.z; return Math.abs(ex * R.c - ez * R.s) < R.hx && Math.abs(ex * R.s + ez * R.c) < R.hz; });
-  // (the marina's docks and the water park's ramps: their own solid ground at the shore, within 50 m of the chunk)
-  const sites = [...(world.marina ? [['marina', world.marina.cm]] : []), ...(world.waterParks?.sites || []).map((s) => ['water park', s.cm])];
-  for (const k of seen.keys()) { const [ix, iz] = k.split(',').map(Number), x0 = ix * CHUNK, z0 = iz * CHUNK, add = (w) => (why.get(k) || why.set(k, new Set()).get(k)).add(w);
-    if (world.half && (x0 < -world.half || z0 < -world.half || x0 + CHUNK > world.half || z0 + CHUNK > world.half)) add('outside the core');
-    let c = false; for (let x = x0 - 50; x <= x0 + CHUNK + 50 && !c; x += 10) for (let z = z0 - 50; z <= z0 + CHUNK + 50 && !c; z += 10) c = cut(x, z); if (c) add('stunt site');
-    for (const [name, cm] of sites) if (cm.hi[0] >= cm.lo[0] && x0 - 50 < cm.hi[0] && x0 + CHUNK + 50 > cm.lo[0] && z0 - 50 < cm.hi[2] && z0 + CHUNK + 50 > cm.lo[2]) add(name); }
+  // (every chunk with roads is baked: the airport's ground, the stunt sites' pads and the land past the World's core are
+  // all in the natural ground (rules.js groundNode: World.rawHeight); the marina's and water park's docks are their own
+  // solid meshes (World.surfs) over it)
   const fallback = new Map(), chunks = [];
   for (const k of wanted) { if (why.has(k)) fallback.set(k, [...why.get(k)].sort().join('+')); else if (seen.has(k)) chunks.push(k.split(',').map(Number)); }
   console.log(`${id}: ${wanted.length} chunks with roads; ${chunks.length} to bake, ${fallback.size} keep today's roads (${count([...fallback.values()])})`);

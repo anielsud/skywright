@@ -30,6 +30,10 @@ const SC = 10, PAD = 54; // (grid cell, m; how far from a road its segments are 
 // its road each side and DECK_DEPTH deep; a tube's walls TUBE_SIDE m out, its crown TUBE_H up; a portal's headwall
 // PORTAL_W m wider than the tube each side, PORTAL_TOP up, PORTAL_T thick (centred on the portal)
 export const DECK_SIDE = 1, DECK_DEPTH = 1.4, TUBE_SIDE = 1.2, TUBE_H = 5.6, PORTAL_W = 5, PORTAL_TOP = 11.6, PORTAL_T = 0.7;
+// with the layout on, a portal's headwall's wings reach PORTAL_FOOT m under the road (a retaining wall where the ground beside
+// the portal lies far under it) and a sill SILL m deep closes the floor's edge across the mouth (roads.js); a surface
+// within FLUSH m of the floor behind the mouth meets the tube's floor (no gap: a twin carriageway at grade beside it)
+export const PORTAL_FOOT = 12, SILL = 2, FLUSH = 0.3;
 const UNDER = 0.1, OVER = 0.3, HOLD = 10; // (the ground kept this far under a deck's underside, over a tube's crown)
 // a tunnel's portals, from the roads stopping at a tube (ends 2, 8): where (the road's end), which way into the hill (dx,
 // dz: the road's last segment's, and the tube's first's if it's stored: roads.js frames the headwall by both), the road's
