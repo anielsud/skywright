@@ -19,7 +19,8 @@ import { clamp, lerp } from './noise.js';
 import { applyLivery } from './liveries.js';
 import { mergeGeometries } from '../vendor/addons/BufferGeometryUtils.js';
 import { blendSkins, addTubObstacle } from './skinBlend.js';
-import { addCrew, crewLodGeos, CREW_LOD_ERR } from './crew.js';
+import { addCrew } from './crew.js';
+import { crewLodGeos, CREW_LOD_ERR } from './crewLod.js';
 import { routeGear, routeStruts } from './gearRoute.js';
 import { assembleCar } from './carDetail.js';
 import { fitOut } from './fitOut.js';
@@ -728,22 +729,26 @@ function navLight(obj, ctx) {
 const VIEW = { h: 800, low: false };
 export function setCrewView(h, tier) { VIEW.h = h || 800; VIEW.low = tier === 'low'; }
 // One per aircraft: hides the small near-only detail beyond a distance (the renderer calls update() for isLOD objects).
-// Vehicles that opt in (other players' planes: crewDetail()) also draw each person lighter as they get smaller on
-// screen: level k of a figure (crew.js crewLodGeos) is within CREW_LOD_ERR (metres) of the full one, and it's used
-// once that error is under 0.15 of a pixel (0.3 on Low), with a margin either way so it doesn't flicker between
-// levels. (Well under a pixel because clothes are layered a millimetre or two apart: a strap on a life vest goes
-// under the vest once the vest's surface may move by more than that, so the error has to be tiny where it shows.) Our own vehicle never does: it's always the full figure, in the cockpit and the chase view alike.
+// Vehicles that opt in (crewDetail(): other players' planes, and our own in flight) also draw each person lighter as
+// they get smaller on screen: level k of a figure (crewLod.js crewLodGeos) is within CREW_LOD_ERR (metres) of the full
+// one, and it's used once that error is under CREW_PX pixels (1, 1.5 on Low), with a margin either way so it doesn't
+// flicker between levels. Up close it's always the full figure: our own vehicle's people are full in its cockpit views
+// whatever their size, and the chase view zoomed right in draws the 6 mm level at most. At the usual chase distance a
+// light plane's pilot (about 40 px tall) draws its 15 mm level (35 mm on Low), a few thousand triangles instead of 58k,
+// and an airliner's crew, further off, the 35 mm one. (Below a pixel the layered clothes don't show the
+// simplification: a strap a millimetre or two over the vest may go under it, but only by a fraction of a pixel.)
 //
-// Posing follows the same opt-in (crewPose, from updateDetail before the frame is drawn, with the camera of the frame
+// Posing follows its own opt-in (crewDetail({ pose: true }), other players' planes only: our own crew is posed every
+// frame; crewPose, from updateDetail before the frame is drawn, with the camera of the frame
 // before): a vehicle off screen, or past where its people are hidden, isn't posed at all (the pose waits where it
 // was; margins all round, so it's posed again before it can be seen); one whose people are small on screen (under
 // POSE_FAR.px pixels a metre, a person under about 40 px tall; on Low under 40 px a metre, about 70 px tall) is posed
 // about 20 times a second instead of every frame, each time with all the time since the last, and without the arms' search for their
 // most comfortable angles (crew.js comfortArm keeps the last answer: the hands stay exactly on the controls).
-const POSE_FAR = { px: 25, low: 40, hz: 20 };
+const POSE_FAR = { px: 25, low: 40, hz: 20 }, CREW_PX = { px: 1, low: 1.5 };
 const _frus = new THREE.Frustum(), _pm = new THREE.Matrix4(), _poseSph = new THREE.Sphere();
 class DetailLOD extends THREE.Object3D {
-  constructor(items, radius) { super(); this.isLOD = true; this.autoUpdate = true; this.items = items; this.far = 40 + radius * 1.2; this.radius = radius; this.on = true; this._p = V(); this.figs = null; this.cam = null; this.poseDt = 0; }
+  constructor(items, radius) { super(); this.isLOD = true; this.autoUpdate = true; this.items = items; this.far = 40 + radius * 1.2; this.radius = radius; this.on = true; this._p = V(); this.figs = null; this.poseLod = false; this.cam = null; this.poseDt = 0; }
   // this frame: { dt } to pose with (the time since the last pose), or null to leave them be; coarse: skip the arms' search
   crewPose(dt) {
     this.poseDt += dt;
@@ -757,7 +762,10 @@ class DetailLOD extends THREE.Object3D {
     if (pxPerM < (VIEW.low ? POSE_FAR.low : POSE_FAR.px)) { if (this.poseDt < 1 / POSE_FAR.hz) return null; out.coarse = true; }
     this.poseDt = 0; return out;
   }
-  crewDetail() {
+  // pose: also pose the crew less often far away, not at all unseen (other players' planes); own: the player's vehicle,
+  // whose people are all full in its cockpit views
+  crewDetail({ pose = true, own = false } = {}) {
+    this.poseLod = pose; this.own = own;
     const by = new Map();
     for (const m of this.items) if (m.isSkinnedMesh && m.userData.crew && m.parent) { if (!by.has(m.parent)) by.set(m.parent, []); by.get(m.parent).push({ m, geos: crewLodGeos(m) }); }
     this.figs = [...by].map(([root, meshes]) => ({ root, meshes, level: 0 }));
@@ -769,12 +777,15 @@ class DetailLOD extends THREE.Object3D {
     const on = this.on ? d < this.far * 1.1 : d < this.far * 0.9;
     if (on !== this.on) { this.on = on; for (const m of this.items) m.visible = on; }
     if (this.figs && on && camera.isPerspectiveCamera) {
-      const pxPerM = VIEW.h * (camera.zoom || 1) / (2 * Math.tan(camera.fov * Math.PI / 360)), lim = VIEW.low ? 0.3 : 0.15;
+      const pxPerM = VIEW.h * (camera.zoom || 1) / (2 * Math.tan(camera.fov * Math.PI / 360)), lim = VIEW.low ? CREW_PX.low : CREW_PX.px;
       for (const f of this.figs) {
         const r = this._p.setFromMatrixPosition(f.root.matrixWorld).distanceTo(camera.position), s = f.root.matrixWorld.getMaxScaleOnAxis(), px = (e) => (e * s * pxPerM) / Math.max(r, 0.1);
         let lv = f.level;
-        while (lv < CREW_LOD_ERR.length && px(CREW_LOD_ERR[lv]) < lim * 0.9) lv++; // (CREW_LOD_ERR[lv]: level lv+1's error)
-        while (lv > 0 && px(CREW_LOD_ERR[lv - 1]) > lim * 1.1) lv--;
+        if (this.own && camera.userData.cockpit) lv = 0;
+        else {
+          while (lv < CREW_LOD_ERR.length && px(CREW_LOD_ERR[lv]) < lim * 0.9) lv++; // (CREW_LOD_ERR[lv]: level lv+1's error)
+          while (lv > 0 && px(CREW_LOD_ERR[lv - 1]) > lim * 1.1) lv--;
+        }
         if (lv !== f.level) { f.level = lv; for (const x of f.meshes) if (x.geos.includes(x.m.geometry)) x.m.geometry = x.geos[lv]; } // (one swapped by anything else is left alone)
       }
     }
@@ -969,7 +980,7 @@ export function updateDetail(ac, dt) {
   let crewMoving = false;
   bikeSync(ac); // bike forks steer and slide, swingarms swing (before the riders reach for the bars)
   const gW = specificForce(ac, dt); // (what the seat pushes the crew with, world frame, in g: they sway against it)
-  const pose = D.lod?.figs ? D.lod.crewPose(dt) : { dt, coarse: false }; // (other players' crews: less often far away, not at all unseen)
+  const pose = D.lod?.poseLod ? D.lod.crewPose(dt) : { dt, coarse: false }; // (other players' crews: less often far away, not at all unseen)
   const ground = ac.onGround && (ac.ctl.throttle || 0) < 0.1 && spd > 6 ? 1 : 0;
   for (const p of ac.parts) {
     if (!p.alive) continue;
