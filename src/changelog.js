@@ -2,6 +2,10 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.211.0', items: [
+    "City rooftops are lighter to draw: water tanks and rooftop huts are now stamped copies instead of being built one by one.",
+    "The faraway land beyond the city costs less to draw: only the part in front of you is drawn.",
+  ] },
   { v: '1.210.0', items: [
     "Behind the scenes: the new smooth road surface now covers most of New York in testing.",
   ] },
