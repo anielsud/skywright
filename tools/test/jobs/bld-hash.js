@@ -26,7 +26,7 @@ export function hashArrays(arrays, h = 0x9747b28c) {
   }
   return (h >>> 0).toString(16).padStart(8, '0');
 }
-const geoArrays = (g) => [...Object.keys(g.attributes).sort().map((k) => g.attributes[k].array), g.index?.array];
+const geoArrays = (g) => [...Object.keys(g.attributes).sort().map((k) => g.attributes[k].array), g.index?.array]; // (atl, color, dmg, normal, position, uv, index)
 const combine = (hs) => hashArrays([new TextEncoder().encode(hs.join(','))]);
 
 // Hooks MeshW.mesh (the arrays as written, before the GPU upload empties them) and buildLowStep (each low tile built,
@@ -48,11 +48,23 @@ export function install() {
   rec.uninstall = () => { MeshW.prototype.mesh = mesh; CityScenery.prototype.buildLowStep = step; };
   return rec;
 }
-export function tallHash(city, rec) { // (each 2 km group's arrays as its writer wrote them: the far mesh, before its index is cut down; the cell meshes share its vertices)
-  const hs = (city.tallGroups || city.tallMeshes).map((g) => hashArrays(rec.meshes.get(g.m)) + ':' + g.lv.join('/') + '/' + g.main + '/' + g.all);
+// (a group's near buildings: the first nearN vertices of its writer's arrays, the far copies' own vertices after them
+// (realCity.js farBuilding), its index as it would be written for nearN vertices: the same bytes as before the far copies)
+const nearArrays = (A, nearN) => {
+  if (nearN == null) return A;
+  const keys = ['atl', 'color', 'dmg', 'normal', 'position', 'uv'], N = A[keys.indexOf('position')].length / 3;
+  return A.map((a, i) => (i < keys.length ? a.subarray(0, (a.length / N) * nearN) : nearN <= 65535 && !(a instanceof Uint16Array) ? Uint16Array.from(a) : a));
+};
+export function tallHash(city, rec) { // (each 2 km group's arrays as its writer wrote them, before its index went into the cells' meshes; the cell meshes share its vertices)
+  const hs = (city.tallGroups || city.tallMeshes).map((g) => hashArrays(nearArrays(rec.meshes.get(g.m), g.nearN)) + ':' + g.lv.join('/') + '/' + g.main + '/' + g.all);
   return { n: hs.length, hash: combine(hs) };
 }
 // every other mesh MeshW wrote so far (the landmarks: realLandmarks.js), in the order written
+// the far copies' own vertices (realCity.js farBuilding): info (made the same way every run)
+export function farHash(city, rec) {
+  const hs = (city.tallGroups || []).map((g) => { const A = rec.meshes.get(g.m), N = A[4].length / 3; return hashArrays(A.slice(0, 6).map((a) => a.subarray((a.length / N) * g.nearN))); });
+  return { n: hs.length, hash: combine(hs), tris: city.farStats?.tris ?? 0 };
+}
 export function otherHash(city, rec) {
   const tall = new Set([...(city.tallGroups || []), ...city.tallMeshes].map((g) => g.m)), hs = [];
   for (const r of rec.list) { const m = r.deref(); if (m && !tall.has(m) && !rec.lows.has(m) && rec.meshes.has(m)) hs.push(hashArrays(rec.meshes.get(m))); }
@@ -99,6 +111,7 @@ export async function run(T) {
     await T.step('nyc: build, hash the tall buildings', async () => {
       await T.start('Kestrel', 'nyc'); C = T.S.F.world.towns.city;
       const h = tallHash(C, rec), o = otherHash(C, rec); T.log(`BLDHASH tall ${h.hash} (${h.n} meshes, ${C.stats.tall} buildings) msTall ${C.msTall.toFixed(0)} ms`); T.log(`BLDHASH other ${o.hash} (${o.n} meshes: landmarks)`);
+      const f = farHash(C, rec); T.log(`BLDHASH far ${f.hash} (${f.n} groups, ${Math.round(f.tris)} far triangles; info) farMs ${C.farStats?.ms.toFixed(0)} ms`);
     });
     await T.step('nyc: stream Battery to Harlem, hash the low tiles', async () => {
       const S = T.S, F = S.F; F.paused = true; rec.lowMs = 0;

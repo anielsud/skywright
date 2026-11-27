@@ -42,7 +42,7 @@ export async function run(T) {
   // every building mesh: [mesh, x, z, kind] (furn: the roof furniture's instances, realCity.js FurnK)
   const furn = (L) => (L || []).map((f) => [f, f.position.x + f.boundingSphere.center.x, f.position.z + f.boundingSphere.center.z, 'furn']);
   const meshes = () => [
-    ...(city.tallGroups || []).map((g) => [g.m, g.x, g.z, 'tall']), ...city.tallMeshes.map((g) => [g.m, g.x, g.z, 'tall']),
+    ...(city.tallGroups || []).map((g) => [g.fm || g.m, g.x, g.z, 'tall']), ...city.tallMeshes.map((g) => [g.m, g.x, g.z, 'tall']), ...city.tallMeshes.filter((g) => g.fm).map((g) => [g.fm, g.x, g.z, 'tall']),
     ...[...city.tiles.values()].flatMap((t) => (t.meshes || []).map((m) => [m, m.position.x, m.position.z, 'low'])),
     ...(city.tallGroups || []).flatMap((g) => furn(g.furn)), ...[...city.tiles.values()].flatMap((t) => furn(t.furn)),
   ];
