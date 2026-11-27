@@ -20,7 +20,9 @@ function hiGrid(id) { // the hi grid as realworld.js decodes it: uint16 (h + 200
 
 export async function runCase(c) {
   const dir = `assets/real/${c.place}/layout/`, idx = JSON.parse(readFileSync(dir + 'index.json', 'utf8')), G = hiGrid(c.place), out = [], meshes = new Map();
-  for (const e of idx.chunks) {
+  // (a sample: the first test chunks, side by side, and Lauterbrunnen's; every chunk is checked by the bake, tools/bake/layout.mjs)
+  const SAMPLE = new Set(['-7,25', '-6,25', '-4,-3']);
+  for (const e of idx.chunks.filter((e) => SAMPLE.has(e.ix + ',' + e.iz))) {
     const gz = readFileSync(dir + e.file), name = `${c.place} ${e.ix},${e.iz}`, buf = gunzipSync(gz), L = decodeLayout(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
     out.push({ name: `${name}: its file is named by its bytes`, ok: e.file === `${e.ix}_${e.iz}.${createHash('sha256').update(gz).digest('hex').slice(0, 10)}.bin.gz`, why: e.file });
     const grid = { x0: G.x0, z0: G.z0, sp: G.sp }, { i0, j0, ni, nj } = latticeOf(L, grid), lat = new Float32Array(ni * nj); for (let j = 0; j < nj; j++) for (let i = 0; i < ni; i++) lat[j * ni + i] = G.H[(j0 + j) * G.n + i0 + i];
@@ -32,12 +34,12 @@ export async function runCase(c) {
     for (let q = 0; q < m.tk.length; q++) { const v = [I[q * 3], I[q * 3 + 1], I[q * 3 + 2]];
       if (m.tk[q] === KIND.tarmac) for (const k of v) if (Math.abs(Y[k] - P[k * 3 + 1]) > 1e-4) off++;
       if (m.tk[q] === KIND.kerb) for (let r = 0; r < 3; r++) { // (the steepest physics rise along an edge of the kerb's strip: a 15 cm step over its 10 cm would be ~1.5; a plane through a sliver's three corners says nothing)
-        const u = v[r], w = v[(r + 1) % 3], l = Math.hypot(P[u * 3] - P[w * 3], P[u * 3 + 2] - P[w * 3 + 2]); if (l >= 0.02) step = Math.max(step, Math.abs(Y[u] - Y[w]) / l); } }
+        const u = v[r], w = v[(r + 1) % 3], l = Math.hypot(P[u * 3] - P[w * 3], P[u * 3 + 2] - P[w * 3 + 2]); const top = (q) => P[q * 3 + 1] - Y[q] > 0.1, gut = (q) => Math.abs(P[q * 3 + 1] - Y[q]) < 1e-4; if (l < 0.5 && ((top(u) && gut(w)) || (top(w) && gut(u)))) step = Math.max(step, Math.abs(Y[u] - Y[w])); } } // (across the kerb: a gutter's point to a top's) // (the largest physics rise along a short edge of the kerb's strip: drawn it's 0.15 m)
     out.push({ name: `${name}: on the tarmac physics is what's drawn`, ok: off === 0, why: `${off} tarmac corners off` });
-    out.push({ name: `${name}: a kerb is never physics`, ok: step < 0.35, why: `steepest physics slope on a kerb ${step.toFixed(2)} (a step would be ~1.5; the streets are graded to 0.2)` });
+    out.push({ name: `${name}: a kerb is never physics`, ok: step <= 0.05, why: `largest physics rise across a kerb ${step.toFixed(3)} m (drawn 0.15)` });
   }
   // chunks side by side: the shared edge's segments, positions and heights, the same from both sides at every pair of levels
-  for (const e of idx.chunks) { const b = meshes.get(e.ix + 1 + ',' + e.iz), a = meshes.get(e.ix + ',' + e.iz); if (!b) continue;
+  for (const e of idx.chunks.filter((e) => meshes.has(e.ix + ',' + e.iz))) { const b = meshes.get(e.ix + 1 + ',' + e.iz), a = meshes.get(e.ix + ',' + e.iz); if (!b) continue;
     const X = (e.ix + 1) * idx.size, segs = (m) => { const s = new Set(), P = m.pos, I = m.idx; for (let q = 0; q < I.length; q += 3) for (let r = 0; r < 3; r++) { const u = I[q + r], v = I[q + (r + 1) % 3]; if (P[u * 3] === X && P[v * 3] === X) s.add([[P[u * 3 + 2], P[u * 3 + 1]], [P[v * 3 + 2], P[v * 3 + 1]]].sort((p, q) => p[0] - q[0]).join('|')); } return s; };
     for (const [la, lb] of [['fine', 'fine'], ['fine', 'coarse'], ['coarse', 'fine']]) { const A = segs(a[la]), B = segs(b[lb]), miss = [...A].filter((k) => !B.has(k)).length + [...B].filter((k) => !A.has(k)).length;
       out.push({ name: `${c.place} ${e.ix},${e.iz} | ${e.ix + 1},${e.iz}: their edge meets (${la} | ${lb})`, ok: A.size > 0 && miss === 0, why: `${A.size} and ${B.size} segments, ${miss} unmatched` }); }
