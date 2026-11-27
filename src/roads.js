@@ -726,7 +726,9 @@ export function buildRoadMeshes(w, net) {
       for (const [p, r, out] of [[A, ra, i === 0 || !rd.tube[i - 1]], [B, rb, i + 2 >= n || !rd.tube[i + 2]]]) {
         if (!out) continue;
         const W = hw + 5, top = H + 6, t = 0.7, d = new THREE.Vector3(-r.z, 0, r.x), wall = (o0, o1, y0, y1) => { const g = new THREE.BoxGeometry(o1 - o0, y1 - y0, t); g.rotateY(Math.atan2(r.x, r.z) + Math.PI / 2); g.translate(p.x + r.x * (o0 + o1) / 2, p.y + (y0 + y1) / 2, p.z + r.z * (o0 + o1) / 2); tubeGeos.push(g); };
-        wall(-W, -hw, -3, top); wall(hw, W, -3, top); wall(-hw, hw, H, top); void d; // (down to 3 m under the road: the baked layout's ground beside a portal can lie a little under it, rules.js PORTAL_*)
+        const foot = w.layout ? 12 : 3; // (down to 3 m under the road: the baked layout's ground beside a portal can lie a little under it, rules.js PORTAL_*; with the layout on, 12 m (PORTAL_FOOT): a retaining wall where the ground beside lies far under the road)
+        wall(-W, -hw, -foot, top); wall(hw, W, -foot, top); wall(-hw, hw, H, top); void d;
+        if (w.layout) wall(-hw, hw, -2, -0.05); // (and a sill under the floor across the mouth, rules.js SILL: a surface behind it a little under the floor meets it)
       }
     }
     if (pos.length) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.computeVertexNormals(); tubeGeos.push(g); }

@@ -4,7 +4,8 @@
 // with the terrain's own material, the streets with the layout's and today's pavement), and physics (World.sampleGrid /
 // groundAt) reading its fine mesh. Inside an active chunk, today's roads, kerbs, junction boxes, pavements and ground
 // (coarse, patch and detail) don't draw (clip: a mask of the active chunks their shaders read); where an active chunk
-// meets today's ground (a chunk not baked: the airport, past the core, no roads; or not in yet). Bridges' decks and tunnels' tubes stay today's (roads.js), the layout meeting them at their heights, a skirt closes the gap.
+// meets today's ground (a chunk not baked: no roads, or failed a check; or not in yet). The airfield's runways, apron and
+// landside road, the stunt sites' pads and the land past the core are in the natural ground (rules.js groundNode). Bridges' decks and tunnels' tubes stay today's (roads.js), the layout meeting them at their heights, a skirt closes the gap.
 import * as THREE from 'three';
 import { decodeLayout, KIND } from './format.js';
 import { meshChunk, physIndex, physAt, latticeOf } from './mesh.js';
@@ -230,6 +231,8 @@ export class Layout {
     const o = this.out, c = this.active.get(Math.floor(x / this.size) + ',' + Math.floor(z / this.size)); if (!c) return null;
     const h = physAt(c.L, c.m.fine, c.phys, x, z, o); if (!(h === h)) return null;
     const k = c.m.fine.tk[o[0]], w = this.w, n = new THREE.Vector3(o[1], o[2], o[3]), lot = k <= KIND.bank && w.cityD && w.cityPaved(x, z) > 0.5 && w.real.bare(x, z); // (a city's paved lots, as World.groundAt says)
+    const air = k <= KIND.bank && w.airfieldPaved?.(x, z); // (the airfield's runways, taxiways and apron: their meshes over this ground, World.groundAt's 'runway', at least runway height)
+    if (air) return { h: Math.max(h, w.loc.rwyH), n: new THREE.Vector3(0, 1, 0), type: 'runway' };
     const type = k === KIND.verge || k === KIND.gravel ? 'sand' : k >= KIND.tarmac || lot ? 'runway' : n.y < 0.8 ? 'rock' : w.loc.desert && !(w.real && w.real.forest(x, z) > 0.45) ? 'sand' : 'grass'; // (a desert's ground: sand, but pine needles under the rims' forests, as World.groundAt)
     return { h, n: type === 'runway' ? new THREE.Vector3(0, 1, 0) : n, type };
   }
