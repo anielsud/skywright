@@ -760,6 +760,9 @@ How shaders are kept from stalling a frame (#273):
   sway amount) that only picks a snippet is a uniform, and its customProgramCacheKey names only what changes the GLSL
   (flora.js vegPatch, cabKit.js cabFinish, crew.js crewPatch, bubbleCockpit.js relief). `python3 tools/test/jobs.py
   progs --quality low` counts the programs each place's start compiles, by family (tools/test/jobs/progs.js).
+- **A shadow caster's depth shader doesn't depend on its map unless it alpha-tests** (shaders.js installFog, #287):
+  three's shared depth material otherwise compiled a mapped copy of the same shader whenever draw order handed it a
+  textured caster first, mid-flight.
 - Give custom materials a `name`: the checks print it.
 
 Every job step fails on a **stall** (a program compiled during a frame's draw: `[shaders] N compiled in flight,
