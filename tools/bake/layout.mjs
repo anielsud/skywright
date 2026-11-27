@@ -18,10 +18,12 @@ import { cpus } from 'node:os';
 import { Worker } from 'node:worker_threads';
 import { worldAt } from '../test/node/world.mjs';
 import { bakeLayout } from '../../src/layout/bake.js';
-import { CHUNK, LAYOUT_V } from '../../src/layout/format.js';
+import { CHUNK, LAYOUT_V, decodeLayout } from '../../src/layout/format.js';
 import { latticeOf } from '../../src/layout/mesh.js';
+import { groundGrid, latticeHeights } from '../../src/layout/rules.js';
 import { RWY } from '../../src/world.js';
 import { DRIFT_MAX } from './markcheck.mjs';
+import { groundVsBase } from './groundcheck.mjs';
 
 const args = process.argv.slice(2);
 if (!args.length) { console.error(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).join('\n')); process.exit(1); }
@@ -52,8 +54,7 @@ for (const a of args) {
   // ---- the bake (one height solve for them all)
   const r = bakeLayout(world, chunks, (...m) => { if (!/^\s+\[layout\]\s{3}/.test(m[0])) console.log(...m); }), tc = performance.now();
   // ---- the checks, the game's way, a worker per core
-  const H = world.real.hi, grid = { x0: H.x0, z0: H.z0, sp: H.sp, wl: world.loc.shore ? world.waterLevel : -Infinity }, jobs = r.chunks.map(({ ix, iz, bytes }) => { const L = { x0: ix * CHUNK, z0: iz * CHUNK, size: CHUNK }, lat = latticeOf(L, grid), G = new Float32Array(lat.ni * lat.nj);
-    for (let j = 0; j < lat.nj; j++) for (let i = 0; i < lat.ni; i++) G[j * lat.ni + i] = H.H[Math.max(0, Math.min(H.n - 1, lat.j0 + j)) * H.n + Math.max(0, Math.min(H.n - 1, lat.i0 + i))];
+  const grid = groundGrid(world), jobs = r.chunks.map(({ ix, iz, bytes }) => { const G = latticeHeights(world, grid, latticeOf({ x0: ix * CHUNK, z0: iz * CHUNK, size: CHUNK }, grid)); // (the natural ground as the runtime's: Layout.lattice)
     return { ix, iz, buf: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), G }; });
   const N = Math.max(1, Math.min(cpus().length - 1, Math.ceil(jobs.length / 4))), parts = Array.from({ length: N }, () => []); jobs.forEach((j, q) => parts[q % N].push(j));
   const results = (await Promise.all(parts.map((p) => new Promise((res, rej) => { const wk = new Worker(new URL('./layout-check.mjs', import.meta.url)); wk.once('message', (m) => { res(m); wk.terminate(); }); wk.once('error', rej); wk.postMessage({ jobs: p, grid }); })))).flat();
@@ -92,6 +93,8 @@ for (const a of args) {
   console.log(`  mesh ms fine ${st((c) => c.fine.ms)} (outlines ${st((c) => c.fine.outlineMs)}); coarse ${st((c) => c.coarse.ms)}; triangles fine ${st((c) => c.fine.tris)}`);
   console.log(`  wall: World ${((tb - t0) / 1000).toFixed(1)} s, bake ${((tc - tb) / 1000).toFixed(1)} s, checks ${((td - tc) / 1000).toFixed(1)} s on ${N} workers, files ${((performance.now() - td) / 1000).toFixed(1)} s`, JSON.stringify(r.stats.solve), JSON.stringify(r.stats.inChunk), JSON.stringify(r.stats.overGrade));
   console.log('  furthest from the ground, in the chunks:', JSON.stringify(r.stats.worstIn));
+  { const gb = groundVsBase(world, r.chunks.filter(({ ix, iz }) => !failed.has(key(ix, iz))).map(({ bytes }) => decodeLayout(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))), grid, (L, lat) => latticeHeights(world, grid, lat));
+    const f = (s) => `max ${s.max} m, p99 ${s.p99} m over ${s.n} (worst ${JSON.stringify(s.worst)})`; console.log(`  ground vs today's terrain base outside the banks: at the hi grid's points ${f(gb.nodes)}; every 10 m ${f(gb.pts)}`); }
 }
 process.exit(process.exitCode || 0);
 function count(list) { const m = new Map(); for (const v of list) m.set(v, (m.get(v) || 0) + 1); return [...m].map(([k, n]) => `${n} ${k}`).join(', '); }

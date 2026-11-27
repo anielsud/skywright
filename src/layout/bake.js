@@ -1,6 +1,6 @@
 // The bake of the road layout (#294): everything about the roads' shape is decided here, once, for an area of chunks,
 // and stored per chunk (format.js); the game only joins the points (mesh.js). Run by tools/bake/layout.mjs on a real
-// place's World (its road network, junctions and natural ground, World.real.height).
+// place's World (its road network, junctions and natural ground, rules.js naturalGround: today's terrain base without the roads' carving).
 //
 //  1. network: the street network and the ways off it near the area, resampled (<= SEG m), with the points where roads
 //     cross without a shared node tied together (they meet at one height)
@@ -12,6 +12,7 @@
 //     Everything else (heights, the reshaped ground, the markings' coordinates) the game works out with rules.js.
 import CL from '../../vendor/layout/clipper1.mjs';
 import { CHUNK, KIND, RKINDS, encodeLayout, stations } from './format.js';
+import { naturalGround } from './rules.js';
 
 const PIN_W = 1e4, SEG = 8, MARGIN = 150, ARC = 8, SIMPLIFY = 25, SHAPE_TOL = 15, EDGE_STEP = 4, NET_PAD = 75; // (NET_PAD: the network stored with a chunk reaches this far past it: past every rule's reach, rules.js)
 const PAVE = { main: 4.5, street: 3.5 }; // (as roadgrade.js: a city street's pavement, a country road's verge)
@@ -35,7 +36,7 @@ const RELAX_OFF = 2, RELAX_HOPS = 3, RELAX_MAX = 1, RELAX_WG = 1, RELAX_ROUNDS =
 const cm = (v) => Math.round(v * 100);
 
 export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
-  const T = {}, tic = (k, t0) => { T[k] = (T[k] || 0) + performance.now() - t0; log(`  [layout] ${k} ${Math.round(T[k])} ms`); }, city = !!w.loc.city, g = (x, z) => w.real.height(x, z), wl = w.loc.shore ? w.waterLevel : -Infinity;
+  const T = {}, tic = (k, t0) => { T[k] = (T[k] || 0) + performance.now() - t0; log(`  [layout] ${k} ${Math.round(T[k])} ms`); }, city = !!w.loc.city, g = naturalGround(w), wl = w.loc.shore ? w.waterLevel : -Infinity;
   const ix0 = Math.min(...chunks.map((c) => c[0])), ix1 = Math.max(...chunks.map((c) => c[0])), iz0 = Math.min(...chunks.map((c) => c[1])), iz1 = Math.max(...chunks.map((c) => c[1]));
   const R = { x0: ix0 * CHUNK - MARGIN, x1: (ix1 + 1) * CHUNK + MARGIN, z0: iz0 * CHUNK - MARGIN, z1: (iz1 + 1) * CHUNK + MARGIN }, inR = (p, m = 0) => p.x > R.x0 - m && p.x < R.x1 + m && p.z > R.z0 - m && p.z < R.z1 + m;
   // ---- 1. network

@@ -173,6 +173,25 @@ export function makeRules(net, g, city, wl = -Infinity) {
   return { base, drawn, ground, road, roadOn, lineOn, bends, nearest, nearest2, lot, junction, region, portals };
 }
 
+// The natural ground: today's terrain base without the roads' carving, at the hi grid's points (World.rawHeight: the real
+// heights with the airport's apron, the road out to its gate and the stunt sites' levelled pads; World.shoreSnap: no
+// ground within decimetres of the water). The game's terrain shapes the same base before roads.js carves it; the layout
+// samples it at the hi grid's points (11.7 m in the islands; today's grid is the quality's, 14-57 m), bilinear between.
+// The bake (its solve, and the meshes it checks) and the runtime both read it from the World through these.
+export const groundGrid = (w) => { const H = w.real.hi; return { x0: H.x0, z0: H.z0, sp: H.sp, wl: w.loc.shore ? w.waterLevel : -Infinity }; };
+export const groundNode = (w, grid, i, j) => w.shoreSnap(w.rawHeight(grid.x0 + i * grid.sp, grid.z0 + j * grid.sp));
+// the natural ground's heights at a chunk's lattice (latticeOf)
+export function latticeHeights(w, grid, lat) {
+  const G = new Float32Array(lat.ni * lat.nj); for (let j = 0; j < lat.nj; j++) for (let i = 0; i < lat.ni; i++) G[j * lat.ni + i] = groundNode(w, grid, lat.i0 + i, lat.j0 + j);
+  return G;
+}
+// the natural ground anywhere (the bake's solve): bilinear over the same points, each worked out once
+export function naturalGround(w) {
+  const grid = groundGrid(w), memo = new Map(), node = (i, j) => { const k = i * 1048576 + j; let v = memo.get(k); if (v === undefined) memo.set(k, (v = groundNode(w, grid, i, j))); return v; };
+  return (x, z) => { const fx = (x - grid.x0) / grid.sp, fz = (z - grid.z0) / grid.sp, i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j;
+    return (node(i, j) * (1 - u) + node(i + 1, j) * u) * (1 - v) + (node(i, j + 1) * (1 - u) + node(i + 1, j + 1) * u) * v; };
+}
+
 // the natural ground from the hi grid's points around a chunk (lat: i0, j0, ni, nj; G their heights): bilinear, as the
 // World's (realworld.js sampleH)
 export function latticeGround(grid, lat, G) {
