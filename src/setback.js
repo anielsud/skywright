@@ -426,7 +426,7 @@ const clamp01 = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);
 //    a face may stand more than FOOT.out past the walls (the face moves in if one does);
 //  - a box inside another goes. Where two meet, a car is never pushed out of one into the other (aircraft.js).
 // -> [{ x, z, ux, uz, hl, hw }] (the building's own frame's first), or null.
-export const FOOT = { step: 1, slant: 0.3, cells: 2000, max: 12, frames: 4, strips: 6, cover: 0.97, grow: 0.5, out: 1, eager: 10000, retry: 0.93, fine: { step: 0.5, max: 32, edge: 1, crumbs: 0.5, cover: 0.99, grow: 0.5, frames: 6 } }; // (eager: m2, a footprint so big its boxes are worked out at load, lazyParts)
+export const FOOT = { step: 1, slant: 0.3, cells: 2000, max: 12, frames: 4, strips: 6, cover: 0.97, grow: 0.5, out: 1, eager: 10000, retry: 0.95, fine: { step: 0.5, max: 32, edge: 1, crumbs: 0.5, cover: 0.99, grow: 0.5, frames: 6, turn: 3 }, tile: 60, tiled: 1500 }; // (eager: m2, a footprint so big its boxes are worked out at load, lazyParts; tile: m, the squares a big one the fine pass leaves under 90% is cut into, tiled: from how big, m2, tiledBoxes)
 const D8 = (8 * Math.PI) / 180, D3 = (3 * Math.PI) / 180, Q90 = Math.PI / 2;
 const turn = (a, b) => { const d = Math.abs(a - b) % Q90; return Math.min(d, Q90 - d); }; // (between two wall directions, mod 90 degrees)
 // a footprint in a frame (fx, fz): its rings in (u, v), and a grid of cells on its own lines: through every corner
@@ -486,15 +486,94 @@ const toWorld = (G, cu, cv, au, av, hl, hw) => ({ x: cu * G.fx - cv * G.fz, z: c
 // A footprint the first pass leaves under FOOT.retry covered (sampled, not by cells: a spiky tower, a curved front, a
 // sliver of a trapezoid; its walls run off the 1 m grid, or it needs more than FOOT.max boxes) gets a second, finer pass
 // (FOOT.fine: every slanted wall cut every half metre in every frame, up to 6 frames and 32 boxes, smaller crumbs taken,
-// faces checked against FOOT.out every metre instead of at their quarters, and a box past it dropped), kept if it covers
-// more. Only those few hundred buildings pay for it, in time and in boxes; not the huge ones boxed at load.
-export function footBoxes(P, holes, ux, uz) {
-  const B = footPass(P, holes, ux, uz, null);
-  if (!B || !(B.cov < FOOT.retry) || !FOOT.fine || B.area > FOOT.eager) return B; // (not a huge one: boxed at load, a fine pass there is 3-60 ms each, ~0.2 s more on New York's load)
-  const F = footPass(P, holes, ux, uz, FOOT.fine);
-  return F && F.cov > B.cov + 0.01 ? F : B;
+// a wing turned 3 degrees off the rest, or one with walls from 2 m long, a frame of its own, faces checked against FOOT.out every metre instead of at their
+// quarters, and a box past it dropped), kept if it covers more. Only those few hundred buildings pay for it, in time and
+// in boxes. A big one (over FOOT.tiled) still under 90% then (a campus of wings, a block of courtyards: more than 32
+// boxes' worth) is cut into FOOT.tile squares, each boxed on its own (tiledBoxes): B.refine says so, and its owner has
+// a Refiner do it a piece at a time in a frame's spare time, these boxes standing till then. A huge one (over
+// FOOT.eager: boxed at load) goes straight there after its first pass.
+export function footBoxes(P, holes, ux, uz, tiles = true, pre = null, quick = false) {
+  if (pre) return footPass(P, holes, ux, uz, FOOT.fine, pre); // (more boxes, for what pre leaves bare: fillBare)
+  const B = footPass(P, holes, ux, uz, null, null, quick);
+  if (!B || !(B.cov < (quick ? 0.93 : FOOT.retry) || B.dropped) || !FOOT.fine) return B; // (quick: as before, at load)
+  if (B.area > FOOT.eager && tiles) { B.refine = true; return B; } // (the fine pass on one is 3-60 ms, ~0.2 s more on New York's load)
+  let F = footPass(P, holes, ux, uz, FOOT.fine); F = F && F.cov > B.cov + 0.01 ? F : B;
+  if (F.cov < 0.9 && !quick && !(tiles && F.area > FOOT.tiled)) { // (a small one still bare (a big one is cut into squares, below): the fine pass again starting in the frames of its longest walls that run some other way, up to 3; the frame it starts in decides what it takes first)
+    const E = []; for (let k = 0, m = P.length - 1; k < P.length; m = k++) { const dx = P[k][0] - P[m][0], dz = P[k][1] - P[m][1], l = Math.hypot(dx, dz); if (l > 1) E.push([l, dx / l, dz / l]); }
+    E.sort((a, b) => b[0] - a[0]); const tried = [Math.atan2(uz, ux)];
+    for (const [, ex, ez] of E) {
+      const a = Math.atan2(ez, ex); if (tried.length > 3 || tried.some((b) => turn(a, b) <= D3)) continue; tried.push(a);
+      const G = footPass(P, holes, ex, ez, FOOT.fine); if (G && G.cov > F.cov + 0.01) F = G;
+    }
+  }
+  if (tiles && F.cov < 0.9 && F.area > FOOT.tiled) F.refine = true; // (cut into squares: a Refiner's job, after these, 10-25 ms is a hitch when a car first comes near)
+  return F;
 }
-function footPass(P, holes, ux, uz, fine) {
+// A building's boxes kept off the street (fit: setback.js fitBox each; one moved in off it can leave a slice of the
+// building bare, a slanted front's wedge): more boxes for what's bare, kept off it too. -> the boxes
+export function fillBare(P, holes, ux, uz, B, fit) {
+  const F = B.map(fit); if (!F.some((f) => f.fit) || B.area > FOOT.eager) return F; // (not a huge one boxed at load: the fine pass there is too slow)
+  const more = footPass(P, holes, ux, uz, FOOT.fine, F); return more ? F.concat(more.map(fit)) : F;
+}
+// A big footprint cut into squares FOOT.tile across (in the building's frame), each piece's boxes (footBoxes) inside
+// it: a piece is a few wings, boxed on a fine grid of its own (the whole one's grid is FOOT.cells cells, metres across
+// on a campus). Then boxes in one frame that share a whole face (a wing across a cut) are one box again.
+// -> boxes, cov: the pieces' covers weighted by area. tiledSteps: the same a piece at a time (a Refiner's job).
+export function tiledBoxes(P, holes, ux, uz) { const it = tiledSteps(P, holes, ux, uz); let r; do r = it.next(); while (!r.done); return r.value; }
+export function* tiledSteps(P, holes, ux, uz) {
+  holes = holes || [];
+  let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+  for (const p of P) { const u = p[0] * ux + p[1] * uz, v = -p[0] * uz + p[1] * ux; if (u < u0) u0 = u; if (u > u1) u1 = u; if (v < v0) v0 = v; if (v > v1) v1 = v; }
+  const T = FOOT.tile, nu = Math.max(1, Math.round((u1 - u0) / T)), nv = Math.max(1, Math.round((v1 - v0) / T)), su = (u1 - u0) / nu, sv = (v1 - v0) / nv, out = [];
+  const cut = (R, ua, ub, va, vb) => { let Q = clip(R, ux, uz, 0, 0, ua); if (Q.length >= 3) Q = clip(Q, -ux, -uz, 0, 0, -ub); if (Q.length >= 3) Q = clip(Q, -uz, ux, 0, 0, va); if (Q.length >= 3) Q = clip(Q, uz, -ux, 0, 0, -vb); WORK.verts += R.length * 4; return Q.length >= 3 && Math.abs(area(Q)) > 0.05 ? Q : null; };
+  let cA = 0, tA = 0;
+  for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+    const ua = u0 + su * i, ub = ua + su, va = v0 + sv * j, vb = va + sv, Q = cut(P, ua, ub, va, vb); if (!Q) continue;
+    const H = holes.map((h) => cut(h, ua, ub, va, vb)).filter(Boolean), B = footBoxes(Q, H, ux, uz, false), a = Math.abs(area(Q)) - H.reduce((t, h) => t + Math.abs(area(h)), 0);
+    if (a > 0) { tA += a; if (B) { cA += a * B.cov; out.push(...B); } }
+    yield;
+  }
+  if (!out.length) return null;
+  const M = mergeBoxes(out); M.cov = cA / Math.max(1e-9, tA); M.area = tA;
+  return M;
+}
+// boxes in one frame that share a whole face (to 5 cm): one box (in place, a pass at a time till none do)
+function mergeBoxes(L) {
+  for (let changed = true; changed;) {
+    changed = false;
+    for (let i = 0; i < L.length; i++) for (let j = L.length - 1; j > i; j--) {
+      const a = L[i], b = L[j], d = a.ux * b.ux + a.uz * b.uz; if (Math.abs(d) < 0.99999 && Math.abs(a.ux * b.uz - a.uz * b.ux) < 0.99999) continue;
+      const r = a.hl + a.hw + b.hl + b.hw; if (Math.abs(a.x - b.x) > r || Math.abs(a.z - b.z) > r) continue;
+      const fx = a.ux, fz = a.uz, cu = b.x * fx + b.z * fz, cv = -b.x * fz + b.z * fx, au = a.x * fx + a.z * fz, av = -a.x * fz + a.z * fx;
+      const [pl, pw] = Math.abs(d) > 0.5 ? [b.hl, b.hw] : [b.hw, b.hl], A = [[au - a.hl, au + a.hl], [av - a.hw, av + a.hw]], B = [[cu - pl, cu + pl], [cv - pw, cv + pw]];
+      for (let ax = 0; ax < 2; ax++) {
+        const o = 1 - ax;
+        if (Math.abs(A[o][0] - B[o][0]) > 0.05 || Math.abs(A[o][1] - B[o][1]) > 0.05 || (Math.abs(A[ax][1] - B[ax][0]) > 0.05 && Math.abs(B[ax][1] - A[ax][0]) > 0.05)) continue;
+        const R = [[], []]; R[ax] = [Math.min(A[ax][0], B[ax][0]), Math.max(A[ax][1], B[ax][1])]; R[o] = [Math.max(A[o][0], B[o][0]), Math.min(A[o][1], B[o][1])];
+        const mu = (R[0][0] + R[0][1]) / 2, mv = (R[1][0] + R[1][1]) / 2;
+        L[i] = { x: mu * fx - mv * fz, z: mu * fz + mv * fx, ux: fx, uz: fz, hl: (R[0][1] - R[0][0]) / 2, hw: (R[1][1] - R[1][0]) / 2 }; L.splice(j, 1); changed = true;
+        break;
+      }
+    }
+  }
+  return L;
+}
+// A huge footprint's tiledBoxes worked out after load, a piece at a time (a scenery's update, in what's left of a
+// frame's budget): its first pass's boxes stand till then. done(boxes) swaps them in.
+export class Refiner {
+  constructor() { this.jobs = []; this.ms = 0; this.pieces = 0; this.done = 0; this.slowest = 0; }
+  add(P, holes, ux, uz, done) { this.jobs.push({ it: tiledSteps(P, holes, ux, uz), done }); }
+  step(ms = 1, max = Infinity) { // (max: pieces at most, whatever the time: the test stepper)
+    const t0 = performance.now();
+    for (let n = 0; this.jobs.length && n < max && performance.now() - t0 < ms; n++) {
+      const j = this.jobs[0], t1 = performance.now(), r = j.it.next(), dt = performance.now() - t1; this.pieces++; if (dt > this.slowest) this.slowest = dt;
+      if (r.done) { this.jobs.shift(); this.done++; if (r.value) j.done(r.value); }
+    }
+    this.ms += performance.now() - t0;
+  }
+  flush() { this.step(Infinity); }
+}
+function footPass(P, holes, ux, uz, fine, pre = null, quick = false) {
   holes = holes || [];
   const STEP = fine?.step ?? FOOT.step, MAX = fine?.max ?? FOOT.max;
   const A = Math.abs(area(P)) - holes.reduce((t, h) => t + Math.abs(area(h)), 0); if (!(A > 2)) return null;
@@ -502,10 +581,11 @@ function footPass(P, holes, ux, uz, fine) {
   const dirs = [[ux, uz]], ang = (x, z) => ((Math.atan2(z, x) % Q90) + Q90) % Q90, ed = [];
   for (let k = 0, m = P.length - 1; k < P.length; m = k++) { const ex = P[k][0] - P[m][0], ez = P[k][1] - P[m][1], L = Math.hypot(ex, ez); if (L >= 2.5) ed.push([L, P[m], ex / L, ez / L]); }
   ed.sort((p, q) => q[0] - p[0]);
-  for (const [L, , ex, ez] of ed) { if (dirs.length >= (fine?.frames ?? FOOT.frames) || L < Math.max(4, 0.12 * Math.sqrt(A))) break; if (dirs.every(([x, z]) => turn(ang(x, z), ang(ex, ez)) > D8)) dirs.push([ex, ez]); }
+  for (const [L, , ex, ez] of ed) { if (dirs.length >= (fine?.frames ?? FOOT.frames) || L < (fine ? Math.max(2, 0.06 * Math.sqrt(A)) : Math.max(4, 0.12 * Math.sqrt(A)))) break; if (dirs.every(([x, z]) => turn(ang(x, z), ang(ex, ez)) > (fine ? fine.turn * Q90 / 90 : D8))) dirs.push([ex, ez]); } // (the fine pass: a wing turned 3 degrees off the rest gets its own frame too)
   const framed = (x, z) => dirs.some(([fx, fz]) => turn(ang(fx, fz), ang(x, z)) < D3), grids = dirs.map(([fx, fz]) => frameGrid(P, holes, fx, fz, framed, STEP, fine ? 1 : 3)), G0 = grids[0], F = grids.filter(Boolean);
   if (!G0 || !(G0.aIn > 1)) return null;
   const out = []; // [G, cu, cv, au, av, hl, hw] in G's frame
+  if (pre) for (const b of pre) for (const G of F) mark(G, b); // (boxes it has already: what's left uncovered counts)
   // strips along the long walls no frame runs with (within 3 degrees), in the building's frame
   for (const [L, p, ex, ez] of ed) {
     if (out.length >= FOOT.strips) break;
@@ -555,7 +635,7 @@ function footPass(P, holes, ux, uz, fine) {
     // nothing more than FOOT.out past the walls (corners, edge middles and quarters): the worst face moves in
     for (let it = 0; it < 16; it++) {
       let w = FOOT.out, wf = -1, wa = 0;
-      for (let k = 0; k < 4; k++) { const ax = k >> 1, lo = ax ? f[0] : f[2], len = ax ? f[1] - f[0] : f[3] - f[2], na = fine ? Math.min(16, Math.max(4, Math.ceil(len / fine.edge))) : 4; for (let a = 0; a <= na; a++) { const t = lo + len * a / na, d = ax ? outD(G, t, f[k]) : outD(G, f[k], t); if (d > w) { w = d; wf = k; wa = a === 0 ? 0 : a === na ? 4 : 2; } } }
+      for (let k = 0; k < 4; k++) { const ax = k >> 1, lo = ax ? f[0] : f[2], len = ax ? f[1] - f[0] : f[3] - f[2], na = fine ? Math.min(16, Math.max(4, Math.ceil(len / fine.edge))) : quick || A > FOOT.eager ? 4 : Math.min(8, Math.max(4, Math.ceil(len / 2))); for (let a = 0; a <= na; a++) { const t = lo + len * a / na, d = ax ? outD(G, t, f[k]) : outD(G, f[k], t); if (d > w) { w = d; wf = k; wa = a === 0 ? 0 : a === na ? 4 : 2; } } }
       if (wf < 0) break;
       if (wa === 0 || wa === 4) { const o = (wf >> 1 ? 0 : 2) + (wa ? 1 : 0); if ((o >> 1 ? f[1] - f[0] : f[3] - f[2]) < (wf >> 1 ? f[1] - f[0] : f[3] - f[2])) wf = o; } // (a corner: whichever of its faces is shorter moves in)
       const ax = wf >> 1; if (f[ax * 2 + 1] - f[ax * 2] < 1) break;
@@ -601,18 +681,21 @@ function footPass(P, holes, ux, uz, fine) {
   const all = out.map((b) => toWorld(...b)).sort((a, b) => (Math.abs(b.ux * ux + b.uz * uz) > 0.9999) - (Math.abs(a.ux * ux + a.uz * uz) > 0.9999));
   const pt = (b, l, w) => [b.x + b.ux * l - b.uz * w, b.z + b.uz * l + b.ux * w], inB = (b, p, e = 0) => { const x = p[0] - b.x, y = p[1] - b.z; return Math.abs(x * b.ux + y * b.uz) < b.hl + e && Math.abs(-x * b.uz + y * b.ux) < b.hw + e; };
   const keep = all.filter((b, i) => !all.some((c, j) => j !== i && (c.hl * c.hw > b.hl * b.hw || (c.hl * c.hw === b.hl * b.hw && j < i)) && [[1, 1], [1, -1], [-1, 1], [-1, -1]].every(([p, q]) => inB(c, pt(b, b.hl * p, b.hw * q), 0.05))));
-  // the fine pass: every edge of every box checked every half metre, and one more than FOOT.out past the walls goes
-  // (its faces' own check can give up on a box squeezed between spikes)
-  const fit = fine ? keep.filter((b) => { for (const [a0, c0, a1, c1] of [[1, 1, -1, 1], [-1, 1, -1, -1], [-1, -1, 1, -1], [1, -1, 1, 1]]) { const n = Math.min(24, Math.max(1, Math.ceil(Math.hypot((a1 - a0) * b.hl, (c1 - c0) * b.hw) / 0.5))); for (let i = 0; i < n; i++) { const a = a0 + (a1 - a0) * i / n, c = c0 + (c1 - c0) * i / n, [x, z] = pt(b, b.hl * a, b.hw * c); if (outD(G0, x * ux + z * uz, -x * uz + z * ux) > FOOT.out + 0.15) return false; } } return true; }) : keep;
+  // every edge of every box checked every half metre (the first pass: every metre), and one more than FOOT.out past the
+  // walls goes (its faces' own
+  // check can give up on a box squeezed between spikes; the first pass's sees its faces' quarters only). Not on a huge
+  // one boxed at load: its first pass is quick, a Refiner's pieces (small) are checked
+  const fit = fine || (A <= FOOT.eager && !quick) ? keep.filter((b) => { for (const [a0, c0, a1, c1] of [[1, 1, -1, 1], [-1, 1, -1, -1], [-1, -1, 1, -1], [1, -1, 1, 1]]) { const n = Math.min(fine ? 24 : 12, Math.max(1, Math.ceil(Math.hypot((a1 - a0) * b.hl, (c1 - c0) * b.hw) / (fine ? 0.5 : 1)))); for (let i = 0; i < n; i++) { const a = a0 + (a1 - a0) * i / n, c = c0 + (c1 - c0) * i / n, [x, z] = pt(b, b.hl * a, b.hw * c); if (outD(G0, x * ux + z * uz, -x * uz + z * ux) > FOOT.out + 0.15) return false; } } return true; }) : keep;
   if (!fit.length) return null;
-  fit.cov = sampled(G0, fit, A); fit.area = A; // (how much of the footprint it covers: footBoxes, a second pass under FOOT.retry)
+  fit.dropped = keep.length - fit.length; // (footBoxes: a box dropped, its part of the building bare: the fine pass then)
+  fit.cov = sampled(G0, pre ? fit.concat(pre) : fit, A); fit.area = A; // (how much of the footprint it covers: footBoxes, a second pass under FOOT.retry)
   return fit;
 }
-// how much of a footprint (its grid in the building's frame, G0) boxes cover: points on rows about 0.7 m apart (at most
-// ~1500 of them), inside the footprint by the row's crossings, then in a box or not. (Not the grid's cells: a cell along
-// a slanted wall is counted whole when its middle is in a box.)
+// how much of a footprint (its grid in the building's frame, G0) boxes cover: about 4000 points on rows (1500 on a huge one; at least 0.3 m
+// apart: on a small house a 0.7 m grid was off by 4%, 93% for what's 89%), inside the footprint by the row's crossings,
+// then in a box or not. (Not the grid's cells: a cell along a slanted wall is counted whole when its middle is in a box.)
 function sampled(G, B, A) {
-  const s = Math.max(0.7, Math.sqrt(A / 1500)), { U, V, rings, fx, fz } = G, xs = [], L = B.map((b) => ({ u: b.x * fx + b.z * fz, v: -b.x * fz + b.z * fx, au: b.ux * fx + b.uz * fz, av: -b.ux * fz + b.uz * fx, hl: b.hl, hw: b.hw }));
+  const s = Math.max(0.3, Math.sqrt(A / (A > FOOT.eager ? 1500 : 4000))), { U, V, rings, fx, fz } = G, xs = [], L = B.map((b) => ({ u: b.x * fx + b.z * fz, v: -b.x * fz + b.z * fx, au: b.ux * fx + b.uz * fz, av: -b.ux * fz + b.uz * fx, hl: b.hl, hw: b.hw }));
   let n = 0, k = 0; WORK.verts += G.nr * Math.ceil((V[V.length - 1] - V[0]) / s);
   for (let v = V[0] + s / 2; v < V[V.length - 1]; v += s) {
     xs.length = 0;
@@ -639,12 +722,24 @@ export const inParts = (B, x, z) => { for (const b of B) { const dx = x - b.x, d
 // out over the pavement)
 export function irregular(P, A, x, z, ux, uz, hl, hw) {
   if (A < 0.9 * 4 * hl * hw) return true;
-  for (let k = 0; k < 16; k++) {
+  const off = (a, c) => { // (how far the box's point (a, c) (-1..1 along each axis) stands past the walls, squared)
     WORK.verts += P.length;
-    const t = (k & 3) / 2 - 1, side = k >> 2, a = side < 2 ? (side ? 1 : -1) : t, c = side < 2 ? t : side === 2 ? 1 : -1; // (round the edges, a quarter at a time)
-    const px = x + ux * hl * a - uz * hw * c, pz = z + uz * hl * a + ux * hw * c; if (inside(P, px, pz)) continue;
+    const px = x + ux * hl * a - uz * hw * c, pz = z + uz * hl * a + ux * hw * c; if (inside(P, px, pz)) return 0;
     let d2 = Infinity; for (let i = 0, j = P.length - 1; i < P.length; j = i++) { const p = P[j], q = P[i], ex = q[0] - p[0], ez = q[1] - p[1], tt = clamp01(((px - p[0]) * ex + (pz - p[1]) * ez) / (ex * ex + ez * ez || 1e-9)), dx = p[0] + ex * tt - px, dz = p[1] + ez * tt - pz; d2 = Math.min(d2, dx * dx + dz * dz); }
-    if (d2 > 0.25) return true;
+    return d2;
+  };
+  for (let k = 0; k < 16; k++) { // (round the edges, a quarter at a time, every corner: each side from its corner on)
+    const t = (k & 3) / 2 - 1, side = k >> 2, a = side === 0 ? -1 : side === 1 ? 1 : side === 2 ? -t : t, c = side === 0 ? -t : side === 1 ? t : side === 2 ? 1 : -1;
+    if (off(a, c) > 0.25) return true;
+  }
+  // a notch between those points (a recess in a long front, a bite out of a corner): a wall corner standing in from
+  // every face of the box. Then the face nearest it, every metre for 3 m either side of it
+  for (const p of P) {
+    const dx = p[0] - x, dz = p[1] - z, u = dx * ux + dz * uz, v = -dx * uz + dz * ux, du = hl - Math.abs(u), dv = hw - Math.abs(v); if (du <= 0.5 || dv <= 0.5) continue;
+    for (let k = -3; k <= 3; k++) { // (on the face toward it: the long axis's ends, or its sides)
+      const a = du < dv ? Math.sign(u) || 1 : Math.max(-1, Math.min(1, (u + k) / hl)), c = du < dv ? Math.max(-1, Math.min(1, (v + k) / hw)) : Math.sign(v) || 1;
+      if (off(a, c) > 0.25) return true;
+    }
   }
   return false;
 }
