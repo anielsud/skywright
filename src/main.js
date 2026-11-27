@@ -35,6 +35,7 @@ import { Blackbox } from './blackbox.js';
 import { designSummary, trackHangar } from './buildStats.js';
 import { loadReal } from './realworld.js';
 import { trafficModels } from './trafficModels.js';
+import { newStart, mark, phases, gpuFamily, frameStats, PERF_WINDOW_MS } from './startStats.js';
 import { aircraftLights, updateAircraftLights } from './navLights.js';
 import { Streaks } from './streaks.js';
 import { WindTunnel } from './windTunnel.js';
@@ -670,16 +671,18 @@ function startFlight(cfgOverride) {
   const cfg = { ...flightCfg, ...cfgOverride };
   state = 'loading';
   $('#loading').classList.add('show');
-  const fail = (e) => { console.error(e); freeKept(); $('#loading').classList.remove('show'); state = 'hangar'; ui.hint('Something went wrong: ' + e.message); };
+  const fail = (e) => { console.error(e); startRec = null; freeKept(); $('#loading').classList.remove('show'); state = 'hangar'; ui.hint('Something went wrong: ' + e.message); };
+  const rec = (startRec = newStart(renderer.info.programs.length)); // what this start costs: flight_ready (startStats.js)
   // real-world places load their baked geodata first (cached by the service worker after the first visit)
   const loc = LOCATIONS[cfg.location], msg = $('#loading p'), msg0 = msg.textContent;
   const place = loadReal(loc, qualityTier(), (f) => (msg.textContent = `Loading ${loc.name}… ${Math.round(f * 100)}%`));
   // (and the street cars' models, so the World is built with them: trafficModelsNow; never rejects)
   const ready = Promise.all([place, trafficModels(baseTier(qualityTier()))]);
-  ready.then(() => setTimeout(() => {
+  ready.then(() => { const t = performance.now(); setTimeout(() => {
+    mark(rec, 'data', t); // (when the data was in: the 50 ms below is the page getting to show the message)
     msg.textContent = msg0;
     try { buildFlight(cfg); } catch (e) { fail(e); }
-  }, 50), (e) => { msg.textContent = msg0; fail(new Error(`couldn’t load ${loc.name} (it needs the internet the first time): ${e.message}`)); });
+  }, 50); }, (e) => { msg.textContent = msg0; fail(new Error(`couldn’t load ${loc.name} (it needs the internet the first time): ${e.message}`)); });
 }
 const PARKED = [2, 0, 4, 7]; // the airport's parked planes (presets)
 // Hangar idle time after boot: the first flight's share of the world's session caches (moored boats, parked planes,
@@ -724,6 +727,8 @@ function buildFlight(cfg) {
     world.addParked(PARKED.map((i) => parkedStatic(presets[i]))); // (kept per design for the session: traffic.js)
     kids = new Set(scene.children);
   }
+  const rec = startRec; startRec = null; mark(rec, 'world');
+  if (rec) { rec.world = reused ? 'kept' : 'new'; if (!reused) { rec.towns = world.towns?.ms ?? null; rec.city = world.towns?.city?.msTall ?? null; } }
   const realism = REALISM[cfg.realism];
   const design = cloneDesign(hangar.design);
   const ac = new Aircraft(design, realism);
@@ -828,14 +833,15 @@ function buildFlight(cfg) {
   // The loading screen stays up while every shader compiles (the hidden things' too: tree LODs, night lights, far town
   // detail), and over the first frame, which draws the hidden shadow casters for their shadow shaders (see warmShaders)
   // (in a kept World only what this flight added needs that: the World's own hidden casters were drawn in its first flight's warm-up)
-  const warm = (F.warm = { t: performance.now(), n: 0, pending: true, skip: reused ? kids : null }), compiled = () => { warm.pending = false; warm.t = performance.now(); };
-  setTimeout(compiled, 15000); // (never stuck behind the loading screen)
+  F.startRec = rec; mark(rec, 'setup');
+  const warm = (F.warm = { t: performance.now(), n: 0, pending: true, skip: reused ? kids : null, rec }), compiled = (via) => { warm.pending = false; warm.t = performance.now(); mark(rec, 'compiled'); if (rec) rec.via.compile ||= via; };
+  setTimeout(() => compiled('timeout'), 15000); // (never stuck behind the loading screen)
   // (into the post-processing target, as the scene really renders: tone mapping and output encoding are part of a
   // shader; and with the reflection environment in place, which the first world update would otherwise add)
   world.updateEnv();
   renderer.setRenderTarget(post.enabled ? post.composer.readBuffer : null);
   const seats = warmStations(ac.stations); // (the cockpit views' own cabins and linings, hidden until you sit there)
-  compileAsync(scene, flightCam).catch(() => {}).then(compiled);
+  compileAsync(scene, flightCam).catch(() => {}).then(() => compiled('done'));
   F.live = true; // (from here on, whatever joins the scene compiles on its own and waits hidden until ready: readyFirst)
   seats();
   renderer.setRenderTarget(null);
@@ -848,8 +854,43 @@ function buildFlight(cfg) {
   if (!ac.hasEngine) hud.toast('Glider: look for rising air under clouds and over sunny ridges.');
 }
 
+// What a flight start cost on this device (src/startStats.js has the fields): flight_ready when the loading screen goes
+// away, then flight_perf with the first 10 s's frame times. startRec: the start being loaded (startFlight -> buildFlight,
+// then F.startRec); lastStart: the last flight_ready's record (window.__sky.lastStart: tests log it).
+let startRec = null, lastStart = null, gpuFam = null;
+function flightReady(f, frames, loaded) {
+  try {
+    const r = f.startRec; if (!r) return; mark(r, 'ready');
+    const c = renderer.domElement, ms = (v) => (v == null ? null : Math.round(v));
+    lastStart = {
+      location: f.cfg.location, kind: f.kind, start: f.cfgStart, world: r.world, ...phases(r), towns_ms: ms(r.towns), city_ms: ms(r.city),
+      compile_via: r.via.compile || null, effects_via: r.via.effects || null, ready_via: loaded ? 'loaded' : 'giveup',
+      programs_new: renderer.info.programs.length - r.p0, programs_total: renderer.info.programs.length, frames_hidden: frames,
+      quality: settings.quality, quality_tier: qualityTier(), perf_level: perf.level, res_scale: +perf.scale.toFixed(2),
+      touch: isTouch, dpr: +devicePixelRatio.toFixed(2), canvas_w: c.width, canvas_h: c.height, parallel_compile: PARALLEL(), gpu: (gpuFam ??= gpuFamily(renderer.getContext())),
+    };
+    analytics.capture('flight_ready', lastStart);
+    f.perfRec = { ms: [], sum: 0, gaps: 0, rec: lastStart };
+  } catch (err) { console.warn('flight_ready', err); } // (analytics never breaks a flight)
+}
+function perfFrame(f, ms) {
+  const P = f.perfRec; if (f.paused || document.hidden) return; // (paused or in the background: not the device's frame rate)
+  if (ms > 1000) { P.gaps++; return; } // (back from a tab switch)
+  P.ms.push(ms); P.sum += ms;
+  if (P.sum >= PERF_WINDOW_MS) flightPerf(f, true);
+}
+function flightPerf(f, complete) {
+  const P = f.perfRec; if (!P) return; f.perfRec = null;
+  if (!P.ms.length) return;
+  try {
+    const R = P.rec, stats = { ...frameStats(P.ms), gaps: P.gaps, complete, perf_level: perf.level, res_scale: +perf.scale.toFixed(2) };
+    R.perf = stats;
+    analytics.capture('flight_perf', { location: R.location, kind: R.kind, world: R.world, quality_tier: R.quality_tier, gpu: R.gpu, ...stats });
+  } catch (err) { console.warn('flight_perf', err); }
+}
 // One flight_end per flight: outcome is how it ended (crash, mission result) or why it was left (hangar, restart, closed the app)
 function trackFlightEnd(f, exit) {
+  if (f) flightPerf(f, false); // (the first 10 s's frame times, if the flight ended before they were in)
   if (!f || f.tracked || !f.track) return; f.tracked = true;
   const s = f.ac.stats, secs = (performance.now() - f.t0) / 1000;
   analytics.capture('flight_end', {
@@ -1510,8 +1551,9 @@ function fitNearPlane(f) {
 let testDt = null;
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  const raw = now - last, dt = Math.min(0.1, raw / 1000); last = now;
   governPerf(dt);
+  if (state === 'flight' && F?.perfRec) perfFrame(F, raw);
   if (state === 'hangar') {
     if (hangar.update(dt)) {
       post.look({ bloom: 0.3, threshold: 3.0, vignette: 0.35, warmth: 0.3 });
@@ -1541,13 +1583,14 @@ function frame(now) {
       F.world.towns?.city?.occlude(flightCam, renderer); // (with the frame's final camera: realCity.js occlude)
       const progs = renderer.info.programs, n0 = progs.length;
       post.render(F.scene, flightCam, dt);
+      if (warm?.n === 1) mark(warm.rec, 'frame');
       if (F.wantShot) { F.wantShot = false; report(grabShot()); } // (🐞: a WebGL canvas can only be read straight after it's drawn)
       // A program first made DURING the draw is a stall: the frame waits for it to compile (#273). Ones readyFirst made
       // between frames are not: those objects wait hidden. (Under the loading screen, compiling in the draw is the point.)
       if (!F.warm && progs.length > n0) { const names = progs.slice(n0).map((p) => `${p.name} ${p.cacheKey?.slice(-48)}`).join(' | '); console.warn(`[shaders] ${progs.length - n0} compiled in flight, stalling a frame: ${names}`); window.__inflightCompiles = (window.__inflightCompiles || 0) + progs.length - n0; }
       if (restore) { restore(); compileWith(F.scene, F.effects.boom, warm); } // and every shader as lit by a crash's explosion flash (effects.js)
       // ...and until the ground photos have arrived (their upload, and the rock impostors' re-capture, would hitch), and the street cars' models (startFlight loads them first, so this is a safety net)
-      else if (warm && ((F.world.loaded?.() !== false && F.traffic.vehicles.ready) || performance.now() - warm.t > 3000)) { F.warm = null; $('#loading').classList.remove('show'); }
+      else if (warm) { const ok = F.world.loaded?.() !== false && F.traffic.vehicles.ready; if (ok || performance.now() - warm.t > 3000) { F.warm = null; $('#loading').classList.remove('show'); flightReady(F, warm.n, ok); } }
     }
   }
 }
@@ -1612,8 +1655,8 @@ function compileWith(scene, light, warm) {
   warm.pending = true;
   const had = !!light.parent; // the explosion light now lives in the scene permanently: don't take it out again
   target(); if (!had) scene.add(light); const done = compileAsync(scene, flightCam); if (!had) scene.remove(light); renderer.setRenderTarget(null);
-  const finish = () => { if (!warm.pending) return; target(); renderer.compile(scene, flightCam); renderer.setRenderTarget(null); warm.pending = false; warm.t = performance.now(); };
-  done.catch(() => {}).then(finish); setTimeout(finish, 15000);
+  const finish = (via) => { if (!warm.pending) return; target(); renderer.compile(scene, flightCam); renderer.setRenderTarget(null); warm.pending = false; warm.t = performance.now(); mark(warm.rec, 'effects'); if (warm.rec) warm.rec.via.effects = via; };
+  done.catch(() => {}).then(() => finish('done')); setTimeout(() => finish('timeout'), 15000);
 }
 function warmShaders(scene, skip = null) {
   const undo = [];
@@ -1764,7 +1807,7 @@ async function boot() {
     addEventListener('online', autoCheckUpdate);
     addEventListener('focus', autoCheckUpdate);
   }
-  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, restartFlight, get kept() { return kept; },
+  window.__sky = { applyQuality, THREE, PARTS, Aircraft, REALISM, analyze, audio, post, renderer, get perf() { return perf; }, hangar, get F() { return F; }, startFlight, endFlight, restartFlight, get kept() { return kept; }, get lastStart() { return lastStart; },
     // tests (tools/test): advance(s) steps the flight s seconds at a fixed dt with no rendering (physics, world, effects,
     // traffic, missions: everything stepFlight does), ~50x faster than waiting for frames. Streaming that works to a
     // time budget per frame in play (terrain tiles, far field, flora, roads, city blocks, map tiles, geodata) gets a

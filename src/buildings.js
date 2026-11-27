@@ -784,6 +784,68 @@ export function buildingMaterial({ cellPx = 256, interiors = true, ground = fals
   return mat;
 }
 
+// Instanced roof furniture (realCity.js FurnK: water tanks, bulkheads, plant rooms, rooftop units, hatches): the
+// building material over a unit shape per kind, what the merged meshes keep per vertex given per instance instead.
+// Per vertex (the unit shape): fv = [cell (255: the instance's wall cell, 254: its top cell), colour (0: the instance's
+// first, 1: its second, 2: steel), uv mode, 1 if it stays aligned to the world's axes whatever the instance's yaw (a
+// tank's lathed staves and roof, as MeshW.lathe draws them)], fe = [a, b]: its height a + b * fl metres more (fixed
+// parts of a tank: its platform's depth, the legs). Per instance: instanceMatrix (yaw and size: the unit shape scaled),
+// fi = [wall cell, top cell, building seed, height above the floor (atl.y, atl.z)], fcA / fcB (linear bytes), fl (a
+// tank's legs; a box top's uv metres a repeat), dmg (destruction.js, as the merged meshes'). The uv modes give what
+// MeshW writes for the shape at that size: 1 / 2 a wall along x / z (MeshW.wall: whole bays of 3 m, floors of 3 m),
+// 3 a top (MeshW.poly: metres / fl), 4 a tank platform's beams (0.4 m deep), 5 its staves (bays round it), 6 its roof
+// (metres / 3: the unit uv times the diameter).
+const FURN_VERT_HEAD = `attribute vec4 fv; attribute vec2 fe; attribute vec4 fi; attribute vec3 fcA; attribute vec3 fcB; attribute float fl;
+  vec2 fRot(vec2 w, mat4 m) { return vec2(dot(w, normalize(m[0].xz)), dot(w, normalize(m[2].xz))); }
+  float fNb(float L) { return max(1.0, floor(L / 3.0 + 0.5)); }`;
+const FURN_POS = `vec3 fS = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+  transformed.y += (fe.x + fe.y * fl) / fS.y;
+  if (fv.w > 0.5) transformed.xz = fRot(transformed.xz, instanceMatrix);`;
+export function furnMaterial(opts, steel) {
+  const mat = buildingMaterial(opts), base = mat.onBeforeCompile, s = [(steel >> 16) & 255, (steel >> 8) & 255, steel & 255].map((v) => (v / 255).toFixed(5)).join(', ');
+  mat.onBeforeCompile = (sh, r) => {
+    base(sh, r);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\n' + FURN_VERT_HEAD)
+      .replace('#include <color_vertex>', `#include <color_vertex>
+        vColor = fv.y < 0.5 ? fcA : fv.y < 1.5 ? fcB : vec3(${s});
+        vAtl = vec4(fv.x > 254.5 ? fi.x : fv.x > 253.5 ? fi.y : fv.x, fi.z, fi.w, 0.0);
+        { vec3 fS = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz)); vec2 fu = uv; float fm = fv.z;
+          if (fm > 5.5) fu = uv * fS.x;
+          else if (fm > 4.5) fu = vec2(uv.x * max(1.0, floor(PI * fS.x / 3.0 + 0.5)), uv.y);
+          else if (fm > 3.5) fu = vec2(uv.x * fNb(1.02 * fS.x), uv.y * (0.4 / 3.0));
+          else if (fm > 2.5) fu = uv * fS.xz / fl;
+          else if (fm > 1.5) fu = vec2(uv.x * fNb(fS.z), uv.y * fS.y / 3.0);
+          else if (fm > 0.5) fu = vec2(uv.x * fNb(fS.x), uv.y * fS.y / 3.0);
+          vMapUv = (mapTransform * vec3(fu, 1.0)).xy; }`)
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nif (fv.w > 0.5) objectNormal.xz = fRot(objectNormal.xz, instanceMatrix);')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + FURN_POS + '\nvWP = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;');
+  };
+  const key = mat.customProgramCacheKey;
+  mat.customProgramCacheKey = () => key() + 'f';
+  return mat;
+}
+// any material drawing the furniture instances in their shapes (tools/test/jobs/bldcull.js: an id colour each)
+export function furnShaped(mat) {
+  mat.onBeforeCompile = (sh) => { sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\n' + FURN_VERT_HEAD).replace('#include <begin_vertex>', '#include <begin_vertex>\n' + FURN_POS); };
+  mat.customProgramCacheKey = () => 'furnShaped1';
+  return mat;
+}
+let _furnDepth = null;
+export function furnDepthMaterial() {
+  if (_furnDepth) return _furnDepth;
+  const m = (_furnDepth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }));
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, DMG.U);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\n' + FURN_VERT_HEAD + DMG_DEPTH_VERT_HEAD)
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + FURN_POS)
+      .replace('#include <clipping_planes_vertex>', '#include <clipping_planes_vertex>\n' + DMG_VERT + ' vDmgP = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;' + DMG_VERT_KILL);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vDmgP;\n' + DMG_FRAG_HEAD)
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n' + DMG_FRAG);
+  };
+  m.customProgramCacheKey = () => 'furnDepth1';
+  return m;
+}
+
 // ---------------- geometry builder ----------------
 const _c = new THREE.Color();
 export const LY0 = 4, LYS = 4; // atl.z holds the height above a building's floor, (h + LY0) * LYS: from LY0 m below it (walls go on down into the ground) to 60 m up

@@ -8,7 +8,7 @@
 //   road(x, z)     the nearest street's coordinates for the markings: { id, u, v, hw, lanes, oneway, dj }
 import { KIND } from './format.js';
 
-export const KERB = 0.15, KERB_W = 0.1, PAVE_RAMP = 2, SLOPE = 0.5, BANK_MAX = 30, CITY_REACH = 36, JBLEND = 6, SBLEND = 3, VERGE = 1.5;
+export const LOT_PAIR = 40, KERB = 0.15, KERB_W = 0.1, PAVE_RAMP = 2, SLOPE = 0.5, BANK_MAX = 30, CITY_REACH = 36, JBLEND = 6, SBLEND = 3, VERGE = 1.5;
 const SC = 10, PAD = 54; // (grid cell, m; how far from a road its segments are found: the bake stores every road within more than this of a chunk, bake.js NET_PAD, so two chunks work out their shared edge alike)
 
 // net: { runs: [{ pts: Float64Array x,z,..., h: Float64Array, hw, pave, kind, minor, surf, lanes, oneway }], junctions: [{ x, z, r, y0, gx, gz }] }
@@ -24,7 +24,7 @@ export function makeRules(net, g, city) {
   const nearest = (x, z, ok) => { let best = null; const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return null;
     for (let q = 0; q < L.length; q += 2) { const ri = L[q], s = L[q + 1], r = runs[ri]; if (!ok(r)) continue; const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
       const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), px = ax + dx * t, pz = az + dz * t, d = Math.hypot(x - px, z - pz) - r.hw;
-      if (!best || d < best.d) best = { ri, r, d, h: r.h[s] + (r.h[s + 1] - r.h[s]) * t, u: r.s[s] + (r.s[s + 1] - r.s[s]) * t, v: (dx * (z - az) - dz * (x - ax)) / Math.sqrt(L2), px, pz }; }
+      if (!best || d < best.d) best = { ri, r, d, h: r.h[s] + (r.h[s + 1] - r.h[s]) * t, u: r.s[s] + (r.s[s + 1] - r.s[s]) * t, v: (dx * (z - az) - dz * (x - ax)) / Math.sqrt(L2), px, pz, dx: dx / Math.sqrt(L2), dz: dz / Math.sqrt(L2) }; }
     return best; };
   // the two nearest (different) roads (filter ok), by distance past their pavements' edge
   const nearest2 = (x, z, ok) => { const best = []; const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return best;
@@ -47,7 +47,7 @@ export function makeRules(net, g, city) {
     return streetH(x, z, hh);
   };
   const drawn = (x, z, k) => base(x, z, k) + (k === KIND.pave || k === KIND.kerb ? KERB : 0);
-  const lot = (x, z) => { const two = nearest2(x, z, (r) => !r.minor && r.pave); if (!two.length) return null; let s = 0, ws = 0; for (const n of two) { const wt = 1 / Math.max(0.5, n.d); s += (streetH(x, z, n.h) + KERB) * wt; ws += wt; } return { y: s / ws, d: two[0].d }; };
+  const lot = (x, z) => { const two = nearest2(x, z, (r) => !r.minor && r.pave).filter((n, i) => i === 0 || n.d <= LOT_PAIR); if (!two.length) return null; /* (the second only if it's near: past that, which it is depends on how far the stored network reaches) */ let s = 0, ws = 0; for (const n of two) { const wt = 1 / Math.max(0.5, n.d); s += (streetH(x, z, n.h) + KERB) * wt; ws += wt; } return { y: s / ws, d: two[0].d }; };
   const edge = (x, z) => { const n = nearest(x, z, any); if (!n) return null; return { y: (n.r.minor ? n.h : streetH(x, z, n.h)) + (n.r.pave ? KERB : 0), d: Math.max(0, n.d - (n.r.pave || (n.r.minor ? 0 : VERGE))) }; };
   const ground = (x, z) => { const gz = g(x, z); if (city) { const l = lot(x, z); if (l && l.d <= CITY_REACH) return l.y; } const e = edge(x, z); if (!e || e.d > BANK_MAX) return gz; return e.y > gz ? Math.max(gz, e.y - SLOPE * e.d) : Math.min(gz, e.y + SLOPE * e.d); };
   // the markings' coordinates: the nearest street, and how far its point is from the nearest junction's circle
@@ -56,7 +56,12 @@ export function makeRules(net, g, city) {
   const roadOn = (ri, x, z) => { const r = runs[ri]; let best = null; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
       const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), px = ax + dx * t, pz = az + dz * t, d = Math.hypot(x - px, z - pz); if (!best || d < best.d) best = { d, u: r.s[s] + (r.s[s + 1] - r.s[s]) * t, v: (dx * (z - az) - dz * (x - ax)) / Math.sqrt(L2), px, pz }; }
     const j = junction(best.px, best.pz); return { id: ri, u: best.u, v: best.v, hw: r.hw, lanes: r.lanes, oneway: r.oneway, dj: j ? j[1] : 99 }; };
-  return { base, drawn, ground, road, roadOn, nearest };
+  // road ri's segment nearest (x, z), as a line: a point on it (ax, az) where it's u0 along the road, its direction (dx, dz).
+  // Along and across it are linear in position, so a triangle's corners given them from one line interpolate exactly
+  const lineOn = (ri, x, z) => { const r = runs[ri]; let best = null; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz; if (L2 < 1e-6) continue;
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t), l = Math.sqrt(L2); if (!best || d < best.d) best = { d, ax, az, dx: dx / l, dz: dz / l, u0: r.s[s] }; }
+    return best && { ...best, hw: r.hw, lanes: r.lanes, oneway: r.oneway }; };
+  return { base, drawn, ground, road, roadOn, lineOn, nearest, nearest2, lot, junction };
 }
 
 // the natural ground from the hi grid's points around a chunk (lat: i0, j0, ni, nj; G their heights): bilinear, as the
