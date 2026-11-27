@@ -8,6 +8,8 @@ import { now, slice } from './stepClock.js';
 import { FOG } from './shaders.js';
 
 const SEA_DROP = 100; // drowned vertices sit at least this far under the sea, so coasts can't z-fight from far away
+const SECTORS = 64; // the merged cells are ordered by bearing from the field's centre, in this many sectors (see cull)
+const _fr = new THREE.Frustum(), _pv = new THREE.Matrix4();
 
 export class FarField {
   constructor(world, tiles) {
@@ -33,9 +35,17 @@ export class FarField {
         if (texture2D(farMask, (cell - farMaskOrigin + 0.5) / farMaskSize).r > 0.6) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);`);
     };
     mat.customProgramCacheKey = () => 'farfield';
-    this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
-    this.mesh.frustumCulled = false; this.mesh.visible = false;
-    world.group.add(this.mesh);
+    // Two meshes share the one geometry (one draw call, two only when the view straddles the first sector). Each one,
+    // just before it draws for a camera, sets the draw range to the sectors that camera's frustum touches: the camera
+    // sees ~a third of the ring, the rest (behind and to the sides) is never sent. Exact per sector box, any camera.
+    const g0 = new THREE.BufferGeometry();
+    this.mesh = new THREE.Mesh(g0, mat); this.mesh2 = new THREE.Mesh(g0, mat);
+    for (const [m, part] of [[this.mesh, 0], [this.mesh2, 1]]) {
+      m.frustumCulled = false; m.visible = false;
+      m.onBeforeRender = (r, sc, cam, geo) => { const d = this.cull(cam, part); geo.setDrawRange(d[0], d[1]); m.userData.drawn = d[1] / 3; };
+      world.group.add(m);
+    }
+    this.sec = null; this.vis = new Uint8Array(SECTORS);
     this.center = null; this.job = null; this.maskDirty = true; this.dirty = 0;
     this.templates = new Map();
     this.applyRadius();
@@ -48,6 +58,23 @@ export class FarField {
   applyRadius() { FOG.fogEnd.value = this.fadeEnd(); }
   fadeEnd() { return (this.R - 1) * this.T; } // everything is fully hazed by here, inside the far field's ragged rim
   viewDist() { return (this.R + 1.5) * this.T; } // camera far plane
+
+  // the index range(s) for this camera: the shortest run of sectors (cyclic) that holds every sector in its frustum;
+  // part 0 is that run (up to the last sector), part 1 the rest of it when it wraps past the last sector
+  cull(cam, part) {
+    const S = this.sec; if (!S) return [0, part ? 0 : Infinity];
+    _fr.setFromProjectionMatrix(_pv.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    const v = this.vis; let any = false;
+    for (let s = 0; s < SECTORS; s++) any = (v[s] = S.count[s] > 0 && _fr.intersectsBox(S.box[s]) ? 1 : 0) || any;
+    if (!any) return [0, 0];
+    // the longest cyclic gap of sectors not needed: draw everything else
+    let best = 0, bestEnd = 0, run = 0;
+    for (let q = 0; q < 2 * SECTORS; q++) { if (v[q % SECTORS]) run = 0; else if (++run > best && run <= SECTORS) { best = run; bestEnd = q % SECTORS; } }
+    const a = best ? (bestEnd + 1) % SECTORS : 0, b = best ? (bestEnd - best + SECTORS) % SECTORS : SECTORS - 1; // first, last sector drawn
+    const end = (s) => S.start[s] + S.count[s];
+    if (a <= b) return part ? [0, 0] : [S.start[a], end(b) - S.start[a]];
+    return part ? [0, end(b)] : [S.start[a], S.total - S.start[a]];
+  }
 
   segsFor(d) { return d <= 7.5 ? 8 : d <= 13 ? 4 : 2; }
 
@@ -85,12 +112,21 @@ export class FarField {
     // (a cell invalidate() dropped while this job was under way is built again here: a few small cells, no hitch)
     const list = want.map((c) => { const k = c.i + ',' + c.j + ',' + c.segs; let cell = this.cells.get(k); if (!cell) this.cells.set(k, (cell = this.buildCell(c.i, c.j, c.segs))); return cell; });
     const shown = new Map(); for (const c of list) shown.set(c.i + ',' + c.j, c);
+    // ordered by sector (bearing of the cell's centre from cx,cz), each sector's index range and bounding box kept (cull)
+    const secOf = (c) => Math.min(SECTORS - 1, Math.floor(((Math.atan2(c.j + 0.5 - cz, c.i + 0.5 - cx) / (2 * Math.PI)) + 1) % 1 * SECTORS));
+    for (const c of list) c.sec = secOf(c);
+    list.sort((p, q) => p.sec - q.sec);
+    const sec = { start: new Int32Array(SECTORS), count: new Int32Array(SECTORS), box: [...Array(SECTORS)].map(() => new THREE.Box3()), total: 0 };
     for (const c of list) { nv += c.pos.length / 3; ni += this.template(c.segs).length; }
     // compact attributes (8-bit normals and colours, 16-bit cell index): less to upload each time the field moves
     const pos = new Float32Array(nv * 3), nrm = new Int8Array(nv * 3), col = new Uint8Array(nv * 3), cell = new Int16Array(nv * 2), idx = new Uint32Array(ni);
     let v = 0, q = 0;
     for (let m = 0; m < list.length; m++) {
       const c = list[m], n = c.pos.length / 3, tpl = this.template(c.segs);
+      if (!sec.count[c.sec]) sec.start[c.sec] = q;
+      sec.count[c.sec] += tpl.length; const bx = sec.box[c.sec];
+      for (let a = 0; a < n; a++) { const y = c.pos[a * 3 + 1]; if (y < bx.min.y) bx.min.y = y; if (y > bx.max.y) bx.max.y = y; }
+      bx.min.x = Math.min(bx.min.x, c.i * this.T); bx.max.x = Math.max(bx.max.x, (c.i + 1) * this.T); bx.min.z = Math.min(bx.min.z, c.j * this.T); bx.max.z = Math.max(bx.max.z, (c.j + 1) * this.T);
       pos.set(c.pos, v * 3); nrm.set(c.nrm, v * 3); col.set(c.col, v * 3);
       for (let a = 0; a < n; a++) { cell[(v + a) * 2] = c.i; cell[(v + a) * 2 + 1] = c.j; }
       for (let a = 0; a < tpl.length; a++) idx[q + a] = tpl[a] + v;
@@ -103,7 +139,8 @@ export class FarField {
     g.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
     g.setAttribute('cell', new THREE.BufferAttribute(cell, 2));
     g.setIndex(new THREE.BufferAttribute(idx, 1));
-    this.mesh.geometry.dispose(); this.mesh.geometry = g; this.mesh.visible = true;
+    sec.total = idx.length;
+    this.mesh.geometry.dispose(); this.mesh.geometry = this.mesh2.geometry = g; this.mesh.visible = this.mesh2.visible = true; this.sec = sec;
     const h = (this.M - 1) / 2;
     this.origin = { i: Math.floor(cx) - h, j: Math.floor(cz) - h }; this.shown = shown;
     this.writeMask();
@@ -175,5 +212,5 @@ export class FarField {
     return { i, j, segs, pos, nrm, col, land };
   }
   info() { return `${this.cells.size} cells, ${this.mesh.geometry.attributes.position?.count ?? 0} verts, R=${this.R}`; }
-  dispose() { FOG.fogEnd.value = 1e9; this.w.group.remove(this.mesh); this.mesh.geometry.dispose(); this.mesh.material.dispose(); this.mask.dispose(); }
+  dispose() { FOG.fogEnd.value = 1e9; this.w.group.remove(this.mesh, this.mesh2); this.mesh.geometry.dispose(); this.mesh.material.dispose(); this.mask.dispose(); }
 }
