@@ -655,12 +655,11 @@ export class World {
   groundAt(x, z, y) {
     const e = 1.5, S = this.roadSurf, pad = this.pad?.ground(x, z, y); // the launch pad's slab, trench and stand deck
     if (pad) return pad;
-    if (this.layout?.on) { const L = this.layout.ground(x, z); if (L) return L; }
-    if (S && S.q(x, z, true, y ?? Infinity)) return { h: S.y, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: 'runway' };
+    if (S && S.q(x, z, true, y ?? Infinity)) return { h: S.y, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: 'runway' }; // (a bridge's deck, a tunnel's floor: before the layout, which is the ground under them)
+    if (this.layout?.on) { const L = this.layout.ground(x, z); if (L) { if (L.type !== 'runway') { const wt = this.waterOver(x, z, L.h); if (wt) return wt; } return L; } } // (the baked layout's ground; water over it: a river under a bridge)
     const h = this.sampleGrid(x, z);
     if (S && S.q(x, z) && S.e <= 0) return { h, n: new THREE.Vector3(-S.gx, 1, -S.gz).normalize(), type: S.surf === 2 ? 'sand' : 'runway' }; // on a road (a gravel track: loose, dusty)
-    if (h < this.waterLevel) return { h: this.waterLevel, n: new THREE.Vector3(0, 1, 0), type: 'water' };
-    const rw = this.real?.waterAt(x, z); if (rw != null && h < rw + 0.3) return { h: rw, n: new THREE.Vector3(0, 1, 0), type: 'water' }; // real rivers above the water level
+    const wt = this.waterOver(x, z, h); if (wt) return wt;
     if (this.bake && !this.bake.dry && this.landAt(x, z, this.gL || (this.gL = [0, 0, 0, 0]))[0] > 0.6) return { h, n: new THREE.Vector3(0, 1, 0), type: 'water' }; // rivers, lakes
     const hx = this.sampleGrid(x + e, z), hz = this.sampleGrid(x, z + e);
     const n = new THREE.Vector3(h - hx, e, h - hz).normalize();
@@ -673,6 +672,12 @@ export class World {
     else if (this.loc.desert) type = this.real && this.real.forest(x, z) > 0.45 ? 'grass' : 'sand'; // (pine needles under the real rims' forests)
     else if (h > this.loc.snowline + 100) type = 'snow';
     return { h: type === 'runway' ? Math.max(h, this.loc.rwyH) : h, n: type === 'runway' ? new THREE.Vector3(0, 1, 0) : n, type };
+  }
+  // the water over ground h at (x, z), if any: the sea or a lake's level, a real river above it
+  waterOver(x, z, h) {
+    if (h < this.waterLevel) return { h: this.waterLevel, n: new THREE.Vector3(0, 1, 0), type: 'water' };
+    const rw = this.real?.waterAt(x, z); if (rw != null && h < rw + 0.3) return { h: rw, n: new THREE.Vector3(0, 1, 0), type: 'water' }; // real rivers above the water level
+    return null;
   }
   isPaved(x, z) {
     if (x > 60 && x < 100 && Math.abs(z) < RWY.len / 2) return true; // taxiway

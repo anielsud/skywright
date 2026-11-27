@@ -6,13 +6,21 @@
 //   chunkOutlines(net, areas, L) -> { P: [[X, Z], ...] (cm), E: [[a, b, kind], ...] (an edge two regions share: once for each) }
 import CL from '../../vendor/layout/clipper1.mjs';
 import { KIND } from './format.js';
-import { vergeW } from './rules.js';
+import { vergeW, portalsOf, PORTAL_T } from './rules.js';
 
 const ARC = 15, EDGE_STEP = 4, CLIP = 25, SNAP = 50; // (CLIP: m about the chunk a road's stretches are kept: past a road's widest reach, its half width and pavement) // (ARC: cm a round join's arc may cut inside; EDGE_STEP: m between the chunk's edge points)
 const cm = (v) => Math.round(v * 100);
 
 export function chunkOutlines(net, areas, L) {
-  const runs = net.runs, X0 = cm(L.x0), Z0 = cm(L.z0), S = cm(L.size);
+  const runs = net.runs.filter((r) => !r.off), X0 = cm(L.x0), Z0 = cm(L.z0), S = cm(L.size); // (a bridge's deck, a tunnel's tube: not the ground's, roads.js draws them)
+  // where a road stops at a deck or a tube it stops square (each of its capsules near there cut by a box past the end); a
+  // tunnel's portal: the lip, the headwall's back half across it, is an opening (no surface: the tube's mouth). The box's
+  // near corners at a portal are the lip's own, so the carriageway's end and the lip's front are one line
+  const portals = portalsOf(net.runs), corner = (x, z, ux, uz, a, v) => [cm(x + ux * a - uz * v), cm(z + uz * a + ux * v)]; // (a point a along, v across, from (x, z) facing (ux, uz))
+  const cutsOf = (r) => { const P = r.shape, n = P.length / 2, out = []; for (const end of ['A', 'B']) { const c = r['cut' + end]; if (!c || n < 2) continue; const i = end === 'A' ? 0 : n - 1, j = end === 'A' ? 1 : n - 2, x = P[i * 2], z = P[i * 2 + 1];
+      const pt = c === 'tube' ? portals.find((p) => Math.abs(p.x - x) < 1e-6 && Math.abs(p.z - z) < 1e-6) : null, l = Math.hypot(x - P[j * 2], z - P[j * 2 + 1]) || 1;
+      out.push({ x, z, ux: pt ? pt.dx : (x - P[j * 2]) / l, uz: pt ? pt.dz : (z - P[j * 2 + 1]) / l, wb: pt ? pt.W : 0 }); } return out; };
+  const cutBox = (c, d) => { const wb = c.wb || d + 0.5; return [[corner(c.x, c.z, c.ux, c.uz, 0, -wb), corner(c.x, c.z, c.ux, c.uz, d + 1, -wb), corner(c.x, c.z, c.ux, c.uz, d + 1, wb), corner(c.x, c.z, c.ux, c.uz, 0, wb)]]; };
   const off = (rings, d, open = true) => { const co = new CL.ClipperOffset(2, ARC); co.AddPaths(toC(rings), CL.JoinType.jtRound, open ? CL.EndType.etOpenRound : CL.EndType.etClosedPolygon); const s = new CL.Paths(); co.Execute(s, d); return fromC(s); };
   const union = (...ps) => bool(CL.ClipType.ctUnion, ps.flat(), null), minus = (a, ...bs) => (bs.length ? bool(CL.ClipType.ctDifference, a, union(...bs)) : a), inter = (a, b) => bool(CL.ClipType.ctIntersection, a, b);
   // (each road as its shape's segments that come within CLIP of the chunk, each offset on its own: a segment's strip is a
@@ -23,14 +31,17 @@ export function chunkOutlines(net, areas, L) {
       if (Math.max(ax, bx) < cx0 || Math.min(ax, bx) > cx1 || Math.max(az, bz) < cz0 || Math.min(az, bz) > cz1) continue; out.push([[cm(ax), cm(az)], [cm(bx), cm(bz)]]); } return out; };
   // (and each capsule given a point where it crosses a chunk line, worked out from it alone, before anything is unioned: the
   // union keeps it (collinear points kept), so the chunks either side cut their outlines at the same points)
-  const strips = (filter, width) => { const out = []; for (const r of runs) if (filter(r)) { const d = width(r); if (d > 0) { const ls = segs(r); for (const seg of ls) out.push(...splitAtGrid(off([seg], cm(d)), S)); } } return out; }; // (each capsule offset alone: an offset of several unions them, the rounding again depending on which)
+  const strips = (filter, width) => { const out = []; for (const r of runs) if (filter(r)) { const d = width(r); if (d > 0) { const ls = segs(r), cuts = r.cutA || r.cutB ? cutsOf(r) : [];
+    for (const seg of ls) { let cap = off([seg], cm(d)); for (const c of cuts) if (segDist(seg, cm(c.x), cm(c.z)) < cm(d + 1)) cap = bool(CL.ClipType.ctDifference, cap, cutBox(c, d)); out.push(...splitAtGrid(cap, S)); } } } return out; }; // (each capsule offset alone: an offset of several unions them, the rounding again depending on which)
   const minorKind = (r) => (!r.minor ? -1 : r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
   const area = (surf) => splitAtGrid(areas.filter((a) => a.surf === surf).map((a) => a.ring), S);
   const street = (r) => !r.minor;
   const Tc = union(strips(street, (r) => r.hw)), Pv = union(strips((r) => r.pave > 0, (r) => r.hw + r.pave)), Vg = union(strips((r) => vergeW(r) > 0, (r) => r.hw + vergeW(r)));
   const Ta = union(strips((r) => minorKind(r) === KIND.alley, (r) => r.hw), area(0)), Tp = union(strips((r) => minorKind(r) === KIND.pavers, (r) => r.hw), area(1)), Tg = union(strips((r) => minorKind(r) === KIND.gravel, (r) => r.hw), area(2));
   const Pall = minus(Pv, Tc); // (the kerb: mesh.js, along every tarmac edge a pavement shares)
+  const Lp = union(portals.filter((p) => p.x > cx0 && p.x < cx1 && p.z > cz0 && p.z < cz1).map((p) => [corner(p.x, p.z, p.dx, p.dz, 0, -p.W), corner(p.x, p.z, p.dx, p.dz, PORTAL_T / 2, -p.W), corner(p.x, p.z, p.dx, p.dz, PORTAL_T / 2, p.W), corner(p.x, p.z, p.dx, p.dz, 0, p.W)]));
   const REG = [[KIND.tarmac, Tc], [KIND.pave, Pall], [KIND.alley, minus(Ta, Tc, Pall)], [KIND.pavers, minus(Tp, Tc, Pall, Ta)], [KIND.gravel, minus(Tg, Tc, Pall, Ta, Tp)], [KIND.verge, minus(Vg, Tc, Pall, Ta, Tp, Tg).filter((p) => Math.abs(ringArea(p)) > 5000)]]; // (no verge slivers under 0.5 m²)
+  if (Lp.length) { const Lq = minus(Lp, Tc); for (const e of REG) e[1] = minus(e[1], Lq); REG.unshift([KIND.lip, Lq]); } // (not over a carriageway: another road's beside the portal, a twin tube's) // (a portal's lip: an opening through everything)
   // the chunk's: clipped to it (each region split where it crosses a chunk line first: neighbours clip the same points)
   const box = [[[X0, Z0], [X0 + S, Z0], [X0 + S, Z0 + S], [X0, Z0 + S]]];
   const key = new Map(), P = []; const add = (X, Z) => { X = Math.max(X0, Math.min(X0 + S, X)); Z = Math.max(Z0, Math.min(Z0 + S, Z)); const k = X * 1e7 + Z; let i = key.get(k); if (i == null) { i = P.length; key.set(k, i); P.push([X, Z]); } return i; };
@@ -52,6 +63,7 @@ export function chunkOutlines(net, areas, L) {
     E = out.filter((e) => n.get(e[3]) % 2).map(([u, v, k]) => [u, v, k]); };
   // (and every point the regions have on the chunk's edge, used by this side's polygons or not: the chunk beside has them too)
   for (const [, sp] of pre) for (const r of sp) for (const [X, Z] of r) if (onEdge(X, Z) && X >= X0 && X <= X0 + S && Z >= Z0 && Z <= Z0 + S) add(X, Z);
+  for (const r of runs) for (const c of r.cutA || r.cutB ? cutsOf(r) : []) { const X = cm(c.x), Z = cm(c.z); if (X > X0 && Z > Z0 && X < X0 + S && Z < Z0 + S) add(X, Z); } // (where a road stops at a deck or tube: its end a point of its own, mesh.js)
   split(); for (let pass = 0; pass < 4; pass++) { if (!crossings(P, E, add)) break; split(); }
   // the regions a point on the chunk's edge is in (a bit per kind): from the regions before they're clipped to the chunk,
   // which both chunks have alike (on a region's edge or corner counts as in), not from this side's polygons
@@ -113,3 +125,6 @@ function crossings(P, E, add) {
 const toC = (rings) => rings.map((r) => r.map(([X, Z]) => ({ X, Y: Z }))), fromC = (P) => P.map((r) => r.map((p) => [p.X, p.Y]));
 function bool(type, a, b) { const c = new CL.Clipper(); c.PreserveCollinear = true; c.AddPaths(toC(a), CL.PolyType.ptSubject, true); if (b?.length) c.AddPaths(toC(b), CL.PolyType.ptClip, true); const s = new CL.Paths(); c.Execute(type, s, CL.PolyFillType.pftNonZero, CL.PolyFillType.pftNonZero); return fromC(s); }
 function ringArea(r) { let a = 0; for (let i = 0; i < r.length; i++) { const [x0, z0] = r[i], [x1, z1] = r[(i + 1) % r.length]; a += x0 * z1 - x1 * z0; } return a / 2; }
+
+// distance (cm) from a point to a segment [[ax, az], [bx, bz]] (cm)
+function segDist([[ax, az], [bx, bz]], X, Z) { const dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((X - ax) * dx + (Z - az) * dz) / L2)); return Math.hypot(X - ax - dx * t, Z - az - dz * t); }

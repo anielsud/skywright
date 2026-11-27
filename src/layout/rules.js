@@ -26,14 +26,48 @@ export const painted = (r, city) => !r.minor && (city || r.kind === 'highway' ||
 export const zebra = (r, city) => !r.minor && (city || r.pave > 0);
 const SC = 10, PAD = 54; // (grid cell, m; how far from a road its segments are found: the bake stores every road within more than this of a chunk, bake.js NET_PAD, so two chunks work out their shared edge alike)
 
-// net: { runs: [{ pts: Float64Array x,z,..., h: Float64Array, hw, pave, kind, minor, surf, lanes, oneway }], junctions: [{ x, z, r, y0, gx, gz }] }
+// bridges and tunnels (roads.js draws their decks and tubes at their own profile, as today): a deck is DECK_SIDE m wider than
+// its road each side and DECK_DEPTH deep; a tube's walls TUBE_SIDE m out, its crown TUBE_H up; a portal's headwall
+// PORTAL_W m wider than the tube each side, PORTAL_TOP up, PORTAL_T thick (centred on the portal)
+export const DECK_SIDE = 1, DECK_DEPTH = 1.4, TUBE_SIDE = 1.2, TUBE_H = 5.6, PORTAL_W = 5, PORTAL_TOP = 11.6, PORTAL_T = 0.7;
+const UNDER = 0.1, OVER = 0.3, HOLD = 10; // (the ground kept this far under a deck's underside, over a tube's crown)
+// a tunnel's portals, from the roads stopping at a tube (ends 2, 8): where (the road's end), which way into the hill (dx,
+// dz: the road's last segment's, and the tube's first's if it's stored: roads.js frames the headwall by both), the road's
+// height there (the tube's floor), the tube's half width (hwT) and the headwall's (W)
+export function portalsOf(runs) {
+  const out = [], tubes = runs.filter((r) => r.off === 'tube'), P = (r, i) => [r.shape[i * 2], r.shape[i * 2 + 1]], ns = (r) => r.shape.length / 2;
+  for (const r of runs) for (const end of ['A', 'B']) { if (r['cut' + end] !== 'tube' || ns(r) < 2) continue;
+    const [x, z] = end === 'A' ? P(r, 0) : P(r, ns(r) - 1), [px, pz] = end === 'A' ? P(r, 1) : P(r, ns(r) - 2); let nx = px, nz = pz;
+    for (const t of tubes) { if (ns(t) < 2) continue; const [ax, az] = P(t, 0), [bx, bz] = P(t, ns(t) - 1); if (Math.hypot(ax - x, az - z) < 0.02) { [nx, nz] = P(t, 1); nx = 2 * x - nx; nz = 2 * z - nz; break; } if (Math.hypot(bx - x, bz - z) < 0.02) { [nx, nz] = P(t, ns(t) - 2); nx = 2 * x - nx; nz = 2 * z - nz; break; } }
+    let dx = (x - px) + (x - nx), dz = (z - pz) + (z - nz); if (Math.hypot(dx, dz) < 1e-6) { dx = x - px; dz = z - pz; } const l = Math.hypot(dx, dz) || 1, hwT = r.hw + TUBE_SIDE;
+    out.push({ x, z, dx: dx / l, dz: dz / l, y: end === 'A' ? r.h[0] : r.h[r.h.length - 1], hw: r.hw, hwT, W: hwT + PORTAL_W }); }
+  return out;
+}
+// (x, z) in a portal's frame: along (into the hill, from the portal) and across
+export const portalUV = (p, x, z) => [(x - p.x) * p.dx + (z - p.z) * p.dz, (z - p.z) * p.dx - (x - p.x) * p.dz];
+
+// net: { runs: [{ pts: Float64Array x,z,..., h: Float64Array, hw, pave, kind, minor, surf, lanes, oneway, off ('deck', 'tube': not the ground's), cutA, cutB ('deck', 'tube': it stops there) }], junctions: [{ x, z, r, y0, gx, gz }] }
 // g(x, z): the natural ground; city: a city's lots; wl: the world's water level (the shore rule; none: -Infinity)
 export function makeRules(net, g, city, wl = -Infinity) {
   const runs = net.runs, JN = net.junctions;
   for (const r of runs) { const n = r.h.length; r.s = new Float64Array(n); for (let i = 1; i < n; i++) r.s[i] = r.s[i - 1] + Math.hypot(r.pts[i * 2] - r.pts[i * 2 - 2], r.pts[i * 2 + 1] - r.pts[i * 2 - 1]); }
-  const segIdx = new Map(), key = (i, j) => i * 100003 + j;
-  runs.forEach((r, ri) => { for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3];
+  const segIdx = new Map(), key = (i, j) => i * 100003 + j, offIdx = new Map(), portals = portalsOf(runs);
+  runs.forEach((r, ri) => { if (r.off) return; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3];
     for (let i = Math.floor((Math.min(ax, bx) - PAD) / SC); i <= Math.floor((Math.max(ax, bx) + PAD) / SC); i++) for (let j = Math.floor((Math.min(az, bz) - PAD) / SC); j <= Math.floor((Math.max(az, bz) + PAD) / SC); j++) { const k = key(i, j); (segIdx.get(k) || segIdx.set(k, []).get(k)).push(ri, s); } } });
+  runs.forEach((r, ri) => { if (!r.off) return; const wd = r.hw + (r.off === 'deck' ? DECK_SIDE : TUBE_SIDE); for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3];
+    for (let i = Math.floor((Math.min(ax, bx) - wd) / SC); i <= Math.floor((Math.max(ax, bx) + wd) / SC); i++) for (let j = Math.floor((Math.min(az, bz) - wd) / SC); j <= Math.floor((Math.max(az, bz) + wd) / SC); j++) { const k = key(i, j); (offIdx.get(k) || offIdx.set(k, []).get(k)).push(ri, s); } } });
+  // (a road's raw projection t on its segment s past an end where it stops at a deck or tube: past it, it isn't there)
+  const pastCut = (r, s, t, kind) => (t < 0 && s === 0 && r.cutA && (!kind || r.cutA === kind)) || (t > 1 && s === r.h.length - 2 && r.cutB && (!kind || r.cutB === kind));
+  // the ground under a deck kept under its underside, over a tube kept over its crown (within their widths, between their ends)
+  const offClamp = (x, z, y) => { const L = offIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return y;
+    for (let q = 0; q < L.length; q += 2) { const r = runs[L[q]], s = L[q + 1], ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9, t0 = ((x - ax) * dx + (z - az) * dz) / L2;
+      if ((t0 < 0 && s === 0) || (t0 > 1 && s === r.h.length - 2)) continue; const t = Math.max(0, Math.min(1, t0)), d = Math.hypot(x - ax - dx * t, z - az - dz * t), hy = r.h[s] + (r.h[s + 1] - r.h[s]) * t;
+      if (r.off === 'deck') { if (d <= r.hw + DECK_SIDE + 0.05) y = Math.min(y, hy - DECK_DEPTH - UNDER); } else if (d <= r.hw + TUBE_SIDE + 0.5) y = Math.max(y, hy + TUBE_H + OVER); } // (a tube: half a metre wider, the portal's frame turned a little from the tube's)
+    return y; };
+  // a portal's opening: its lip (behind the portal, the headwall's back half, across the headwall: no surface); and the ground
+  // there kept within the headwall (its rim hidden in it)
+  const inLip = (x, z) => portals.some((p) => { const [u, v] = portalUV(p, x, z); return u >= -0.005 && u <= PORTAL_T / 2 + 0.005 && Math.abs(v) <= p.W + 0.005; });
+  const portalClamp = (x, z, y) => { for (const p of portals) { const [u, v] = portalUV(p, x, z); if (u >= -0.05 && u <= PORTAL_T / 2 + 0.05 && Math.abs(v) <= p.W + 0.05) y = Math.min(y, p.y + (u < PORTAL_T / 4 && Math.abs(v) <= p.hwT + 0.05 ? TUBE_H - 0.1 : PORTAL_TOP - 0.3)); } return y; }; // (the mouth's front: under the crown, a steep hillside's cutting held there)
   const street = (r) => !r.minor, any = () => true;
   // the nearest road (filter ok) to (x, z): its distance past its tarmac's edge d, height h there, u along, v across
   const nearest = (x, z, ok) => { let best = null; const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return null;
@@ -64,11 +98,22 @@ export function makeRules(net, g, city, wl = -Infinity) {
       const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw; c.push(d, r.h[s] + (r.h[s + 1] - r.h[s]) * t); if (d < dmin) dmin = d; }
     let sw = 0, sh = 0; for (let q = 0; q < c.length; q += 2) { const u = 1 - (c[q] - dmin) / SBLEND; if (u <= 0) continue; const wt = u * u * (3 - 2 * u); sw += wt; sh += wt * c[q + 1]; } return sw ? sh / sw : null; };
   const minorKind = (k) => k === KIND.alley || k === KIND.pavers || k === KIND.gravel;
+  // where a road stops at a deck or a tube: its own height across its end, as the deck's or the tube's floor (level across), not
+  // blended with a road beside it (a dual carriageway's other side, a ramp): fading to the blend over HOLD m back from the end
+  // and over its pavement or verge sideways (no step)
+  const cuts = []; runs.forEach((r) => { if (r.off || r.minor) return; const n = r.h.length; if (n < 2) return; for (const [c, i, j] of [[r.cutA, 0, 1], [r.cutB, n - 1, n - 2]]) if (c) { const dx = r.pts[i * 2] - r.pts[j * 2], dz = r.pts[i * 2 + 1] - r.pts[j * 2 + 1], l = Math.hypot(dx, dz) || 1; cuts.push({ r, x: r.pts[i * 2], z: r.pts[i * 2 + 1], dx: dx / l, dz: dz / l, y: r.h[i], side: r.pave || vergeW(r) || 1 }); } });
+  const sstep = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
+  // (two such ends side by side, a twin tube's: each one's own height by how near its centre line the point is, sharply, so
+  // each end is its own exactly and the two blend between, without a step)
+  const hold = (x, z, y) => { let W = 0, sk = 0, sy = 0; for (const c of cuts) { const u = (c.x - x) * c.dx + (c.z - z) * c.dz; if (u < -0.01 || u > HOLD) continue; const v = Math.abs((z - c.z) * c.dx - (x - c.x) * c.dz); if (v > c.r.hw + c.side) continue;
+      const w = (1 - sstep(u / HOLD)) * (1 - sstep((v - c.r.hw) / c.side)); if (w <= 0) continue; const k = Math.exp(-8 * (v / c.r.hw) ** 2) + 1e-12; W = Math.max(W, w); sk += k; sy += k * nearestOn(c.r, x, z); }
+    return W > 0 ? y + (sy / sk - y) * W : y; };
+  const nearestOn = (r, x, z) => { let best = Infinity, y = 0; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t); if (d < best) { best = d; y = r.h[s] + (r.h[s + 1] - r.h[s]) * t; } } return y; };
   const base = (x, z, k) => {
     const n = nearest(x, z, minorKind(k) ? any : street) || nearest(x, z, any); if (!n) return g(x, z);
     if (minorKind(k) && n.d > 0) { const f = Math.min(1, n.d / 20); return n.h + (g(x, z) - n.h) * f; } // (a plaza's middle, away from its ways: towards the ground)
     if (n.r.minor) return n.h;
-    return streetH(x, z, blended(x, z));
+    const y = streetH(x, z, blended(x, z)); return cuts.length ? hold(x, z, y) : y;
   };
   const drawn = (x, z, k) => base(x, z, k) + (k === KIND.pave || k === KIND.kerb ? KERB : 0);
   const lot = (x, z) => { const two = nearest2(x, z, (r) => !r.minor && r.pave).filter((n, i) => i === 0 || n.d <= LOT_PAIR); if (!two.length) return null; /* (the second only if it's near: past that, which it is depends on how far the stored network reaches) */ let s = 0, ws = 0; for (const n of two) { const wt = 1 / Math.max(0.5, n.d); s += (streetH(x, z, n.h) + KERB) * wt; ws += wt; } return { y: s / ws, d: two[0].d }; };
@@ -78,7 +123,8 @@ export function makeRules(net, g, city, wl = -Infinity) {
   const slopeAt = (x, z) => Math.hypot(g(x + 2, z) - g(x - 2, z), g(x, z + 2) - g(x, z - 2)) / 4;
   const banks = (x, z, gz) => { const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return gz; const per = new Map();
     for (let q = 0; q < L.length; q += 2) { const ri = L[q], s = L[q + 1], r = runs[ri], ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
-      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), px = ax + dx * t, pz = az + dz * t, d = Math.hypot(x - px, z - pz) - r.hw - (r.pave || vergeW(r)), b = per.get(ri);
+      const t0 = ((x - ax) * dx + (z - az) * dz) / L2; if (pastCut(r, s, t0, 'tube')) continue; // (past a portal, the hill: not the approach's cutting)
+      const t = Math.max(0, Math.min(1, t0)), px = ax + dx * t, pz = az + dz * t, d = Math.hypot(x - px, z - pz) - r.hw - (r.pave || vergeW(r)), b = per.get(ri);
       if (d <= BANK_MAX && (!b || d < b.d)) per.set(ri, { r, d: Math.max(0, d), h: r.h[s] + (r.h[s + 1] - r.h[s]) * t, px, pz }); }
     if (!per.size || gz < wl) return gz; let lo = -Infinity, hi = Infinity, nb = null;
     for (const b of per.values()) { const y = (b.r.minor ? b.h : streetH(b.px, b.pz, b.h)) + (b.r.pave ? KERB : 0), sl = BANK_STEEP * slopeAt(b.px, b.pz), kf = Math.min(BANK_TOP, Math.max(FILL, sl)), kc = Math.min(BANK_TOP, Math.max(CUT, sl));
@@ -86,7 +132,8 @@ export function makeRules(net, g, city, wl = -Infinity) {
     if (lo > hi) { lo = nb.lo; hi = nb.hi; } return shore(Math.min(hi, Math.max(lo, gz)), gz); };
   // (the shore: under the water the natural ground; on dry ground a fill tapers to nothing at the waterline, never below it)
   const shore = (y, gz) => (gz < wl ? gz : Math.max(wl, y > gz ? Math.min(y, gz + SHORE_K * (gz - wl)) : y));
-  const ground = (x, z) => { const gz = g(x, z); if (city) { const l = lot(x, z); if (l && l.d <= CITY_REACH) return l.y; } return banks(x, z, gz); };
+  const ground0 = (x, z) => { const gz = g(x, z); if (city) { const l = lot(x, z); if (l && l.d <= CITY_REACH) return l.y; } return banks(x, z, gz); };
+  const ground = (x, z) => portalClamp(x, z, offClamp(x, z, ground0(x, z)));
   // the markings' coordinates: the nearest street, and how far its point is from the nearest junction's circle
   const road = (x, z) => { const n = nearest(x, z, street); if (!n) return null; const j = junction(n.px, n.pz); return { id: n.ri, u: n.u, v: n.v, hw: n.r.hw, lanes: n.r.lanes, oneway: n.r.oneway, dj: j ? j[1] : 99 }; };
   // a point's coordinates on a given road (the one its triangle was given): along, across, and from the nearest junction's circle
@@ -115,14 +162,15 @@ export function makeRules(net, g, city, wl = -Infinity) {
   // alley, pavers, gravel, a verge; else the ground (a carriageway's edge, to 3 cm: its outline's points round to the
   // centimetre). For the chunk's edge points: both chunks beside it agree.
   const mk = (r) => (r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
-  const region = (x, z) => { const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return KIND.ground; let best = KIND.ground, rank = 99;
+  const region = (x, z) => { if (portals.length && inLip(x, z)) return KIND.lip; const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return KIND.ground; let best = KIND.ground, rank = 99;
     const RANK = { [KIND.tarmac]: 0, [KIND.pave]: 1, [KIND.alley]: 2, [KIND.pavers]: 3, [KIND.gravel]: 4, [KIND.verge]: 5 };
     for (let q = 0; q < L.length; q += 2) { const ri = L[q], s = L[q + 1], r = runs[ri], ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
-      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw;
+      const t0 = ((x - ax) * dx + (z - az) * dz) / L2; if (pastCut(r, s, t0)) continue; // (a road stopping at a deck or tube stops square)
+      const t = Math.max(0, Math.min(1, t0)), d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw;
       const k = d <= (r.minor ? 0 : 0.03) ? (r.minor ? mk(r) : KIND.tarmac) : !r.minor && r.pave && d <= r.pave ? KIND.pave : d <= vergeW(r) ? KIND.verge : null;
       if (k != null && RANK[k] < rank) { rank = RANK[k]; best = k; } }
     return best; };
-  return { base, drawn, ground, road, roadOn, lineOn, bends, nearest, nearest2, lot, junction, region };
+  return { base, drawn, ground, road, roadOn, lineOn, bends, nearest, nearest2, lot, junction, region, portals };
 }
 
 // the natural ground from the hi grid's points around a chunk (lat: i0, j0, ni, nj; G their heights): bilinear, as the

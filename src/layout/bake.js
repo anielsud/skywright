@@ -13,7 +13,7 @@
 import CL from '../../vendor/layout/clipper1.mjs';
 import { CHUNK, KIND, RKINDS, encodeLayout, stations } from './format.js';
 
-const SEG = 8, MARGIN = 150, ARC = 8, SIMPLIFY = 25, SHAPE_TOL = 15, EDGE_STEP = 4, NET_PAD = 75; // (NET_PAD: the network stored with a chunk reaches this far past it: past every rule's reach, rules.js)
+const PIN_W = 1e4, SEG = 8, MARGIN = 150, ARC = 8, SIMPLIFY = 25, SHAPE_TOL = 15, EDGE_STEP = 4, NET_PAD = 75; // (NET_PAD: the network stored with a chunk reaches this far past it: past every rule's reach, rules.js)
 const PAVE = { main: 4.5, street: 3.5 }; // (as roadgrade.js: a city street's pavement, a country road's verge)
 // a country place's pavements: only along a street's built-up stretches (OpenStreetMap's sidewalk tags aren't in the
 // road data; the buildings are): BUILT_N or more buildings within BUILT_D m of the road per 100 m, averaged over
@@ -42,23 +42,30 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   let t0 = performance.now();
   const V = [], node = new Map(), runs = [], rdId = new Map(), built = city ? null : builtUp(w); // (built: a country place's built-up stretches)
   const newVar = (x, z) => (V.push({ x, z, g: g(x, z) }), V.length - 1);
+  // (a road's stretches on bridge decks or in tunnels' tubes aren't the ground's: they're stored as decks and tubes
+  // (offRuns), drawn by today's bridge and tube meshes at their own profile (roads.js); the stretches either side are
+  // roads of their own, each ending where the deck or tube begins (cutA, cutB), held there at the deck's or tube's height
+  // (pins) so the two meet without a step; a node a road shares with a deck or a tube is held at its height too)
+  const offRuns = [], pins = new Map(), pinNode = new Map(), endNode = new Set();
   for (const rd of w.net.roads) {
-    if (rd.kind === 'rail' || rd.baked) continue; // (rail; the airport's own roads)
+    if (rd.kind === 'rail') continue;
     const n0 = rd.pts.length, P = rd.closed ? [...rd.pts, rd.pts[0]] : rd.pts, n = P.length; let a = -1, b = -1; // (a roundabout's ring: closed as a line)
     for (let i = 0; i < n; i++) if (inR(P[i])) { if (a < 0) a = i; b = i; }
     if (a < 0) continue;
     a = Math.max(0, a - 1); b = Math.min(n - 1, b + 1);
-    // (a road's stretches on bridges or in tunnels aren't the layout's: the chunks they're in keep today's roads (bakeChunks'
-    // fallback); the stretches either side of one are roads of their own here)
     // (on the sea, loc.shore: a way off the street network out in the water isn't the layout's either: a resort's walkway out
     // to its overwater bungalows, on a pier the game draws as its deck)
-    const bad = (i) => !!(rd.bridge?.[i % n0] || rd.tube?.[i % n0] || rd.span?.[i % n0]) || (rd.minor && g(P[i % n0].x, P[i % n0].z) < wl - WET), jn = new Map(rd.jn || []);
-    for (let s0 = a; s0 <= b;) {
-      if (bad(s0)) { s0++; continue; } let e0 = s0; while (e0 + 1 <= b && !bad(e0 + 1)) e0++;
-      if (e0 > s0) {
-        // (in a country place, a street's stretch split again where it enters or leaves a built-up stretch: PAVE_VILLAGE)
-        const parts = []; if (built && !rd.minor && rd.kind !== 'highway') { const f = built(P, s0, e0); let s1 = s0; for (let q = s0 + 1; q <= e0; q++) if (q === e0 || f[q - s0] !== f[q - s0 - 1]) { parts.push([s1, q, f[s1 - s0]]); s1 = q; } } else parts.push([s0, e0, false]);
-        for (const [s1, e1, village] of parts) {
+    const wet = (i) => rd.minor && g(P[i % n0].x, P[i % n0].z) < wl - WET;
+    const off = (i) => (rd.baked || (rd.bridge?.[i % n0] && rd.bridge?.[(i + 1) % n0]) ? 'deck' : rd.tube?.[i % n0] && rd.tube?.[(i + 1) % n0] ? 'tube' : wet(i) || wet(i + 1) ? 'wet' : null), jn = new Map(rd.jn || []), cut = (t) => (t === 'wet' ? null : t);
+    for (let s0 = a; s0 < b;) {
+      const ty = off(s0); let e0 = s0 + 1; while (e0 < b && off(e0) === ty) e0++;
+      if (ty === 'wet') { s0 = e0; continue; }
+      if (ty) { const pts = [], ys = []; for (let i = s0; i <= e0; i++) { pts.push([P[i].x, P[i].z]); ys.push(P[i].y); const nd = jn.get(i % n0); if (nd != null && !pinNode.has(nd)) pinNode.set(nd, P[i].y); if (nd != null && (i === s0 || i === e0)) endNode.add(nd); }
+        offRuns.push({ off: ty, rd, osmPts: pts, pts, ys, kind: rd.kind, minor: !!rd.minor, surf: rd.surf || 0, hw: rd.width / 2, lanes: rd.lanes || (rd.oneway ? 1 : 2), oneway: !!rd.oneway, pave: 0 }); s0 = e0; continue; }
+      // (in a country place, a street's stretch split again where it enters or leaves a built-up stretch: PAVE_VILLAGE)
+      const parts = []; if (built && !rd.minor && rd.kind !== 'highway') { const f = built(P, s0, e0); let s1 = s0; for (let q = s0 + 1; q <= e0; q++) if (q === e0 || f[q - s0] !== f[q - s0 - 1]) { parts.push([s1, q, f[s1 - s0]]); s1 = q; } } else parts.push([s0, e0, false]);
+      const cA = cut(s0 > a ? off(s0 - 1) : a > 0 ? off(a - 1) : null), cB = cut(e0 < b ? off(e0) : b < n - 1 ? off(b) : null);
+      for (const [s1, e1, village] of parts) {
         const pts = [], vars = [], osm = []; // (osm: which of pts are the road's own points)
         for (let i = s1; i <= e1; i++) {
           if (i > s1) { const p = P[i - 1], q = P[i], l = Math.hypot(q.x - p.x, q.z - p.z), k = Math.ceil(l / SEG); for (let s = 1; s < k; s++) { const x = p.x + (q.x - p.x) * s / k, z = p.z + (q.z - p.z) * s / k; pts.push([x, z]); vars.push(newVar(x, z)); } }
@@ -66,13 +73,18 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
           let v; if (nd != null && node.has(nd)) v = node.get(nd); else if (rd.closed && i === n0 && vars.length) v = vars[0]; else { v = newVar(P[i].x, P[i].z); if (nd != null) node.set(nd, v); }
           osm.push(pts.length); pts.push([P[i].x, P[i].z]); vars.push(v);
         }
-        const minor = !!rd.minor, kind = rd.kind;
-        runs.push({ cutA: s1 === s0 && (s0 > a || (a > 0 && bad(a - 1))), cutB: e1 === e0 && (e0 < b || (b < n - 1 && bad(b + 1))), rd, osmPts: osm.map((k) => pts[k]), kind, minor, surf: rd.surf || 0, hw: rd.width / 2, lanes: rd.lanes || (rd.oneway ? 1 : 2), oneway: !!rd.oneway, layer: rd.layer || 0, pts, vars, grade: minor ? GRADE_MINOR[kind] ?? 0.3 : (city ? GRADE_CITY : GRADE)[kind] ?? 0.2, pave: city && !minor && !rd.baked && PAVE[kind] ? PAVE[kind] : village ? PAVE_VILLAGE : 0 });
-        }
+        const minor = !!rd.minor, kind = rd.kind, cutA = s1 === s0 ? cA : null, cutB = e1 === e0 ? cB : null;
+        if (cutA) pins.set(vars[0], P[s1].y); if (cutB) pins.set(vars[vars.length - 1], P[e1].y);
+        runs.push({ cutA, cutB, rd, osmPts: osm.map((k) => pts[k]), kind, minor, surf: rd.surf || 0, hw: rd.width / 2, lanes: rd.lanes || (rd.oneway ? 1 : 2), oneway: !!rd.oneway, layer: rd.layer || 0, pts, vars, grade: minor ? GRADE_MINOR[kind] ?? 0.3 : (city ? GRADE_CITY : GRADE)[kind] ?? 0.2, pave: city && !minor && !rd.baked && PAVE[kind] ? PAVE[kind] : village ? PAVE_VILLAGE : 0 });
       }
-      s0 = e0 + 1;
+      s0 = e0;
     }
   }
+  for (const [nd, y] of pinNode) { const v = node.get(nd); if (v != null && !pins.has(v)) pins.set(v, y); }
+  // (a road ending where a deck or tube ends (a whole-bridge way, bake.py's decks over water) ends there as at a cut)
+  { const at = new Map(); for (const nd of endNode) { const v = node.get(nd); if (v != null) at.set(v, pinNode.get(nd)); }
+    for (const r of runs) { if (!r.cutA && at.has(r.vars[0])) r.cutA = 'deck'; if (!r.cutB && at.has(r.vars[r.vars.length - 1])) r.cutB = 'deck'; } }
+  const pinAll = () => { for (const [k, y] of pins) h[k] = y; };
   // (roads crossing without a shared node, on the same layer: tied at the crossing)
   { const segGrid = new Map(), C = 20, key = (i, j) => i * 100003 + j, ins = runs.map(() => []);
     runs.forEach((r, ri) => { for (let s = 0; s + 1 < r.pts.length; s++) { const [ax, az] = r.pts[s], [bx, bz] = r.pts[s + 1]; for (let i = Math.floor(Math.min(ax, bx) / C); i <= Math.floor(Math.max(ax, bx) / C); i++) for (let j = Math.floor(Math.min(az, bz) / C); j <= Math.floor(Math.max(az, bz) / C); j++) { const k = key(i, j); (segGrid.get(k) || segGrid.set(k, []).get(k)).push([ri, s]); } } });
@@ -95,23 +107,23 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   // ---- 2. height solve
   t0 = performance.now();
   const nv = V.length, floor = wl + FREEBOARD, gt = Float64Array.from(V, (v) => Math.max(v.g, floor)), h = Float64Array.from(gt), edges = [], nb = V.map(() => []); // (gt: the ground each station is pulled to: the natural ground, above the water)
-  const lift = () => { let n = 0; for (let k = 0; k < nv; k++) if (h[k] < floor) { h[k] = floor; n++; } return n; };
+  const lift = () => { let n = 0; for (let k = 0; k < nv; k++) if (h[k] < floor && !pins.has(k)) { h[k] = floor; n++; } return n; };
   for (const r of runs) for (let i = 0; i + 1 < r.vars.length; i++) { const a = r.vars[i], b = r.vars[i + 1]; if (a === b) continue; const l = Math.max(0.5, r.s[i + 1] - r.s[i]); edges.push([a, b, l, r.grade]); nb[a].push([b, 1 / l]); nb[b].push([a, 1 / l]); }
   const vGrid = new Map(), VC = 10; V.forEach((v, k) => { const key = Math.floor(v.x / VC) * 100003 + Math.floor(v.z / VC); (vGrid.get(key) || vGrid.set(key, []).get(key)).push(k); });
   const varsNear = (x, z, r) => { const out = []; for (let i = Math.floor((x - r) / VC); i <= Math.floor((x + r) / VC); i++) for (let j = Math.floor((z - r) / VC); j <= Math.floor((z + r) / VC); j++) for (const k of vGrid.get(i * 100003 + j) || []) if (Math.hypot(V[k].x - x, V[k].z - z) <= r) out.push(k); return out; };
   const JN = [], hwAt = new Map(); for (const r of runs) if (!r.minor) for (const v of r.vars) hwAt.set(v, Math.max(hwAt.get(v) || 0, r.hw));
   for (const j of w.net.junctions) { if (!inR(j)) continue; let r = 0; for (let q = 0; q < j.box.length; q += 2) r = Math.max(r, Math.hypot(j.box[q] - j.x, j.box[q + 1] - j.z)); r = Math.min(35, Math.max(6, r)); if (!city) { const v = node.get(j.nd), hw = v != null ? hwAt.get(v) : null; if (hw) r = Math.min(r, Math.max(JR_MIN, JR_K * hw + JR_ADD)); } const m = varsNear(j.x, j.z, r); if (m.length >= 2) JN.push({ x: j.x, z: j.z, r, m, a: 0, b: 0, c: 0 }); }
-  const plane = (J) => { const n = J.m.length; let mx = 0, mz = 0, my = 0; for (const k of J.m) { mx += V[k].x; mz += V[k].z; my += h[k]; } mx /= n; mz /= n; my /= n; let a = 0, b = 0, c = 0, d = 0, e = 0;
-    for (const k of J.m) { const X = V[k].x - mx, Z = V[k].z - mz, Y = h[k] - my; a += X * X; b += X * Z; c += Z * Z; d += X * Y; e += Z * Y; } const det = a * c - b * b; let gx = n >= 3 && Math.abs(det) > 1e-6 ? (d * c - e * b) / det : 0, gz = n >= 3 && Math.abs(det) > 1e-6 ? (e * a - d * b) / det : 0;
+  const plane = (J) => { const n = J.m.length; let mx = 0, mz = 0, my = 0, W = 0; for (const k of J.m) { const q = pins.has(k) ? PIN_W : 1; mx += q * V[k].x; mz += q * V[k].z; my += q * h[k]; W += q; } mx /= W; mz /= W; my /= W; let a = 0, b = 0, c = 0, d = 0, e = 0; // (a pinned point, a deck's or tube's end, weighs PIN_W: the plane passes through it)
+    for (const k of J.m) { const q = pins.has(k) ? PIN_W : 1, X = V[k].x - mx, Z = V[k].z - mz, Y = h[k] - my; a += q * X * X; b += q * X * Z; c += q * Z * Z; d += q * X * Y; e += q * Z * Y; } const det = a * c - b * b; let gx = n >= 3 && Math.abs(det) > 1e-6 ? (d * c - e * b) / det : 0, gz = n >= 3 && Math.abs(det) > 1e-6 ? (e * a - d * b) / det : 0;
     // (members nearly in a line (less than PLANE_ACROSS m RMS across it: a small junction's few stations along a road that runs
     // through it): the slope across that line isn't known from them. Where it came out steeper than CROSS_MAX (up to 220%:
     // a village's pavement 12 m under its street) the plane takes the slope along the line only, level across it)
     { const m2 = (a + c) / 2, r2 = Math.hypot((a - c) / 2, b), lmin = m2 - r2, lmax = m2 + r2; const th = 0.5 * Math.atan2(2 * b, a - c), ux = Math.cos(th), uz = Math.sin(th); J.line = n >= 3 && lmax > 1e-6 && lmin < PLANE_ACROSS * PLANE_ACROSS * n && Math.abs(gz * ux - gx * uz) > CROSS_MAX; if (J.line) { J.wasLine = true; const sl = (d * ux + e * uz) / lmax; gx = sl * ux; gz = sl * uz; } }
     J.mx = mx; J.mz = mz; J.my = my; J.gx = gx; J.gz = gz; };
-  const toPlane = () => { for (const J of JN) { plane(J); for (const k of J.m) h[k] = J.my + J.gx * (V[k].x - J.mx) + J.gz * (V[k].z - J.mz); } };
-  const clampGrades = (passes) => { for (let p = 0; p < passes; p++) for (const [a, b, l, G] of edges) { const d = h[a] - h[b], lim = G * l; if (Math.abs(d) > lim) { const ex = (Math.abs(d) - lim) / 2 * Math.sign(d); h[a] -= ex; h[b] += ex; } } };
+  const toPlane = () => { for (const J of JN) { plane(J); for (const k of J.m) h[k] = J.my + J.gx * (V[k].x - J.mx) + J.gz * (V[k].z - J.mz); } pinAll(); };
+  const clampGrades = (passes) => { for (let p = 0; p < passes; p++) for (const [a, b, l, G] of edges) { const d = h[a] - h[b], lim = G * l; if (Math.abs(d) > lim) { const ex = (Math.abs(d) - lim) / 2 * Math.sign(d); h[a] -= ex; h[b] += ex; } } pinAll(); };
   const WG = opts.WG ?? 0.1; // (the natural ground's pull against the neighbours' 1/l, per station: a weaker pull smoothed hairpins metres off the ground, #297)
-  let iters = 0; const wg = new Float64Array(nv).fill(WG);
+  let iters = 0; const wg = new Float64Array(nv).fill(WG); pinAll();
   const smooth = (n) => { for (let it = 0; it < n; it++, iters++) {
     for (let k = 0; k < nv; k++) { const N = nb[k]; if (!N.length) continue; let s = wg[k] * gt[k], ws = wg[k]; for (const [o, wt] of N) { s += wt * h[o]; ws += wt; } h[k] = s / ws; }
     toPlane(); clampGrades(2); lift();
@@ -120,9 +132,9 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   // (last: each junction on its plane, then every road within its grade limit, away from the junctions: a junction's own
   // slope is its ground's; the clamp leaves a junction's points where they are and moves the road's next to it)
   toPlane(); const memberOf = new Map(); JN.forEach((J, q) => { for (const k of J.m) memberOf.set(k, q); });
-  const member = { has: (k) => memberOf.has(k) }, inOne = (a, b) => memberOf.has(a) && memberOf.get(a) === memberOf.get(b);
+  const member = { has: (k) => memberOf.has(k) || pins.has(k) }, inOne = (a, b) => memberOf.has(a) && memberOf.get(a) === memberOf.get(b);
   const enforce = () => { for (let p = 0; p < 400; p++) { let moved = 0; for (const [a, b, l, G] of edges) { if (inOne(a, b)) continue; const d = h[a] - h[b], lim = G * l; if (Math.abs(d) <= lim + 1e-4) continue; const ex = Math.abs(d) - lim, sg = Math.sign(d);
-    if (member.has(a)) h[b] += ex * sg; else if (member.has(b)) h[a] -= ex * sg; else { h[a] -= ex / 2 * sg; h[b] += ex / 2 * sg; } moved++; } moved += lift(); if (!moved) break; } };
+    if ((pins.has(a) && member.has(b)) || (pins.has(b) && member.has(a))) continue; if (member.has(a)) h[b] += ex * sg; else if (member.has(b)) h[a] -= ex * sg; else { h[a] -= ex / 2 * sg; h[b] += ex / 2 * sg; } moved++; } moved += lift(); if (!moved) break; } };
   enforce();
   // (where holding a road to its limit puts it more than RELAX_OFF m off the ground (a pitch steeper than its limit, or a
   // cliff the height grid blurs over it), the limit gives way there: each edge within RELAX_HOPS stations of such a point
@@ -167,10 +179,11 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   const street = (r) => !r.minor;
   // the solved height of road r at (x, z) on it (its nearest point along its own stations)
   // (the same, looking only near segment `from` on: stations come in order along the road) -> [height, segment]
+  const hv = (r, i) => (r.ys ? r.ys[i] : h[r.vars[i]]); // (a deck's or tube's: its own profile, roads.js)
   const solvedNear = (r, x, z, from) => { let best = Infinity, y = 0, at = from; const a0 = Math.max(0, from - 4), a1 = Math.min(r.pts.length - 1, from + 80);
-    for (let i = a0; i < a1; i++) { const [ax, az] = r.pts[i], [bx, bz] = r.pts[i + 1], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t); if (d < best) { best = d; y = h[r.vars[i]] + (h[r.vars[i + 1]] - h[r.vars[i]]) * t; at = i; } }
+    for (let i = a0; i < a1; i++) { const [ax, az] = r.pts[i], [bx, bz] = r.pts[i + 1], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t); if (d < best) { best = d; y = hv(r, i) + (hv(r, i + 1) - hv(r, i)) * t; at = i; } }
     return best < 0.5 ? [y, at] : [solvedAt(r, x, z), from]; };
-  const solvedAt = (r, x, z) => { let best = Infinity, y = 0; for (let i = 0; i + 1 < r.pts.length; i++) { const [ax, az] = r.pts[i], [bx, bz] = r.pts[i + 1], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t); if (d < best) { best = d; y = h[r.vars[i]] + (h[r.vars[i + 1]] - h[r.vars[i]]) * t; } } return y; };
+  const solvedAt = (r, x, z) => { let best = Infinity, y = 0; for (let i = 0; i + 1 < r.pts.length; i++) { const [ax, az] = r.pts[i], [bx, bz] = r.pts[i + 1], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t); if (d < best) { best = d; y = hv(r, i) + (hv(r, i + 1) - hv(r, i)) * t; } } return y; };
   const path = (pts) => pts.map(([x, z]) => [cm(x), cm(z)]);
   // ---- 4. per chunk: its outlines and the network near it, stored; then meshed the game's way, as the bake's check
   const out = [];
@@ -178,7 +191,8 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   // (each road's shape, simplified once; roads, junctions and plazas listed per chunk they can reach)
   const cellOf = (x, z) => Math.floor(x / CHUNK) * 100003 + Math.floor(z / CHUNK), byCell = new Map(), put = (k, kind, i) => { let c = byCell.get(k); if (!c) byCell.set(k, (c = { r: [], j: [], a: [] })); if (c[kind].at(-1) !== i) c[kind].push(i); };
   const boxCells = (x0, z0, x1, z1, kind, i) => { for (let a = Math.floor(x0 / CHUNK); a <= Math.floor(x1 / CHUNK); a++) for (let b = Math.floor(z0 / CHUNK); b <= Math.floor(z1 / CHUNK); b++) put(a * 100003 + b, kind, i); };
-  runs.forEach((r, ri) => { const sh = rdpLine(r.osmPts.map(([x, z]) => [cm(x), cm(z)]), SHAPE_TOL); r.shape = [sh[0]]; for (let i = 1; i < sh.length; i++) { const [px, pz] = sh[i - 1], [qx, qz] = sh[i], k = Math.ceil(Math.max(Math.abs(qx - px), Math.abs(qz - pz)) / 30000); for (let s2 = 1; s2 <= k; s2++) r.shape.push([Math.round(px + (qx - px) * s2 / k), Math.round(pz + (qz - pz) * s2 / k)]); }
+  const allRuns = [...runs, ...offRuns];
+  allRuns.forEach((r, ri) => { const sh = rdpLine(r.osmPts.map(([x, z]) => [cm(x), cm(z)]), SHAPE_TOL); r.shape = [sh[0]]; for (let i = 1; i < sh.length; i++) { const [px, pz] = sh[i - 1], [qx, qz] = sh[i], k = Math.ceil(Math.max(Math.abs(qx - px), Math.abs(qz - pz)) / 30000); for (let s2 = 1; s2 <= k; s2++) r.shape.push([Math.round(px + (qx - px) * s2 / k), Math.round(pz + (qz - pz) * s2 / k)]); }
     for (let i = 0; i + 1 < r.shape.length; i++) { const [ax, az] = r.shape[i], [bx, bz] = r.shape[i + 1]; boxCells(Math.min(ax, bx) / 100 - NET_PAD, Math.min(az, bz) / 100 - NET_PAD, Math.max(ax, bx) / 100 + NET_PAD, Math.max(az, bz) / 100 + NET_PAD, 'r', ri); } });
   JN.forEach((J, q) => boxCells(J.x - NET_PAD - J.r, J.z - NET_PAD - J.r, J.x + NET_PAD + J.r, J.z + NET_PAD + J.r, 'j', q));
   (w.net.areas || []).forEach((ar, q) => boxCells(ar.bb[0] - NET_PAD, ar.bb[1] - NET_PAD, ar.bb[2] + NET_PAD, ar.bb[3] + NET_PAD, 'a', q));
@@ -194,7 +208,7 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
     // the network within NET_PAD of the chunk (every road and junction its rules can reach), quantized
     const near = (x, z, m) => x > x0 - m && x < x0 + CHUNK + m && z > z0 - m && z < z0 + CHUNK + m;
     const segNear = (p, q) => { const m = NET_PAD; return Math.max(p[0], q[0]) > x0 - m && Math.min(p[0], q[0]) < x0 + CHUNK + m && Math.max(p[1], q[1]) > z0 - m && Math.min(p[1], q[1]) < z0 + CHUNK + m; };
-    for (const r of cell.r.map((q) => runs[q])) {
+    for (const r of cell.r.map((q) => allRuns[q])) {
       // (its shape: simplified once for the whole road, above: every chunk that stores a stretch of it stores the same
       // points, so neighbours work out the same heights and outlines)
       if (!r.shape) { const sh = rdpLine(r.osmPts.map(([x, z]) => [cm(x), cm(z)]), SHAPE_TOL); r.shape = [sh[0]]; for (let i = 1; i < sh.length; i++) { const [px, pz] = sh[i - 1], [qx, qz] = sh[i], k = Math.ceil(Math.max(Math.abs(qx - px), Math.abs(qz - pz)) / 30000); for (let s2 = 1; s2 <= k; s2++) r.shape.push([Math.round(px + (qx - px) * s2 / k), Math.round(pz + (qz - pz) * s2 / k)]); } }
@@ -202,7 +216,9 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
       if (a < 0) continue; a = Math.max(0, a - 1); b = Math.min(O.length - 1, b + 1);
       const xs = [], zs = []; for (let i = a; i <= b; i++) { xs.push(r.shape[i][0] - X0); zs.push(r.shape[i][1] - Z0); }
       let cur = 0; const hs = stations(xs, zs, 100).map(([x, z]) => { const o = solvedNear(r, (x + X0) / 100, (z + Z0) / 100, cur); cur = o[1]; return Math.round(o[0] * 100); }); // (walking along the road)
-      Q.runs.push({ k: KCODE[r.kind] ?? KCODE.other, flags: (r.minor ? 1 : 0) | (r.oneway ? 2 : 0) | (Math.min(3, r.surf) << 2), hw: Math.round(r.hw * 10), pave: Math.round(r.pave * 10), lanes: Math.min(255, r.lanes), x: xs, z: zs, h: hs }); }
+      // (ends: where it stops at a deck or a tube, if this stretch of it reaches that end; flags: a deck's or a tube's own)
+      const ends = (a === 0 ? (r.cutA === 'deck' ? 1 : r.cutA === 'tube' ? 2 : 0) : 0) | (b === O.length - 1 ? (r.cutB === 'deck' ? 4 : r.cutB === 'tube' ? 8 : 0) : 0);
+      Q.runs.push({ ends, k: KCODE[r.kind] ?? KCODE.other, flags: (r.minor ? 1 : 0) | (r.oneway ? 2 : 0) | (Math.min(3, r.surf) << 2) | (r.off === 'deck' ? 16 : r.off === 'tube' ? 32 : 0), hw: Math.round(r.hw * 10), pave: Math.round(r.pave * 10), lanes: Math.min(255, r.lanes), x: xs, z: zs, h: hs }); }
     // (each way stored as it is, not joined to one it meets end to end: whether it could be depended on which other roads the
     // chunk stores there, so the chunks either side of an edge could see one road or two, and blend their lots differently)
     // the roads and the junctions in order across the chunk, so each start is near the one before

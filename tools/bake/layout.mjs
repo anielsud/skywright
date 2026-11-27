@@ -6,7 +6,7 @@
 //   node --import ./tools/test/node/setup.mjs tools/bake/layout.mjs lauterbrunnen:-4,-3 nyc:-7,25:-6,25
 //     (place:all: every CHUNK-metre square with roads; or place:ix,iz[:ix,iz...]. A place's chunks are baked together:
 //     one height solve)
-// A chunk with a bridge or a tunnel, the airport's roads, a stunt site, past the World's core, or that fails a check isn't baked: it keeps today's roads,
+// A chunk with the airport's roads, a stunt site, past the World's core, or that fails a check isn't baked: it keeps today's roads,
 // listed in the index's fallback with why. Every baked chunk is checked the game's way (layout-check.mjs, on a worker
 // per core): fixed edges, cover, holes, tarmac drawn - physics, kerbs not physics, the markings on their street's centre
 // line (markcheck.mjs: within DRIFT_MAX), and each shared edge between two baked chunks, at every pair of levels. Writes each chunk as <ix>_<iz>.<hash>.bin.gz (hash: of its bytes) and the
@@ -29,11 +29,11 @@ const key = (ix, iz) => ix + ',' + iz;
 for (const a of args) {
   const [id, ...cs] = a.split(':'), t0 = performance.now();
   const { world } = await worldAt(id), tb = performance.now();
-  // ---- which chunks: every one with roads (or those asked for); a bridge, a tunnel or the airport's roads keep it today's
-  const roads = world.net.roads.filter((rd) => rd.kind !== 'rail'), seen = new Map(), why = new Map();
+  // ---- which chunks: every one with roads (or those asked for); the airport's roads keep it today's
+  const roads = world.net.roads.filter((rd) => rd.kind !== 'rail'), seen = new Map(), why = new Map(), bt = new Map();
   for (const rd of roads) { const P = rd.pts; for (let i = 0; i < P.length; i++) { const p = P[i], q = P[Math.min(i + 1, P.length - 1)], n = Math.max(1, Math.ceil(Math.hypot(q.x - p.x, q.z - p.z) / 10));
     for (let s = 0; s < n; s++) { const x = p.x + (q.x - p.x) * s / n, z = p.z + (q.z - p.z) * s / n, k = key(Math.floor(x / CHUNK), Math.floor(z / CHUNK)); seen.set(k, (seen.get(k) || 0) + Math.hypot(q.x - p.x, q.z - p.z) / n);
-      const b = rd.baked ? 'bridge' : rd.bridge?.[i] || rd.bridge?.[i + 1] || rd.span?.[i] || rd.span?.[i + 1] ? 'bridge' : rd.tube?.[i] || rd.tube?.[i + 1] ? 'tunnel' : null; if (b) (why.get(k) || why.set(k, new Set()).get(k)).add(b); } } }
+      const b = rd.baked ? 'bridge' : rd.bridge?.[i] || rd.bridge?.[i + 1] || rd.span?.[i] || rd.span?.[i + 1] ? 'bridge' : rd.tube?.[i] || rd.tube?.[i + 1] ? 'tunnel' : null; if (b) (bt.get(k) || bt.set(k, new Set()).get(k)).add(b); } } } // (bt: the chunks with a bridge or a tunnel: baked, their decks and tubes today's (roads.js) at the layout's heights)
   const wanted = cs[0] === 'all' ? [...seen.keys()] : cs.map((c) => c.split(',').map(Number).join(','));
   // (the airport: its runways, apron and roads are World's own ground, World.groundAt: the chunks about it keep today's)
   for (const k of seen.keys()) { const [ix, iz] = k.split(',').map(Number), x0 = ix * CHUNK, z0 = iz * CHUNK; if (x0 < 700 && x0 + CHUNK > -500 && z0 < RWY.len / 2 + 400 && z0 + CHUNK > -RWY.len / 2 - 400) (why.get(k) || why.set(k, new Set()).get(k)).add('airport'); }
@@ -61,7 +61,7 @@ for (const a of args) {
   // a chunk failing a check keeps today's roads
   const failed = new Map();
   for (const c of results) { const f = c.fine, co = c.coarse, bad = [];
-    if (f.failed || co.failed) bad.push('fixed edges'); if (Math.abs(f.covered - 1) > 1e-6 || Math.abs(co.covered - 1) > 1e-6) bad.push('cover'); if (f.holes) bad.push('holes'); if (f.tarmacOff > 1e-4) bad.push('tarmac off physics'); if (f.kerbSlope > 0.05) bad.push('kerb in physics'); if (f.drift > DRIFT_MAX) bad.push('markings off the centre line');
+    if (f.failed || co.failed) bad.push('fixed edges'); if (Math.abs(f.covered - 1) > 1e-6 || Math.abs(co.covered - 1) > 1e-6) bad.push('cover'); if (f.holes) bad.push('holes'); if (f.tarmacOff > 1e-4) bad.push('tarmac off physics'); if (f.kerbSlope > 0.05) bad.push('kerb in physics'); if (f.drift > DRIFT_MAX) bad.push('markings off the centre line'); if (f.deckBad) bad.push('deck step'); if (f.portalBad) bad.push('portal step'); if (f.rimBad || f.noLip) bad.push('portal gap');
     if (bad.length) failed.set(key(c.ix, c.iz), bad.join('+')); }
   // shared edges between two baked chunks: the same points and heights from both sides, at every pair of levels
   let pairs = 0, seamBad = 0; const seamList = [];
@@ -85,6 +85,9 @@ for (const a of args) {
   console.log(`  checks: ${results.length} chunks; failed ${failed.size} (${count([...failed.values()])}); holes ${results.reduce((s, c) => s + c.fine.holes, 0)} of ${results.reduce((s, c) => s + c.fine.samples, 0)} samples; tarmac drawn - physics max ${Math.max(...results.map((c) => c.fine.tarmacOff)).toFixed(4)} m; kerb physics rise max ${Math.max(...results.map((c) => c.fine.kerbSlope)).toFixed(3)} m (drawn 0.15); markings off the centre line max ${Math.max(...results.map((c) => c.fine.drift)).toFixed(4)} m (fails over ${DRIFT_MAX}) over ${sum((c) => c.fine.driftSamples)} samples, ${sum((c) => c.fine.lost)} lost to another street's triangle; crossings whole ${sum((c) => c.fine.whole)}/${sum((c) => c.fine.mouths)} mouths (${sum((c) => c.fine.tight)} too close to another junction); slabs' across off the kerb max ${Math.max(...results.map((c) => c.fine.kerbErr)).toFixed(3)} m; bends' bisectors left soft ${sum((c) => c.fine.bendMissed)}; seams ${pairs - seamBad}/${pairs} match${seamBad ? ' (' + seamList.slice(0, 10).join(' ') + ')' : ''}`);
   { const S = (k) => results.reduce((n, c) => n + c.fine.shore[k], 0); if (grid.wl > -Infinity) console.log(`  shore (water level ${grid.wl}): ground pushed below the water by banks ${S('under')}; ground raised in the water ${S('raised')}; paved points below the water ${S('pavedWet')}; bank points the shore rule changed ${S('limited')} in ${results.filter((c) => c.fine.shore.limited).length} chunks`);  const ex = results.flatMap((c) => c.fine.shore.ex); if (ex.length) console.log('    e.g.', JSON.stringify(ex.slice(0, 16))); }
   { const W = {}; for (const c of results) for (const [k, n] of Object.entries(c.fine.why || {})) W[k] = (W[k] || 0) + n; if (Object.keys(W).length) console.log('  fixed edges failed, by what and why:', JSON.stringify(W)); }
+  { const btc = new Map(); for (const [k, v] of bt) btc.set([...v].sort().join('+'), (btc.get([...v].sort().join('+')) || 0) + 1); const sum = (f) => results.reduce((n, c) => n + (c.fine[f] || 0), 0), mx = (f) => Math.max(0, ...results.map((c) => c.fine[f] || 0));
+    console.log(`  bridges and tunnels: chunks with one ${JSON.stringify(Object.fromEntries(btc))}, baked ${[...bt.keys()].filter((k) => keep.has(k) && !fallback.has(k)).length}; deck ends ${sum('deckEnds')} (step max ${mx('deckGap').toFixed(4)} m, ${sum('deckBad')} >= 2 cm); portals ${sum('portals')} (approach step max ${mx('portalGap').toFixed(4)} m over ${sum('portalEnds')}, ${sum('portalBad')} >= 2 cm; lip rim points ${sum('rimN')}, outside the tube or headwall ${sum('rimBad')}; portals with no opening ${sum('noLip')})`); }
+  { const B = results.filter((c) => c.badAt).flatMap((c) => c.badAt); if (B.length) console.log('  steps at decks and portals (>= 2 cm):', JSON.stringify(B.slice(0, 12))); }
   console.log(`  kerb top lines left soft (would cross another line): ${results.reduce((n, c) => n + (c.fine.softMissed || 0), 0)} segments in ${results.filter((c) => c.fine.softMissed).length} chunks`);
   console.log(`  mesh ms fine ${st((c) => c.fine.ms)} (outlines ${st((c) => c.fine.outlineMs)}); coarse ${st((c) => c.coarse.ms)}; triangles fine ${st((c) => c.fine.tris)}`);
   console.log(`  wall: World ${((tb - t0) / 1000).toFixed(1)} s, bake ${((tc - tb) / 1000).toFixed(1)} s, checks ${((td - tc) / 1000).toFixed(1)} s on ${N} workers, files ${((performance.now() - td) / 1000).toFixed(1)} s`, JSON.stringify(r.stats.solve), JSON.stringify(r.stats.inChunk), JSON.stringify(r.stats.overGrade));
