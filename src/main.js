@@ -728,6 +728,7 @@ function buildFlight(cfg) {
   const ac = new Aircraft(design, realism);
   scene.add(ac.root);
   void ac.stations; // the cockpit views (stations.js, with a capsule's cabin): made while loading, so their shaders warm up with the rest and the camera button never waits
+  ac.root.userData.detail?.lod?.crewDetail({ pose: false, own: true }); // our crew: lighter as they get small on screen (the chase view), full up close (planeDetail DetailLOD); its levels simplified now, under the loading screen. Same materials and vertices, so nothing more to compile
   const spot = world.sunElev < 0.2 || world.W.dark > 0.6;
   const nav = aircraftLights(ac, { spot }); // running lights (a real landing light after dark)
   // By day a landing light part's own SpotLight stays dark the whole flight (Aircraft.update: lit only at night, and
@@ -1532,7 +1533,7 @@ function frame(now) {
       const golden = Math.max(0, 1 - Math.abs(w.sunElev - 0.08) / 0.3);
       post.look({ bloom: w.night ? 0.65 : 0.5, threshold: w.night ? 2.5 : 4.0, warmth: golden * 1.5 - w.W.dark * 0.5, saturation: (0.97 + golden * 0.12 - w.W.dark * 0.25) * (1 - 0.7 * (gvis.shown ? smoothstep(0, 0.7, gvis.grey) : 0)), contrast: 1.12, vignette: 0.3 }); // near-neutral colour, a little more contrast: photographic rather than candy
       fitNearPlane(F);
-      setCrewView(renderer.domElement.height, qualityTier()); // (other players' crews: their detail by size on screen)
+      setCrewView(renderer.domElement.height, qualityTier()); // (the crews' detail by size on screen: planeDetail DetailLOD)
       const warm = F.warm, restore = warm && !warm.n++ ? warmShaders(F.scene, warm.skip) : null;
       flushNew();
       const progs = renderer.info.programs, n0 = progs.length;
