@@ -294,10 +294,17 @@ export function waterMaterial(o) {
   };
   if (!o.U) Object.assign(U, FOG);
   const mat = new THREE.ShaderMaterial({
-    uniforms: U, defines: o.shore ? { WATER_SHORE: '' } : {},
+    uniforms: U, defines: { ...(o.shore ? { WATER_SHORE: '' } : {}), ...(o.vdepth ? { WATER_VDEPTH: '' } : {}) }, // (vdepth: the ground's depth under each vertex given (aDepth), not read from the fine grid: the baked layout's water, layout/runtime.js)
     vertexShader: /* glsl */`
       varying vec3 vW;
-      void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+      #ifdef WATER_VDEPTH
+      attribute float aDepth; varying float vDepth;
+      #endif
+      void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w;
+        #ifdef WATER_VDEPTH
+        vDepth = aDepth;
+        #endif
+      }`,
     fragmentShader: /* glsl */`
       uniform sampler2D fineTex; uniform vec4 fineGrid; uniform mat4 projectionMatrix;
       uniform sampler2D outerTex; uniform vec2 outerOrigin; uniform float outerSize; uniform sampler2D nrm; uniform float waterLevel;
@@ -307,6 +314,9 @@ export function waterMaterial(o) {
       float vnoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(wh(i), wh(i + vec2(1.0, 0.0)), f.x), mix(wh(i + vec2(0.0, 1.0)), wh(i + 1.0), f.x), f.y); }
       uniform sampler2D farMask; uniform vec2 farMaskOrigin; uniform float farMaskSize; uniform float farCell;
       varying vec3 vW;
+      #ifdef WATER_VDEPTH
+      varying float vDepth;
+      #endif
       ${FOG_GLSL}
       vec3 nmap(vec2 p) { return texture2D(nrm, p).xzy * 2.0 - 1.0; }
       // Ground height relative to the water on the core's fine grid, interpolated over the triangles the ground is
@@ -324,7 +334,11 @@ export function waterMaterial(o) {
         bool wet = true;
         vec2 cf = (vW.xz - fineGrid.xy) * fineGrid.z;
         bool core = cf.x >= 0.0 && cf.y >= 0.0 && cf.x <= fineGrid.w && cf.y <= fineGrid.w;
+        #ifdef WATER_VDEPTH
+        th = -vDepth;
+        #else
         if (core) th = fineH(vW.xz, wet);
+        #endif
         #ifdef WATER_SHORE
         th = min(th, 0.0); // the mesh is the water: right at its edge the ground meets it
         #else

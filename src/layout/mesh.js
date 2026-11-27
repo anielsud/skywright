@@ -13,7 +13,7 @@ import { KIND } from './format.js';
 import { makeRules, latticeGround, KERB, KERB_W, PAVE_RAMP, painted, zebra } from './rules.js';
 import { chunkOutlines } from './outline.js';
 
-const NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, LANE_STEP = 6, ZEBRA = [0.5, 3.5]; // (ZEBRA: a crossing's band, m out from a junction's circle, as roadMat paints it)
+const NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, LANE_STEP = 6, ZEBRA = [0.5, 3.5], MOUTH_D = 6; // (ZEBRA: a crossing's band, m out from a junction's circle, as roadMat paints it)
 const PAVED = [KIND.lip, KIND.tarmac, KIND.kerb, KIND.pave, KIND.alley, KIND.pavers, KIND.gravel, KIND.verge]; // (the order a point is classed in)
 const RIBBON = new Set([KIND.tarmac, KIND.kerb, KIND.pave]); // (drawn with a street's coordinates: markings, the pavement's slabs)
 
@@ -148,7 +148,7 @@ export function meshChunk(L, grid, G, level = 'fine') {
   const mouths = new Map(), mouthsOf = (ri) => { let M = mouths.get(ri); if (M) return M; M = []; const r = L.net.runs[ri];
     for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, l = Math.hypot(dx, dz); if (l < 1e-3) continue; const ux = dx / l, uz = dz / l;
       for (const J of JN) { const fx = ax - J.x, fz = az - J.z; if (Math.abs(fx) > l + J.r || Math.abs(fz) > l + J.r) continue; const b = fx * ux + fz * uz, disc = b * b - (fx * fx + fz * fz - J.r * J.r); if (disc <= 0) continue;
-        for (const sg of [-1, 1]) { const t = -b + sg * Math.sqrt(disc); if (t >= 0 && t < l) M.push([r.s[s] + t, sg]); } } }
+        for (const sg of [-1, 1]) { const t = -b + sg * Math.sqrt(disc); if (t >= 0 && t < l) M.push([r.s[s] + t, sg, ax + ux * t, az + uz * t, ux, uz]); } } }
     mouths.set(ri, M); return M; };
   if (fine) for (let q = 0; q < nt; q++) { const k = tk[q]; if (!RIBBON.has(k)) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;
     const rc = R.road(cx, cz); if (!rc) continue; const ln = R.lineOn(rc.id, cx, cz); if (!ln) continue;
@@ -156,8 +156,18 @@ export function meshChunk(L, grid, G, level = 'fine') {
     // (the junction: the street's mouth nearest along it to one of its corners (a long thin triangle reaching a mouth:
     // that one); the distance from it linear along the line, so a crossing's band is square across and the markings
     // stop at its edge. Inside the circle it's below 0: nothing painted)
-    const us = vs.map((v) => along(X[v], Z[v])); let um = 0, sg = 0, bd = Infinity; for (const [u0, s0] of mouthsOf(rc.id)) for (const u of us) if (Math.abs(u - u0) < bd) { bd = Math.abs(u - u0); um = u0; sg = s0; }
-    vs.forEach((v, q) => { const u = us[q]; rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(u, across(X[v], Z[v]), ln.hw, sg ? sg * (u - um) : 99); rib.lane.push(Math.min(15, ln.lanes) + (ln.oneway ? 16 : 0) + (painted(L.net.runs[rc.id], L.city) ? 32 : 0) + (zebra(L.net.runs[rc.id], L.city) ? 64 : 0)); rib.kind.push(k); rib.id.push(rc.id); }); }
+    // (within MOUTH_D of the mouth, the distance is along the mouth's own segment, not the street's length: where the
+    // street bends in its crossing's band (a village's streets), the band stays square across)
+    const us = vs.map((v) => along(X[v], Z[v])); let um = 0, sg = 0, bd = Infinity, mo = null; for (const M of mouthsOf(rc.id)) for (const u of us) if (Math.abs(u - M[0]) < bd) { bd = Math.abs(u - M[0]); um = M[0]; sg = M[1]; mo = M; }
+    const near = sg && Math.min(...us.map((u) => sg * (u - um))) < MOUTH_D;
+    vs.forEach((v, q) => { const u = us[q]; rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(u, across(X[v], Z[v]), ln.hw, !sg ? 99 : near ? sg * ((X[v] - mo[2]) * mo[4] + (Z[v] - mo[3]) * mo[5]) : sg * (u - um)); rib.lane.push(Math.min(15, ln.lanes) + (ln.oneway ? 16 : 0) + (painted(L.net.runs[rc.id], L.city) ? 32 : 0) + (zebra(L.net.runs[rc.id], L.city) ? 64 : 0)); rib.kind.push(k); rib.id.push(rc.id); }); }
+  // the gravel (fine): its triangles on their own too, each given the track nearest its middle as one line (its corners'
+  // along and across from it: the material's two wheel ruts and grassy crown, as today's tracks, roadSurface.js
+  // pathMaterial); a gravel plaza's (no track there) its world x, z, half width 1e4 (no edge). road = (along, across, half width, -)
+  const track = (r) => r.minor && (r.surf === 2 || r.kind === 'track');
+  if (fine) for (let q = 0; q < nt; q++) { if (tk[q] !== KIND.gravel) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;
+    const n = R.nearest(cx, cz, track), on = n && n.d <= 0.5;
+    for (const v of vs) { rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(on ? n.u + (X[v] - n.px) * n.dx + (Z[v] - n.pz) * n.dz : X[v], on ? n.dx * (Z[v] - n.pz) - n.dz * (X[v] - n.px) : Z[v], on ? n.r.hw : 1e4, 99); rib.lane.push(0); rib.kind.push(KIND.gravel); rib.id.push(on ? n.ri : 0xffffffff); } }
   // the ground's paving (a city's lots): its squares along the street nearest each triangle's middle (an angle a
   // triangle, within a right angle: one across a triangle, or the squares swirl; runtime.js gives its corners their own copies)
   const ang = new Float32Array(nt); if (fine && L.city) for (let q = 0; q < nt; q++) { if (tk[q] > KIND.bank) continue; const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2], n = R.nearest((X[a] + X[b] + X[c]) / 3, (Z[a] + Z[b] + Z[c]) / 3, (r) => !r.minor); if (n) { const t = Math.atan2(n.dz, n.dx), h = Math.PI / 2; ang[q] = ((t % h) + h) % h; } }
