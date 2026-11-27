@@ -14,11 +14,11 @@
 //   lauterbrunnen (built by the Rocket's flight there: the pad check needs no extra swap):
 //   - Rocket on the pad (padcheck); startbakes-stunts (stuntsIn: no flight needed); streaming quiet and the whole scene
 //     drawn; #187: nothing compiled mid-flight from before the build to here
-//   - the restart suite (restart.py's checks, driven here, all of them on CI too: #291), ordered so
+//   - the restart suite (restart.py's checks, driven here; the fresh-start memory comparison local only), ordered so
 //     no flight is started twice: damage, restart (also the launch pad start type's restart), whole again; 2 more
 //     restarts (damage before the last): memory flat; back to the hangar frees the World, a fresh Rocket start builds
-//     a new one with the same spawn, and holds the same GPU memory as that World damaged and restarted (both measured
-//     with streaming finished round the spawn); one start type per kind of spawn (air, stunt park, water park: see STARTS), each
+//     a new one with the same spawn, and (local runs only: ~90 s of CI time) holds the same GPU memory as that World
+//     damaged and restarted (both measured with streaming finished round the spawn, #291); one start type per kind of spawn (air, stunt park, water park: see STARTS), each
 //     swapped into that World, restarted, then 4 s stepped on (runway, street and marina: the startchoice Node suite)
 //   - start-rule wiring (wiring.js wiringChecks) over every flight started here
 // Keep BASE's time and weather (T.start's cfg: start, mode, realism, landStart, boatStart only), or a place is built
@@ -162,6 +162,14 @@ export async function run(T) {
     // the memory comparison, like with like (#291): this World streamed in round the spawn and measured, then damaged,
     // restarted, and streamed and measured the same way (the first World's restarts had a sweep and more game time
     // of streaming behind them than any fresh start: ~200 more geometries, all flora cells and things shown hidden)
+    // Local runs only (compareMemory): its streaming, damage and restart cost CI ~90 s on a job near the critical path,
+    // and CI's flat-over-restarts checks still catch a leak; CI skips the extra work, not just the verdict
+    const compareMemory = !T.ci;
+    if (!compareMemory) {
+      s2 = await settled(S);
+      T.checks(freshChecks(L, kept, s0, s1, s2, null));
+      return `${s.how} in ${(s.ms / 1000).toFixed(1)} s, start ${s.start}; GPU memory comparison skipped (CI)`;
+    }
     await streamed(T); await memQuiet(T); s2 = await settled(S, { mem: true });
     damage(S); T.advance(3); await T.restart();
     await streamed(T); await memQuiet(T); const r = await settled(S, { mem: true });
