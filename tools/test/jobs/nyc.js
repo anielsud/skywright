@@ -11,9 +11,10 @@
 //                               hover; lands gently on the deck; rests as on the runway
 //   Dragonfly: shader sweep     drawn: streaming quiet (T.settle), then the whole scene drawn (every hidden object
 //                               shown, culling off) and every event effect fired (the only job that fires them): no
-//                               stall, nothing waited for its shader (shadercheck.js sceneDrawn / eventsFired)
-//   Dragonfly: real loop        drawn: the tour flight (smoke.js tour: full power for 3 drawn frames, 3 s stepped,
-//                               every cockpit view drawn, back to chase)
+//                               stall, nothing waited for its shader (shadercheck.js sceneDrawn / eventsFired); then
+//                               stepped until the effects have died out (not left on screen for the next step)
+//   Dragonfly: real loop        drawn: the tour flight (smoke.js tour: full power on the real loop over its 2 cockpit
+//                               views, each drawn once; out of the cockpit and back to chase, 3 s stepped)
 //   Dragonfly (Arcade): helipad swapped in (realism doesn't rebuild the World); the helipad checks again, stepped
 //   Rocket: pad                 swapped in; padcheck.js rocket('nyc'): on the pad, 5 s hold, 10 s burn past the tower,
 //                               stepped

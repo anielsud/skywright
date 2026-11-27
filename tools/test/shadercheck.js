@@ -38,7 +38,7 @@ export async function fly(name, location, secs = 4) {
 // Before the events and the crash the vehicle is held until streaming round it is quiet (harness settle: frame-count
 // based), so a late show in the phase is that phase's own. sweep() below is the old one-place-per-flight suite
 // (shadercheck.py), with a streaming phase (the map's edges) between events and crash.
-import { frames, settle, counters, since, stepUntil } from './jobs/harness.js';
+import { frames, settle, counters, since, stepUntil, advance } from './jobs/harness.js';
 
 const delta = (c0) => { const d = since(c0); return { stall: d.stall, late: d.late, messages: d.messages }; };
 
@@ -69,7 +69,14 @@ export async function eventsFired({ n = 5, settled = true } = {}) {
   E.feathers(at); E.leaves(at);
   F.sonic.boom({ effects: E, world: W });
   await frames(n, { what: 'the event effects drawn' });
-  return delta(c0);
+  // Then stepped (not drawn) until they've died out: drawn at the next step's fixed 1/60 s a frame they'd stay on screen
+  // for its every frame (an explosion's smoke lives up to 12 s), and a screen of smoke, fire and shock rings costs
+  // seconds a frame of software WebGL on CI (#278: the New York tour after this paid it). Stepped for the longest life
+  // left among the particles, shock rings and flash (the pools also hold the place's own steady smoke, so not "empty").
+  const left = (P) => { let m = 0; for (let i = 0; i < P.n; i++) m = Math.max(m, P.max[i] - P.life[i]); return m; }, u = E.boom.userData;
+  const out = Math.max(left(E.smoke), left(E.fire), u.on ? u.d - u.t : 0, ...F.sonic.rings.map((r) => r.life - r.t));
+  if (out > 0) advance(out + 0.1);
+  return { ...delta(c0), out };
 }
 
 // Put the vehicle on a collision course (a building in New York, water at the islands, the ground elsewhere), let

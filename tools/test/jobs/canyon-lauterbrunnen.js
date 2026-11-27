@@ -5,8 +5,8 @@
 //   audio: engine voices    the AudioContext runs, without decoding the 131 clips (cars' and bikes' engines are
 //                           synthesized: src/motorSound.js; the clips are the hangar job's)
 //   canyon (built by the first flight):
-//   - Dirt Bike from the stunt park (builds the canyon), then its tour (smoke.js tour(): 3 frames drawn at full power on
-//     the real loop, 3 s stepped, every cockpit view drawn) and its engine voice audible
+//   - Dirt Bike from the stunt park (builds the canyon), then its tour (smoke.js tour(): full power on the real loop
+//     over every cockpit view drawn, at least 2 frames; 3 s stepped) and its engine voice audible
 //   - Dune Buggy swapped in at the stunt park: the same tour and engine check (then the AudioContext is suspended)
 //   - the shader sweep: streaming quiet, the whole scene drawn (3 frames); the Dune Buggy's ground crash (stepped to the
 //     impact, 5 frames drawn; parts must come off)

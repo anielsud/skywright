@@ -152,7 +152,8 @@ The jobs:
   Pilot on the rooftop helipad, stepped (`helipadcheck.js` `heliRun`/`heliChecks`: its spawn pose, the building under the
   pad has no damage key, the runway resting baseline by teleporting the same Dragonfly to the runway, then 5 s parked,
   a lift to a 25 m hover, a landing and a rest, each compared with the runway); the shader sweep's scene and events
-  (drawn: every hidden object shown, every event effect fired; this is the only job that fires them); the tour flight on
+  (drawn: every hidden object shown, every event effect fired, then stepped until they've died out; this is the only
+  job that fires them); the tour flight on
   the real loop and every cockpit view (drawn); the Dragonfly again in Arcade; the Rocket on the pad (hold + launch,
   stepped) and on the real loop; the Dune Buggy at the stunt park's arch, the site dry, flat and clear (tree canopy from
   the imagery) and its kicker jump and loop run, the road start (the rule's pick, the buggy teleported there as
@@ -163,8 +164,8 @@ The jobs:
   World's answers; over every stock preset nothing but a rocket on the pad, nothing but a helicopter on the helipad);
   no stunt site or water park warnings.
 - **islands** (Bora Bora, built once by the first flight; every vehicle swapped in once): the Kestrel from the runway
-  (the tour flight: 3 frames at full power on the real loop, each stepping a fixed 1/60 s, `__sky.fixedDt`, 3 s
-  stepped, every cockpit view drawn; then streaming
+  (the tour flight: full power on the real loop over every cockpit view drawn once, at least 2 frames, each stepping
+  a fixed 1/60 s, `__sky.fixedDt`; out of the cockpit, 3 s stepped; then streaming
   quiet and the sweep's scene phase: no stalls, nothing waited for its shader); startbakes-stunts; the
   Albatross's water start and the Kite's air start (2 s stepped: finite, in one piece); the Speedboat from the marina
   (an AudioContext with no clips decoded, as a boat's motor voice is synthesized: at full gas its voice's gain comes up
@@ -175,8 +176,8 @@ The jobs:
   last, the start-rule wiring (`wiring.js`) over every vehicle it started.
 - **canyon-lauterbrunnen** (two places in one session, each built once): the AudioContext starts without decoding the
   clips (the engines checked are synthesized). **Grand Canyon**: the Dirt Bike from the stunt park (builds it) and the
-  Dune Buggy swapped in there, each on the tour (3 frames drawn at full power on the real loop, 3 s stepped, every
-  cockpit view drawn) with its engine voice audible right after (smoke.py's verdict; not judged if the audio clock ran
+  Dune Buggy swapped in there, each on the tour (full power on the real loop over every cockpit view drawn, at least 2
+  frames; 3 s stepped) with its engine voice audible right after (smoke.py's verdict; not judged if the audio clock ran
   under 0.3 s over the tour); streaming quiet, the whole scene
   drawn (no stalls, nothing waits for its shader); the Dune Buggy's ground crash (stepped to the impact, 5 frames drawn,
   parts must come off); the Rocket swapped in on the pad (padcheck, stepped). **Lauterbrunnen**, built by the Rocket's
@@ -213,6 +214,8 @@ a place is most of the run, the flying itself 2 s.
 
 Chrome is found at the usual macOS path, or `google-chrome` / `chromium` on Linux. Set `CHROME=/path/to/chrome` to override.
 On Linux it uses SwiftShader for WebGL (no GPU needed), which is how it runs in CI.
+Elsewhere `SKY_SWIFTSHADER=1` does the same (e.g. `SKY_SWIFTSHADER=1 python3 tools/test/jobs.py nyc --quality low --ci`):
+CI's draw counts, compiles and stalls on this machine (its frame times are this machine's CPU's, not a runner's).
 
 ## When
 

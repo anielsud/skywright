@@ -70,26 +70,29 @@ export function quick(secs = 2) {
 }
 
 // ---------- for the per-map jobs (tools/test/jobs): the tour flight with fixed frame counts, no wall-clock waits ----------
-// Against the flight already running (harness T.start): full power on the real game loop for `n` drawn frames (the
-// loop runs: the flight clock moves; each steps a fixed 1/60 s, __sky.fixedDt, so the ride judged after them is the
-// same game time on any machine, not min(frame time, 1/20) a frame), `more` game seconds stepped (advance), then every
-// cockpit view drawn once as the camera button steps through them, and back to the chase view. Judge it with tourChecks.
+// Against the flight already running (harness T.start): full power on the real game loop, each drawn frame stepping a
+// fixed 1/60 s (__sky.fixedDt, so the ride judged after them is the same game time on any machine), over every cockpit
+// view drawn once as the camera button steps through them (the loop runs: the flight clock moves over them; topped up
+// with chase frames to at least `n` drawn frames), then the camera button leaves the cockpit (a state: not drawn), back
+// to the chase view, and `more` game seconds stepped (advance). Judge it with tourChecks. Nothing else is drawn: a
+// drawn frame costs 1-2 s of software WebGL at New York on CI, and these frames are the only ones the claims need.
 import { frames as drawFrames, advance } from './jobs/harness.js';
-export async function tour({ frames: n = 3, more = 3 } = {}) {
+export async function tour({ frames: n = 2, more = 3 } = {}) {
   const F = S.F; if (!F) throw new Error('no flight');
-  go(true);
-  const t0 = F.t; S.fixedDt = 1 / 60;
-  try { await drawFrames(n, { what: 'the tour flight on the real loop' }); } finally { S.fixedDt = null; }
-  const ran = S.F === F ? F.t - t0 : 0;
+  const ac = F.ac, views = ac.stations.length, names = [], t0 = F.t;
+  go(true); S.fixedDt = 1 / 60;
+  try {
+    if (views < n) await drawFrames(n - views, { what: 'the tour flight on the real loop' });
+    S.rig.set('cockpit', ac);
+    for (let k = 0; k < views && S.F === F; k++) { names.push(S.rig.stationName(ac)); await drawFrames(1, { what: `cockpit view ${k + 1}` }); S.rig.next(ac); }
+  } finally { S.fixedDt = null; }
+  const ran = S.F === F ? F.t - t0 : 0, frames = Math.max(n, views);
+  const leftCockpit = S.rig.mode !== 'cockpit';
+  S.rig.set('chase');
   if (more && S.F === F) advance(more);
   const ride = state();
-  const ac = F.ac; S.rig.set('cockpit', ac); const views = ac.stations.length, names = [];
-  for (let k = 0; k < views; k++) { names.push(S.rig.stationName(ac)); await drawFrames(1, { what: `cockpit view ${k + 1}` }); S.rig.next(ac); }
-  await drawFrames(1);
-  const leftCockpit = S.rig.mode !== 'cockpit';
-  S.rig.set('chase'); await drawFrames(1);
   go(false);
-  return { name: ac.design.name, kind: F.kind, bike: !!ac.isBike, ran, frames: n, ride, views, names, leftCockpit, end: S.F === F ? state() : null };
+  return { name: ac.design.name, kind: F.kind, bike: !!ac.isBike, ran, frames, ride, views, names, leftCockpit, end: S.F === F ? state() : null };
 }
 // [[name, ok, detail]] for T.checks (smoke.py's verdicts on a tour flight; its audio check lives in the hangar job)
 export function tourChecks(f) {
