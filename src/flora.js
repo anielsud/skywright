@@ -575,6 +575,9 @@ export class Flora {
     this.cells = new Map(); this.queue = []; this.wantAt = null; this.nearAt = null; this.impDirty = true; this.nearDirty = true; this.frame = 0; this.lastImp = -99; this.cellMs = 1;
     this.felled = new Map();
     this.cover = new GroundCover(this);
+    // a baked layout chunk's surface arrived (#294, ?layout=1): its cells' trees generated again on it (on its heights,
+    // off its paving), the old ones drawn until then
+    W.layout?.onActive((b) => { for (const c of this.cells.values()) { const x0 = c.ci * CELL, z0 = c.cj * CELL; if (c.data && x0 < b.x1 && x0 + CELL > b.x0 && z0 < b.z1 && z0 + CELL > b.z0) { c.regen = true; this.tilesDirty = true; } } });
     this.buildMs = performance.now() - t0;
   }
   mkInst(geo, mat, cap) {
@@ -727,7 +730,7 @@ export class Flora {
       for (let t = -szz; t <= szz; t += 7 + r() * 4) {
         const u = ax ? sg * sxx : t, v = ax ? t : sg * sxx, x = f.x + u * ca - v * sa, z = f.z + u * sa + v * ca;
         if (x < x0 || x >= x0 + CELL || z < z0 || z >= z0 + CELL) continue;
-        if (n.n2(x / 60, z / 60 + 5) < -0.15 || this.w.nearRoad(x, z, 8)) continue; // gaps in the hedge
+        if (n.n2(x / 60, z / 60 + 5) < -0.15 || this.w.nearRoad(x, z, 8) || (this.w.layout?.on && this.w.layout.pavedAt(x, z))) continue; // gaps in the hedge
         const h = this.w.sampleGrid(x, z);
         out.push(x, h - 0.2, z, 0.55 + r() * 0.5, gr.vars[Math.floor(r() * gr.vars.length)].idx, r() * 6.283);
       }
@@ -746,7 +749,8 @@ export class Flora {
     const inField = (x, z, m) => fields.some((f) => { const dx = x - f.x, dz = z - f.z; if (f.pivot) return dx * dx + dz * dz < (f.sx + m) ** 2; const ca = Math.cos(f.ang), sa = Math.sin(f.ang); return Math.abs(dx * ca + dz * sa) < f.sx + m && Math.abs(-dx * sa + dz * ca) < f.sz + m; });
     // fixed trees first (they belong to the far layer too): injected ones, hedgerows
     const ex = this.extra.get(cell.key);
-    if (ex) for (let k = 0; k < ex.length; k += 4) out.push(ex[k], W.sampleGrid(ex[k], ex[k + 1]) - 0.2, ex[k + 1], ex[k + 2], ex[k + 3], (ex[k] * 1.7 + ex[k + 1]) % 6.283);
+    const L = W.layout?.on ? W.layout : null; // (a baked layout chunk: nothing on its paving)
+    if (ex) for (let k = 0; k < ex.length; k += 4) if (!L || !L.pavedAt(ex[k], ex[k + 1])) out.push(ex[k], W.sampleGrid(ex[k], ex[k + 1]) - 0.2, ex[k + 1], ex[k + 2], ex[k + 3], (ex[k] * 1.7 + ex[k + 1]) % 6.283);
     const rh = mulberry32(hash2(cell.ci, cell.cj, 4321));
     for (const f of fields) this.hedgerow(f, x0, z0, out, rh);
     const G = this.groups, dens = new Float32Array(G.length), grid = this.cellGrid(x0, z0, dense || cell.d < FINE_R ? GN : GN_FAR), gn = grid.gn, M = gn + 1;
@@ -773,6 +777,7 @@ export class Flora {
       if (roadNear && W.nearRoad(x, z, 11)) continue;
       const h = W.sampleGrid(x, z); if (h < wl + 0.7) continue;
       if (this.bare && this.bare(x, z)) continue;
+      if (L && L.pavedAt(x, z)) continue;
       if (W.landAt && W.landAt(x, z, e.land || (e.land = [0, 0, 0, 0]))[0] > 0.3) continue; // not in rivers and lakes (world.js terrain bake)
       if (W.real?.waterAt(x, z, 16) != null) continue; // nor in real rivers above the water level (realworld.js)
       let t = u2 * tot, k = 0; while (k < G.length - 1 && (t -= dens[k]) > 0) k++;
@@ -796,7 +801,7 @@ export class Flora {
     cell.data = new Float32Array(out); cell.n = out.length / STRIDE; cell.nBase = nBase; cell.dense = dense;
     let y0 = Infinity, y1 = -Infinity; for (let k = 1; k < out.length; k += STRIDE) { if (out[k] < y0) y0 = out[k]; if (out[k] > y1) y1 = out[k]; }
     cell.y0 = y0; cell.y1 = y1;
-    cell.tile = this.tileOf(cell); cell.reseat = false;
+    cell.tile = this.tileOf(cell); cell.reseat = false; cell.regen = false;
   }
   // The outer tile under a cell was rebuilt at another detail (or re-streamed): instead of generating the cell again,
   // move each tree by how much the ground moved under it, old tile -> new tile (the old tile's heights stay readable
@@ -839,7 +844,7 @@ export class Flora {
       c.mark = this.frame; c.d = d;
       if (c.data && c.tile && c.tile !== this.tileOf(c)) c.reseat = true; // the ground under it was re-meshed: re-seat its trees
       if (c.data && !dense && c.dense) { c.dense = false; c.n = c.nBase; c.data = c.data.slice(0, c.nBase * STRIDE); this.cellChanged(c); }
-      if (!c.data || (dense && !c.dense) || c.reseat) { c.wantDense = dense; want.push(c); }
+      if (!c.data || (dense && !c.dense) || c.reseat || c.regen) { c.wantDense = dense; want.push(c); }
     }
     for (const [key, c] of this.cells) if (c.mark !== this.frame && c.d > Rf * 1.05) { this.cells.delete(key); this.cellChanged(c); }
     this.impBlocks(cam);

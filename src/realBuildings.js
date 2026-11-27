@@ -43,7 +43,7 @@ export class RealScenery {
     world.flora?.setForestMask?.((x, z) => D.forest(x, z), W.loc.flora?.bare ? (x, z) => D.bare(x, z) : null); // mapped forests (OSM) instead of noise
     const t0 = performance.now();
     if (D.city) this.city = new CityScenery(world, D, this.group); // a city: baked footprints, built as tiled meshes
-    else this.buildBuildings(D.osm.buildings);
+    else { this.buildBuildings(D.osm.buildings); W.layout?.onActive((b) => this.relayout(b)); }
     this.landmarks = new Landmarks(world, D, this.group); // bridge structures, the Statue of Liberty, bridge decks to land on
     this.tall = !!D.city || this.landmarks.boxes.length > 0; // obstacles far above the ground: main.js tests hits at any height
     this.buildRails(D.osm.rails);
@@ -281,7 +281,7 @@ export class RealScenery {
       if (!this.grid.has(key)) this.grid.set(key, []);
       const e = [cx, base, cz, eave + rise, Math.sqrt(Math.abs(area) / Math.PI)];
       e.solid = true; e.fp = P; if (sb.through) e.through = true; e.dk = 'r' + this.count; e.rng = [[B, n0, B.n - n0]]; e.ob = irr ? { x: ox, z: oz, ux, uz, hl: hl + FOOT.out, hw: hw + FOOT.out } : cb || { x: ox, z: oz, ux, uz, hl, hw }; if (irr) osmBoxes(this, e, ux, uz, !sb.through, roads, [cb || { x: ox, z: oz, ux, uz, hl, hw }]); if (irr && A > FOOT.eager) void e.parts; // (a big one now: not a hitch later) // destructible (destruction.js); its boxes (World.wallBoxes)
-      e.kind = kind; e.roof = roof; e.rect = rect; e.walls = walls; e.chalet = chalet; e.pitch = roof === 0 ? 0 : rise / Math.max(0.1, hw); e.rise = rise; e.ridge = [ux, uz]; e.overMax = Math.hypot(chalet ? 1.2 : 0.6, overZ ?? (chalet ? 1.2 : 0.6)); e.stones = roofCell === C.ROOF_STONES; e.tagged = hTag > 0 || lv > 0; e.porch = porch || walkK >= 0; e.steeple = steeple; e.wet = wet; // (what it was built as: tools/test/bldcheck.js)
+      e.wet = wet; e.kind = kind; e.roof = roof; e.rect = rect; e.walls = walls; e.chalet = chalet; e.pitch = roof === 0 ? 0 : rise / Math.max(0.1, hw); e.rise = rise; e.ridge = [ux, uz]; e.overMax = Math.hypot(chalet ? 1.2 : 0.6, overZ ?? (chalet ? 1.2 : 0.6)); e.stones = roofCell === C.ROOF_STONES; e.tagged = hTag > 0 || lv > 0; e.porch = porch || walkK >= 0; e.steeple = steeple; e.wet = wet; // (what it was built as: tools/test/bldcheck.js)
       this.grid.get(key).push(e);
       this.count++;
     }
@@ -298,6 +298,19 @@ export class RealScenery {
       this.chunkList.push({ m, x: ch.x / ch.n, z: ch.z / ch.n, r: g.boundingSphere.radius });
     }
     this.chunks = null;
+  }
+  // a baked layout chunk's surface arrived (#294, ?layout=1): each building standing in it moved up or down onto it (its
+  // walls from just below its lowest corner, as built: its vertices, one run in its chunk's mesh, and its collision disc)
+  relayout(b) {
+    const L = this.w.layout, moved = new Map();
+    for (const a of this.grid.values()) for (const e of a) {
+      if (!e.fp || e.wet || !e.rng || !e.fp.some((p) => p[0] >= b.x0 - 1 && p[0] <= b.x1 + 1 && p[1] >= b.z0 - 1 && p[1] <= b.z1 + 1)) continue; // (one across chunks: once they're all in)
+      let g0 = Infinity; for (const p of e.fp) { const y = L.placeY(p[0], p[1]); if (!(y === y)) { g0 = Infinity; break; } g0 = Math.min(g0, y); }
+      const dy = g0 - 0.6 - e[1]; if (!(Math.abs(dy) > 0.02 && Math.abs(dy) < 30)) continue;
+      for (const [B, s, n] of e.rng) { const P = B.geo?.attributes.position; if (!P || !n) continue; for (let v = s; v < s + n; v++) P.array[v * 3 + 1] += dy; const r = moved.get(P) || [Infinity, -Infinity]; moved.set(P, [Math.min(r[0], s), Math.max(r[1], s + n)]); }
+      e[1] += dy;
+    }
+    for (const [P, [s, t]] of moved) { P.addUpdateRange(s * 3, (t - s) * 3); P.needsUpdate = true; }
   }
   // piers and jetties (OSM man_made=pier): plank decks on piles, walkways out to the overwater bungalows
   buildPiers(list) {

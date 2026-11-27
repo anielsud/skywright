@@ -27,8 +27,12 @@ export class Layout {
     const H = w.real.hi, S = this.size; this.gx0 = Math.floor(H.x0 / S) * S; this.gz0 = Math.floor(H.z0 / S) * S; this.gn = Math.ceil((H.x0 + H.size - this.gx0) / S) + 1;
     this.maskData = new Uint8Array(this.gn * this.gn); this.mask = new THREE.DataTexture(this.maskData, this.gn, this.gn, THREE.RedFormat, THREE.UnsignedByteType); this.mask.needsUpdate = true;
     this.U = { layMask: { value: this.mask }, layGrid: { value: new THREE.Vector4(this.gx0, this.gz0, S, this.gn) } };
-    this.out = [0, 0, 1, 0]; this.skirts = new Map();
+    this.out = [0, 0, 1, 0]; this.skirts = new Map(); this.subs = []; this.o2 = [0, 0, 0, 0];
+    this.place = !(typeof location !== 'undefined' && /[?&]layplace=0\b/.test(location.search || '')); // (false: what stands on the roads placed as before this (?layplace=0, to compare shots))
   }
+  // fn(box: { x0, z0, x1, z1 }) each time a chunk's surface arrives (physics on there): what was placed on today's ground
+  // and roads within it (lamps, signals, trees, lanes) re-placed on the layout's
+  onActive(fn) { this.subs.push(fn); }
   // today's ground and road materials: not drawn inside an active chunk
   clip(...mats) {
     const U = this.U;
@@ -88,6 +92,7 @@ export class Layout {
       c.phys = physIndex(c.L, m); this.active.set(c.k, c); this.on = true;
       const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 255; this.mask.needsUpdate = true; }
       if (this.mats) this.skirtsFor(c);
+      const box = { x0: c.L.x0, z0: c.L.z0, x1: c.L.x0 + c.L.size, z1: c.L.z0 + c.L.size, k: c.k }; if (this.place) for (const f of this.subs) f(box); // (what stands on it re-placed: onActive)
     }
     if (!this.mats) return; // (no drawing: tools)
     const want = Math.hypot(c.cx - this.cam.x, c.cz - this.cam.z) < FINE_D ? 'fine' : 'coarse';
@@ -161,8 +166,32 @@ export class Layout {
     while (this.queue.size || this.busy) { if (this.worker) await new Promise((res) => setTimeout(res, 20)); else this.pump(); }
     return cs.length;
   }
+  // the height to place things at (x, z) on (lamps, signals, lanes, building bases): the surface's, NaN outside the active chunks
+  placeY(x, z) { return this.place && this.on ? this.heightAt(x, z) : NaN; }
   // the physics height at (x, z) (NaN outside the active chunks)
   heightAt(x, z, out) { const c = this.active.get(Math.floor(x / this.size) + ',' + Math.floor(z / this.size)); return c ? physAt(c.L, c.m.fine, c.phys, x, z, out) : NaN; }
+  // whether every chunk over the square x0..x1, z0..z1 that will be in (baked, in reach of the camera) is in: what's
+  // built over it then stands on the layout's surface, not today's ground (realCity.js: a low tile waits for it)
+  readyIn(x0, z0, x1, z1) {
+    const S = this.size; if (!this.place) return true;
+    for (let i = Math.floor(x0 / S); i <= Math.floor(x1 / S); i++) for (let j = Math.floor(z0 / S); j <= Math.floor(z1 / S); j++) { const k = i + ',' + j; if (!this.index.has(k) || this.active.has(k)) continue;
+      if (this.chunks.has(k) || Math.hypot((i + 0.5) * S - this.cam.x, (j + 0.5) * S - this.cam.z) <= LOAD_D) return false; }
+    return true;
+  }
+  // the surface kind (format.js KIND) at (x, z), -1 outside the active chunks
+  kindAt(x, z) { if (!this.place) return -1; const c = this.active.get(Math.floor(x / this.size) + ',' + Math.floor(z / this.size)); if (!c) return -1; const h = physAt(c.L, c.m.fine, c.phys, x, z, this.o2); return h === h ? c.m.fine.tk[this.o2[0]] : -1; }
+  // whether (x, z) is on the layout's paving (tarmac, kerb, pavement, verge, pavers, gravel, an alley): nothing grows there
+  pavedAt(x, z) { const k = this.kindAt(x, z); return k >= KIND.tarmac && k !== KIND.out; }
+  // the street nearest (x, z) in an active chunk (not the ways off the network), within reach of its centre line:
+  // { px, pz (the nearest point of its centre line), nx, nz (from there towards (x, z)), d, hw, pave } or null
+  edgeAt(x, z, reach = 30) {
+    const c = this.place && this.active.get(Math.floor(x / this.size) + ',' + Math.floor(z / this.size)); if (!c) return null;
+    let best = null, bd = reach;
+    for (const r of c.L.net.runs) { if (r.minor) continue; const P = r.pts;
+      for (let i = 0; i + 3 < P.length; i += 2) { const ax = P[i], az = P[i + 1], ex = P[i + 2] - ax, ez = P[i + 3] - az, l = ex * ex + ez * ez, t = l ? Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / l)) : 0, px = ax + ex * t, pz = az + ez * t, d = Math.hypot(x - px, z - pz);
+        if (d < bd) { bd = d; const ll = Math.sqrt(l) || 1; let nx = -ez / ll, nz = ex / ll; if ((x - px) * nx + (z - pz) * nz < 0) { nx = -nx; nz = -nz; } best = { px, pz, nx, nz, d, hw: r.hw, pave: r.pave }; } } }
+    return best;
+  }
   // World.groundAt's answer inside an active chunk (null outside): height, normal, surface type
   ground(x, z) {
     const o = this.out, c = this.active.get(Math.floor(x / this.size) + ',' + Math.floor(z / this.size)); if (!c) return null;
