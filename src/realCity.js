@@ -11,7 +11,7 @@
 // the roofs. Collisions: an oriented box per building.
 import * as THREE from 'three';
 import { STEP } from './stepClock.js';
-import { buildingMaterial, buildingDepthMaterial, dmgAttr, C, facade, facadeSpec, floodlit, linHex, LY0, LYS } from './buildings.js';
+import { buildingMaterial, buildingDepthMaterial, furnMaterial, furnDepthMaterial, dmgAttr, C, facade, facadeSpec, floodlit, linHex, LY0, LYS } from './buildings.js';
 import { toLocal } from './realworld.js';
 import { OcclusionBuffer, OCC_LAYER, inscribedBox, binBounds, worldBounds, shadowsSeeOccluded } from './occlusion.js';
 import { roadIndex, setBack, holeInside, fitBox, footBoxes, boundBox, inParts, irregular, lazyParts, packRing, unpackRing, FOOT, MAJOR, streetWalls, PASSAGE, clip, intrusion, WORK, workSince, Refiner, fillBare } from './setback.js';
@@ -19,6 +19,7 @@ import { roadIndex, setBack, holeInside, fitBox, footBoxes, boundBox, inParts, i
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
 const GROUP = 2; // tall buildings: the far ones drawn by height, by their distance to these GROUP x GROUP data tiles
 const TALL_CELL = 500, LOW_CELL = 500; // (m) one mesh per cell (by a footprint's middle): culled each on its own
+const FURN_CELL = 1000; // (m) roof furniture: an InstancedMesh per kind per FURN_CELL cell of a tall group (a low tile's: per tile), culled each on its own (FurnK)
 const LOW_R = { low: 900, medium: 1600, high: 2400, ultra: 2600 }; // low buildings within this distance of the camera
 const DENSE = 12; // tall buildings within ~300 m (CityScenery.dense): a built-up spot
 const SUP = 25; // (m) the cells base() looks for what stands under a part in
@@ -29,7 +30,7 @@ const REACH = 24, FRONT = 40, CONE = 0; // (m) a wall facing a street within REA
 export const OCC = { on: true, h: 150, r: 1000, max: 64, corners: 40000, lowA: 300 };
 const LEVELS = [150, 70, 35, 0]; // tall meshes, sorted by height: a far mesh draws only buildings >= LEVELS[k] m
 const LEVEL_D = { low: [5000, 3000, 1800], medium: [8000, 5000, 3000], high: [14000, 8000, 5000], ultra: [15000, 9000, 5500] };
-const FURN_D = { low: 1300, medium: 2400, high: 4000, ultra: 4500 }; // roof furniture (late indices) drawn within this of a tall mesh
+const FURN_D = { low: 1300, medium: 2400, high: 4000, ultra: 4500 }; // roof furniture (its instances, FurnK) drawn within this of a tall group
 // roof furniture per tier: tank sides, rooftop units, hatches; both faces of a tank's stand (seen through it)
 // (Low: no platform beams under a tank, no stair bulkheads on the walk-ups, which have no elevator)
 const FURN = { low: { seg: 6, units: 0, hatch: 0, both: false, platform: false, stair: false, tanks: 0.75 }, medium: { seg: 8, units: 1, hatch: 1, both: false, platform: true, stair: true },
@@ -60,7 +61,7 @@ const TANK = { staves: L([0xf4f0e8, 0xe6ded2, 0xd8cab8, 0xfcfaf4, 0xd0c8be]), co
 
 // ---------------- mesh writer: the buildings.js vertex layout, quantised ----------------
 export class MeshW {
-  constructor(cx, cz, cap = 8192) { this.cx = cx; this.cz = cz; this.n = 0; this.ni = 0; this.cap = 0; this.idx = new Uint32Array(cap * 2); this.grow(cap); this.seed = 0; this.yg = 0; this.top = 0; this.late = false; this.lidx = new Uint32Array(1024); this.lni = 0; }
+  constructor(cx, cz, cap = 8192) { this.cx = cx; this.cz = cz; this.n = 0; this.ni = 0; this.cap = 0; this.idx = new Uint32Array(cap * 2); this.grow(cap); this.seed = 0; this.yg = 0; this.top = 0; this.late = false; this.lidx = new Uint32Array(1024); this.lni = 0; this.fw = null; }
   // Late triangles (roof furniture): their vertices go with the building's (one run, destruction.js), their indices
   // to a second list drawn after all the others, so a draw range can leave them out far away (CityScenery.update)
   setLate(on) { if (on === this.late) return; [this.idx, this.lidx] = [this.lidx, this.idx]; [this.ni, this.lni] = [this.lni, this.ni]; this.late = on; }
@@ -214,6 +215,104 @@ export class MeshW {
   }
 }
 
+// ---------------- roof furniture: instanced ----------------
+// The roof furniture (CityScenery.roofTop, crown) is instances of a unit shape per kind, not vertices in the merged
+// meshes: 'box' (bulkheads, plant rooms, rooftop units, hatches: four walls and a top, buildings.js furnMaterial uv
+// modes 1-3) and 'tank' (a water tank on its stand: the stand's sides, the platform's beams, the staves and the conical
+// roof, its heights a + b * legs + c * diameter). One InstancedMesh per kind per 500 m cell, a child of the cell's
+// mesh (hidden with it; its own frustum and occlusion tests, its own distance: CityScenery.update); a building's
+// instances are a run in each (destruction.js: their dmg flags, like its vertices').
+// The unit shapes (per tier: a tank's sides, both faces of its stand, its platform)
+const FURN_GEO = new Map();
+function furnGeo(kind, F) {
+  const key = kind + (kind === 'tank' ? `${F.seg}${F.both}${F.platform}` : ''); let g = FURN_GEO.get(key); if (g) return g;
+  const P = [], N = [], UV = [], V = [], E = [], I = [];
+  const vert = (x, y, z, nx, ny, nz, u, v, cell, col, mode, world = 0, a = 0, b = 0) => { P.push(x, y, z); N.push(nx, ny, nz); UV.push(u, v); V.push(cell, col, mode, world); E.push(a, b); return P.length / 3 - 1; };
+  const quad = (o) => I.push(o, o + 1, o + 2, o, o + 2, o + 3);
+  // an upright quad a -> b ((u, n) points, local x = u, z = n), y and fe from each end's (ya, ea, eb) at the bottom and top
+  const side = (a, b, cell, col, mode, y0, a0, b0, y1, a1, b1) => {
+    const du = b[0] - a[0], dn = b[1] - a[1], L = Math.hypot(du, dn), nx = -dn / L, nz = du / L;
+    quad(vert(a[0], y0, a[1], nx, 0, nz, 0, 0, cell, col, mode, 0, a0, b0)); vert(b[0], y0, b[1], nx, 0, nz, 1, 0, cell, col, mode, 0, a0, b0);
+    vert(b[0], y1, b[1], nx, 0, nz, 1, 1, cell, col, mode, 0, a1, b1); vert(a[0], y1, a[1], nx, 0, nz, 0, 1, cell, col, mode, 0, a1, b1);
+  };
+  const ring = (s) => [[-s, s], [s, s], [s, -s], [-s, -s]];
+  if (kind === 'box') { // CityScenery.block: walls (the instance's cell and first colour), a top (its top cell and second colour)
+    const Q = ring(0.5);
+    for (let k = 0; k < 4; k++) side(Q[k], Q[(k + 1) % 4], 255, 0, k % 2 ? 2 : 1, 0, 0, 0, 1, 0, 0);
+    const o = P.length / 3; for (const [u, n] of Q) vert(u, 1, n, 0, 1, 0, u + 0.5, 0.5 - n, 254, 1, 3); quad(o);
+  } else { // CityScenery.tank, its diameter 1
+    const Q = ring(0.4); // the stand: legs high (both faces at High)
+    for (let k = 0; k < 4; k++) { const a = Q[k], b = Q[(k + 1) % 4]; side(a, b, C.FRAME, 2, 0, 0, 0, 0, 0, 0, 1); if (F.both) side(b, a, C.FRAME, 2, 0, 0, 0, 0, 0, 0, 1); }
+    if (F.platform) { const Pq = ring(0.51); for (let k = 0; k < 4; k++) side(Pq[k], Pq[(k + 1) % 4], C.METAL, 2, 4, 0, 0, 1, 0, 0.4, 1); } // (its beams, 0.4 m deep)
+    // MeshW.lathe's rows [radius, c, v, normal out, normal up, a]: smooth round seg sides, aligned to the world's axes
+    const lathe = (rows, cell, col, mode, uMax) => {
+      const seg = F.seg, m = seg + 1, o = P.length / 3;
+      for (const [r, y, v, no, nu, a] of rows) for (let k = 0; k <= seg; k++) { const t = (k / seg) * Math.PI * 2, s = Math.sin(t), c = Math.cos(t); vert(s * r, y, c * r, s * no, nu, c * no, (k / seg) * uMax, v, cell, col, mode, 1, a, 1); }
+      for (let j = 0; j < rows.length - 1; j++) for (let k = 0; k < seg; k++) { const a = o + j * m + k, b = a + m; I.push(a, a + 1, b + 1, a, b + 1, b); }
+    };
+    const ro = 0.54, rise = ro * 0.62, k = rise / ro, cn = 1 / Math.hypot(1, k);
+    lathe([[0.5, 0, 0, 1, 0, 0.4], [0.5, 0.95, 1, 1, 0, 0.4]], C.WTANK, 0, 5, 1); // the staves (bays round it: uv mode 5)
+    lathe([[ro, 0.95, 0, k * cn, cn, 0.32], [0, 0.95 + rise, Math.hypot(ro, rise) / 3, k * cn, cn, 0.4]], C.TRIM, 1, 6, (2 * Math.PI * ro) / 3); // its roof
+  }
+  g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2)); g.setAttribute('fv', new THREE.BufferAttribute(new Uint8Array(V), 4)); g.setAttribute('fe', new THREE.Float32BufferAttribute(E, 2));
+  g.setIndex(I); FURN_GEO.set(key, g);
+  return g;
+}
+const freeOnUpload = function () { this.array = new this.array.constructor(0); };
+// One kind's instances in one cell, as they're written (positions in metres from the writer's centre), then its mesh
+export class FurnK {
+  constructor(kind) { this.kind = kind; this.n = 0; this.cap = 0; this.geo = null; this.grow(8); }
+  grow(need) {
+    if (need <= this.cap) return;
+    const cap = Math.max(need, this.cap * 2), cp = (A, T, k) => { const b = new T(cap * k); if (A) b.set(A.subarray(0, this.n * k)); return b; };
+    this.mx = cp(this.mx, Float32Array, 16); this.fi = cp(this.fi, Uint8Array, 4); this.ca = cp(this.ca, Uint8Array, 3); this.cb = cp(this.cb, Uint8Array, 3); this.fl = cp(this.fl, Float32Array, 1); this.ex = cp(this.ex, Float32Array, 6); this.cap = cap;
+  }
+  // at (x, y, z), its x axis along (ux, uz) (its z axis (-uz, ux), as CityScenery.roofTop's at()), the unit shape scaled
+  // (sx, sy, sz); fl, the cells, seed, ly, colours (hex bytes): buildings.js furnMaterial; r, h: its reach round (x, z)
+  // and its height (its box, for culling)
+  add(x, y, z, ux, uz, sx, sy, sz, fl, c0, c1, seed, ly, ca, cb, r, h) {
+    if (this.n >= this.cap) this.grow(this.n + 1);
+    const i = this.n++, M = this.mx, o = i * 16, f = i * 4, c = i * 3, e = i * 6;
+    M[o] = ux * sx; M[o + 1] = 0; M[o + 2] = uz * sx; M[o + 3] = 0; M[o + 4] = 0; M[o + 5] = sy; M[o + 6] = 0; M[o + 7] = 0;
+    M[o + 8] = -uz * sz; M[o + 9] = 0; M[o + 10] = ux * sz; M[o + 11] = 0; M[o + 12] = x; M[o + 13] = y; M[o + 14] = z; M[o + 15] = 1;
+    this.fi[f] = c0; this.fi[f + 1] = c1; this.fi[f + 2] = seed; this.fi[f + 3] = ly;
+    this.ca[c] = (ca >> 16) & 255; this.ca[c + 1] = (ca >> 8) & 255; this.ca[c + 2] = ca & 255; this.cb[c] = (cb >> 16) & 255; this.cb[c + 1] = (cb >> 8) & 255; this.cb[c + 2] = cb & 255;
+    this.fl[i] = fl;
+    const X = this.ex; X[e] = x - r; X[e + 1] = y; X[e + 2] = z - r; X[e + 3] = x + r; X[e + 4] = y + h; X[e + 5] = z + r;
+  }
+  // its InstancedMesh, at (cx, cz) (the writer's centre); own: its own copy of the unit shape's vertices (a mesh disposed
+  // with its low tile: a shared attribute freed would leave the others' vertex arrays pointing at nothing)
+  mesh(mat, F, own, cx, cz) {
+    const n = this.n, U = furnGeo(this.kind, F), g = new THREE.BufferGeometry();
+    for (const [k, a] of Object.entries(U.attributes)) g.setAttribute(k, own ? a.clone() : a);
+    g.setIndex(own ? U.index.clone() : U.index);
+    const inst = (A, k, norm = false) => { const a = new THREE.InstancedBufferAttribute(A, k, norm); a.onUpload(freeOnUpload); return a; };
+    g.setAttribute('fi', inst(this.fi.slice(0, n * 4), 4)); g.setAttribute('fcA', inst(this.ca.slice(0, n * 3), 3, true)); g.setAttribute('fcB', inst(this.cb.slice(0, n * 3), 3, true));
+    g.setAttribute('fl', inst(this.fl.slice(0, n), 1)); g.setAttribute('dmg', inst(dmgAttr(n, this.dmgW).array, 1)); // (destruction.js)
+    const m = new THREE.InstancedMesh(g, mat, n); m.instanceMatrix.array.set(this.mx.subarray(0, n * 16)); m.instanceMatrix.onUpload(freeOnUpload);
+    m.customDepthMaterial = furnDepthMaterial(); m.position.set(cx, 0, cz); m.matrixAutoUpdate = false; m.updateMatrix();
+    // its box and sphere (three's culling), its boxes in 4 x 4 columns (occlusion.js worldBounds)
+    const X = this.ex, bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < n * 6; i += 6) for (let a = 0; a < 3; a++) { bb[a] = Math.min(bb[a], X[i + a]); bb[a + 3] = Math.max(bb[a + 3], X[i + 3 + a]); }
+    m.boundingBox = new THREE.Box3(new THREE.Vector3(bb[0], bb[1], bb[2]), new THREE.Vector3(bb[3], bb[4], bb[5])); m.boundingSphere = m.boundingBox.getBoundingSphere(new THREE.Sphere());
+    const B = 4, cols = new Float64Array(B * B * 6).fill(Infinity), sx = B / Math.max(1e-9, bb[3] - bb[0]), sz = B / Math.max(1e-9, bb[5] - bb[2]);
+    for (let q = 0; q < B * B; q++) cols.fill(-Infinity, q * 6 + 3, q * 6 + 6);
+    for (let i = 0; i < n * 6; i += 6) {
+      const q = (Math.min(B - 1, Math.floor(((X[i] + X[i + 3]) / 2 - bb[0]) * sx)) * B + Math.min(B - 1, Math.floor(((X[i + 2] + X[i + 5]) / 2 - bb[2]) * sz))) * 6;
+      for (let a = 0; a < 3; a++) { cols[q + a] = Math.min(cols[q + a], X[i + a]); cols[q + 3 + a] = Math.max(cols[q + 3 + a], X[i + 3 + a]); }
+    }
+    const L = []; for (let q = 0; q < B * B; q++) if (cols[q * 6] <= cols[q * 6 + 3]) L.push(...cols.subarray(q * 6, q * 6 + 6));
+    m.userData.occL = L;
+    this.geo = g; this.dmgW = null; this.mx = this.fi = this.ca = this.cb = this.fl = this.ex = null; // (the JS copies: uploaded and dropped)
+    return m;
+  }
+}
+// a cell's writers, one per kind, positions from (cx, cz)
+const furnW = (cx, cz) => ({ cx, cz, box: new FurnK('box'), tank: new FurnK('tank') });
+const lyOf = (M, y) => Math.max(0, Math.min(255, (y - M.yg + LY0) * LYS)); // (MeshW.v's atl.z)
+
 // A roof's triangles without holes, as THREE.ShapeUtils.triangulateShape gives them (its earcut, 2.2.4, in three r170):
 // the same linked ring, the same ear tests in the same order, so the same triangles, flat [a, b, c, ...]. Only the
 // common case: no holes, at most 80 points (earcut's z-order hashing starts past that), no repeated end point
@@ -348,9 +447,11 @@ export class CityScenery {
     this.grid = new Map(); // 50 m cells -> collision boxes
     this.lowR = LOW_R[W.qName] ?? 1600;
     this.furn = FURN[W.qName] ?? FURN.medium; this.furnD = FURN_D[W.qName] ?? FURN_D.medium; // roof furniture: every tier, its detail by tier
-    this.roofStats = { flat: 0, tanks: 0, bulkheads: 0, plant: 0, units: 0, hatches: 0, cake: 0, screen: 0, copper: 0, flood: 0, cells: {}, cols: new Set() }; // (what the roofs got: tools/test/bldcheck.js)
+    this.roofStats = { flat: 0, tanks: 0, bulkheads: 0, plant: 0, units: 0, hatches: 0, cake: 0, screen: 0, copper: 0, flood: 0, crownBox: 0, cells: {}, cols: new Set() }; // (what the roofs got: tools/test/bldcheck.js; crownBox: a crown's plant room or cap, a box instance like the roofs')
+    this.furnMade = { box: 0, tank: 0 }; // (roof furniture instances made, tall and low, every low tile build: roofStats' counts)
     this.levelD = LEVEL_D[W.qName] ?? LEVEL_D.medium;
-    this.mat = buildingMaterial({ cellPx: { low: 128, medium: 192, ultra: 384 }[W.qName] ?? 256, interiors: W.qName !== 'low', glass: true });
+    const mo = { cellPx: { low: 128, medium: 192, ultra: 384 }[W.qName] ?? 256, interiors: W.qName !== 'low', glass: true };
+    this.mat = buildingMaterial(mo); this.fmat = furnMaterial(mo, TANK.steel); // (fmat: the roof furniture's instances, FurnK)
     // (lit windows: set in update, dimmer than a village's; thousands of them in view)
     this.tiles = new Map(); for (const t of H.tiles) this.tiles.set(t[0] + ',' + t[1], { i: t[0], j: t[1], off: t[2], nTall: t[3], nLow: t[4], low: null });
     const cfg = W.loc.city || {};
@@ -394,16 +495,17 @@ export class CityScenery {
       // The group's buildings, written into one vertex buffer (one writer: destruction.js finds a building's vertices
       // through it), are drawn two ways, each through an index buffer of its own over those vertices:
       //  - near (all heights drawn): one mesh per TALL_CELL cell, each culled on its own by three's frustum test (in
-      //    every pass: the shadow map's too), its buildings tallest first, its roof furniture last;
+      //    every pass: the shadow map's too), its buildings tallest first (any late indices last; the roof furniture is instances: FurnK, one InstancedMesh per kind per FURN_CELL);
       //  - far (only the tall ones): the whole group, tallest first, so a draw range by height level is one draw call.
       const [gi, gj] = k.split(',').map(Number), gcx = H.x0 + (gi + 0.5) * GROUP * H.tile, gcz = H.z0 + (gj + 0.5) * GROUP * H.tile;
-      const M = new MeshW(gcx, gcz, 16384), lv = [], cells = new Map(), occ = [];
+      const M = new MeshW(gcx, gcz, 16384), lv = [], cells = new Map(), occ = [], fws = new Map(); // (fws: each cell's roof furniture, FurnK)
       let li = 0;
       for (const rc of recs) {
         while (li < LEVELS.length - 1 && rc.top < LEVELS[li]) { lv.push(M.ni); li++; }
         readRec(U, S, rc.o, this.q, rc.cx, rc.cz, R);
         if (this.skipped(R)) continue;
         const ck = this.cellKey(R.P, TALL_CELL), a = M.ni, la = M.lni, v0 = M.n;
+        const fk = this.cellKey(R.P, FURN_CELL); M.fw = fws.get(fk); if (!M.fw) fws.set(fk, (M.fw = furnW(...this.cellCentre(fk, FURN_CELL))));
         this.lastFoot = this.lastBase = null; this.building(M, R, true);
         const ob = M.n > v0 && this.occluder(R, true); if (ob) { ob.ck = ck; occ.push(ob); (rc.t.occ || (rc.t.occ = [])).push(ob); }
         let c = cells.get(ck); if (!c) cells.set(ck, (c = []));
@@ -414,7 +516,8 @@ export class CityScenery {
       if (!M.n) continue;
       const far = M.mesh(this.mat), G = far.geometry, I = G.index.array, P = G.attributes.position.array;
       far.castShadow = W_SHADOW(this.w); far.receiveShadow = true;
-      const g = { m: far, x: gcx, z: gcz, lv, all: M.ni, main: M.main, cells: [] }, cellM = new Map();
+      const g = { m: far, x: gcx, z: gcz, lv, all: M.ni, main: M.main, cells: [], furn: [] }, cellM = new Map();
+      for (const fw of fws.values()) this.furnMeshes(fw, g.furn, false, W_SHADOW(this.w));
       // (far: only what is drawn far, the levels down to the lowest a far group draws; no roof furniture)
       G.setIndex(new THREE.BufferAttribute(I.slice(0, lv[LEVELS.length - 2]), 1)); G.index.onUpload(function () { this.array = new this.array.constructor(0); });
       binBounds(far, P, G.index.array, G.index.count, 8); // (its bounds in columns, while its vertices are here: occlude())
@@ -637,7 +740,7 @@ export class CityScenery {
         else if (st.prewar) crown = { kind: 'cake', h: Math.max(12, Math.min(45, top * 0.2)), tiers: top > 150 && b.hw > 14 ? 2 : 1, cap: hc < 0.4 ? 'copper' : hc < 0.65 ? 'slate' : 'flat', b };
       }
     }
-    const eave = yTop - rise - (crown ? crown.h : 0), n0 = M.n; let wt = false;
+    const eave = yTop - rise - (crown ? crown.h : 0), n0 = M.n, f0 = M.fw && [M.fw.box.n, M.fw.tank.n]; let wt = false;
     if (pad && !(pad.roof && pad.roof.y >= eave)) pad.roof = { y: eave, box: box || obb(P), P, g: gm };
     M.seed = (hseed * 255) | 0; M.yg = yFloor; M.color(st.col);
     // ---- walls: one quad a wall, the whole facade drawn by its program (buildings.js facade): the ground floor (shop
@@ -683,7 +786,7 @@ export class CityScenery {
       M.color(rLook.col); M.roof(P, holes, eave, rLook.cell);
       const RS = this.roofStats; RS.flat++; RS.cells[rLook.cell] = (RS.cells[rLook.cell] || 0) + 1; RS.cols.add(rLook.col);
       if (crown) this.crown(M, R, st, P, crown, eave, yTop, yfV, flV, F2, rLook);
-      // roof furniture (late indices: drawn near only): water tanks, bulkheads, plant rooms, rooftop units, hatches
+      // roof furniture (instances, FurnK: drawn near only): water tanks, bulkheads, plant rooms, rooftop units, hatches
       else if (!part && !pad && A > 60) {
         const b = box || obb(P);
         if (b && A / b.ar > 0.6 && b.hw > 2.2) { M.setLate(true); wt = this.roofTop(M, R, st, kind, P, b, eave, A, top, tall, rLook); M.setLate(false); }
@@ -745,7 +848,9 @@ export class CityScenery {
     if (cut) t.passage = true;
     if (pad) { t.fixed = true; return; } // (no damage key: destruction.js leaves it standing, whatever falls around it)
     // destructible (destruction.js): its vertices, what it's made of; damage done earlier this flight comes back with it
-    t.dk = 'c' + R.o; t.rng = [[M, n0, M.n - n0]]; t.look = { cell: st.cell, col: st.col, rcol: rLook?.col ?? 0x5c5a56, glass: !!st.glass }; if (wt) t.type = 'waterTower';
+    t.dk = 'c' + R.o; t.rng = [[M, n0, M.n - n0]];
+    if (f0) { const B = M.fw.box, K = M.fw.tank; if (B.n > f0[0]) t.rng.push([B, f0[0], B.n - f0[0]]); if (K.n > f0[1]) t.rng.push([K, f0[1], K.n - f0[1]]); } // (its roof furniture's instances: hidden with it)
+    t.look = { cell: st.cell, col: st.col, rcol: rLook?.col ?? 0x5c5a56, glass: !!st.glass }; if (wt) t.type = 'waterTower';
     W.destruct?.restore(t);
   }
   // A building's facade programs (buildings.js facade): { front: the walls facing a street, rear: the others, gH: its
@@ -840,34 +945,23 @@ export class CityScenery {
       : u < 0.3 ? 'membrane' : u < 0.48 ? 'silver' : u < 0.68 ? 'tar' : u < 0.88 ? 'gravel' : u < 0.96 || top > 40 ? 'pavers' : 'green';
     return { cell: { membrane: C.ROOF_MEMBRANE, silver: C.ROOF_TAR, tar: C.ROOF_TAR, gravel: C.ROOF_GRAVEL, pavers: C.PAVERS, green: C.ROOF_GRAVEL }[k], col: pick(ROOF[k], v), kind: k };
   }
-  // a box standing on a roof (bulkheads, plant rooms, rooftop units): its four walls and a tarred top
-  block(M, x, z, ux, uz, hu, hn, y0, y1, cell, col, top = ROOF.tar[0]) {
+  // a box standing on a roof (bulkheads, plant rooms, rooftop units; a hatch: no walls, its top topCell, s m a repeat):
+  // its four walls and a tarred top. An instance (FurnK 'box') where the writer has its cell's (always, in the city)
+  block(M, x, z, ux, uz, hu, hn, y0, y1, cell, col, top = ROOF.tar[0], topCell = C.ROOF_TAR, s = 3) {
+    if (M.fw) { M.fw.box.add(x - M.fw.cx, y0, z - M.fw.cz, ux, uz, 2 * hu, Math.max(y1 - y0, 1e-4), 2 * hn, s, cell, topCell, M.seed, lyOf(M, y0), col, top, Math.hypot(hu, hn), y1 - y0); return; }
     const nx = -uz, nz = ux, Q = [[-hu, hn], [hu, hn], [hu, -hn], [-hu, -hn]].map(([a, b]) => [x + ux * a + nx * b, z + uz * a + nz * b]);
     M.color(col);
     for (let k = 0; k < 4; k++) { const p = Q[k], q = Q[(k + 1) % 4]; M.wall(p[0], p[1], q[0], q[1], y0, y1, y0, cell, 3, 3); }
-    M.color(top); M.poly(Q.map((p) => [p[0], y1, p[1]]), C.ROOF_TAR);
+    M.color(top); M.poly(Q.map((p) => [p[0], y1, p[1]]), topCell, s);
   }
   // The wooden water tank on its steel stand (traced from the SoHo and Midtown rooftop photos): silver-grey cedar staves
   // bound with steel hoops (WTANK, v 0..1 the whole tank), a low conical roof with a little overhang, on a deep steel
   // platform, the stand cross-braced (FRAME, cut out) and anything from a metre to two storeys tall. D: the tank's
   // diameter, legs: the stand's height
-  tank(M, x, z, ux, uz, D, y, legs, h) {
-    const F = this.furn, seg = F.seg, r = D / 2, y0 = y + legs, y1 = y0 + 0.4, y2 = y1 + D * 0.95, ro = r * 1.08, y3 = y2 + ro * 0.62, nx = -uz, nz = ux;
-    // the stand (both faces at High: the far side's bracing shows through the near side's)
-    const s = r * 0.8, Q = [[-s, s], [s, s], [s, -s], [-s, -s]].map(([a, b]) => [x + ux * a + nx * b, z + uz * a + nz * b]), UV = [[0, 0], [1, 0], [1, 1], [0, 1]];
-    M.color(TANK.steel);
-    if (legs > 0.3) for (let k = 0; k < 4; k++) {
-      const a = Q[k], b = Q[(k + 1) % 4];
-      M.q([[a[0], y, a[1]], [b[0], y, b[1]], [b[0], y0, b[1]], [a[0], y0, a[1]]], UV, C.FRAME);
-      if (F.both) M.q([[b[0], y, b[1]], [a[0], y, a[1]], [a[0], y0, a[1]], [b[0], y0, b[1]]], UV, C.FRAME);
-    }
-    if (F.platform) { const Pq = [[-1, 1], [1, 1], [1, -1], [-1, -1]].map(([a, b]) => [x + (ux * a + nx * b) * r * 1.02, z + (uz * a + nz * b) * r * 1.02]); for (let k = 0; k < 4; k++) { const a = Pq[k], b = Pq[(k + 1) % 4]; M.wall(a[0], a[1], b[0], b[1], y0, y1, y0, C.METAL, 3, 3); } } // (the platform's deep beams)
-    // the tank and its roof: smooth, their vertices shared round them
-    const around = Math.max(1, Math.round((Math.PI * D) / 3)), k = (y3 - y2) / ro, cn = 1 / Math.hypot(1, k);
-    M.color(pick(TANK.staves, h)); M.lathe(x, z, [[r, y1, 0, 1, 0], [r, y2, 1, 1, 0]], seg, C.WTANK, around);
-    M.color(pick(TANK.cone, (h * 7.3) % 1)); M.lathe(x, z, [[ro, y2 - 0.08, 0, k * cn, cn], [0, y3, Math.hypot(ro, y3 - y2) / 3, k * cn, cn]], seg, C.TRIM, (2 * Math.PI * ro) / 3); // (tar paper or sheet metal over boards)
+  tank(M, x, z, ux, uz, D, y, legs, h) { // (an instance, FurnK 'tank': its stand's corners reach 0.72 D out, its roof 1.28 D over the legs and platform)
+    M.fw.tank.add(x - M.fw.cx, y, z - M.fw.cz, ux, uz, D, D, D, legs, 0, 0, M.seed, lyOf(M, y), pick(TANK.staves, h), pick(TANK.cone, (h * 7.3) % 1), 0.73 * D, legs + 0.4 + 1.29 * D);
   }
-  // A flat roof's furniture (late indices: drawn near only), from the rooftop photos: on the pre-war apartment houses
+  // A flat roof's furniture (instances, FurnK: drawn near only), from the rooftop photos: on the pre-war apartment houses
   // and walk-ups the water tank on its stand at one end and the stair / elevator bulkhead at the other, in the
   // building's own brick or stone; on the towers a plant room (louvred, or the building's masonry); rooftop units and
   // hatches scattered between (Medium up). Returns whether it got a tank (destruction.js: the splash).
@@ -913,8 +1007,7 @@ export class CityScenery {
     for (let k = 0; k < F.hatch; k++) {
       const u = (hh(131 + k) - 0.5) * 2 * Math.max(0, hl - 2), n = (hh(137 + k) - 0.5) * 2 * Math.max(0, hw - 2);
       if (!fits(u, n, 0.5, 0.5)) continue;
-      const Q = [[-0.5, 0.5], [0.5, 0.5], [0.5, -0.5], [-0.5, -0.5]].map(([a, c]) => { const q = at(u + a, n + c); return [q[0], y + 0.15, q[1]]; });
-      M.color(look.kind === 'tar' ? ROOF.hatchLight : ROOF.hatch); M.poly(Q, C.METAL, 1); RS.hatches++;
+      const q = at(u, n), hc = look.kind === 'tar' ? ROOF.hatchLight : ROOF.hatch; this.block(M, q[0], q[1], ux, uz, 0.5, 0.5, y + 0.15, y + 0.15, C.METAL, hc, hc, C.METAL, 1); RS.hatches++;
     }
     return wt;
   }
@@ -928,7 +1021,7 @@ export class CityScenery {
     if (cr.kind === 'screen') { // a louvred screen round the roof (both faces: from above its inside shows too), the plant behind it
       M.color(ROOF.screen); const lv = lit(C.LOUVRE);
       for (let k = 0; k < P.length; k++) { const a = P[k], c = P[(k + 1) % P.length]; M.wall(c[0], c[1], a[0], a[1], eave, yTop, eave, lv, 3, 3); M.wall(a[0], a[1], c[0], c[1], eave, yTop, eave, C.LOUVRE, 3, 3); }
-      M.setLate(true); this.block(M, b.cx, b.cz, b.ux, b.uz, b.hl * 0.4, b.hw * 0.45, eave, yTop - 1.5, C.LOUVRE, pick(ROOF.plant, hash(R.o, 61))); M.setLate(false);
+      M.setLate(true); this.block(M, b.cx, b.cz, b.ux, b.uz, b.hl * 0.4, b.hw * 0.45, eave, yTop - 1.5, C.LOUVRE, pick(ROOF.plant, hash(R.o, 61))); M.setLate(false); RS.crownBox++;
       RS.screen++; RS.crowns?.push([b.cx, b.cz, 'screen', Math.round(yTop)]); return;
     }
     // wedding-cake setbacks: one or two tiers stepped in, each to a whole floor with its cornice; the top one capped
@@ -949,7 +1042,7 @@ export class CityScenery {
       } else { M.color(look.col); M.roof(Q, [], yk, look.cell); }
       y0 = yk;
     }
-    if (cr.cap === 'flat') { M.setLate(true); this.block(M, b.cx, b.cz, b.ux, b.uz, b.hl * sN * 0.45, b.hw * sN * 0.5, y0, y0 + 4, C.LIME, st.col); M.setLate(false); }
+    if (cr.cap === 'flat') { M.setLate(true); this.block(M, b.cx, b.cz, b.ux, b.uz, b.hl * sN * 0.45, b.hw * sN * 0.5, y0, y0 + 4, C.LIME, st.col); M.setLate(false); RS.crownBox++; }
     RS.cake++; RS.crowns?.push([b.cx, b.cz, cr.cap, Math.round(yTop)]);
   }
 
@@ -990,7 +1083,7 @@ export class CityScenery {
       if (this.skipped(R)) continue;
       if (minA && Math.abs(area2(R.P)) < minA) break; // sorted by area: the rest are smaller still
       const ck = this.cellKey(R.P, LOW_CELL, t); let M = st.cells.get(ck);
-      if (!M) st.cells.set(ck, (M = new MeshW(...this.cellCentre(ck, LOW_CELL), 4096)));
+      if (!M) { st.cells.set(ck, (M = new MeshW(...this.cellCentre(ck, LOW_CELL), 4096))); M.fw = st.fw || (st.fw = furnW(...this.tileCentre(t.i, t.j))); }
       const v0 = M.n; this.lastFoot = this.lastBase = null; this.building(M, R, false);
       const ob = M.n > v0 && this.occluder(R, false); if (ob) { ob.ck = ck; (st.occ || (st.occ = [])).push(ob); }
       if ((st.r & 31) === 0 && (STEP.on ? st.r - r0 >= budget * 32 : performance.now() - t0 > budget)) { this.curTile = null; return false; }
@@ -1004,10 +1097,31 @@ export class CityScenery {
       t.tris += M.ni / 3; t.meshes.push(m); this.group.add(m); cellM.set(ck, m);
     }
     t.occL = (st.occ || []).filter((ob) => (ob.m = cellM.get(ob.ck)));
+    t.furn = []; this.furnMeshes(st.fw, t.furn, true, W_SHADOW(this.w));
     return true;
+  }
+  // a cell's roof furniture (its writers, furnW): an InstancedMesh per kind, into the scene and the list L (own: their
+  // own copy of the unit shapes, a low tile's: disposed with it)
+  furnMeshes(fw, L, own, sh) {
+    if (!fw) return;
+    for (const K of [fw.box, fw.tank]) {
+      if (!K.n) continue;
+      this.furnMade[K.kind] += K.n;
+      const f = K.mesh(this.fmat, this.furn, own, fw.cx, fw.cz); f.userData.kind = K.kind; f.castShadow = sh; f.receiveShadow = true; f.visible = own; L.push(f); this.group.add(f);
+    }
+  }
+  // the roof furniture instances standing now (tall: in the cells' meshes; low: the tiles built), by kind
+  furnCount() {
+    const out = { tall: { box: 0, tank: 0 }, low: { box: 0, tank: 0 }, made: { ...this.furnMade }, meshes: 0 };
+    const add = (L, o) => { for (const f of L || []) { o[f.userData.kind] += f.count; out.meshes++; } };
+    for (const g of this.tallGroups) add(g.furn, out.tall);
+    for (const t of this.tiles.values()) add(t.furn, out.low);
+    return out;
   }
   dropLow(t) {
     for (const m of t.meshes || []) { this.group.remove(m); m.geometry.dispose(); }
+    for (const f of t.furn || []) { this.group.remove(f); f.geometry.dispose(); f.dispose(); }
+    t.furn = null;
     t.low = null; t.meshes = null; t.st = null; t.tris = 0; t.occL = null;
     const key = t.i + ',' + t.j;
     if (t.keys) for (const k of t.keys) { const a = this.grid.get(k); if (a) { const b = a.filter((x) => x.tile !== key); if (b.length) this.grid.set(k, b); else this.grid.delete(k); } }
@@ -1021,7 +1135,11 @@ export class CityScenery {
     const nl = this.levelD.length;
     for (const g of this.tallGroups) {
       const d = Math.hypot(g.x - cam.x, g.z - cam.z) - T * GROUP * 0.7, near = d <= this.levelD[nl - 1], sh = this.shadows && d < 2500; // (shadow maps reach a few km: no need to draw the far skyline into them)
-      for (const c of g.cells) { c.m.visible = near; if (near) { c.m.geometry.setDrawRange(0, d > this.furnD ? c.main : c.all); c.m.castShadow = sh; } }
+      for (const c of g.cells) {
+        c.m.visible = near; if (!near) continue;
+        c.m.geometry.setDrawRange(0, d > this.furnD ? c.main : c.all); c.m.castShadow = sh;
+      }
+      for (const f of g.furn) { f.visible = near && d <= this.furnD; f.castShadow = sh; } // (its roof furniture's instances, FurnK)
       let n = 0; if (!near) for (let k = 0; k < nl; k++) if (d > this.levelD[nl - 1 - k]) n = g.lv[nl - 1 - k];
       g.m.geometry.setDrawRange(0, n); g.m.visible = n > 0; g.m.castShadow = sh;
     }
@@ -1046,7 +1164,7 @@ export class CityScenery {
       break;
     }
     if (!this.queue.length && this.refiner.jobs.length) this.refiner.step(STEP.on ? Infinity : 1, STEP.on ? 2 : Infinity); // (the low tiles first; then a huge footprint's boxes, a millisecond a frame)
-    const k = this.w.lightsK ?? (this.w.night ? 1 : 0); this.mat.emissiveIntensity = 1.6 * Math.min(1, k / 0.12); // (buildings.js updateBuildingLights: which windows, by hour)
+    const k = this.w.lightsK ?? (this.w.night ? 1 : 0); this.mat.emissiveIntensity = this.fmat.emissiveIntensity = 1.6 * Math.min(1, k / 0.12); // (buildings.js updateBuildingLights: which windows, by hour)
   }
   // A box wholly inside the building just built (its walls from footprint(), its record): from the ground to under its
   // eave, inscribed in its footprint 2 m in from the walls (occlusion.js inscribedBox; not its collision boxes, which
@@ -1077,7 +1195,7 @@ export class CityScenery {
   occlude(cam, renderer) {
     if (renderer) shadowsSeeOccluded(renderer);
     const hid = this.occHidden || (this.occHidden = []), W = this.w;
-    for (const m of hid) m.layers.set(0);
+    for (const m of hid) m.layers.set(0); // (a cell mesh and its roof furniture each tested and hidden on its own)
     hid.length = 0;
     const S = this.occStats || (this.occStats = { on: false, cands: 0, occluders: 0, corners: 0, pixels: 0, tested: 0, hidden: 0, tris: 0, ms: 0 });
     cam.updateMatrixWorld();
@@ -1107,10 +1225,10 @@ export class CityScenery {
     const test = (m) => {
       if (!m.visible || !B.hidden(worldBounds(m))) return;
       m.layers.set(OCC_LAYER); hid.push(m);
-      const g = m.geometry; tris += Math.min(g.index.count, g.drawRange.count) / 3;
+      const g = m.geometry; tris += (Math.min(g.index.count, g.drawRange.count) / 3) * (m.isInstancedMesh ? m.count : 1);
     };
-    for (const g of this.tallGroups) { test(g.m); for (const c of g.cells) test(c.m); }
-    for (const t of this.tiles.values()) if (t.meshes) for (const m of t.meshes) test(m);
+    for (const g of this.tallGroups) { test(g.m); for (const c of g.cells) test(c.m); for (const f of g.furn) test(f); } // (the roof furniture's instances: their own boxes, FurnK.mesh)
+    for (const t of this.tiles.values()) { if (t.meshes) for (const m of t.meshes) test(m); if (t.furn) for (const f of t.furn) test(f); }
     Object.assign(S, { cands: C.length, occluders: st.occluders, corners: st.corners, pixels: st.pixels, tested: st.tested, hidden: st.hidden, tris, ms: performance.now() - t0 });
   }
   // everything near the camera built (the loading screen waits for this on the first frames)
