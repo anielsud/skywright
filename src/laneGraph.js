@@ -19,7 +19,8 @@ const SPEED = { highway: 27, main: 20, street: 11 };
 
 export class LaneGraph {
   constructor(net, rand = Math.random) {
-    this.r = rand; this.lanes = []; this.out = new Map(); // node key -> lanes leaving it
+    this.r = rand; this.lanes = []; this.made = []; this.surf = null; // (surf(x, z): the baked layout's height there, NaN off it: vehicles.js)
+    this.out = new Map(); // node key -> lanes leaving it
     this.deg = new Map(); // node key -> road pieces meeting there (3+: a junction, where crossing traffic gives way: vehicles.js)
     net.roads.forEach((rd, ri) => {
       const P = rd.pts, n = P.length; if (n < 2 || rd.kind === 'rail' || rd.minor) return; // (no traffic off the street network: pedestrian streets, plazas, alleys, tracks)
@@ -54,10 +55,18 @@ export class LaneGraph {
       let dx = q1.x - q0.x, dz = q1.z - q0.z; const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
       pts.push(new THREE.Vector3(p.x - dz * off, p.y, p.z + dx * off)); br.push(!!rd.bridge?.[idx[k]]);
     }
+    this.onSurf(pts, br); this.made.push(L);
     L.pts = pts; L.bridge = br; L.len = []; let s = 0; pts.forEach((q, i) => { if (i) s += Math.hypot(q.x - pts[i - 1].x, q.z - pts[i - 1].z); L.len.push(s); }); L.total = Math.max(s, 0.01);
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity; for (const q of pts) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); z0 = Math.min(z0, q.z); z1 = Math.max(z1, q.z); }
     L.cx = (x0 + x1) / 2; L.cz = (z0 + z1) / 2; L.r = Math.hypot(x1 - x0, z1 - z0) / 2 + 10;
     return L;
+  }
+  // a lane's points onto the baked layout's surface where it's in (#294, ?layout=1; not a bridge's deck)
+  onSurf(pts, br) { const f = this.surf; if (f) pts.forEach((q, i) => { if (br?.[i]) return; const y = f(q.x, q.z); if (y === y) q.y = y; }); }
+  // a layout chunk's surface arrived (box: x0, z0, x1, z1): the lanes and turns made already within it, onto it
+  relevel(b) {
+    const inB = (pts) => pts.some((q) => q.x >= b.x0 && q.x < b.x1 && q.z >= b.z0 && q.z < b.z1);
+    for (const L of this.made) { if (inB(L.pts)) this.onSurf(L.pts, L.bridge); if (L.moves) for (const M of L.moves.values()) if (M.T && inB(M.T.pts)) this.onSurf(M.T.pts, null); }
   }
   // a random lane, by length (where to put a car)
   pick() {
@@ -105,6 +114,7 @@ export class LaneGraph {
     const p0 = A.pts.at(-1), p2 = B.pts[0], c = A.piece.rd.pts[A.fwd ? A.piece.b : A.piece.a], pts = [];
     if (Math.hypot(p2.x - p0.x, p2.z - p0.z) < 0.6) return null;
     for (let k = 0; k <= 6; k++) { const t = k / 6, u = 1 - t; pts.push(new THREE.Vector3(u * u * p0.x + 2 * u * t * c.x + t * t * p2.x, u * u * p0.y + 2 * u * t * c.y + t * t * p2.y, u * u * p0.z + 2 * u * t * c.z + t * t * p2.z)); }
+    this.onSurf(pts, null);
     const T = { pts, bridge: pts.map(() => false), len: [], total: 0, speed: Math.min(A.speed, B.speed) * 0.6, kind: A.kind, list: [], then: B, transient: true };
     let s = 0; pts.forEach((q, i) => { if (i) s += Math.hypot(q.x - pts[i - 1].x, q.z - pts[i - 1].z); T.len.push(s); }); T.total = Math.max(s, 0.01);
     T.cx = c.x; T.cz = c.z; T.r = s / 2 + 10;

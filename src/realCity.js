@@ -788,6 +788,9 @@ export class CityScenery {
     const A = Math.abs(area2(P)) - holes.reduce((s, h) => s + Math.abs(area2(h)), 0);
     if (A < 6) return;
     const part = R.flags & 1, hseed = hash(Math.round(p0[0] * 4), Math.round(p0[1] * 4)), h2 = hash(R.o, 7), h3 = hash(R.o, 13);
+    const LY = W.layout?.on && W.layout.place ? W.layout : null; if (LY) { // (a baked layout chunk, #294 ?layout=1: the ground under it the layout's, not the bake's)
+      let a = Infinity, b = -Infinity; for (const p of P) { const y = LY.heightAt(p[0], p[1]); if (!(y === y)) { a = Infinity; break; } a = Math.min(a, y); b = Math.max(b, y); }
+      if (a < Infinity) { R.g0 = a; R.g1 = b; } }
     const gm = (R.g0 + R.g1) / 2;
     let mx = 0, mz = 0; for (const p of P) { mx += p[0]; mz += p[1]; } mx /= P.length; mz /= P.length;
     // a part up in the air with nothing under it: down to the street; one on the ground inside a lower one: on its roof (base())
@@ -1403,7 +1406,10 @@ export class CityScenery {
       this.queue = want.sort((a, b) => a[0] - b[0]).map((w) => w[1]);
     }
     const budget = this.qn === 'low' || this.qn === 'medium' ? 3 : 5;
-    while (this.queue.length) {
+    const LY = this.w.layout; let go = true; if (LY && this.queue.length && !this.queue[0].low) { // (a baked layout chunk not in yet under the next tile: the first tile whose ground is ready first, #294)
+      const ready = (t) => { const [cx, cz] = this.tileCentre(t.i, t.j); return LY.readyIn(cx - T / 2 - 40, cz - T / 2 - 40, cx + T / 2 + 40, cz + T / 2 + 40); };
+      const k = this.queue.findIndex((t) => t.st || ready(t)); if (k < 0) go = false; else if (k > 0) this.queue.unshift(...this.queue.splice(k, 1)); }
+    while (go && this.queue.length) {
       const t = this.queue[0];
       if (t.low) { this.queue.shift(); continue; }
       if (this.buildLowStep(t, budget)) this.queue.shift();

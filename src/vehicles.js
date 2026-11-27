@@ -85,7 +85,8 @@ export class Vehicles {
     // traffic on the lanes
     // (the road graph, laneGraph.js: cars go from road to road at the junctions)
     this.graph = new LaneGraph(world.net, r);
-    this.signals = new Signals(this.graph, { city }); this.signals.build(this.group); // (a city's crossroads: traffic lights)
+    const lay = world.layout; if (lay) this.graph.surf = (x, z) => lay.placeY(x, z); // (the baked layout's surface where it's in, #294)
+    this.signals = new Signals(this.graph, { city, layout: lay }); this.signals.build(this.group); // (a city's crossroads: traffic lights)
     this.cars = [];
     const want = ({ low: 70, medium: 140, high: 240 }[world.qBase] || 140) * (city ? 3 : 1); // (a city: busy streets; only the cars near the camera are drawn)
     const taken = new Map(); // (lane -> where cars are put down on it: not on top of each other)
@@ -118,6 +119,8 @@ export class Vehicles {
     this.cars.push({ path: ap, s: 0, v: 6, want: 7, type: 'tanker', color: 0xffffff, brake: 0, roll: 0 }, { path: ap, s: ap.total * 0.5, v: 6, want: 6, type: 'offroad', color: 0xf2b705, brake: 0, roll: 0 },
       { path: ap, s: ap.total * 0.25, v: 4, want: 4.5, type: 'tug', color: 0xffffff, brake: 0, roll: 0, tow: 3 });
     for (const c of this.parked) c.p.y = world.sampleGrid(c.p.x, c.p.z) + 0.03;
+    // a baked layout chunk's surface arrived (#294, ?layout=1): the lanes, turns, parked cars and signals in it onto it
+    lay?.onActive((b) => { this.graph.relevel(b); this.signals.relayout(b); for (const c of this.parked) if (c.p.x >= b.x0 && c.p.x < b.x1 && c.p.z >= b.z0 && c.p.z < b.z1) c.p.y = world.sampleGrid(c.p.x, c.p.z) + 0.03; });
     this.drawDist = { low: 1200, medium: 1800, high: 3000 }[world.qBase] || 1800;
     this.lod = LOD[world.qBase] || LOD.medium;
     this.models = {}; // type -> meta (L, wheels, lights), once loaded
@@ -177,6 +180,8 @@ export class Vehicles {
     out.lerpVectors(a, b, t); dirOut.subVectors(b, a).normalize();
     // roads and rail carry their own profile (what physics drives on, bridges included); the apron loop is flat ground
     out.y = path.kind === 'apron' ? this.world.sampleGrid(out.x, out.z) + 0.25 : a.y + (b.y - a.y) * t + 0.02;
+    // (a baked layout chunk, #294: its surface, which the lane's points only sample; not a bridge's deck or the rail)
+    const lay = this.world.layout; if (lay?.on && lay.place && path.kind !== 'apron' && path.kind !== 'rail' && !path.bridge?.[lo] && !path.bridge?.[(lo + 1) % path.pts.length]) { const y = lay.heightAt(out.x, out.z); if (y === y) out.y = y + 0.02; }
     return lo;
   }
   // Who is in each junction (node key -> [{ c, M: its way through }]): the cars on the turn curves, the cars over their

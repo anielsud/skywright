@@ -684,15 +684,22 @@ export function buildRoadMeshes(w, net) {
     if (rd.kind === 'highway' || rd.mountain || rd.minor || (rd.kind === 'street' && (rd.real || w.qName !== 'low'))) return;
     const every = rd.kind === 'street' ? 4 : 6;
     let at = 0; // (metres along the road)
-    rd.pts.forEach((p, i) => { if (i) at += Math.hypot(p.x - rd.pts[i - 1].x, p.z - rd.pts[i - 1].z); if (i % every || jn.some((j) => Math.abs(j.s - at) < j.r + 1.5)) return; const a = rd.pts[Math.max(0, i - 1)], b = rd.pts[Math.min(rd.pts.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); const s = (i / every) % 2 ? 1 : -1; const off = rd.bridge?.[i] ? rd.width / 2 + 0.6 : rd.width / 2 + 1.5, x = p.x - d.z * off * s, z = p.z + d.x * off * s, gy = rd.bridge?.[i] ? p.y + 1 : w.sampleGrid(x, z); lamps.push(x + d.z * 1.2 * s, gy + 7, z - d.x * 1.2 * s); poles.push(x, gy, z, Math.atan2(d.z * s, -d.x * s)); });
+    rd.pts.forEach((p, i) => { if (i) at += Math.hypot(p.x - rd.pts[i - 1].x, p.z - rd.pts[i - 1].z); if (i % every || jn.some((j) => Math.abs(j.s - at) < j.r + 1.5)) return; const a = rd.pts[Math.max(0, i - 1)], b = rd.pts[Math.min(rd.pts.length - 1, i + 1)], d = new THREE.Vector3().subVectors(b, a).setY(0).normalize(); const s = (i / every) % 2 ? 1 : -1; const off = rd.bridge?.[i] ? rd.width / 2 + 0.6 : rd.width / 2 + 1.5; let x = p.x - d.z * off * s, z = p.z + d.x * off * s;
+      const L = !rd.bridge?.[i] && w.layout?.on ? w.layout.edgeAt(x, z, off + 4) : null; if (L && Math.abs(L.d - (L.hw + 1.5)) > 0.5) { x = L.px + L.nx * (L.hw + 1.5); z = L.pz + L.nz * (L.hw + 1.5); } // (a baked layout chunk, #294: 1.5 m past its kerb)
+      const gy = rd.bridge?.[i] ? p.y + 1 : w.sampleGrid(x, z); lamps.push(x + d.z * 1.2 * s, gy + 7, z - d.x * 1.2 * s); poles.push(x, gy, z, Math.atan2(d.z * s, -d.x * s)); });
   };
   const lampMeshes = (lamps, poles, t) => {
     if (!poles.length) return;
     const pm = new THREE.InstancedMesh(poleGeo, poleMat, poles.length / 4), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
     for (let k = 0; k < poles.length / 4; k++) pm.setMatrixAt(k, m4.compose(new THREE.Vector3(poles[k * 4], poles[k * 4 + 1] - 0.2, poles[k * 4 + 2]), q.setFromAxisAngle(up, poles[k * 4 + 3]), one));
     pm.castShadow = w.qName === 'high' || w.qName === 'ultra'; pm.computeBoundingSphere(); group.add(pm); t.meshes.push(pm); t.poles = pm;
-    const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3)); const pt = new THREE.Points(lg, lampMat); group.add(pt); t.meshes.push(pt);
+    const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3)); const pt = new THREE.Points(lg, lampMat); group.add(pt); t.meshes.push(pt); t.lampObjs = [pm, pt]; t.lampPoles = poles;
   };
+  // a baked layout chunk's surface arrived (#294, ?layout=1): the lamps of the tiles built over it placed again on it
+  const inBox = (P, b) => { for (let k = 0; k < P.length; k += 4) if (P[k] > b.x0 - 8 && P[k] < b.x1 + 8 && P[k + 2] > b.z0 - 8 && P[k + 2] < b.z1 + 8) return true; return false; }; // (a lamp moved onto the kerb can cross into it)
+  w.layout?.onActive((b) => { for (const t of all) { if (!t.built || !t.lampPoles || !inBox(t.lampPoles, b)) continue;
+    const vis = t.poles?.visible ?? true; for (const o of t.lampObjs || []) { group.remove(o); t.meshes.splice(t.meshes.indexOf(o), 1); if (o.isPoints) o.geometry.dispose(); else o.dispose(); } t.lampObjs = null; t.poles = null;
+    const lamps = [], poles = []; for (const k of t.roads) if (!net.roads[k].tunnel) lampsFor(net.roads[k], lamps, poles, J[k]); lampMeshes(lamps, poles, t); if (t.poles) t.poles.visible = vis; } });
   // tunnels: the tube (walls and a vault over the road, lined; a strip of lights along its crown) where there's
   // ground or water over it, and a concrete portal (a headwall round the opening) where it goes in
   const tubeMat = new THREE.MeshStandardMaterial({ color: 0x6e6c66, emissive: 0x2a2924, roughness: 0.9, side: THREE.DoubleSide }); // (lined; lit from within: the light strip)

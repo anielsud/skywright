@@ -4,6 +4,7 @@
 // group isn't green; the lights are drawn at the junctions near the camera (poles and heads instanced, the lamps'
 // colours set every frame).
 import * as THREE from 'three';
+import { KIND } from './layout/format.js';
 
 const G = 18, A = 3, R = 2, CYCLE = 2 * (G + A + R); // seconds: green, amber, all red (per group)
 
@@ -11,7 +12,7 @@ const G = 18, A = 3, R = 2, CYCLE = 2 * (G + A + R); // seconds: green, amber, a
 // the kerbs of the two roads either side of it (the corner of two neighbouring legs, 30-170 degrees apart), clear of
 // the carriageway of every road piece near (pieces: this junction's and its neighbours' within 35 m, e.g. a divided
 // avenue's other half); the nearest such corner. null if there is none.
-const KERB = 1.2;
+const KERB = 1.2, KIND_TARMAC = KIND.tarmac, KIND_KERB = KIND.kerb;
 function nearby(graph, into, key, c) {
   const pieces = new Set(), seen = new Set([key]); let front = [key];
   for (let d = 0; d < 2 && front.length; d++) {
@@ -63,7 +64,8 @@ function corner(c, lanes, key, pieces) {
 }
 
 export class Signals {
-  constructor(graph, { city = false } = {}) {
+  constructor(graph, { city = false, layout = null } = {}) {
+    this.lay = layout; // (the baked road layout, #294 ?layout=1: where it's in, a pole stands KERB past its kerb, on its surface)
     this.nodes = new Map(); // node key -> { key, x, y, z, off, lanes: Map(lane -> group), heads: [{ yaw, group }], px, pz (the pole, once placed) }
     if (!city) return;
     const into = (this.into = new Map()); this.graph = graph;
@@ -91,9 +93,19 @@ export class Signals {
     if (n.px === undefined) {
       const p = n, c = corner(p, [...(this.into.get(n.key) || []), ...(this.graph.out.get(n.key) || [])], n.key, nearby(this.graph, this.into, n.key, p)), y0 = n.heads[0].yaw;
       n.px = c ? c[0] : p.x - Math.sin(y0 + 0.8) * 9; n.pz = c ? c[1] : p.z - Math.cos(y0 + 0.8) * 9; // (no corner at all: as before, 9 m out)
+      n.py = n.y; const L = this.lay;
+      if (L?.on) { // (a baked layout chunk: out from the junction's middle through the corner to the layout's kerb (its tarmac and kerb's end), KERB past it; on its surface)
+        const dx = n.px - p.x, dz = n.pz - p.z, l = Math.hypot(dx, dz);
+        if (l > 0.5 && L.kindAt(p.x, p.z) >= 0) { const ux = dx / l, uz = dz / l, road = (k) => k === KIND_TARMAC || k === KIND_KERB; let e = -1, was = false;
+          for (let s = 0; s < l + 12; s += 0.1) { const k = L.kindAt(p.x + ux * s, p.z + uz * s); if (k < 0) break; if (road(k)) was = true; else if (was) { e = s; break; } }
+          if (e > 0 && Math.abs(e + KERB - l) > 0.5) { n.px = p.x + ux * (e + KERB); n.pz = p.z + uz * (e + KERB); } }
+        const y = L.placeY(n.px, n.pz); if (y === y) n.py = y;
+      }
     }
     return n;
   }
+  // a layout chunk's surface arrived (box): the poles in it placed again (on the next update)
+  relayout(b) { for (const n of this.nodes.values()) if (n.x > b.x0 - 40 && n.x < b.x1 + 40 && n.z > b.z0 - 40 && n.z < b.z1 + 40) { n.px = undefined; this.at = null; } }
   // the lights' meshes (added to group): poles and heads instanced, three lamps a head whose colours update() sets
   build(group) {
     if (!this.nodes.size) return;
@@ -121,8 +133,8 @@ export class Signals {
       for (const n of this.near) {
         // the pole on the corner, back from the junction's middle; an arm and a head over each approach
         const { px: cx, pz: cz } = this.pole(n);
-        this.poles.setMatrixAt(np++, m4.compose(p.set(cx, n.y, cz), q.identity(), one));
-        for (const hd of n.heads) { if (nh >= this.MAX) break; const yaw = hd.yaw + Math.PI; q.setFromAxisAngle(up, Math.atan2(n.x - cx, n.z - cz)); this.arms.setMatrixAt(nh, m4.compose(p.set(cx, n.y, cz), q, one)); this.heads.setMatrixAt(nh, m4.compose(p.set(cx, n.y, cz), q.setFromAxisAngle(up, yaw), one)); hd.slot = nh++; hd.q = q.clone(); hd.c = new THREE.Vector3(cx, n.y, cz); }
+        const cy = n.py; this.poles.setMatrixAt(np++, m4.compose(p.set(cx, cy, cz), q.identity(), one));
+        for (const hd of n.heads) { if (nh >= this.MAX) break; const yaw = hd.yaw + Math.PI; q.setFromAxisAngle(up, Math.atan2(n.x - cx, n.z - cz)); this.arms.setMatrixAt(nh, m4.compose(p.set(cx, cy, cz), q, one)); this.heads.setMatrixAt(nh, m4.compose(p.set(cx, cy, cz), q.setFromAxisAngle(up, yaw), one)); hd.slot = nh++; hd.q = q.clone(); hd.c = new THREE.Vector3(cx, cy, cz); }
       }
       this.poles.count = np; this.arms.count = nh; this.heads.count = nh; this.lamps.count = nh * 3;
       for (const m of [this.poles, this.arms, this.heads]) m.instanceMatrix.needsUpdate = true;
