@@ -2,6 +2,11 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.208.0', items: [
+    "New York runs smoother: the game no longer draws buildings that are off screen or hidden behind other buildings.",
+    "Faraway airports and the ground behind you cost much less to draw.",
+    "Your pilot is drawn in less detail when you can't see them up close, so flying is smoother.",
+  ] },
   { v: '1.207.0', items: [
     "Behind the scenes: the new smooth road surface test now has proper pavements, kerbs and tidy road markings.",
   ] },
