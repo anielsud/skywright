@@ -6,7 +6,7 @@
 //   chunkOutlines(net, areas, L) -> { P: [[X, Z], ...] (cm), E: [[a, b, kind], ...] (an edge two regions share: once for each) }
 import CL from '../../vendor/layout/clipper1.mjs';
 import { KIND } from './format.js';
-import { VERGE } from './rules.js';
+import { vergeW } from './rules.js';
 
 const ARC = 15, EDGE_STEP = 4, CLIP = 25, SNAP = 50; // (CLIP: m about the chunk a road's stretches are kept: past a road's widest reach, its half width and pavement) // (ARC: cm a round join's arc may cut inside; EDGE_STEP: m between the chunk's edge points)
 const cm = (v) => Math.round(v * 100);
@@ -27,7 +27,7 @@ export function chunkOutlines(net, areas, L) {
   const minorKind = (r) => (!r.minor ? -1 : r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
   const area = (surf) => splitAtGrid(areas.filter((a) => a.surf === surf).map((a) => a.ring), S);
   const street = (r) => !r.minor;
-  const Tc = union(strips(street, (r) => r.hw)), Pv = union(strips((r) => r.pave > 0, (r) => r.hw + r.pave)), Vg = union(strips((r) => !r.minor && !r.pave, (r) => r.hw + VERGE));
+  const Tc = union(strips(street, (r) => r.hw)), Pv = union(strips((r) => r.pave > 0, (r) => r.hw + r.pave)), Vg = union(strips((r) => vergeW(r) > 0, (r) => r.hw + vergeW(r)));
   const Ta = union(strips((r) => minorKind(r) === KIND.alley, (r) => r.hw), area(0)), Tp = union(strips((r) => minorKind(r) === KIND.pavers, (r) => r.hw), area(1)), Tg = union(strips((r) => minorKind(r) === KIND.gravel, (r) => r.hw), area(2));
   const Pall = minus(Pv, Tc); // (the kerb: mesh.js, along every tarmac edge a pavement shares)
   const REG = [[KIND.tarmac, Tc], [KIND.pave, Pall], [KIND.alley, minus(Ta, Tc, Pall)], [KIND.pavers, minus(Tp, Tc, Pall, Ta)], [KIND.gravel, minus(Tg, Tc, Pall, Ta, Tp)], [KIND.verge, minus(Vg, Tc, Pall, Ta, Tp, Tg).filter((p) => Math.abs(ringArea(p)) > 5000)]]; // (no verge slivers under 0.5 m²)
@@ -37,9 +37,9 @@ export function chunkOutlines(net, areas, L) {
   // (Clipper's intersection with the box can move a vertex lying on the chunk's edge by a centimetre, differently on
   // either side: each vertex it gives on the edge is put back on the region's own point there, the same for both chunks)
   const onEdge = (X, Z) => X === X0 || X === X0 + S || Z === Z0 || Z === Z0 + S;
-  const pre = []; let E = []; for (const [k, Ps] of REG) { const sp = splitAtGrid(Ps, S), own = new Map(); pre.push([k, sp]); for (const r of sp) for (const [X, Z] of r) { if (X === X0 || X === X0 + S) own.set('x' + X + ',' + Z, [X, Z]); if (Z === Z0 || Z === Z0 + S) own.set('z' + Z + ',' + X, [X, Z]); }
+  const pre = [], regionArea = {}; let E = []; for (const [k, Ps] of REG) { const sp = splitAtGrid(Ps, S), own = new Map(); pre.push([k, sp]); for (const r of sp) for (const [X, Z] of r) { if (X === X0 || X === X0 + S) own.set('x' + X + ',' + Z, [X, Z]); if (Z === Z0 || Z === Z0 + S) own.set('z' + Z + ',' + X, [X, Z]); }
     const snap = ([X, Z]) => { if (!onEdge(X, Z) || ((X === X0 || X === X0 + S) && (Z === Z0 || Z === Z0 + S))) return [X, Z]; for (let d = 0; d <= SNAP; d++) for (const s of d ? [d, -d] : [0]) { const o = X === X0 || X === X0 + S ? own.get('x' + X + ',' + (Z + s)) : own.get('z' + Z + ',' + (X + s)); if (o) return o; } return [X, Z]; };
-    for (const p0 of inter(sp, box)) { if (p0.length < 3) continue; const p = p0.map(snap); for (let q = 0; q < p.length; q++) { const a = add(p[q][0], p[q][1]), b = add(p[(q + 1) % p.length][0], p[(q + 1) % p.length][1]); if (a !== b) E.push([a, b, k]); } } }
+    for (const p0 of inter(sp, box)) { if (p0.length < 3) continue; regionArea[k] = (regionArea[k] || 0) + ringArea(p0) / 1e4; const p = p0.map(snap); for (let q = 0; q < p.length; q++) { const a = add(p[q][0], p[q][1]), b = add(p[(q + 1) % p.length][0], p[(q + 1) % p.length][1]); if (a !== b) E.push([a, b, k]); } } }
   for (let s = 0; s <= S; s += EDGE_STEP * 100) for (const [X, Z] of [[X0 + s, Z0], [X0 + s, Z0 + S], [X0, Z0 + s], [X0 + S, Z0 + s]]) add(X, Z);
   // edges split at the points that lie on them (Clipper's rounded crossings; the chunk's edge points), and where two cross
   const onLine = (a, b) => (P[a][0] === P[b][0] && (P[a][0] === X0 || P[a][0] === X0 + S)) || (P[a][1] === P[b][1] && (P[a][1] === Z0 || P[a][1] === Z0 + S));
@@ -57,7 +57,7 @@ export function chunkOutlines(net, areas, L) {
   // which both chunks have alike (on a region's edge or corner counts as in), not from this side's polygons
   const edgeBits = new Map(), ins = pre.map(([k, sp]) => [k, ringsIndex(sp)]);
   P.forEach(([X, Z], i) => { if (!onEdge(X, Z)) return; let m = 0; for (const [k, ix] of ins) if (ix.has(X, Z)) m |= 1 << k; edgeBits.set(i, m); });
-  return { P, E, edgeBits };
+  return { P, E, edgeBits, area: regionArea }; // (area: m², each region's in the chunk: a check on the meshing)
 }
 
 // rings with a vertex wherever they cross a chunk line (x or z a multiple of S cm), at a crossing worked out the
@@ -104,7 +104,7 @@ function crossings(P, E, add) {
     const [a, b] = E[e], [c, d] = E[f]; if (a === c || a === d || b === c || b === d) continue;
     const A = P[a], B = P[b], Cp = P[c], D = P[d]; if (o(A, B, Cp) * o(A, B, D) >= 0 || o(Cp, D, A) * o(Cp, D, B) >= 0) continue;
     const den = (B[0] - A[0]) * (D[1] - Cp[1]) - (B[1] - A[1]) * (D[0] - Cp[0]), t = ((Cp[0] - A[0]) * (D[1] - Cp[1]) - (Cp[1] - A[1]) * (D[0] - Cp[0])) / den;
-    add(Math.round(A[0] + (B[0] - A[0]) * t), Math.round(A[1] + (B[1] - A[1]) * t)); n++;
+    add(Math.round(A[0] + (B[0] - A[0]) * t), Math.round(A[1] + (B[1] - A[1]) * t), true); n++; // (exact: snapped to a corner near it, the two edges would still cross)
   }
   return n;
 }

@@ -177,17 +177,17 @@ function roadMat(texName, color, marks = false, yellow = 0) {
         vec3 det = texture2D(tDet, vLW / 3.0).rgb; diffuseColor.rgb *= 0.55 + 0.9 * dot(det, vec3(0.333));
         ${marks ? `{
           float v = vRoad.y, u = vRoad.x, hw = vRoad.z, dj = vRoad.w, aa = fwidth(v) * 0.8 + 0.005, ua = fwidth(u) * 0.8 + 0.005;
-          float lanes = max(1.0, mod(vLane, 16.0)), oneway = mod(floor(vLane / 16.0), 2.0), painted = step(32.0, vLane);
+          float lanes = max(1.0, mod(vLane, 16.0)), oneway = mod(floor(vLane / 16.0), 2.0), painted = mod(floor(vLane / 32.0), 2.0), zebra = step(64.0, vLane);
           float paint = 0.0; vec3 col = vec3(0.92);
-          if (hw > 0.5 && painted > 0.5 && (dj < -0.5 || dj > 0.5)) {
-            float dash = step(fract(u / 9.0), 0.45);
+          if (hw > 0.5 && (dj < -0.5 || dj > 0.5)) {
+            float dash = step(fract(u / 9.0), 0.45) * painted;
             if (oneway < 0.5) { // two-way: the centre line, and lane lines each side
               float c = uYellow > 0.5 ? max(1.0 - smoothstep(0.05, 0.05 + aa, abs(abs(v) - 0.12)), 0.0) : (1.0 - smoothstep(0.06, 0.06 + aa, abs(v))) * dash;
               if (c > 0.0) { paint = c; col = uYellow > 0.5 ? vec3(0.85, 0.66, 0.12) : vec3(0.92); }
               float per = max(1.0, floor(lanes / 2.0)), lw = hw / per;
               for (int k = 1; k < 4; k++) { if (float(k) >= per) break; paint = max(paint, (1.0 - smoothstep(0.06, 0.06 + aa, abs(abs(v) - lw * float(k)))) * dash); }
             } else { float lw = 2.0 * hw / lanes; for (int k = 1; k < 6; k++) { if (float(k) >= lanes) break; paint = max(paint, (1.0 - smoothstep(0.06, 0.06 + aa, abs(v + hw - lw * float(k)))) * dash); } }
-            if (dj > 0.5 && dj < 3.5 && abs(v) < hw - 0.3) { paint = max(paint, step(0.5, fract(v / 1.2))); col = vec3(0.92); } // (the zebra)
+            if (zebra > 0.5 && dj > 0.5 && dj < 3.5 && abs(v) < hw - 0.3) { paint = max(paint, step(0.5, fract(v / 1.2))); col = vec3(0.92); } // (the zebra)
           }
           diffuseColor.rgb = mix(diffuseColor.rgb, col, paint * 0.9);
         }` : ''}`);
