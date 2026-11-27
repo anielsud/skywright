@@ -496,11 +496,11 @@ export class RealScenery {
     // the ballast out to a few km.
     const W = this.w, CELL = 2000, cells = new Map();
     const cellOf = (x, z) => { const k = Math.floor(x / CELL) + ',' + Math.floor(z / CELL); let c = cells.get(k); if (!c) cells.set(k, (c = { pos: grow(Float32Array), idx: grow(Uint32Array), steel: grow(Float32Array), sIdx: grow(Uint32Array) })); return c; };
-    const ribbon = (pts, br, width, lift, which) => {
+    // ys given: the heights to use (the steel rails reuse their bed's: below); returns the heights it used
+    const ribbon = (pts, br, width, lift, which, ys) => {
       // (a bridge: straight between its ends' ground, so only the ends are sampled)
-      let ys;
-      if (br) { const a = W.sampleGrid(pts[0][0], pts[0][1]), b = W.sampleGrid(pts.at(-1)[0], pts.at(-1)[1]); ys = pts.map((_, i) => a + (b - a) * (i / (pts.length - 1)) + 1); }
-      else ys = pts.map((p) => W.sampleGrid(p[0], p[1]));
+      if (!ys && br) { const a = W.sampleGrid(pts[0][0], pts[0][1]), b = W.sampleGrid(pts.at(-1)[0], pts.at(-1)[1]); ys = pts.map((_, i) => a + (b - a) * (i / (pts.length - 1)) + 1); }
+      else if (!ys) ys = pts.map((p) => W.sampleGrid(p[0], p[1]));
       // runs of points in one square (consecutive runs share their boundary point, so the ribbon stays closed)
       let i0 = 0;
       while (i0 < pts.length - 1) {
@@ -515,13 +515,16 @@ export class RealScenery {
         }
         i0 = i1;
       }
+      return ys;
     };
     for (const [kind, br, flat] of list) {
       const raw = []; for (let k = 0; k < flat.length; k += 2) raw.push([flat[k], flat[k + 1]]);
       const pts = densify(raw, 6);
       if (pts.length < 2) continue;
-      ribbon(pts, br, 3.6, 0.25, 0);
-      for (const s of [-0.55, 0.55]) ribbon(offset(pts, s), br, 0.14, 0.45, 1);
+      // the two steel rails at the bed's centre height (+0.2 m): the bed is level across, so they sit on it exactly,
+      // whatever the ground's cross-slope does under them (sampling the ground at each rail cost ~100 ms in New York)
+      const ys = ribbon(pts, br, 3.6, 0.25, 0);
+      for (const s of [-0.55, 0.55]) ribbon(offset(pts, s), br, 0.14, 0.45, 1, ys);
     }
     const ballast = new THREE.MeshStandardMaterial({ color: 0x4e463e, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
     const steelM = new THREE.MeshStandardMaterial({ color: 0x8b9097, metalness: 0.8, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6 });
