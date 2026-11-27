@@ -79,6 +79,7 @@ export class Layout {
   }
   got(c, level, m) {
     c.m[level] = m;
+    const st = this.stats; if (st && st.firstRingMs == null && st.ring.every((k) => this.chunks.get(k)?.m.fine)) st.firstRingMs = performance.now() - st.t0;
     if (level === 'fine' && !c.phys) { // physics, the mask and the skirts start with the fine mesh
       c.phys = physIndex(c.L, m); this.active.set(c.k, c); this.on = true;
       const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 255; this.mask.needsUpdate = true; }
@@ -133,6 +134,7 @@ export class Layout {
   // each frame: the chunks about the camera fetched and asked for (fine near, coarse further); each drawn at its level
   update(cam) {
     const x = cam.position.x, z = cam.position.z; this.cam.x = x; this.cam.z = z;
+    if (!this.stats) { const S = this.size, ring = []; for (const k of this.index.keys()) { const [i, j] = k.split(',').map(Number); if (Math.hypot((i + 0.5) * S - x, (j + 0.5) * S - z) < FINE_D) ring.push(k); } this.stats = { t0: performance.now(), ring, firstRingMs: null }; } // (the first ring: the chunks fine about the first camera, meshed: goto.py --stats)
     if (!this.lastScan || Math.hypot(x - this.lastScan[0], z - this.lastScan[1]) > 100) { this.lastScan = [x, z]; // (about every 100 m: which are in reach)
       const S = this.size, r = Math.ceil(LOAD_D / S);
       for (let i = Math.floor(x / S) - r; i <= Math.floor(x / S) + r; i++) for (let j = Math.floor(z / S) - r; j <= Math.floor(z / S) + r; j++) {
@@ -177,17 +179,17 @@ function roadMat(texName, color, marks = false, yellow = 0) {
         vec3 det = texture2D(tDet, vLW / 3.0).rgb; diffuseColor.rgb *= 0.55 + 0.9 * dot(det, vec3(0.333));
         ${marks ? `{
           float v = vRoad.y, u = vRoad.x, hw = vRoad.z, dj = vRoad.w, aa = fwidth(v) * 0.8 + 0.005, ua = fwidth(u) * 0.8 + 0.005;
-          float lanes = max(1.0, mod(vLane, 16.0)), oneway = mod(floor(vLane / 16.0), 2.0), painted = step(32.0, vLane);
+          float lanes = max(1.0, mod(vLane, 16.0)), oneway = mod(floor(vLane / 16.0), 2.0), painted = mod(floor(vLane / 32.0), 2.0), zebra = step(64.0, vLane);
           float paint = 0.0; vec3 col = vec3(0.92);
-          if (hw > 0.5 && painted > 0.5 && (dj < -0.5 || dj > 0.5)) {
-            float dash = step(fract(u / 9.0), 0.45);
+          if (hw > 0.5 && (dj < -0.5 || dj > 0.5)) {
+            float dash = step(fract(u / 9.0), 0.45) * painted;
             if (oneway < 0.5) { // two-way: the centre line, and lane lines each side
               float c = uYellow > 0.5 ? max(1.0 - smoothstep(0.05, 0.05 + aa, abs(abs(v) - 0.12)), 0.0) : (1.0 - smoothstep(0.06, 0.06 + aa, abs(v))) * dash;
               if (c > 0.0) { paint = c; col = uYellow > 0.5 ? vec3(0.85, 0.66, 0.12) : vec3(0.92); }
               float per = max(1.0, floor(lanes / 2.0)), lw = hw / per;
               for (int k = 1; k < 4; k++) { if (float(k) >= per) break; paint = max(paint, (1.0 - smoothstep(0.06, 0.06 + aa, abs(abs(v) - lw * float(k)))) * dash); }
             } else { float lw = 2.0 * hw / lanes; for (int k = 1; k < 6; k++) { if (float(k) >= lanes) break; paint = max(paint, (1.0 - smoothstep(0.06, 0.06 + aa, abs(v + hw - lw * float(k)))) * dash); } }
-            if (dj > 0.5 && dj < 3.5 && abs(v) < hw - 0.3) { paint = max(paint, step(0.5, fract(v / 1.2))); col = vec3(0.92); } // (the zebra)
+            if (zebra > 0.5 && dj > 0.5 && dj < 3.5 && abs(v) < hw - 0.3) { paint = max(paint, step(0.5, fract(v / 1.2))); col = vec3(0.92); } // (the zebra)
           }
           diffuseColor.rgb = mix(diffuseColor.rgb, col, paint * 0.9);
         }` : ''}`);

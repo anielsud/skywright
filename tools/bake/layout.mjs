@@ -6,7 +6,7 @@
 //   node --import ./tools/test/node/setup.mjs tools/bake/layout.mjs lauterbrunnen:-4,-3 nyc:-7,25:-6,25
 //     (place:all: every CHUNK-metre square with roads; or place:ix,iz[:ix,iz...]. A place's chunks are baked together:
 //     one height solve)
-// A chunk with a bridge or a tunnel, the airport's roads, or that fails a check isn't baked: it keeps today's roads,
+// A chunk with a bridge or a tunnel, the airport's roads, a stunt site, past the World's core, or that fails a check isn't baked: it keeps today's roads,
 // listed in the index's fallback with why. Every baked chunk is checked the game's way (layout-check.mjs, on a worker
 // per core): fixed edges, cover, holes, tarmac drawn - physics, kerbs not physics, and each shared edge between two
 // baked chunks, at every pair of levels. Writes each chunk as <ix>_<iz>.<hash>.bin.gz (hash: of its bytes) and the
@@ -36,6 +36,12 @@ for (const a of args) {
   const wanted = cs[0] === 'all' ? [...seen.keys()] : cs.map((c) => c.split(',').map(Number).join(','));
   // (the airport: its runways, apron and roads are World's own ground, World.groundAt: the chunks about it keep today's)
   for (const k of seen.keys()) { const [ix, iz] = k.split(',').map(Number), x0 = ix * CHUNK, z0 = iz * CHUNK; if (x0 < 700 && x0 + CHUNK > -500 && z0 < RWY.len / 2 + 400 && z0 + CHUNK > -RWY.len / 2 - 400) (why.get(k) || why.set(k, new Set()).get(k)).add('airport'); }
+  // (a stunt site's cut and what's past the World's core: ground the layout's natural ground doesn't know (the stunt
+  // site levelled; past the core, the streamed tiles' ground and no roads))
+  const cut = (x, z) => (world.stuntPlan?.cut || []).some((R) => { const ex = x - R.x, ez = z - R.z; return Math.abs(ex * R.c - ez * R.s) < R.hx && Math.abs(ex * R.s + ez * R.c) < R.hz; });
+  for (const k of seen.keys()) { const [ix, iz] = k.split(',').map(Number), x0 = ix * CHUNK, z0 = iz * CHUNK, add = (w) => (why.get(k) || why.set(k, new Set()).get(k)).add(w);
+    if (world.half && (x0 < -world.half || z0 < -world.half || x0 + CHUNK > world.half || z0 + CHUNK > world.half)) add('outside the core');
+    let c = false; for (let x = x0 - 50; x <= x0 + CHUNK + 50 && !c; x += 10) for (let z = z0 - 50; z <= z0 + CHUNK + 50 && !c; z += 10) c = cut(x, z); if (c) add('stunt site'); }
   const fallback = new Map(), chunks = [];
   for (const k of wanted) { if (why.has(k)) fallback.set(k, [...why.get(k)].sort().join('+')); else if (seen.has(k)) chunks.push(k.split(',').map(Number)); }
   console.log(`${id}: ${wanted.length} chunks with roads; ${chunks.length} to bake, ${fallback.size} keep today's roads (${count([...fallback.values()])})`);
@@ -77,6 +83,7 @@ for (const a of args) {
   console.log(`  kerb top lines left soft (would cross another line): ${results.reduce((n, c) => n + (c.fine.softMissed || 0), 0)} segments in ${results.filter((c) => c.fine.softMissed).length} chunks`);
   console.log(`  mesh ms fine ${st((c) => c.fine.ms)} (outlines ${st((c) => c.fine.outlineMs)}); coarse ${st((c) => c.coarse.ms)}; triangles fine ${st((c) => c.fine.tris)}`);
   console.log(`  wall: World ${((tb - t0) / 1000).toFixed(1)} s, bake ${((tc - tb) / 1000).toFixed(1)} s, checks ${((td - tc) / 1000).toFixed(1)} s on ${N} workers, files ${((performance.now() - td) / 1000).toFixed(1)} s`, JSON.stringify(r.stats.solve), JSON.stringify(r.stats.inChunk), JSON.stringify(r.stats.overGrade));
+  console.log('  furthest from the ground, in the chunks:', JSON.stringify(r.stats.worstIn));
 }
 process.exit(process.exitCode || 0);
 function count(list) { const m = new Map(); for (const v of list) m.set(v, (m.get(v) || 0) + 1); return [...m].map(([k, n]) => `${n} ${k}`).join(', '); }

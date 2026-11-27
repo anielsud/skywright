@@ -11,7 +11,7 @@ Chrome starts once; the game starts once per place (and quality, time, weather, 
 
 (The report JSON is what tools/analytics/reports.py saves.) Same requirements as smoke.py.
 """
-import argparse, asyncio, base64, json, os, sys, tempfile, shutil
+import argparse, asyncio, base64, json, os, sys, tempfile, shutil, time
 import websockets
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smoke import free_port, start_server, launch_chrome, CDP  # noqa: E402
@@ -42,6 +42,7 @@ async def main(a):
         async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:
             cdp = CDP(ws); await cdp.send('Runtime.enable')
             for (loc, tier, tod, weather, vehicle), rs in groups.items():
+                t_nav = time.time()
                 await cdp.send('Page.navigate', url=origin + '/' + ('?' + a.query if a.query else ''))
                 await cdp.wait_for(f'{S} && {S}.hangar && {S}.presets.length', 60, 'boot')
                 await cdp.wait_for("!document.getElementById('splash')", 30, 'splash')
@@ -50,7 +51,15 @@ async def main(a):
                 if weather: cfg['weather'] = weather
                 await cdp.js(f"""(() => {{ Object.assign({S}.flightCfg, {json.dumps(cfg)}); {S}.settings.quality = {json.dumps(tier)};
                     const d = {S}.presets.find((p) => p.name === {json.dumps(vehicle)}) || {S}.presets[0]; {S}.hangar.load(d); {S}.startFlight(); return d.name; }})()""")
+                t_go = time.time()
                 await cdp.wait_for(f'{S}.F && {S}.F.t > 0.5 && !{S}.F.warm', 240, 'flight')
+                t_fly = time.time()
+                if a.stats:  # how long the place took to load (start pressed -> flying), and the baked layout's first ring (#294)
+                    for _ in range(100):
+                        st = await cdp.js(f"JSON.stringify({S}.F.world.layout?.stats || null)")
+                        if st == 'null' or json.loads(st).get('firstRingMs') is not None: break
+                        await asyncio.sleep(0.2)
+                    print(json.dumps({'location': loc, 'query': a.query, 'boot_s': round(t_go - t_nav, 2), 'load_s': round(t_fly - t_go, 2), 'layout': json.loads(st)}), flush=True)
                 for r in rs:
                     await cdp.js(f"""(() => {{ const F = {S}.F, ac = F.ac, cam = {S}.rig.cam, r = {json.dumps(r)}; F.paused = true;
                         let p = r.pos, q = r.quat || [0, 0, 0, 1], c = r.cam, l = r.look;
@@ -79,5 +88,5 @@ async def main(a):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('poses', nargs='+'); ap.add_argument('--out', default='goto.png', help='a file for one pose, a directory for several'); ap.add_argument('--size', default='1280x720'); ap.add_argument('--wait', type=float, default=8); ap.add_argument('--query', default='', help="the page's query string, e.g. layout=1")
+    ap.add_argument('poses', nargs='+'); ap.add_argument('--out', default='goto.png', help='a file for one pose, a directory for several'); ap.add_argument('--size', default='1280x720'); ap.add_argument('--wait', type=float, default=8); ap.add_argument('--query', default='', help="the page's query string, e.g. layout=1"); ap.add_argument('--stats', action='store_true', help='print each place\'s load time (and the baked layout\'s first ring)')
     asyncio.run(main(ap.parse_args()))

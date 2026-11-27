@@ -4,11 +4,22 @@
 //   base(x, z, k)  the road surface under a point of a paved region of kind k (format.js KIND), before the kerb
 //   drawn(x, z, k) what's drawn there: base, plus the kerb's 15 cm on a pavement
 //   ground(x, z)   the ground off the paved regions: a city's lots at their pavements' top (blended between the two
-//                  nearest streets, out to CITY_REACH), else from the paved edge a 1:2 slope to the natural ground
+//                  nearest streets, out to CITY_REACH), else the banks: from each road's outer edge a set slope to the
+//                  natural ground (FILL, CUT; steeper on a steep hillside)
 //   road(x, z)     the nearest street's coordinates for the markings: { id, u, v, hw, lanes, oneway, dj }
 import { KIND } from './format.js';
 
-export const LOT_PAIR = 40, KERB = 0.15, KERB_W = 0.1, PAVE_RAMP = 2, SLOPE = 0.5, BANK_MAX = 30, CITY_REACH = 36, JBLEND = 6, SBLEND = 3, VERGE = 1.5;
+export const LOT_PAIR = 40, KERB = 0.15, KERB_W = 0.1, PAVE_RAMP = 2, BANK_MAX = 40, CITY_REACH = 36, JBLEND = 6, SBLEND = 3;
+// the banks (country roads): from a road's outer edge a fill falls at FILL (1:1.5) and a cutting rises at CUT (1:1) to the
+// natural ground; where the hillside itself is steeper (the valley walls' switchbacks), BANK_STEEP x its slope (a rock
+// cut), at most BANK_TOP; a bank that hasn't met the ground within BANK_MAX m stops there (a retaining wall's place)
+export const FILL = 0.67, CUT = 1, BANK_STEEP = 1.25, BANK_TOP = 3;
+// the verge (a road with no pavement): a strip of gravel along its edge, no kerb; none along the ways off the street network
+export const vergeW = (r) => (r.minor || r.pave ? 0 : r.kind === 'highway' ? 1.5 : r.kind === 'main' ? 1 : 0.6);
+// whether a street's carriageway is painted (lane and centre lines): a city's, a main road, or one wide enough for two
+// lanes (5.5 m); its junctions' zebras: a city's streets and a village's (with a pavement)
+export const painted = (r, city) => !r.minor && (city || r.kind === 'highway' || r.kind === 'main' || r.hw >= 2.75);
+export const zebra = (r, city) => !r.minor && (city || r.pave > 0);
 const SC = 10, PAD = 54; // (grid cell, m; how far from a road its segments are found: the bake stores every road within more than this of a chunk, bake.js NET_PAD, so two chunks work out their shared edge alike)
 
 // net: { runs: [{ pts: Float64Array x,z,..., h: Float64Array, hw, pave, kind, minor, surf, lanes, oneway }], junctions: [{ x, z, r, y0, gx, gz }] }
@@ -57,8 +68,19 @@ export function makeRules(net, g, city) {
   };
   const drawn = (x, z, k) => base(x, z, k) + (k === KIND.pave || k === KIND.kerb ? KERB : 0);
   const lot = (x, z) => { const two = nearest2(x, z, (r) => !r.minor && r.pave).filter((n, i) => i === 0 || n.d <= LOT_PAIR); if (!two.length) return null; /* (the second only if it's near: past that, which it is depends on how far the stored network reaches) */ let s = 0, ws = 0; for (const n of two) { const wt = 1 / Math.max(0.5, n.d); s += (streetH(x, z, n.h) + KERB) * wt; ws += wt; } return { y: s / ws, d: two[0].d }; };
-  const edge = (x, z) => { const n = nearest(x, z, any); if (!n) return null; return { y: (n.r.minor ? n.h : streetH(x, z, n.h)) + (n.r.pave ? KERB : 0), d: Math.max(0, n.d - (n.r.pave || (n.r.minor ? 0 : VERGE))) }; };
-  const ground = (x, z) => { const gz = g(x, z); if (city) { const l = lot(x, z); if (l && l.d <= CITY_REACH) return l.y; } const e = edge(x, z); if (!e || e.d > BANK_MAX) return gz; return e.y > gz ? Math.max(gz, e.y - SLOPE * e.d) : Math.min(gz, e.y + SLOPE * e.d); };
+  // the banks: every road within reach bounds the ground, a fill from below (lo) and a cutting from above (hi), each from its
+  // outer edge (pavement or verge) at its slope; the ground is the natural ground held between them (so two roads' banks,
+  // a switchback's legs, meet without a step). Where two roads' banks disagree (a wall's place): the nearer road's.
+  const slopeAt = (x, z) => Math.hypot(g(x + 2, z) - g(x - 2, z), g(x, z + 2) - g(x, z - 2)) / 4;
+  const banks = (x, z, gz) => { const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return gz; const per = new Map();
+    for (let q = 0; q < L.length; q += 2) { const ri = L[q], s = L[q + 1], r = runs[ri], ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), px = ax + dx * t, pz = az + dz * t, d = Math.hypot(x - px, z - pz) - r.hw - (r.pave || vergeW(r)), b = per.get(ri);
+      if (d <= BANK_MAX && (!b || d < b.d)) per.set(ri, { r, d: Math.max(0, d), h: r.h[s] + (r.h[s + 1] - r.h[s]) * t, px, pz }); }
+    if (!per.size) return gz; let lo = -Infinity, hi = Infinity, nb = null;
+    for (const b of per.values()) { const y = (b.r.minor ? b.h : streetH(b.px, b.pz, b.h)) + (b.r.pave ? KERB : 0), sl = BANK_STEEP * slopeAt(b.px, b.pz), kf = Math.min(BANK_TOP, Math.max(FILL, sl)), kc = Math.min(BANK_TOP, Math.max(CUT, sl));
+      b.lo = y - kf * b.d; b.hi = y + kc * b.d; lo = Math.max(lo, b.lo); hi = Math.min(hi, b.hi); if (!nb || b.d < nb.d) nb = b; }
+    if (lo > hi) { lo = nb.lo; hi = nb.hi; } return Math.min(hi, Math.max(lo, gz)); };
+  const ground = (x, z) => { const gz = g(x, z); if (city) { const l = lot(x, z); if (l && l.d <= CITY_REACH) return l.y; } return banks(x, z, gz); };
   // the markings' coordinates: the nearest street, and how far its point is from the nearest junction's circle
   const road = (x, z) => { const n = nearest(x, z, street); if (!n) return null; const j = junction(n.px, n.pz); return { id: n.ri, u: n.u, v: n.v, hw: n.r.hw, lanes: n.r.lanes, oneway: n.r.oneway, dj: j ? j[1] : 99 }; };
   // a point's coordinates on a given road (the one its triangle was given): along, across, and from the nearest junction's circle
@@ -70,7 +92,18 @@ export function makeRules(net, g, city) {
   const lineOn = (ri, x, z) => { const r = runs[ri]; let best = null; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz; if (L2 < 1e-6) continue;
       const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t), l = Math.sqrt(L2); if (!best || d < best.d) best = { d, ax, az, dx: dx / l, dz: dz / l, u0: r.s[s] }; }
     return best && { ...best, hw: r.hw, lanes: r.lanes, oneway: r.oneway }; };
-  return { base, drawn, ground, road, roadOn, lineOn, nearest, nearest2, lot, junction };
+  // the paved region a point is in, by the outlines' own order (outline.js): a street's carriageway, its pavement, an
+  // alley, pavers, gravel, a verge; else the ground (a carriageway's edge, to 3 cm: its outline's points round to the
+  // centimetre). For the chunk's edge points: both chunks beside it agree.
+  const mk = (r) => (r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
+  const region = (x, z) => { const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return KIND.ground; let best = KIND.ground, rank = 99;
+    const RANK = { [KIND.tarmac]: 0, [KIND.pave]: 1, [KIND.alley]: 2, [KIND.pavers]: 3, [KIND.gravel]: 4, [KIND.verge]: 5 };
+    for (let q = 0; q < L.length; q += 2) { const ri = L[q], s = L[q + 1], r = runs[ri], ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw;
+      const k = d <= (r.minor ? 0 : 0.03) ? (r.minor ? mk(r) : KIND.tarmac) : !r.minor && r.pave && d <= r.pave ? KIND.pave : d <= vergeW(r) ? KIND.verge : null;
+      if (k != null && RANK[k] < rank) { rank = RANK[k]; best = k; } }
+    return best; };
+  return { base, drawn, ground, road, roadOn, lineOn, nearest, nearest2, lot, junction, region };
 }
 
 // the natural ground from the hi grid's points around a chunk (lat: i0, j0, ni, nj; G their heights): bilinear, as the

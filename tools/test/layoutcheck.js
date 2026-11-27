@@ -22,7 +22,7 @@ function hiGrid(id) { // the hi grid as realworld.js decodes it: uint16 (h + 200
 export async function runCase(c) {
   const dir = `assets/real/${c.place}/layout/`, idx = JSON.parse(readFileSync(dir + 'index.json', 'utf8')), G = hiGrid(c.place), out = [], meshes = new Map();
   // (a sample: the first test chunks, side by side, and Lauterbrunnen's; every chunk is checked by the bake, tools/bake/layout.mjs)
-  const SAMPLE = new Set(['-7,25', '-6,25', '-4,-3']);
+  const SAMPLE = new Set(['-7,25', '-6,25', '-4,-3', '16,8', '16,9', '4,-13', '4,-12']); // (Lauterbrunnen: a town; the village beside a bridge's chunk; switchbacks on a valley wall)
   for (const e of idx.chunks.filter((e) => SAMPLE.has(e.ix + ',' + e.iz))) {
     const gz = readFileSync(dir + e.file), name = `${c.place} ${e.ix},${e.iz}`, buf = gunzipSync(gz), L = decodeLayout(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
     out.push({ name: `${name}: its file is named by its bytes`, ok: e.file === `${e.ix}_${e.iz}.${createHash('sha256').update(gz).digest('hex').slice(0, 10)}.bin.gz`, why: e.file });
