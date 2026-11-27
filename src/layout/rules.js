@@ -14,6 +14,10 @@ export const LOT_PAIR = 40, KERB = 0.15, KERB_W = 0.1, PAVE_RAMP = 2, BANK_MAX =
 // natural ground; where the hillside itself is steeper (the valley walls' switchbacks), BANK_STEEP x its slope (a rock
 // cut), at most BANK_TOP; a bank that hasn't met the ground within BANK_MAX m stops there (a retaining wall's place)
 export const FILL = 0.67, CUT = 1, BANK_STEEP = 1.25, BANK_TOP = 3;
+// the shore (a coastal road, the world's water level wl): a bank never fills into the water (the sea bed under it stays as
+// it is) nor cuts dry ground below it; on dry ground a fill rises at most SHORE_K x the ground's height above the water,
+// so it meets the shore at the waterline instead of stepping down into the lagoon
+export const SHORE_K = 4;
 // the verge (a road with no pavement): a strip of gravel along its edge, no kerb; none along the ways off the street network
 export const vergeW = (r) => (r.minor || r.pave ? 0 : r.kind === 'highway' ? 1.5 : r.kind === 'main' ? 1 : 0.6);
 // whether a street's carriageway is painted (lane and centre lines): a city's, a main road, or one wide enough for two
@@ -23,8 +27,8 @@ export const zebra = (r, city) => !r.minor && (city || r.pave > 0);
 const SC = 10, PAD = 54; // (grid cell, m; how far from a road its segments are found: the bake stores every road within more than this of a chunk, bake.js NET_PAD, so two chunks work out their shared edge alike)
 
 // net: { runs: [{ pts: Float64Array x,z,..., h: Float64Array, hw, pave, kind, minor, surf, lanes, oneway }], junctions: [{ x, z, r, y0, gx, gz }] }
-// g(x, z): the natural ground; city: a city's lots
-export function makeRules(net, g, city) {
+// g(x, z): the natural ground; city: a city's lots; wl: the world's water level (the shore rule; none: -Infinity)
+export function makeRules(net, g, city, wl = -Infinity) {
   const runs = net.runs, JN = net.junctions;
   for (const r of runs) { const n = r.h.length; r.s = new Float64Array(n); for (let i = 1; i < n; i++) r.s[i] = r.s[i - 1] + Math.hypot(r.pts[i * 2] - r.pts[i * 2 - 2], r.pts[i * 2 + 1] - r.pts[i * 2 - 1]); }
   const segIdx = new Map(), key = (i, j) => i * 100003 + j;
@@ -76,10 +80,12 @@ export function makeRules(net, g, city) {
     for (let q = 0; q < L.length; q += 2) { const ri = L[q], s = L[q + 1], r = runs[ri], ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
       const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), px = ax + dx * t, pz = az + dz * t, d = Math.hypot(x - px, z - pz) - r.hw - (r.pave || vergeW(r)), b = per.get(ri);
       if (d <= BANK_MAX && (!b || d < b.d)) per.set(ri, { r, d: Math.max(0, d), h: r.h[s] + (r.h[s + 1] - r.h[s]) * t, px, pz }); }
-    if (!per.size) return gz; let lo = -Infinity, hi = Infinity, nb = null;
+    if (!per.size || gz < wl) return gz; let lo = -Infinity, hi = Infinity, nb = null;
     for (const b of per.values()) { const y = (b.r.minor ? b.h : streetH(b.px, b.pz, b.h)) + (b.r.pave ? KERB : 0), sl = BANK_STEEP * slopeAt(b.px, b.pz), kf = Math.min(BANK_TOP, Math.max(FILL, sl)), kc = Math.min(BANK_TOP, Math.max(CUT, sl));
       b.lo = y - kf * b.d; b.hi = y + kc * b.d; lo = Math.max(lo, b.lo); hi = Math.min(hi, b.hi); if (!nb || b.d < nb.d) nb = b; }
-    if (lo > hi) { lo = nb.lo; hi = nb.hi; } return Math.min(hi, Math.max(lo, gz)); };
+    if (lo > hi) { lo = nb.lo; hi = nb.hi; } return shore(Math.min(hi, Math.max(lo, gz)), gz); };
+  // (the shore: under the water the natural ground; on dry ground a fill tapers to nothing at the waterline, never below it)
+  const shore = (y, gz) => (gz < wl ? gz : Math.max(wl, y > gz ? Math.min(y, gz + SHORE_K * (gz - wl)) : y));
   const ground = (x, z) => { const gz = g(x, z); if (city) { const l = lot(x, z); if (l && l.d <= CITY_REACH) return l.y; } return banks(x, z, gz); };
   // the markings' coordinates: the nearest street, and how far its point is from the nearest junction's circle
   const road = (x, z) => { const n = nearest(x, z, street); if (!n) return null; const j = junction(n.px, n.pz); return { id: n.ri, u: n.u, v: n.v, hw: n.r.hw, lanes: n.r.lanes, oneway: n.r.oneway, dj: j ? j[1] : 99 }; };

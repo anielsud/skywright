@@ -4,8 +4,8 @@
 // compares neighbours': their shared edge must match).
 import { parentPort } from 'node:worker_threads';
 import { decodeLayout, KIND } from '../../src/layout/format.js';
-import { KERB } from '../../src/layout/rules.js';
-import { meshChunk, physIndex, physAt } from '../../src/layout/mesh.js';
+import { KERB, makeRules, latticeGround } from '../../src/layout/rules.js';
+import { meshChunk, physIndex, physAt, latticeOf } from '../../src/layout/mesh.js';
 import { markCheck } from './markcheck.mjs';
 
 const HOLE_STEP = 2;
@@ -27,6 +27,15 @@ parentPort.on('message', ({ jobs, grid }) => {
       for (let x = L.x0 + HOLE_STEP / 2; x < L.x0 + L.size; x += HOLE_STEP) for (let z = L.z0 + HOLE_STEP / 2; z < L.z0 + L.size; z += HOLE_STEP) { samples++; const h = physAt(L, m, ixx, x, z); if (!(h === h)) holes++; }
       // the markings, the crossings and the slabs, as the material draws them (markcheck.mjs)
       const mk = markCheck(L, m); Object.assign(r.fine, { tarmacOff: off, kerbSlope: kerb, holes, samples, drift: mk.drift, driftSamples: mk.samples, lost: mk.lost, mouths: mk.mouths, whole: mk.whole, tight: mk.tight, kerbErr: mk.kerbErr, bendMissed: s.bendMissed });
+      // the shore: every point of the drawn ground against the natural ground and the water level: dry ground pushed below the
+      // water (must be 0), ground raised where it's under water, paved points below the water; and how many bank points the
+      // shore rule changed (against the same rules without it)
+      const wl = grid.wl ?? -Infinity, ng = latticeGround(grid, latticeOf(L, grid), G), R0 = makeRules(L.net, ng, !!L.city), R1 = wl > -Infinity ? makeRules(L.net, ng, !!L.city, wl) : R0, shore = { under: 0, raised: 0, pavedWet: 0, limited: 0 }, seen = new Uint8Array(n);
+      const paved = new Uint8Array(n); for (let q = 0; q < m.tk.length; q++) if (m.tk[q] !== KIND.ground && m.tk[q] !== KIND.bank) for (let a = 0; a < 3; a++) paved[I[q * 3 + a]] = m.tk[q]; // (a point on a paved region's edge is the region's)
+      shore.ex = [];
+      for (let q = 0; q < m.tk.length; q++) for (let a = 0; a < 3; a++) { const k = I[q * 3 + a]; if (seen[k]) continue; seen[k] = 1; const x = P[k * 3], y = P[k * 3 + 1], z = P[k * 3 + 2], gz = ng(x, z), bad = (w) => { shore[w]++; if (shore.ex.length < 4) shore.ex.push([w, +x.toFixed(1), +z.toFixed(1), +y.toFixed(2), +gz.toFixed(2), paved[k]]); };
+        if (!paved[k]) { if (gz >= wl && y < wl - 1e-3) bad('under'); if (gz < wl && y > gz + 0.01) bad('raised'); if (R1 !== R0 && Math.abs(R0.ground(x, z) - R1.ground(x, z)) > 0.01) shore.limited++; } else if (y < wl) bad('pavedWet'); }
+      r.fine.shore = shore;
     }
     r.edges = edges; out.push(r);
   }
