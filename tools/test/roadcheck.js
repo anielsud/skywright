@@ -352,7 +352,7 @@ export async function junctionCheck(w, { detail = true, keep = false, within = n
   // builds check that it is the same ground (match).
   const { detailLow } = await import('../../src/world.js');
   const lattice = (DS) => { // (I, J) -> the height updateDetail draws at (I * DS, J * DS) away from its edge
-    const BS = 64, raw = new Map(), low = new Map(), cover = w.detailCover(), lift = DS * 0.15, h9 = new Float32Array(9), o9 = new Uint8Array(9);
+    const BS = 64, raw = new Map(), low = new Map(), cover = w.detailCover(), lift = w.detailLift(DS), h9 = new Float32Array(9), o9 = new Uint8Array(9);
     const blk = (M, I, J, mk) => { const k = key(Math.floor(I / BS), Math.floor(J / BS)); let b = M.get(k); if (!b) M.set(k, (b = mk())); return b; };
     const fill = (I, J, s) => { const b = blk(raw, I, J, () => ({ h: new Float32Array(BS * BS), on: new Uint8Array(BS * BS).fill(2) })), k = (J - Math.floor(J / BS) * BS) * BS + I - Math.floor(I / BS) * BS;
       if (b.on[k] === 2) { b.h[k] = w.detailVert(I * DS, J * DS, cover); b.on[k] = w.dvOn; } h9[s] = b.h[k]; o9[s] = b.on[k]; };
@@ -405,11 +405,11 @@ export async function junctionCheck(w, { detail = true, keep = false, within = n
 // another road's footprint (a slab across another street's tarmac is not the ground's business), nor on a bridge.
 // Returns { n samples, float, buried, worst, at, ex }.
 const GAP = 0.1, PSTEP = 4;
-export async function pavementCheck(w, { within = null } = {}) {
+export async function pavementCheck(w, { within = null, keep = false } = {}) { // (keep: every failing spot in out.spots, [x, z, d])
   const { RJ_Q = 16 } = await import('../../src/roads.js'), G = w.roadGroup, lim = w.half - 600, TILE = w.loc.roads?.chunk || 2000, C = 4;
   const PAVE = { main: 4.5, street: 3.5 }, S = w.roadSurf, tk = (x, z) => Math.floor(x / TILE) + ',' + Math.floor(z / TILE), per = new Map();
   const ok = (x, z) => Math.abs(x) < lim && Math.abs(z) < lim && (!within || (x >= within[0] && z >= within[1] && x <= within[2] && z <= within[3]));
-  const put = (t, x, z) => { if (!ok(x, z)) return; let L = per.get(t); if (!L) per.set(t, (L = [])); L.push(x, z); };
+  const put = (t, x, z, tag = 0) => { if (!ok(x, z)) return; let L = per.get(t); if (!L) per.set(t, (L = [])); L.push(x, z, tag); }; // (tag: 0 a street's slab, 1 a corner slab)
   for (const rd of w.net.roads) {
     if (!(rd.kind === 'main' || rd.kind === 'street') || rd.baked || rd.tunnel) continue;
     const P = rd.pts, hw = rd.width / 2, o = hw + PAVE[rd.kind] - 0.1, t = tk(P[0].x, P[0].z);
@@ -422,7 +422,7 @@ export async function pavementCheck(w, { within = null } = {}) {
   }
   for (const B of w.net.junctions || []) for (const R of B.pave || []) for (let e = 0; e < R.length; e += 8) { // (roadgrade.js PAVE_ROW: kerb x, z, building line x, z, ...)
     const kx = R[e], kz = R[e + 1], ox = R[e + 2], oz = R[e + 3], dx = kx - ox, dz = kz - oz, l = Math.hypot(dx, dz); if (l < 0.5) continue;
-    put(tk(B.x, B.z), ox + dx / l * 0.1, oz + dz / l * 0.1);
+    put(tk(B.x, B.z), ox + dx / l * 0.1, oz + dz / l * 0.1, 1);
   }
   const out = { n: 0, float: 0, buried: 0, worst: 0, at: '', ex: [] }, key = (a, b) => (a + 4e4) * 1e5 + (b + 4e4);
   for (const t of G.userData.tiles) {
@@ -441,7 +441,7 @@ export async function pavementCheck(w, { within = null } = {}) {
         for (let u = Math.floor(x0 / C); u <= Math.floor(x1 / C); u++) for (let v = Math.floor(z0 / C); v <= Math.floor(z1 / C); v++) { const k = key(u, v); let E = cells.get(k); if (!E) cells.set(k, (E = [])); E.push(id); }
       }
     }
-    for (let s = 0; s < L.length; s += 2) {
+    for (let s = 0; s < L.length; s += 3) {
       const x = L[s], z = L[s + 1]; let top = NaN;
       for (const id of cells.get(key(Math.floor(x / C), Math.floor(z / C))) || []) {
         const [P, rj, a, b, c, uv] = tris[id], ax = P[a * 3], az = P[a * 3 + 2], bx = P[b * 3], bz = P[b * 3 + 2], cx = P[c * 3], cz = P[c * 3 + 2];
@@ -454,6 +454,7 @@ export async function pavementCheck(w, { within = null } = {}) {
       if (Number.isNaN(top) || (S.q(x, z) && S.e <= 0)) continue; // (no slab drawn here: cut at a junction; on another road)
       const d = top - w.sampleGrid(x, z) - 0.01; out.n++;
       if (d > GAP) out.float++; else if (d < -GAP) out.buried++; else continue;
+      if (keep) (out.spots ??= []).push([x, z, d, L[s + 2]]);
       if (Math.abs(d) > Math.abs(out.worst)) { out.worst = d; out.at = `${x.toFixed(0)}, ${z.toFixed(0)}`; }
       if (out.ex.length < 4 && Math.abs(d) > 0.3) out.ex.push(`(${x.toFixed(0)}, ${z.toFixed(0)}) ${d.toFixed(2)} m`);
     }

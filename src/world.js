@@ -537,6 +537,10 @@ export class World {
   }
   // (cover: metres past the footprint the road meshes cover, a city street's pavements: their slabs, roadgrade.js SLAB, which come down to the ground where it falls away, #228)
   detailCover() { return this.loc.city ? SLAB + 1.5 : 1; }
+  // how far a close-up ground vertex beside a road may rise over the lowest road vertex next to it (detailLow): a 15% grade over a cell; a
+  // city's 5% (beside a pavement the open ground is at the slabs' level, and a triangle rising 15% over a cell leant in over the slab's outer
+  // edge, #228)
+  detailLift(DS) { return DS * (this.loc.city ? 0.05 : 0.15); }
   updateDetail(cp) {
     if (!this.detail) return;
     const D = this.detailD, DS = this.detailS, ext = D * DS, half = this.half, hide = () => { if (this.detail.visible) { this.detail.visible = false; this.patchMat.userData.U.detailRect.value.set(1e9, 1e9, -1e9, -1e9); } };
@@ -562,7 +566,7 @@ export class World {
     // Beside them, no higher than the lowest road next to it (plus a 15% grade over a cell): where a road runs just below
     // another's embankment (a switchback: the next leg's fill slope coming down onto it) the ground steps up between
     // them by metres, and a triangle across that step leant in over the lower road's edge.
-    const hs0 = hs.slice(), lift = DS * 0.15;
+    const hs0 = hs.slice(), lift = this.detailLift(DS);
     for (let j = B; j <= D - B; j++) for (let i = B; i <= D - B; i++) { const k = j * n + i; hs[k] = detailLow(hs0, on, k, n, lift); }
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const k = j * n + i, o = k * 3;
