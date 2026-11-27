@@ -740,8 +740,9 @@ run their part of it (`--only stunts|waterpark|walls`).
 
 A restart keeps the World and must look and behave exactly like a fresh start: in the canyon-lauterbrunnen job, at
 Lauterbrunnen (#278; `restart.js` holds the checks): damage then restart (everything whole, same spawn), memory flat
-over 3 restarts, back to the hangar frees the World and a fresh start builds a new one, and every start type swapped
-in then restarted. The old `restart.py` is gone.
+over 3 restarts, back to the hangar frees the World and a fresh start builds a new one that holds the same GPU memory
+as it does damaged and restarted (both measured with streaming finished round the spawn, the flora's cells the last
+to finish: #291; on CI too), and every start type swapped in then restarted. The old `restart.py` is gone.
 
 ## Shader check
 
