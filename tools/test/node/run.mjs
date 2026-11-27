@@ -24,7 +24,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url)), REPO = fileURLToPath(new URL('../../../', import.meta.url));
-export const SUITES = ['bikeride', 'drivecheck', 'rocketcheck', 'riders', 'gvision', 'boatride', 'stunts', 'waterpark', 'walls', 'meshcheck', 'cockpitcheck', 'gearcheck', 'startbakes', 'tunnelcheck', 'startchoice', 'presets', 'roadcheck', 'airportcheck', 'bldcheck', 'setbacks']; // (tools/test/<name>.js; add a suite here once it exports nodeSuite)
+export const SUITES = ['bikeride', 'drivecheck', 'rocketcheck', 'riders', 'gvision', 'boatride', 'stunts', 'waterpark', 'walls', 'meshcheck', 'cockpitcheck', 'gearcheck', 'startbakes', 'tunnelcheck', 'startchoice', 'presets', 'roadcheck', 'airportcheck', 'bldcheck', 'setbacks', 'layoutcheck']; // (tools/test/<name>.js; add a suite here once it exports nodeSuite)
 // what building a place's World costs (ms: node/world.mjs worldAt on a quiet Mac, 2026-11; New York's also ~1.2 GB): pick
 const BUILD_MS = { nyc: 13000, lauterbrunnen: 4000, islands: 2500, canyon: 2000 };
 const modUrl = (name) => pathToFileURL(`${REPO}tools/test/${name}.js`).href;

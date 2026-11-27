@@ -17,6 +17,7 @@ import { GeoStream } from './geostream.js';
 import { decodeRoadnet, way, plazas, MINOR, MINOR_KINDS } from './roadnet.js';
 import { decodeRoads, PACK_V } from './roadPack.js';
 import { ROADS } from './version.js';
+import { layoutWanted } from './layout/format.js';
 
 const BASE = 'assets/real/';
 const GAIN = 1.35, DESHADE = 0.3; // imagery brightness (linear, loc.satGain overrides) and how much of its baked-in shading to remove (shaders.js)
@@ -197,6 +198,8 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   const packKey = ROADS !== 'dev' ? ROADS : globalThis.SKY_ROADPACK_KEY; // (tests: a dev build loads packs baked with that key)
   if (packKey) try { const b = await gunzip(await get(`assets/boot/roads-${id}.bin.gz`)), P = decodeRoads(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); if (P.key === packKey && P.v === PACK_V) D.roadPack = P; } catch { /* (missing: work them out) */ }
   if (cityZ) D.city = decodeCity(await gunzip(cityZ));
+  // the baked road layout's chunks (#294, behind a flag while it's tried out): their bytes, decoded by the World
+  if (layoutWanted()) try { const idx = await get(dir + 'layout/index.json', 'json'); D.layout = await Promise.all(idx.chunks.map(async (c) => { const b = await gunzip(await get(dir + 'layout/' + c.file)); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); })); } catch { /* (none baked here) */ }
   if (statueB) try { D.statue = (await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(statueB, '')).scene; } catch (e) { console.warn('[landmarks] statue model', e); }
   D.key = key;
   cache.get(id)?.dispose();

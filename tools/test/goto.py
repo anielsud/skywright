@@ -7,6 +7,7 @@ Chrome starts once; the game starts once per place (and quality, time, weather, 
 
   python3 tools/test/goto.py reports/<report>.json [--out shot.png] [--size 1280x720] [--wait 8]
   python3 tools/test/goto.py poses.json other.json --out shots/      (one PNG per pose, named by its 'name')
+  python3 tools/test/goto.py poses.json --out after/ --query layout=1 (the page's query string: a flag to try)
 
 (The report JSON is what tools/analytics/reports.py saves.) Same requirements as smoke.py.
 """
@@ -41,7 +42,7 @@ async def main(a):
         async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:
             cdp = CDP(ws); await cdp.send('Runtime.enable')
             for (loc, tier, tod, weather, vehicle), rs in groups.items():
-                await cdp.send('Page.navigate', url=origin + '/')
+                await cdp.send('Page.navigate', url=origin + '/' + ('?' + a.query if a.query else ''))
                 await cdp.wait_for(f'{S} && {S}.hangar && {S}.presets.length', 60, 'boot')
                 await cdp.wait_for("!document.getElementById('splash')", 30, 'splash')
                 cfg = {'location': loc, 'online': False, 'mode': 'free', 'start': rs[0].get('start') or 'runway'}
@@ -77,5 +78,5 @@ async def main(a):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('poses', nargs='+'); ap.add_argument('--out', default='goto.png', help='a file for one pose, a directory for several'); ap.add_argument('--size', default='1280x720'); ap.add_argument('--wait', type=float, default=8)
+    ap.add_argument('poses', nargs='+'); ap.add_argument('--out', default='goto.png', help='a file for one pose, a directory for several'); ap.add_argument('--size', default='1280x720'); ap.add_argument('--wait', type=float, default=8); ap.add_argument('--query', default='', help="the page's query string, e.g. layout=1")
     asyncio.run(main(ap.parse_args()))
