@@ -9,10 +9,9 @@
 //   islands: Albatross (water start), islands: Kite (air start)   swapped in; S 2 s at full power: still flying,
 //       finite, in one piece (smoke.py's 'quick' steps)
 //   islands: Speedboat from the marina         the AudioContext started here (no recorded clips: a boat's motor voice
-//       is synthesized, motorSound.js, so the 131-clip decode stays in the hangar job), full gas, D frames until the
-//       motor voice's output gain is up, or the audio clock has run 0.3 s with the engine on (the gain ramps on the
-//       audio clock, not per frame): the engine is audible (smoke.js fly()'s `motor` check; not judged if the audio
-//       clock is stalled, as smoke did); then the tour (D) and tourChecks; the AudioContext is
+//       is synthesized, motorSound.js, so the 131-clip decode stays in the hangar job); the tour (D) and tourChecks,
+//       then its motor voice audible at full gas (smoke.js motorVoice/motorChecks: the level the game set the voice
+//       to, judged on every machine, no audio clock waited for); the AudioContext is
 //       suspended again (nothing else here is heard)
 //   islands: Rocket on the pad                 padcheck.js rocket('islands') + rocketChecks (S)
 //   islands: SR-71 land from the approach, then Mach 2.5+ above 60k ft   swapped in once (the landing challenge's
@@ -29,19 +28,13 @@
 // one session compiles nothing new", #187); the sweep's streaming phase (#275's probe and the stall counter in every
 // step). Keep BASE's time and weather (T.start's cfg: start, mode, realism, landStart, boatStart only), or the islands
 // are built again.
-import { tour, tourChecks } from '../smoke.js';
+import { tour, tourChecks, motorVoice, motorChecks } from '../smoke.js';
 import { rocket, rocketChecks } from '../padcheck.js';
 import { sceneDrawn, crash, phaseChecks } from '../shadercheck.js'; // (event effects fire in the nyc job only: they are the same at every place)
 import { stuntsIn, stuntsChecks } from '../startbakes.js';
-import { isMotor } from '../../../src/motorSound.js';
 
 const LOC = 'islands', SR71 = 'SR-71 Blackbird';
 const MACH_MIN = 2.5, ALT_MIN_FT = 60000; // (smoke.py)
-// the boat's motor voice ramps up on the audio clock (audio.set: a 0.06 s time constant): wait until it is up, or until
-// the audio clock has run ENGINE_CLOCK s since the voice exists with its engine running (5 time constants), then judge.
-// Frames are no measure of it (a fast machine draws many in that time, CI few). A clock that hasn't moved in
-// ENGINE_STALL frames is stalled (#180: not judged); ENGINE_MAX frames is only a safety stop.
-const ENGINE_CLOCK = 0.3, ENGINE_STALL = 30, ENGINE_MAX = 600;
 
 export async function run(T) {
   const started = []; // { name, location, cfg, start } per vehicle started here (wiring.js)
@@ -84,9 +77,10 @@ export async function run(T) {
     if (A.ctx?.state === 'suspended') A.ctx.resume();
     await T.until(() => A.ctx?.state === 'running', { what: 'the AudioContext to run', timeout: 30 });
     const s = await T.start('Speedboat', LOC, { boatStart: 'marina' }); note('Speedboat', s);
-    const heard = await engineAudible(T);
-    const f = await tour();
+    const f = await tour(), m = motorVoice();
     T.checks(tourChecks(f));
+    T.checks(motorChecks(m));
+    const heard = m.kind ? `${m.kind} engine ${m.goal.toFixed(2)}` : 'no motor voice';
     A.ctx.suspend(); // (nothing else in this job is listened to)
     return `${begun(s)}; ${heard}; ${f.ride?.speed.toFixed(1)} m/s, ${f.views} cockpit view(s)`;
   });
@@ -118,25 +112,6 @@ export async function run(T) {
     await wiringChecks(T, started);
     return started.map((v) => `${v.name}: ${v.start}`).join(', ');
   });
-}
-
-// Full gas on the real loop until the motor voice's output gain is up (smoke.js fly(): `motor`, judged by smoke.py:
-// silent if under 0.01 at full throttle, not judged when the audio clock is stalled, #180).
-async function engineAudible(T) {
-  const A = T.S.audio, ac = T.F.ac;
-  const e = ac.parts.find((p) => p.alive && p.engine && isMotor(p.engine.sound));
-  if (!T.check('it has a motor-voiced engine (a car, bike or boat engine sound)', !!e, ac.parts.filter((p) => p.engine).map((p) => p.engine.sound).join(', ') || 'no engine')) return 'no motor voice';
-  const kind = e.engine.sound, gain = () => A.voices[kind]?.out.gain.value ?? 0, a0 = A.ctx.currentTime;
-  T.go(true);
-  let k = 0, on = null; const run = () => A.ctx.currentTime - a0, since = () => (on == null ? 0 : A.ctx.currentTime - on);
-  for (; k < ENGINE_MAX && gain() < 0.01 && since() < ENGINE_CLOCK && !(k >= ENGINE_STALL && run() < 0.01); k++) {
-    await T.frames(1, { what: `the ${kind} motor voice to come up (frame ${k + 1})` });
-    if (on == null && A.voices[kind] && ac.engineRunning !== false) on = A.ctx.currentTime; // (engineRunning: cars and boats, main.js engineSwitch)
-  }
-  const g = gain(), clock = run();
-  if (g < 0.01 && (clock < 0.01 || (on != null && since() < ENGINE_CLOCK))) { T.log(`audio clock stalled (${clock.toFixed(3)} s over ${k} frames): engine sound not checked`); return 'audio clock stalled: engine not checked'; }
-  T.check(`its ${kind} engine is audible at full throttle`, g >= 0.01, `voice gain ${g.toFixed(3)} after ${k} frame(s), audio clock +${clock.toFixed(2)} s (${since().toFixed(2)} s with the engine running), voice ${A.voices[kind] ? 'made' : 'never made'}`);
-  return `${kind} engine ${g.toFixed(2)}`;
 }
 
 // ---------- the SR-71's scripted flights (sr71flight.js; smoke.py sr71_start/sr71_climb/sr71_land, in game time) ----------

@@ -165,7 +165,9 @@ export class Audio {
   filt(type, f, Q = 1) { const b = this.ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = Q; return b; }
   gain(v = 0) { const g = this.ctx.createGain(); g.gain.value = v; return g; }
   shape() { const s = this.ctx.createWaveShaper(); s.curve = this.shaper; return s; }
-  set(param, v, t = 0.06) { if (Number.isFinite(v)) param.setTargetAtTime(v, this.ctx.currentTime, t); }
+  // every ramped parameter heads for v; the target is kept on the param (param.goal): what the game asked for, readable
+  // at once (the value itself only gets there on the audio clock, which a stalled or slow output device holds back)
+  set(param, v, t = 0.06) { if (Number.isFinite(v)) { param.setTargetAtTime(v, this.ctx.currentTime, t); param.goal = v; } }
   panner() {
     const p = this.ctx.createPanner(); p.panningModel = 'HRTF'; p.distanceModel = 'inverse'; p.refDistance = 12; p.maxDistance = 20000; p.rolloffFactor = 1.1;
     return p;

@@ -131,8 +131,9 @@ The rules (#278), which keep CI fast and free of timing flakes:
   (shaders, cockpit views, the real loop running);
 - **no wall-clock waits**: every wait is on a game state (`T.until`, `T.untilFrames`, `T.stepUntil`) or a frame count.
   Their limits are safety nets: generous, and they fail loudly naming what was awaited (a step's own safety timeout
-  skips the rest of the job: the page is in an unknown state). Something that runs on the audio clock (a gain ramp) is
-  waited for on the audio clock (`ctx.currentTime`), not in frames;
+  skips the rest of the job: the page is in an unknown state). A sound's level is judged by what the game set it to
+  (`audio.js` `set()` keeps each parameter's target as `param.goal`; `smoke.js` `motorVoice`), not by waiting for the
+  audio clock to ramp it there (that clock is neither frames nor game time, and stalls with no output device, #180);
 - **no timing verdicts** (Node tier too): no pass/fail may depend on wall-clock time measured on the machine running
   the test (CI is 1.5–6× slower than a dev Mac, and a busy one slower still). Prove a cost claim by counting the work
   (vertices, segments tested, solves, cells) against a cap set from today's count with margin, and keep the ms in the
@@ -168,8 +169,8 @@ The jobs:
   a fixed 1/60 s, `__sky.fixedDt`; out of the cockpit, 3 s stepped; then streaming
   quiet and the sweep's scene phase: no stalls, nothing waited for its shader); startbakes-stunts; the
   Albatross's water start and the Kite's air start (2 s stepped: finite, in one piece); the Speedboat from the marina
-  (an AudioContext with no clips decoded, as a boat's motor voice is synthesized: at full gas its voice's gain comes up
-  within 0.3 s of the audio clock with the engine running, i.e. the engine is audible; then the tour flight); the Rocket on the pad (padcheck); the SR-71
+  (an AudioContext with no clips decoded, as a boat's motor voice is synthesized: the tour flight, then the level the
+  game set its motor voice to at full gas, `motorVoice`: audible); the Rocket on the pad (padcheck); the SR-71
   swapped in once on the landing approach and flown by `sr71flight.js` in game time (the game loop paused): it lands
   intact and stops on the runway (one screenshot), then, put on the runway start, climbs to Mach 2.5+ above 60,000 ft
   with nothing broken; then crashed into the water (stepped to the impact, 5 frames drawn: parts come off, no stalls);
@@ -177,8 +178,8 @@ The jobs:
 - **canyon-lauterbrunnen** (two places in one session, each built once): the AudioContext starts without decoding the
   clips (the engines checked are synthesized). **Grand Canyon**: the Dirt Bike from the stunt park (builds it) and the
   Dune Buggy swapped in there, each on the tour (full power on the real loop over every cockpit view drawn, at least 2
-  frames; 3 s stepped) with its engine voice audible right after (smoke.py's verdict; not judged if the audio clock ran
-  under 0.3 s over the tour); streaming quiet, the whole scene
+  frames; 3 s stepped) with its engine voice audible right after (smoke.py's 0.01 floor on the level the game set the
+  voice to, `motorVoice`: judged on every machine); streaming quiet, the whole scene
   drawn (no stalls, nothing waits for its shader); the Dune Buggy's ground crash (stepped to the impact, 5 frames drawn,
   parts must come off); the Rocket swapped in on the pad (padcheck, stepped). **Lauterbrunnen**, built by the Rocket's
   flight there: the pad check; startbakes-stunts (`stuntsIn`); streaming quiet and the whole scene drawn; #187: nothing

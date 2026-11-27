@@ -94,6 +94,22 @@ export async function tour({ frames: n = 2, more = 3 } = {}) {
   go(false);
   return { name: ac.design.name, kind: F.kind, bike: !!ac.isBike, ran, frames, ride, views, names, leftCockpit, end: S.F === F ? state() : null };
 }
+// The engine voice of a car, bike or boat (synthesized: src/motorSound.js), as the game drives it: the level it set the
+// voice's output to (audio.js set() keeps each parameter's target, `goal`) and the engine's start/stop state. Read right
+// after a tour at full power (tour() lets go of the gas just before it returns; audio.update runs every game step, drawn
+// or stepped), so it is judged the same on any machine: no audio clock is waited for or measured (a stalled clock, #180,
+// or a fast GPU drawing the tour in a fraction of a second, only holds back the value heading for the target).
+export function motorVoice(ac = S.F?.ac) {
+  const A = S.audio, e = ac?.parts.find((p) => p.alive && p.engine && A.voices[p.engine.sound]?.motor);
+  if (!e) return { kind: null, engines: ac ? ac.parts.filter((p) => p.engine).map((p) => p.engine.sound).join(', ') : '' };
+  const kind = e.engine.sound, out = A.voices[kind].out.gain;
+  return { kind, goal: out.goal ?? 0, state: A.engState(kind) };
+}
+// [[name, ok, detail]]: audible at full power (smoke.py's 0.01 floor), its engine running (not 'off' or stopping)
+export function motorChecks(m) {
+  return [['its engine voice plays, audible at full power', !!m.kind && m.goal >= 0.01 && (m.state === 'on' || m.state === 'start'),
+    m.kind ? `${m.kind} voice set to gain ${m.goal.toFixed(3)}, engine ${m.state}` : `no engine voice running (audio.voices; engines: ${m.engines || 'none'})`]];
+}
 // [[name, ok, detail]] for T.checks (smoke.py's verdicts on a tour flight; its audio check lives in the hangar job)
 export function tourChecks(f) {
   const e = f.end, r = f.ride, out = [];

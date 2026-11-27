@@ -22,7 +22,7 @@
 //   - start-rule wiring (wiring.js wiringChecks) over every flight started here
 // Keep BASE's time and weather (T.start's cfg: start, mode, realism, landStart, boatStart only), or a place is built
 // again.
-import { tour, tourChecks } from '../smoke.js';
+import { tour, tourChecks, motorVoice, motorChecks } from '../smoke.js';
 import { rocket, rocketChecks } from '../padcheck.js';
 import { sceneDrawn, crash, phaseChecks } from '../shadercheck.js';
 import { stuntsIn, stuntsChecks } from '../startbakes.js';
@@ -183,22 +183,14 @@ export async function run(T) {
 }
 
 // The tour flight (smoke.js tour) and, right after it, the engine voice: cars' and bikes' engines are synthesized voices
-// (motorSound.js) that audio.update drives every step; over the tour's drawn frames at full power the audio clock runs,
-// so the voice's output gain has reached its level. Read at once (tour() lets go of the gas just before it returns; no
-// step has run since). smoke.py's verdict: audible (gain >= 0.01) unless the audio clock stalled (no output device, #180):
-// stalled meaning it ran under AUDIO_RUN s over the whole tour (an absolute advance, not a share of wall time).
-const AUDIO_RUN = 0.3;
+// (motorSound.js) that audio.update drives every game step; read at once (smoke.js motorVoice: the level the game set,
+// not the audio clock's progress, so it is judged on every machine).
 async function tourWithEngine(T) {
-  const S = T.S, A = S.audio, a0 = A.ctx?.currentTime ?? 0;
-  const f = await tour();
-  const F = S.F, e = F?.ac.parts.find((p) => p.alive && p.engine && A.voices[p.engine.sound]?.motor);
-  const m = e ? { kind: e.engine.sound, gain: A.voices[e.engine.sound].out.gain.value } : null;
-  const ran = (A.ctx?.currentTime ?? 0) - a0, stalled = ran < AUDIO_RUN;
+  const f = await tour(), m = motorVoice();
   T.checks(tourChecks(f));
-  T.check('its engine voice plays, audible at full power', !!m && (m.gain >= 0.01 || stalled),
-    !m ? 'no engine voice running (audio.voices)' : `${m.kind} gain ${m.gain.toFixed(3)}, audio clock +${ran.toFixed(2)} s${stalled ? ' (audio clock stalled: level not checked)' : ''}`);
+  T.checks(motorChecks(m));
   const r = f.ride;
-  return `${f.ran.toFixed(2)} s over ${f.frames} frames; ${r ? `${r.speed.toFixed(0)} m/s, ` : ''}${f.views} cockpit view(s)${m ? `, engine ${m.gain.toFixed(2)}` : ''}`;
+  return `${f.ran.toFixed(2)} s over ${f.frames} frames; ${r ? `${r.speed.toFixed(0)} m/s, ` : ''}${f.views} cockpit view(s)${m.kind ? `, engine ${m.goal.toFixed(2)}` : ''}`;
 }
 
 // (local runs only, for the fresh-start memory comparison) a new World's textures stream in over its first moments:
