@@ -71,7 +71,7 @@ export function meshChunk(L, grid, G, level = 'fine') {
   const clear = (x, z, d) => { for (let i = Math.floor((x - d) / C); i <= Math.floor((x + d) / C); i++) for (let j = Math.floor((z - d) / C); j <= Math.floor((z + d) / C); j++) { const k = i * 1e6 + j, el = eg.get(k), pl = pg.get(k);
     if (el) for (let q = 0; q < el.length; q += 2) if (segD(x, z, el[q], el[q + 1]) < d) return false; if (pl) for (const p of pl) if (Math.hypot(PX[p] - x, PZ[p] - z) < d) return false; } return true; };
   const tarmacD = (x, z, max) => { let best = max; for (let i = Math.floor((x - max) / C); i <= Math.floor((x + max) / C); i++) for (let j = Math.floor((z - max) / C); j <= Math.floor((z + max) / C); j++) { const el = eg.get(i * 1e6 + j); if (!el) continue; for (let q = 0; q < el.length; q += 2) if ((kinds[el[q]] & (1 << KIND.tarmac)) && (kinds[el[q + 1]] & (1 << KIND.tarmac))) best = Math.min(best, segD(x, z, el[q], el[q + 1])); } return best; };
-    let keep = null; // (coarse: which points are used)
+    let keep = null; const bis = []; // (coarse: which points are used; fine: the bends' bisectors, fixed soft)
   if (fine) {
     // the hi grid's points off the paved regions, clear of the outlines
     for (let j = 1; j < lat.nj - 1; j++) for (let i = 1; i < lat.ni - 1; i++) { const X = Math.round((grid.x0 + (lat.i0 + i) * grid.sp) * 100), Z = Math.round((grid.z0 + (lat.j0 + j) * grid.sp) * 100);
@@ -84,12 +84,22 @@ export function meshChunk(L, grid, G, level = 'fine') {
     // along each street's centre line, points every LANE_STEP m (every metre near a junction's circle): its carriageway's
     // triangles short strips across that one street, so its markings stop at the junction's mouth and nowhere else
     L.net.runs.forEach((r, ri) => { if (r.minor) return; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3], l = Math.hypot(bx - ax, bz - az);
-      let dj0 = null; const ux = (bx - ax) / (l || 1), uz = (bz - az) / (l || 1);
+      let dj0 = null, tSide = -Infinity; const ux = (bx - ax) / (l || 1), uz = (bz - az) / (l || 1);
       for (let t = 0; t < l;) { const x = ax + (bx - ax) * t / l, z = az + (bz - az) * t / l, X = Math.round(x * 100), Z = Math.round(z * 100); let step = LANE_STEP;
-        if (inside(X, Z, 50) && classify(X, Z) === KIND.tarmac) { const rd = R.road(x, z); if (rd && rd.id === ri) { if (rd.dj < 6) step = 1; if (rd.dj > 0.3 && clear(X, Z, 60)) putP(add(X, Z));
-          // (where it passes a crossing's edges, ZEBRA m from the junction's circle: points across the carriageway, so the
-          // crossing's triangles are this street's alone)
-          if (dj0 != null && ZEBRA.some((d) => (dj0 - d) * (rd.dj - d) <= 0)) for (const o of [-1, 1]) { const off = o * (r.hw - 0.35), qx = x - uz * off, qz = z + ux * off, QX = Math.round(qx * 100), QZ = Math.round(qz * 100);
+        const onT = inside(X, Z, 50) && classify(X, Z) === KIND.tarmac;
+        // (at a bend: points across the carriageway on its bisector, the line between them fixed (soft), so no triangle
+        // crosses it: each side takes its own segment's line (rules.js lineOn), and the two agree on it. Whichever street
+        // is nearest there: a street meeting this one at its bend (no junction) mustn't take the bend's away)
+        if (onT && t === 0 && s > 0 && !((R.junction(x, z) || [0, 99])[1] <= 0.3)) { const [nx, nz] = R.bends(r)[s], ch = Math.abs(nx * ux + nz * uz); if (ch < 0.99995 && ch > 0.5) { const chain = [];
+            for (const v of [-(r.hw - 0.35), -r.hw / 2, 0, r.hw / 2, r.hw - 0.35]) { const o = v / ch, QX = Math.round((x - nz * o) * 100), QZ = Math.round((z + nx * o) * 100); if (!v) { if (key.has(X * 1e7 + Z) || clear(X, Z, 25)) { const i = add(X, Z); putP(i); chain.push(i); } else chain.push(-1); continue; } // (o along the bisector: v from either segment's line)
+              if (inside(QX, QZ, 50) && classify(QX, QZ) === KIND.tarmac && (key.has(QX * 1e7 + QZ) || clear(QX, QZ, 25))) { const i = add(QX, QZ); putP(i); chain.push(i); } else chain.push(-1); }
+            for (let q = 0; q + 1 < chain.length; q++) if (chain[q] >= 0 && chain[q + 1] >= 0) bis.push([chain[q], chain[q + 1]]); } }
+        if (onT) { const rd = R.road(x, z); if (rd && rd.id === ri) { if (rd.dj < 6) step = 1; if (rd.dj > 0.3 && clear(X, Z, 60)) putP(add(X, Z));
+          // (where it passes a crossing's edges, ZEBRA m from the junction's circle, and every LANE_STEP m: points across the
+          // carriageway just inside its kerbs, so the crossing's triangles are this street's alone and none is a long
+          // sliver along a kerb from one junction to the next)
+          const edge = t - tSide >= LANE_STEP - 1e-6; if (edge) tSide = t;
+          if (edge || (dj0 != null && ZEBRA.some((d) => (dj0 - d) * (rd.dj - d) <= 0))) for (const o of [-1, 1]) { const off = o * (r.hw - 0.35), qx = x - uz * off, qz = z + ux * off, QX = Math.round(qx * 100), QZ = Math.round(qz * 100);
             if (inside(QX, QZ, 50) && classify(QX, QZ) === KIND.tarmac && clear(QX, QZ, 25)) putP(add(QX, QZ)); }
           dj0 = rd.dj; } else dj0 = null; } else dj0 = null;
         t += step; } } });
@@ -117,9 +127,9 @@ export function meshChunk(L, grid, G, level = 'fine') {
   const coords = new Float64Array(N * 2); for (let k = 0; k < N; k++) { coords[k * 2] = X[k]; coords[k * 2 + 1] = Z[k]; }
   const del = new Delaunator(coords), t1 = performance.now(), con = new Constrainautor(del), seen = new Set(); let fixed = 0, failed = 0;
   const onLine = (a, b) => (PX[a] === PX[b] && (PX[a] === X0 || PX[a] === X0 + S)) || (PZ[a] === PZ[b] && (PZ[a] === Z0 || PZ[a] === Z0 + S));
-  let softMissed = 0; const why = {}, failedAt = [], fix = (a, b, kind = 'edge') => { const u = at.get(a), v = at.get(b); if (u == null || v == null || u === v) return; const k = Math.min(u, v) * N + Math.max(u, v); if (seen.has(k)) return; seen.add(k); try { con.constrainOne(u, v); fixed++; } catch (err) { if (kind === 'kerb') { softMissed++; return; } failed++; if (failedAt.length < 4) failedAt.push([X[u], Z[u], X[v], Z[v]]); const w = kind + ': ' + String(err.message || err).slice(0, 30); why[w] = (why[w] || 0) + 1; } }; // (a kerb's top line is soft: where it can't be fixed (it would cross another), the strip there is the triangulation's)
+  let softMissed = 0, bendMissed = 0; const why = {}, failedAt = [], fix = (a, b, kind = 'edge') => { const u = at.get(a), v = at.get(b); if (u == null || v == null || u === v) return; const k = Math.min(u, v) * N + Math.max(u, v); if (seen.has(k)) return; seen.add(k); try { con.constrainOne(u, v); fixed++; } catch (err) { if (kind === 'kerb') { softMissed++; return; } if (kind === 'bend') { bendMissed++; return; } failed++; if (failedAt.length < 4) failedAt.push([X[u], Z[u], X[v], Z[v]]); const w = kind + ': ' + String(err.message || err).slice(0, 30); why[w] = (why[w] || 0) + 1; } }; // (a kerb's top line is soft: where it can't be fixed (it would cross another), the strip there is the triangulation's)
   for (const side of [(i) => PZ[i] === Z0, (i) => PZ[i] === Z0 + S, (i) => PX[i] === X0, (i) => PX[i] === X0 + S]) { const s = idxs.filter(side).sort((a, b) => PX[a] - PX[b] || PZ[a] - PZ[b]); for (let q = 0; q + 1 < s.length; q++) fix(s[q], s[q + 1]); }
-  if (fine) { for (const [a, b, k] of E) if (!onLine(a, b) && k !== KIND.kerb) fix(a, b, 'outline'); for (const [a, b, k] of E) if (k === KIND.kerb) fix(a, b, 'kerb'); } // (the outlines first: a kerb never stands in one's way)
+  if (fine) { for (const [a, b, k] of E) if (!onLine(a, b) && k !== KIND.kerb) fix(a, b, 'outline'); for (const [a, b, k] of E) if (k === KIND.kerb) fix(a, b, 'kerb'); for (const [a, b] of bis) fix(a, b, 'bend'); } // (the outlines first: a kerb never stands in one's way)
   const t2 = performance.now(), T = del.triangles, nt = T.length / 3;
   // ---- each triangle: its kind (its middle's region), wound to face up; sorted by kind (one draw group each)
   const tkind = new Uint8Array(nt); for (let t = 0; t < nt; t++) { if (!fine) continue; const a = T[t * 3], b = T[t * 3 + 1], c = T[t * 3 + 2]; tkind[t] = classify((X[a] + X[b] + X[c]) / 3 * 100, (Z[a] + Z[b] + Z[c]) / 3 * 100); if (tkind[t] === KIND.pave && kerbSet.has(idxs[a]) && kerbSet.has(idxs[b]) && kerbSet.has(idxs[c]) && tarmacD(Math.round((X[a] + X[b] + X[c]) / 3 * 100), Math.round((Z[a] + Z[b] + Z[c]) / 3 * 100), 50) <= (KERB_W + 0.02) * 100) tkind[t] = KIND.kerb; if (tkind[t] === KIND.tarmac && (Y[a] !== PY[a] || Y[b] !== PY[b] || Y[c] !== PY[c])) tkind[t] = KIND.pave; } // (the kerb's strip: by the carriageway's edge)
@@ -131,21 +141,30 @@ export function meshChunk(L, grid, G, level = 'fine') {
   for (let k = 0; k < N; k++) { const l = Math.hypot(nrm[k * 3], nrm[k * 3 + 1], nrm[k * 3 + 2]) || 1; nrm[k * 3] /= l; nrm[k * 3 + 1] /= l; nrm[k * 3 + 2] /= l; }
   // ---- the streets' triangles (carriageway, kerb, pavement) on their own, each given its middle's street as one line:
   // every corner's along and across from that line (so they interpolate exactly: markings on the centre line, slabs along
-  // the kerb), and how far along the street from the nearest junction's circle, linear too (a crossing's band square
-  // across); markings only on carriageway whose middle is out of the junction. rib = { pos, nrm, road (u, v, hw, dj), lane, kind }
-  const rib = { pos: [], nrm: [], road: [], lane: [], kind: [], id: [] };
+  // the kerb), and how far along the street from its nearest mouth onto a junction, linear too (a crossing's band square
+  // across; below 0 inside the junction, where nothing is painted). rib = { pos, nrm, road (u, v, hw, dj), lane, kind, id }
+  const rib = { pos: [], nrm: [], road: [], lane: [], kind: [], id: [] }, JN = L.net.junctions;
+  // a street's mouths: where its centre line crosses a junction's circle, [how far along it, +1 if it leaves the circle going on, -1 if it enters]
+  const mouths = new Map(), mouthsOf = (ri) => { let M = mouths.get(ri); if (M) return M; M = []; const r = L.net.runs[ri];
+    for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, l = Math.hypot(dx, dz); if (l < 1e-3) continue; const ux = dx / l, uz = dz / l;
+      for (const J of JN) { const fx = ax - J.x, fz = az - J.z; if (Math.abs(fx) > l + J.r || Math.abs(fz) > l + J.r) continue; const b = fx * ux + fz * uz, disc = b * b - (fx * fx + fz * fz - J.r * J.r); if (disc <= 0) continue;
+        for (const sg of [-1, 1]) { const t = -b + sg * Math.sqrt(disc); if (t >= 0 && t < l) M.push([r.s[s] + t, sg]); } } }
+    mouths.set(ri, M); return M; };
   if (fine) for (let q = 0; q < nt; q++) { const k = tk[q]; if (!RIBBON.has(k)) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;
     const rc = R.road(cx, cz); if (!rc) continue; const ln = R.lineOn(rc.id, cx, cz); if (!ln) continue;
     const along = (x, z) => ln.u0 + (x - ln.ax) * ln.dx + (z - ln.az) * ln.dz, across = (x, z) => ln.dx * (z - ln.az) - ln.dz * (x - ln.ax), uc = along(cx, cz);
-    const djAt = (u) => { const j = R.junction(ln.ax + ln.dx * (u - ln.u0), ln.az + ln.dz * (u - ln.u0)); return j ? j[1] : null; }, j0 = rc.dj, ja = djAt(uc + 1), sg = j0 < 99 && ja != null ? Math.sign(ja - j0) : 0;
-    const marks = k === KIND.tarmac && j0 > 0.3;
-    for (const v of vs) { const u = along(X[v], Z[v]); rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(u, across(X[v], Z[v]), k === KIND.tarmac && !marks ? 0 : ln.hw, sg ? j0 + sg * (u - uc) : 99); rib.lane.push(Math.min(15, ln.lanes) + (ln.oneway ? 16 : 0) + (painted(L.net.runs[rc.id], L.city) ? 32 : 0) + (zebra(L.net.runs[rc.id], L.city) ? 64 : 0)); rib.kind.push(k); rib.id.push(rc.id); } }
-  // the ground's paving (a city's lots): its squares along the nearest street (an angle a corner, within a right angle)
-  const ang = new Float32Array(N); if (fine && L.city) for (let k = 0; k < N; k++) { const n = R.nearest(X[k], Z[k], (r) => !r.minor); if (n) { const a = Math.atan2(n.dz, n.dx), q = Math.PI / 2; ang[k] = ((a % q) + q) % q; } }
+    // (the junction: the street's mouth nearest along it to one of its corners (a long thin triangle reaching a mouth:
+    // that one); the distance from it linear along the line, so a crossing's band is square across and the markings
+    // stop at its edge. Inside the circle it's below 0: nothing painted)
+    const us = vs.map((v) => along(X[v], Z[v])); let um = 0, sg = 0, bd = Infinity; for (const [u0, s0] of mouthsOf(rc.id)) for (const u of us) if (Math.abs(u - u0) < bd) { bd = Math.abs(u - u0); um = u0; sg = s0; }
+    vs.forEach((v, q) => { const u = us[q]; rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(u, across(X[v], Z[v]), ln.hw, sg ? sg * (u - um) : 99); rib.lane.push(Math.min(15, ln.lanes) + (ln.oneway ? 16 : 0) + (painted(L.net.runs[rc.id], L.city) ? 32 : 0) + (zebra(L.net.runs[rc.id], L.city) ? 64 : 0)); rib.kind.push(k); rib.id.push(rc.id); }); }
+  // the ground's paving (a city's lots): its squares along the street nearest each triangle's middle (an angle a
+  // triangle, within a right angle: one across a triangle, or the squares swirl; runtime.js gives its corners their own copies)
+  const ang = new Float32Array(nt); if (fine && L.city) for (let q = 0; q < nt; q++) { if (tk[q] > KIND.bank) continue; const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2], n = R.nearest((X[a] + X[b] + X[c]) / 3, (Z[a] + Z[b] + Z[c]) / 3, (r) => !r.minor); if (n) { const t = Math.atan2(n.dz, n.dx), h = Math.PI / 2; ang[q] = ((t % h) + h) % h; } }
   let area = 0; for (let q = 0; q < nt; q++) { const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2]; area += Math.abs((X[b] - X[a]) * (Z[c] - Z[a]) - (X[c] - X[a]) * (Z[b] - Z[a])) / 2; }
   const F32 = (a) => Float32Array.from(a);
   return { level, pos, phys, nrm, idx, tk, ang, rib: { pos: F32(rib.pos), nrm: F32(rib.nrm), road: F32(rib.road), lane: F32(rib.lane), kind: Uint8Array.from(rib.kind), id: Uint32Array.from(rib.id) },
-    stats: { points: N, tris: nt, fixed, failed, failedAt, regionArea: O.area, why, softMissed, covered: area / (L.size * L.size), outlineMs: tOut, delaunayMs: t1 - t0, constrainMs: t2 - t1, totalMs: performance.now() - t0 } };
+    stats: { points: N, tris: nt, fixed, failed, failedAt, regionArea: O.area, why, softMissed, bendMissed, covered: area / (L.size * L.size), outlineMs: tOut, delaunayMs: t1 - t0, constrainMs: t2 - t1, totalMs: performance.now() - t0 } };
 }
 
 // physics lookup over a fine mesh: a grid of CELL-metre cells listing the triangles touching each

@@ -89,9 +89,22 @@ export function makeRules(net, g, city) {
     const j = junction(best.px, best.pz); return { id: ri, u: best.u, v: best.v, hw: r.hw, lanes: r.lanes, oneway: r.oneway, dj: j ? j[1] : 99 }; };
   // road ri's segment nearest (x, z), as a line: a point on it (ax, az) where it's u0 along the road, its direction (dx, dz).
   // Along and across it are linear in position, so a triangle's corners given them from one line interpolate exactly
-  const lineOn = (ri, x, z) => { const r = runs[ri]; let best = null; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz; if (L2 < 1e-6) continue;
-      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t), l = Math.sqrt(L2); if (!best || d < best.d) best = { d, ax, az, dx: dx / l, dz: dz / l, u0: r.s[s] }; }
-    return best && { ...best, hw: r.hw, lanes: r.lanes, oneway: r.oneway }; };
+  // A segment's own stretch ends at the bisectors of its bends (bends(r): each segment's start and end planes), so the
+  // triangles either side of a bend's bisector (mesh.js puts points on it) take the two segments' lines, and the across
+  // coordinate agrees on it; a point off every stretch (past a road's end) takes the nearest segment.
+  const lineOn = (ri, x, z) => { const r = runs[ri], B = bends(r); let best = null, near = null; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz; if (L2 < 1e-6) continue;
+      const l = Math.sqrt(L2), q = ((x - ax) * dx + (z - az) * dz) / L2, t = Math.max(0, Math.min(1, q)), d = Math.hypot(x - ax - dx * t, z - az - dz * t), c = { d, ax, az, dx: dx / l, dz: dz / l, u0: r.s[s] };
+      if (!near || d < near.d) near = c;
+      const [sx, sz, ex, ez] = B[s]; if ((x - ax) * sx + (z - az) * sz >= 0 && (x - ax - dx) * ex + (z - az - dz) * ez < 0) { c.d = Math.abs((dx * (z - az) - dz * (x - ax)) / l); if (!best || c.d < best.d) best = c; } }
+    if (!best || best.d > near.d + 0.01) best = near; return best && // (a stretch's planes are half-spaces: one far along a road that doubles back can hold the point too)
+      { ...best, hw: r.hw, lanes: r.lanes, oneway: r.oneway }; };
+  // per segment of a road: its stretch's start and end planes' normals (sx, sz, ex, ez): along it at its ends, the
+  // bisector's at a bend (the two directions' sum)
+  const bendCache = new Map(), bends = (r) => { let B = bendCache.get(r); if (B) return B; const n = r.h.length, D = [];
+    for (let s = 0; s + 1 < n; s++) { const dx = r.pts[s * 2 + 2] - r.pts[s * 2], dz = r.pts[s * 2 + 3] - r.pts[s * 2 + 1], l = Math.hypot(dx, dz); D.push(l < 1e-3 ? null : [dx / l, dz / l]); }
+    const prev = (s) => { for (let k = s - 1; k >= 0; k--) if (D[k]) return D[k]; return null; }, next = (s) => { for (let k = s + 1; k < D.length; k++) if (D[k]) return D[k]; return null; };
+    const mid = (a, b) => { const x = a[0] + b[0], z = a[1] + b[1], l = Math.hypot(x, z); return l < 1e-3 ? b : [x / l, z / l]; };
+    B = D.map((d, s) => { if (!d) return [0, 0, 0, 0]; const pv = prev(s), nx = next(s), a = pv ? mid(pv, d) : d, b = nx ? mid(d, nx) : d; return [a[0], a[1], b[0], b[1]]; }); bendCache.set(r, B); return B; };
   // the paved region a point is in, by the outlines' own order (outline.js): a street's carriageway, its pavement, an
   // alley, pavers, gravel, a verge; else the ground (a carriageway's edge, to 3 cm: its outline's points round to the
   // centimetre). For the chunk's edge points: both chunks beside it agree.
@@ -103,7 +116,7 @@ export function makeRules(net, g, city) {
       const k = d <= (r.minor ? 0 : 0.03) ? (r.minor ? mk(r) : KIND.tarmac) : !r.minor && r.pave && d <= r.pave ? KIND.pave : d <= vergeW(r) ? KIND.verge : null;
       if (k != null && RANK[k] < rank) { rank = RANK[k]; best = k; } }
     return best; };
-  return { base, drawn, ground, road, roadOn, lineOn, nearest, nearest2, lot, junction, region };
+  return { base, drawn, ground, road, roadOn, lineOn, bends, nearest, nearest2, lot, junction, region };
 }
 
 // the natural ground from the hi grid's points around a chunk (lat: i0, j0, ni, nj; G their heights): bilinear, as the
