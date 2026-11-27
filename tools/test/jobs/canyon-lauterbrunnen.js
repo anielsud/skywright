@@ -17,8 +17,8 @@
 //   - the restart suite (restart.py's checks, driven here; CI ran it with --restarts 3 --no-fresh-compare), ordered so
 //     no flight is started twice: damage, restart (also the launch pad start type's restart), whole again; 2 more
 //     restarts (damage before the last): memory flat; back to the hangar frees the World, a fresh Rocket start builds
-//     a new one with the same spawn; the other start types (runway, air, stunt park, street, marina, water park), each
-//     swapped into that World, restarted, then 4 s stepped on
+//     a new one with the same spawn; one start type per kind of spawn (air, stunt park, water park: see STARTS), each
+//     swapped into that World, restarted, then 4 s stepped on (runway, street and marina: the startchoice Node suite)
 //   - start-rule wiring (wiring.js wiringChecks) over every flight started here
 // Keep BASE's time and weather (T.start's cfg: start, mode, realism, landStart, boatStart only), or a place is built
 // again.
@@ -29,14 +29,20 @@ import { stuntsIn, stuntsChecks } from '../startbakes.js';
 import { snap, damage, damaged, whole, settled, damageChecks, memoryChecks, freshChecks, startTypeCheck } from '../restart.js';
 
 const L = 'lauterbrunnen';
-// restart.py's start types after the launch pad (that one is the Rocket's, restarted in the damage step): swapped into
-// the fresh World in this order (a vehicle's two starts back to back), each then restarted
+// The start types restarted after the launch pad (that one is the Rocket's, restarted in the damage step), each swapped
+// into the fresh World, then restarted. A restart runs the same code for every start type (main.js restartFlight:
+// endFlight(true) keeps the World and reset()s it, buildFlight starts the same cfg again); start types differ only in
+// where buildFlight puts the vehicle and what the 4 s after it drive through. One per kind of start, each the one
+// whose 4 s run over state World.reset() puts back:
+//   air          planAirStart and an airborne spawn with speed and throttle (main.js alone: Node can't reach it)
+//   stunt park   a car on the ground at the stunt park's arch (its ramps, boosts and state: World.reset)
+//   water park   a boat afloat at the water park's arch (its boosts and state: World.reset)
+// runway, street and marina put the vehicle down the same way from a different spot (Aircraft.spawn at the World's
+// answer): the startchoice Node suite's Lauterbrunnen case checks that a restart gives each of them (and the two above)
+// the same start and spawn pose as a fresh start, after damage and World.reset.
 const STARTS = [
-  ['runway', 'Kestrel', { start: 'runway' }],
   ['air', 'Kestrel', { start: 'air' }],
   ['stunt park', 'Dune Buggy', { landStart: 'park' }],
-  ['street', 'Dune Buggy', { landStart: 'road' }],
-  ['marina', 'Speedboat', { boatStart: 'marina' }],
   ['water park', 'Speedboat', { boatStart: 'waterpark' }],
 ];
 

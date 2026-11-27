@@ -470,7 +470,7 @@
   "roadcheck|nyc": 95627,
   "roadcheck|nyc ground detail": 65,
   "roadcheck|nyc ground under the road": 83305,
-  "roadcheck|nyc junctions": 190108,
+  "roadcheck|nyc junctions": 125000,
   "roadcheck|nyc open ground": 5103,
   "roadcheck|nyc posts": 2457,
   "roadcheck|nyc road pack": 1142,
@@ -569,5 +569,6 @@
   "waterpark|lauterbrunnen site, starts, MEGA JUMP": 6741,
   "waterpark|nyc site, starts, MEGA JUMP": 8594,
   "waterpark|ref Jet Ski, Pontoon, kid's boats 2/2": 7274,
-  "waterpark|ref Speedboat, Fireboat, kid's boats 1/2": 14111
+  "waterpark|ref Speedboat, Fireboat, kid's boats 1/2": 14111,
+  "startchoice|lauterbrunnen: a restart starts where a fresh start did": 9000
 }
