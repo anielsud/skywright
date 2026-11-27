@@ -5,7 +5,8 @@
 // pavements and ground (coarse, patch and detail) don't draw (clip: a discard by rectangle in their shaders).
 import * as THREE from 'three';
 import { decodeLayout, KIND } from './format.js';
-import { meshChunk, physIndex, physAt } from './mesh.js';
+import { meshChunk, physIndex, physAt, latticeOf } from './mesh.js';
+import { sidewalkMaterial } from '../roadSurface.js';
 import { terrainMaterial, FOG } from '../shaders.js';
 
 const FINE_D = 900; // metres from the camera to a chunk's middle within which it draws at the fine level
@@ -38,17 +39,18 @@ export class Layout {
   // maps: the terrain's (World.terrainMaps) for the ground's material
   start(maps) {
     const yellow = this.w.loc.id === 'nyc' ? 1 : 0;
-    this.mats = { ground: terrainMaterial(maps, 'detail'), tarmac: roadMat('asphalt_d', 0x5a5a5c, true, yellow), kerb: roadMat('sidewalk_d', 0xb8b4ac), pave: roadMat('sidewalk_d', 0x9c9890), gravel: roadMat('gravel_d', 0xa09684), pavers: roadMat('sidewalk_d', 0xa89a88) };
-    this.matList = [this.mats.ground, this.mats.tarmac, this.mats.kerb, this.mats.pave, this.mats.gravel, this.mats.pavers];
+    const skirt = terrainMaterial(maps, 'detail'); skirt.side = THREE.DoubleSide;
+    this.mats = { skirt, ground: terrainMaterial(maps, 'detail'), tarmac: roadMat('asphalt_d', 0x5a5a5c, true, yellow), alley: roadMat('asphalt_d', 0x5a5a5c), gravel: roadMat('gravel_d', 0xa09684), pavers: roadMat('sidewalk_d', 0xa89a88), walk: sidewalkMaterial() };
+    this.matList = [this.mats.ground, this.mats.alley, this.mats.gravel, this.mats.pavers];
     this.worker = typeof Worker !== 'undefined' ? new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }) : null;
     if (this.worker) this.worker.onmessage = (ev) => this.got(this.chunks[ev.data.id], ev.data.level, ev.data.m);
     for (const c of this.chunks) this.ask(c, 'fine');
   }
   // the hi grid's heights at a chunk's grid points (the natural ground the layout meets)
   lattice(c) {
-    const G = this.w.real.hi, { i0, j0, ni, nj } = c.L.lat, out = new Float32Array(ni * nj);
-    for (let j = 0; j < nj; j++) for (let i = 0; i < ni; i++) out[j * ni + i] = G.H[(j0 + j) * G.n + i0 + i];
-    return { grid: { x0: G.x0, z0: G.z0, sp: G.sp }, G: out };
+    const H = this.w.real.hi, grid = { x0: H.x0, z0: H.z0, sp: H.sp }, lat = latticeOf(c.L, grid), out = new Float32Array(lat.ni * lat.nj);
+    for (let j = 0; j < lat.nj; j++) for (let i = 0; i < lat.ni; i++) out[j * lat.ni + i] = H.H[Math.max(0, Math.min(H.n - 1, lat.j0 + j)) * H.n + Math.max(0, Math.min(H.n - 1, lat.i0 + i))];
+    return { grid, G: out };
   }
   ask(c, level) {
     if (c.asked.has(level)) return; c.asked.add(level);
@@ -59,21 +61,52 @@ export class Layout {
   got(c, level, m) {
     c.m[level] = m;
     if (level === 'fine' && !c.ix) { // physics and the clipping start with the fine mesh
-      c.ix = physIndex(c.L, m); const r = this.U.layR.value[this.U.layN.value++]; r.set(c.L.x0, c.L.z0, c.L.x0 + c.L.size, c.L.z0 + c.L.size); this.on = true;
+      c.ix = physIndex(c.L, m); const r = this.U.layR.value[this.U.layN.value++]; r.set(c.L.x0, c.L.z0, c.L.x0 + c.L.size, c.L.z0 + c.L.size);
+      c.skirt = this.skirt(c, m); this.on = true;
       this.ask(c, 'coarse');
     }
     if (!c.shown) this.show(c, level);
   }
+  // where a chunk meets today's ground (no baked chunk beside it), a wall from its edge to today's ground's height there:
+  // the two needn't meet (today's roads and banks are its own), and without it the sky showed through (#297: the
+  // white sliver at Lauterbrunnen's chunk, where a road's bank met today's ground metres off)
+  skirt(c, m) {
+    const L = c.L, P = m.pos, n = P.length / 3, w = this.w, sides = [[(x) => x === L.x0, -1, 0], [(x) => x === L.x0 + L.size, 1, 0], [null, 0, -1], [null, 0, 1]], out = [], nrm = [];
+    const was = this.on; this.on = false; // (today's ground: World.sampleGrid without the layout)
+    for (const [, dx, dz] of sides) {
+      if (this.chunks.some((o) => o !== c && o.L.ix === L.ix + dx && o.L.iz === L.iz + dz)) continue; // (a baked chunk beside it: they meet)
+      const onSide = (k) => (dx ? P[k * 3] === (dx < 0 ? L.x0 : L.x0 + L.size) : P[k * 3 + 2] === (dz < 0 ? L.z0 : L.z0 + L.size));
+      const ks = []; for (let k = 0; k < n; k++) if (onSide(k)) ks.push(k); ks.sort((a, b) => (dx ? P[a * 3 + 2] - P[b * 3 + 2] : P[a * 3] - P[b * 3]));
+      const T = ks.map((k) => w.sampleGrid(P[k * 3], P[k * 3 + 2]));
+      for (let q = 0; q + 1 < ks.length; q++) { const a = ks[q], b = ks[q + 1], ya = P[a * 3 + 1], yb = P[b * 3 + 1], lo = Math.min(ya, yb, T[q], T[q + 1]) - 0.3, hi = Math.max(ya, yb, T[q], T[q + 1]);
+        if (hi - lo < 0.35) continue; const A = [P[a * 3], P[a * 3 + 2]], B = [P[b * 3], P[b * 3 + 2]];
+        out.push(A[0], hi, A[1], B[0], hi, B[1], B[0], lo, B[1], A[0], hi, A[1], B[0], lo, B[1], A[0], lo, A[1]); for (let v = 0; v < 6; v++) nrm.push(dx, 0, dz); }
+    }
+    this.on = was; if (!out.length) return null;
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(out, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3)); g.computeBoundingSphere();
+    const me = new THREE.Mesh(g, this.mats.skirt); me.name = 'layout skirt'; this.group.add(me); return me;
+  }
   show(c, level) {
     const m = c.m[level]; if (!m) return;
-    if (!c.mesh) { c.mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.matList); c.mesh.receiveShadow = true; c.mesh.name = 'layout ' + c.L.ix + ',' + c.L.iz; this.group.add(c.mesh); }
+    if (!c.mesh) { c.mesh = new THREE.Group(); c.mesh.name = 'layout ' + c.L.ix + ',' + c.L.iz; this.group.add(c.mesh); }
+    for (const o of c.mesh.children) o.geometry.dispose(); c.mesh.clear();
+    // the surface (ground, alleys, gravel, pavers); the carriageway, kerbs and pavements from the street ribbons below
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(m.nrm, 3));
-    g.setAttribute('aRoad', new THREE.BufferAttribute(m.road, 4)); g.setAttribute('aLane', new THREE.BufferAttribute(m.lane, 1));
-    g.setIndex(new THREE.BufferAttribute(m.idx, 1));
-    const matOf = (k) => (k === KIND.ground || k === KIND.bank ? 0 : k === KIND.tarmac || k === KIND.alley ? 1 : k === KIND.kerb ? 2 : k === KIND.pave ? 3 : k === KIND.verge || k === KIND.gravel ? 4 : 5);
-    for (let q = 0; q < m.tk.length;) { const mi = matOf(m.tk[q]); let e = q; while (e < m.tk.length && matOf(m.tk[e]) === mi) e++; g.addGroup(q * 3, (e - q) * 3, mi); q = e; }
-    g.computeBoundingSphere(); c.mesh.geometry.dispose(); c.mesh.geometry = g; c.shown = level;
+    g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(m.nrm, 3)); g.setIndex(new THREE.BufferAttribute(m.idx, 1));
+    const matOf = (k) => (k === KIND.ground || k === KIND.bank ? 0 : k === KIND.alley ? 1 : k === KIND.verge || k === KIND.gravel ? 2 : k === KIND.pavers ? 3 : -1);
+    for (let q = 0; q < m.tk.length;) { const mi = matOf(m.tk[q]); let e = q; while (e < m.tk.length && matOf(m.tk[e]) === mi) e++; if (mi >= 0) g.addGroup(q * 3, (e - q) * 3, mi); q = e; }
+    g.computeBoundingSphere(); const surf = new THREE.Mesh(g, this.matList); surf.receiveShadow = true; c.mesh.add(surf);
+    const r = m.rib, n = r.kind.length; if (n) {
+      const pick = (want) => { const at = []; for (let v = 0; v < n; v += 3) if (want(r.kind[v])) at.push(v); return at; };
+      const part = (vs, mat, attrs) => { const k = vs.length * 3, P = new Float32Array(k * 3), N = new Float32Array(k * 3), A = attrs.map(([, size]) => new Float32Array(k * size));
+        vs.forEach((v0, t) => { for (let q = 0; q < 3; q++) { const v = v0 + q, o = t * 3 + q; P.set(r.pos.subarray(v * 3, v * 3 + 3), o * 3); N.set(r.nrm.subarray(v * 3, v * 3 + 3), o * 3); attrs.forEach(([, size, f], a) => A[a].set(f(v), o * size)); } });
+        const gg = new THREE.BufferGeometry(); gg.setAttribute('position', new THREE.BufferAttribute(P, 3)); gg.setAttribute('normal', new THREE.BufferAttribute(N, 3)); attrs.forEach(([name, size], a) => gg.setAttribute(name, new THREE.BufferAttribute(A[a], size)));
+        gg.computeBoundingSphere(); const me = new THREE.Mesh(gg, mat); me.receiveShadow = true; c.mesh.add(me); };
+      part(pick((k) => k === KIND.tarmac), this.mats.tarmac, [['aRoad', 4, (v) => r.road.subarray(v * 4, v * 4 + 4)], ['aLane', 1, (v) => [r.lane[v]]]]);
+      // (the pavement and its kerb with today's material: uv = metres across from the street's centre line, along; rinfo = half width, -, seed)
+      part(pick((k) => k === KIND.kerb || k === KIND.pave), this.mats.walk, [['uv', 2, (v) => [r.road[v * 4 + 1], r.road[v * 4]]], ['rinfo', 3, (v) => [r.road[v * 4 + 2], 0, 3]], ['rjunc', 4, () => [99, 99, 0, 0]]]);
+    }
+    c.shown = level;
   }
   update(cam) {
     for (const c of this.chunks) { if (!c.ix) continue; const want = Math.hypot(cam.position.x - c.cx, cam.position.z - c.cz) < FINE_D ? 'fine' : 'coarse'; if (want === c.shown) continue; if (c.m[want]) this.show(c, want); else this.ask(c, want); }
@@ -91,7 +124,7 @@ export class Layout {
     const type = k === KIND.verge || k === KIND.gravel ? 'sand' : k >= KIND.tarmac || lot ? 'runway' : n.y < 0.8 ? 'rock' : 'grass';
     return { h, n: type === 'runway' ? new THREE.Vector3(0, 1, 0) : n, type };
   }
-  dispose() { this.worker?.terminate(); for (const c of this.chunks) c.mesh?.geometry.dispose(); }
+  dispose() { this.worker?.terminate(); for (const c of this.chunks) { for (const o of c.mesh?.children || []) o.geometry.dispose(); c.skirt?.geometry.dispose(); } }
 }
 
 // a paved surface: its photo texture over a base colour (world-space, metres), and on the tarmac the markings from the

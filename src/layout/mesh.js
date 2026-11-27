@@ -1,86 +1,132 @@
-// Joining a chunk's baked layout (format.js) and the natural ground around it into one surface: the stored points (roads,
-// pavements, kerbs, embankments, the chunk's edge) and the hi grid's points outside them, a constrained Delaunay
-// triangulation with the stored edges fixed. Pure (no three.js, no World): the game runs it in a worker (worker.js),
-// the bake and the tests call it directly. Nothing here decides a shape: every height is a stored or a grid one.
+// Joining a chunk's baked layout (format.js) into one surface with the natural ground around it: its outlines' points
+// (worked out from its network, outline.js), the chunk's edge points (every EDGE_STEP m), the hi grid's points off the paved regions and, where the roads
+// reshape the ground (a city's lots, banks), more points on a lattice; every height from rules.js; a constrained
+// Delaunay triangulation with the outlines fixed; each triangle's kind from the region its middle is in. Pure (no
+// three.js, no World): the game runs it in a worker (worker.js), the bake and the tests call it directly.
 //
-// level 'fine': everything; each triangle gets its kind (format.js KIND) from the fixed edges around it.
-// level 'coarse': the chunk's edge points (the same as the fine level's: neighbours always meet), every other grid
-// point and one stored point per COARSE_CELL; only the chunk's edge fixed; every triangle ground (the roads far away
-// are the imagery's).
+// level 'fine': all of it. level 'coarse': the chunk's edge points (the same: neighbours always meet), one stored point
+// per COARSE_CELL, every other grid point; only the chunk's edge fixed; every triangle ground (far away, the imagery's
+// roads).
 import Delaunator from '../../vendor/layout/delaunator.js';
 import Constrainautor from '../../vendor/layout/constrainautor.mjs';
 import { KIND } from './format.js';
+import { makeRules, latticeGround, KERB, KERB_W, PAVE_RAMP, VERGE } from './rules.js';
+import { chunkOutlines } from './outline.js';
 
-const COARSE_CELL = 8;
+const EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, LANE_STEP = 6;
+const PAVED = [KIND.tarmac, KIND.kerb, KIND.pave, KIND.alley, KIND.pavers, KIND.gravel, KIND.verge]; // (the order a point is classed in)
+const RIBBON = new Set([KIND.tarmac, KIND.kerb, KIND.pave]); // (drawn with a street's coordinates: markings, the pavement's slabs)
 
-// L: a decoded chunk; grid: { x0, z0, sp } the hi grid; G: its heights at L.lat's points (Float32Array ni * nj).
-// opts.classify(x, z) (the bake's): each triangle's kind from the regions at its middle, and back in ek each fixed
-// edge's kinds either side as those triangles have them (what the flood below then reproduces from the file).
-export function meshChunk(L, grid, G, level = 'fine', opts = {}) {
-  const t0 = performance.now(), fine = level === 'fine', n = L.px.length, size = L.size * 100;
-  const X = [], Z = [], Y = [], PY = [], src = []; // src: the layout point's index, or -1 - (grid point)
-  const onEdge = (i) => L.px[i] === 0 || L.pz[i] === 0 || L.px[i] === size || L.pz[i] === size;
-  const cells = new Set();
-  for (let i = 0; i < n; i++) {
-    if (!fine && !onEdge(i)) { const k = Math.floor(L.px[i] / (COARSE_CELL * 100)) * 4096 + Math.floor(L.pz[i] / (COARSE_CELL * 100)); if (cells.has(k)) continue; cells.add(k); }
-    X.push(L.x0 + L.px[i] / 100); Z.push(L.z0 + L.pz[i] / 100); Y.push(L.py[i] / 1000); PY.push((L.py[i] + L.pdy[i]) / 1000); src.push(i);
+// the hi grid's points a chunk's ground uses (and one more round it, for the bilinear ground): lat
+export const latticeOf = (L, grid) => { const i0 = Math.floor((L.x0 - grid.x0) / grid.sp) - 1, j0 = Math.floor((L.z0 - grid.z0) / grid.sp) - 1, n = Math.ceil(L.size / grid.sp) + 3; return { i0, j0, ni: n, nj: n }; };
+
+// L: a decoded chunk; grid: { x0, z0, sp } the hi grid; G: its heights at latticeOf(L, grid)'s points (ni * nj)
+export function meshChunk(L, grid, G, level = 'fine') {
+  const t0 = performance.now(), fine = level === 'fine', lat = latticeOf(L, grid), g = latticeGround(grid, lat, G), R = makeRules(L.net, g, !!L.city);
+  const X0 = Math.round(L.x0 * 100), Z0 = Math.round(L.z0 * 100), S = Math.round(L.size * 100);
+  // ---- the points (centimetres while they're gathered)
+  const PX = [], PZ = [], key = new Map(), kinds = [];
+  const add = (X, Z) => { const k = X * 1e7 + Z; let i = key.get(k); if (i == null) { i = PX.length; key.set(k, i); PX.push(X); PZ.push(Z); kinds.push(0); } return i; };
+  const O = chunkOutlines(L.net, L.areas, L), ol = O.P.map(([x, z]) => add(x, z)), tOut = performance.now() - t0; // (the outlines: from the network, outline.js)
+  const E = []; for (const [a0, b0, k] of O.E) { const a = ol[a0], b = ol[b0]; E.push([a, b, k]); kinds[a] |= 1 << k; kinds[b] |= 1 << k; }
+  for (let s = 0; s <= S; s += EDGE_STEP * 100) { add(X0 + s, Z0); add(X0 + s, Z0 + S); add(X0, Z0 + s); add(X0 + S, Z0 + s); }
+  // which paved region a point is in (cm), first in PAVED's order; ground otherwise
+  const RW = 200, rows = new Map(); for (const [a, b, k] of E) { const az = PZ[a], bz = PZ[b]; if (az === bz) continue; for (let r = Math.floor(Math.min(az, bz) / RW); r <= Math.floor(Math.max(az, bz) / RW); r++) (rows.get(r) || rows.set(r, []).get(r)).push(a, b, k); }
+  const classify = (x, z) => { const L2 = rows.get(Math.floor(z / RW)); if (!L2) return KIND.ground; let inside = 0; for (let q = 0; q < L2.length; q += 3) { const a = L2[q], b = L2[q + 1], az = PZ[a], bz = PZ[b]; if ((az > z) !== (bz > z) && x < PX[a] + (PX[b] - PX[a]) * (z - az) / (bz - az)) inside ^= 1 << L2[q + 2]; } for (const k of PAVED) if (inside & (1 << k)) return k; return KIND.ground; };
+  // the kerb (fine): a KERB_W strip on the pavement's side of every tarmac edge a pavement shares (listed for both), its
+  // top a line of points offset from the tarmac's (mitred at corners), fixed; its triangles the kerb's (kerbSet)
+  const kerbSet = new Set();
+  if (fine) {
+    const kinds2 = new Map(); for (const [a, b, k] of E) { const kk = Math.min(a, b) * 1e7 + Math.max(a, b); (kinds2.get(kk) || kinds2.set(kk, [a, b, 0]).get(kk))[2] |= 1 << k; }
+    const KE = [...kinds2.values()].filter(([, , m]) => (m & (1 << KIND.tarmac)) && (m & (1 << KIND.pave))), nrmOf = new Map(), deg = new Map();
+    for (const e of KE) { const [a, b] = e, dx = PX[b] - PX[a], dz = PZ[b] - PZ[a], l = Math.hypot(dx, dz) || 1; let nx = -dz / l, nz = dx / l; const mx = (PX[a] + PX[b]) / 2, mz = (PZ[a] + PZ[b]) / 2;
+      if (classify(mx + nx * 3, mz + nz * 3) !== KIND.pave) { nx = -nx; nz = -nz; } e.push(nx, nz); // (towards the pavement)
+      for (const v of [a, b]) { const q = nrmOf.get(v) || [0, 0, []]; q[0] += nx; q[1] += nz; q[2].push([nx, nz]); nrmOf.set(v, q); deg.set(v, (deg.get(v) || 0) + 1); } }
+    const top = new Map(), W = KERB_W * 100, near = new Map(), nk = (x, z) => Math.floor(x / 400) * 1e6 + Math.floor(z / 400);
+    for (let i = 0; i < PX.length; i++) { const k = nk(PX[i], PZ[i]); (near.get(k) || near.set(k, []).get(k)).push(i); }
+    const egs = new Map(); for (const [a, b] of E) for (let i = Math.floor(Math.min(PX[a], PX[b]) / 400); i <= Math.floor(Math.max(PX[a], PX[b]) / 400); i++) for (let j = Math.floor(Math.min(PZ[a], PZ[b]) / 400); j <= Math.floor(Math.max(PZ[a], PZ[b]) / 400); j++) { const k = i * 1e6 + j; (egs.get(k) || egs.set(k, []).get(k)).push(a, b); }
+    const o3 = (ax, az, bx, bz, cx, cz) => Math.sign((bx - ax) * (cz - az) - (bz - az) * (cx - ax));
+    const crosses = (ax, az, bx, bz, skip) => { for (let i = Math.floor(Math.min(ax, bx) / 400); i <= Math.floor(Math.max(ax, bx) / 400); i++) for (let j = Math.floor(Math.min(az, bz) / 400); j <= Math.floor(Math.max(az, bz) / 400); j++) { const el = egs.get(i * 1e6 + j); if (!el) continue;
+      for (let q = 0; q < el.length; q += 2) { const c = el[q], d = el[q + 1]; if (skip.has(c) || skip.has(d)) continue; if (o3(ax, az, bx, bz, PX[c], PZ[c]) * o3(ax, az, bx, bz, PX[d], PZ[d]) <= 0 && o3(PX[c], PZ[c], PX[d], PZ[d], ax, az) * o3(PX[c], PZ[c], PX[d], PZ[d], bx, bz) <= 0) return true; } } return false; };
+    const cand = new Map(); // (each vertex's kerb-top point, if it lies clear inside the pavement)
+    for (const [v, [sx, sz, ns]] of nrmOf) { const l = Math.hypot(sx, sz) || 1, dx = sx / l, dz = sz / l, c = Math.min(...ns.map(([nx, nz]) => nx * dx + nz * dz)); if (c < 0.35) continue; const d = W / c, x = Math.round(PX[v] + dx * d), z = Math.round(PZ[v] + dz * d);
+      if (classify(x, z) !== KIND.pave) continue; let ok = true; for (let i = Math.floor(x / 400) - 1; i <= Math.floor(x / 400) + 1 && ok; i++) for (let j = Math.floor(z / 400) - 1; j <= Math.floor(z / 400) + 1 && ok; j++) for (const p of near.get(i * 1e6 + j) || []) if (p !== v && Math.hypot(PX[p] - x, PZ[p] - z) < 3) { ok = false; break; }
+      if (ok && !crosses(PX[v], PZ[v], x, z, new Set([v]))) cand.set(v, [x, z]); }
+    const kept = KE.filter(([a, b]) => cand.has(a) && cand.has(b) && !crosses(cand.get(a)[0], cand.get(a)[1], cand.get(b)[0], cand.get(b)[1], new Set([a, b])));
+    const deg2 = new Map(); for (const [a, b] of kept) for (const v of [a, b]) deg2.set(v, (deg2.get(v) || 0) + 1);
+    for (const [v] of deg2) { const [x, z] = cand.get(v), o = add(x, z); kinds[o] |= 1 << KIND.pave; top.set(v, o); kerbSet.add(v); kerbSet.add(o); }
+    for (const [a, b] of kept) E.push([top.get(a), top.get(b), KIND.kerb]);
+    for (const [v, n] of deg2) if (n === 1) E.push([v, top.get(v), KIND.kerb]); // (the strip's ends closed)
   }
-  const { i0, j0, ni, nj } = L.lat;
-  for (let j = 0; j < nj; j++) for (let i = 0; i < ni; i++) {
-    const k = j * ni + i; if (L.mask[k >> 3] & (1 << (k & 7))) continue;
-    if (!fine && ((i0 + i) % 2 || (j0 + j) % 2)) continue;
-    const x = grid.x0 + (i0 + i) * grid.sp, z = grid.z0 + (j0 + j) * grid.sp; X.push(x); Z.push(z); Y.push(G[k]); PY.push(G[k]); src.push(-1 - k);
+  // near an outline (cm): its edges and points
+  const C = 400, eg = new Map(), pg = new Map(), cell = (x, z) => Math.floor(x / C) * 1e6 + Math.floor(z / C);
+  for (const [a, b] of E) for (let i = Math.floor(Math.min(PX[a], PX[b]) / C); i <= Math.floor(Math.max(PX[a], PX[b]) / C); i++) for (let j = Math.floor(Math.min(PZ[a], PZ[b]) / C); j <= Math.floor(Math.max(PZ[a], PZ[b]) / C); j++) { const k = i * 1e6 + j; (eg.get(k) || eg.set(k, []).get(k)).push(a, b); }
+  const putP = (i) => { const k = cell(PX[i], PZ[i]); (pg.get(k) || pg.set(k, []).get(k)).push(i); }; for (let i = 0; i < PX.length; i++) putP(i);
+  const segD = (x, z, a, b) => { const dx = PX[b] - PX[a], dz = PZ[b] - PZ[a], L2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - PX[a]) * dx + (z - PZ[a]) * dz) / L2)); return Math.hypot(x - PX[a] - dx * t, z - PZ[a] - dz * t); };
+  const clear = (x, z, d) => { for (let i = Math.floor((x - d) / C); i <= Math.floor((x + d) / C); i++) for (let j = Math.floor((z - d) / C); j <= Math.floor((z + d) / C); j++) { const k = i * 1e6 + j, el = eg.get(k), pl = pg.get(k);
+    if (el) for (let q = 0; q < el.length; q += 2) if (segD(x, z, el[q], el[q + 1]) < d) return false; if (pl) for (const p of pl) if (Math.hypot(PX[p] - x, PZ[p] - z) < d) return false; } return true; };
+  const tarmacD = (x, z, max) => { let best = max; for (let i = Math.floor((x - max) / C); i <= Math.floor((x + max) / C); i++) for (let j = Math.floor((z - max) / C); j <= Math.floor((z + max) / C); j++) { const el = eg.get(i * 1e6 + j); if (!el) continue; for (let q = 0; q < el.length; q += 2) if ((kinds[el[q]] & (1 << KIND.tarmac)) && (kinds[el[q + 1]] & (1 << KIND.tarmac))) best = Math.min(best, segD(x, z, el[q], el[q + 1])); } return best; };
+  const inside = (X, Z, m) => X > X0 + m && Z > Z0 + m && X < X0 + S - m && Z < Z0 + S - m;
+  let keep = null; // (coarse: which points are used)
+  if (fine) {
+    // the hi grid's points off the paved regions, clear of the outlines
+    for (let j = 1; j < lat.nj - 1; j++) for (let i = 1; i < lat.ni - 1; i++) { const X = Math.round((grid.x0 + (lat.i0 + i) * grid.sp) * 100), Z = Math.round((grid.z0 + (lat.j0 + j) * grid.sp) * 100);
+      if (inside(X, Z, 50) && classify(X, Z) === KIND.ground && clear(X, Z, CLEAR * 100)) putP(add(X, Z)); }
+    // where the roads reshape the ground: a city's lots on a CITY_IN lattice; elsewhere the banks, on a BANK_STEP one
+    const step = L.city ? CITY_IN : BANK_STEP;
+    for (let x = L.x0 + step / 2; x < L.x0 + L.size; x += step) for (let z = L.z0 + step / 2; z < L.z0 + L.size; z += step) { const X = Math.round(x * 100), Z = Math.round(z * 100);
+      if (!inside(X, Z, 50) || classify(X, Z) !== KIND.ground) continue; const gy = g(x, z), y = R.ground(x, z); if (Math.abs(y - gy) <= BANK_MIN) continue;
+      if (clear(X, Z, (L.city ? 2 : 1.5) * 100)) putP(add(X, Z)); }
+    // along each street's centre line, points every LANE_STEP m (every metre near a junction's circle): its carriageway's
+    // triangles short strips across that one street, so its markings stop at the junction's mouth and nowhere else
+    L.net.runs.forEach((r, ri) => { if (r.minor) return; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3], l = Math.hypot(bx - ax, bz - az);
+      for (let t = 0; t < l;) { const x = ax + (bx - ax) * t / l, z = az + (bz - az) * t / l, X = Math.round(x * 100), Z = Math.round(z * 100); let step = LANE_STEP;
+        if (inside(X, Z, 50) && classify(X, Z) === KIND.tarmac) { const rd = R.road(x, z); if (rd && rd.id === ri) { if (rd.dj < 6) step = 1; if (rd.dj > 0.3 && clear(X, Z, 60)) putP(add(X, Z)); } }
+        t += step; } } });
+  } else {
+    keep = new Set(); const cells = new Set(), onB = (i) => PX[i] === X0 || PZ[i] === Z0 || PX[i] === X0 + S || PZ[i] === Z0 + S;
+    for (let i = 0; i < PX.length; i++) { if (onB(i)) { keep.add(i); continue; } const k = Math.floor((PX[i] - X0) / (COARSE_CELL * 100)) * 4096 + Math.floor((PZ[i] - Z0) / (COARSE_CELL * 100)); if (!cells.has(k)) { cells.add(k); keep.add(i); } }
+    for (let j = 1; j < lat.nj - 1; j++) for (let i = 1; i < lat.ni - 1; i++) { if ((lat.i0 + i) % 2 || (lat.j0 + j) % 2) continue; const X = Math.round((grid.x0 + (lat.i0 + i) * grid.sp) * 100), Z = Math.round((grid.z0 + (lat.j0 + j) * grid.sp) * 100); if (inside(X, Z, 50) && clear(X, Z, 100)) keep.add(add(X, Z)); }
   }
-  const N = X.length, coords = new Float64Array(N * 2); for (let k = 0; k < N; k++) { coords[k * 2] = X[k]; coords[k * 2 + 1] = Z[k]; }
-  const del = new Delaunator(coords), t1 = performance.now();
-  // the fixed edges: the layout's (fine) or the chunk's edge only (coarse)
-  const at = new Map(); src.forEach((s, k) => { if (s >= 0) at.set(s, k); });
-  const con = new Constrainautor(del), kinds = new Map(), edgeOf = new Map(), why = {}; let fixed = 0, failed = 0;
-  for (let e = 0; e < L.ea.length; e++) {
-    const a = at.get(L.ea[e]), b = at.get(L.eb[e]); if (a == null || b == null) continue;
-    if (!fine && !(onEdge(L.ea[e]) && onEdge(L.eb[e]))) continue;
-    try { con.constrainOne(a, b); fixed++; kinds.set(a * N + b, [L.ek[e * 2], L.ek[e * 2 + 1]]); edgeOf.set(Math.min(a, b) * N + Math.max(a, b), e); } catch (err) { failed++; const k = L.ek[e * 2] + '/' + L.ek[e * 2 + 1] + ' ' + String(err.message || err).slice(0, 24); why[k] = (why[k] || 0) + 1; }
-  }
-  const t2 = performance.now(), T = del.triangles, H = del.halfedges, nt = T.length / 3, tkind = new Uint8Array(nt).fill(fine ? 255 : KIND.ground);
-  let ek = null;
-  if (fine && opts.classify) { // (the bake: kinds from the regions themselves, and the edges' sides from them)
-    for (let t = 0; t < nt; t++) { const a = T[t * 3], b = T[t * 3 + 1], c = T[t * 3 + 2]; tkind[t] = opts.classify((X[a] + X[b] + X[c]) / 3, (Z[a] + Z[b] + Z[c]) / 3); }
-    ek = new Uint8Array(L.ea.length * 2).fill(KIND.out);
-    for (let h = 0; h < T.length; h++) { const a = T[h], b = T[h % 3 === 2 ? h - 2 : h + 1], c = T[h % 3 === 0 ? h + 2 : h - 1], e = edgeOf.get(Math.min(a, b) * N + Math.max(a, b)); if (e == null) continue;
-      const A = at.get(L.ea[e]), B = at.get(L.eb[e]), left = (X[B] - X[A]) * (Z[c] - Z[A]) - (Z[B] - Z[A]) * (X[c] - X[A]) > 0; ek[e * 2 + (left ? 0 : 1)] = tkind[Math.floor(h / 3)]; }
-    // (edges between two kinds that aren't fixed: the bake fixes them, by the points' sources: >= 0 the layout's, < 0 the grid's)
-    opts.cuts = []; for (let h = 0; h < T.length; h++) { const o = H[h]; if (o < h) continue; const a = T[h], b = T[h % 3 === 2 ? h - 2 : h + 1]; if (edgeOf.has(Math.min(a, b) * N + Math.max(a, b))) continue; if (tkind[Math.floor(h / 3)] !== tkind[Math.floor(o / 3)]) opts.cuts.push([src[a], src[b]]); }
-  } else if (fine) { // each triangle's kind: from a fixed edge beside it, then across the edges that aren't fixed
-    const queue = [];
-    for (let e = 0; e < T.length; e++) {
-      const a = T[e], b = T[e % 3 === 2 ? e - 2 : e + 1], c = T[e % 3 === 0 ? e + 2 : e - 1];
-      const kk = kinds.get(a * N + b) || kinds.get(b * N + a); if (!kk) continue;
-      const [ea, eb] = kinds.has(a * N + b) ? [a, b] : [b, a];
-      const left = (X[eb] - X[ea]) * (Z[c] - Z[ea]) - (Z[eb] - Z[ea]) * (X[c] - X[ea]) > 0, k = left ? kk[0] : kk[1], t = Math.floor(e / 3);
-      if (tkind[t] === 255 && k !== 255) { tkind[t] = k; queue.push(t); }
-    }
-    while (queue.length) { const t = queue.pop(); for (let q = 0; q < 3; q++) { const e = t * 3 + q, o = H[e]; if (o < 0) continue; const u = Math.floor(o / 3); if (tkind[u] !== 255) continue; const a = T[e], b = T[q === 2 ? e - 2 : e + 1]; if (kinds.has(a * N + b) || kinds.has(b * N + a)) continue; tkind[u] = tkind[t]; queue.push(u); } }
-    for (let t = 0; t < nt; t++) if (tkind[t] === 255) tkind[t] = KIND.ground;
-  }
-  // buffers: drawn positions, physics heights, normals, road coordinates (u, v, hw, dj) and lanes
-  const pos = new Float32Array(N * 3), phys = new Float32Array(N), road = new Float32Array(N * 4), lane = new Float32Array(N), nrm = new Float32Array(N * 3);
-  for (let k = 0; k < N; k++) {
-    pos[k * 3] = X[k]; pos[k * 3 + 1] = Y[k]; pos[k * 3 + 2] = Z[k]; phys[k] = PY[k]; const s = src[k];
-    if (s >= 0 && L.rhw[s]) { road[k * 4] = L.ru[s]; road[k * 4 + 1] = L.rv[s] / 100; road[k * 4 + 2] = L.rhw[s] / 10; road[k * 4 + 3] = L.rdj[s] / 10; lane[k] = L.rl[s]; } else road[k * 4 + 3] = -1;
-  }
-  // sorted by kind: one draw group per kind
+  const idxs = keep ? [...keep].sort((a, b) => a - b) : PX.map((_, i) => i), N = idxs.length, at = new Map(idxs.map((p, k) => [p, k]));
+  // ---- heights: every one from the rules
+  const X = new Float64Array(N), Z = new Float64Array(N), Y = new Float64Array(N), PY = new Float64Array(N);
+  idxs.forEach((p, k) => {
+    const x = PX[p] / 100, z = PZ[p] / 100, K = kinds[p]; X[k] = x; Z[k] = z;
+    let kind = K & (1 << KIND.tarmac) ? KIND.tarmac : K & ((1 << KIND.kerb) | (1 << KIND.pave)) ? KIND.pave : PAVED.find((q) => K & (1 << q)) ?? null;
+    if (kind == null) { // (a point of the chunk's edge: its region by the rules (the nearest road's widths), not this chunk's polygons, so the chunk beside works it out the same)
+      const n = R.nearest(x, z, () => true), mk = (r) => (r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
+      kind = !n ? KIND.ground : n.d <= 0 ? (n.r.minor ? mk(n.r) : KIND.tarmac) : !n.r.minor && n.r.pave && n.d <= n.r.pave ? KIND.pave : !n.r.minor && !n.r.pave && n.d <= VERGE ? KIND.verge : KIND.ground; }
+    if (kind === KIND.ground) { Y[k] = PY[k] = R.ground(x, z); return; }
+    Y[k] = R.drawn(x, z, kind);
+    PY[k] = kind === KIND.pave ? Y[k] - KERB * (1 - Math.min(1, tarmacD(PX[p], PZ[p], PAVE_RAMP * 100) / (PAVE_RAMP * 100))) : Y[k]; // (the slabs: physics ramps up to them from the carriageway's edge: a kerb is never physics)
+  });
+  // ---- the triangulation, the outlines (or, coarse, the chunk's edge) fixed
+  const coords = new Float64Array(N * 2); for (let k = 0; k < N; k++) { coords[k * 2] = X[k]; coords[k * 2 + 1] = Z[k]; }
+  const del = new Delaunator(coords), t1 = performance.now(), con = new Constrainautor(del), seen = new Set(); let fixed = 0, failed = 0;
+  const onLine = (a, b) => (PX[a] === PX[b] && (PX[a] === X0 || PX[a] === X0 + S)) || (PZ[a] === PZ[b] && (PZ[a] === Z0 || PZ[a] === Z0 + S));
+  const fix = (a, b) => { const u = at.get(a), v = at.get(b); if (u == null || v == null || u === v) return; const k = Math.min(u, v) * N + Math.max(u, v); if (seen.has(k)) return; seen.add(k); try { con.constrainOne(u, v); fixed++; } catch { failed++; } };
+  for (const side of [(i) => PZ[i] === Z0, (i) => PZ[i] === Z0 + S, (i) => PX[i] === X0, (i) => PX[i] === X0 + S]) { const s = idxs.filter(side).sort((a, b) => PX[a] - PX[b] || PZ[a] - PZ[b]); for (let q = 0; q + 1 < s.length; q++) fix(s[q], s[q + 1]); }
+  if (fine) for (const [a, b] of E) if (!onLine(a, b)) fix(a, b);
+  const t2 = performance.now(), T = del.triangles, nt = T.length / 3;
+  // ---- each triangle: its kind (its middle's region), wound to face up; sorted by kind (one draw group each)
+  const tkind = new Uint8Array(nt); for (let t = 0; t < nt; t++) { if (!fine) continue; const a = T[t * 3], b = T[t * 3 + 1], c = T[t * 3 + 2]; tkind[t] = classify(Math.round((X[a] + X[b] + X[c]) / 3 * 100), Math.round((Z[a] + Z[b] + Z[c]) / 3 * 100)); if (tkind[t] === KIND.pave && kerbSet.has(idxs[a]) && kerbSet.has(idxs[b]) && kerbSet.has(idxs[c])) tkind[t] = KIND.kerb; }
   const order = Array.from({ length: nt }, (_, t) => t).sort((a, b) => tkind[a] - tkind[b] || a - b), idx = new Uint32Array(nt * 3), tk = new Uint8Array(nt);
-  order.forEach((t, q) => { // (wound so the face looks up: three.js draws only the front)
-    const a = T[t * 3]; let b = T[t * 3 + 1], c = T[t * 3 + 2];
-    if ((Z[c] - Z[a]) * (X[b] - X[a]) - (X[c] - X[a]) * (Z[b] - Z[a]) > 0) { const s = b; b = c; c = s; } // (the normal's y is minus this)
-    idx[q * 3] = a; idx[q * 3 + 1] = b; idx[q * 3 + 2] = c; tk[q] = tkind[t]; });
-  for (let q = 0; q < nt; q++) { // area-weighted vertex normals
-    const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2], ux = X[b] - X[a], uy = Y[b] - Y[a], uz = Z[b] - Z[a], vx = X[c] - X[a], vy = Y[c] - Y[a], vz = Z[c] - Z[a];
-    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx; for (const v of [a, b, c]) { nrm[v * 3] += nx; nrm[v * 3 + 1] += ny; nrm[v * 3 + 2] += nz; }
-  }
-  for (let k = 0; k < N; k++) { const l = Math.hypot(nrm[k * 3], nrm[k * 3 + 1], nrm[k * 3 + 2]) || 1; nrm[k * 3] /= l; nrm[k * 3 + 1] /= l; nrm[k * 3 + 2] /= l; if (nrm[k * 3 + 1] < 0) { nrm[k * 3] *= -1; nrm[k * 3 + 1] *= -1; nrm[k * 3 + 2] *= -1; } }
+  order.forEach((t, q) => { const a = T[t * 3]; let b = T[t * 3 + 1], c = T[t * 3 + 2]; if ((Z[c] - Z[a]) * (X[b] - X[a]) - (X[c] - X[a]) * (Z[b] - Z[a]) > 0) { const s = b; b = c; c = s; } idx[q * 3] = a; idx[q * 3 + 1] = b; idx[q * 3 + 2] = c; tk[q] = tkind[t]; }); // (the normal's y is minus that)
+  const pos = new Float32Array(N * 3), phys = new Float32Array(N), nrm = new Float32Array(N * 3);
+  for (let k = 0; k < N; k++) { pos[k * 3] = X[k]; pos[k * 3 + 1] = Y[k]; pos[k * 3 + 2] = Z[k]; phys[k] = PY[k]; }
+  for (let q = 0; q < nt; q++) { const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2], ux = X[b] - X[a], uy = Y[b] - Y[a], uz = Z[b] - Z[a], vx = X[c] - X[a], vy = Y[c] - Y[a], vz = Z[c] - Z[a]; const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx; for (const v of [a, b, c]) { nrm[v * 3] += nx; nrm[v * 3 + 1] += ny; nrm[v * 3 + 2] += nz; } }
+  for (let k = 0; k < N; k++) { const l = Math.hypot(nrm[k * 3], nrm[k * 3 + 1], nrm[k * 3 + 2]) || 1; nrm[k * 3] /= l; nrm[k * 3 + 1] /= l; nrm[k * 3 + 2] /= l; }
+  // ---- the streets' triangles (carriageway, kerb, pavement) on their own, each on one street: markings (only where all
+  // three corners are that street's, out of the junction) and the pavement's slabs; out = [pos, nrm, road (u, v, hw, dj), lane, kind]
+  const rib = { pos: [], nrm: [], road: [], lane: [], kind: [] }, rc = new Map(), roadAt = (v) => (rc.has(v) ? rc.get(v) : (rc.set(v, R.road(X[v], Z[v])), rc.get(v)));
+  if (fine) for (let q = 0; q < nt; q++) { const k = tk[q]; if (!RIBBON.has(k)) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], rs = vs.map(roadAt); if (!rs[0]) continue;
+    const id = rs[0].id, same = rs.every((r) => r && r.id === id), on = vs.map((v) => R.roadOn(id, X[v], Z[v])), marks = k === KIND.tarmac && same && on.every((r) => r.dj > 0.3);
+    vs.forEach((v, n) => { rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); const r = on[n]; rib.road.push(r.u, r.v, k === KIND.tarmac && !marks ? 0 : r.hw, r.dj); rib.lane.push(Math.min(15, r.lanes) + (r.oneway ? 16 : 0) + 32); rib.kind.push(k); }); }
   let area = 0; for (let q = 0; q < nt; q++) { const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2]; area += Math.abs((X[b] - X[a]) * (Z[c] - Z[a]) - (X[c] - X[a]) * (Z[b] - Z[a])) / 2; }
-  return { level, pos, phys, nrm, road, lane, idx, tk, ek, stats: { points: N, tris: nt, fixed, failed, why, covered: area / (L.size * L.size), delaunayMs: t1 - t0, constrainMs: t2 - t1, totalMs: performance.now() - t0 } };
+  const F32 = (a) => Float32Array.from(a);
+  return { level, pos, phys, nrm, idx, tk, rib: { pos: F32(rib.pos), nrm: F32(rib.nrm), road: F32(rib.road), lane: F32(rib.lane), kind: Uint8Array.from(rib.kind) },
+    stats: { points: N, tris: nt, fixed, failed, covered: area / (L.size * L.size), outlineMs: tOut, delaunayMs: t1 - t0, constrainMs: t2 - t1, totalMs: performance.now() - t0 } };
 }
 
 // physics lookup over a fine mesh: a grid of CELL-metre cells listing the triangles touching each
