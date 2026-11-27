@@ -14,6 +14,7 @@ import { now as clock } from './stepClock.js';
 
 const ELEV = (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
 const IMG = (z, x, y) => `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/${z}/${y}/${x}.jpg`;
+export const geoTileUrl = (kind, z, x, y) => (kind === 'e' ? ELEV : IMG)(z, x, y); // (tools/realworld/geotiles.mjs bakes these)
 export const GEO_CACHE = 'skywright-geo-v1'; // (sw.js keeps it across releases and leaves these requests to us)
 const CACHE_MAX = 1500; // tiles kept in the Cache API (~70 KB each)
 const R_EARTH = 6371008.8, D2R = Math.PI / 180;
@@ -66,8 +67,8 @@ function convert(kind, d, o) {
   const C = new Uint8Array(65536 * 3); grade(d, C); return C;
 }
 self.onmessage = async (e) => {
-  const { id, url, kind, o } = e.data;
-  try { const { blob, net } = await blobOf(url); const data = convert(kind, await decode(blob), o); self.postMessage({ id, ok: true, data, net }, [data.buffer]); }
+  const { id, url, kind, o, seed } = e.data; // seed: the tile's file from the place's geo.bin (no fetch, same decode)
+  try { const { blob, net } = seed ? { blob: seed, net: 0 } : await blobOf(url); const data = convert(kind, await decode(blob), o); self.postMessage({ id, ok: true, data, net, seed: !!seed }, [data.buffer]); }
   catch (err) { self.postMessage({ id, ok: false, err: String(err && err.message || err) }); }
 };`;
 // (the same code on the main thread where a worker can't decode: no OffscreenCanvas)
@@ -75,12 +76,12 @@ let mainDecode = null;
 function mainThread(src) {
   if (mainDecode) return mainDecode;
   const { blobOf, convert } = new Function('self', src + '\nreturn { blobOf, convert };')({});
-  mainDecode = async (url, kind, o) => {
-    const { blob, net } = await blobOf(url);
+  mainDecode = async (url, kind, o, seed) => {
+    const { blob, net } = seed ? { blob: seed, net: 0 } : await blobOf(url);
     const bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
     const c = document.createElement('canvas'); c.width = c.height = 256;
     const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(bmp, 0, 0, 256, 256); bmp.close?.();
-    return { data: convert(kind, g.getImageData(0, 0, 256, 256).data, o), net };
+    return { data: convert(kind, g.getImageData(0, 0, 256, 256).data, o), net, seed: !!seed };
   };
   return mainDecode;
 }
@@ -104,7 +105,8 @@ export class GeoStream {
     this.memo = { e: [null, -1], i: [null, -1] };
     this.tint = [1, 1, 1]; this.tintDone = false;
     this.clock = 0; this.lastPlan = -1e9; this.cam = null; this.vel = { x: 0, z: 0 }; this.lastT = 0;
-    this.stats = { netBytes: 0, netTiles: 0, cacheTiles: 0, fails: 0, invalidations: 0, ms: 0, frames: 0 };
+    this.seeded = new Map(); // url -> Blob: tile files shipped with the place (seed)
+    this.stats = { netBytes: 0, netTiles: 0, cacheTiles: 0, seedTiles: 0, fails: 0, invalidations: 0, ms: 0, frames: 0 };
     this.onInvalidate = null; this.radius = () => 130000; this.ids = 0; this.cbs = new Map();
     try {
       if (typeof OffscreenCanvas === 'undefined' || typeof Worker === 'undefined') throw new Error('no worker decode');
@@ -221,19 +223,19 @@ export class GeoStream {
     }
   }
   request(q) {
-    const url = (q.kind === 'e' ? ELEV : IMG)(q.Z, q.tx, q.ty);
+    const url = (q.kind === 'e' ? ELEV : IMG)(q.Z, q.tx, q.ty), seed = this.seeded.get(url);
     this.pending.set(q.k, q);
     // the flat sea's floor: depth by distance from the shore inside this tile (so a shore just across a tile edge
     // isn't seen: the floor drops to its 25 m within ~500 m of a shore anyway); a smaller run counts as sea at coarse zooms
     const lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * (q.ty + 0.5) / 2 ** q.Z))), o = q.kind === 'e' ? { wl: this.wl, sp: 40075016.7 * Math.cos(lat) / (256 * 2 ** q.Z), minRun: Math.max(4, 64 >> (10 - q.Z)) } : null;
     const done = (r) => { const t0 = performance.now(); this.received(q, r); this.stats.ms += performance.now() - t0; };
-    if (this.worker) { const id = ++this.ids; this.cbs.set(id, done); this.worker.postMessage({ id, url, kind: q.kind, o }); }
-    else mainThread(this.src)(url, q.kind, o).then((r) => done({ ok: true, ...r }), (e) => done({ ok: false, err: String(e) }));
+    if (this.worker) { const id = ++this.ids; this.cbs.set(id, done); this.worker.postMessage({ id, url, kind: q.kind, o, seed }); }
+    else mainThread(this.src)(url, q.kind, o, seed).then((r) => done({ ok: true, ...r }), (e) => done({ ok: false, err: String(e) }));
   }
   received(q, r) {
     this.pending.delete(q.k);
     if (!r.ok) { this.stats.fails++; const n = (this.tries.get(q.k) || 0) + 1; this.tries.set(q.k, n); this.failed.set(q.k, clock() + Math.min(120000, 5000 * 2 ** n)); return; } // (back off: 10 s, 20 s ... 2 min)
-    if (r.net) { this.stats.netBytes += r.net; this.stats.netTiles++; } else this.stats.cacheTiles++;
+    if (r.seed) this.stats.seedTiles++; else if (r.net) { this.stats.netBytes += r.net; this.stats.netTiles++; } else this.stats.cacheTiles++;
     this.arrive(q, r.data);
   }
   arrive(q, data) {
@@ -266,6 +268,19 @@ export class GeoStream {
     for (let n = 0; n < 4 && this.rects.length; n++) { const r = this.rects.shift(); this.stats.invalidations++; this.onInvalidate?.(r[0] - 50, r[1] - 50, r[2] + 50, r[3] + 50); }
     this.stats.ms += performance.now() - t0; this.stats.frames++;
   }
+  // The coarse backdrop shipped with the place (assets/real/<id>/geo.bin, tools/realworld/geotiles.mjs): the tile files
+  // exactly as the hosts serve them, so the first view needs no outside fetch. Requests for these tiles hand the file
+  // to the same decode as a fetched one (worker, sea carve, grading, tint); the rest still stream. A bad file is ignored.
+  seed(buf) {
+    try {
+      const b = new Uint8Array(buf), hl = new DataView(b.buffer, b.byteOffset).getUint32(4, true);
+      if (String.fromCharCode(...b.subarray(0, 4)) !== 'SKG1') return;
+      let o = 8 + hl;
+      for (const [kind, Z, tx, ty, n] of JSON.parse(new TextDecoder().decode(b.subarray(8, 8 + hl))).tiles) {
+        this.seeded.set((kind === 'e' ? ELEV : IMG)(Z, tx, ty), new Blob([b.subarray(o, o + n)], { type: kind === 'e' ? 'image/png' : 'image/jpeg' })); o += n;
+      }
+    } catch (e) { this.seeded.clear(); }
+  }
   // Before the World is built: fetch what the first view needs (the coarse backdrop, and anything near the start past
   // the baked squares), waiting at most `ms`. Never rejects.
   prime(ms = 3000) {
@@ -282,6 +297,6 @@ export class GeoStream {
   }
   // a fresh World: nothing it builds has used anything yet
   reset() { this.miss.clear(); this.rects.length = 0; this.cam = null; this.vel = { x: 0, z: 0 }; this.lastPlan = -1e9; }
-  info() { const s = this.stats; return `${this.tiles.size} tiles, ${this.pending.size} loading, ${(s.netBytes / 1e6).toFixed(1)} MB in ${s.netTiles} (+${s.cacheTiles} cached, ${s.fails} failed), ${s.invalidations} rebuilds, ${(s.ms / Math.max(1, s.frames)).toFixed(3)} ms/frame`; }
+  info() { const s = this.stats; return `${this.tiles.size} tiles, ${this.pending.size} loading, ${(s.netBytes / 1e6).toFixed(1)} MB in ${s.netTiles} (+${s.seedTiles} shipped, ${s.cacheTiles} cached, ${s.fails} failed), ${s.invalidations} rebuilds, ${(s.ms / Math.max(1, s.frames)).toFixed(3)} ms/frame`; }
   dispose() { this.worker?.terminate(); this.worker = null; this.tiles.clear(); this.cbs.clear(); }
 }

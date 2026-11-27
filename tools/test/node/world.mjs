@@ -22,7 +22,8 @@ export async function worldAt(id, { time = 11 } = {}) {
   if (!loc) throw new Error(`no location ${id}`);
   // (offline: the land streamed in past the baked squares (geostream.js) is left out. It only reaches beyond the
   // coarse square, kilometres from anything tested, and the network would make a run slower and less repeatable)
-  const net = globalThis.fetch; globalThis.fetch = (u, o) => (/^https?:/.test(String(u?.url ?? u)) ? Promise.reject(new Error('offline (tests)')) : net(u, o));
+  // (the backdrop shipped with a place, geo.bin, is left out too: Node decodes its PNG heights but not its JPEG imagery)
+  const net = globalThis.fetch; globalThis.fetch = (u, o) => (/^https?:|geo\.bin$/.test(String(u?.url ?? u)) ? Promise.reject(new Error('offline (tests)')) : net(u, o));
   const warn = console.warn, warns = []; console.warn = (...a) => { warns.push(a.map(String).join(' ')); warn(...a); }; // (kept: e.g. '[stunts] no flat, clear site')
   let world;
   try {
