@@ -14,11 +14,11 @@
 //   lauterbrunnen (built by the Rocket's flight there: the pad check needs no extra swap):
 //   - Rocket on the pad (padcheck); startbakes-stunts (stuntsIn: no flight needed); streaming quiet and the whole scene
 //     drawn; #187: nothing compiled mid-flight from before the build to here
-//   - the restart suite (restart.py's checks, driven here, all of them on CI too: #291), ordered so
+//   - the restart suite (restart.py's checks, driven here; the fresh-start memory comparison local only), ordered so
 //     no flight is started twice: damage, restart (also the launch pad start type's restart), whole again; 2 more
 //     restarts (damage before the last): memory flat; back to the hangar frees the World, a fresh Rocket start builds
-//     a new one with the same spawn, and holds the same GPU memory as that World damaged and restarted (both measured
-//     with streaming quiet round the spawn and the flora held still, #291); one start type per kind of spawn (air, stunt park, water park: see STARTS), each
+//     a new one with the same spawn, and (local runs only) holds the same GPU memory as that World damaged and restarted
+//     (both measured with streaming quiet round the spawn and the flora held still, #291); one start type per kind of spawn (air, stunt park, water park: see STARTS), each
 //     swapped into that World, restarted, then 4 s stepped on (runway, street and marina: the startchoice Node suite)
 //   - start-rule wiring (wiring.js wiringChecks) over every flight started here
 // Keep BASE's time and weather (T.start's cfg: start, mode, realism, landStart, boatStart only), or a place is built
@@ -161,8 +161,15 @@ export async function run(T) {
     const s = await T.start('Rocket', L); rec('Rocket');
     // the memory comparison, like with like (#291): this World measured, then damaged, restarted and measured the same
     // way. The flora (trees: its cells and impostors, the slowest streamer, ~23 game s to finish at Low) is held still
-    // for both, so neither has more of it streamed in than the other, without waiting for it (CI: a few seconds, not
-    // ~90); everything else streams quiet round the spawn (T.settle) before each
+    // for both, so neither has more of it streamed in than the other, without waiting for it; everything else streams
+    // quiet round the spawn (T.settle) before each. Local runs only (compareMemory): its ~11 more drawn frames, 6 game s
+    // and a restart are still ~25-50 s under SwiftShader, on a CI job near the critical path; CI skips that work, not
+    // just the verdict (its flat-over-restarts checks still catch a leak)
+    if (T.ci) {
+      s2 = await settled(S);
+      T.checks(freshChecks(L, kept, s0, s1, s2, null));
+      return `${s.how} in ${(s.ms / 1000).toFixed(1)} s, start ${s.start}; GPU memory comparison skipped (CI)`;
+    }
     const fl = T.F.world.flora; if (fl) fl.update = () => {}; // (held: what it has built at the start stays as it is)
     let r;
     try {

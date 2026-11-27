@@ -742,7 +742,8 @@ A restart keeps the World and must look and behave exactly like a fresh start: i
 Lauterbrunnen (#278; `restart.js` holds the checks): damage then restart (everything whole, same spawn), memory flat
 over 3 restarts, back to the hangar frees the World and a fresh start builds a new one that holds the same GPU memory
 as it does damaged and restarted (both measured with streaming quiet round the spawn and the flora, the slowest
-streamer, held still for both rather than waited for: #291; on CI too, a few seconds), and every start type swapped in then restarted. The old `restart.py` is gone.
+streamer, held still for both rather than waited for: #291; local runs only, as under SwiftShader it still adds
+~25-50 s to a CI job near the critical path: CI skips that work and keeps the flat-over-restarts checks), and every start type swapped in then restarted. The old `restart.py` is gone.
 
 ## Shader check
 
