@@ -24,7 +24,9 @@ const PAVE_VILLAGE = 1.8, BUILT_D = 30, BUILT_N = 5, BUILT_WIN = 120, BUILT_MIN 
 const JR_K = 1.5, JR_ADD = 1.5, JR_MIN = 4;
 // grade limits: the street network's as roadgrade.js; the ways off it steeper (a farm's service road, a gravel track;
 // a footpath steps up the hillside: its OSM line is coarser than its zigzags), and kept within MINOR_OFF m of the ground
-const GRADE = { highway: 0.07, main: 0.12, street: 0.2 }, GRADE_MINOR = { service: 0.3, track: 0.35, ped: 0.6 }, MINOR_OFF = 1.5;
+const GRADE = { highway: 0.18, main: 0.18, street: 0.22 }, GRADE_MINOR = { service: 0.3, track: 0.35, ped: 0.6 }, MINOR_OFF = 1.5; // (alpine: Swiss pass and valley roads reach 15-20%)
+const GRADE_CITY = { highway: 0.07, main: 0.12, street: 0.2 }; // (a city's: as roadgrade.js)
+const RELAX_OFF = 2, RELAX_HOPS = 3, RELAX_MAX = 1, RELAX_WG = 1, RELAX_ROUNDS = 4;
 const cm = (v) => Math.round(v * 100);
 
 export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
@@ -58,7 +60,7 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
           osm.push(pts.length); pts.push([P[i].x, P[i].z]); vars.push(v);
         }
         const minor = !!rd.minor, kind = rd.kind;
-        runs.push({ cutA: s1 === s0 && (s0 > a || (a > 0 && bad(a - 1))), cutB: e1 === e0 && (e0 < b || (b < n - 1 && bad(b + 1))), rd, osmPts: osm.map((k) => pts[k]), kind, minor, surf: rd.surf || 0, hw: rd.width / 2, lanes: rd.lanes || (rd.oneway ? 1 : 2), oneway: !!rd.oneway, layer: rd.layer || 0, pts, vars, grade: minor ? GRADE_MINOR[kind] ?? 0.3 : GRADE[kind] ?? 0.2, pave: city && !minor && !rd.baked && PAVE[kind] ? PAVE[kind] : village ? PAVE_VILLAGE : 0 });
+        runs.push({ cutA: s1 === s0 && (s0 > a || (a > 0 && bad(a - 1))), cutB: e1 === e0 && (e0 < b || (b < n - 1 && bad(b + 1))), rd, osmPts: osm.map((k) => pts[k]), kind, minor, surf: rd.surf || 0, hw: rd.width / 2, lanes: rd.lanes || (rd.oneway ? 1 : 2), oneway: !!rd.oneway, layer: rd.layer || 0, pts, vars, grade: minor ? GRADE_MINOR[kind] ?? 0.3 : (city ? GRADE_CITY : GRADE)[kind] ?? 0.2, pave: city && !minor && !rd.baked && PAVE[kind] ? PAVE[kind] : village ? PAVE_VILLAGE : 0 });
         }
       }
       s0 = e0 + 1;
@@ -97,24 +99,38 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   const toPlane = () => { for (const J of JN) { plane(J); for (const k of J.m) h[k] = J.my + J.gx * (V[k].x - J.mx) + J.gz * (V[k].z - J.mz); } };
   const clampGrades = (passes) => { for (let p = 0; p < passes; p++) for (const [a, b, l, G] of edges) { const d = h[a] - h[b], lim = G * l; if (Math.abs(d) > lim) { const ex = (Math.abs(d) - lim) / 2 * Math.sign(d); h[a] -= ex; h[b] += ex; } } };
   const WG = opts.WG ?? 0.1; // (the natural ground's pull against the neighbours' 1/l, per station: a weaker pull smoothed hairpins metres off the ground, #297)
-  let iters = 0;
-  for (; iters < 600; iters++) {
-    for (let k = 0; k < nv; k++) { const N = nb[k]; if (!N.length) continue; let s = WG * V[k].g, ws = WG; for (const [o, wt] of N) { s += wt * h[o]; ws += wt; } h[k] = s / ws; }
+  let iters = 0; const wg = new Float64Array(nv).fill(WG);
+  const smooth = (n) => { for (let it = 0; it < n; it++, iters++) {
+    for (let k = 0; k < nv; k++) { const N = nb[k]; if (!N.length) continue; let s = wg[k] * V[k].g, ws = wg[k]; for (const [o, wt] of N) { s += wt * h[o]; ws += wt; } h[k] = s / ws; }
     toPlane(); clampGrades(2);
-  }
+  } };
+  smooth(600);
   // (last: each junction on its plane, then every road within its grade limit, away from the junctions: a junction's own
   // slope is its ground's; the clamp leaves a junction's points where they are and moves the road's next to it)
   toPlane(); const memberOf = new Map(); JN.forEach((J, q) => { for (const k of J.m) memberOf.set(k, q); });
   const member = { has: (k) => memberOf.has(k) }, inOne = (a, b) => memberOf.has(a) && memberOf.get(a) === memberOf.get(b);
-  for (let p = 0; p < 400; p++) { let moved = 0; for (const [a, b, l, G] of edges) { if (inOne(a, b)) continue; const d = h[a] - h[b], lim = G * l; if (Math.abs(d) <= lim + 1e-4) continue; const ex = Math.abs(d) - lim, sg = Math.sign(d);
-    if (member.has(a)) h[b] += ex * sg; else if (member.has(b)) h[a] -= ex * sg; else { h[a] -= ex / 2 * sg; h[b] += ex / 2 * sg; } moved++; } if (!moved) break; }
+  const enforce = () => { for (let p = 0; p < 400; p++) { let moved = 0; for (const [a, b, l, G] of edges) { if (inOne(a, b)) continue; const d = h[a] - h[b], lim = G * l; if (Math.abs(d) <= lim + 1e-4) continue; const ex = Math.abs(d) - lim, sg = Math.sign(d);
+    if (member.has(a)) h[b] += ex * sg; else if (member.has(b)) h[a] -= ex * sg; else { h[a] -= ex / 2 * sg; h[b] += ex / 2 * sg; } moved++; } if (!moved) break; } };
+  enforce();
+  // (where holding a road to its limit puts it more than RELAX_OFF m off the ground (a pitch steeper than its limit, or a
+  // cliff the height grid blurs over it), the limit gives way there: each edge within RELAX_HOPS stations of such a point
+  // takes the ground's own grade along it (up to RELAX_MAX) and those points pull to the ground harder; re-solved warm)
+  const relaxed = new Set(); T.relax = [];
+  for (let round = 0; round < (city ? 0 : RELAX_ROUNDS); round++) { // (a country place's: a city's streets are flat enough)
+    let off = new Set(); for (let k = 0; k < nv; k++) if (Math.abs(h[k] - V[k].g) > RELAX_OFF) off.add(k); T.relax.push(off.size); if (!off.size) break;
+    for (let hop = 0; hop < RELAX_HOPS; hop++) { const more = new Set(off); for (const k of off) for (const [o] of nb[k]) more.add(o); off = more; }
+    for (const e of edges) { const [a, b, l] = e; if (!off.has(a) && !off.has(b)) continue; const gg = Math.min(RELAX_MAX, Math.abs(V[a].g - V[b].g) / l * 1.15 + 0.01); if (gg > e[3]) { e[3] = gg; relaxed.add(e); } }
+    for (const k of off) wg[k] = Math.max(wg[k], RELAX_WG);
+    smooth(150); toPlane(); enforce();
+  }
+  T.relaxedEdges = relaxed.size;
   // (a way off the street network that its limit would hold off the ground (a footpath's or a track's zigzags finer than
   // its OSM line, up a hillside steeper than any track): kept within MINOR_OFF m of the ground, over its limit there)
   { const street = new Set(); for (const r of runs) if (!r.minor) for (const v of r.vars) street.add(v); let held = 0;
     for (const r of runs) if (r.minor) for (const v of r.vars) if (!street.has(v) && !member.has(v) && Math.abs(h[v] - V[v].g) > MINOR_OFF) { h[v] = V[v].g + Math.sign(h[v] - V[v].g) * MINOR_OFF; held++; }
     T.minorHeld = held; }
   let dev = 0, over = 0; for (let k = 0; k < nv; k++) dev = Math.max(dev, Math.abs(h[k] - V[k].g)); for (const [a, b, l, G] of edges) if (!inOne(a, b) && G < 0.3) over = Math.max(over, Math.abs(h[a] - h[b]) / l - G);
-  T.solve = { minorHeld: T.minorHeld, vars: nv, junctions: JN.length, iters, maxFromGround: +dev.toFixed(2), worstOverGrade: +Math.max(0, over).toFixed(3) };
+  T.solve = { relax: T.relax, relaxedEdges: T.relaxedEdges, minorHeld: T.minorHeld, vars: nv, junctions: JN.length, iters, maxFromGround: +dev.toFixed(2), worstOverGrade: +Math.max(0, over).toFixed(3) };
   { // (the worst edges over their limit: between which junctions, how long, how far the planes' ends are apart)
     const ov = edges.filter(([a, b]) => !inOne(a, b)).map(([a, b, l, G]) => [Math.abs(h[a] - h[b]) / l - G, a, b, l, G]).filter((e) => e[0] > 1e-3).sort((p, q) => q[0] - p[0]);
     T.overGrade = { edges: ov.length, bothJunctions: ov.filter(([, a, b]) => memberOf.has(a) && memberOf.has(b)).length, worst: ov.slice(0, 4).map(([o, a, b, l, G]) => ({ x: +V[a].x.toFixed(1), z: +V[a].z.toFixed(1), over: +o.toFixed(3), l: +l.toFixed(1), limit: G, rise: +Math.abs(h[a] - h[b]).toFixed(2), ends: [memberOf.has(a) ? 'junction' : V[a].tie ? 'tie' : 'road', memberOf.has(b) ? 'junction' : V[b].tie ? 'tie' : 'road'] })) }; }
