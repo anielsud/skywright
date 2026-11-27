@@ -34,7 +34,7 @@ export const REAL_LOCATIONS = {
   lauterbrunnen: {
     id: 'lauterbrunnen', name: 'Jungfrau Region', real: true,
     desc: 'The real Swiss Alps from satellite data: Interlaken, the Lauterbrunnen valley, Eiger, Mönch and Jungfrau.',
-    credit: 'Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) · Heights: AWS Terrain Tiles · Map data © OpenStreetMap contributors',
+    credit: 'Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) · Heights: AWS Terrain Tiles (EU-DEM: produced using Copernicus data and information funded by the European Union; SRTM, GMTED2010 courtesy of the U.S. Geological Survey) · Map data © OpenStreetMap contributors',
     seed: 41, rwyH: 568, water: 561, north: 50, cloudBase: 3300, trees: 'pine', snowline: 2900, erosion: false,
     // the alpine tree palette, with real altitudes mapped onto the fictional valley's (tree line ~2000 m, beech below ~1200 m)
     // wl: the valley floor (towns, the airport) is only a few metres above the lakes: no riverside woods across it
@@ -55,7 +55,7 @@ export const REAL_LOCATIONS = {
   islands: {
     id: 'islands', name: 'Bora Bora', real: true,
     desc: 'The real Bora Bora from satellite data: Mt Otemanu, a turquoise lagoon inside the coral reef, palm-covered motus, and Taha’a and Raiatea on the horizon.',
-    credit: 'Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) · Heights: AWS Terrain Tiles · Lagoon depths estimated from the imagery · Map data © OpenStreetMap contributors',
+    credit: 'Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) · Heights: AWS Terrain Tiles (SRTM, GMTED2010 courtesy of the U.S. Geological Survey; ETOPO1: U.S. NOAA) · Lagoon depths estimated from the imagery · Map data © OpenStreetMap contributors',
     seed: 23, rwyH: 2.5, water: 0, north: 124.6, cloudBase: 1100, trees: 'palm', snowline: 99999, erosion: false, boats: true,
     waterStart: [800, -2300], // seaplanes start in the lagoon off the airport, facing south-east along it
     marina: { at: [5300, -3900], r: 2400, waves: 0.05 }, // boats: a marina in the lagoon off Vaitape
@@ -74,7 +74,7 @@ export const REAL_LOCATIONS = {
   canyon: {
     id: 'canyon', name: 'Grand Canyon', real: true,
     desc: 'The real Grand Canyon from aerial photos: the South Rim villages, Phantom Ranch, the Colorado River and the North Rim.',
-    credit: 'Imagery: USDA NAIP via USGS The National Map (public domain), Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) farther out · Heights: AWS Terrain Tiles (USGS 3DEP) · Map data © OpenStreetMap contributors',
+    credit: 'Imagery: USDA NAIP via USGS The National Map (public domain), Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) farther out · Heights: AWS Terrain Tiles (3DEP, SRTM, GMTED2010 courtesy of the U.S. Geological Survey) · Map data © OpenStreetMap contributors',
     seed: 37, rwyH: 2002, water: 200, north: 40.5, cloudBase: 4300, trees: 'pine', snowline: 99999, erosion: false, desert: true,
     fogBase: 1300, // haze settles into the canyon
     marina: { river: true, at: [2330, -17474], r: 4000, waves: 0.02 }, // boats: a landing on the Colorado (flat water near Phantom Ranch)
@@ -100,7 +100,7 @@ export const REAL_LOCATIONS = {
   nyc: {
     id: 'nyc', name: 'New York City', real: true,
     desc: 'Take off from LaGuardia and fly the Hudson: the Statue of Liberty, the skyscrapers, Central Park and the bridges. Stunt park and water park side by side in Liberty State Park.',
-    credit: 'Imagery: USGS NAIP (public domain), Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) · Buildings: NYC Open Data, © OpenStreetMap contributors · Heights: AWS Terrain Tiles',
+    credit: 'Imagery: USGS NAIP (public domain), Sentinel-2 cloudless 2016 by EOX (CC BY 4.0) · Buildings: NYC Open Data, © OpenStreetMap contributors · Heights: AWS Terrain Tiles (3DEP, SRTM, GMTED2010 courtesy of the U.S. Geological Survey; ETOPO1: U.S. NOAA)',
     seed: 53, rwyH: 6, water: 0, north: 32, cloudBase: 1800, trees: 'pine', snowline: 99999, erosion: false, boats: true,
     core: 33000, // the detailed core reaches from LaGuardia to the Statue of Liberty (16 km)
     marina: { at: [-700, 600], r: 2600, waves: 0.1 }, // boats: a marina on Flushing Bay, beside LaGuardia
@@ -172,13 +172,13 @@ function pixels(bmp, size) {
 // Load (once) everything a real location needs. quality: the World's tier (smaller imagery textures on low/medium).
 export async function loadReal(loc, quality = 'high', onProgress) {
   const id = loc.id, key = id + ':' + quality;
-  if (cache.get(id)?.key === key) { await cache.get(id).stream.prime(1500); return cache.get(id); }
+  if (cache.get(id)?.key === key) { cache.get(id).stream.prime(1500); return cache.get(id); } // (not awaited: see below)
   const dir = BASE + id + '/';
-  const files = [get(dir + 'meta.json', 'json'), get(dir + 'hi.bin.gz'), get(dir + 'far.bin.gz'), get(dir + (loc.img?.[quality] || 'hi.jpg'), 'blob'), get(dir + 'far.jpg', 'blob'), get(dir + 'cover.png', 'blob'), get(dir + 'osm.json', 'json'), get(dir + 'roads.bin.gz')];
+  const files = [get(dir + 'meta.json', 'json'), get(dir + 'hi.bin.gz'), get(dir + 'far.bin.gz'), get(dir + (loc.img?.[quality] || 'hi.jpg'), 'blob'), get(dir + 'far.jpg', 'blob'), get(dir + 'cover.png', 'blob'), get(dir + 'osm.json', 'json'), get(dir + 'roads.bin.gz'), get(dir + 'geo.bin').catch(() => null)]; // (geo.bin: the streamed coarse backdrop, GeoStream.seed)
   if (loc.city) files.push(get(dir + 'city.bin.gz')); // a city's buildings (realCity.js)
   if (loc.city?.statue) files.push(get('assets/landmarks/liberty.glb').catch((e) => (console.warn('[landmarks] statue model', e), null))); // the Statue of Liberty scan (realLandmarks.js; tools/liberty)
   let done = 0; const tick = (p) => { done++; onProgress?.(done / files.length); return p; };
-  const [meta, hiZ, farZ, hiB, farB, coverB, osm, roadsZ, cityZ, statueB] = await Promise.all(files.map((p) => p.then(tick)));
+  const [meta, hiZ, farZ, hiB, farB, coverB, osm, roadsZ, geoB, cityZ, statueB] = await Promise.all(files.map((p) => p.then(tick)));
   // the largest imagery texture on this tier; a place with loc.img has a ready-made hi file per tier (no resize)
   const texSize = quality === 'high' || quality === 'ultra' ? 4096 : 2048, fit = { resizeWidth: texSize, resizeHeight: texSize, resizeQuality: 'high' };
   const opt = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
@@ -187,7 +187,11 @@ export async function loadReal(loc, quality = 'high', onProgress) {
     createImageBitmap(farB, texSize < 4096 ? fit : {}), createImageBitmap(coverB, opt),
   ]);
   const D = new RealData(loc, meta, decodeHeights(await gunzip(hiZ), meta.hi.n), decodeHeights(await gunzip(farZ), meta.far.n), hiBmp, farBmp, coverBmp, osm);
-  await D.stream.prime(); // the streamed land the first view reaches past the coarse square (a few seconds at most; never fails)
+  if (geoB) D.stream.seed(geoB); // (the shipped coarse backdrop: decoded like fetched tiles, no outside fetch)
+  // the streamed land the first view reaches past the coarse square: requested now, not waited for (up to 3 s on a cold
+  // cache). Ground built before a tile arrives samples a coarser level or the edge means, and is rebuilt when it does
+  // (geostream.js miss/rects -> World.invalidateArea; World's attach starts that bookkeeping afresh). Never fails.
+  D.stream.prime();
   { const b = await gunzip(roadsZ); D.roadnet = decodeRoadnet(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); } // every road, with its junctions (roadnet.js)
   // the roads already built and graded, baked at deploy for this build (roadPack.js; none locally)
   const packKey = ROADS !== 'dev' ? ROADS : globalThis.SKY_ROADPACK_KEY; // (tests: a dev build loads packs baked with that key)
