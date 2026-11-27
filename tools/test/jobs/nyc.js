@@ -62,7 +62,11 @@ export async function run(T) {
     return `${s.how} in ${(s.ms / 1000).toFixed(1)} s (${s.frames} frames), started at ${s.start}`;
   };
   try {
-    await T.step('build New York + Dragonfly (Pilot)', () => begin('Dragonfly'));
+    await T.step('build New York + Dragonfly (Pilot)', async () => {
+      const d = await begin('Dragonfly');
+      T.log(`start cost (info only, no verdict; flight_ready, src/startStats.js): ${JSON.stringify(S.lastStart)}`);
+      return d;
+    });
 
     await T.step('stunt site planned == search == bake', async () => {
       const r = await stuntsIn(T.F.world);

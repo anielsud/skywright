@@ -1,25 +1,31 @@
-// The baked road layout in a World (#294, behind a flag while it's tried out: format.js layoutWanted). For each baked
-// chunk: its surface meshed in a worker (mesh.js; fine near the camera, coarse further away, the same edge points at
-// both levels), drawn as one mesh (the ground with the terrain's own material, the paved kinds with the layout's), and
-// physics (World.sampleGrid / groundAt) reading the fine mesh. Inside a chunk, today's roads, kerbs, junction boxes,
-// pavements and ground (coarse, patch and detail) don't draw (clip: a discard by rectangle in their shaders).
+// The baked road layout in a World (#294, behind a flag while it's tried out: format.js layoutWanted). A place's chunks
+// stream in about the camera (LOAD_D): each fetched, meshed in a worker (mesh.js; fine within FINE_D, coarse beyond, the
+// same edge points at both levels; the nearest asked first, so the start is ready first), drawn as one mesh (the ground
+// with the terrain's own material, the streets with the layout's and today's pavement), and physics (World.sampleGrid /
+// groundAt) reading its fine mesh. Inside an active chunk, today's roads, kerbs, junction boxes, pavements and ground
+// (coarse, patch and detail) don't draw (clip: a mask of the active chunks their shaders read); where an active chunk
+// meets today's ground (a chunk not baked: a bridge, a tunnel, no roads; or not in yet), a skirt closes the gap.
 import * as THREE from 'three';
 import { decodeLayout, KIND } from './format.js';
 import { meshChunk, physIndex, physAt, latticeOf } from './mesh.js';
 import { sidewalkMaterial } from '../roadSurface.js';
 import { terrainMaterial, FOG } from '../shaders.js';
 
-const FINE_D = 900; // metres from the camera to a chunk's middle within which it draws at the fine level
+const FINE_D = 900, LOAD_D = 2500; // metres from the camera to a chunk's middle: fine within FINE_D; fetched within LOAD_D
 const loader = new THREE.TextureLoader(), texCache = new Map();
 const tex = (name) => { if (!texCache.has(name)) { const t = loader.load(`tex/roads/${name}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; texCache.set(name, t); } return texCache.get(name); };
+const SIDES = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 
 export class Layout {
-  // files: each chunk's decompressed bytes (ArrayBuffer)
-  constructor(w, files) {
-    this.w = w; this.on = false; this.group = new THREE.Group(); this.group.name = 'layout';
-    this.chunks = files.map((buf, k) => { const L = decodeLayout(buf); return { k, buf, L, cx: L.x0 + L.size / 2, cz: L.z0 + L.size / 2, m: {}, ix: null, mesh: null, shown: null, asked: new Set() }; });
-    this.U = { layN: { value: 0 }, layR: { value: [0, 1, 2, 3].map(() => new THREE.Vector4(1e9, 1e9, -1e9, -1e9)) } };
-    this.out = [0, 0, 1, 0]; this.n = new THREE.Vector3();
+  // index: the place's layout/index.json ({ size, chunks: [{ ix, iz, file }], fallback }); dir: where its files are
+  constructor(w, index, dir) {
+    this.w = w; this.on = false; this.dir = dir; this.size = index.size; this.group = new THREE.Group(); this.group.name = 'layout';
+    this.index = new Map(index.chunks.map((c) => [c.ix + ',' + c.iz, c])); this.chunks = new Map(); this.active = new Map(); this.queue = new Map(); this.busy = false; this.cam = { x: 0, z: 0 };
+    // the active chunks' mask, a texel a chunk over the hi square (today's materials don't draw where it's set)
+    const H = w.real.hi, S = this.size; this.gx0 = Math.floor(H.x0 / S) * S; this.gz0 = Math.floor(H.z0 / S) * S; this.gn = Math.ceil((H.x0 + H.size - this.gx0) / S) + 1;
+    this.maskData = new Uint8Array(this.gn * this.gn); this.mask = new THREE.DataTexture(this.maskData, this.gn, this.gn, THREE.RedFormat, THREE.UnsignedByteType); this.mask.needsUpdate = true;
+    this.U = { layMask: { value: this.mask }, layGrid: { value: new THREE.Vector4(this.gx0, this.gz0, S, this.gn) } };
+    this.out = [0, 0, 1, 0]; this.skirts = new Map();
   }
   // today's ground and road materials: not drawn inside an active chunk
   clip(...mats) {
@@ -30,59 +36,75 @@ export class Layout {
       m.onBeforeCompile = function (sh, r) {
         ob.call(this, sh, r); Object.assign(sh.uniforms, U);
         sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vLayXZ;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvLayXZ = (modelMatrix * vec4(transformed, 1.0)).xz;');
-        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vLayXZ; uniform int layN; uniform vec4 layR[4];')
-          .replace('void main() {', 'void main() {\n  for (int i = 0; i < 4; i++) { if (i >= layN) break; vec4 lr = layR[i]; if (vLayXZ.x > lr.x && vLayXZ.x < lr.z && vLayXZ.y > lr.y && vLayXZ.y < lr.w) discard; }');
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vLayXZ; uniform sampler2D layMask; uniform vec4 layGrid;')
+          .replace('void main() {', 'void main() {\n  { vec2 lc = floor((vLayXZ - layGrid.xy) / layGrid.z); if (lc.x >= 0.0 && lc.y >= 0.0 && lc.x < layGrid.w && lc.y < layGrid.w && texture2D(layMask, (lc + 0.5) / layGrid.w).r > 0.5) discard; }');
       };
-      m.customProgramCacheKey = () => key + '|layout';
+      m.customProgramCacheKey = () => key + '|layout2';
     }
   }
   // maps: the terrain's (World.terrainMaps) for the ground's material
   start(maps) {
-    const yellow = this.w.loc.id === 'nyc' ? 1 : 0;
-    const skirt = terrainMaterial(maps, 'detail'); skirt.side = THREE.DoubleSide;
-    this.mats = { skirt, ground: terrainMaterial(maps, 'detail'), tarmac: roadMat('asphalt_d', 0x5a5a5c, true, yellow), alley: roadMat('asphalt_d', 0x5a5a5c), gravel: roadMat('gravel_d', 0xa09684), pavers: roadMat('sidewalk_d', 0xa89a88), walk: sidewalkMaterial() };
+    const yellow = this.w.loc.id === 'nyc' ? 1 : 0, skirt = terrainMaterial(maps, 'detail'); skirt.side = THREE.DoubleSide;
+    // (the ground: the terrain's own material, a city's paving turned to each corner's street (aAng), not the world's axes)
+    const ground = terrainMaterial(maps, 'detail'), ob = ground.onBeforeCompile; ground.onBeforeCompile = function (sh, r) { ob.call(this, sh, r);
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aAng; varying float vAng;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvAng = aAng;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vAng; vec2 layRot(vec2 p) { float c = cos(vAng), s = sin(vAng); return vec2(c * p.x + s * p.y, -s * p.x + c * p.y); }').replace('cityPaved(vTW.xz,', 'cityPaved(layRot(vTW.xz),').replace('cityPave(vTW.xz,', 'cityPave(layRot(vTW.xz),'); };
+    ground.customProgramCacheKey = () => 'layoutGround';
+    this.mats = { skirt, ground, tarmac: roadMat('asphalt_d', 0x5a5a5c, true, yellow), alley: roadMat('asphalt_d', 0x5a5a5c), gravel: roadMat('gravel_d', 0xa09684), pavers: roadMat('sidewalk_d', 0xa89a88), walk: sidewalkMaterial() };
     this.matList = [this.mats.ground, this.mats.alley, this.mats.gravel, this.mats.pavers];
     this.worker = typeof Worker !== 'undefined' ? new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }) : null;
-    if (this.worker) this.worker.onmessage = (ev) => this.got(this.chunks[ev.data.id], ev.data.level, ev.data.m);
-    for (const c of this.chunks) this.ask(c, 'fine');
+    if (this.worker) this.worker.onmessage = (ev) => { this.busy = false; const c = this.chunks.get(ev.data.id); if (c) this.got(c, ev.data.level, ev.data.m); this.pump(); };
   }
   // the hi grid's heights at a chunk's grid points (the natural ground the layout meets)
-  lattice(c) {
-    const H = this.w.real.hi, grid = { x0: H.x0, z0: H.z0, sp: H.sp }, lat = latticeOf(c.L, grid), out = new Float32Array(lat.ni * lat.nj);
+  lattice(L) {
+    const H = this.w.real.hi, grid = { x0: H.x0, z0: H.z0, sp: H.sp }, lat = latticeOf(L, grid), out = new Float32Array(lat.ni * lat.nj);
     for (let j = 0; j < lat.nj; j++) for (let i = 0; i < lat.ni; i++) out[j * lat.ni + i] = H.H[Math.max(0, Math.min(H.n - 1, lat.j0 + j)) * H.n + Math.max(0, Math.min(H.n - 1, lat.i0 + i))];
     return { grid, G: out };
   }
-  ask(c, level) {
-    if (c.asked.has(level)) return; c.asked.add(level);
-    const { grid, G } = this.lattice(c);
-    if (this.worker) this.worker.postMessage({ id: c.k, buf: c.buf.slice(0), grid, G, level }, [G.buffer]);
-    else this.got(c, level, meshChunk(c.L, grid, G, level)); // (Node: no workers; the same function)
+  // a chunk's file, fetched and decoded (once)
+  load(k) {
+    let c = this.chunks.get(k); if (c) return c.ready.then(() => c); const e = this.index.get(k);
+    c = { k, ix: e.ix, iz: e.iz, cx: (e.ix + 0.5) * this.size, cz: (e.iz + 0.5) * this.size, m: {}, phys: null, mesh: null, shown: null, asked: new Set() }; this.chunks.set(k, c);
+    c.ready = (async () => { const r = await fetch(this.dir + e.file), s = r.body.pipeThrough(new DecompressionStream('gzip')); c.buf = await new Response(s).arrayBuffer(); c.L = decodeLayout(c.buf); })();
+    return c.ready.then(() => c);
+  }
+  ask(c, level) { if (c.asked.has(level)) return; c.asked.add(level); this.queue.set(c.k + ':' + level, [c, level]); this.pump(); }
+  // the next mesh to make: the nearest chunk's (fine before coarse at the same distance)
+  pump() {
+    if (this.busy || !this.queue.size) return;
+    let best = null, bd = Infinity; for (const [q, [c, level]] of this.queue) { const d = Math.hypot(c.cx - this.cam.x, c.cz - this.cam.z) + (level === 'coarse' ? 1 : 0); if (d < bd) { bd = d; best = q; } }
+    const [c, level] = this.queue.get(best); this.queue.delete(best); const { grid, G } = this.lattice(c.L);
+    if (this.worker) { this.busy = true; this.worker.postMessage({ id: c.k, buf: c.buf.slice(0), grid, G, level }, [G.buffer]); }
+    else { this.got(c, level, meshChunk(c.L, grid, G, level)); this.pump(); } // (Node: no workers; the same function)
   }
   got(c, level, m) {
     c.m[level] = m;
-    if (level === 'fine' && !c.ix) { // physics and the clipping start with the fine mesh
-      c.ix = physIndex(c.L, m); const r = this.U.layR.value[this.U.layN.value++]; r.set(c.L.x0, c.L.z0, c.L.x0 + c.L.size, c.L.z0 + c.L.size);
-      c.skirt = this.skirt(c, m); this.on = true;
-      this.ask(c, 'coarse');
+    if (level === 'fine' && !c.phys) { // physics, the mask and the skirts start with the fine mesh
+      c.phys = physIndex(c.L, m); this.active.set(c.k, c); this.on = true;
+      const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 255; this.mask.needsUpdate = true; }
+      if (this.mats) this.skirtsFor(c);
     }
-    if (!c.shown) this.show(c, level);
+    if (!this.mats) return; // (no drawing: tools)
+    const want = Math.hypot(c.cx - this.cam.x, c.cz - this.cam.z) < FINE_D ? 'fine' : 'coarse';
+    if (c.phys && (level === want || !c.shown)) this.show(c, c.m[want] ? want : 'fine');
   }
-  // where a chunk meets today's ground (no baked chunk beside it), a wall from its edge to today's ground's height there:
-  // the two needn't meet (today's roads and banks are its own), and without it the sky showed through (#297: the
-  // white sliver at Lauterbrunnen's chunk, where a road's bank met today's ground metres off)
-  skirt(c, m) {
-    const L = c.L, P = m.pos, n = P.length / 3, w = this.w, sides = [[(x) => x === L.x0, -1, 0], [(x) => x === L.x0 + L.size, 1, 0], [null, 0, -1], [null, 0, 1]], out = [], nrm = [];
-    const was = this.on; this.on = false; // (today's ground: World.sampleGrid without the layout)
-    for (const [, dx, dz] of sides) {
-      if (this.chunks.some((o) => o !== c && o.L.ix === L.ix + dx && o.L.iz === L.iz + dz)) continue; // (a baked chunk beside it: they meet)
-      const onSide = (k) => (dx ? P[k * 3] === (dx < 0 ? L.x0 : L.x0 + L.size) : P[k * 3 + 2] === (dz < 0 ? L.z0 : L.z0 + L.size));
-      const ks = []; for (let k = 0; k < n; k++) if (onSide(k)) ks.push(k); ks.sort((a, b) => (dx ? P[a * 3 + 2] - P[b * 3 + 2] : P[a * 3] - P[b * 3]));
-      const T = ks.map((k) => w.sampleGrid(P[k * 3], P[k * 3 + 2]));
-      for (let q = 0; q + 1 < ks.length; q++) { const a = ks[q], b = ks[q + 1], ya = P[a * 3 + 1], yb = P[b * 3 + 1], lo = Math.min(ya, yb, T[q], T[q + 1]) - 0.3, hi = Math.max(ya, yb, T[q], T[q + 1]);
-        if (hi - lo < 0.35) continue; const A = [P[a * 3], P[a * 3 + 2]], B = [P[b * 3], P[b * 3 + 2]];
-        out.push(A[0], hi, A[1], B[0], hi, B[1], B[0], lo, B[1], A[0], hi, A[1], B[0], lo, B[1], A[0], lo, A[1]); for (let v = 0; v < 6; v++) nrm.push(dx, 0, dz); }
-    }
-    this.on = was; if (!out.length) return null;
+  // the skirts about an active chunk: on each side whose neighbour isn't active (and the neighbour's facing it, gone)
+  skirtsFor(c) {
+    for (const [dx, dz] of SIDES) { const nk = (c.ix + dx) + ',' + (c.iz + dz), back = nk + ':' + (-dx) + ',' + (-dz);
+      if (this.active.has(nk)) { const s = this.skirts.get(back); if (s) { this.group.remove(s); s.geometry.dispose(); this.skirts.delete(back); } continue; }
+      const me = this.skirt(c, c.m.fine, dx, dz); if (me) this.skirts.set(c.k + ':' + dx + ',' + dz, me); }
+  }
+  // a wall on one side of a chunk from its edge to today's ground there: the two needn't meet, and without it the sky
+  // showed through (#297: the white sliver at Lauterbrunnen's chunk, where a road's bank met today's ground metres off)
+  skirt(c, m, dx, dz) {
+    const L = c.L, P = m.pos, n = P.length / 3, w = this.w, out = [], nrm = [];
+    const onSide = (k) => (dx ? P[k * 3] === (dx < 0 ? L.x0 : L.x0 + L.size) : P[k * 3 + 2] === (dz < 0 ? L.z0 : L.z0 + L.size));
+    const ks = []; for (let k = 0; k < n; k++) if (onSide(k)) ks.push(k); ks.sort((a, b) => (dx ? P[a * 3 + 2] - P[b * 3 + 2] : P[a * 3] - P[b * 3]));
+    const was = this.on; this.on = false; const T = ks.map((k) => w.sampleGrid(P[k * 3], P[k * 3 + 2])); this.on = was; // (today's ground: World.sampleGrid without the layout)
+    for (let q = 0; q + 1 < ks.length; q++) { const a = ks[q], b = ks[q + 1], ya = P[a * 3 + 1], yb = P[b * 3 + 1], lo = Math.min(ya, yb, T[q], T[q + 1]) - 0.3, hi = Math.max(ya, yb, T[q], T[q + 1]);
+      if (hi - lo < 0.35) continue; const A = [P[a * 3], P[a * 3 + 2]], B = [P[b * 3], P[b * 3 + 2]];
+      out.push(A[0], hi, A[1], B[0], hi, B[1], B[0], lo, B[1], A[0], hi, A[1], B[0], lo, B[1], A[0], lo, A[1]); for (let v = 0; v < 6; v++) nrm.push(dx, 0, dz); }
+    if (!out.length) return null;
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(out, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3)); g.computeBoundingSphere();
     const me = new THREE.Mesh(g, this.mats.skirt); me.name = 'layout skirt'; this.group.add(me); return me;
   }
@@ -92,7 +114,7 @@ export class Layout {
     for (const o of c.mesh.children) o.geometry.dispose(); c.mesh.clear();
     // the surface (ground, alleys, gravel, pavers); the carriageway, kerbs and pavements from the street ribbons below
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(m.nrm, 3)); g.setIndex(new THREE.BufferAttribute(m.idx, 1));
+    g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(m.nrm, 3)); g.setAttribute('aAng', new THREE.BufferAttribute(m.ang, 1)); g.setIndex(new THREE.BufferAttribute(m.idx, 1));
     const matOf = (k) => (k === KIND.ground || k === KIND.bank ? 0 : k === KIND.alley ? 1 : k === KIND.verge || k === KIND.gravel ? 2 : k === KIND.pavers ? 3 : -1);
     for (let q = 0; q < m.tk.length;) { const mi = matOf(m.tk[q]); let e = q; while (e < m.tk.length && matOf(m.tk[e]) === mi) e++; if (mi >= 0) g.addGroup(q * 3, (e - q) * 3, mi); q = e; }
     g.computeBoundingSphere(); const surf = new THREE.Mesh(g, this.matList); surf.receiveShadow = true; c.mesh.add(surf);
@@ -108,23 +130,37 @@ export class Layout {
     }
     c.shown = level;
   }
+  // each frame: the chunks about the camera fetched and asked for (fine near, coarse further); each drawn at its level
   update(cam) {
-    for (const c of this.chunks) { if (!c.ix) continue; const want = Math.hypot(cam.position.x - c.cx, cam.position.z - c.cz) < FINE_D ? 'fine' : 'coarse'; if (want === c.shown) continue; if (c.m[want]) this.show(c, want); else this.ask(c, want); }
+    const x = cam.position.x, z = cam.position.z; this.cam.x = x; this.cam.z = z;
+    if (!this.lastScan || Math.hypot(x - this.lastScan[0], z - this.lastScan[1]) > 100) { this.lastScan = [x, z]; // (about every 100 m: which are in reach)
+      const S = this.size, r = Math.ceil(LOAD_D / S);
+      for (let i = Math.floor(x / S) - r; i <= Math.floor(x / S) + r; i++) for (let j = Math.floor(z / S) - r; j <= Math.floor(z / S) + r; j++) {
+        const k = i + ',' + j; if (!this.index.has(k) || this.chunks.has(k) || Math.hypot((i + 0.5) * S - x, (j + 0.5) * S - z) > LOAD_D) continue;
+        this.load(k).then((c) => this.ask(c, 'fine')).catch(() => {}); } }
+    for (const c of this.chunks.values()) { if (!c.phys || !this.mats) continue; const want = Math.hypot(c.cx - x, c.cz - z) < FINE_D ? 'fine' : 'coarse';
+      if (want === 'coarse' && !c.asked.has('coarse')) this.ask(c, 'coarse');
+      if (want !== c.shown && c.m[want]) this.show(c, want); }
+  }
+  // load and mesh (fine) every chunk within r of (x, z) now (tools and tests; the game streams them in update): how many
+  async prime(x, z, r) {
+    this.cam.x = x; this.cam.z = z; const S = this.size, n = Math.ceil(r / S), ks = [];
+    for (let i = Math.floor(x / S) - n; i <= Math.floor(x / S) + n; i++) for (let j = Math.floor(z / S) - n; j <= Math.floor(z / S) + n; j++) { const k = i + ',' + j; if (this.index.has(k) && Math.hypot((i + 0.5) * S - x, (j + 0.5) * S - z) <= r) ks.push(k); }
+    const cs = await Promise.all(ks.map((k) => this.load(k))); for (const c of cs) this.ask(c, 'fine');
+    while (this.queue.size || this.busy) { if (this.worker) await new Promise((res) => setTimeout(res, 20)); else this.pump(); }
+    return cs.length;
   }
   // the physics height at (x, z) (NaN outside the active chunks)
-  heightAt(x, z, out) {
-    for (const c of this.chunks) if (c.ix && x >= c.L.x0 && z >= c.L.z0 && x < c.L.x0 + c.L.size && z < c.L.z0 + c.L.size) return physAt(c.L, c.m.fine, c.ix, x, z, out);
-    return NaN;
-  }
+  heightAt(x, z, out) { const c = this.active.get(Math.floor(x / this.size) + ',' + Math.floor(z / this.size)); return c ? physAt(c.L, c.m.fine, c.phys, x, z, out) : NaN; }
   // World.groundAt's answer inside an active chunk (null outside): height, normal, surface type
   ground(x, z) {
-    const o = this.out, h = this.heightAt(x, z, o); if (!(h === h)) return null;
-    const c = this.chunks.find((c) => c.ix && x >= c.L.x0 && z >= c.L.z0 && x < c.L.x0 + c.L.size && z < c.L.z0 + c.L.size), k = c.m.fine.tk[o[0]];
-    const w = this.w, n = new THREE.Vector3(o[1], o[2], o[3]), lot = k <= KIND.bank && w.cityD && w.cityPaved(x, z) > 0.5 && w.real.bare(x, z); // (a city's paved lots, as World.groundAt says)
+    const o = this.out, c = this.active.get(Math.floor(x / this.size) + ',' + Math.floor(z / this.size)); if (!c) return null;
+    const h = physAt(c.L, c.m.fine, c.phys, x, z, o); if (!(h === h)) return null;
+    const k = c.m.fine.tk[o[0]], w = this.w, n = new THREE.Vector3(o[1], o[2], o[3]), lot = k <= KIND.bank && w.cityD && w.cityPaved(x, z) > 0.5 && w.real.bare(x, z); // (a city's paved lots, as World.groundAt says)
     const type = k === KIND.verge || k === KIND.gravel ? 'sand' : k >= KIND.tarmac || lot ? 'runway' : n.y < 0.8 ? 'rock' : 'grass';
     return { h, n: type === 'runway' ? new THREE.Vector3(0, 1, 0) : n, type };
   }
-  dispose() { this.worker?.terminate(); for (const c of this.chunks) { for (const o of c.mesh?.children || []) o.geometry.dispose(); c.skirt?.geometry.dispose(); } }
+  dispose() { this.worker?.terminate(); for (const c of this.chunks.values()) for (const o of c.mesh?.children || []) o.geometry.dispose(); for (const s of this.skirts.values()) s.geometry.dispose(); this.mask.dispose(); }
 }
 
 // a paved surface: its photo texture over a base colour (world-space, metres), and on the tarmac the markings from the

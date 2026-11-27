@@ -53,7 +53,8 @@ export function decodeLayout(buf) {
     for (let s = 1; s < n; s++, d++) { xs.push(xs[s - 1] + A.rd[d * 2]); zs.push(zs[s - 1] + A.rd[d * 2 + 1]); }
     const St = stations(xs, zs, 100), pts = new Float64Array(St.length * 2), h = new Float64Array(St.length); let y = A.r0[i * 3 + 2];
     St.forEach(([x, z], s) => { if (s) y += A.rh[e++]; pts[s * 2] = H.x0 + x / 100; pts[s * 2 + 1] = H.z0 + z / 100; h[s] = y / 100; });
-    const k = A.rk.subarray(i * 6, i * 6 + 6); runs.push({ kind: RKINDS[k[0]], minor: !!(k[1] & 1), oneway: !!(k[1] & 2), surf: k[1] >> 2, hw: k[2] / 10, pave: k[3] / 10, lanes: k[4], pts, h }); }
+    const shape = new Float64Array(n * 2); for (let q = 0; q < n; q++) { shape[q * 2] = H.x0 + xs[q] / 100; shape[q * 2 + 1] = H.z0 + zs[q] / 100; }
+    const k = A.rk.subarray(i * 6, i * 6 + 6); runs.push({ kind: RKINDS[k[0]], minor: !!(k[1] & 1), oneway: !!(k[1] & 2), surf: k[1] >> 2, hw: k[2] / 10, pave: k[3] / 10, lanes: k[4], pts, h, shape }); }
   const junctions = []; for (let i = 0; i < H.jn; i++) junctions.push({ x: H.x0 + A.jx[i * 4] / 100, z: H.z0 + A.jx[i * 4 + 1] / 100, r: A.jx[i * 4 + 2] / 100, y0: A.jx[i * 4 + 3] / 1000, gx: A.jg[i * 2] / 1e4, gz: A.jg[i * 2 + 1] / 1e4 });
   const areas = []; let ad = 0, X0 = Math.round(H.x0 * 100), Z0 = Math.round(H.z0 * 100);
   for (let i = 0; i < H.na; i++) { let x = A.a0[i * 2], z = A.a0[i * 2 + 1]; const ring = [[X0 + x, Z0 + z]]; for (let s = 1; s < A.ac[i]; s++, ad++) { x += A.ad[ad * 2]; z += A.ad[ad * 2 + 1]; ring.push([X0 + x, Z0 + z]); } areas.push({ surf: A.ak[i], ring }); }

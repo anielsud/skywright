@@ -199,7 +199,7 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   if (packKey) try { const b = await gunzip(await get(`assets/boot/roads-${id}.bin.gz`)), P = decodeRoads(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); if (P.key === packKey && P.v === PACK_V) D.roadPack = P; } catch { /* (missing: work them out) */ }
   if (cityZ) D.city = decodeCity(await gunzip(cityZ));
   // the baked road layout's chunks (#294, behind a flag while it's tried out): their bytes, decoded by the World
-  if (layoutWanted()) try { const idx = await get(dir + 'layout/index.json', 'json'); D.layout = await Promise.all(idx.chunks.map(async (c) => { const b = await gunzip(await get(dir + 'layout/' + c.file)); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); })); } catch { /* (none baked here) */ }
+  if (layoutWanted()) try { D.layout = { index: await get(dir + 'layout/index.json', 'json'), dir: dir + 'layout/' }; } catch { /* (none baked here) */ } // (the chunks themselves stream in: layout/runtime.js)
   if (statueB) try { D.statue = (await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(statueB, '')).scene; } catch (e) { console.warn('[landmarks] statue model', e); }
   D.key = key;
   cache.get(id)?.dispose();

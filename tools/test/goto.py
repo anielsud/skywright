@@ -64,9 +64,10 @@ async def main(a):
                         cam.position.set(c[0], c[1], c[2]); if (r.fov) cam.fov = r.fov; cam.updateProjectionMatrix();
                         cam.lookAt(c[0] + l[0], c[1] + l[1], c[2] + l[2]); document.querySelectorAll('#modal-root').forEach((e) => (e.style.display = 'none')); return 1; }})()""")
                     # (terrain, roads and buildings stream in around the camera: paused, the flight loop doesn't update the world,
-                    # so step it here, from the camera, until the wait is over)
+                    # so step it here, from the camera, until the wait is over. The buildings and trees follow the camera from
+                    # traffic.update in flight (world.towns.update, world.flora.update), not World.update: stepped here too)
                     for _ in range(max(1, int(a.wait))):
-                        await cdp.js(f"""(() => {{ const F = {S}.F, cam = {S}.rig.cam; for (let i = 0; i < 20; i++) F.world.update(1 / 60, cam, cam.position.clone().set(0, 0, 0), []);
+                        await cdp.js(f"""(() => {{ const F = {S}.F, cam = {S}.rig.cam; for (let i = 0; i < 20; i++) {{ F.world.update(1 / 60, cam, cam.position.clone().set(0, 0, 0), []); F.world.towns?.update(1 / 60, F.world.t, null, cam.position); F.world.flora?.update?.(cam.position); }}
                             F.world.roadGroup?.userData.update?.(cam.position, 1e5, 3000); return 1; }})()""", timeout=300)
                         await asyncio.sleep(1)
                     shot = await cdp.send('Page.captureScreenshot', format='png')
