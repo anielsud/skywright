@@ -11,11 +11,10 @@
 //  4. per chunk: the outlines (clipped to it, split where they cross) and the network within NET_PAD of it, quantized.
 //     Everything else (heights, the reshaped ground, the markings' coordinates) the game works out with rules.js.
 import CL from '../../vendor/layout/clipper1.mjs';
-import { CHUNK, KIND, RKINDS, encodeLayout, decodeLayout, stations } from './format.js';
-import { meshChunk, latticeOf } from './mesh.js';
+import { CHUNK, KIND, RKINDS, encodeLayout, stations } from './format.js';
 import { VERGE } from './rules.js';
 
-const SEG = 8, MARGIN = 150, ARC = 8, SIMPLIFY = 25, SHAPE_TOL = 15, EDGE_STEP = 4, NET_PAD = 60; // (NET_PAD: the network stored with a chunk reaches this far past it: past every rule's reach, rules.js)
+const SEG = 8, MARGIN = 150, ARC = 8, SIMPLIFY = 25, SHAPE_TOL = 15, EDGE_STEP = 4, NET_PAD = 75; // (NET_PAD: the network stored with a chunk reaches this far past it: past every rule's reach, rules.js)
 const PAVE = { main: 4.5, street: 3.5 }; // (as roadgrade.js: a city street's pavement, a country road's verge)
 const GRADE = { highway: 0.07, main: 0.12, street: 0.2 }, GRADE_MINOR = 0.25;
 const cm = (v) => Math.round(v * 100);
@@ -29,21 +28,28 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   const V = [], node = new Map(), runs = [];
   const newVar = (x, z) => (V.push({ x, z, g: g(x, z) }), V.length - 1);
   for (const rd of w.net.roads) {
-    if (rd.kind === 'rail' || rd.closed) continue;
-    const P = rd.pts, n = P.length; let a = -1, b = -1;
+    if (rd.kind === 'rail' || rd.baked) continue; // (rail; the airport's own roads)
+    const n0 = rd.pts.length, P = rd.closed ? [...rd.pts, rd.pts[0]] : rd.pts, n = P.length; let a = -1, b = -1; // (a roundabout's ring: closed as a line)
     for (let i = 0; i < n; i++) if (inR(P[i])) { if (a < 0) a = i; b = i; }
     if (a < 0) continue;
     a = Math.max(0, a - 1); b = Math.min(n - 1, b + 1);
-    let bad = false; for (let i = a; i <= b; i++) if (rd.bridge?.[i] || rd.tube?.[i] || rd.span?.[i]) bad = true;
-    if (bad) { log(`  (skipped a ${rd.kind} on a bridge or in a tunnel)`); continue; }
-    const jn = new Map(rd.jn || []), pts = [], vars = [], osm = []; // (osm: which of pts are the road's own points)
-    for (let i = a; i <= b; i++) {
-      if (i > a) { const p = P[i - 1], q = P[i], l = Math.hypot(q.x - p.x, q.z - p.z), k = Math.ceil(l / SEG); for (let s = 1; s < k; s++) { const x = p.x + (q.x - p.x) * s / k, z = p.z + (q.z - p.z) * s / k; pts.push([x, z]); vars.push(newVar(x, z)); } }
-      const nd = jn.get(i); let v; if (nd != null && node.has(nd)) v = node.get(nd); else { v = newVar(P[i].x, P[i].z); if (nd != null) node.set(nd, v); }
-      osm.push(pts.length); pts.push([P[i].x, P[i].z]); vars.push(v);
+    // (a road's stretches on bridges or in tunnels aren't the layout's: the chunks they're in keep today's roads (bakeChunks'
+    // fallback); the stretches either side of one are roads of their own here)
+    const bad = (i) => !!(rd.bridge?.[i % n0] || rd.tube?.[i % n0] || rd.span?.[i % n0]), jn = new Map(rd.jn || []);
+    for (let s0 = a; s0 <= b;) {
+      if (bad(s0)) { s0++; continue; } let e0 = s0; while (e0 + 1 <= b && !bad(e0 + 1)) e0++;
+      if (e0 > s0) {
+        const pts = [], vars = [], osm = []; // (osm: which of pts are the road's own points)
+        for (let i = s0; i <= e0; i++) {
+          if (i > s0) { const p = P[i - 1], q = P[i], l = Math.hypot(q.x - p.x, q.z - p.z), k = Math.ceil(l / SEG); for (let s = 1; s < k; s++) { const x = p.x + (q.x - p.x) * s / k, z = p.z + (q.z - p.z) * s / k; pts.push([x, z]); vars.push(newVar(x, z)); } }
+          const nd = jn.get(i % n0); let v; if (nd != null && node.has(nd)) v = node.get(nd); else if (rd.closed && i === n0 && vars.length) v = vars[0]; else { v = newVar(P[i].x, P[i].z); if (nd != null) node.set(nd, v); }
+          osm.push(pts.length); pts.push([P[i].x, P[i].z]); vars.push(v);
+        }
+        const minor = !!rd.minor, kind = rd.kind;
+        runs.push({ rd, osmPts: osm.map((k) => pts[k]), kind, minor, surf: rd.surf || 0, hw: rd.width / 2, lanes: rd.lanes || (rd.oneway ? 1 : 2), oneway: !!rd.oneway, layer: rd.layer || 0, pts, vars, grade: minor ? GRADE_MINOR : GRADE[kind] ?? 0.2, pave: city && !minor && !rd.baked && PAVE[kind] ? PAVE[kind] : 0 });
+      }
+      s0 = e0 + 1;
     }
-    const minor = !!rd.minor, kind = rd.kind;
-    runs.push({ rd, osmPts: osm.map((k) => pts[k]), kind, minor, surf: rd.surf || 0, hw: rd.width / 2, lanes: rd.lanes || (rd.oneway ? 1 : 2), oneway: !!rd.oneway, layer: rd.layer || 0, pts, vars, grade: minor ? GRADE_MINOR : GRADE[kind] ?? 0.2, pave: city && !minor && !rd.baked && PAVE[kind] ? PAVE[kind] : 0 });
   }
   // (roads crossing without a shared node, on the same layer: tied at the crossing)
   { const segGrid = new Map(), C = 20, key = (i, j) => i * 100003 + j, ins = runs.map(() => []);
@@ -85,48 +91,59 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   }
   // (last: each junction on its plane, then every road within its grade limit, away from the junctions: a junction's own
   // slope is its ground's; the clamp leaves a junction's points where they are and moves the road's next to it)
-  toPlane(); const member = new Set(); for (const J of JN) for (const k of J.m) member.add(k);
-  for (let p = 0; p < 400; p++) { let moved = 0; for (const [a, b, l, G] of edges) { if (member.has(a) && member.has(b)) continue; const d = h[a] - h[b], lim = G * l; if (Math.abs(d) <= lim + 1e-4) continue; const ex = Math.abs(d) - lim, sg = Math.sign(d);
+  toPlane(); const memberOf = new Map(); JN.forEach((J, q) => { for (const k of J.m) memberOf.set(k, q); });
+  const member = { has: (k) => memberOf.has(k) }, inOne = (a, b) => memberOf.has(a) && memberOf.get(a) === memberOf.get(b);
+  for (let p = 0; p < 400; p++) { let moved = 0; for (const [a, b, l, G] of edges) { if (inOne(a, b)) continue; const d = h[a] - h[b], lim = G * l; if (Math.abs(d) <= lim + 1e-4) continue; const ex = Math.abs(d) - lim, sg = Math.sign(d);
     if (member.has(a)) h[b] += ex * sg; else if (member.has(b)) h[a] -= ex * sg; else { h[a] -= ex / 2 * sg; h[b] += ex / 2 * sg; } moved++; } if (!moved) break; }
-  let dev = 0, over = 0; for (let k = 0; k < nv; k++) dev = Math.max(dev, Math.abs(h[k] - V[k].g)); for (const [a, b, l, G] of edges) if (!(member.has(a) && member.has(b))) over = Math.max(over, Math.abs(h[a] - h[b]) / l - G);
+  let dev = 0, over = 0; for (let k = 0; k < nv; k++) dev = Math.max(dev, Math.abs(h[k] - V[k].g)); for (const [a, b, l, G] of edges) if (!inOne(a, b)) over = Math.max(over, Math.abs(h[a] - h[b]) / l - G);
   T.solve = { vars: nv, junctions: JN.length, iters, maxFromGround: +dev.toFixed(2), worstOverGrade: +Math.max(0, over).toFixed(3) };
   { const inJ = new Map(); JN.forEach((J, q) => J.m.forEach((k) => inJ.set(k, q)));
     const grade = (k) => { let gmax = 0; for (const [o] of nb[k]) { const l = Math.hypot(V[o].x - V[k].x, V[o].z - V[k].z); if (l > 0.5) gmax = Math.max(gmax, Math.abs(V[o].g - V[k].g) / l); } return gmax; };
-    const inC = (k) => chunks.some(([ix, iz]) => V[k].x >= ix * CHUNK && V[k].x < (ix + 1) * CHUNK && V[k].z >= iz * CHUNK && V[k].z < (iz + 1) * CHUNK);
+    const cset = new Set(chunks.map(([ix, iz]) => ix * 100003 + iz)), inC = (k) => cset.has(Math.floor(V[k].x / CHUNK) * 100003 + Math.floor(V[k].z / CHUNK));
     // forced: the steepest the natural ground climbs along the road over 80 m about the point, against its limit
     const forced = (k) => { for (const r of runs) { const i = r.vars.indexOf(k); if (i < 0) continue; let a = i, b = i; while (a > 0 && r.s[i] - r.s[a] < 40) a--; while (b < r.vars.length - 1 && r.s[b] - r.s[i] < 40) b++; const l = r.s[b] - r.s[a]; return l > 20 ? +(Math.abs(V[r.vars[b]].g - V[r.vars[a]].g) / l).toFixed(2) : null; } return null; };
-    const ins = [...V.keys()].filter(inC); T.inChunk = { vars: ins.length, maxFromGround: +Math.max(...ins.map((k) => Math.abs(h[k] - V[k].g))).toFixed(2), over2m: ins.filter((k) => Math.abs(h[k] - V[k].g) > 2).length };
+    const ins = [...V.keys()].filter(inC); T.inChunk = { vars: ins.length, maxFromGround: +ins.reduce((m, k) => Math.max(m, Math.abs(h[k] - V[k].g)), 0).toFixed(2), over2m: ins.filter((k) => Math.abs(h[k] - V[k].g) > 2).length };
     T.worstIn = ins.sort((a, b) => Math.abs(h[b] - V[b].g) - Math.abs(h[a] - V[a].g)).slice(0, 6).map((k) => ({ x: +V[k].x.toFixed(1), z: +V[k].z.toFixed(1), off: +(h[k] - V[k].g).toFixed(2), grade80m: forced(k), kinds: [...new Set(runs.filter((r) => r.vars.includes(k)).map((r) => r.kind + ':' + r.grade))] }));
     T.worst = [...V.keys()].sort((a, b) => Math.abs(h[b] - V[b].g) - Math.abs(h[a] - V[a].g)).slice(0, 8).map((k) => ({ x: +V[k].x.toFixed(1), z: +V[k].z.toFixed(1), off: +(h[k] - V[k].g).toFixed(2), junction: inJ.has(k) ? { r: +JN[inJ.get(k)].r.toFixed(1), members: JN[inJ.get(k)].m.length, spread: +(Math.max(...JN[inJ.get(k)].m.map((q) => V[q].g)) - Math.min(...JN[inJ.get(k)].m.map((q) => V[q].g))).toFixed(1) } : null, tie: !!V[k].tie, terrainGrade: +grade(k).toFixed(2), kinds: [...new Set(runs.filter((r) => r.vars.includes(k)).map((r) => r.kind + ':' + r.grade))] })); }
   tic('solveMs', t0);
   const street = (r) => !r.minor;
   // the solved height of road r at (x, z) on it (its nearest point along its own stations)
+  // (the same, looking only near segment `from` on: stations come in order along the road) -> [height, segment]
+  const solvedNear = (r, x, z, from) => { let best = Infinity, y = 0, at = from; const a0 = Math.max(0, from - 4), a1 = Math.min(r.pts.length - 1, from + 80);
+    for (let i = a0; i < a1; i++) { const [ax, az] = r.pts[i], [bx, bz] = r.pts[i + 1], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t); if (d < best) { best = d; y = h[r.vars[i]] + (h[r.vars[i + 1]] - h[r.vars[i]]) * t; at = i; } }
+    return best < 0.5 ? [y, at] : [solvedAt(r, x, z), from]; };
   const solvedAt = (r, x, z) => { let best = Infinity, y = 0; for (let i = 0; i + 1 < r.pts.length; i++) { const [ax, az] = r.pts[i], [bx, bz] = r.pts[i + 1], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t); if (d < best) { best = d; y = h[r.vars[i]] + (h[r.vars[i + 1]] - h[r.vars[i]]) * t; } } return y; };
   const path = (pts) => pts.map(([x, z]) => [cm(x), cm(z)]);
   // ---- 4. per chunk: its outlines and the network near it, stored; then meshed the game's way, as the bake's check
-  const G = w.real.hi, grid = { x0: G.x0, z0: G.z0, sp: G.sp }, out = [];
+  const out = [];
   const KCODE = Object.fromEntries(RKINDS.map((k, i) => [k, i]));
+  // (each road's shape, simplified once; roads, junctions and plazas listed per chunk they can reach)
+  const cellOf = (x, z) => Math.floor(x / CHUNK) * 100003 + Math.floor(z / CHUNK), byCell = new Map(), put = (k, kind, i) => { let c = byCell.get(k); if (!c) byCell.set(k, (c = { r: [], j: [], a: [] })); if (c[kind].at(-1) !== i) c[kind].push(i); };
+  const boxCells = (x0, z0, x1, z1, kind, i) => { for (let a = Math.floor(x0 / CHUNK); a <= Math.floor(x1 / CHUNK); a++) for (let b = Math.floor(z0 / CHUNK); b <= Math.floor(z1 / CHUNK); b++) put(a * 100003 + b, kind, i); };
+  runs.forEach((r, ri) => { const sh = rdpLine(r.osmPts.map(([x, z]) => [cm(x), cm(z)]), SHAPE_TOL); r.shape = [sh[0]]; for (let i = 1; i < sh.length; i++) { const [px, pz] = sh[i - 1], [qx, qz] = sh[i], k = Math.ceil(Math.max(Math.abs(qx - px), Math.abs(qz - pz)) / 30000); for (let s2 = 1; s2 <= k; s2++) r.shape.push([Math.round(px + (qx - px) * s2 / k), Math.round(pz + (qz - pz) * s2 / k)]); }
+    for (let i = 0; i + 1 < r.shape.length; i++) { const [ax, az] = r.shape[i], [bx, bz] = r.shape[i + 1]; boxCells(Math.min(ax, bx) / 100 - NET_PAD, Math.min(az, bz) / 100 - NET_PAD, Math.max(ax, bx) / 100 + NET_PAD, Math.max(az, bz) / 100 + NET_PAD, 'r', ri); } });
+  JN.forEach((J, q) => boxCells(J.x - NET_PAD - J.r, J.z - NET_PAD - J.r, J.x + NET_PAD + J.r, J.z + NET_PAD + J.r, 'j', q));
+  (w.net.areas || []).forEach((ar, q) => boxCells(ar.bb[0] - NET_PAD, ar.bb[1] - NET_PAD, ar.bb[2] + NET_PAD, ar.bb[3] + NET_PAD, 'a', q));
   for (const [ix, iz] of chunks) {
-    t0 = performance.now();
+    t0 = performance.now(); const cell = byCell.get(ix * 100003 + iz) || { r: [], j: [], a: [] };
     const x0 = ix * CHUNK, z0 = iz * CHUNK, X0 = cm(x0), Z0 = cm(z0), S = cm(CHUNK);
     const Q = { ix, iz, x0, z0, size: CHUNK, city, runs: [], jn: [], areas: [] };
     // the plazas near it (their rings, int16 steps: longer ones split)
-    for (const ar of w.net.areas || []) { if (!(ar.bb[2] > x0 - NET_PAD && ar.bb[0] < x0 + CHUNK + NET_PAD && ar.bb[3] > z0 - NET_PAD && ar.bb[1] < z0 + CHUNK + NET_PAD)) continue;
+    for (const ar of cell.a.map((q) => w.net.areas[q])) { if (!(ar.bb[2] > x0 - NET_PAD && ar.bb[0] < x0 + CHUNK + NET_PAD && ar.bb[3] > z0 - NET_PAD && ar.bb[1] < z0 + CHUNK + NET_PAD)) continue;
       const rp = []; for (let q = 0; q < ar.ring.length; q += 2) rp.push([cm(ar.ring[q]) - X0, cm(ar.ring[q + 1]) - Z0]); const ring = rdpRing(rp, SHAPE_TOL + 5); if (ring.length < 3) continue;
       const xs = [], zs = []; for (const [X, Z] of ring) { if (xs.length) { const px = xs[xs.length - 1], pz = zs[zs.length - 1], k = Math.ceil(Math.max(Math.abs(X - px), Math.abs(Z - pz)) / 30000); for (let s2 = 1; s2 < k; s2++) { xs.push(Math.round(px + (X - px) * s2 / k)); zs.push(Math.round(pz + (Z - pz) * s2 / k)); } } xs.push(X); zs.push(Z); }
       Q.areas.push({ surf: Math.min(2, ar.surf || 0), x: xs, z: zs }); }
     // the network within NET_PAD of the chunk (every road and junction its rules can reach), quantized
     const near = (x, z, m) => x > x0 - m && x < x0 + CHUNK + m && z > z0 - m && z < z0 + CHUNK + m;
     const segNear = (p, q) => { const m = NET_PAD; return Math.max(p[0], q[0]) > x0 - m && Math.min(p[0], q[0]) < x0 + CHUNK + m && Math.max(p[1], q[1]) > z0 - m && Math.min(p[1], q[1]) < z0 + CHUNK + m; };
-    for (const r of runs) {
-      // (its shape: OpenStreetMap's points simplified to SHAPE_TOL and long steps split, once for the whole road: every chunk
-      // that stores a stretch of it stores the same points, so neighbours work out the same heights and outlines)
+    for (const r of cell.r.map((q) => runs[q])) {
+      // (its shape: simplified once for the whole road, above: every chunk that stores a stretch of it stores the same
+      // points, so neighbours work out the same heights and outlines)
       if (!r.shape) { const sh = rdpLine(r.osmPts.map(([x, z]) => [cm(x), cm(z)]), SHAPE_TOL); r.shape = [sh[0]]; for (let i = 1; i < sh.length; i++) { const [px, pz] = sh[i - 1], [qx, qz] = sh[i], k = Math.ceil(Math.max(Math.abs(qx - px), Math.abs(qz - pz)) / 30000); for (let s2 = 1; s2 <= k; s2++) r.shape.push([Math.round(px + (qx - px) * s2 / k), Math.round(pz + (qz - pz) * s2 / k)]); } }
-      const O = r.shape.map(([X, Z]) => [X / 100, Z / 100]); let a = -1, b = -1; for (let i = 0; i < O.length; i++) if (near(O[i][0], O[i][1], NET_PAD)) { if (a < 0) a = i; b = i; }
-      if (a < 0) { for (let i = 0; i + 1 < O.length; i++) if (segNear(O[i], O[i + 1])) { a = i; b = i + 1; break; } if (a < 0) continue; } // (a long segment passing by)
-      a = Math.max(0, a - 1); b = Math.min(O.length - 1, b + 1);
+      const O = r.shape.map(([X, Z]) => [X / 100, Z / 100]); let a = -1, b = -1; for (let i = 0; i + 1 < O.length; i++) if (segNear(O[i], O[i + 1])) { if (a < 0) a = i; b = i + 1; } // (every segment that comes within NET_PAD, long ones passing by too)
+      if (a < 0) continue; a = Math.max(0, a - 1); b = Math.min(O.length - 1, b + 1);
       const xs = [], zs = []; for (let i = a; i <= b; i++) { xs.push(r.shape[i][0] - X0); zs.push(r.shape[i][1] - Z0); }
-      const hs = stations(xs, zs, 100).map(([x, z]) => Math.round(solvedAt(r, (x + X0) / 100, (z + Z0) / 100) * 100));
+      let cur = 0; const hs = stations(xs, zs, 100).map(([x, z]) => { const o = solvedNear(r, (x + X0) / 100, (z + Z0) / 100, cur); cur = o[1]; return Math.round(o[0] * 100); }); // (walking along the road)
       Q.runs.push({ k: KCODE[r.kind] ?? KCODE.other, flags: (r.minor ? 1 : 0) | (r.oneway ? 2 : 0) | (Math.min(3, r.surf) << 2), hw: Math.round(r.hw * 10), pave: Math.round(r.pave * 10), lanes: Math.min(255, r.lanes), x: xs, z: zs, h: hs }); }
     // (ways that meet end to end where no other road does, with the same attributes: one road, so one start stored; then
     // the roads and the junctions in order across the chunk, so each start is near the one before)
@@ -137,14 +154,11 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
           let A = Q.runs[i], B = Q.runs[j]; if (!li) A = rev(A); if (lj) B = rev(B); // (A ends where B starts)
           Q.runs[i] = { ...A, x: [...A.x, ...B.x.slice(1)], z: [...A.z, ...B.z.slice(1)], h: [...A.h, ...B.h.slice(1)] }; Q.runs.splice(j, 1); merged = true; break; } } }
     Q.runs.sort((a, b) => a.x[0] - b.x[0] || a.z[0] - b.z[0]);
-    for (const J of JN) { if (!near(J.x, J.z, NET_PAD + J.r)) continue; const y = J.my + J.gx * (J.x - J.mx) + J.gz * (J.z - J.mz); Q.jn.push({ x: cm(J.x) - X0, z: cm(J.z) - Z0, r: cm(J.r), y: Math.round(y * 1000), gx: Math.round(J.gx * 1e4), gz: Math.round(J.gz * 1e4) }); }
+    for (const J of cell.j.map((q) => JN[q])) { if (!near(J.x, J.z, NET_PAD + J.r)) continue; const y = J.my + J.gx * (J.x - J.mx) + J.gz * (J.z - J.mz); Q.jn.push({ x: cm(J.x) - X0, z: cm(J.z) - Z0, r: cm(J.r), y: Math.round(y * 1000), gx: Math.round(J.gx * 1e4), gz: Math.round(J.gz * 1e4) }); }
     Q.jn.sort((a, b) => a.x - b.x || a.z - b.z);
-    const bytes = encodeLayout(Q), L = decodeLayout(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-    tic('chunkMs', t0);
-    // the bake's check: meshed from the file the game's way (fine and coarse), every fixed edge taken, the chunk covered
-    const lat = latticeOf(L, grid), Gl = new Float32Array(lat.ni * lat.nj); for (let j = 0; j < lat.nj; j++) for (let i = 0; i < lat.ni; i++) Gl[j * lat.ni + i] = G.H[(lat.j0 + j) * G.n + lat.i0 + i];
-    const mf = meshChunk(L, grid, Gl, 'fine'), mc = meshChunk(L, grid, Gl, 'coarse');
-    out.push({ ix, iz, bytes, L, stats: { areas: Q.areas.length, runs: Q.runs.length, stations: Q.runs.reduce((s, r) => s + r.x.length, 0), junctions: Q.jn.length, mesh: mf.stats, coarse: mc.stats } });
+    const bytes = encodeLayout(Q);
+    T.chunkMs = (T.chunkMs || 0) + performance.now() - t0;
+    out.push({ ix, iz, bytes, stats: { areas: Q.areas.length, runs: Q.runs.length, stations: Q.runs.reduce((s, r) => s + r.x.length, 0), junctions: Q.jn.length } });
   }
   return { chunks: out, stats: T };
 }

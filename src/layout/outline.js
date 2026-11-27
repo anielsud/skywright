@@ -8,17 +8,24 @@ import CL from '../../vendor/layout/clipper1.mjs';
 import { KIND } from './format.js';
 import { VERGE } from './rules.js';
 
-const ARC = 15, EDGE_STEP = 4; // (ARC: cm a round join's arc may cut inside; EDGE_STEP: m between the chunk's edge points)
+const ARC = 15, EDGE_STEP = 4, CLIP = 25; // (CLIP: m about the chunk a road's stretches are kept: past a road's widest reach, its half width and pavement) // (ARC: cm a round join's arc may cut inside; EDGE_STEP: m between the chunk's edge points)
 const cm = (v) => Math.round(v * 100);
 
 export function chunkOutlines(net, areas, L) {
   const runs = net.runs, X0 = cm(L.x0), Z0 = cm(L.z0), S = cm(L.size);
   const off = (rings, d, open = true) => { const co = new CL.ClipperOffset(2, ARC); co.AddPaths(toC(rings), CL.JoinType.jtRound, open ? CL.EndType.etOpenRound : CL.EndType.etClosedPolygon); const s = new CL.Paths(); co.Execute(s, d); return fromC(s); };
   const union = (...ps) => bool(CL.ClipType.ctUnion, ps.flat(), null), minus = (a, ...bs) => (bs.length ? bool(CL.ClipType.ctDifference, a, union(...bs)) : a), inter = (a, b) => bool(CL.ClipType.ctIntersection, a, b);
-  const line = (r) => { const p = []; for (let i = 0; i < r.h.length; i++) p.push([cm(r.pts[i * 2]), cm(r.pts[i * 2 + 1])]); return p; };
-  const strips = (filter, width) => { const out = []; for (const r of runs) if (filter(r)) { const d = width(r); if (d > 0) out.push(...off([line(r)], cm(d))); } return out; };
+  // (each road as its shape's segments that come within CLIP of the chunk, each offset on its own: a segment's strip is a
+  // capsule of its two stored points alone, so two chunks get the same edges, and the same points where they cross, about
+  // their shared edge; what's past CLIP can't reach into the chunk)
+  const cx0 = L.x0 - CLIP, cz0 = L.z0 - CLIP, cx1 = L.x0 + L.size + CLIP, cz1 = L.z0 + L.size + CLIP;
+  const segs = (r) => { const out = [], P = r.shape; for (let i = 0; i + 1 < P.length / 2; i++) { const ax = P[i * 2], az = P[i * 2 + 1], bx = P[i * 2 + 2], bz = P[i * 2 + 3];
+      if (Math.max(ax, bx) < cx0 || Math.min(ax, bx) > cx1 || Math.max(az, bz) < cz0 || Math.min(az, bz) > cz1) continue; out.push([[cm(ax), cm(az)], [cm(bx), cm(bz)]]); } return out; };
+  // (and each capsule given a point where it crosses a chunk line, worked out from it alone, before anything is unioned: the
+  // union keeps it (collinear points kept), so the chunks either side cut their outlines at the same points)
+  const strips = (filter, width) => { const out = []; for (const r of runs) if (filter(r)) { const d = width(r); if (d > 0) { const ls = segs(r); for (const seg of ls) out.push(...splitAtGrid(off([seg], cm(d)), S)); } } return out; }; // (each capsule offset alone: an offset of several unions them, the rounding again depending on which)
   const minorKind = (r) => (!r.minor ? -1 : r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
-  const area = (surf) => areas.filter((a) => a.surf === surf).map((a) => a.ring);
+  const area = (surf) => splitAtGrid(areas.filter((a) => a.surf === surf).map((a) => a.ring), S);
   const street = (r) => !r.minor;
   const Tc = union(strips(street, (r) => r.hw)), Pv = union(strips((r) => r.pave > 0, (r) => r.hw + r.pave)), Vg = union(strips((r) => !r.minor && !r.pave, (r) => r.hw + VERGE));
   const Ta = union(strips((r) => minorKind(r) === KIND.alley, (r) => r.hw), area(0)), Tp = union(strips((r) => minorKind(r) === KIND.pavers, (r) => r.hw), area(1)), Tg = union(strips((r) => minorKind(r) === KIND.gravel, (r) => r.hw), area(2));
@@ -80,5 +87,5 @@ function crossings(P, E, add) {
 
 // Clipper (rings of [x, z] integer centimetres in, and out)
 const toC = (rings) => rings.map((r) => r.map(([X, Z]) => ({ X, Y: Z }))), fromC = (P) => P.map((r) => r.map((p) => [p.X, p.Y]));
-function bool(type, a, b) { const c = new CL.Clipper(); c.AddPaths(toC(a), CL.PolyType.ptSubject, true); if (b?.length) c.AddPaths(toC(b), CL.PolyType.ptClip, true); const s = new CL.Paths(); c.Execute(type, s, CL.PolyFillType.pftNonZero, CL.PolyFillType.pftNonZero); return fromC(s); }
+function bool(type, a, b) { const c = new CL.Clipper(); c.PreserveCollinear = true; c.AddPaths(toC(a), CL.PolyType.ptSubject, true); if (b?.length) c.AddPaths(toC(b), CL.PolyType.ptClip, true); const s = new CL.Paths(); c.Execute(type, s, CL.PolyFillType.pftNonZero, CL.PolyFillType.pftNonZero); return fromC(s); }
 function ringArea(r) { let a = 0; for (let i = 0; i < r.length; i++) { const [x0, z0] = r[i], [x1, z1] = r[(i + 1) % r.length]; a += x0 * z1 - x1 * z0; } return a / 2; }
