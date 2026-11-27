@@ -10,7 +10,7 @@
 // brick walk-ups and brownstones, clapboard houses with pitched roofs, warehouses; water towers and plant rooms on
 // the roofs. Collisions: an oriented box per building.
 import * as THREE from 'three';
-import { STEP } from './stepClock.js';
+import { STEP, slice } from './stepClock.js';
 import { buildingMaterial, buildingDepthMaterial, furnMaterial, furnDepthMaterial, dmgAttr, C, facade, facadeSpec, floodlit, linHex, LY0, LYS } from './buildings.js';
 import { toLocal } from './realworld.js';
 import { OcclusionBuffer, OCC_LAYER, inscribedBox, binBounds, worldBounds, shadowsSeeOccluded } from './occlusion.js';
@@ -30,11 +30,16 @@ const REACH = 24, FRONT = 40, CONE = 0; // (m) a wall facing a street within REA
 export const OCC = { on: true, h: 150, r: 1000, max: 64, corners: 40000, lowA: 300 };
 const LEVELS = [150, 70, 35, 0]; // tall meshes, sorted by height: a far mesh draws only buildings >= LEVELS[k] m
 const LEVEL_D = { low: [5000, 3000, 1800], medium: [8000, 5000, 3000], high: [14000, 8000, 5000], ultra: [15000, 9000, 5500] };
-// far meshes (CityScenery.farBuilding): a 500 m cell of tall buildings whose box is more than FAR.d m from the camera
+// far meshes (CityScenery.farBuilding, made after load: farStep): a 500 m cell of tall buildings whose box is more than FAR.d m from the camera
 // is drawn from a cheaper copy of its buildings: footprints simplified to FAR_TOL m (3/4 of a pixel at FAR.d, 1280 x
 // 720, 60 degree view), no passages; its upright triangles sorted into SECT compass sectors by the way they face, so
 // the sectors facing wholly away from the camera are left out of the draw range (back faces: never drawn anyway)
 export const FAR = { d: 1000 }; const FAR_TOL = 1.2, SECT = 16; // (FAR.d: tools/test/jobs/bldfar.js draws the cells near, Infinity, to compare)
+// the 2 km group meshes (drawn past the cells' range, 3.2 km and more at Low) from copies simplified to FAR_TOL_G (half
+// a pixel at 3 km); room after a group's vertices for the copies' own, a share of its own count (a building whose copy
+// doesn't fit is copied as it is: its sectors still left out)
+const FAR_TOL_G = 2.4, FAR_ROOM = 0.22;
+const FAR_NP = 24; // (farRec: numbers kept per building)
 const FURN_D = { low: 1300, medium: 2400, high: 4000, ultra: 4500 }; // roof furniture (its instances, FurnK) drawn within this of a tall group
 // roof furniture per tier: tank sides, rooftop units, hatches; both faces of a tank's stand (seen through it)
 // (Low: no platform beams under a tank, no stair bulkheads on the walk-ups, which have no elevator)
@@ -213,7 +218,7 @@ export class MeshW {
   mesh(mat) {
     const g = this.geometry();
     // static: once on the GPU the JS copies only cost memory (collisions use their own boxes)
-    for (const a of [...Object.values(g.attributes), g.index]) a.onUpload(function () { this.array = new this.array.constructor(0); });
+    for (const a of [...Object.values(g.attributes), g.index]) a.onUpload(function () { this.array = new this.array.constructor(0); this.sent = true; });
     const m = new THREE.Mesh(g, mat); m.customDepthMaterial = buildingDepthMaterial();
     m.position.set(this.cx, 0, this.cz); m.scale.setScalar(1 / PQ); m.matrixAutoUpdate = false; m.updateMatrix();
     return m;
@@ -408,8 +413,35 @@ function farRing(P, tol, lock) {
   const a0 = area2(P), a1 = area2(K.map((i) => P[i]));
   return a1 * a0 > 0 && Math.abs(a1) > Math.abs(a0) * 0.5 ? K : null;
 }
-// a far writer's list (CityScenery.farBuilding: F.L, F.Ln used): room for k more
-function farGrow(F, k) { if (F.Ln + k > F.L.length) { const b = new Int32Array(Math.max(F.Ln + k, F.L.length * 2)); b.set(F.L.subarray(0, F.Ln)); F.L = b; } }
+// What a tall building's far copies are made from, kept at load as it is written (farRec, into its group's pack: no
+// simplifying, no sorting; packed small by farDone): FAR_NP numbers each (prm), its rings (np, first point, first wall
+// start), their points in the mesh's int16 units (pts: the near walls' corners exactly), the street walls (str), where
+// each wall's indices start in the group's index (edges), its collision entry (t: damage)
+const farPack = () => ({ prm: [], rings: [], pts: [], str: [], edges: [], t: [], cell: 0, top: 0, n: 0 });
+function farRec(M, pk, o) {
+  const r = pk.n++, F2 = o.F2, q = (v, c) => Math.round((v - c) * PQ);
+  pk.prm.push(pk.top, pk.cell, (o.cut ? 1 : 0) | (o.flat ? 2 : 0) | (F2 ? 4 : 0) | (F2?.endDoor ? 8 : 0) | (o.street ? 16 : 0), F2?.front ?? 0, F2?.rear ?? 0,
+    o.st.col, o.st.bay, o.st.cell, o.st.fl, o.rLook?.col ?? 0, o.rLook?.cell ?? 0, M.seed, o.yBase, o.wTop, o.yfV, o.flV, o.yFloor, o.eave, o.topW, o.iR0, o.iR1, M.ni, pk.rings.length / 3, 1 + o.holes.length);
+  [o.P, ...o.holes].forEach((Q, h) => {
+    pk.rings.push(Q.length, pk.pts.length / 2, pk.edges.length);
+    for (let k = 0; k < Q.length; k++) { pk.pts.push(q(Q[k][0], M.cx), q(Q[k][1], M.cz)); pk.str.push(!h && o.street?.[k] ? 1 : 0); }
+    pk.edges.push(...(h ? o.wIh[h - 1] : o.wIo));
+  });
+  pk.t.push(null);
+  return r;
+}
+const farDone = (pk) => ({ prm: Float32Array.from(pk.prm), rings: Int32Array.from(pk.rings), pts: Int16Array.from(pk.pts), str: Uint8Array.from(pk.str), edges: Int32Array.from(pk.edges), t: pk.t, n: pk.n });
+const farBytes = (pk) => pk.prm.byteLength + pk.rings.byteLength + pk.pts.byteLength + pk.str.byteLength + pk.edges.byteLength + pk.t.length * 8;
+// an attribute's items [base, base + n) set from src (a mesh's arrays go once uploaded: MeshW.mesh; then a zeroed
+// stand-in, of which only that range uploads)
+function farPut(a, src, base, n) {
+  const k = a.itemSize;
+  if (!a.sent) { a.array.set(src.subarray(0, n * k), base * k); a.needsUpdate = true; return; }
+  if (a.array.length !== a.count * k) a.array = new a.array.constructor(a.count * k);
+  a.array.set(src.subarray(0, n * k), base * k); a.addUpdateRange(base * k, n * k); a.needsUpdate = true;
+}
+// a 32-bit hash over ints (tools/test/jobs/bld-hash.js: the far copies made the same every run)
+const farMix = (h, A, n) => { for (let i = 0; i < n; i++) { h = Math.imul(h ^ (A[i] | 0), 0x5bd1e995); h ^= h >>> 15; } return h >>> 0; };
 const inside = (P, x, z) => { let c = false; for (let i = 0, j = P.length - 1; i < P.length; j = i++) { const a = P[i], b = P[j]; if ((a[1] > z) !== (b[1] > z) && x < (b[0] - a[0]) * (z - a[1]) / (b[1] - a[1]) + a[0]) c = !c; } return c; };
 const area2 = (P) => { let a = 0; for (let k = 0; k < P.length; k++) { const p = P[k], c = P[(k + 1) % P.length]; a += p[0] * c[1] - c[0] * p[1]; } return a / 2; };
 // oriented bounding box: the edge direction giving the smallest rectangle
@@ -500,7 +532,8 @@ export class CityScenery {
     this.roads = roadIndex(W); this.setbacks = { cut: 0, dropped: 0, through: 0, ms: performance.now() - t0 }; // set back from the streets (setback.js; ms: the index and the cuts)
     this.footStats = { n: 0, irr: 0, boxes: 0, max: 0, ms: 0, lazy: 0, load: 0 }; // (the collision boxes: ms in footBoxes, whenever; lazy: the slowest worked out after load; load: at load)
     this.refiner = new Refiner(); // (a huge footprint's boxes, a piece at a time after load: setback.js tiledBoxes)
-    this.farStats = { tris: 0, verts: 0, nearVerts: 0, ms: 0 }; // (the far copies: their triangles, the ms making their meshes (farBuilding's time is in msTall))
+    this.farStats = { tris: 0, groupTris: 0, verts: 0, nearVerts: 0, room: 0, over: 0, ms: 0, maxMs: 0, steps: 0, built: 0, done: 0, kept: 0, keptI: 0, hash: 0, groupNear: 0 }; // (the far copies, made after load: farStep)
+    this.farQ = null; // (their jobs, nearest their switch first: farPlan)
     this.density(); this.sup = new Map(); this.supTiles = new Set(); this.grounded = 0; this.nested = 0; this.kiosks = 0; this.passages = []; this.gf = { front: 0, ground: 0, parts: 0, miss: [] };
     this.buildTall();
     this.msTall = performance.now() - t0; this.loadWork = { ...workSince(w0), irr: this.footStats.irr, n: this.footStats.n }; // (setback.js WORK at load: tools/test/setbacks.js)
@@ -530,60 +563,48 @@ export class CityScenery {
       }
       recs.sort((a, b) => b.top - a.top);
       // The group's buildings, written into one vertex buffer (one writer: destruction.js finds a building's vertices
-      // through it), with their far copies (farBuilding: mostly the same triangles, a few vertices of their own after
-      // the buildings'), are drawn three ways, each through an index buffer of its own over those vertices:
+      // through it), with their far copies (made after load: farStep; mostly the same triangles, a few vertices of their
+      // own in the room after the buildings'), are drawn three ways, each through an index buffer of its own over them:
       //  - near (all heights drawn): one mesh per TALL_CELL cell, each culled on its own by three's frustum test (in
       //    every pass: the shadow map's too), its buildings tallest first (any late indices last; the roof furniture is instances: FurnK, one InstancedMesh per kind per FURN_CELL);
       //  - a cell past FAR.d: its far copies, one mesh per cell (farCell), its back-facing sectors left out;
-      //  - far (only the tall ones): the group's far copies, tallest first, so a draw range by height level is one draw call.
+      //  - far (only the tall ones): the whole group, tallest first, so a draw range by height level is one draw call (its
+      //    near buildings till their coarser far copies are written over its index).
       const [gi, gj] = k.split(',').map(Number), gcx = H.x0 + (gi + 0.5) * GROUP * H.tile, gcz = H.z0 + (gj + 0.5) * GROUP * H.tile;
       const M = new MeshW(gcx, gcz, 16384), lv = [], cells = new Map(), occ = [], fws = new Map(); // (fws: each cell's roof furniture, FurnK)
-      const Mf = (M.far = new MeshW(gcx, gcz, 1024)), lvF = [], fcells = new Map(); // (the far copy: farBuilding; its levels and its runs by cell, in its list)
-      Mf.L = new Int32Array(65536); Mf.Ln = 0; Mf.ents = [];
+      const pk = (M.far = farPack()), ckOf = new Map(); // (what the far copies are made from, later: farRec; ckOf: the cells, numbered)
       let li = 0;
       for (const rc of recs) {
-        while (li < LEVELS.length - 1 && rc.top < LEVELS[li]) { lv.push(M.ni); lvF.push(Mf.Ln); li++; }
+        while (li < LEVELS.length - 1 && rc.top < LEVELS[li]) { lv.push(M.ni); li++; }
         readRec(U, S, rc.o, this.q, rc.cx, rc.cz, R);
         if (this.skipped(R)) continue;
-        const ck = this.cellKey(R.P, TALL_CELL), a = M.ni, la = M.lni, v0 = M.n, fa = Mf.Ln;
+        const ck = this.cellKey(R.P, TALL_CELL), a = M.ni, la = M.lni, v0 = M.n;
+        pk.cell = ckOf.get(ck) ?? ckOf.set(ck, ckOf.size).get(ck); pk.top = rc.top;
         const fk = this.cellKey(R.P, FURN_CELL); M.fw = fws.get(fk); if (!M.fw) fws.set(fk, (M.fw = furnW(...this.cellCentre(fk, FURN_CELL))));
         this.lastFoot = this.lastBase = null; this.building(M, R, true);
         const ob = M.n > v0 && this.occluder(R, true); if (ob) { ob.ck = ck; occ.push(ob); (rc.t.occ || (rc.t.occ = [])).push(ob); }
         let c = cells.get(ck); if (!c) cells.set(ck, (c = []));
         c.push(a, M.ni, la, M.lni, rc.top); // (its main and late index runs)
-        if (Mf.Ln > fa) { let f = fcells.get(ck); if (!f) fcells.set(ck, (f = [])); f.push(fa, Mf.Ln); }
         this.stats.tall++;
       }
-      while (lv.length < LEVELS.length - 1) { lv.push(M.ni); lvF.push(Mf.Ln); }
+      while (lv.length < LEVELS.length - 1) lv.push(M.ni);
       M.far = null;
       if (!M.n) continue;
-      // the far copy's own vertices after the group's (its buildings' vertex runs, and damage already written, moved with them)
-      const t0 = performance.now(), nearN = M.n;
-      if (Mf.n) {
-        M.grow(nearN + Mf.n);
-        M.pos.set(Mf.pos.subarray(0, Mf.n * 3), nearN * 3); M.nor.set(Mf.nor.subarray(0, Mf.n * 3), nearN * 3); M.uv.set(Mf.uv.subarray(0, Mf.n * 2), nearN * 2);
-        M.col.set(Mf.col.subarray(0, Mf.n * 3), nearN * 3); M.atl.set(Mf.atl.subarray(0, Mf.n * 4), nearN * 4); M.n += Mf.n;
-        for (const e of Mf.ents) { e[0] = M; e[1] += nearN; }
-        for (const [a, c, v] of Mf.dmgW || []) (M.dmgW || (M.dmgW = [])).push([a + nearN, c, v]);
-      }
-      this.farStats.ms += performance.now() - t0;
-      // (the group's mesh: its vertices, shared by the cells' near and far meshes and the far group mesh, never drawn
-      // itself; hashed by tools/test/jobs/bld-hash.js, its first nearN vertices the near buildings')
-      const nm = M.mesh(this.mat), G = nm.geometry, I = G.index.array, P = G.attributes.position.array;
-      nm.visible = false;
-      // the far copy, the whole group's, tallest first, so a draw range by height level is one draw call (only what is
-      // drawn that far: the levels down to the lowest a far group draws); the cells' far meshes (farCell)
-      const t1 = performance.now(), FI = new (I.constructor)(Mf.Ln), L = Mf.L;
-      for (let k = 0; k < Mf.Ln; k++) { const v = L[k]; FI[k] = v >= 0 ? v : nearN - 1 - v; }
-      const FG = new THREE.BufferGeometry(); for (const [k, at] of Object.entries(G.attributes)) FG.setAttribute(k, at);
-      FG.setIndex(new THREE.BufferAttribute(FI.slice(0, lvF[LEVELS.length - 2]), 1)); FG.index.onUpload(function () { this.array = new this.array.constructor(0); });
-      FG.boundingSphere = G.boundingSphere.clone();
-      const far = new THREE.Mesh(FG, this.mat); far.customDepthMaterial = nm.customDepthMaterial; far.position.copy(nm.position); far.scale.copy(nm.scale); far.matrixAutoUpdate = false; far.updateMatrix();
+      // room after the buildings' vertices for the far copies' own (made later: farStep), copies of the first vertex
+      // till then (the bounds as they were; nothing draws them)
+      const nearN = M.n, room = Math.ceil(nearN * FAR_ROOM) + 64;
+      M.grow(nearN + room); for (let i = nearN; i < nearN + room; i++) M.pos.copyWithin(i * 3, 0, 3);
+      M.n += room;
+      const far = M.mesh(this.mat), G = far.geometry, I = G.index.array, P = G.attributes.position.array;
       far.castShadow = W_SHADOW(this.w); far.receiveShadow = true;
-      const g = { m: nm, fm: far, x: gcx, z: gcz, lv, lvF, all: M.ni, main: M.main, nearN, cells: [], furn: [] }, cellM = new Map();
+      const g = { m: far, x: gcx, z: gcz, lv, all: M.ni, main: M.main, nearN, cells: [], furn: [] }, cellM = new Map();
       for (const fw of fws.values()) this.furnMeshes(fw, g.furn, false, W_SHADOW(this.w));
-      binBounds(far, P, FG.index.array, FG.index.count, 8); // (its bounds in columns, while its vertices are here: occlude())
-      this.farStats.ms += performance.now() - t1;
+      // (far: only what is drawn far, the levels down to the lowest a far group draws; no roof furniture; its far copy
+      // written over it later, farStep)
+      G.setIndex(new THREE.BufferAttribute(I.slice(0, lv[LEVELS.length - 2]), 1)); G.index.onUpload(function () { this.array = new this.array.constructor(0); this.sent = true; });
+      binBounds(far, P, G.index.array, G.index.count, 8); // (its bounds in columns, while its vertices are here: occlude())
+      g.far = { M, I, pk: farDone(pk), room, used: 0, cells: [], jobs: 0 }; // (I: the whole index, till the far copies are made)
+      this.farStats.kept += farBytes(g.far.pk); this.farStats.keptI += I.byteLength;
       for (const [ck, c] of cells) {
         let n = 0; for (let q = 0; q < c.length; q += 5) n += c[q + 1] - c[q] + c[q + 3] - c[q + 2];
         const J = new (I.constructor)(n), clv = [];
@@ -597,62 +618,50 @@ export class CityScenery {
         for (let q = 0; q < c.length; q += 5) { J.set(I.subarray(M.main + c[q + 2], M.main + c[q + 3]), o); o += c[q + 3] - c[q + 2]; }
         if (!n) continue;
         const cg = new THREE.BufferGeometry();
-        for (const [nm, at] of Object.entries(G.attributes)) cg.setAttribute(nm, at); // (shared: uploaded once)
+        for (const [k, at] of Object.entries(G.attributes)) cg.setAttribute(k, at); // (shared: uploaded once)
         cg.setIndex(new THREE.BufferAttribute(J, 1)); cg.index.onUpload(function () { this.array = new this.array.constructor(0); });
         // its bounds: its own vertices' (three's culling test; the shared buffer's would be the whole group's)
         let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
         for (let q = 0; q < n; q++) { const v = J[q] * 3, x = P[v], y = P[v + 1], z = P[v + 2]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (z < z0) z0 = z; if (z > z1) z1 = z; }
         cg.boundingBox = new THREE.Box3(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1)); cg.boundingSphere = cg.boundingBox.getBoundingSphere(new THREE.Sphere());
-        const m = new THREE.Mesh(cg, this.mat); m.customDepthMaterial = nm.customDepthMaterial; binBounds(m, P, J, n, 4);
-        m.position.copy(nm.position); m.scale.copy(nm.scale); m.matrixAutoUpdate = false; m.updateMatrix();
+        const m = new THREE.Mesh(cg, this.mat); m.customDepthMaterial = far.customDepthMaterial; binBounds(m, P, J, n, 4);
+        m.position.copy(far.position); m.scale.copy(far.scale); m.matrixAutoUpdate = false; m.updateMatrix();
         m.castShadow = far.castShadow; m.receiveShadow = true; m.visible = false;
         this.group.add(m);
-        const [x, z] = this.cellCentre(ck, TALL_CELL), cell = { m, x, z, lv: clv, all: n, main, box: [nm.position.x + x0 / PQ, y0 / PQ, nm.position.z + z0 / PQ, nm.position.x + x1 / PQ, y1 / PQ, nm.position.z + z1 / PQ] };
-        const t1 = performance.now(); cell.fm = this.farCell(fcells.get(ck), G, FI, P, far); this.farStats.ms += performance.now() - t1;
-        g.cells.push(cell); cellM.set(ck, m);
+        const [x, z] = this.cellCentre(ck, TALL_CELL), cell = { m, x, z, lv: clv, all: n, main, fm: null, box: [far.position.x + x0 / PQ, y0 / PQ, far.position.z + z0 / PQ, far.position.x + x1 / PQ, y1 / PQ, far.position.z + z1 / PQ] };
+        g.cells.push(cell); cellM.set(ck, m); g.far.cells[ckOf.get(ck)] = cell;
       }
       for (const ob of occ) ob.m = cellM.get(ob.ck); // (an occluder counts only while its cell mesh is drawn)
-      G.setIndex(null); // (the near index: in the cells' now)
       this.group.add(far);
-      this.stats.tris += M.ni / 3; this.farStats.tris += Mf.Ln / 3; this.farStats.verts += Mf.n; this.farStats.nearVerts += nearN;
+      this.stats.tris += M.ni / 3; this.farStats.nearVerts += nearN; this.farStats.room += room;
       this.tallGroups.push(g);
     }
     this.tallMeshes = this.tallGroups.flatMap((g) => g.cells); // (the near meshes: every building of the group once)
     for (const t of this.tiles.values()) if (t.lowOff == null) t.lowOff = t.off; // (tiles with no tall buildings)
   }
 
-  // A cell's far mesh, over its group's far vertices (FG: the far copy's geometry, FI its whole index, FP its
-  // positions; runs: the cell's buildings' index runs in it [a, b, ...]): its upright triangles sorted into SECT compass
-  // sectors by the way they face, the rest (roofs) after them, then the sectors again: [S0 .. S15, rest, S0 .. S13], so
-  // the sectors facing the camera (a run round the compass) and the rest are one draw range (farRange: a run that goes
-  // round past S15 into the second copy ends by S13, as at least one sector is left out then). null: none.
-  farCell(runs, FG, FI, FP, far) {
-    if (!runs) return null;
-    const S = Array.from({ length: SECT }, () => []), O = [], sw = (2 * Math.PI) / SECT;
-    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
-    for (let q = 0; q < runs.length; q += 2) for (let k = runs[q]; k < runs[q + 1]; k += 3) {
-      const a = FI[k] * 3, b = FI[k + 1] * 3, c = FI[k + 2] * 3;
-      const ux = FP[b] - FP[a], uy = FP[b + 1] - FP[a + 1], uz = FP[b + 2] - FP[a + 2], vx = FP[c] - FP[a], vy = FP[c + 1] - FP[a + 1], vz = FP[c + 2] - FP[a + 2];
-      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx; // (its winding's normal: the face the GPU culls by)
-      const L = ny === 0 && (nx !== 0 || nz !== 0) ? S[Math.min(SECT - 1, Math.floor(((Math.atan2(nz, nx) + 2 * Math.PI) % (2 * Math.PI)) / sw))] : O;
-      L.push(FI[k], FI[k + 1], FI[k + 2]);
-      for (const v of [a, b, c]) { const x = FP[v], y = FP[v + 1], z = FP[v + 2]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (z < z0) z0 = z; if (z > z1) z1 = z; }
-    }
-    const off = new Int32Array(SECT + 1); for (let j = 0; j < SECT; j++) off[j + 1] = off[j] + S[j].length;
-    const oE = off[SECT] + O.length, J = new (FI.constructor)(oE + off[SECT - 2]);
-    for (let j = 0; j < SECT; j++) { J.set(S[j], off[j]); if (j < SECT - 2) J.set(S[j], oE + off[j]); } J.set(O, off[SECT]);
+  // A cell's far mesh (c: the cell), over its group's vertices (G: the group mesh's geometry; J: its far copies'
+  // triangles, S: each one's sector, farBuilding): its upright triangles sorted into SECT compass sectors by the way
+  // they face, the rest (roofs) after them, then the sectors again: [S0 .. S15, rest, S0 .. S13], so the sectors facing
+  // the camera (a run round the compass) and the rest are one draw range (farRange: a run that goes round past S15 into
+  // the second copy ends by S13, as at least one sector is left out then). Its bounds the near mesh's (the copies stand
+  // within the buildings' footprints).
+  farCell(J, S, G, c, gm) {
+    const cnt = new Int32Array(SECT + 1); for (const v of S) cnt[v < 0 ? SECT : v]++;
+    const off = new Int32Array(SECT + 2); for (let j = 0; j <= SECT; j++) off[j + 1] = off[j] + cnt[j] * 3;
+    const oE = off[SECT + 1], K = new (J.constructor)(oE + off[SECT - 2]), at = off.slice(0, SECT + 1);
+    for (let t = 0; t < S.length; t++) { const j = S[t] < 0 ? SECT : S[t], w = at[j]; K[w] = J[t * 3]; K[w + 1] = J[t * 3 + 1]; K[w + 2] = J[t * 3 + 2]; at[j] += 3; }
+    K.copyWithin(oE, 0, off[SECT - 2]);
     const g = new THREE.BufferGeometry();
-    for (const [nm, at] of Object.entries(FG.attributes)) g.setAttribute(nm, at); // (shared: uploaded once)
-    g.setIndex(new THREE.BufferAttribute(J, 1)); g.index.onUpload(function () { this.array = new this.array.constructor(0); });
-    g.boundingBox = new THREE.Box3(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1)); g.boundingSphere = g.boundingBox.getBoundingSphere(new THREE.Sphere());
+    for (const [k, a] of Object.entries(G.attributes)) g.setAttribute(k, a); // (shared: uploaded once)
+    g.setIndex(new THREE.BufferAttribute(K, 1)); g.index.onUpload(function () { this.array = new this.array.constructor(0); this.sent = true; });
+    const ng = c.m.geometry; g.boundingBox = ng.boundingBox.clone(); g.boundingSphere = ng.boundingSphere.clone();
     g.setDrawRange(0, oE);
-    const m = new THREE.Mesh(g, this.mat); m.customDepthMaterial = far.customDepthMaterial; binBounds(m, FP, J, oE, 4);
-    m.position.copy(far.position); m.scale.copy(far.scale); m.matrixAutoUpdate = false; m.updateMatrix();
-    m.castShadow = far.castShadow; m.receiveShadow = true; m.visible = false;
+    const m = new THREE.Mesh(g, this.mat); m.customDepthMaterial = gm.customDepthMaterial; m.userData.occL = c.m.userData.occL;
+    m.position.copy(gm.position); m.scale.copy(gm.scale); m.matrixAutoUpdate = false; m.updateMatrix();
+    m.castShadow = c.m.castShadow; m.receiveShadow = true; m.visible = false;
     this.group.add(m);
-    // (its middle and its reach round it, level, in metres: farRange)
-    const cx = far.position.x + (x0 + x1) / 2 / PQ, cz = far.position.z + (z0 + z1) / 2 / PQ;
-    m.userData.far = { off, oE, cx, cz, r: Math.hypot(x1 - x0, z1 - z0) / 2 / PQ };
+    const B = c.box; m.userData.far = { off: off.subarray(0, SECT + 1), oE, cx: (B[0] + B[3]) / 2, cz: (B[2] + B[5]) / 2, r: Math.hypot(B[3] - B[0], B[5] - B[2]) / 2 }; // (its middle and its reach round it, level: farRange)
     return m;
   }
   // a cell's far mesh's draw range (farCell) for the camera at c: the sectors that face wholly away from it from
@@ -882,23 +891,24 @@ export class CityScenery {
     // underside where they cross the road, walls line it either side and a ceiling closes it over the road
     const pass = F.pass?.length ? F.pass : null, yPass = pass ? R.g1 + PASSAGE.clear : 0, cut = pass && yPass > yBase + 0.5 && yPass < eave - 2;
     const inPass = (x, z) => pass.some((s) => segD(s, x, z) < s[4]);
-    const ring = (Q, inner, wI) => { // (wI: each wall's index run [i0, i1, ...]: the far copy, farBuilding)
+    const ring = (Q, inner, wI) => { // (wI: where each wall's indices start, and the last one's end: the far copy, farRec)
       const n = Q.length;
       for (let k = 0; k < n; k++) {
+        wI?.push(M.ni);
         const a = Q[k], b = Q[(k + 1) % n], [p, r] = inner ? [a, b] : [b, a]; // outer walls b -> a (outside on the front)
         const front = !!street && !inner && street[k], nb = Math.max(1, Math.round(Math.hypot(r[0] - p[0], r[1] - p[1]) / st.bay));
         const wall = (y0, t0, t1) => {
           if (F2) M.wall(p[0], p[1], r[0], r[1], y0, wTop, yfV, front ? F2.front : F2.rear, st.bay, flV, front && !F2.endDoor ? -Math.floor(nb / 2) : 0, t0, t1);
           else M.wall(p[0], p[1], r[0], r[1], y0, wTop, yFloor, st.cell, st.bay, st.fl, 0, t0, t1);
         };
-        if (!cut) { const i0 = M.ni; wall(yBase, 0, 1); wI?.push(i0, M.ni); continue; }
+        if (!cut) { wall(yBase, 0, 1); continue; }
         for (const [t0, t1, over] of spans(p, r, inPass)) wall(over ? yPass : yBase, t0, t1);
       }
+      wI?.push(M.ni);
     };
-    const topW = M.top, iW0 = M.ni, wIo = M.far && [], wIh = holes.map(() => M.far && []); // (the walls' index runs and floor count: the far copy, farBuilding)
+    const topW = M.top, wIo = M.far && [], wIh = holes.map(() => M.far && []); // (the walls' index runs and floor count: the far copy, farBuilding)
     ring(P, false, wIo); holes.forEach((h, k) => ring(h, true, wIh[k]));
     M.top = 0;
-    const iW1 = M.ni;
     if (cut) { this.passage(M, P, pass, yBase, yPass, inPass); this.passages.push([mx, mz, pass.length]); }
     // ---- roof
     let rLook = null, iR0 = M.ni, iR1 = M.ni;
@@ -941,7 +951,7 @@ export class CityScenery {
       this.addBox({ cx: m.x, cz: m.z, ux: 1, uz: 0, hl: 2, hw: 2 }, yTop, gm + m.top, null);
     }
     // ---- its far copy (a tall group's far writer: farBuilding)
-    const far = M.far ? this.farBuilding(M, M.far, { P, holes, wIo, wIh, iW0, iW1, iR0, iR1, topW, cut, F2, st, street, yBase, wTop, yfV, flV, yFloor, eave, rLook, flat: roof === 'flat' }) : null;
+    const far = M.far ? farRec(M, M.far, { P, holes, wIo, wIh, iR0, iR1, topW, cut, F2, st, street, yBase, wTop, yfV, flV, yFloor, eave, rLook, flat: roof === 'flat' }) : -1;
     const b0 = box || obb(P);
     if (!b0) return;
     // the collision boxes: a near-rectangle's own box; an irregular footprint (an L, a U, a cross, a courtyard, a
@@ -974,51 +984,116 @@ export class CityScenery {
     // destructible (destruction.js): its vertices, what it's made of; damage done earlier this flight comes back with it
     t.dk = 'c' + R.o; t.rng = [[M, n0, M.n - n0]];
     if (f0) { const B = M.fw.box, K = M.fw.tank; if (B.n > f0[0]) t.rng.push([B, f0[0], B.n - f0[0]]); if (K.n > f0[1]) t.rng.push([K, f0[1], K.n - f0[1]]); } // (its roof furniture's instances: hidden with it)
-    if (far?.[1]) { const e = [M.far, far[0], far[1]]; t.rng.push(e); M.far.ents.push(e); } // (its far copy's own vertices: damaged with it, cut down and holed alike; moved into M's at the group's end)
+    if (far >= 0) M.far.t[far] = t; // (its far copy's own vertices, when they're made: damaged with it, farStep)
     t.look = { cell: st.cell, col: st.col, rcol: rLook?.col ?? 0x5c5a56, glass: !!st.glass }; if (wt) t.type = 'waterTower';
     W.destruct?.restore(t);
   }
-  // A building's far copy: its triangles listed in its group's far list (F.L: M's own vertices, or -(1 + a vertex of
-  // F's own), F: the far writer, the same centre as M, its vertices appended to M's at the group's end): the walls
-  // round its footprint simplified (farRing: FAR_TOL; a point where the street walls start or stop kept, so each wall
-  // keeps its facade program), a wall left as it was M's own (its bays, windows and lit windows the same), a wall that
-  // spans several written anew as building() writes one; its flat roof over the simplified footprint (M's own if
-  // nothing was dropped); a passage's walls as they are (the passage itself left out: from far away it's under the
-  // building); the rest (crowns, pitched roofs, spires, masts) M's own. o: building()'s values. Returns its own vertex
-  // run [first, count] in F (destruction.js: damaged with the building).
-  farBuilding(M, F, o) {
-    const v0 = F.n, { F2, st, street } = o, I = M.idx;
-    const near = (i0, i1) => { farGrow(F, i1 - i0); for (let j = i0; j < i1; j++) F.L[F.Ln++] = I[j]; };
-    const own = () => { farGrow(F, F.ni); for (let j = 0; j < F.ni; j++) F.L[F.Ln++] = -1 - F.idx[j]; F.ni = 0; }; // (what F just wrote)
-    F.seed = M.seed; F.yg = o.yFloor;
-    let Ps = o.P, Hs = o.holes, same = true;
-    if (o.cut) near(o.iW0, o.iW1);
-    else {
-      F.color(st.col); F.top = o.topW;
-      const ring = (Q, inner, fr, wI) => {
-        const n = Q.length, K = farRing(Q, FAR_TOL, fr ? (i) => !fr[(i + n - 1) % n] !== !fr[i] : null), m = K ? K.length : n;
-        for (let q = 0; q < m; q++) {
-          const ka = K ? K[q] : q, kb = K ? K[(q + 1) % m] : (q + 1) % n;
-          if (kb === (ka + 1) % n) { near(wI[ka * 2], wI[ka * 2 + 1]); continue; } // (as it was)
-          const a = Q[ka], b = Q[kb], [p, r] = inner ? [a, b] : [b, a], front = !!fr && fr[ka];
-          const nb = Math.max(1, Math.round(Math.hypot(r[0] - p[0], r[1] - p[1]) / st.bay));
-          if (F2) F.wall(p[0], p[1], r[0], r[1], o.yBase, o.wTop, o.yfV, front ? F2.front : F2.rear, st.bay, o.flV, front && !F2.endDoor ? -Math.floor(nb / 2) : 0);
-          else F.wall(p[0], p[1], r[0], r[1], o.yBase, o.wTop, o.yFloor, st.cell, st.bay, st.fl, 0);
-          own();
-        }
-        if (K) same = false;
-        return K ? K.map((i) => Q[i]) : Q;
-      };
-      Ps = ring(o.P, false, street, o.wIo); Hs = o.holes.map((h, k) => ring(h, true, null, o.wIh[k]));
+  // A building's far copy (record r of the group's pack, gf: its g.far), its triangles listed in L, three a triangle
+  // (gf.I's: the group's own vertices; -1 - v: vertex v of F's, the job's writer, the same centre), its sector in S
+  // (the way it faces, for farCell; -1: not upright): the walls round its footprint simplified (farRing: tol; a point
+  // where the street walls start or stop kept, so each wall keeps its facade program; tol < 0: none), a wall left as
+  // it was the near one (its bays, windows and lit windows the same), a wall that spans several written anew as
+  // building() writes one; its flat roof over the simplified footprint (the near one if nothing was dropped); a
+  // passage's walls as they are (the passage itself left out: from far away it's under the building); the rest
+  // (crowns, pitched roofs, spires, masts) the near triangles.
+  farBuilding(gf, r, tol, F, L, S) {
+    const pk = gf.pk, A = pk.prm, o = r * FAR_NP, I = gf.I, cx = F.cx, cz = F.cz, fl = A[o + 2], cut = fl & 1, F2 = fl & 4, end = fl & 8;
+    const front = A[o + 3], rear = A[o + 4], col = A[o + 5], bay = A[o + 6], cell = A[o + 7], flo = A[o + 8], yBase = A[o + 12], wTop = A[o + 13], yfV = A[o + 14], flV = A[o + 15], yFloor = A[o + 16];
+    const sw = (2 * Math.PI) / SECT, sec = (px, pz, rx, rz) => { const nx = pz - rz, nz = rx - px; return nx || nz ? Math.min(SECT - 1, Math.floor(((Math.atan2(nz, nx) + 2 * Math.PI) % (2 * Math.PI)) / sw)) : -1; }; // (an upright wall p -> r: the way its winding faces)
+    const near = (i0, i1, sc) => { for (let j = i0; j < i1; j += 3) { L.push(I[j], I[j + 1], I[j + 2]); S.push(sc); } };
+    const own = (sc) => { const X = F.idx; for (let j = 0; j < F.ni; j += 3) { L.push(-1 - X[j], -1 - X[j + 1], -1 - X[j + 2]); S.push(sc); } F.ni = 0; };
+    F.seed = A[o + 11]; F.yg = yFloor;
+    let same = true, Ps = null; const Hs = [];
+    for (let h = 0; h < A[o + 23]; h++) {
+      const rg = (A[o + 22] + h) * 3, np = pk.rings[rg], po = pk.rings[rg + 1], eo = pk.rings[rg + 2], E = pk.edges, Pt = pk.pts, inner = h > 0;
+      const Q = []; for (let k = 0; k < np; k++) Q.push([cx + Pt[(po + k) * 2] / PQ, cz + Pt[(po + k) * 2 + 1] / PQ]);
+      const fr = !inner && fl & 16 ? (k) => pk.str[po + k] : null;
+      const K = cut || tol < 0 ? null : farRing(Q, tol, fr ? (i) => fr((i + np - 1) % np) !== fr(i) : null), m = K ? K.length : np;
+      if (K) same = false;
+      F.color(col); F.top = A[o + 18];
+      for (let q = 0; q < m; q++) {
+        const ka = K ? K[q] : q, kb = K ? K[(q + 1) % m] : (q + 1) % np, [pi, ri] = inner ? [ka, kb] : [kb, ka]; // (outer walls b -> a: outside on the front)
+        const sc = sec(Pt[(po + pi) * 2], Pt[(po + pi) * 2 + 1], Pt[(po + ri) * 2], Pt[(po + ri) * 2 + 1]);
+        if (kb === (ka + 1) % np) { near(E[eo + ka], E[eo + ka + 1], sc); continue; } // (as it was)
+        const p = Q[pi], rr = Q[ri], fw = !!fr && !!fr(ka), nb = Math.max(1, Math.round(Math.hypot(rr[0] - p[0], rr[1] - p[1]) / bay));
+        if (F2) F.wall(p[0], p[1], rr[0], rr[1], yBase, wTop, yfV, fw ? front : rear, bay, flV, fw && !end ? -Math.floor(nb / 2) : 0);
+        else F.wall(p[0], p[1], rr[0], rr[1], yBase, wTop, yFloor, cell, bay, flo, 0);
+        own(sc);
+      }
       F.top = 0;
+      const Qs = K ? K.map((i) => Q[i]) : Q; if (inner) Hs.push(Qs); else Ps = Qs;
     }
-    if (o.flat) {
-      if (same) near(o.iR0, o.iR1);
-      else { F.color(o.rLook.col); F.roof(Ps, Hs, o.eave, o.rLook.cell); own(); }
+    if (fl & 2) {
+      if (same) near(A[o + 19], A[o + 20], -1);
+      else { F.color(A[o + 9]); F.roof(Ps, Hs, A[o + 17], A[o + 10]); own(-1); }
     }
-    near(o.iR1, M.ni);
-    return [v0, F.n - v0];
+    near(A[o + 20], A[o + 21], -1);
   }
+  // The far copies are made after load, a job at a time (each cell's copies; each group's coarser ones for its group
+  // mesh), the jobs nearest the distance their mesh switches at first; a few buildings a frame (budget ms, or under the
+  // test stepper units: stepClock.js). Until a cell's (a group's) copies exist it draws its near meshes as it did.
+  farPlan(cam) {
+    if (!this.farQ) {
+      this.farQ = [];
+      for (const g of this.tallGroups) {
+        const gf = g.far; if (!gf) continue;
+        const per = gf.cells.map(() => []); for (let r = 0; r < gf.pk.n; r++) per[gf.pk.prm[r * FAR_NP + 1]].push(r);
+        per.forEach((recs, ci) => { if (recs.length && gf.cells[ci]) { this.farQ.push({ g, ci, recs, k: 0 }); gf.jobs++; } });
+        const recs = []; for (let r = 0; r < gf.pk.n && gf.pk.prm[r * FAR_NP] >= LEVELS[LEVELS.length - 2]; r++) recs.push(r);
+        if (recs.length) { this.farQ.push({ g, ci: -1, recs, k: 0 }); gf.jobs++; }
+        if (!gf.jobs) this.farFree(g);
+      }
+    }
+    if (!cam) return;
+    const T = this.city.hdr.tile, nl = this.levelD.length;
+    for (const j of this.farQ) {
+      if (j.ci < 0) { const d = Math.hypot(j.g.x - cam.x, j.g.z - cam.z) - T * GROUP * 0.7; j.key = Math.abs(d - this.levelD[nl - 1]); continue; }
+      const B = j.g.far.cells[j.ci].box, bx = Math.max(B[0] - cam.x, 0, cam.x - B[3]), by = Math.max(B[1] - cam.y, 0, cam.y - B[4]), bz = Math.max(B[2] - cam.z, 0, cam.z - B[5]);
+      j.key = Math.abs(Math.hypot(bx, by, bz) - FAR.d);
+    }
+    const cur = this.farQ[0]?.F ? this.farQ.shift() : null; // (one under way stays first)
+    this.farQ.sort((a, b) => a.key - b.key); if (cur) this.farQ.unshift(cur);
+  }
+  farStep(budget) {
+    const Q = this.farQ; if (!Q?.length) return;
+    const t0 = performance.now(), more = slice(budget, Math.ceil(budget * 16)), FS = this.farStats; let n = 0;
+    while (Q.length && more()) {
+      const j = Q[0], gf = j.g.far, grp = j.ci < 0;
+      if (!j.F) { j.F = new MeshW(gf.M.cx, gf.M.cz, 1024); j.L = []; j.S = []; j.runs = []; j.lv = []; j.li = 0; }
+      const r = j.recs[j.k++], F = j.F, n0 = F.n, l0 = j.L.length, s0 = j.S.length;
+      if (grp) while (j.li < LEVELS.length - 1 && gf.pk.prm[r * FAR_NP] < LEVELS[j.li]) { j.lv.push(j.L.length); j.li++; }
+      this.farBuilding(gf, r, grp ? FAR_TOL_G : FAR_TOL, F, j.L, j.S);
+      if (gf.used + F.n > gf.room) { F.n = n0; F.ni = 0; j.L.length = l0; j.S.length = s0; this.farBuilding(gf, r, -1, F, j.L, j.S); FS.over++; } // (no room left: as it is)
+      if (F.n > n0) j.runs.push(r, n0, F.n - n0);
+      n++;
+      if (j.k === j.recs.length) { Q.shift(); this.farFinish(j); }
+    }
+    const ms = performance.now() - t0; FS.steps++; FS.built += n; FS.ms += ms; FS.maxMs = Math.max(FS.maxMs, ms); if (!Q.length) FS.done = FS.steps;
+  }
+  farFlush() { this.farPlan(null); while (this.farQ.length) this.farStep(Infinity); }
+  // a job's copies done: its own vertices into the group's room (damage already done to them written in, their run
+  // added to the building's: destruction.js), its mesh
+  farFinish(j) {
+    const g = j.g, gf = g.far, F = j.F, G = gf.M.geo, base = g.nearN, b0 = base + gf.used, FS = this.farStats, at = G.attributes;
+    if (F.n) {
+      farPut(at.position, F.pos, b0, F.n); farPut(at.normal, F.nor, b0, F.n); farPut(at.uv, F.uv, b0, F.n); farPut(at.color, F.col, b0, F.n); farPut(at.atl, F.atl, b0, F.n);
+      const dm = new Uint8Array(F.n), ds = this.w.destruct?.states;
+      for (let q = 0; q < j.runs.length; q += 3) { const t = gf.pk.t[j.runs[q]]; if (!t) continue; const e = [gf.M, b0 + j.runs[q + 1], j.runs[q + 2]]; t.rng.push(e); const f = ds?.get(t.dk)?.flag; if (f) dm.fill(f, j.runs[q + 1], j.runs[q + 1] + j.runs[q + 2]); }
+      farPut(at.dmg, dm, b0, F.n);
+      gf.used += F.n; FS.verts += F.n;
+    }
+    const L = j.L, J = new (gf.I.constructor)(L.length); for (let k = 0; k < L.length; k++) { const v = L[k]; J[k] = v >= 0 ? v : b0 - 1 - v; }
+    FS.hash = (FS.hash + farMix(farMix(farMix(0x9747b28c, L, L.length), F.pos, F.n * 3), F.atl, F.n * 4)) >>> 0; // (order-free: a sum)
+    if (j.ci >= 0) { const c = gf.cells[j.ci]; c.fm = this.farCell(J, j.S, G, c, g.m); FS.tris += L.length / 3; }
+    else { // (the group mesh's index, written over: never longer than the near one it replaces, level for level)
+      while (j.lv.length < LEVELS.length - 1) j.lv.push(L.length);
+      const ix = g.m.geometry.index;
+      if (L.length <= ix.count) { farPut(ix, J, 0, L.length); g.lvF = j.lv; FS.groupTris += L.length / 3; FS.groupNear += g.lv[LEVELS.length - 2] / 3; }
+    }
+    j.F = j.L = j.S = null;
+    if (!--gf.jobs) this.farFree(g);
+  }
+  farFree(g) { g.far.I = null; g.far.pk = null; } // (what they were made from: dropped)
   // A building's facade programs (buildings.js facade): { front: the walls facing a street, rear: the others, gH: its
   // ground floor's height, endDoor: the door at the wall's end (a row house's stoop), not its middle }. From the
   // reference photos: tenement and loft storefronts (a sign fascia and transom over display windows, a door every few
@@ -1311,13 +1386,13 @@ export class CityScenery {
         c.m.geometry.setDrawRange(0, d > this.furnD ? c.main : c.all); c.m.castShadow = sh;
       }
       for (const f of g.furn) { f.visible = near && d <= this.furnD; f.castShadow = sh; } // (its roof furniture's instances, FurnK)
-      let n = 0; if (!near) for (let k = 0; k < nl; k++) if (d > this.levelD[nl - 1 - k]) n = g.lvF[nl - 1 - k];
-      g.fm.geometry.setDrawRange(0, n); g.fm.visible = n > 0; g.fm.castShadow = sh;
+      const lv = g.lvF || g.lv; let n = 0; if (!near) for (let k = 0; k < nl; k++) if (d > this.levelD[nl - 1 - k]) n = lv[nl - 1 - k]; // (lvF: its far copies, once made)
+      g.m.geometry.setDrawRange(0, n); g.m.visible = n > 0; g.m.castShadow = sh;
     }
     // low tiles: plan every ~100 m of camera movement, build one tile at a time (a few ms a frame)
     const R = this.lowR;
     if (!this.lastPlan || Math.hypot(cam.x - this.lastPlan.x, cam.z - this.lastPlan.z) > 100) {
-      this.lastPlan = { x: cam.x, z: cam.z };
+      this.lastPlan = { x: cam.x, z: cam.z }; this.farMoved = true;
       const want = [];
       for (const t of this.tiles.values()) {
         if (!t.nLow) continue;
@@ -1335,6 +1410,7 @@ export class CityScenery {
       break;
     }
     if (!this.queue.length && this.refiner.jobs.length) this.refiner.step(STEP.on ? Infinity : 1, STEP.on ? 2 : Infinity); // (the low tiles first; then a huge footprint's boxes, a millisecond a frame)
+    if (!this.queue.length) { if (!this.farQ || this.farMoved) { this.farPlan(cam); this.farMoved = false; } this.farStep(budget); } // (then the far copies: farStep)
     const k = this.w.lightsK ?? (this.w.night ? 1 : 0); this.mat.emissiveIntensity = this.fmat.emissiveIntensity = 1.6 * Math.min(1, k / 0.12); // (buildings.js updateBuildingLights: which windows, by hour)
   }
   // A box wholly inside the building just built (its walls from footprint(), its record): from the ground to under its
@@ -1398,7 +1474,7 @@ export class CityScenery {
       m.layers.set(OCC_LAYER); hid.push(m);
       const g = m.geometry; tris += (Math.min(g.index.count, g.drawRange.count) / 3) * (m.isInstancedMesh ? m.count : 1);
     };
-    for (const g of this.tallGroups) { test(g.fm); for (const c of g.cells) { test(c.m); if (c.fm) test(c.fm); } for (const f of g.furn) test(f); } // (the roof furniture's instances: their own boxes, FurnK.mesh)
+    for (const g of this.tallGroups) { test(g.m); for (const c of g.cells) { test(c.m); if (c.fm) test(c.fm); } for (const f of g.furn) test(f); } // (the roof furniture's instances: their own boxes, FurnK.mesh)
     for (const t of this.tiles.values()) { if (t.meshes) for (const m of t.meshes) test(m); if (t.furn) for (const f of t.furn) test(f); }
     Object.assign(S, { cands: C.length, occluders: st.occluders, corners: st.corners, pixels: st.pixels, tested: st.tested, hidden: st.hidden, tris, ms: performance.now() - t0 });
   }

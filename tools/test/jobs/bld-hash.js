@@ -60,10 +60,10 @@ export function tallHash(city, rec) { // (each 2 km group's arrays as its writer
   return { n: hs.length, hash: combine(hs) };
 }
 // every other mesh MeshW wrote so far (the landmarks: realLandmarks.js), in the order written
-// the far copies' own vertices (realCity.js farBuilding): info (made the same way every run)
-export function farHash(city, rec) {
-  const hs = (city.tallGroups || []).map((g) => { const A = rec.meshes.get(g.m), N = A[4].length / 3; return hashArrays(A.slice(0, 6).map((a) => a.subarray((a.length / N) * g.nearN))); });
-  return { n: hs.length, hash: combine(hs), tris: city.farStats?.tris ?? 0 };
+// the far copies (realCity.js farBuilding, made after load: farStep), all made now: info (the same every run)
+export function farHash(city) {
+  const t0 = performance.now(); city.farFlush?.(); const F = city.farStats;
+  return F ? { hash: (F.hash >>> 0).toString(16).padStart(8, '0'), tris: F.tris, groupTris: F.groupTris, groupNear: F.groupNear, verts: F.verts, room: F.room, over: F.over, kept: F.kept, keptI: F.keptI, ms: performance.now() - t0 } : null;
 }
 export function otherHash(city, rec) {
   const tall = new Set([...(city.tallGroups || []), ...city.tallMeshes].map((g) => g.m)), hs = [];
@@ -111,12 +111,13 @@ export async function run(T) {
     await T.step('nyc: build, hash the tall buildings', async () => {
       await T.start('Kestrel', 'nyc'); C = T.S.F.world.towns.city;
       const h = tallHash(C, rec), o = otherHash(C, rec); T.log(`BLDHASH tall ${h.hash} (${h.n} meshes, ${C.stats.tall} buildings) msTall ${C.msTall.toFixed(0)} ms`); T.log(`BLDHASH other ${o.hash} (${o.n} meshes: landmarks)`);
-      const f = farHash(C, rec); T.log(`BLDHASH far ${f.hash} (${f.n} groups, ${Math.round(f.tris)} far triangles; info) farMs ${C.farStats?.ms.toFixed(0)} ms`);
+
     });
     await T.step('nyc: stream Battery to Harlem, hash the low tiles', async () => {
       const S = T.S, F = S.F; F.paused = true; rec.lowMs = 0;
       await fly(F.world, S.rig.cam, T.THREE);
       const h = lowHash(rec); T.check('every tile built twice hashed the same', !h.bad.length, h.bad.join(' '));
+      const f = farHash(C); if (f) T.log(`BLDHASH far ${f.hash} (info: cells ${Math.round(f.tris)} triangles, groups ${Math.round(f.groupTris)} (near ${Math.round(f.groupNear)}), ${f.verts} own vertices in ${f.room} of room, ${f.over} buildings copied as they are for want of room; kept ${(f.kept / 1e6).toFixed(1)} MB + index ${(f.keptI / 1e6).toFixed(1)} MB till made; the rest made in ${f.ms.toFixed(0)} ms)`);
       T.log(`BLDHASH low ${h.hash} (${h.n} tiles, ${h.built} builds) lowMs ${rec.lowMs.toFixed(0)} ms (flight only)`);
     }, { allowStalls: true });
     await T.step('nyc: hash the collision boxes', async () => {
