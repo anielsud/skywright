@@ -131,8 +131,9 @@ The rules (#278), which keep CI fast and free of timing flakes:
   (shaders, cockpit views, the real loop running);
 - **no wall-clock waits**: every wait is on a game state (`T.until`, `T.untilFrames`, `T.stepUntil`) or a frame count.
   Their limits are safety nets: generous, and they fail loudly naming what was awaited (a step's own safety timeout
-  skips the rest of the job: the page is in an unknown state). Something that runs on the audio clock (a gain ramp) is
-  waited for on the audio clock (`ctx.currentTime`), not in frames;
+  skips the rest of the job: the page is in an unknown state). A sound's level is judged by what the game set it to
+  (`audio.js` `set()` keeps each parameter's target as `param.goal`; `smoke.js` `motorVoice`), not by waiting for the
+  audio clock to ramp it there (that clock is neither frames nor game time, and stalls with no output device, #180);
 - **no timing verdicts** (Node tier too): no pass/fail may depend on wall-clock time measured on the machine running
   the test (CI is 1.5–6× slower than a dev Mac, and a busy one slower still). Prove a cost claim by counting the work
   (vertices, segments tested, solves, cells) against a cap set from today's count with margin, and keep the ms in the
@@ -152,32 +153,33 @@ The jobs:
   Pilot on the rooftop helipad, stepped (`helipadcheck.js` `heliRun`/`heliChecks`: its spawn pose, the building under the
   pad has no damage key, the runway resting baseline by teleporting the same Dragonfly to the runway, then 5 s parked,
   a lift to a 25 m hover, a landing and a rest, each compared with the runway); the shader sweep's scene and events
-  (drawn: every hidden object shown, every event effect fired; this is the only job that fires them); the tour flight on
+  (drawn once each: every hidden object shown, every event effect fired, then stepped until they've died out; this is the only
+  job that fires them); the tour flight on
   the real loop and every cockpit view (drawn); the Dragonfly again in Arcade; the Rocket on the pad (hold + launch,
   stepped) and on the real loop; the Dune Buggy at the stunt park's arch, the site dry, flat and clear (tree canopy from
   the imagery) and its kicker jump and loop run, the road start (the rule's pick, the buggy teleported there as
   buildFlight puts it: in its lane, facing along the road), and the crash: two game-loop runs into building faces
-  (nothing gets inside), the 30 m/s one drawn (no stall, nothing waited for its shader, something broke off); the Dirt
+  (nothing gets inside), the 30 m/s one stepped to its end and drawn once (no stall, nothing waited for its shader, something broke off); the Dirt
   Bike at the arch and on the road; the Speedboat and the Jet Ski at the water park's arch, afloat, facing down the
   course; the start rule's wiring (`jobs/wiring.js`: every vehicle started where `chooseStart` predicts with the
   World's answers; over every stock preset nothing but a rocket on the pad, nothing but a helicopter on the helipad);
   no stunt site or water park warnings.
 - **islands** (Bora Bora, built once by the first flight; every vehicle swapped in once): the Kestrel from the runway
-  (the tour flight: 3 frames at full power on the real loop, each stepping a fixed 1/60 s, `__sky.fixedDt`, 3 s
-  stepped, every cockpit view drawn; then streaming
+  (the tour flight: full power on the real loop over every cockpit view drawn once, at least 2 frames, each stepping
+  a fixed 1/60 s, `__sky.fixedDt`; out of the cockpit, 3 s stepped; then streaming
   quiet and the sweep's scene phase: no stalls, nothing waited for its shader); startbakes-stunts; the
   Albatross's water start and the Kite's air start (2 s stepped: finite, in one piece); the Speedboat from the marina
-  (an AudioContext with no clips decoded, as a boat's motor voice is synthesized: at full gas its voice's gain comes up
-  within 0.3 s of the audio clock with the engine running, i.e. the engine is audible; then the tour flight); the Rocket on the pad (padcheck); the SR-71
+  (an AudioContext with no clips decoded, as a boat's motor voice is synthesized: the tour flight, then the level the
+  game set its motor voice to at full gas, `motorVoice`: audible); the Rocket on the pad (padcheck); the SR-71
   swapped in once on the landing approach and flown by `sr71flight.js` in game time (the game loop paused): it lands
   intact and stops on the runway (one screenshot), then, put on the runway start, climbs to Mach 2.5+ above 60,000 ft
   with nothing broken; then crashed into the water (stepped to the impact, 5 frames drawn: parts come off, no stalls);
   last, the start-rule wiring (`wiring.js`) over every vehicle it started.
 - **canyon-lauterbrunnen** (two places in one session, each built once): the AudioContext starts without decoding the
   clips (the engines checked are synthesized). **Grand Canyon**: the Dirt Bike from the stunt park (builds it) and the
-  Dune Buggy swapped in there, each on the tour (3 frames drawn at full power on the real loop, 3 s stepped, every
-  cockpit view drawn) with its engine voice audible right after (smoke.py's verdict; not judged if the audio clock ran
-  under 0.3 s over the tour); streaming quiet, the whole scene
+  Dune Buggy swapped in there, each on the tour (full power on the real loop over every cockpit view drawn, at least 2
+  frames; 3 s stepped) with its engine voice audible right after (smoke.py's 0.01 floor on the level the game set the
+  voice to, `motorVoice`: judged on every machine); streaming quiet, the whole scene
   drawn (no stalls, nothing waits for its shader); the Dune Buggy's ground crash (stepped to the impact, 5 frames drawn,
   parts must come off); the Rocket swapped in on the pad (padcheck, stepped). **Lauterbrunnen**, built by the Rocket's
   flight there: the pad check; startbakes-stunts (`stuntsIn`); streaming quiet and the whole scene drawn; #187: nothing
@@ -213,6 +215,8 @@ a place is most of the run, the flying itself 2 s.
 
 Chrome is found at the usual macOS path, or `google-chrome` / `chromium` on Linux. Set `CHROME=/path/to/chrome` to override.
 On Linux it uses SwiftShader for WebGL (no GPU needed), which is how it runs in CI.
+Elsewhere `SKY_SWIFTSHADER=1` does the same (e.g. `SKY_SWIFTSHADER=1 python3 tools/test/jobs.py nyc --quality low --ci`):
+CI's draw counts, compiles and stalls on this machine (its frame times are this machine's CPU's, not a runner's).
 
 ## When
 

@@ -70,26 +70,45 @@ export function quick(secs = 2) {
 }
 
 // ---------- for the per-map jobs (tools/test/jobs): the tour flight with fixed frame counts, no wall-clock waits ----------
-// Against the flight already running (harness T.start): full power on the real game loop for `n` drawn frames (the
-// loop runs: the flight clock moves; each steps a fixed 1/60 s, __sky.fixedDt, so the ride judged after them is the
-// same game time on any machine, not min(frame time, 1/20) a frame), `more` game seconds stepped (advance), then every
-// cockpit view drawn once as the camera button steps through them, and back to the chase view. Judge it with tourChecks.
+// Against the flight already running (harness T.start): full power on the real game loop, each drawn frame stepping a
+// fixed 1/60 s (__sky.fixedDt, so the ride judged after them is the same game time on any machine), over every cockpit
+// view drawn once as the camera button steps through them (the loop runs: the flight clock moves over them; topped up
+// with chase frames to at least `n` drawn frames), then the camera button leaves the cockpit (a state: not drawn), back
+// to the chase view, and `more` game seconds stepped (advance). Judge it with tourChecks. Nothing else is drawn: a
+// drawn frame costs 1-2 s of software WebGL at New York on CI, and these frames are the only ones the claims need.
 import { frames as drawFrames, advance } from './jobs/harness.js';
-export async function tour({ frames: n = 3, more = 3 } = {}) {
+export async function tour({ frames: n = 2, more = 3 } = {}) {
   const F = S.F; if (!F) throw new Error('no flight');
-  go(true);
-  const t0 = F.t; S.fixedDt = 1 / 60;
-  try { await drawFrames(n, { what: 'the tour flight on the real loop' }); } finally { S.fixedDt = null; }
-  const ran = S.F === F ? F.t - t0 : 0;
+  const ac = F.ac, views = ac.stations.length, names = [], t0 = F.t;
+  go(true); S.fixedDt = 1 / 60;
+  try {
+    if (views < n) await drawFrames(n - views, { what: 'the tour flight on the real loop' });
+    S.rig.set('cockpit', ac);
+    for (let k = 0; k < views && S.F === F; k++) { names.push(S.rig.stationName(ac)); await drawFrames(1, { what: `cockpit view ${k + 1}` }); S.rig.next(ac); }
+  } finally { S.fixedDt = null; }
+  const ran = S.F === F ? F.t - t0 : 0, frames = Math.max(n, views);
+  const leftCockpit = S.rig.mode !== 'cockpit';
+  S.rig.set('chase');
   if (more && S.F === F) advance(more);
   const ride = state();
-  const ac = F.ac; S.rig.set('cockpit', ac); const views = ac.stations.length, names = [];
-  for (let k = 0; k < views; k++) { names.push(S.rig.stationName(ac)); await drawFrames(1, { what: `cockpit view ${k + 1}` }); S.rig.next(ac); }
-  await drawFrames(1);
-  const leftCockpit = S.rig.mode !== 'cockpit';
-  S.rig.set('chase'); await drawFrames(1);
   go(false);
-  return { name: ac.design.name, kind: F.kind, bike: !!ac.isBike, ran, frames: n, ride, views, names, leftCockpit, end: S.F === F ? state() : null };
+  return { name: ac.design.name, kind: F.kind, bike: !!ac.isBike, ran, frames, ride, views, names, leftCockpit, end: S.F === F ? state() : null };
+}
+// The engine voice of a car, bike or boat (synthesized: src/motorSound.js), as the game drives it: the level it set the
+// voice's output to (audio.js set() keeps each parameter's target, `goal`) and the engine's start/stop state. Read right
+// after a tour at full power (tour() lets go of the gas just before it returns; audio.update runs every game step, drawn
+// or stepped), so it is judged the same on any machine: no audio clock is waited for or measured (a stalled clock, #180,
+// or a fast GPU drawing the tour in a fraction of a second, only holds back the value heading for the target).
+export function motorVoice(ac = S.F?.ac) {
+  const A = S.audio, e = ac?.parts.find((p) => p.alive && p.engine && A.voices[p.engine.sound]?.motor);
+  if (!e) return { kind: null, engines: ac ? ac.parts.filter((p) => p.engine).map((p) => p.engine.sound).join(', ') : '' };
+  const kind = e.engine.sound, out = A.voices[kind].out.gain;
+  return { kind, goal: out.goal ?? 0, state: A.engState(kind) };
+}
+// [[name, ok, detail]]: audible at full power (smoke.py's 0.01 floor), its engine running (not 'off' or stopping)
+export function motorChecks(m) {
+  return [['its engine voice plays, audible at full power', !!m.kind && m.goal >= 0.01 && (m.state === 'on' || m.state === 'start'),
+    m.kind ? `${m.kind} voice set to gain ${m.goal.toFixed(3)}, engine ${m.state}` : `no engine voice running (audio.voices; engines: ${m.engines || 'none'})`]];
 }
 // [[name, ok, detail]] for T.checks (smoke.py's verdicts on a tour flight; its audio check lives in the hangar job)
 export function tourChecks(f) {

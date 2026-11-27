@@ -19,7 +19,9 @@ function boxOf(e) {
 // every building within r of (x, z): { x, z, ux, uz, hl, hw, y0, y1, e }
 export function buildings(W, x, z, r) {
   const T = W.towns, out = [], seen = new Set();
-  const add = (e) => { if (seen.has(e) || !(e[3] > 0)) return; seen.add(e); for (const b of e.parts || [boxOf(e)]) if (Math.hypot(b.x - x, b.z - z) < r + Math.hypot(b.hl, b.hw)) out.push({ ...b, y0: e[1], y1: e[1] + e[3], e }); }; // (an irregular building: each of its own boxes, e.parts)
+  // (an entry's own box first, with room to spare: New York's e.parts are made on first read (setback.js), and reading
+  // them for every building in the city, as this did for the nyc job's crash, cost 7-9 s and made 150,000 of them)
+  const add = (e) => { if (seen.has(e) || !(e[3] > 0)) return; seen.add(e); const o = boxOf(e), d = Math.hypot(o.hl, o.hw); if (Math.hypot(o.x - x, o.z - z) >= r + 2 * d + 50) return; for (const b of e.parts || [o]) if (Math.hypot(b.x - x, b.z - z) < r + Math.hypot(b.hl, b.hw)) out.push({ ...b, y0: e[1], y1: e[1] + e[3], e }); }; // (an irregular building: each of its own boxes, e.parts)
   const g = T.city ? T.city.grid : T.grid;
   for (const a of g.values()) for (const e of a) if (e.solid) add(e);
   for (const e of T.landmarks?.boxes || []) add(e);
@@ -46,6 +48,7 @@ function points(S, ac) {
 const penetration = (S, ac, boxes) => { let m = 0; for (const p of points(S, ac)) for (const B of boxes) m = Math.max(m, inside(B, p)); return m; };
 
 // Faces with a clear, flat 16 m run-up: [{ B, nx, nz, tx, tz, cx, cz, gy }] (n: out of the face, t: along it)
+const LANE = Math.hypot(16, 2) + 0.01; // m: the farthest point faces() tests from a face's middle (16 m out, 2 m aside)
 export function faces(S, near, { r = 1500, max = 3, minH = 6, angles = ANGLES } = {}) {
   const W = S.F.world, every = buildings(W, near.x, near.z, r), all = every.filter((B) => B.hl > 3 && B.hw > 3 && B.y1 - B.y0 > minH);
   all.sort((a, b) => Math.hypot(a.x - near.x, a.z - near.z) - Math.hypot(b.x - near.x, b.z - near.z));
@@ -56,13 +59,17 @@ export function faces(S, near, { r = 1500, max = 3, minH = 6, angles = ANGLES } 
       if (wide < 4) continue;
       const cx = B.x + nx * half, cz = B.z + nz * half;
       // a clear lane 16 m out along each run's angle, nothing else solid in it, the ground flat and at the building's foot
+      // (only buildings that can reach the lane are tested: every point tested is within LANE m of the face's middle, and a
+      // box holds a point only within its half-diagonal of its centre. Testing all of them, thousands at New York, took
+      // 7 s of the nyc job's crash step under software WebGL's CPU share)
+      const lane = every.filter((C) => C !== B && Math.hypot(C.x - cx, C.z - cz) < LANE + Math.hypot(C.hl, C.hw));
       let ok = true; const g0 = W.groundAt(cx + nx * 2, cz + nz * 2).h;
       if (Math.abs(g0 - B.y0) > 2.5) ok = false;
       for (const a of angles) for (let d = 0.5; d <= 16 && ok; d += 0.5) { // (from just off the face: another of an irregular building's boxes may stand a little proud of it)
         const c = Math.cos(a * Math.PI / 180), sn = Math.sin(a * Math.PI / 180), dx = nx * c - nz * sn, dz = nz * c + nx * sn;
         const px = cx + dx * d, pz = cz + dz * d, g = W.groundAt(px, pz).h;
         if (Math.abs(g - g0) > 0.8 || g < W.waterLevel + 0.3) ok = false;
-        for (let k = -2; k <= 2 && ok; k += 1) { const q = { x: px - dz * k, y: g + 0.5, z: pz + dx * k }; for (const C of every) if (C !== B && inside(C, q) > 0) { ok = false; break; } }
+        for (let k = -2; k <= 2 && ok; k += 1) { const q = { x: px - dz * k, y: g + 0.5, z: pz + dx * k }; for (const C of lane) if (inside(C, q) > 0) { ok = false; break; } }
       }
       if (ok) { out.push({ B, nx, nz, tx: -nz, tz: nx, cx, cz, gy: g0 }); break; }
     }

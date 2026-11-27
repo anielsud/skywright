@@ -77,6 +77,9 @@ def launch_chrome(cdp_port, profile, size):
         if platform.system() == 'Linux':
             # CI runners have no GPU (WebGL via SwiftShader) and restrict the sandbox's user namespaces.
             args[1:1] = ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-dev-shm-usage']
+        elif os.environ.get('SKY_SWIFTSHADER'):
+            # SKY_SWIFTSHADER=1: CI's software WebGL on this machine (draw counts and stalls as CI sees them)
+            args[1:1] = ['--use-angle=swiftshader', '--enable-unsafe-swiftshader']
         proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.time() + (60 if ci else 20)
         while time.time() < deadline:

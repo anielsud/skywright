@@ -9,11 +9,12 @@
 //                               runway resting baseline (the same Dragonfly teleported to the runway, settled); back on
 //                               the pad: rests 5 s as on the runway, rotor stopped, nothing touched; lifts to a 25 m
 //                               hover; lands gently on the deck; rests as on the runway
-//   Dragonfly: shader sweep     drawn: streaming quiet (T.settle), then the whole scene drawn (every hidden object
-//                               shown, culling off) and every event effect fired (the only job that fires them): no
-//                               stall, nothing waited for its shader (shadercheck.js sceneDrawn / eventsFired)
-//   Dragonfly: real loop        drawn: the tour flight (smoke.js tour: full power for 3 drawn frames, 3 s stepped,
-//                               every cockpit view drawn, back to chase)
+//   Dragonfly: shader sweep     drawn: streaming quiet (T.settle), then the whole scene drawn once (every hidden object
+//                               shown, culling off) and every event effect fired, drawn once (the only job that fires them): no
+//                               stall, nothing waited for its shader (shadercheck.js sceneDrawn / eventsFired); then
+//                               stepped until the effects have died out (not left on screen for the next step)
+//   Dragonfly: real loop        drawn: the tour flight (smoke.js tour: full power on the real loop over its 2 cockpit
+//                               views, each drawn once; out of the cockpit and back to chase, 3 s stepped)
 //   Dragonfly (Arcade): helipad swapped in (realism doesn't rebuild the World); the helipad checks again, stepped
 //   Rocket: pad                 swapped in; padcheck.js rocket('nyc'): on the pad, 5 s hold, 10 s burn past the tower,
 //                               stepped
@@ -26,8 +27,9 @@
 //                               facing along the road, nothing in a building
 //   Dune Buggy: buildings       the crash: placecheck's wall runs (walls.js gameRun: the game loop's own runs, stepped)
 //                               into two building faces near the park, nothing of it inside (10 m/s at 35 deg, then
-//                               30 m/s straight on); streaming quiet before the 30 m/s one, its impact drawn (5 frames): no
-//                               stall, nothing waited for its shader, something broke off
+//                               30 m/s straight on); streaming quiet before the 30 m/s one (one quiet round), the crash
+//                               stepped to its end, then drawn once: no stall, nothing waited for its shader, something
+//                               broke off
 //   Dirt Bike: arch + road      swapped in at the arch; the road start by teleport, as for the buggy
 //   Speedboat, Jet Ski          each swapped in with boat start 'waterpark': at the water park's arch, afloat, upright,
 //                               facing down the course
@@ -183,8 +185,11 @@ function roadCheck(T, name) {
 }
 
 // The game loop's own runs into building faces near the park (placecheck.py's walls part), the second one the crash
-// that's drawn (shadercheck's crash phase at New York). Stepped; only the crash's frames (and streaming quiet before
-// it) drawn.
+// that's drawn (shadercheck's crash phase at New York). Stepped; drawn: one round of streaming quiet before the crash
+// and one frame after it. gameRun steps the crash through to its end (2.5 game s: the parts are off, the building's
+// chunks, shards and dust out), so everything it adds is in the scene before that frame, and one frame proves the claim
+// (shadercheck.js sceneDrawn: a missing program compiles in that render, a stall; an added object is checked by
+// flushNew before it, a late show). More frames would only redraw the dust (#278: 1-2 s each on CI).
 async function walls(T, near) {
   const S = T.S, F = T.F, ac = F.ac, THREE = S.THREE;
   const fs = faces(S, near || ac.x, { max: 2 });
@@ -196,12 +201,12 @@ async function walls(T, near) {
   // then streaming quiet where the crash happens (the first face, 14 m out, where walls.js sets a straight-on run up),
   // so a late show in the drawn frames is the crash's own
   ac.spawn(F.env, new THREE.Vector3(f0.cx + f0.nx * 14, 0, f0.cz + f0.nz * 14), Math.atan2(f0.nx, f0.nz));
-  await T.settle();
+  await T.settle({ quiet: 1 }); // (the buggy has been drawn at the arch next door: one quiet round; streaming steps in game time, so this is the same on every run)
   const c0 = T.counters(), lost0 = ac.stats.partsLost;
   runs.push({ face: 0, v: 30, a: 0, ...(await gameRun(S, f0, 30, 0)) });
   F.paused = false;
   const lost = ac.stats.partsLost - lost0;
-  await T.frames(5, { what: 'the crash drawn' });
+  await T.frames(1, { what: 'the crash drawn' });
   T.noLateShows('the crash drawn: nothing waited for its shader', c0);
   T.check('the crash happened (something broke off)', lost > 0, `${lost} parts lost at 30 m/s`);
   const worst = runs.reduce((a, x) => (x.maxPen > a.maxPen ? x : a));
