@@ -65,7 +65,7 @@ function corner(c, lanes, key, pieces) {
 
 export class Signals {
   constructor(graph, { city = false, layout = null } = {}) {
-    this.lay = layout; // (the baked road layout, #294 ?layout=1: where it's in, a pole stands KERB past its kerb, on its surface)
+    this.lay = layout; // (the baked road layout, #294: where it's in, a pole stands KERB past its kerb, on its surface)
     this.nodes = new Map(); // node key -> { key, x, y, z, off, lanes: Map(lane -> group), heads: [{ yaw, group }], px, pz (the pole, once placed) }
     if (!city) return;
     const into = (this.into = new Map()); this.graph = graph;

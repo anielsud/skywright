@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""The baked layout's startup and streaming (#294, ?layout=1), measured in the browser: one Chrome, each version given
-(a query, e.g. "?layout=1", or "_main/?layout=1" for main's copy served under the root, as goto.py), each place:
+"""The baked layout's startup and streaming (#294; on by default, ?layout=0 today's roads), measured in the browser: one Chrome, each
+version given (a query, e.g. "" or "?layout=0", or "_main/" for main's copy served under the root, as goto.py), each place:
 
   - a car's street start ('road'): start pressed -> flying (load_s), and when the start's ring of chunks (fine within
     900 m) was meshed, from start pressed (ring_s);
@@ -10,7 +10,7 @@
     thread's layout work (Layout update / got / pump, outermost calls): the longest, and how many over 50 ms; and every
     15 s the JS heap (MB), the GPU's geometries and the layout's chunks held (mem: [s, MB, geometries, chunks]).
 
-  python3 tools/test/layoutload.py --versions "_main/?layout=1" "?layout=1" --places nyc lauterbrunnen --fly 60 --tier low
+  python3 tools/test/layoutload.py --versions "_main/" "" --places nyc lauterbrunnen --fly 60 --tier low
 Same requirements as smoke.py. Prints one JSON line per run; the load average with each.
 """
 import argparse, asyncio, json, os, sys, tempfile, shutil, time
@@ -81,7 +81,7 @@ async def main(a):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--versions', nargs='+', default=['?layout=1']); ap.add_argument('--places', nargs='+', default=['nyc', 'lauterbrunnen'])
+    ap.add_argument('--versions', nargs='+', default=['']); ap.add_argument('--places', nargs='+', default=['nyc', 'lauterbrunnen'])
     ap.add_argument('--tier', default='low'); ap.add_argument('--fly', type=float, default=0, help='seconds of flight after the start (at --fly-place)')
     ap.add_argument('--fly-place', default='nyc'); ap.add_argument('--speed', type=float, default=250); ap.add_argument('--alt', type=float, default=500); ap.add_argument('--center', type=float, nargs=2, default=None, help='the circle flown round this point (x z), not the start'); ap.add_argument('--size', default='1280x720'); ap.add_argument('--wait', type=float, default=240, help='s to wait for the flight')
     asyncio.run(main(ap.parse_args()))

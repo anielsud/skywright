@@ -516,7 +516,7 @@ function lazyBoxes(city, t, P, holes, q, fit, fallback, exact = false, tile = nu
 // o[k] worked out by make the first time it's read (then a plain property)
 const lazy = (o, k, make) => Object.defineProperty(o, k, { configurable: true, enumerable: true, get() { const v = make(); Object.defineProperty(o, k, { value: v, writable: true, configurable: true, enumerable: true }); return v; }, set(v) { Object.defineProperty(o, k, { value: v, writable: true, configurable: true, enumerable: true }); } });
 
-// The building lines a city tile's buildings are set back from, on the baked layout with its overlay (#294, ?layout=1:
+// The building lines a city tile's buildings are set back from, on the baked layout with its overlay (#294:
 // layout/setbacks.js): the low buildings (streamed by tile) and the lazy collision boxes (tall or low) read them, so no
 // building consults today's roads and no road index (setback.js roadIndex) is made. A tile's are its region's (its
 // records' box, LINES_PAD out: what the furthest reach any check makes, streetWalls' FRONT, finds) from the layout chunks
@@ -596,7 +596,7 @@ export class CityScenery {
     this.helipads = (cfg.helipads || []).map((h) => { const [x, z] = toLocal(D.meta, h.lat, h.lon), L = h.look && toLocal(D.meta, h.look.lat, h.look.lon); return { ...h, x, z, look: L ? { x: L[0], z: L[1] } : null, roof: null }; });
     const t0 = performance.now(), w0 = { ...WORK };
     this.stats = { tall: 0, low: 0, tris: 0 };
-    // the baked setbacks (#294, ?layout=1: layout/setbacks.js): what each tall building's road checks answered, against
+    // the baked setbacks (#294: layout/setbacks.js): what each tall building's road checks answered, against
     // the layout's building lines, and its ground from the layout's surface (tap); then the road index and the density
     // map are made only when something else first asks (a low tile, a lazy collision box). Recording: the bake's run.
     const BK = CityScenery.bake; this.ov = BK ? null : D.setbacks?.n === H.tiles.reduce((n, t) => n + t[3], 0) ? D.setbacks : null; this.tp = null; this.ovStats = { used: 0, miss: 0 };
@@ -891,7 +891,7 @@ export class CityScenery {
     const A = Math.abs(area2(P)) - holes.reduce((s, h) => s + Math.abs(area2(h)), 0);
     if (A < 6) return;
     const part = R.flags & 1, hseed = hash(Math.round(p0[0] * 4), Math.round(p0[1] * 4)), h2 = hash(R.o, 7), h3 = hash(R.o, 13);
-    const LY = W.layout?.on && W.layout.place ? W.layout : null; if (LY) { // (a baked layout chunk, #294 ?layout=1: the ground under it the layout's, not the bake's)
+    const LY = W.layout?.on && W.layout.place ? W.layout : null; if (LY) { // (a baked layout chunk, #294: the ground under it the layout's, not the bake's)
       let a = Infinity, b = -Infinity; for (const p of P) { const y = LY.heightAt(p[0], p[1]); if (!(y === y)) { a = Infinity; break; } a = Math.min(a, y); b = Math.max(b, y); }
       if (a < Infinity) { R.g0 = a; R.g1 = b; } }
     const gm = (R.g0 + R.g1) / 2;

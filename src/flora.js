@@ -575,7 +575,7 @@ export class Flora {
     this.cells = new Map(); this.queue = []; this.wantAt = null; this.nearAt = null; this.impDirty = true; this.nearDirty = true; this.frame = 0; this.lastImp = -99; this.cellMs = 1;
     this.felled = new Map();
     this.cover = new GroundCover(this);
-    // a baked layout chunk's surface arrived (#294, ?layout=1): its cells' trees generated again on it (on its heights,
+    // a baked layout chunk's surface arrived (#294): its cells' trees generated again on it (on its heights,
     // off its paving), the old ones drawn until then
     W.layout?.onActive((b) => { for (const c of this.cells.values()) { const x0 = c.ci * CELL, z0 = c.cj * CELL; if (c.data && x0 < b.x1 && x0 + CELL > b.x0 && z0 < b.z1 && z0 + CELL > b.z0) { c.regen = true; this.tilesDirty = true; } } });
     this.buildMs = performance.now() - t0;

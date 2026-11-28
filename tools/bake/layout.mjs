@@ -29,6 +29,7 @@ import { groundOf, mergeGround } from './groundcheck.mjs';
 import { onWorkers, workers } from './pool.mjs';
 
 globalThis.SKY_LAYOUT_BAKE = true; /* (the World as the game builds it with the layout on: realworld.js decksOverRails) */
+globalThis.SKY_LAYOUT ??= false; globalThis.SKY_LAYOUT_LAZY = false; /* (the layout is baked from today's network and ground: the World without the layout's chunks or setbacks read, node/world.mjs lazyLayout; setbacks.mjs run as a script turns the layout on) */
 const key = (ix, iz) => ix + ',' + iz, WARN = 0.02, LX_FAIL = 0.05, RAIL_FAIL = 0.1;
 if (import.meta.url === pathToFileURL(process.argv[1]).href) { // (run as a script; all.mjs calls bakePlace)
   const args = process.argv.slice(2);

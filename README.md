@@ -67,6 +67,7 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 
 **A living world**
 - **Roads:** a ring road, highways, town streets and long bridges (one crosses the sea to the volcano island).
+  In the real places the roads, pavements, railway beds and the ground beside them are one surface, baked ahead of time (`tools/bake/layout.mjs`, `src/layout/`). For one release, `?layout=0` in the address (or `SKY_LAYOUT=0` in Node tests) gives the previous roads, worked out at load.
 - **Traffic:** 8 kinds of procedurally modelled vehicles (cars, SUVs, pickups, vans, buses, lorries and tankers). They follow lanes, keep their distance, show brake lights, and use headlights at night.
 - **Towns:** houses, apartments, shops, churches and stations. Building style follows the location: chalets in the Alps, adobe in the desert, painted houses, thatched resorts and overwater bungalows on Bora Bora. Windows light up at night, chimneys smoke, and street lamps glow.
 - **Farmland:** fields of crops (pivot-irrigation circles in the desert), plus farms with barns and silos, and grazing sheep or cows.
@@ -129,6 +130,7 @@ On a tablet, host it over HTTPS (for example GitHub Pages). Tilt steering and of
 | `src/traffic.js` | Cars, birds, balloons, boats, the circuit plane |
 | `src/effects.js`, `src/billboard.js` | Particles and instanced billboards |
 | `src/roads.js`, `src/vehicles.js`, `src/flora.js`, `src/towns.js` | Road/rail network, traffic, vegetation, towns and landmarks |
+| `src/layout/` | The baked road layout: roads, pavements and ground as one surface, streamed in per chunk |
 | `src/shaders.js`, `src/post.js` | Height fog, terrain/water/foliage shaders, post-processing |
 | `src/sky.js`, `src/clouds.js` | Physically based sky (atmosphere LUT, aerial perspective, stars, cirrus) and lit cumulus / overcast cloud layers |
 | `src/audio.js` | Synthesized sound |

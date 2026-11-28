@@ -93,7 +93,7 @@ def main():
     profile = tempfile.mkdtemp(prefix='sky-bake-')
     proc, ws_url = launch_chrome(cdp_port, profile, '800,600')
     try:
-        r, bad = asyncio.run(run(f'http://127.0.0.1:{port}/', ws_url))
+        r, bad = asyncio.run(run(f'http://127.0.0.1:{port}/?layout=0', ws_url))  # (the stunt sites from today's data, the layout's chunks not read)
     finally:
         proc.kill(); proc.wait(); srv.shutdown(); shutil.rmtree(profile, ignore_errors=True)
     kb = lambda n: os.path.getsize(os.path.join(OUT, f'{n}.json')) // 1024

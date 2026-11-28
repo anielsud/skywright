@@ -8,9 +8,9 @@ Chrome starts once; the game starts once per place (and quality, time, weather, 
 
   python3 tools/test/goto.py reports/<report>.json [--out shot.png] [--size 1280x720] [--wait 8]
   python3 tools/test/goto.py poses.json other.json --out shots/      (one PNG per pose, named by its 'name')
-  python3 tools/test/goto.py poses.json --out after/ --query layout=1 (the page's query string: a flag to try)
-A pose's own 'query' (e.g. "" or "layout=1") overrides --query for it: one launch can shoot with and without a flag.
-A query with a path first (e.g. "_main/?layout=1") loads the copy of the game served there (say, main's, put under the
+  python3 tools/test/goto.py poses.json --out after/ --query layout=0 (the page's query string: a flag to try)
+A pose's own 'query' (e.g. "" or "layout=0") overrides --query for it: one launch can shoot with and without a flag.
+A query with a path first (e.g. "_main/?layout=0") loads the copy of the game served there (say, main's, put under the
 root): one launch can shoot two versions.
 
 (The report JSON is what tools/analytics/reports.py saves.) Same requirements as smoke.py.
