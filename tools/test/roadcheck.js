@@ -44,6 +44,20 @@ export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world:
 // the streets).
 const MINOR_ROUGH = { joins: 0.03, steps: 0.4, steep: 1.5 }; // (a km, on adding them: Lauterbrunnen 1.24 steep spots, Bora Bora's hillside drives 0.66; New York 0.021 joins or crossings off, all under half a metre. Steps off the way's grade (measure), today's roads: Bora Bora 0.24, Lauterbrunnen 0.21, New York 0.18, the canyon 0.03; counted as any 1 m rise over STEP, before #294, they were 1.21, 0.77 and 0.67 under a 1.5 limit)
 const MINOR_MIN = { nyc: { ped: 1000, service: 2000, plazas: 50 }, lauterbrunnen: { ped: 100, service: 1000, track: 1000, plazas: 20 }, islands: { service: 50, track: 20 }, canyon: { service: 100, track: 100 } };
+// What a baked layout chunk (#294) draws at (x, z), as layout/runtime.js show() builds it from draw.js drawBuffers: its
+// surface and its carriageway, pavement and track ribbons (meshes for a raycaster, made once per chunk); null outside
+// the layout's chunks (today's roads draw there)
+async function layoutMeshes(w, x, z) {
+  const L = w.layout; if (!L?.on || !L.ground(x, z)) return null;
+  const c = L.active.get(Math.floor(x / L.size) + ',' + Math.floor(z / L.size)); if (!c?.m.fine) return null;
+  if (!c.testMeshes) {
+    const THREE = await import('three'), { drawBuffers } = await import('../../src/layout/draw.js'), d = drawBuffers(c.m.fine), mat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }), out = [];
+    const mesh = (pos, idx) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); if (idx) g.setIndex(new THREE.BufferAttribute(idx, 1)); g.computeBoundingSphere(); out.push(new THREE.Mesh(g, mat)); };
+    mesh(d.surf.pos, d.surf.idx); for (const k of ['tarmac', 'walk', 'track']) if (d.parts[k]) mesh(d.parts[k].pos, null);
+    c.testMeshes = out;
+  }
+  return c.testMeshes;
+}
 async function minorCheck(w, c, ctx) {
   const THREE = await import('three'), { LaneGraph } = await import('../../src/laneGraph.js'), { junctionPlan } = await import('../../src/junctions.js'), { Vehicles } = await import('../../src/vehicles.js'), { envOf } = await import('./node/world.mjs');
   const M = w.net.roads.filter((r) => r.minor), A = w.net.areas || [], count = { plazas: A.length };
@@ -69,14 +83,15 @@ async function minorCheck(w, c, ctx) {
   const G = w.roadGroup.userData, rc = new THREE.Raycaster(), down = new THREE.Vector3(0, -1, 0);
   let drawn = 0, apart = 0, paved = 0, soft = 0; const ex = { drawn: [], apart: [], paved: [] };
   { // (a road's meshes are in the tile of its first point: the tiles nearest each spot and its road's first point)
-    for (const sp of spots) { const by = (q) => G.tiles.map((t) => [Math.hypot(t.x - q.x, t.z - q.z), t]).sort((a, b) => a[0] - b[0]).map((e) => e[1]), near = [...new Set([...by(sp).slice(0, 4), ...(sp.first ? by(sp.first).slice(0, 4) : [])])];
+    for (const sp of spots) { sp.lay = await layoutMeshes(w, sp.x, sp.z); if (sp.lay) { sp.meshes = sp.lay; continue; } /* (inside a baked layout chunk: what it draws, not today's ribbons, hidden there) */
+      const by = (q) => G.tiles.map((t) => [Math.hypot(t.x - q.x, t.z - q.z), t]).sort((a, b) => a[0] - b[0]).map((e) => e[1]), near = [...new Set([...by(sp).slice(0, 4), ...(sp.first ? by(sp.first).slice(0, 4) : [])])];
       for (const t of near) if (!t.built) G.update({ x: t.x, y: 0, z: t.z }, 1e9, 10);
       sp.meshes = near.flatMap((t) => t.meshes.filter((m) => m.isMesh && !m.isInstancedMesh && /^(path3|tarmac)/.test(m.material.customProgramCacheKey?.() || ''))); }
     for (const sp of spots) {
       const meshes = sp.meshes;
       const g = w.groundAt(sp.x, sp.z), at = `(${Math.round(sp.x)}, ${Math.round(sp.z)}) ${sp.what}`;
       rc.set(new THREE.Vector3(sp.x, g.h + 20, sp.z), down); rc.far = 40;
-      const hit = rc.intersectObjects(meshes, false).filter((h) => /^path3/.test(h.object.material.customProgramCacheKey()) === (sp.surf !== 0)).sort((a, b) => Math.abs(a.point.y - g.h) - Math.abs(b.point.y - g.h))[0]; // (the one nearest the ground: not a bridge over it)
+      const hit = rc.intersectObjects(meshes, false).filter((h) => sp.lay || /^path3/.test(h.object.material.customProgramCacheKey()) === (sp.surf !== 0)).sort((a, b) => Math.abs(a.point.y - g.h) - Math.abs(b.point.y - g.h))[0]; // (the one nearest the ground: not a bridge over it)
       if (hit) { drawn++; if (Math.abs(hit.point.y - g.h) > 0.2) { apart++; if (ex.apart.length < 3) ex.apart.push(`${at} ${(hit.point.y - g.h).toFixed(2)} m`); } } else if (ex.drawn.length < 3) ex.drawn.push(at);
       const okType = sp.surf === 2 ? g.type === 'sand' : g.type === 'runway'; if (okType) paved++; else if (ex.paved.length < 3) ex.paved.push(`${at} ${g.type}`);
       if (sp.surf === 2) soft++;

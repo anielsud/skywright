@@ -45,7 +45,7 @@ export async function worldAt(id, { time = 11 } = {}) {
 // The baked road layout (#294) in a Node World: each chunk read and meshed (fine) the first time physics asks about a
 // point in it (World.sampleGrid / groundAt: Layout.heightAt, ground) or a city tile waits for it (readyIn), so a test
 // anywhere stands on the layout's surface as the game does once its chunks round the camera are in. Placing (lanes,
-// lamps, trees, building lines: placeY, kindAt, pavedAt, edgeAt) reads only the chunks already in, as in the game,
+// lamps, trees, building lines: placeY, kindAt, pavedAt, edgeAt; the retaining walls' boxes) reads only the chunks already in, as in the game,
 // where what was placed before a chunk arrived is placed again on it (onActive): a lane graph over the whole map
 // doesn't mesh the whole map (layout/runtime.js streams them; here they're synchronous, so a
 // result doesn't hang on when a chunk arrived). A chunk's mesh doesn't depend on its neighbours', so the order they're
@@ -63,7 +63,12 @@ export function lazyLayout(world) {
     return Map.prototype.get.call(L.active, k); };
   class Active extends Map { off = 0; get(k) { return super.get(k) ?? (this.off ? undefined : mesh(k)); } has(k) { return super.has(k) || (!this.off && !!mesh(k)); } }
   const A = new Active(L.active); L.active = A; L.lazy = true; L.on = true;
-  for (const f of ['placeY', 'kindAt', 'pavedAt', 'edgeAt']) { const o = L[f].bind(L); L[f] = (...a) => { A.off++; try { return o(...a); } finally { A.off--; } }; }
+  /* (and the retaining walls' boxes, wallBoxes: what asks for them stands on the ground first, World.groundAt, which meshes
+  its chunk; asking at every building in a city (walls.js registered) doesn't mesh the city) */
+  for (const f of ['placeY', 'kindAt', 'pavedAt', 'edgeAt', 'wallBoxes']) { const o = L[f].bind(L); L[f] = (...a) => { A.off++; try { return o(...a); } finally { A.off--; } }; }
+  /* (today's road tiles, built about the camera (roads.js group.userData.update) on whatever ground is in: inside a
+  layout chunk they don't draw, so building one doesn't mesh the chunks under it either) */
+  const G = world.roadGroup?.userData; if (G?.update) { const up = G.update; G.update = (...a) => { A.off++; try { return up(...a); } finally { A.off--; } }; }
   const unload = L.unload.bind(L); L.unload = (c) => { unload(c); L.on = true; }; /* (a chunk dropped far from the camera (World.update): meshed again when asked about) */
   return world;
 }
