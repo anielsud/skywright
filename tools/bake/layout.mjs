@@ -43,7 +43,7 @@ export async function bakePlace(a, world, asks) {
   world ||= (await worldAt(id)).world; const tb = performance.now();
   // ---- which chunks: every one with roads (or those asked for); the airport's roads keep it today's
   // (and the railways: World.real.osm.rails, bake.py rail_entry; one on a bridge all deck, one in a tunnel all tube)
-  const rails = (world.real?.osm?.rails || []).filter((e) => !e[4]).map(([, br, f, , tun]) => { const pts = []; for (let k = 0; k < f.length; k += 2) pts.push({ x: f[k], z: f[k + 1] }); const all = new Array(pts.length).fill(true); return { kind: 'rail', pts, bridge: br ? all : null, tube: tun ? all : null }; });
+  const rails = (world.real?.osm?.rails || []).map(([, br, f, , tun]) => { const pts = []; for (let k = 0; k < f.length; k += 2) pts.push({ x: f[k], z: f[k + 1] }); const all = new Array(pts.length).fill(true); return { kind: 'rail', pts, bridge: br ? all : null, tube: tun ? all : null }; });
   const roads = [...world.net.roads.filter((rd) => rd.kind !== 'rail'), ...rails], seen = new Map(), why = new Map(), bt = new Map();
   for (const rd of roads) { const P = rd.pts; for (let i = 0; i < P.length; i++) { const p = P[i], q = P[Math.min(i + 1, P.length - 1)], n = Math.max(1, Math.ceil(Math.hypot(q.x - p.x, q.z - p.z) / 10));
     for (let s = 0; s < n; s++) { const x = p.x + (q.x - p.x) * s / n, z = p.z + (q.z - p.z) * s / n, k = key(Math.floor(x / CHUNK), Math.floor(z / CHUNK)); seen.set(k, (seen.get(k) || 0) + Math.hypot(q.x - p.x, q.z - p.z) / n);

@@ -202,9 +202,9 @@ export class Layout {
     c.shown = level;
   }
   // a chunk's railways (rails.js): the rails and sleepers laid on its surface (or a deck's, a tube's own profile), and a
-  // rail bridge's deck, a rail tunnel's tube and portals (a road's are roads.js's)
+  // rail bridge's deck, a rail tunnel's tube and portals (a road's are roads.js's, but for its headwall raised under a way over it)
   railsFor(c) {
-    const L = c.L, m = c.m.fine, at = (x, z) => physAt(L, m, c.phys, x, z), pcs = railPieces(L, at); if (!pcs.length && !L.net.runs.some((r) => r.kind === 'rail' && r.off)) return;
+    const L = c.L, m = c.m.fine, at = (x, z) => physAt(L, m, c.phys, x, z), pcs = railPieces(L, at), ports = portalsOf(L.net.runs); if (!pcs.length && !L.net.runs.some((r) => r.kind === 'rail' && r.off) && !ports.some((p) => p.top > PORTAL_TOP)) return;
     const G = { steel: [], sleeper: [], deck: [], tube: [], ballast: [] }, quad = (A, a, b, cc, d) => A.push(...a, ...b, ...cc, ...a, ...cc, ...d);
     for (const pc of pcs) { const P = pc.P, n = P.length / 5, half = GAUGE[pc.cls] / 2;
       // the rails: a head 7 cm wide RAIL_TOP over the bed, its sides down to the sleepers
@@ -226,9 +226,10 @@ export class Layout {
       if (pc.off === 'deck') for (let i = 15; i < n - 1; i += 15) { const x = P[i * 5], z = P[i * 5 + 1], gy = this.w.sampleGrid(x, z), top = P[i * 5 + 2] - DECK_DEPTH; if (top - gy < 3) continue; const ux = P[i * 5 + 3], uz = P[i * 5 + 4], hx = 0.8, hz = hw + DECK_SIDE - 0.4, cx = (a, o) => [x + ux * a - uz * o, z + uz * a + ux * o];
         for (const [a0, o0, a1, o1] of [[-hx, -hz, hx, -hz], [hx, -hz, hx, hz], [hx, hz, -hx, hz], [-hx, hz, -hx, -hz]]) { const p = cx(a0, o0), q = cx(a1, o1); quad(G.deck, [p[0], gy - 1, p[1]], [q[0], gy - 1, q[1]], [q[0], top, q[1]], [p[0], top, p[1]]); } } }
     // a rail tunnel's portals: the headwall round its mouth (as roads.js's), centred on the portal
-    for (const p of portalsOf(L.net.runs.filter((r) => r.kind === 'rail'))) { if (p.x < L.x0 || p.x >= L.x0 + L.size || p.z < L.z0 || p.z >= L.z0 + L.size) continue; const T = PORTAL_T / 2, pt = (u, v, y) => [p.x + p.dx * u - p.dz * v, p.y + y, p.z + p.dz * u + p.dx * v];
+    for (const p of ports) { if (p.x < L.x0 || p.x >= L.x0 + L.size || p.z < L.z0 || p.z >= L.z0 + L.size) continue; const T = PORTAL_T / 2, pt = (u, v, y) => [p.x + p.dx * u - p.dz * v, p.y + y, p.z + p.dz * u + p.dx * v];
       const box = (v0, v1, y0, y1) => { for (const u of [-T, T]) quad(G.tube, pt(u, v0, y0), pt(u, v1, y0), pt(u, v1, y1), pt(u, v0, y1)); quad(G.tube, pt(-T, v0, y1), pt(-T, v1, y1), pt(T, v1, y1), pt(T, v0, y1)); for (const v of [v0, v1]) quad(G.tube, pt(-T, v, y0), pt(T, v, y0), pt(T, v, y1), pt(-T, v, y1)); };
-      box(-p.W, -p.hwT, -PORTAL_FOOT, PORTAL_TOP); box(p.hwT, p.W, -PORTAL_FOOT, PORTAL_TOP); box(-p.hwT, p.hwT, TUBE_H, PORTAL_TOP); box(-p.hwT, p.hwT, -SILL, -0.05); } // (its wings PORTAL_FOOT deep, a sill across the mouth: roads.js's)
+      if (!p.rail) { if (p.top > PORTAL_TOP) box(-p.W, p.W, PORTAL_TOP - 0.01, p.top); continue; } // (a road's portal is roads.js's: where a way runs over it, its headwall raised to under that way, rules.js portalsOf)
+      box(-p.W, -p.hwT, -PORTAL_FOOT, p.top); box(p.hwT, p.W, -PORTAL_FOOT, p.top); box(-p.hwT, p.hwT, TUBE_H, p.top); box(-p.hwT, p.hwT, -SILL, -0.05); } // (its wings PORTAL_FOOT deep, a sill across the mouth: roads.js's)
     const grp = new THREE.Group(); grp.name = 'layout rails ' + c.k;
     for (const [k, A] of Object.entries(G)) { if (!A.length) continue; const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(A, 3)); if (k === 'ballast') { const nv = A.length / 3; g.setAttribute('aRoad', new THREE.Float32BufferAttribute(new Float32Array(nv * 4), 4)); g.setAttribute('aLane', new THREE.Float32BufferAttribute(new Float32Array(nv), 1)); }
       g.computeVertexNormals(); g.computeBoundingSphere(); const me = new THREE.Mesh(g, this.mats[k]); me.receiveShadow = true; me.castShadow = k === 'deck'; me.userData.near = k === 'steel' || k === 'sleeper'; grp.add(me); }
