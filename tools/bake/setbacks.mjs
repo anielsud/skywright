@@ -22,7 +22,7 @@ import { roadIndex } from '../../src/setback.js';
 import { groundGrid, latticeHeights } from '../../src/layout/rules.js';
 import { latticeOf } from '../../src/layout/mesh.js';
 import { groundBytes } from '../../src/layout/format.js';
-import { layoutKey, buildingLines, encodeSetbacks } from '../../src/layout/setbacks.js';
+import { overlayKey, hashBytes, SETBACK_CODE, buildingLines, encodeSetbacks } from '../../src/layout/setbacks.js';
 import { onWorkers, workers } from './pool.mjs';
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) { // (run as a script; all.mjs calls bakeSetbacks with the layout bake's World)
@@ -76,11 +76,13 @@ export async function bakeSetbacks(id, W, answered = new Map()) {
   const tl2 = performance.now();
   CityScenery.bake = { roads: lines, ground };
   let C; try { C = new CityScenery(W, D, new THREE.Group()); } finally { CityScenery.bake = null; }
-  const tapes = Array.from({ length: recs.length }, (_, i) => C.tapes[i] || null), key = layoutKey(index);
-  const raw = encodeSetbacks(tapes, key), gz = gzipSync(raw, { level: 9 }), out = `assets/real/${id}/setbacks.bin.gz`;
+  const tapes = Array.from({ length: recs.length }, (_, i) => C.tapes[i] || null), key = bakedKey(id, index);
+  const raw = encodeSetbacks(tapes, key, lines), gz = gzipSync(raw, { level: 9 }), out = `assets/real/${id}/setbacks.bin.gz`;
   writeFileSync(out, gz);
   const st = { cut: 0, drop: 0, through: 0 }; for (const T of tapes) { const s = T?.sb?.[0]; if (s?.drop) st.drop++; else if (s?.through) st.through++; else if (s?.cut) st.cut++; }
   console.log(`  setbacks: ${st.cut} cut, ${st.drop} dropped, ${st.through} with a road through (today's roads: ${W.towns?.city?.setbacks ? `${W.towns.city.setbacks.cut} cut, ${W.towns.city.setbacks.dropped} dropped, ${W.towns.city.setbacks.through} through` : '-'})`);
   console.log(`  wrote ${out}: ${(gz.length / 1024).toFixed(0)} KB (${(raw.length / 1024).toFixed(0)} KB raw), key ${key}; ${((performance.now() - t0) / 1000).toFixed(1)} s in all (ground ${((tg - tw) / 1000).toFixed(1)} s, lines ${((tl2 - tg) / 1000).toFixed(1)} s, buildings ${((performance.now() - tl2) / 1000).toFixed(1)} s)`);
   return { id, kb: gz.length / 1024, ...st, s: { ground: (tg - tw) / 1000, lines: (tl2 - tg) / 1000, buildings: (performance.now() - tl2) / 1000, all: (performance.now() - t0) / 1000 } };
 }
+// the key an overlay baked now gets (layout/setbacks.js overlayKey: the layout's, city.bin.gz's bytes', the setback code's)
+export function bakedKey(id, index = JSON.parse(readFileSync(`assets/real/${id}/layout/index.json`, 'utf8'))) { return overlayKey(index, hashBytes(new Uint8Array(readFileSync(`assets/real/${id}/city.bin.gz`))), SETBACK_CODE.map((f) => readFileSync(f, 'utf8'))); }

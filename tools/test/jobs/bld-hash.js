@@ -13,6 +13,7 @@
 import { toLocal } from '../../../src/realworld.js';
 import { MeshW, CityScenery } from '../../../src/realCity.js';
 import { stepping, stepTick } from '../../../src/stepClock.js';
+import { ROADS } from '../../../src/setback.js';
 
 // a 32-bit hash over typed arrays' bytes (murmur3-style word mix; the tail bytes folded in)
 export function hashArrays(arrays, h = 0x9747b28c) {
@@ -90,10 +91,28 @@ export function boxHash(city) {
   }
   return { n: ents.length, parts, hash: hashArrays(out) };
 }
+// the flight's ends (the Battery, Harlem; 150 m up)
+export function line(W, THREE) {
+  const at = ([lat, lon, h]) => { const [x, z] = toLocal(W.real.meta, lat, lon); return new THREE.Vector3(x, W.heightAt(x, z) + h, z); };
+  return [at([40.7030, -74.0160, 150]), at([40.8000, -73.9500, 150])];
+}
+// On the baked layout (#294, ?layout=1), what's built depends on when its chunks arrive: a low tile waits for the chunks
+// under it (realCity.js update: Layout.readyIn) and for its building lines (TileLines), and the collision boxes' grid
+// order follows the tiles'. So every chunk the flight would fetch (within LOAD_D of any point on it, a scan every 100 m)
+// is meshed first, every tile's building lines are in, and the low tiles already built are dropped: then the flight
+// builds the same tiles in the same order every run. -> what was primed, or null without the layout
+export async function primeLayout(W, THREE) {
+  const LY = W.layout; if (!LY) return null;
+  const t0 = performance.now(), [a, b] = line(W, THREE), n = Math.ceil(a.distanceTo(b) / 100), p = new THREE.Vector3();
+  for (let i = 0; i <= n; i++) { p.lerpVectors(a, b, i / n); await LY.prime(p.x, p.z, 2500 + 150); } // (runtime.js LOAD_D, and a scan's 100 m)
+  const C = W.towns.city, lines = C.lines ? await C.lines.prime() : 0;
+  for (const t of C.tiles.values()) if (t.low || t.st) C.dropLow(t);
+  C.queue = []; C.lastPlan = null;
+  return { chunks: LY.active.size, lines, ms: performance.now() - t0 };
+}
 // streams the low buildings along the line (W: the World, cam: a camera, THREE)
 export async function fly(W, cam, THREE, yieldEvery = 30) {
-  const at = ([lat, lon, h]) => { const [x, z] = toLocal(W.real.meta, lat, lon); return new THREE.Vector3(x, W.heightAt(x, z) + h, z); };
-  const a = at([40.7030, -74.0160, 150]), b = at([40.8000, -73.9500, 150]), n = Math.ceil(a.distanceTo(b) / 60 * 30), v = new THREE.Vector3();
+  const [a, b] = line(W, THREE), n = Math.ceil(a.distanceTo(b) / 60 * 30), v = new THREE.Vector3();
   for (let i = 0; i <= n; i++) {
     cam.position.lerpVectors(a, b, i / n); cam.lookAt(b); cam.updateMatrixWorld();
     stepping(() => { W.update(1 / 30, cam, v, []); W.towns.update(1 / 30, W.t, null, cam.position); stepTick(1 / 30); }); // (the test stepper: streaming budgets in work units, so what's built doesn't depend on the machine)
@@ -114,14 +133,17 @@ export async function run(T) {
 
     });
     await T.step('nyc: stream Battery to Harlem, hash the low tiles', async () => {
-      const S = T.S, F = S.F; F.paused = true; rec.lowMs = 0;
+      const S = T.S, F = S.F; F.paused = true;
+      const pr = await primeLayout(F.world, T.THREE); if (pr) T.log(`layout primed: ${pr.chunks} chunks meshed, ${pr.lines} chunks' building lines, ${pr.ms.toFixed(0)} ms`);
+      rec.low.clear(); rec.lowBad.length = 0; rec.lowTiles = 0; rec.lowMs = 0; const L0 = C.lines ? { ...C.lines.stats } : null;
       await fly(F.world, S.rig.cam, T.THREE);
       const h = lowHash(rec); T.check('every tile built twice hashed the same', !h.bad.length, h.bad.join(' '));
       const f = farHash(C); if (f) T.log(`BLDHASH far ${f.hash} (info: cells ${Math.round(f.tris)} triangles, groups ${Math.round(f.groupTris)} (near ${Math.round(f.groupNear)}), ${f.verts} own vertices in ${f.room} of room, ${f.over} buildings copied as they are for want of room; kept ${(f.kept / 1e6).toFixed(1)} MB + index ${(f.keptI / 1e6).toFixed(1)} MB till made; the rest made in ${f.ms.toFixed(0)} ms)`);
-      T.log(`BLDHASH low ${h.hash} (${h.n} tiles, ${h.built} builds) lowMs ${rec.lowMs.toFixed(0)} ms (flight only)`);
+      T.log(`BLDHASH low ${h.hash} (${h.n} tiles, ${h.built} builds) lowMs ${rec.lowMs.toFixed(0)} ms (flight only)${L0 ? `; building lines ${C.lines.stats.tiles - L0.tiles} tiles, ${(C.lines.stats.ms - L0.ms).toFixed(0)} ms` : ''}`);
     }, { allowStalls: true });
     await T.step('nyc: hash the collision boxes', async () => {
       const h = boxHash(C); T.log(`BLDHASH boxes ${h.hash} (${h.n} entries, ${h.parts} parts)`);
+      T.log(`BLDHASH road index built ${ROADS.built} times (${ROADS.ms.toFixed(0)} ms)${C.lines ? `; building lines: ${C.lines.stats.tiles} tiles, ${C.lines.stats.segs} pieces, ${C.lines.stats.ms.toFixed(0)} ms` : ''}`);
     });
   } finally { rec.uninstall(); }
 }
