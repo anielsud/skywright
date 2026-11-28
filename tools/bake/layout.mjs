@@ -52,14 +52,14 @@ export async function bakePlace(a, world, asksOf, cache) {
   const tc = performance.now();
   // ---- the checks, the game's way, a worker per core (a chunk whose inputs haven't changed: its last result)
   const jobs = r.chunks.map(({ ix, iz, bytes }, q) => ({ ix, iz, buf: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), G: Gs[q], Q: asks?.get(key(ix, iz)) })); // (Q: points to give the fine mesh's height at, for setbacks.mjs)
-  const code = C && C.stamp(C.importsOf(new URL('./layout-check.mjs', import.meta.url))), gridKey = C && C.hash(JSON.stringify(grid)), ckey = C ? jobs.map((j) => C.hash(key(j.ix, j.iz), new Uint8Array(j.buf), j.G, j.Q || '', gridKey, code)) : [];
+  const code = C && C.stamp(C.importsOf(new URL('./layout-check.mjs', import.meta.url))), gridKey = C && C.hash(JSON.stringify(grid)), ckey = C ? jobs.map((j) => C.hash(key(j.ix, j.iz), new Uint8Array(j.buf), j.G, j.Q || '', gridKey, code, 'own-chunk')) : []; /* ('own-chunk': before it, results were kept under other chunks' keys, below: those entries never given back) */
   const old = C ? jobs.map((j, q) => C.getK(id + '/chunks', ckey[q])) : [], todo = jobs.filter((j, q) => !old[q]);
   const N = workers(todo.length), checking = todo.length ? onWorkers(new URL('./layout-check.mjs', import.meta.url), todo, { grid }, N) : Promise.resolve([]);
   // (meanwhile, here, if the World is built: each chunk's ground against today's terrain base, groundcheck.mjs; reported
   // for those that pass)
   const groundAt = (w, q) => { const b = r.chunks[q].bytes; return groundOf(w, decodeLayout(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)), grid, Gs[q]); };
-  const gbOf = world ? r.chunks.map((c, q) => groundAt(world, q)) : null, tg = performance.now(), fresh = await checking, byJob = new Map(todo.map((j, q) => [j, fresh[q]]));
-  const results = jobs.map((j, q) => old[q] || byJob.get(j));
+  const gbOf = world ? r.chunks.map((c, q) => groundAt(world, q)) : null, tg = performance.now(), fresh = await checking, byJob = new Map(fresh.map((c) => [key(c.ix, c.iz), c])); /* (by each answer's own chunk: the workers' answers come back worker by worker, not in todo's order, pool.mjs) */
+  const results = jobs.map((j, q) => old[q] || byJob.get(key(j.ix, j.iz)));
   if (C) { jobs.forEach((j, q) => { if (!old[q]) C.putK(id + '/chunks', ckey[q], results[q]); }); C.prune(id + '/chunks'); }
   const td = performance.now(), byKey = new Map(results.map((c) => [key(c.ix, c.iz), c])), sum = (f) => results.reduce((n, c) => n + (f(c) || 0), 0);
   // a chunk failing a check keeps today's roads
