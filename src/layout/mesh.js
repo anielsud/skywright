@@ -207,13 +207,14 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
     for (const [ri, , , , s0] of [...votes.values()]) { const r = L.net.runs[ri];
       for (const q of [s0 - 1, s0 + 1]) { if (q < 0 || q + 1 >= r.h.length) continue; const ax = r.pts[q * 2], az = r.pts[q * 2 + 1], dx = r.pts[q * 2 + 2] - ax, dz = r.pts[q * 2 + 3] - az, l = Math.hypot(dx, dz); if (l < 1e-3 || triD(vs, ax + dx / 2, az + dz / 2) > l / 2 + r.hw) continue;
         const nl = lineOf(ri, q), lk = lkey(ri, nl); if (!votes.has(lk)) votes.set(lk, [ri, 0, SAMPLE.length + q, nl, q]); } }
+    const msOf = new Map(); // (a street's mouths, the same for each of its lines in the triangle: the first's, the most voted)
     const cands = [...votes.values()].sort((a, b) => b[1] - a[1] || a[2] - b[2]).slice(0, MARK_K).map(([ri, nv, , ln, q0]) => {
       // (the line's stretch along it: its segment and those in line with it either side, as stations split a straight)
       const r = L.net.runs[ri], k0 = lkey(ri, ln); let qa = q0, qb = q0; while (qa > 0) { const l2 = lineOf(ri, qa - 1); if (!l2 || lkey(ri, l2) !== k0) break; qa--; } while (qb + 2 < r.h.length) { const l2 = lineOf(ri, qb + 1); if (!l2 || lkey(ri, l2) !== k0) break; qb++; }
       // (its four mouths along this line (one round a bend or across it measures its distance the wrong way): those nearest
       // the most of a few points in the triangle and its corners, then the nearest it)
       const M0 = mouthsOf(ri), M1 = M0.filter((M) => Math.abs(M[4] * ln.dx + M[5] * ln.dz) > 0.7 && Math.abs(ln.dx * (M[3] - ln.az) - ln.dz * (M[2] - ln.ax)) < ln.hw + 5), MS = M1.length ? M1 : M0, mv = MS.map((M) => [0, triD(vs, M[2], M[3]), M]); if (MS.length > 4) for (const [a, b, c] of PICK) { const x = a * X[vs[0]] + b * X[vs[1]] + c * X[vs[2]], z = a * Z[vs[0]] + b * Z[vs[1]] + c * Z[vs[2]]; let bi = 0, bd = Infinity; MS.forEach((M, i) => { const d = Math.hypot(M[2] - x, M[3] - z); if (d < bd) { bd = d; bi = i; } }); mv[bi][0]--; }
-      const ms = mv.sort((a, b) => a[0] - b[0] || a[1] - b[1]).slice(0, 4).map((m) => m[2]);
+      const ms = msOf.get(ri) || msOf.set(ri, mv.sort((a, b) => a[0] - b[0] || a[1] - b[1]).slice(0, 4).map((m) => m[2])).get(ri);
       return { ri, ln, ms, lane: laneBits(ri, ln) + (nv ? 128 : 0), lo: r.s[qa], hi: r.s[qb + 1] }; }).filter(Boolean); // (128: a line nearest somewhere in it, not only a bend's neighbour: only it holds a crossing's band, runtime.js mScore)
     const first = cands[0];
     vs.forEach((v) => { const x = X[v], z = Z[v], rv = rib.kind.length, m = rib.mark.subarray(rv * MARK, rv * MARK + MARK); rib.pos.push(x, Y[v], z); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]);
