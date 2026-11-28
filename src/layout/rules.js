@@ -39,7 +39,7 @@ export const DECK_SIDE = 1, DECK_DEPTH = 1.4, TUBE_SIDE = 1.2, TUBE_H = 5.6, POR
 // the portal lies far under it) and a sill SILL m deep closes the floor's edge across the mouth (roads.js); a surface
 // within FLUSH m of the floor behind the mouth meets the tube's floor (no gap: a twin carriageway at grade beside it)
 export const PORTAL_FOOT = 12, SILL = 2, FLUSH = 0.3, TOP_OVER = 0.5;
-export const HOLD = 10; const UNDER = 0.1, OVER = 0.3; // (the ground kept this far under a deck's underside, over a tube's crown)
+export const HOLD = 10, SLAB_MAX = 0.3; const UNDER = 0.1, OVER = 0.3; // (the ground kept this far under a deck's underside, over a tube's crown)
 // a tunnel's portals, from the roads stopping at a tube (ends 2, 8): where (the road's end), which way into the hill (dx,
 // dz: the road's last segment's, and the tube's first's if it's stored: roads.js frames the headwall by both), the road's
 // height there (the tube's floor), the tube's half width (hwT) and the headwall's (W)
@@ -99,11 +99,12 @@ export function makeRules(net, g, city, wl = -Infinity, box = null) {
     for (let i = Math.floor((Math.min(ax, bx) - wd) / SC); i <= Math.floor((Math.max(ax, bx) + wd) / SC); i++) for (let j = Math.floor((Math.min(az, bz) - wd) / SC); j <= Math.floor((Math.max(az, bz) + wd) / SC); j++) { const k = key(i, j); (offIdx.get(k) || offIdx.set(k, []).get(k)).push(ri, s); } } });
   // (a road's raw projection t on its segment s past an end where it stops at a deck or tube: past it, it isn't there)
   const pastCut = (r, s, t, kind) => (t < 0 && s === 0 && r.cutA && (!kind || r.cutA === kind)) || (t > 1 && s === r.h.length - 2 && r.cutB && (!kind || r.cutB === kind));
-  // the ground under a deck kept under its underside, over a tube kept over its crown (within their widths, between their ends)
+  // the ground under a deck kept under its underside, over a tube over its crown but never more than SLAB_MAX over the natural
+  // ground (within their widths, between their ends)
   const offClamp = (x, z, y) => { const L = offIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return y;
     for (let q = 0; q < L.length; q += 2) { const r = runs[L[q]], s = L[q + 1], ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9, t0 = ((x - ax) * dx + (z - az) * dz) / L2;
       if ((t0 < 0 && s === 0) || (t0 > 1 && s === r.h.length - 2)) continue; const t = Math.max(0, Math.min(1, t0)), d = Math.hypot(x - ax - dx * t, z - az - dz * t), hy = r.h[s] + (r.h[s + 1] - r.h[s]) * t;
-      if (r.off === 'deck') { if (d <= r.hw + DECK_SIDE + 0.05) y = Math.min(y, hy - DECK_DEPTH - UNDER); } else if (d <= r.hw + TUBE_SIDE + 0.5) y = Math.max(y, hy + TUBE_H + OVER); } // (a tube: half a metre wider, the portal's frame turned a little from the tube's)
+      if (r.off === 'deck') { if (d <= r.hw + DECK_SIDE + 0.05) y = Math.min(y, hy - DECK_DEPTH - UNDER); } else if (d <= r.hw + TUBE_SIDE + 0.5) y = Math.max(y, Math.min(hy + TUBE_H + OVER, g(x, z) + SLAB_MAX)); } // (a tube: its road dives under the ground, tubes.js; the ground over it held over its crown only within SLAB_MAX of the natural ground: by a portal, where the ground dips)
     return y; };
   // a portal's opening: its lip (behind the portal, the headwall's back half, across the headwall: no surface); and the ground
   // there kept within the headwall (its rim hidden in it)
@@ -236,7 +237,7 @@ export function makeRules(net, g, city, wl = -Infinity, box = null) {
   // every street segment whose carriageway covers (x, z) (its distance within its half width): [road, segment, distance
   // past the half width (<= 0), ...] in segIdx's order (the first lowest: nearest's, when there's one)
   const covering = (x, z) => { const out = [], L = segNear.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return out; for (let q = 0; q < L.length; q += 2) { const r = runs[L[q]], s = L[q + 1]; if (r.minor) continue; const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)); const d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw; if (d <= 0) out.push(L[q], s, d); } return out; };
-  return { base, drawn, ground, road, roadOn, lineOn, bends, nearest, nearest2, covering, lot, junction, region, portals };
+  return { base, drawn, ground, road, roadOn, lineOn, bends, nearest, nearest2, covering, lot, junction, region, portals, natural: g, unlifted: ground0 }; // (natural: the natural ground; unlifted: the ground off the roads before a deck holds it: for the tube checks)
 }
 
 // The natural ground: today's terrain base without the roads' carving, at the hi grid's points (World.rawHeight: the real

@@ -12,6 +12,7 @@
 //     Everything else (heights, the reshaped ground, the markings' coordinates) the game works out with rules.js.
 import CL from '../../vendor/layout/clipper1.mjs';
 import { CHUNK, KIND, RKINDS, encodeLayout, stations } from './format.js';
+import { diveProfile, twinAnd, DIVE_K, TUBE_STEP, COVER as TUBE_COVER } from './tubes.js';
 import { naturalGround, TUBE_H, TUBE_SIDE, DECK_SIDE, DECK_DEPTH } from './rules.js';
 
 const PIN_W = 1e4, SEG = 8, MARGIN = 150, ARC = 8, SIMPLIFY = 25, SHAPE_TOL = 15, EDGE_STEP = 4, NET_PAD = 75; // (NET_PAD: the network stored with a chunk reaches this far past it: past every rule's reach, rules.js)
@@ -198,12 +199,15 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
     for (const r of runs) if (r.minor && r.rail < 0) for (const v of r.vars) if (!street.has(v) && !railVar.has(v) && !member.has(v) && Math.abs(h[v] - gt[v]) > MINOR_OFF) { h[v] = gt[v] + Math.sign(h[v] - gt[v]) * MINOR_OFF; held++; }
     T.minorHeld = held; }
   lift();
+  // (constraints the solve can't meet (pins over a grade limit) leave stations NaN, and the network about them with them: each
+  // put back on its ground, counted and logged, so one infeasible tunnel never takes the network to 0)
+  { let bad = 0; for (let k = 0; k < nv; k++) if (!Number.isFinite(h[k])) { h[k] = pins.has(k) ? pins.get(k) : V[k].g; bad++; } T.infeasible = bad; if (bad) log(`  [layout] height solve: ${bad} stations not finite, put back on their pin or ground`); }
   { let low = 0, lifted = 0; for (let k = 0; k < nv; k++) { if (h[k] < floor - 1e-6) low++; if (V[k].g < floor) lifted++; } T.shore = { below: low, overWater: lifted }; } // (stations below the floor after all (0); stations whose ground is under it)
   let dev = 0, over = 0; for (let k = 0; k < nv; k++) dev = Math.max(dev, Math.abs(h[k] - V[k].g)); for (const [a, b, l, G] of edges) if (!inOne(a, b) && G < 0.3) over = Math.max(over, Math.abs(h[a] - h[b]) / l - G);
   // the railways' grades against their class's limit (relaxed or not: how far over the limit, where the ground is steeper)
   { const R = {}; for (const e of edges) { const [a, b, l, , c, G0] = e; if (!(c >= 0) || inOne(a, b)) continue; const k = RAIL_CLASS[c], o = Math.abs(h[a] - h[b]) / l - G0, q = R[k] || (R[k] = { edges: 0, km: 0, over: 0, overRelaxed: 0, max: 0, limit: G0 }); q.edges++; q.km += l / 1000; if (o > 1e-3) { q.over++; if (e[3] > G0) q.overRelaxed++; q.max = Math.max(q.max, o); } }
     for (const q of Object.values(R)) { q.km = +q.km.toFixed(1); q.max = +q.max.toFixed(3); } T.rail = { grades: R, levelCrossings: JN.filter((J) => J.lx).length, eqs: eqs.length }; }
-  T.solve = { linePlanes: JN.filter((J) => J.wasLine).length, shore: T.shore, crown: T.crown, deckCeil: T.deckCeil, relax: T.relax, relaxedEdges: T.relaxedEdges, minorHeld: T.minorHeld, vars: nv, junctions: JN.length, iters, maxFromGround: +dev.toFixed(2), worstOverGrade: +Math.max(0, over).toFixed(3) };
+  T.solve = { infeasible: T.infeasible, linePlanes: JN.filter((J) => J.wasLine).length, shore: T.shore, crown: T.crown, deckCeil: T.deckCeil, relax: T.relax, relaxedEdges: T.relaxedEdges, minorHeld: T.minorHeld, vars: nv, junctions: JN.length, iters, maxFromGround: +dev.toFixed(2), worstOverGrade: +Math.max(0, over).toFixed(3) };
   { // (the worst edges over their limit: between which junctions, how long, how far the planes' ends are apart)
     const ov = edges.filter(([a, b]) => !inOne(a, b)).map(([a, b, l, G]) => [Math.abs(h[a] - h[b]) / l - G, a, b, l, G]).filter((e) => e[0] > 1e-3).sort((p, q) => q[0] - p[0]);
     T.overGrade = { edges: ov.length, bothJunctions: ov.filter(([, a, b]) => memberOf.has(a) && memberOf.has(b)).length, worst: ov.slice(0, 4).map(([o, a, b, l, G]) => ({ x: +V[a].x.toFixed(1), z: +V[a].z.toFixed(1), over: +o.toFixed(3), l: +l.toFixed(1), limit: G, rise: +Math.abs(h[a] - h[b]).toFixed(2), ends: [memberOf.has(a) ? 'junction' : V[a].tie ? 'tie' : 'road', memberOf.has(b) ? 'junction' : V[b].tie ? 'tie' : 'road'] })) }; }
@@ -284,15 +288,25 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
 // 'rail' and its class (rail); one on a bridge all deck, one in a tunnel all tube (side-by-side bores as one: mergeBores), at the straight line between the natural
 // ground at its ends (a viaduct's ways end to end: one line each, meeting at their shared ends). Their points shared with
 // another railway's (a switch; ways end to end: OpenStreetMap's shared node, the same point to the decimetre) are one node.
+// a line (flat x, z, ...) with points every step m along it
+function densifyLine(f, step) { const out = [f[0], f[1]]; for (let k = 2; k < f.length; k += 2) { const ax = f[k - 2], az = f[k - 1], bx = f[k], bz = f[k + 1], m = Math.ceil(Math.hypot(bx - ax, bz - az) / step); for (let j = 1; j < m; j++) out.push(ax + (bx - ax) * j / m, az + (bz - az) * j / m); out.push(bx, bz); } return out; }
 function railWays(w, g) {
   const list = deckProfiles(mergeBores(w.real?.osm?.rails || [], g), w, g), key = (x, z) => 'R' + Math.round(x * 10) + ',' + Math.round(z * 10), uses = new Map();
   for (const [, , f] of list) { const seen = new Set(); for (let k = 0; k < f.length; k += 2) { const q = key(f[k], f[k + 1]); if (!seen.has(q)) { seen.add(q); uses.set(q, (uses.get(q) || 0) + 1); } } }
   const out = [];
-  for (const [, br, f, cls = 0, tun = 0, extra = {}] of list) { const n = f.length / 2; if (n < 2) continue;
+  const dived = []; // (the tunnels dived: tubes.js twinAnd over them all)
+  for (const [, br, f0, cls = 0, tun = 0, extra = {}] of list) { const f = tun && !br && !extra.ys ? densifyLine(f0, TUBE_STEP) : f0, n = f.length / 2; if (n < 2) continue;
     const pts = [], jn = []; for (let i = 0; i < n; i++) { const x = f[i * 2], z = f[i * 2 + 1], q = key(x, z); pts.push({ x, z, y: 0 }); if (i === 0 || i === n - 1 || uses.get(q) > 1) jn.push([i, q]); }
     if (extra.ys) pts.forEach((p, i) => { p.y = extra.ys[i]; }); else if (br || tun) { const ya = extra.ya ?? g(pts[0].x, pts[0].z), yb = extra.yb ?? g(pts[n - 1].x, pts[n - 1].z); let s = 0; const S = [0]; for (let i = 1; i < n; i++) S.push((s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z))); pts.forEach((p, i) => { p.y = ya + (yb - ya) * (S[i] / (s || 1)); }); }
     const flag = br || tun ? new Array(n).fill(true) : null;
-    out.push({ kind: 'rail', rail: cls, minor: true, railsOnly: !!extra.railsOnly, keepShape: !!extra.ys, width: (RAIL_HW[cls] + (extra.wide || 0)) * 2, pts, jn: extra.railsOnly ? [] : jn, bridge: br ? flag : null, tube: tun ? flag : null, layer: 0, surf: 0, lanes: cls, pinA: extra.pinA, pinB: extra.pinB }); }
+    // (a tunnel dives as a road's does, tubes.js: at DIVE_K x its class's grade; its tube only where its roof has cover, an open cut
+    // before that)
+    let tube = flag; if (tun && !br && !extra.ys) { const S = [0]; for (let i = 1; i < n; i++) S.push(S[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z));
+      const cov = (k) => { const gz = g(pts[k].x, pts[k].z); return (gz === gz ? gz : Infinity) - TUBE_COVER; }, r = diveProfile(pts.map((p) => p.y), S, cov, (RAIL_GRADE[cls] ?? 0.04) * DIVE_K);
+      r.ys.forEach((y, i) => { pts[i].y = y; }); tube = r.covered.slice(); dived.push({ S, at: (k) => pts[k], cov: r.covered, set: (cv) => cv.forEach((c, i) => { tube[i] = c; }) }); }
+    const way = { kind: 'rail', rail: cls, minor: true, railsOnly: !!extra.railsOnly, keepShape: !!extra.ys, width: (RAIL_HW[cls] + (extra.wide || 0)) * 2, pts, jn: extra.railsOnly ? [] : jn, bridge: br ? flag : null, tube: tun ? tube : null, layer: 0, surf: 0, lanes: cls, pinA: extra.pinA, pinB: extra.pinB }; out.push(way); }
+  // (tunnels side by side, a railway's tracks: their tubes where every one beside is a tube too, tubes.js twinAnd)
+  const cvs = twinAnd(dived); dived.forEach((d, i) => d.set(cvs[i]));
   return out;
 }
 // a railway bridge's deck profile (#294): not the straight line between the natural ground at its ends, but over everything
