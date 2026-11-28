@@ -39,3 +39,26 @@ export function railSide(pc, o, at, refine = false) {
     out.push(x, z, y, ux, uz); }
   return out;
 }
+
+// A road's bridge that OpenStreetMap maps shorter than the real one, over a railway: the road's points either side of its
+// deck that lie over a railway's bed on the ground (their segment within its half width + RAIL_BED of the railway's line),
+// up to DECK_EXT m out from the deck's end, made deck too (#294, the layout: today's roads.js draws and collides with the deck
+// at the road's own heights). So the street isn't ground over the bed at the bridge's height, with the bed ramping up to it.
+// roads: World.net's (pts [{x, y, z}], bridge[]); rails: World.real.osm.rails ([, bridge, flat xz, class, tunnel]). -> the
+// roads (the same objects: a longer deck's bridge[] replaced)
+export const DECK_EXT = 30, RAIL_BED = 2;
+export function decksOverRails(roads, rails) {
+  const C = 25, grid = new Map(), key = (i, j) => i * 100003 + j;
+  for (const [, br, f, , tun] of rails || []) { if (br || tun) continue; for (let k = 0; k + 3 < f.length; k += 2) { const sg = [f[k], f[k + 1], f[k + 2], f[k + 3]];
+    for (let i = Math.floor(Math.min(sg[0], sg[2]) / C); i <= Math.floor(Math.max(sg[0], sg[2]) / C); i++) for (let j = Math.floor(Math.min(sg[1], sg[3]) / C); j <= Math.floor(Math.max(sg[1], sg[3]) / C); j++) (grid.get(key(i, j)) || grid.set(key(i, j), []).get(key(i, j))).push(sg); } }
+  if (!grid.size) return roads;
+  const pd = (px, pz, x0, z0, x1, z1) => { const ux = x1 - x0, uz = z1 - z0, L2 = ux * ux + uz * uz || 1e-9, t = Math.max(0, Math.min(1, ((px - x0) * ux + (pz - z0) * uz) / L2)); return Math.hypot(px - x0 - ux * t, pz - z0 - uz * t); };
+  const o = (px, pz, qx, qz, rx, rz) => Math.sign((qx - px) * (rz - pz) - (qz - pz) * (rx - px));
+  const segD = (ax, az, bx, bz, cx, cz, dx, dz) => (o(ax, az, bx, bz, cx, cz) * o(ax, az, bx, bz, dx, dz) < 0 && o(cx, cz, dx, dz, ax, az) * o(cx, cz, dx, dz, bx, bz) < 0 ? 0 : Math.min(pd(ax, az, cx, cz, dx, dz), pd(bx, bz, cx, cz, dx, dz), pd(cx, cz, ax, az, bx, bz), pd(dx, dz, ax, az, bx, bz)));
+  const over = (p, q, w) => { for (let i = Math.floor((Math.min(p.x, q.x) - w) / C); i <= Math.floor((Math.max(p.x, q.x) + w) / C); i++) for (let j = Math.floor((Math.min(p.z, q.z) - w) / C); j <= Math.floor((Math.max(p.z, q.z) + w) / C); j++) for (const sg of grid.get(key(i, j)) || []) if (segD(p.x, p.z, q.x, q.z, sg[0], sg[1], sg[2], sg[3]) < w) return true; return false; };
+  return roads.map((rd) => { if (rd.kind === 'rail' || rd.baked || !rd.bridge?.some(Boolean)) return rd; const P = rd.pts, n = P.length, B = rd.bridge.slice(), w = rd.width / 2 + RAIL_BED; let changed = false;
+    for (let a = 0; a < n; a++) { if (!rd.bridge[a] || (a > 0 && rd.bridge[a - 1])) continue; let b = a; while (b + 1 < n && rd.bridge[b + 1]) b++; if (b === a) { continue; } /* (each deck: its first point a, its last b) */
+      for (const [e, st] of [[a, -1], [b, 1]]) { let s = 0; for (let i = e; i + st >= 0 && i + st < n; i += st) { const p = P[i], q = P[i + st]; s += Math.hypot(q.x - p.x, q.z - p.z); if (s > DECK_EXT || !over(p, q, w)) break; B[i + st] = true; changed = true; } }
+      a = b; }
+    if (changed) rd.bridge = B; return rd; });
+}
