@@ -4,9 +4,9 @@
 // Delaunay triangulation with the outlines fixed; each triangle's kind from the region its middle is in. Pure (no
 // three.js, no World): the game runs it in a worker (worker.js), the bake and the tests call it directly.
 //
-// level 'fine': all of it. level 'coarse': the chunk's edge points (the same: neighbours always meet), one stored point
-// per COARSE_CELL, every other grid point; only the chunk's edge fixed; every triangle ground (far away, the imagery's
-// roads).
+// level 'fine': all of it. level 'coarse': the chunk's edge points (the same: neighbours always meet; stored by the bake,
+// format.js eg, so no outlines are worked out), inside one point per COARSE_CELL (the roads' stations), every other grid
+// point; only the chunk's edge fixed; every triangle ground (far away, the imagery's roads).
 import Delaunator from '../../vendor/layout/delaunator.js';
 import Constrainautor from '../../vendor/layout/constrainautor.mjs';
 import { KIND } from './format.js';
@@ -33,7 +33,8 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   // ---- the points (centimetres while they're gathered)
   const PX = [], PZ = [], key = new Map(), kinds = [];
   const add = (X, Z) => { const k = X * 1e7 + Z; let i = key.get(k); if (i == null) { i = PX.length; key.set(k, i); PX.push(X); PZ.push(Z); kinds.push(0); } return i; };
-  const O = chunkOutlines(L.net, L.areas, L), ol = O.P.map(([x, z]) => add(x, z)), tOut = performance.now() - t0; // (the outlines: from the network, outline.js)
+  const pre = !fine && L.edge; // (coarse, with the bake's edge points (format.js eg): no outlines)
+  const O = pre ? edgeOnly(L.edge) : chunkOutlines(L.net, L.areas, L), ol = O.P.map(([x, z]) => add(x, z)), tOut = performance.now() - t0; // (the outlines: from the network, outline.js)
   const E = []; for (const [a0, b0, k] of O.E) { const a = ol[a0], b = ol[b0]; E.push([a, b, k]); kinds[a] |= 1 << k; kinds[b] |= 1 << k; }
   for (const [i, m] of O.edgeBits) kinds[ol[i]] = m; // (a point on the chunk's edge: its regions as the chunk beside sees them too (outline.js))
   for (let s = 0; s <= S; s += EDGE_STEP * 100) { add(X0 + s, Z0); add(X0 + s, Z0 + S); add(X0, Z0 + s); add(X0 + S, Z0 + s); }
@@ -114,6 +115,9 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
       for (let t = 0; t < l; t += RAIL_STEP) for (const o of [0, -(r.hw - 0.3), r.hw - 0.3]) { const QX = Math.round((ax + ux * t - uz * o) * 100), QZ = Math.round((az + uz * t + ux * o) * 100);
         if (inside(QX, QZ, 50) && classify(QX, QZ) === KIND.ballast && (key.has(QX * 1e7 + QZ) || clear(QX, QZ, 25))) putP(add(QX, QZ)); } } });
   } else {
+    // (with the bake's edge points only: inside, each road's stations, thinned as the outlines' points are below; their
+    // regions by the rules, as a chunk's edge points without stored regions)
+    if (pre) for (const r of L.net.runs) { if (r.off) continue; for (let q = 0; q < r.h.length; q++) { const X = Math.round(r.pts[q * 2] * 100), Z = Math.round(r.pts[q * 2 + 1] * 100); if (inside(X, Z, 50)) add(X, Z); } }
     keep = new Set(); const cells = new Set(), onB = (i) => PX[i] === X0 || PZ[i] === Z0 || PX[i] === X0 + S || PZ[i] === Z0 + S;
     for (let i = 0; i < PX.length; i++) { if (onB(i)) { keep.add(i); continue; } const k = Math.floor((PX[i] - X0) / (COARSE_CELL * 100)) * 4096 + Math.floor((PZ[i] - Z0) / (COARSE_CELL * 100)); if (!cells.has(k)) { cells.add(k); keep.add(i); } }
     for (let j = 1; j < lat.nj - 1; j++) for (let i = 1; i < lat.ni - 1; i++) { if ((lat.i0 + i) % 2 || (lat.j0 + j) % 2) continue; const X = Math.round((grid.x0 + (lat.i0 + i) * grid.sp) * 100), Z = Math.round((grid.z0 + (lat.j0 + j) * grid.sp) * 100); if (inside(X, Z, 50) && clear(X, Z, 100)) keep.add(add(X, Z)); }
@@ -126,7 +130,7 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
     const x = PX[p] / 100, z = PZ[p] / 100, K = kinds[p]; X[k] = x; Z[k] = z;
     if (kerbFrom.has(p) && kOf.has(kerbFrom.get(p)) && kOf.get(kerbFrom.get(p)) < k) { const g = kOf.get(kerbFrom.get(p)); Y[k] = Y[g] + KERB; PY[k] = PY[g] + KERB * Math.min(1, KERB_W / PAVE_RAMP); return; } // (a kerb's top: its gutter's height, plus the kerb drawn; in physics the start of the ramp)
     let kind = K & (1 << KIND.tarmac) ? KIND.tarmac : K & (1 << KIND.ballast) ? KIND.ballast : K & ((1 << KIND.kerb) | (1 << KIND.pave)) ? KIND.pave : PAVED.find((q) => q !== KIND.lip && K & (1 << q)) ?? (K & (1 << KIND.lip) ? KIND.lip : null);
-    if (kind == null && !(PX[p] === X0 || PZ[p] === Z0 || PX[p] === X0 + S || PZ[p] === Z0 + S)) kind = classify(PX[p], PZ[p]); // (inside: its region)
+    if (kind == null && !(PX[p] === X0 || PZ[p] === Z0 || PX[p] === X0 + S || PZ[p] === Z0 + S)) kind = pre ? R.region(x, z) : classify(PX[p], PZ[p]); // (inside: its region)
     if (kind == null) { // (a point of the chunk's edge: its region by the rules (the nearest road's widths), not this chunk's polygons, so the chunk beside works it out the same)
       kind = R.region(x, z); } // (the outlines' own order, every road's widths)
     if (kind === KIND.ground && edgeH) { const cn = (PX[p] === X0 || PX[p] === X0 + S) && (PZ[p] === Z0 || PZ[p] === Z0 + S) ? (PX[p] === X0 ? 0 : 1) + (PZ[p] === Z0 ? 0 : 2) : -1;
@@ -145,7 +149,13 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   if (fine) { for (const [a, b, k] of E) if (!onLine(a, b) && k !== KIND.kerb) fix(a, b, 'outline'); for (const [a, b, k] of E) if (k === KIND.kerb) fix(a, b, 'kerb'); for (const [a, b] of bis) fix(a, b, 'bend'); } // (the outlines first: a kerb never stands in one's way)
   const t2 = performance.now(), T = del.triangles, nt = T.length / 3;
   // ---- each triangle: its kind (its middle's region), wound to face up; sorted by kind (one draw group each)
-  const tkind = new Uint8Array(nt); for (let t = 0; t < nt; t++) { if (!fine) continue; const a = T[t * 3], b = T[t * 3 + 1], c = T[t * 3 + 2]; tkind[t] = classify((X[a] + X[b] + X[c]) / 3 * 100, (Z[a] + Z[b] + Z[c]) / 3 * 100); if (tkind[t] === KIND.pave && kerbSet.has(idxs[a]) && kerbSet.has(idxs[b]) && kerbSet.has(idxs[c]) && tarmacD(Math.round((X[a] + X[b] + X[c]) / 3 * 100), Math.round((Z[a] + Z[b] + Z[c]) / 3 * 100), 50) <= (KERB_W + 0.02) * 100) tkind[t] = KIND.kerb; if (tkind[t] === KIND.tarmac && (Y[a] !== PY[a] || Y[b] !== PY[b] || Y[c] !== PY[c])) tkind[t] = KIND.pave; } // (the kerb's strip: by the carriageway's edge)
+  // (the region's the same across every edge that isn't fixed (the outlines are): one middle classified per patch, spread
+  // to its neighbours; each triangle's own middle if any fixed edge failed)
+  const tkind = new Uint8Array(nt), cls = (t) => { const a = T[t * 3], b = T[t * 3 + 1], c = T[t * 3 + 2]; return classify((X[a] + X[b] + X[c]) / 3 * 100, (Z[a] + Z[b] + Z[c]) / 3 * 100); };
+  if (fine && !failed && !softMissed) { const done = new Uint8Array(nt), H = del.halfedges, st = []; for (let t0 = 0; t0 < nt; t0++) { if (done[t0]) continue; const k = cls(t0); done[t0] = 1; tkind[t0] = k; st.push(t0);
+    while (st.length) { const t = st.pop(); for (let e = t * 3; e < t * 3 + 3; e++) { const o = H[e]; if (o < 0 || con.isConstrained(e)) continue; const u = (o / 3) | 0; if (!done[u]) { done[u] = 1; tkind[u] = k; st.push(u); } } } } }
+  else if (fine) for (let t = 0; t < nt; t++) tkind[t] = cls(t);
+  for (let t = 0; t < nt; t++) { if (!fine) continue; const a = T[t * 3], b = T[t * 3 + 1], c = T[t * 3 + 2]; if (tkind[t] === KIND.pave && kerbSet.has(idxs[a]) && kerbSet.has(idxs[b]) && kerbSet.has(idxs[c]) && tarmacD(Math.round((X[a] + X[b] + X[c]) / 3 * 100), Math.round((Z[a] + Z[b] + Z[c]) / 3 * 100), 50) <= (KERB_W + 0.02) * 100) tkind[t] = KIND.kerb; if (tkind[t] === KIND.tarmac && (Y[a] !== PY[a] || Y[b] !== PY[b] || Y[c] !== PY[c])) tkind[t] = KIND.pave; } // (the kerb's strip: by the carriageway's edge)
   const order = Array.from({ length: nt }, (_, t) => t).sort((a, b) => tkind[a] - tkind[b] || a - b), idx = new Uint32Array(nt * 3), tk = new Uint8Array(nt);
   order.forEach((t, q) => { const a = T[t * 3]; let b = T[t * 3 + 1], c = T[t * 3 + 2]; if ((Z[c] - Z[a]) * (X[b] - X[a]) - (X[c] - X[a]) * (Z[b] - Z[a]) > 0) { const s = b; b = c; c = s; } idx[q * 3] = a; idx[q * 3 + 1] = b; idx[q * 3 + 2] = c; tk[q] = tkind[t]; }); // (the normal's y is minus that)
   const pos = new Float32Array(N * 3), phys = new Float32Array(N), nrm = new Float32Array(N * 3);
@@ -187,8 +197,14 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   let area = 0; for (let q = 0; q < nt; q++) { const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2]; area += Math.abs((X[b] - X[a]) * (Z[c] - Z[a]) - (X[c] - X[a]) * (Z[b] - Z[a])) / 2; }
   const F32 = (a) => Float32Array.from(a);
   return { level, pos, phys, nrm, idx, tk, ang, rib: { pos: F32(rib.pos), nrm: F32(rib.nrm), road: F32(rib.road), lane: F32(rib.lane), kind: Uint8Array.from(rib.kind), id: Uint32Array.from(rib.id) },
-    stats: { points: N, tris: nt, fixed, failed, failedAt, regionArea: O.area, why, softMissed, bendMissed, covered: area / (L.size * L.size), outlineMs: tOut, delaunayMs: t1 - t0, constrainMs: t2 - t1, totalMs: performance.now() - t0 } };
+    stats: { edge: fine ? edgeOf(O, X0, Z0) : null, points: N, tris: nt, fixed, failed, failedAt, regionArea: O.area, why, softMissed, bendMissed, covered: area / (L.size * L.size), outlineMs: tOut, delaunayMs: t1 - t0, constrainMs: t2 - t1, totalMs: performance.now() - t0 } };
 }
+
+// a chunk's edge points from its outlines (fine): Int32Array x, z (cm), regions (format.js eg), but not those every
+// EDGE_STEP m in no region (the coarse level adds them as the fine does, the rules giving their region alike); and back,
+// as outlines with no edges
+const edgeOf = (O, X0, Z0) => { const e = []; for (const [i, m] of O.edgeBits) { const [X, Z] = O.P[i]; if (!m && (X - X0) % (EDGE_STEP * 100) === 0 && (Z - Z0) % (EDGE_STEP * 100) === 0) continue; e.push(X, Z, m); } return Int32Array.from(e); };
+const edgeOnly = (e) => { const P = [], edgeBits = new Map(); for (let o = 0; o < e.length; o += 3) { edgeBits.set(P.length, e[o + 2]); P.push([e[o], e[o + 1]]); } return { P, E: [], edgeBits, area: null }; };
 
 // physics lookup over a fine mesh: a grid of CELL-metre cells listing the triangles touching each
 const CELL = 4;

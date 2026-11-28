@@ -20,12 +20,18 @@
 //   jg int16 x 2     per junction: its plane's slope along x, z (x 1e-4)
 //   ac uint16, ak uint8  per plaza: its ring's points, its surface (0 tarmac, 1 paving, 2 gravel)
 //   a0 int32 x 2     per plaza: its first point (cm from the corner); ad int16 x 2 per point after: the change
+//   eg uint16 x 2    (optional: the header's ne, points per side) the chunk's edge points, as its fine mesh has them (its
+//                    outlines' points on its edge, outline.js, and every EDGE_STEP m): per side (south z0, north z0 +
+//                    size, west x0, east x0 + size; a corner on the south or north), in order along it: the change in
+//                    cm from the one before, and the regions it's in (a bit per KIND). Written by the bake from its
+//                    check (layout-check.mjs, withEdge): the coarse level meets its neighbours' fine edge without
+//                    working out the outlines (mesh.js)
 export const CHUNK = 500, LAYOUT_V = 2, SEG = 24;
 export const KIND = { ground: 0, bank: 1, tarmac: 2, kerb: 3, pave: 4, verge: 5, pavers: 6, gravel: 7, alley: 8, lip: 9, ballast: 10, out: 255 }; // (lip: a tunnel portal's opening, behind its headwall: no surface; ballast: a railway's bed)
 export const RKINDS = ['highway', 'main', 'street', 'service', 'ped', 'track', 'other', 'rail']; // (a railway: a way off the street network, its lanes its class, bake.js RAIL_CLASS)
 
 const pad4 = (n) => (4 - (n % 4)) % 4;
-const SPEC = (H) => [['rk', Uint8Array, H.runs * 6], ['rn', Uint16Array, H.runs], ['r0', Int32Array, H.runs * 3], ['rd', Int16Array, Math.max(0, H.sp - H.runs) * 2], ['rh', Int16Array, Math.max(0, H.st - H.runs)], ['jx', Int32Array, H.jn * 4], ['jg', Int16Array, H.jn * 2], ['ac', Uint16Array, H.na], ['ak', Uint8Array, H.na], ['a0', Int32Array, H.na * 2], ['ad', Int16Array, Math.max(0, H.ap - H.na) * 2]];
+const SPEC = (H) => [['rk', Uint8Array, H.runs * 6], ['rn', Uint16Array, H.runs], ['r0', Int32Array, H.runs * 3], ['rd', Int16Array, Math.max(0, H.sp - H.runs) * 2], ['rh', Int16Array, Math.max(0, H.st - H.runs)], ['jx', Int32Array, H.jn * 4], ['jg', Int16Array, H.jn * 2], ['ac', Uint16Array, H.na], ['ak', Uint8Array, H.na], ['a0', Int32Array, H.na * 2], ['ad', Int16Array, Math.max(0, H.ap - H.na) * 2], ['eg', Uint16Array, (H.ne ? H.ne[0] + H.ne[1] + H.ne[2] + H.ne[3] : 0) * 2]];
 // a road's stations along its shape (x, z pairs, any units): its points and, between two, ceil(length / SEG) - 1 more
 export function stations(xs, zs, unit = 1) { const out = [[xs[0], zs[0]]]; for (let i = 1; i < xs.length; i++) { const l = Math.hypot(xs[i] - xs[i - 1], zs[i] - zs[i - 1]) / unit, k = Math.max(1, Math.ceil(l / SEG)); for (let s = 1; s <= k; s++) out.push([xs[i - 1] + (xs[i] - xs[i - 1]) * s / k, zs[i - 1] + (zs[i] - zs[i - 1]) * s / k]); } return out; }
 
@@ -33,7 +39,7 @@ export function stations(xs, zs, unit = 1) { const out = [[xs[0], zs[0]]]; for (
 export function encodeLayout(Q) {
   const sp = Q.runs.reduce((s, r) => s + r.x.length, 0), st = Q.runs.reduce((s, r) => s + r.h.length, 0), H = { v: LAYOUT_V, ix: Q.ix, iz: Q.iz, x0: Q.x0, z0: Q.z0, size: Q.size, city: Q.city ? 1 : 0, runs: Q.runs.length, sp, st, jn: Q.jn.length, na: Q.areas.length, ap: Q.areas.reduce((n, a) => n + a.x.length, 0) };
   const A = { ac: Uint16Array.from(Q.areas, (a) => a.x.length), ak: Uint8Array.from(Q.areas, (a) => a.surf), a0: new Int32Array(H.na * 2), ad: new Int16Array(Math.max(0, H.ap - H.na) * 2),
-    rk: new Uint8Array(H.runs * 6), rn: new Uint16Array(H.runs), r0: new Int32Array(H.runs * 3), rd: new Int16Array(Math.max(0, sp - H.runs) * 2), rh: new Int16Array(Math.max(0, st - H.runs)), jx: new Int32Array(H.jn * 4), jg: new Int16Array(H.jn * 2) };
+    rk: new Uint8Array(H.runs * 6), rn: new Uint16Array(H.runs), r0: new Int32Array(H.runs * 3), rd: new Int16Array(Math.max(0, sp - H.runs) * 2), rh: new Int16Array(Math.max(0, st - H.runs)), jx: new Int32Array(H.jn * 4), jg: new Int16Array(H.jn * 2), eg: new Uint16Array(0) };
   let d = 0, e = 0; Q.runs.forEach((r, i) => { A.rk.set([r.k, r.flags, r.hw, r.pave, r.lanes, r.ends || 0], i * 6); A.rn[i] = r.x.length; A.r0.set([r.x[0], r.z[0], r.h[0]], i * 3); for (let s = 1; s < r.x.length; s++, d++) A.rd.set([r.x[s] - r.x[s - 1], r.z[s] - r.z[s - 1]], d * 2); for (let s = 1; s < r.h.length; s++, e++) A.rh[e] = r.h[s] - r.h[s - 1]; });
   Q.jn.forEach((j, i) => { A.jx.set([j.x, j.z, j.r, j.y], i * 4); A.jg.set([j.gx, j.gz], i * 2); });
   let ad = 0; Q.areas.forEach((a, i) => { A.a0.set([a.x[0], a.z[0]], i * 2); for (let s = 1; s < a.x.length; s++, ad++) A.ad.set([a.x[s] - a.x[s - 1], a.z[s] - a.z[s - 1]], ad * 2); });
@@ -60,7 +66,20 @@ export function decodeLayout(buf) {
   const junctions = []; for (let i = 0; i < H.jn; i++) junctions.push({ x: H.x0 + A.jx[i * 4] / 100, z: H.z0 + A.jx[i * 4 + 1] / 100, r: Math.abs(A.jx[i * 4 + 2]) / 100, lx: A.jx[i * 4 + 2] < 0, y0: A.jx[i * 4 + 3] / 1000, gx: A.jg[i * 2] / 1e4, gz: A.jg[i * 2 + 1] / 1e4 });
   const areas = []; let ad = 0, X0 = Math.round(H.x0 * 100), Z0 = Math.round(H.z0 * 100);
   for (let i = 0; i < H.na; i++) { let x = A.a0[i * 2], z = A.a0[i * 2 + 1]; const ring = [[X0 + x, Z0 + z]]; for (let s = 1; s < A.ac[i]; s++, ad++) { x += A.ad[ad * 2]; z += A.ad[ad * 2 + 1]; ring.push([X0 + x, Z0 + z]); } areas.push({ surf: A.ak[i], ring }); }
-  return { ...H, net: { runs, junctions }, areas };
+  let edge = null; if (H.ne) { edge = new Int32Array(A.eg.length / 2 * 3); const S = Math.round(H.size * 100); let q = 0, o = 0;
+    for (let side = 0; side < 4; side++) { let pos = 0; for (let i = 0; i < H.ne[side]; i++, q++, o += 3) { pos += A.eg[q * 2]; edge[o] = side < 2 ? X0 + pos : side === 2 ? X0 : X0 + S; edge[o + 1] = side < 2 ? (side ? Z0 + S : Z0) : Z0 + pos; edge[o + 2] = A.eg[q * 2 + 1]; } } }
+  return { ...H, net: { runs, junctions }, areas, edge }; // (edge: Int32Array x, z (cm), regions per edge point, or null)
+}
+// a chunk's bytes (encodeLayout's, without edge points) with its edge points added: edge Int32Array x, z (cm), regions (mesh.js stats.edge)
+export function withEdge(u8, edge) {
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), hl = dv.getUint32(0, true), H = JSON.parse(new TextDecoder().decode(u8.subarray(4, 4 + hl)).trim());
+  if (H.ne) throw new Error('withEdge: has edge points already');
+  const X0 = Math.round(H.x0 * 100), Z0 = Math.round(H.z0 * 100), S = Math.round(H.size * 100), sides = [[], [], [], []];
+  for (let o = 0; o < edge.length; o += 3) { const X = edge[o] - X0, Z = edge[o + 1] - Z0, m = edge[o + 2]; if (Z === 0) sides[0].push([X, m]); else if (Z === S) sides[1].push([X, m]); else if (X === 0) sides[2].push([Z, m]); else if (X === S) sides[3].push([Z, m]); else throw new Error('withEdge: a point off the edge'); }
+  const eg = new Uint16Array(edge.length / 3 * 2); let q = 0; for (const sd of sides) { sd.sort((a, b) => a[0] - b[0]); let pos = 0; for (const [p, m] of sd) { eg[q * 2] = p - pos; eg[q * 2 + 1] = m; pos = p; q++; } }
+  H.ne = sides.map((sd) => sd.length); const hdr = new TextEncoder().encode(JSON.stringify(H)), nhl = hdr.length + pad4(hdr.length + 4), body = u8.subarray(4 + hl), egB = eg.length * 2, out = new Uint8Array(4 + nhl + body.length + egB + pad4(egB));
+  new DataView(out.buffer).setUint32(0, nhl, true); out.set(hdr, 4); out.fill(32, 4 + hdr.length, 4 + nhl); out.set(body, 4 + nhl); out.set(new Uint8Array(eg.buffer), 4 + nhl + body.length);
+  return out;
 }
 // A chunk inside the layout's extent with nothing of the network or a plaza within its reach (NET_PAD) is only ground:
 // no file, listed in the index's `ground` as spans [iz, ix0, ix1] (both ends in), its bytes worked out here the same at the

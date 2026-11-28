@@ -9,6 +9,7 @@ class BitSet {
     constructor(W, bs) {
         this.W = W;
         this.bs = bs;
+        this.list = [];
     }
     /**
      * Add a number to the set.
@@ -17,8 +18,8 @@ class BitSet {
      * @return this.
      */
     add(idx) {
-        const W = this.W, byte = (idx / W) | 0, bit = idx % W;
-        this.bs[byte] |= 1 << bit;
+        const W = this.W, byte = (idx / W) | 0, bit = idx % W, m = 1 << bit;
+        if (!(this.bs[byte] & m)) { this.bs[byte] |= m; this.list.push(idx); }
         return this;
     }
     /**
@@ -42,6 +43,7 @@ class BitSet {
     set(idx, val) {
         const W = this.W, byte = (idx / W) | 0, bit = idx % W, m = 1 << bit;
         //this.bs[byte] = set ? this.bs[byte] | m : this.bs[byte] & ~m;
+        if (val && !(this.bs[byte] & m)) this.list.push(idx);
         this.bs[byte] ^= (-val ^ this.bs[byte]) & m; // -set == set * 255
         return val;
     }
@@ -66,17 +68,15 @@ class BitSet {
      * @return this.
      */
     forEach(fn) {
-        const W = this.W, bs = this.bs, len = bs.length;
-        for (let byte = 0; byte < len; byte++) {
-            let bit = 0;
-            // bs[byte] may change during iteration
-            while (bs[byte] && bit < W) {
-                if (bs[byte] & (1 << bit)) {
-                    fn(byte * W + bit);
-                }
-                bit++;
+        // (skywright, #294: the numbers added since the last forEach, in the order added, not a scan of every byte: the
+        // flips after each constraint touch a few of a chunk's tens of thousands of edges)
+        const L = this.list;
+        for (let i = 0; i < L.length; i++) {
+            if (this.has(L[i])) {
+                fn(L[i]);
             }
         }
+        L.length = 0;
         return this;
     }
 }

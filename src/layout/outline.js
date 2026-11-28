@@ -22,7 +22,7 @@ export function chunkOutlines(net, areas, L) {
       out.push({ x, z, ux: pt ? pt.dx : (x - P[j * 2]) / l, uz: pt ? pt.dz : (z - P[j * 2 + 1]) / l, wb: pt ? pt.W : 0 }); } return out; };
   const cutBox = (c, d) => { const wb = c.wb || d + 0.5; return [[corner(c.x, c.z, c.ux, c.uz, 0, -wb), corner(c.x, c.z, c.ux, c.uz, d + 1, -wb), corner(c.x, c.z, c.ux, c.uz, d + 1, wb), corner(c.x, c.z, c.ux, c.uz, 0, wb)]]; };
   const off = (rings, d, open = true) => { const co = new CL.ClipperOffset(2, ARC); co.AddPaths(toC(rings), CL.JoinType.jtRound, open ? CL.EndType.etOpenRound : CL.EndType.etClosedPolygon); const s = new CL.Paths(); co.Execute(s, d); return fromC(s); };
-  const union = (...ps) => bool(CL.ClipType.ctUnion, ps.flat(), null), minus = (a, ...bs) => (bs.length ? bool(CL.ClipType.ctDifference, a, union(...bs)) : a), inter = (a, b) => bool(CL.ClipType.ctIntersection, a, b);
+  const union = (...ps) => bool(CL.ClipType.ctUnion, ps.flat(), null), minus = (a, ...bs) => (a.length && bs.some((b) => b.length) ? bool(CL.ClipType.ctDifference, a, bs.flat()) : a), inter = (a, b) => bool(CL.ClipType.ctIntersection, a, b); // (minus: the cut's rings as they are, not unioned first: nonzero filling covers their overlaps)
   // (each road as its shape's segments that come within CLIP of the chunk, each offset on its own: a segment's strip is a
   // capsule of its two stored points alone, so two chunks get the same edges, and the same points where they cross, about
   // their shared edge; what's past CLIP can't reach into the chunk)

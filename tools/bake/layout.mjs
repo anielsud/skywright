@@ -21,7 +21,7 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { worldAt } from '../test/node/world.mjs';
 import { bakeLayout } from '../../src/layout/bake.js';
-import { CHUNK, LAYOUT_V, decodeLayout, indexChunks } from '../../src/layout/format.js';
+import { CHUNK, LAYOUT_V, decodeLayout, indexChunks, withEdge } from '../../src/layout/format.js';
 import { latticeOf } from '../../src/layout/mesh.js';
 import { groundGrid, latticeHeights } from '../../src/layout/rules.js';
 import { DRIFT_MAX } from './markcheck.mjs';
@@ -85,7 +85,8 @@ export async function bakePlace(a, world, asks) {
   const dir = `assets/real/${id}/layout/`; mkdirSync(dir, { recursive: true });
   const prev = (() => { try { return JSON.parse(readFileSync(dir + 'index.json', 'utf8')); } catch { return { chunks: [] }; } })(), keep = new Map(cs[0] === 'all' ? [] : indexChunks(prev).map((c) => [key(c.ix, c.iz), c]));
   let bytesAll = 0, lenAll = 0, bytesExtra = 0, filesExtra = 0, groundN = 0;
-  for (const { ix, iz, bytes: raw, stats: cst } of r.chunks) { const k = key(ix, iz); if (failed.has(k)) { keep.delete(k); if (process.env.LAYOUT_DUMP) writeFileSync(`${process.env.LAYOUT_DUMP}/${ix}_${iz}.bin`, raw); continue; } // (LAYOUT_DUMP=dir: the failing chunks' bytes, to look at)
+  for (const { ix, iz, bytes: raw0, stats: cst } of r.chunks) { const k = key(ix, iz), raw = withEdge(raw0, byKey.get(k).edge); if (failed.has(k)) { keep.delete(k); if (process.env.LAYOUT_DUMP) writeFileSync(`${process.env.LAYOUT_DUMP}/${ix}_${iz}.bin`, raw); continue; } // (LAYOUT_DUMP=dir: the failing chunks' bytes, to look at)
+    // (raw: with its edge points, from its check: the coarse level's, format.js eg)
     if (!cst.runs && !cst.junctions && !cst.areas) { keep.set(k, { ix, iz, file: null }); groundN++; continue; } // (only ground: no file, format.js groundBytes)
     const bytes = gzipSync(raw, { level: 9 }), file = `${ix}_${iz}.${createHash('sha256').update(bytes).digest('hex').slice(0, 10)}.bin.gz`; writeFileSync(dir + file, bytes); keep.set(k, { ix, iz, file }); bytesAll += bytes.length; lenAll += seen.get(k) || 0; if (!seen.has(k)) { bytesExtra += bytes.length; filesExtra++; } }
   const all = [...keep.values()].sort((p, q) => p.iz - q.iz || p.ix - q.ix), ground = []; for (const c of all) { if (c.file) continue; const g = ground.at(-1); if (g && g[0] === c.iz && g[2] === c.ix - 1) g[2] = c.ix; else ground.push([c.iz, c.ix, c.ix]); }
