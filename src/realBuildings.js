@@ -303,7 +303,12 @@ export class RealScenery {
   // walls from just below its lowest corner, as built: its vertices, one run in its chunk's mesh, and its collision disc)
   relayout(b) {
     const L = this.w.layout, moved = new Map(), shifted = new Set();
-    for (const a of this.grid.values()) for (const e of a) {
+    /* (only the cells whose buildings can reach the chunk: filed by their middle's 50 m cell, the farthest corner from its
+       middle at most fpReach; going through every building in the place for each chunk was most of a frame's layout work) */
+    if (this.fpReach == null) { let r = 0; for (const a of this.grid.values()) for (const e of a) if (e.fp) for (const p of e.fp) r = Math.max(r, Math.hypot(p[0] - e[0], p[1] - e[2])); this.fpReach = r + 1; }
+    const R = this.fpReach, cells = [];
+    for (let i = Math.floor((b.x0 - R) / 50); i <= Math.floor((b.x1 + R) / 50); i++) for (let j = Math.floor((b.z0 - R) / 50); j <= Math.floor((b.z1 + R) / 50); j++) { const a = this.grid.get(i + ',' + j); if (a) cells.push(a); }
+    for (const a of cells) for (const e of a) {
       if (!e.fp || e.wet || !e.rng || !e.fp.some((p) => p[0] >= b.x0 - 1 && p[0] <= b.x1 + 1 && p[1] >= b.z0 - 1 && p[1] <= b.z1 + 1)) continue; // (one across chunks: once they're all in)
       let g0 = Infinity; for (const p of e.fp) { const y = L.placeY(p[0], p[1]); if (!(y === y)) { g0 = Infinity; break; } g0 = Math.min(g0, y); }
       const dy = g0 - 0.6 - e[1]; if (!(Math.abs(dy) > 0.02 && Math.abs(dy) < 30)) continue;

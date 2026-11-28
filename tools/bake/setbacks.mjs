@@ -70,7 +70,7 @@ export async function bakeSetbacks(id, W, answered = new Map()) {
   console.log(`${id}: ${recs.length} tall records; ground from the layout for ${moved} (${hts.size - jobs.length} chunks answered by the layout's checks, ${jobs.length} meshed here${jobs.length ? ` on ${workers(jobs.length)} workers` : ''}) in ${((tg - tw) / 1000).toFixed(1)} s (lattices ${((tl - tw) / 1000).toFixed(1)} s)`);
   // ---- 2. the building lines
   const Ls = []; for (const k of L.index.keys()) Ls.push((await L.load(k)).L);
-  const old = roadIndex(W), lines = buildingLines(Ls, old, S, (x, z) => W.rawHeight(x, z)); L.chunks.clear(); L.active.clear();
+  const old = roadIndex(W), lines = buildingLines(Ls, old, S, (x, z) => W.rawHeight(x, z)); L.chunks.clear(); L.active.clear(); L.act.clear();
   console.log(`  building lines: ${lines.segs.length} segments (${lines.segs.length - lines.kept} the layout's, ${lines.kept} today's outside its chunks)`);
   // ---- 3. the tall buildings, recorded
   const tl2 = performance.now();

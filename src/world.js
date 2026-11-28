@@ -489,6 +489,11 @@ export class World {
   // road exactly), and just beside it the embankment/cutting down to the grid (roads.js draws both the same way).
   sampleGrid(x, z) {
     if (this.layout?.on) { const y = this.layout.heightAt(x, z); if (y === y) return y; } // (a baked layout chunk: its surface)
+    return this.sampleToday(x, z);
+  }
+  /* sampleGrid without the baked layout (today's ground): for what samples at tens of metres a texel (the minimap), where
+     the layout's surface changes nothing seen and its lookup is several times the cost */
+  sampleToday(x, z) {
     if (this.Hh) {
       const R = this.hR, st = this.hStep, fx = (x + this.half) / st, fz = (z + this.half) / st;
       if (fx >= 0 && fz >= 0 && fx < R && fz < R) { const h = this.cityAt(x, z, this.triAt(this.Hh, R + 1, fx, fz)), S = this.roadSurf; return S && S.q(x, z) ? S.over(h) : h; }
@@ -1389,6 +1394,8 @@ export class World {
       TUBES.tubeN.value = near.length;
     } // (lazy road tiles: a few ms a frame, nearest first)
     this.updatePatch(cp); this.updateDetail(cp);
+    if (this.layout && this.patchAt) { const st = this.hStep, x0 = -this.half + this.patchAt[0] * st, z0 = -this.half + this.patchAt[1] * st, e = this.patchP * st; this.layout.coverRect(this.patch, x0, z0, x0 + e, z0 + e); } /* (wholly in drawn layout chunks: not drawn) */
+    if (this.layout && this.detailAt) { const DS = this.detailS, x0 = this.detailAt[0] * DS, z0 = this.detailAt[1] * DS, e = this.detailD * DS; this.layout.coverRect(this.detail, x0, z0, x0 + e, z0 + e); }
     const snap = (v, g) => Math.round(v / g) * g;
     this.water.position.x = snap(cp.x, 2000); this.water.position.z = snap(cp.z, 2000);
     if (!this.cloudAnchor || Math.hypot(cp.x - this.cloudAnchor.x, cp.z - this.cloudAnchor.z) > 3000) { this.cloudAnchor = cp.clone(); this.wrapClouds(cp); }

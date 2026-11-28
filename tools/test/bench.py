@@ -3,6 +3,7 @@
 
   python3 tools/test/bench.py [--quality medium] [--locations islands,canyon,nyc,lauterbrunnen] [--cpu-throttle 4] [--time 21.5]
                               [--preset Kestrel] [--start runway] [--seconds 6] [--json out.json] [--renderer webgl|webgpu]
+                              [--query layout=1] [--profile dir]
 
 For each location it flies the preset off the runway at full throttle, lets it settle, then measures over --seconds:
   frame_ms  JavaScript time per frame (every requestAnimationFrame callback: simulation, world streaming, rendering)
@@ -35,7 +36,7 @@ SETUP = """(() => { const S = __sky, B = __bench, r = S.renderer, info = r.info;
   return true; })()"""
 
 
-async def bench(cdp, preset, loc, quality, seconds, start='runway', hour=10):
+async def bench(cdp, preset, loc, quality, seconds, start='runway', hour=10, profile=None):
     S = '__sky'
     if await cdp.js(f'!!{S}.F'):
         await cdp.js(f'{S}.endFlight()')
@@ -48,8 +49,13 @@ async def bench(cdp, preset, loc, quality, seconds, start='runway', hour=10):
     await asyncio.sleep(4)  # take off, let streaming settle
     # hold the graphics still: no adaptive resolution or feature shedding while measuring
     await cdp.js(f'(() => {{ const p = {S}.perf; p.scale = 1; p.level = 0; p.lastChange = 1e15; {S}.applyQuality(); Object.assign(__bench, {{ js: 0, render: 0, calls: 0, tris: 0, frames: 0, on: true }}); }})()')
+    if profile:
+        await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', interval=200); await cdp.send('Profiler.start')
     await asyncio.sleep(seconds)
     b = await cdp.js('(() => { __bench.on = false; return { ...__bench }; })()')
+    if profile:
+        prof = (await cdp.send('Profiler.stop', _timeout=120))['profile']
+        os.makedirs(profile, exist_ok=True); json.dump(prof, open(os.path.join(profile, f'{loc}.cpuprofile'), 'w'))
     await cdp.js(f'{S}.perf.lastChange = 0')
     n = max(1, b['frames'])
     return {'location': loc, 'fps': round(n / seconds, 1), 'frame_ms': round(b['js'] / n, 2), 'render_ms': round(b['render'] / n, 2),
@@ -70,12 +76,15 @@ async def main(a):
             await cdp.send('Page.addScriptToEvaluateOnNewDocument', source=HOOK)
             if a.cpu_throttle > 1:
                 await cdp.send('Emulation.setCPUThrottlingRate', rate=a.cpu_throttle)
-            q = f'?renderer={a.renderer}' if a.renderer else ''
+            qs = [f'renderer={a.renderer}'] if a.renderer else []
+            if a.query:
+                qs.append(a.query)
+            q = '?' + '&'.join(qs) if qs else ''
             await cdp.send('Page.navigate', url=f'{origin}/{q}')
             await cdp.wait_for('window.__sky && window.__sky.hangar', 120, 'the app to boot')
             await cdp.js(SETUP)
             for loc in a.locations.split(','):
-                r = await bench(cdp, a.preset, loc, a.quality, a.seconds, a.start, a.time)
+                r = await bench(cdp, a.preset, loc, a.quality, a.seconds, a.start, a.time, a.profile)
                 rows.append(r)
                 print(f"{r['location']:<15} {r['fps']:6.1f} fps   frame {r['frame_ms']:6.2f} ms   render {r['render_ms']:6.2f} ms   {r['calls']:5d} calls   {r['tris'] / 1e6:5.2f} M tris", flush=True)
     finally:
@@ -93,4 +102,6 @@ if __name__ == '__main__':
     ap.add_argument('--start', default='runway', help='flight start: runway, park, water, waterpark, marina…')
     ap.add_argument('--time', type=float, default=10, help='hour of the day (e.g. 21.5: night, the windows and street lamps lit)')
     ap.add_argument('--port', type=int), ap.add_argument('--cdp-port', type=int)
+    ap.add_argument('--query', default='', help='extra page query, e.g. layout=1')
+    ap.add_argument('--profile', help='a directory: a DevTools CPU profile of each measured window saved there (<location>.cpuprofile)')
     asyncio.run(main(ap.parse_args()))

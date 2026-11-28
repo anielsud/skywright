@@ -20,8 +20,13 @@ export function drawBuffers(m, wl = null) {
   for (let k = 0; k < N0; k++) ang[k] = vAng[k] === vAng[k] ? vAng[k] : 0;
   for (let i = 0; i < dup.length; i++) { const v = dup[i], o = N0 + i; for (let e = 0; e < 3; e++) { pos[o * 3 + e] = m.pos[v * 3 + e]; nrm[o * 3 + e] = m.nrm[v * 3 + e]; } ang[o] = dAng[i]; }
   const r = m.rib, n = r.kind.length, ribG = r.kind.includes(KIND.gravel), groups = [];
-  for (let q = 0; q < m.tk.length;) { const mi = matOf(m.tk[q], ribG); let e = q; while (e < m.tk.length && matOf(m.tk[e], ribG) === mi) e++; if (mi >= 0) groups.push(q * 3, (e - q) * 3, mi); q = e; }
-  const surf = { pos, nrm, ang, idx, groups };
+  /* (the triangles in material order, a group (a draw call) per material: in mesh order the materials alternate, and each
+     run was a draw of its own, tens a chunk) */
+  const nt = m.tk.length, mis = new Int8Array(nt), cnt = new Int32Array(6); for (let q = 0; q < nt; q++) { mis[q] = matOf(m.tk[q], ribG); cnt[mis[q] + 1]++; }
+  const at = new Int32Array(6); for (let k = 1; k < 6; k++) at[k] = at[k - 1] + cnt[k - 1];
+  const sorted = new idx.constructor(idx.length); for (let q = 0; q < nt; q++) { const o = at[mis[q] + 1]++ * 3; sorted[o] = idx[q * 3]; sorted[o + 1] = idx[q * 3 + 1]; sorted[o + 2] = idx[q * 3 + 2]; }
+  for (let mi = 0, o = cnt[0]; mi < 5; o += cnt[mi + 1], mi++) if (cnt[mi + 1]) groups.push(o * 3, cnt[mi + 1] * 3, mi); /* (-1, not in the surface: first, in no group) */
+  const surf = { pos, nrm, ang, idx: sorted, groups };
   // the street ribbons (a triangle soup, three corners per triangle) by material
   const part = (want, attrs) => {
     let t = 0; for (let v = 0; v < n; v += 3) if (want(r.kind[v])) t++; if (!t) return null;
