@@ -16,7 +16,7 @@ parentPort.on('message', ({ jobs, grid }) => {
   for (const { ix, iz, buf, G, Q } of jobs) {
     const L = decodeLayout(buf), r = { ix, iz }, edges = {};
     for (const level of ['fine', 'coarse']) {
-      const m = meshChunk(L, grid, G, level), s = m.stats; if (level === 'fine') { L.edge = s.edge; r.edge = s.edge; } r[level] = { failed: s.failed, why: s.why, softMissed: s.softMissed, covered: s.covered, tris: s.tris, ms: s.totalMs, outlineMs: s.outlineMs };
+      const m = meshChunk(L, grid, G, level), s = m.stats; if (level === 'fine') { L.edge = s.edge; r.edge = s.edge; r.outline = s.outline; } r[level] = { failed: s.failed, why: s.why, softMissed: s.softMissed, covered: s.covered, tris: s.tris, ms: s.totalMs, outlineMs: s.outlineMs };
       const P = m.pos, n = P.length / 3, side = { w: [], e: [], s: [], n: [] }; // (each edge's points: "along@height")
       for (let k = 0; k < n; k++) { const x = P[k * 3], z = P[k * 3 + 2], y = P[k * 3 + 1].toFixed(3); if (x === L.x0) side.w.push(z.toFixed(2) + '@' + y); if (x === L.x0 + L.size) side.e.push(z.toFixed(2) + '@' + y); if (z === L.z0) side.s.push(x.toFixed(2) + '@' + y); if (z === L.z0 + L.size) side.n.push(x.toFixed(2) + '@' + y); }
       for (const k in side) side[k].sort(); edges[level] = side;

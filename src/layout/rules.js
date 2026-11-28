@@ -72,13 +72,16 @@ export const portalUV = (p, x, z) => [(x - p.x) * p.dx + (z - p.z) * p.dz, (z - 
 
 // net: { runs: [{ pts: Float64Array x,z,..., h: Float64Array, hw, pave, kind, minor, surf, lanes, oneway, off ('deck', 'tube': not the ground's), cutA, cutB ('deck', 'tube': it stops there) }], junctions: [{ x, z, r, y0, gx, gz }] }
 // g(x, z): the natural ground; city: a city's lots; wl: the world's water level (the shore rule; none: -Infinity)
-export function makeRules(net, g, city, wl = -Infinity) {
+// box (optional): [x0, z0, x1, z1], the only place the rules are asked about (mesh.js: the chunk, and a margin): the
+// segments' cells outside it aren't listed (the same answers inside it)
+export function makeRules(net, g, city, wl = -Infinity, box = null) {
+  const bi0 = box ? Math.floor(box[0] / SC) : -Infinity, bj0 = box ? Math.floor(box[1] / SC) : -Infinity, bi1 = box ? Math.floor(box[2] / SC) : Infinity, bj1 = box ? Math.floor(box[3] / SC) : Infinity;
   const runs = net.runs, JN = net.junctions;
   for (const r of runs) { const n = r.h.length; r.s = new Float64Array(n); for (let i = 1; i < n; i++) r.s[i] = r.s[i - 1] + Math.hypot(r.pts[i * 2] - r.pts[i * 2 - 2], r.pts[i * 2 + 1] - r.pts[i * 2 - 1]); }
   const segIdx = new Map(), segNear = new Map(), key = (i, j) => i * 100003 + j, offIdx = new Map(), portals = portalsOf(runs);
   runs.forEach((r, ri) => { if (r.off) return; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3];
     const ni0 = Math.floor((Math.min(ax, bx) - PAD_N) / SC), ni1 = Math.floor((Math.max(ax, bx) + PAD_N) / SC), nj0 = Math.floor((Math.min(az, bz) - PAD_N) / SC), nj1 = Math.floor((Math.max(az, bz) + PAD_N) / SC);
-    for (let i = Math.floor((Math.min(ax, bx) - PAD) / SC); i <= Math.floor((Math.max(ax, bx) + PAD) / SC); i++) for (let j = Math.floor((Math.min(az, bz) - PAD) / SC); j <= Math.floor((Math.max(az, bz) + PAD) / SC); j++) { const k = key(i, j); let a = segIdx.get(k); if (!a) segIdx.set(k, (a = [])); a.push(ri, s);
+    for (let i = Math.max(bi0, Math.floor((Math.min(ax, bx) - PAD) / SC)); i <= Math.min(bi1, Math.floor((Math.max(ax, bx) + PAD) / SC)); i++) for (let j = Math.max(bj0, Math.floor((Math.min(az, bz) - PAD) / SC)); j <= Math.min(bj1, Math.floor((Math.max(az, bz) + PAD) / SC)); j++) { const k = key(i, j); let a = segIdx.get(k); if (!a) segIdx.set(k, (a = [])); a.push(ri, s);
       if (i >= ni0 && i <= ni1 && j >= nj0 && j <= nj1) { let b = segNear.get(k); if (!b) segNear.set(k, (b = [])); b.push(ri, s); } } } });
   // (segNear: the segments within PAD_N of a cell, in segIdx's order; a segment left out is more than PAD_N away, more than
   // NEAR_D past its tarmac's edge: an answer nearer than that from segNear alone is segIdx's, exactly)

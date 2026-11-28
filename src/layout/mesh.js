@@ -14,6 +14,9 @@ import { makeRules, latticeGround, KERB, KERB_W, PAVE_RAMP, painted, zebra } fro
 import { chunkOutlines } from './outline.js';
 
 const RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, MOUTH_D = 6, FID_STEP = 4, FID_TOL = 0.1;
+// a chunk whose outlines have OUT_MIN points or more (the densest ~5% of New York's) has them stored by the bake (format.js
+// op): working them out takes 60+ ms there
+export const OUT_MIN = 1650;
 export const MARK_K = 4, MARK_S = 8, MARK = MARK_K * MARK_S; // (a carriageway corner's markings coordinates, rib.mark: below)
 const PAVED = [KIND.lip, KIND.tarmac, KIND.kerb, KIND.ballast, KIND.pave, KIND.alley, KIND.pavers, KIND.gravel, KIND.verge]; // (the order a point is classed in)
 const RIBBON = new Set([KIND.tarmac, KIND.kerb, KIND.pave]); // (drawn with a street's coordinates: markings, the pavement's slabs)
@@ -29,13 +32,13 @@ const LAT_PAD = 56; // (m past the chunk: the rules read the ground at a road's 
 // from its low corner (x0 or z0) on, which the side's ground points take (drawn and physics), so the two meet; c: the
 // four corners' (null: a corner every chunk about is the layout's)
 export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
-  const t0 = performance.now(), fine = level === 'fine', lat = latticeOf(L, grid), g = latticeGround(grid, lat, G), R = makeRules(L.net, g, !!L.city, grid.wl ?? -Infinity);
+  const t0 = performance.now(), fine = level === 'fine', lat = latticeOf(L, grid), g = latticeGround(grid, lat, G), R = makeRules(L.net, g, !!L.city, grid.wl ?? -Infinity, [L.x0 - 30, L.z0 - 30, L.x0 + L.size + 30, L.z0 + L.size + 30]);
   const X0 = Math.round(L.x0 * 100), Z0 = Math.round(L.z0 * 100), S = Math.round(L.size * 100);
   // ---- the points (centimetres while they're gathered)
   const PX = [], PZ = [], key = new Map(), kinds = [];
   const add = (X, Z) => { const k = X * 1e7 + Z; let i = key.get(k); if (i == null) { i = PX.length; key.set(k, i); PX.push(X); PZ.push(Z); kinds.push(0); } return i; };
   const pre = !fine && L.edge; // (coarse, with the bake's edge points (format.js eg): no outlines)
-  const O = pre ? edgeOnly(L.edge) : chunkOutlines(L.net, L.areas, L), ol = O.P.map(([x, z]) => add(x, z)), tOut = performance.now() - t0; // (the outlines: from the network, outline.js)
+  const O = pre ? edgeOnly(L.edge) : L.outline || chunkOutlines(L.net, L.areas, L), ol = O.P.map(([x, z]) => add(x, z)), tOut = performance.now() - t0; // (the outlines: from the network, outline.js)
   const E = []; for (const [a0, b0, k] of O.E) { const a = ol[a0], b = ol[b0]; E.push([a, b, k]); kinds[a] |= 1 << k; kinds[b] |= 1 << k; }
   for (const [i, m] of O.edgeBits) kinds[ol[i]] = m; // (a point on the chunk's edge: its regions as the chunk beside sees them too (outline.js))
   for (let s = 0; s <= S; s += EDGE_STEP * 100) { add(X0 + s, Z0); add(X0 + s, Z0 + S); add(X0, Z0 + s); add(X0 + S, Z0 + s); }
@@ -170,7 +173,8 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   // it interpolates exactly; the material takes, per fragment, the street nearest past its half width and its nearest
   // mouth (markcheck.mjs does the same). rib = { pos, nrm, road (u, v, hw, dj), lane, kind, id, mark (per corner, per
   // street MARK_S: u, v, its distance past each of four mouths, hw (0: none), lane bits), mid (per corner, per street: its id) }
-  const rib = { pos: [], nrm: [], road: [], lane: [], kind: [], id: [], mark: [], mid: [] }, JN = L.net.junctions, NOMARK = new Array(MARK).fill(0), NOMID = new Array(MARK_K).fill(0xffffffff);
+  let nRib = 0; if (fine) for (let q = 0; q < nt; q++) if (RIBBON.has(tk[q]) || tk[q] === KIND.gravel) nRib++;
+  const rib = { pos: [], nrm: [], road: [], lane: [], kind: [], id: [], mark: new Float32Array(nRib * 3 * MARK), mid: new Uint32Array(nRib * 3 * MARK_K).fill(0xffffffff) }, JN = L.net.junctions;
   // a street's mouths: where its centre line crosses a junction's circle, [how far along it, +1 if it leaves the circle going on, -1 if it enters]
   const mouths = new Map(), mouthsOf = (ri) => { let M = mouths.get(ri); if (M) return M; M = []; const r = L.net.runs[ri];
     for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, l = Math.hypot(dx, dz); if (l < 1e-3) continue; const ux = dx / l, uz = dz / l;
@@ -203,10 +207,10 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
       const ms = mv.sort((a, b) => a[0] - b[0] || a[1] - b[1]).slice(0, 4).map((m) => m[2]);
       return { ri, ln, ms, lane: laneBits(ri, ln) }; }).filter(Boolean);
     const first = cands[0];
-    vs.forEach((v) => { const x = X[v], z = Z[v], m = new Array(MARK).fill(0); rib.pos.push(x, Y[v], z); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]);
+    vs.forEach((v) => { const x = X[v], z = Z[v], rv = rib.kind.length, m = rib.mark.subarray(rv * MARK, rv * MARK + MARK); rib.pos.push(x, Y[v], z); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]);
       cands.forEach((c, i) => { const { ln, ms } = c, o = i * MARK_S, dj = ms.map((M) => M[1] * ((x - M[2]) * M[4] + (z - M[3]) * M[5])); m[o] = ln.u0 + (x - ln.ax) * ln.dx + (z - ln.az) * ln.dz; m[o + 1] = ln.dx * (z - ln.az) - ln.dz * (x - ln.ax);
         for (let k = 0; k < 4; k++) m[o + 2 + k] = dj.length ? dj[Math.min(k, dj.length - 1)] : 99; m[o + 6] = ln.hw; m[o + 7] = c.lane; });
-      rib.mark.push(...m); rib.mid.push(...NOMID.map((n, i) => (cands[i] ? cands[i].ri : n))); rib.road.push(m[0], m[1], first ? first.ln.hw : 0, [m[2], m[3], m[4], m[5]].reduce((a, b) => (Math.abs(b) < Math.abs(a) ? b : a))); rib.lane.push(first ? first.lane : 0); rib.kind.push(KIND.tarmac); rib.id.push(first ? first.ri : 0xffffffff); }); }
+      cands.forEach((c, i) => { rib.mid[rv * MARK_K + i] = c.ri; }); rib.road.push(m[0], m[1], first ? first.ln.hw : 0, [m[2], m[3], m[4], m[5]].reduce((a, b) => (Math.abs(b) < Math.abs(a) ? b : a))); rib.lane.push(first ? first.lane : 0); rib.kind.push(KIND.tarmac); rib.id.push(first ? first.ri : 0xffffffff); }); }
   if (fine) for (let q = 0; q < nt; q++) { const k = tk[q]; if (!RIBBON.has(k) || k === KIND.tarmac) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;
     const rc = R.road(cx, cz); if (!rc) continue; const ln = R.lineOn(rc.id, cx, cz); if (!ln) continue;
     const along = (x, z) => ln.u0 + (x - ln.ax) * ln.dx + (z - ln.az) * ln.dz, across = (x, z) => ln.dx * (z - ln.az) - ln.dz * (x - ln.ax), uc = along(cx, cz);
@@ -217,21 +221,21 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
     // street bends in its crossing's band (a village's streets), the band stays square across)
     const us = vs.map((v) => along(X[v], Z[v])); let um = 0, sg = 0, bd = Infinity, mo = null; for (const M of mouthsOf(rc.id)) for (const u of us) if (Math.abs(u - M[0]) < bd) { bd = Math.abs(u - M[0]); um = M[0]; sg = M[1]; mo = M; }
     const near = sg && Math.min(...us.map((u) => sg * (u - um))) < MOUTH_D;
-    vs.forEach((v, q) => { const u = us[q]; rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(u, across(X[v], Z[v]), ln.hw, !sg ? 99 : near ? sg * ((X[v] - mo[2]) * mo[4] + (Z[v] - mo[3]) * mo[5]) : sg * (u - um)); rib.lane.push(Math.min(15, ln.lanes) + (ln.oneway ? 16 : 0) + (painted(L.net.runs[rc.id], L.city) ? 32 : 0) + (zebra(L.net.runs[rc.id], L.city) ? 64 : 0)); rib.kind.push(k); rib.id.push(rc.id); rib.mark.push(...NOMARK); rib.mid.push(...NOMID); }); }
+    vs.forEach((v, q) => { const u = us[q]; rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(u, across(X[v], Z[v]), ln.hw, !sg ? 99 : near ? sg * ((X[v] - mo[2]) * mo[4] + (Z[v] - mo[3]) * mo[5]) : sg * (u - um)); rib.lane.push(Math.min(15, ln.lanes) + (ln.oneway ? 16 : 0) + (painted(L.net.runs[rc.id], L.city) ? 32 : 0) + (zebra(L.net.runs[rc.id], L.city) ? 64 : 0)); rib.kind.push(k); rib.id.push(rc.id); }); }
   // the gravel (fine): its triangles on their own too, each given the track nearest its middle as one line (its corners'
   // along and across from it: the material's two wheel ruts and grassy crown, as today's tracks, roadSurface.js
   // pathMaterial); a gravel plaza's (no track there) its world x, z, half width 1e4 (no edge). road = (along, across, half width, -)
   const track = (r) => r.minor && (r.surf === 2 || r.kind === 'track');
   if (fine) for (let q = 0; q < nt; q++) { if (tk[q] !== KIND.gravel) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;
     const n = R.nearest(cx, cz, track), on = n && n.d <= 0.5;
-    for (const v of vs) { rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(on ? n.u + (X[v] - n.px) * n.dx + (Z[v] - n.pz) * n.dz : X[v], on ? n.dx * (Z[v] - n.pz) - n.dz * (X[v] - n.px) : Z[v], on ? n.r.hw : 1e4, 99); rib.lane.push(0); rib.kind.push(KIND.gravel); rib.id.push(on ? n.ri : 0xffffffff); rib.mark.push(...NOMARK); rib.mid.push(...NOMID); } }
+    for (const v of vs) { rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(on ? n.u + (X[v] - n.px) * n.dx + (Z[v] - n.pz) * n.dz : X[v], on ? n.dx * (Z[v] - n.pz) - n.dz * (X[v] - n.px) : Z[v], on ? n.r.hw : 1e4, 99); rib.lane.push(0); rib.kind.push(KIND.gravel); rib.id.push(on ? n.ri : 0xffffffff); } }
   // the ground's paving (a city's lots): its squares along the street nearest each triangle's middle (an angle a
   // triangle, within a right angle: one across a triangle, or the squares swirl; runtime.js gives its corners their own copies)
   const ang = new Float32Array(nt); if (fine && L.city) for (let q = 0; q < nt; q++) { if (tk[q] > KIND.bank) continue; const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2], n = R.nearest((X[a] + X[b] + X[c]) / 3, (Z[a] + Z[b] + Z[c]) / 3, (r) => !r.minor); if (n) { const t = Math.atan2(n.dz, n.dx), h = Math.PI / 2; ang[q] = ((t % h) + h) % h; } }
   let area = 0; for (let q = 0; q < nt; q++) { const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2]; area += Math.abs((X[b] - X[a]) * (Z[c] - Z[a]) - (X[c] - X[a]) * (Z[b] - Z[a])) / 2; }
   const F32 = (a) => Float32Array.from(a);
-  return { level, pos, phys, nrm, idx, tk, ang, rib: { pos: F32(rib.pos), nrm: F32(rib.nrm), road: F32(rib.road), lane: F32(rib.lane), kind: Uint8Array.from(rib.kind), id: Uint32Array.from(rib.id), mark: F32(rib.mark), mid: Uint32Array.from(rib.mid) },
-    stats: { edge: fine ? edgeOf(O, X0, Z0) : null, points: N, tris: nt, fixed, failed, failedAt, regionArea: O.area, why, softMissed, bendMissed, covered: area / (L.size * L.size), outlineMs: tOut, delaunayMs: t1 - t0, constrainMs: t2 - t1, totalMs: performance.now() - t0 } };
+  return { level, pos, phys, nrm, idx, tk, ang, rib: { pos: F32(rib.pos), nrm: F32(rib.nrm), road: F32(rib.road), lane: F32(rib.lane), kind: Uint8Array.from(rib.kind), id: Uint32Array.from(rib.id), mark: rib.mark, mid: rib.mid },
+    stats: { edge: fine ? edgeOf(O, X0, Z0) : null, outline: fine && !L.outline && O.P.length >= OUT_MIN && O.P.length < 65536 ? { P: O.P, E: O.E } : null, points: N, tris: nt, fixed, failed, failedAt, regionArea: O.area, why, softMissed, bendMissed, covered: area / (L.size * L.size), outlineMs: tOut, delaunayMs: t1 - t0, constrainMs: t2 - t1, totalMs: performance.now() - t0 } };
 }
 
 // a chunk's edge points from its outlines (fine): Int32Array x, z (cm), regions (format.js eg), but not those every

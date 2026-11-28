@@ -26,12 +26,16 @@
 //                    cm from the one before, and the regions it's in (a bit per KIND). Written by the bake from its
 //                    check (layout-check.mjs, withEdge): the coarse level meets its neighbours' fine edge without
 //                    working out the outlines (mesh.js)
+//   op uint16 x 2, oe uint16 x 2, ok uint8  (optional: the header's no, [points, edges]; the densest chunks only, mesh.js
+//                    OUT_MIN) its outlines as chunkOutlines gives them (outline.js): each point (cm from the corner) and each
+//                    edge's two points and kind, each as the change from the one before (modulo 2^16): the game skips
+//                    working them out
 export const CHUNK = 500, LAYOUT_V = 2, SEG = 24;
 export const KIND = { ground: 0, bank: 1, tarmac: 2, kerb: 3, pave: 4, verge: 5, pavers: 6, gravel: 7, alley: 8, lip: 9, ballast: 10, out: 255 }; // (lip: a tunnel portal's opening, behind its headwall: no surface; ballast: a railway's bed)
 export const RKINDS = ['highway', 'main', 'street', 'service', 'ped', 'track', 'other', 'rail']; // (a railway: a way off the street network, its lanes its class, bake.js RAIL_CLASS)
 
 const pad4 = (n) => (4 - (n % 4)) % 4;
-const SPEC = (H) => [['rk', Uint8Array, H.runs * 6], ['rn', Uint16Array, H.runs], ['r0', Int32Array, H.runs * 3], ['rd', Int16Array, Math.max(0, H.sp - H.runs) * 2], ['rh', Int16Array, Math.max(0, H.st - H.runs)], ['jx', Int32Array, H.jn * 4], ['jg', Int16Array, H.jn * 2], ['ac', Uint16Array, H.na], ['ak', Uint8Array, H.na], ['a0', Int32Array, H.na * 2], ['ad', Int16Array, Math.max(0, H.ap - H.na) * 2], ['eg', Uint16Array, (H.ne ? H.ne[0] + H.ne[1] + H.ne[2] + H.ne[3] : 0) * 2]];
+const SPEC = (H) => [['rk', Uint8Array, H.runs * 6], ['rn', Uint16Array, H.runs], ['r0', Int32Array, H.runs * 3], ['rd', Int16Array, Math.max(0, H.sp - H.runs) * 2], ['rh', Int16Array, Math.max(0, H.st - H.runs)], ['jx', Int32Array, H.jn * 4], ['jg', Int16Array, H.jn * 2], ['ac', Uint16Array, H.na], ['ak', Uint8Array, H.na], ['a0', Int32Array, H.na * 2], ['ad', Int16Array, Math.max(0, H.ap - H.na) * 2], ['eg', Uint16Array, (H.ne ? H.ne[0] + H.ne[1] + H.ne[2] + H.ne[3] : 0) * 2], ['op', Uint16Array, (H.no ? H.no[0] : 0) * 2], ['oe', Uint16Array, (H.no ? H.no[1] : 0) * 2], ['ok', Uint8Array, H.no ? H.no[1] : 0]];
 // a road's stations along its shape (x, z pairs, any units): its points and, between two, ceil(length / SEG) - 1 more
 export function stations(xs, zs, unit = 1) { const out = [[xs[0], zs[0]]]; for (let i = 1; i < xs.length; i++) { const l = Math.hypot(xs[i] - xs[i - 1], zs[i] - zs[i - 1]) / unit, k = Math.max(1, Math.ceil(l / SEG)); for (let s = 1; s <= k; s++) out.push([xs[i - 1] + (xs[i] - xs[i - 1]) * s / k, zs[i - 1] + (zs[i] - zs[i - 1]) * s / k]); } return out; }
 
@@ -68,17 +72,27 @@ export function decodeLayout(buf) {
   for (let i = 0; i < H.na; i++) { let x = A.a0[i * 2], z = A.a0[i * 2 + 1]; const ring = [[X0 + x, Z0 + z]]; for (let s = 1; s < A.ac[i]; s++, ad++) { x += A.ad[ad * 2]; z += A.ad[ad * 2 + 1]; ring.push([X0 + x, Z0 + z]); } areas.push({ surf: A.ak[i], ring }); }
   let edge = null; if (H.ne) { edge = new Int32Array(A.eg.length / 2 * 3); const S = Math.round(H.size * 100); let q = 0, o = 0;
     for (let side = 0; side < 4; side++) { let pos = 0; for (let i = 0; i < H.ne[side]; i++, q++, o += 3) { pos += A.eg[q * 2]; edge[o] = side < 2 ? X0 + pos : side === 2 ? X0 : X0 + S; edge[o + 1] = side < 2 ? (side ? Z0 + S : Z0) : Z0 + pos; edge[o + 2] = A.eg[q * 2 + 1]; } } }
-  return { ...H, net: { runs, junctions }, areas, edge }; // (edge: Int32Array x, z (cm), regions per edge point, or null)
+  let outline = null; if (H.no) { const S = Math.round(H.size * 100), bits = new Map(); if (edge) for (let o = 0; o < edge.length; o += 3) bits.set(edge[o] * 1e7 + edge[o + 1], edge[o + 2]);
+    const P = [], E = [], edgeBits = new Map(); let x = 0, z = 0; for (let i = 0; i < H.no[0]; i++) { x = (x + A.op[i * 2]) & 0xffff; z = (z + A.op[i * 2 + 1]) & 0xffff; const X = X0 + x, Z = Z0 + z; if (x === 0 || z === 0 || x === S || z === S) edgeBits.set(i, bits.get(X * 1e7 + Z) || 0); P.push([X, Z]); }
+    let a = 0; for (let i = 0; i < H.no[1]; i++) { a = (a + A.oe[i * 2]) & 0xffff; E.push([a, (a + A.oe[i * 2 + 1]) & 0xffff, A.ok[i]]); }
+    outline = { P, E, edgeBits, area: null }; }
+  return { ...H, net: { runs, junctions }, areas, edge, outline }; // (edge: Int32Array x, z (cm), regions per edge point, or null; outline: the stored outlines (outline.js chunkOutlines's), or null)
 }
-// a chunk's bytes (encodeLayout's, without edge points) with its edge points added: edge Int32Array x, z (cm), regions (mesh.js stats.edge)
-export function withEdge(u8, edge) {
+// a chunk's bytes (encodeLayout's, without edge points) with its edge points added: edge Int32Array x, z (cm), regions
+// (mesh.js stats.edge); and, for the densest chunks, its outlines (outline: { P, E } as chunkOutlines gives them, mesh.js stats.outline)
+export function withEdge(u8, edge, outline = null) {
   const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), hl = dv.getUint32(0, true), H = JSON.parse(new TextDecoder().decode(u8.subarray(4, 4 + hl)).trim());
   if (H.ne) throw new Error('withEdge: has edge points already');
   const X0 = Math.round(H.x0 * 100), Z0 = Math.round(H.z0 * 100), S = Math.round(H.size * 100), sides = [[], [], [], []];
   for (let o = 0; o < edge.length; o += 3) { const X = edge[o] - X0, Z = edge[o + 1] - Z0, m = edge[o + 2]; if (Z === 0) sides[0].push([X, m]); else if (Z === S) sides[1].push([X, m]); else if (X === 0) sides[2].push([Z, m]); else if (X === S) sides[3].push([Z, m]); else throw new Error('withEdge: a point off the edge'); }
   const eg = new Uint16Array(edge.length / 3 * 2); let q = 0; for (const sd of sides) { sd.sort((a, b) => a[0] - b[0]); let pos = 0; for (const [p, m] of sd) { eg[q * 2] = p - pos; eg[q * 2 + 1] = m; pos = p; q++; } }
-  H.ne = sides.map((sd) => sd.length); const hdr = new TextEncoder().encode(JSON.stringify(H)), nhl = hdr.length + pad4(hdr.length + 4), body = u8.subarray(4 + hl), egB = eg.length * 2, out = new Uint8Array(4 + nhl + body.length + egB + pad4(egB));
-  new DataView(out.buffer).setUint32(0, nhl, true); out.set(hdr, 4); out.fill(32, 4 + hdr.length, 4 + nhl); out.set(body, 4 + nhl); out.set(new Uint8Array(eg.buffer), 4 + nhl + body.length);
+  H.ne = sides.map((sd) => sd.length); const parts = [eg];
+  if (outline) { const { P, E } = outline, op = new Uint16Array(P.length * 2), oe = new Uint16Array(E.length * 2), ok = Uint8Array.from(E, (e) => e[2]); let x = 0, z = 0, a = 0; // (each as the change from the one before, modulo 2^16)
+    P.forEach(([X, Z], i) => { op[i * 2] = (X - X0 - x) & 0xffff; op[i * 2 + 1] = (Z - Z0 - z) & 0xffff; x = X - X0; z = Z - Z0; }); E.forEach(([p, q], i) => { oe[i * 2] = (p - a) & 0xffff; oe[i * 2 + 1] = (q - p) & 0xffff; a = p; });
+    H.no = [P.length, E.length]; parts.push(op, oe, ok); }
+  const hdr = new TextEncoder().encode(JSON.stringify(H)), nhl = hdr.length + pad4(hdr.length + 4), body = u8.subarray(4 + hl); let n = 4 + nhl + body.length; for (const p of parts) n += p.byteLength + pad4(p.byteLength);
+  const out = new Uint8Array(n); new DataView(out.buffer).setUint32(0, nhl, true); out.set(hdr, 4); out.fill(32, 4 + hdr.length, 4 + nhl); out.set(body, 4 + nhl);
+  let o = 4 + nhl + body.length; for (const p of parts) { out.set(new Uint8Array(p.buffer, p.byteOffset, p.byteLength), o); o += p.byteLength + pad4(p.byteLength); }
   return out;
 }
 // A chunk inside the layout's extent with nothing of the network or a plaza within its reach (NET_PAD) is only ground:
