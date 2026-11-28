@@ -1,6 +1,8 @@
 // The baked road layout in a World (#294, behind a flag while it's tried out: format.js layoutWanted). A place's chunks
-// stream in about the camera (LOAD_D): each fetched, meshed in a worker (mesh.js; fine within FINE_D, coarse beyond, the
-// same edge points at both levels; the nearest asked first, so the start is ready first), drawn as one mesh (the ground
+// stream in about the camera (LOAD_D): each fetched, meshed in a pool of workers (mesh.js, and what it's drawn with,
+// draw.js; fine within FINE_D, coarse beyond, the same edge points at both levels; fine near the camera's track first,
+// then coarse, so the start's first view is in before the loading screen goes and what's ahead before it's in reach; a
+// chunk is drawn from its first mesh in, coarse until fine, today's ground and roads until then), drawn as one mesh (the ground
 // with the terrain's own material, the streets with the layout's and today's pavement), and physics (World.sampleGrid /
 // groundAt) reading its fine mesh. Inside an active chunk, today's roads, kerbs, junction boxes, pavements and ground
 // (coarse, patch and detail) don't draw (clip: a mask of the active chunks their shaders read); where an active chunk
@@ -11,15 +13,20 @@
 // landside road, the stunt sites' pads and the land past the core are in the natural ground (rules.js groundNode). Bridges' decks and tunnels' tubes stay today's (roads.js), the layout meeting them at their heights, a skirt closes the gap.
 import * as THREE from 'three';
 import { decodeLayout, KIND, indexChunks, groundBytes } from './format.js';
-import { meshChunk, physIndex, physAt, latticeOf, EDGE_STEP, MARK, ZEBRA_IN, ZEBRA_OUT } from './mesh.js';
-import { groundGrid, latticeHeights, portalsOf, DECK_SIDE, DECK_DEPTH, TUBE_SIDE, TUBE_H, PORTAL_TOP, PORTAL_T, PORTAL_FOOT, SILL } from './rules.js';
-import { railPieces, railSide, RAIL_TOP, SLEEPER_TOP, SLEEPER_STEP, GAUGE, SLEEPER_L } from './rails.js';
+import { meshChunk, physIndex, physAt, latticeOf, EDGE_STEP, ZEBRA_IN, ZEBRA_OUT } from './mesh.js';
+import { drawBuffers, railBuffers } from './draw.js';
+import { groundGrid, latticeHeights } from './rules.js';
 import { sidewalkMaterial, pathMaterial, regionLook, REGION } from '../roadSurface.js';
 // the gravel (tracks and verges): a region's own where it differs (Bora Bora's tracks and verges are coral sand and dirt)
 const GRAVEL = { fr: 0xc8b48e };
 import { terrainMaterial, waterMaterial, FOG } from '../shaders.js';
 
 const FINE_D = 900, LOAD_D = 2500; // metres from the camera to a chunk's middle: fine within FINE_D; fetched within LOAD_D
+// the meshing workers: a pool sharing one queue (a core or two left for the page and the GPU process)
+const POOL = Math.max(1, Math.min(4, ((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4) - 2));
+// how far ahead (s) the camera's track is looked along, at its speed, for what to fetch and mesh first (prefetch: a
+// chunk ahead meshed before it's in reach); and the main thread's time (ms) a frame gives arrived meshes (at least one)
+const AHEAD = 4, BUDGET = 6;
 const loader = new THREE.TextureLoader(), texCache = new Map();
 const tex = (name) => { if (!texCache.has(name)) { const t = loader.load(`tex/roads/${name}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; texCache.set(name, t); } return texCache.get(name); };
 const SIDES = [[-1, 0], [1, 0], [0, -1], [0, 1]];
@@ -29,7 +36,7 @@ export class Layout {
   // ground: no file, format.js groundBytes), fallback }); dir: where its files are
   constructor(w, index, dir) {
     this.w = w; this.on = false; this.dir = dir; this.size = index.size; this.group = new THREE.Group(); this.group.name = 'layout';
-    const cs = indexChunks(index); this.index = new Map(cs.map((c) => [c.ix + ',' + c.iz, c])); this.chunks = new Map(); this.active = new Map(); this.queue = new Map(); this.busy = false; this.cam = { x: 0, z: 0 };
+    const cs = indexChunks(index); this.index = new Map(cs.map((c) => [c.ix + ',' + c.iz, c])); this.chunks = new Map(); this.active = new Map(); this.queue = new Map(); this.busy = 0; this.loading = 0; this.done = []; this.cam = { x: 0, z: 0 }; this.vel = { x: 0, z: 0, t: 0, px: 0, pz: 0 }; this.drawn = new Set(); this.workers = [];
     // the active chunks' mask, a texel a chunk over the square holding every baked chunk (today's materials don't draw where
     // it's set; New York's reach past the hi square)
     const S = this.size, ix0 = Math.min(0, ...cs.map((c) => c.ix)), iz0 = Math.min(0, ...cs.map((c) => c.iz)); this.gx0 = ix0 * S; this.gz0 = iz0 * S; this.gn = Math.max(1, ...cs.map((c) => Math.max(c.ix - ix0, c.iz - iz0) + 1));
@@ -67,23 +74,6 @@ export class Layout {
       m.customProgramCacheKey = () => key + '|layoutWater';
     }
   }
-  // a chunk's water: the part of its ground (the shown level's) under the water level, cut along it through the very
-  // triangles the ground is drawn with (as World.buildShoreWater does on today's grid), each corner given the depth of
-  // the ground under it (the shallows, the foam); null if none of it is under water
-  water(m) {
-    const wl = this.w.waterLevel, P = m.pos, I = m.idx, out = [], dep = [], poly = [];
-    if (!(wl > -Infinity)) return null;
-    for (let q = 0; q < m.tk.length; q++) { if (m.tk[q] > KIND.bank) continue; // (the ground and its banks: a paved region is never water, World.groundAt)
-      const v = [I[q * 3], I[q * 3 + 1], I[q * 3 + 2]]; if (P[v[0] * 3 + 1] >= wl && P[v[1] * 3 + 1] >= wl && P[v[2] * 3 + 1] >= wl) continue;
-      poly.length = 0;
-      for (let r = 0; r < 3; r++) { const a = v[r], b = v[(r + 1) % 3], ya = P[a * 3 + 1], yb = P[b * 3 + 1];
-        if (ya < wl) poly.push(P[a * 3], P[a * 3 + 2], wl - ya);
-        if ((ya < wl) !== (yb < wl)) { const t = (ya - wl) / (ya - yb); poly.push(P[a * 3] + (P[b * 3] - P[a * 3]) * t, P[a * 3 + 2] + (P[b * 3 + 2] - P[a * 3 + 2]) * t, 0); } }
-      for (let k = 1; k + 1 < poly.length / 3; k++) for (const e of [0, k, k + 1]) { out.push(poly[e * 3], wl, poly[e * 3 + 1]); dep.push(poly[e * 3 + 2]); } }
-    if (!out.length) return null;
-    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(out, 3)); g.setAttribute('aDepth', new THREE.Float32BufferAttribute(dep, 1)); g.computeBoundingSphere();
-    const me = new THREE.Mesh(g, this.mats.water); me.name = 'layout water'; return me;
-  }
   // maps: the terrain's (World.terrainMaps) for the ground's material
   start(maps) {
     const loc = this.w.loc, look = regionLook(loc.id), yellow = look.yellow ? 1 : 0, skirt = terrainMaterial(maps, 'detail'); skirt.side = THREE.DoubleSide;
@@ -102,8 +92,10 @@ export class Layout {
     // the water: today's plane and shore mesh (World.buildWater) don't draw inside an active chunk, whose own water is its
     // surface's part under the water level (water()), so the shore is the layout's ground's, not today's carved grid's
     const w = this.w; if (w.waterMat) { this.clipWater(w.waterMat, ...(w.shoreWater?.children || []).map((o) => o.material)); this.mats.water = waterMaterial({ U: w.waterMat.userData.U, shore: true, vdepth: true }); }
-    this.worker = typeof Worker !== 'undefined' ? new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }) : null;
-    if (this.worker) this.worker.onmessage = (ev) => { this.busy = false; const c = this.chunks.get(ev.data.id); if (c) this.got(c, ev.data.level, ev.data.m); this.pump(); };
+    // (the arrived meshes: drawn straight away until the first view is in (behind the loading screen), then a few a frame (update))
+    this.workers = typeof Worker !== 'undefined' ? Array.from({ length: POOL }, () => { const wk = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }); wk.jobs = [];
+      wk.onmessage = (ev) => { const t0 = performance.now(); wk.jobs.shift(); this.busy--; const st = this.stats; if (st) { st.meshed++; st.workMs += ev.data.ms; } if (this.eager()) this.arrive(ev.data); else this.done.push(ev.data); this.pump(); this.note(t0); };
+      wk.onerror = (e) => { e.preventDefault?.(); this.busy--; console.warn('[layout] a chunk failed to mesh:', wk.jobs.shift(), e.message); this.pump(); }; return wk; }) : []; // (a mesh that throws: that chunk stays today's, the worker goes on)
   }
   // the natural ground at a chunk's grid points (rules.js groundNode: today's terrain base without the roads' carving)
   lattice(L) { const grid = groundGrid(this.w); return { grid, G: latticeHeights(this.w, grid, latticeOf(L, grid)) }; }
@@ -111,19 +103,35 @@ export class Layout {
   load(k) {
     let c = this.chunks.get(k); if (c) return c.ready.then(() => c); const e = this.index.get(k);
     c = { k, ix: e.ix, iz: e.iz, cx: (e.ix + 0.5) * this.size, cz: (e.iz + 0.5) * this.size, m: {}, phys: null, mesh: null, shown: null, asked: new Set() }; this.chunks.set(k, c);
-    c.ready = (async () => { if (!e.file) c.buf = groundBytes(e.ix, e.iz, !!this.w.loc.city).buffer; // (only ground: worked out, not fetched)
-      else { const r = await fetch(this.dir + e.file), s = r.body.pipeThrough(new DecompressionStream('gzip')); c.buf = await new Response(s).arrayBuffer(); } c.L = decodeLayout(c.buf); })();
+    this.loading++; c.ready = (async () => { if (!e.file) c.buf = groundBytes(e.ix, e.iz, !!this.w.loc.city).buffer; // (only ground: worked out, not fetched)
+      else { const r = await fetch(this.dir + e.file), s = r.body.pipeThrough(new DecompressionStream('gzip')); c.buf = await new Response(s).arrayBuffer(); } c.L = decodeLayout(c.buf); })().finally(() => { if (!--this.loading) this.pump(); }); // (the last fetch in: what was held for it, pump)
     return c.ready.then(() => c);
   }
   ask(c, level) { if (c.asked.has(level)) return; c.asked.add(level); this.queue.set(c.k + ':' + level, [c, level]); this.pump(); }
-  // the next mesh to make: the nearest chunk's (fine before coarse at the same distance)
+  // a point's distance (m) from the camera's track: from the camera to where it will be AHEAD s on at its speed
+  dAhead(x, z) { const a = this.cam, v = this.vel, ex = v.x * AHEAD, ez = v.z * AHEAD, l = ex * ex + ez * ez, t = l ? Math.max(0, Math.min(1, ((x - a.x) * ex + (z - a.z) * ez) / l)) : 0; return Math.hypot(x - a.x - ex * t, z - a.z - ez * t); }
+  // the order meshes are made in (lowest first): fine within FINE_D of the camera's track, the nearest first; then coarse
+  // for the rest in reach (what's drawn further off); then fine for those (their physics, what stands on them)
+  prio(c, level) { const d = this.dAhead(c.cx, c.cz); return level === 'fine' ? (d < FINE_D ? d : 2e5 + d) : 1e5 + d; }
+  // how many meshes a worker is given at once: while the loading screen is up the main thread is busy for 100s of ms at a
+  // time (the World, the shaders), and a worker that had to wait for it to be given its next stood idle; in flight, two
+  // (the order can still change with the camera's track)
+  depth() { return this.eager() ? 4 : 2; }
+  // the next meshes to make, up to depth() per worker
   pump() {
-    if (this.busy || !this.queue.size) return;
-    let best = null, bd = Infinity; for (const [q, [c, level]] of this.queue) { const d = Math.hypot(c.cx - this.cam.x, c.cz - this.cam.z) + (level === 'coarse' ? 1 : 0); if (d < bd) { bd = d; best = q; } }
-    const [c, level] = this.queue.get(best); this.queue.delete(best); const { grid, G } = this.lattice(c.L), edgeH = this.edgeH(c);
-    if (this.worker) { this.busy = true; this.worker.postMessage({ id: c.k, buf: c.buf.slice(0), grid, G, level, edgeH }, [G.buffer]); }
-    else { this.got(c, level, meshChunk(c.L, grid, G, level, edgeH)); this.pump(); } // (Node: no workers; the same function)
+    while (this.queue.size && (!this.workers.length || this.busy < this.workers.length * this.depth())) {
+      let best = null, bp = Infinity; for (const [q, [c, level]] of this.queue) { const p = this.prio(c, level); if (p < bp) { bp = p; best = q; } }
+      if (bp >= 2e5 && this.loading && this.eager()) break; // (the first view's fine far off waits for every fetch: a worker isn't taken from what the loading screen waits for)
+      const [c, level] = this.queue.get(best); this.queue.delete(best); const { grid, G } = this.lattice(c.L), edgeH = this.edgeH(c), wl = this.mats?.water ? this.w.waterLevel : null;
+      if (this.workers.length) { const wk = this.workers.reduce((a, b) => (b.jobs.length < a.jobs.length ? b : a)); wk.jobs.push(c.k + ':' + level); this.busy++; wk.postMessage({ id: c.k, buf: c.buf.slice(0), grid, G, level, edgeH, wl }, [G.buffer]); }
+      else { const m = meshChunk(c.L, grid, G, level, edgeH), d = this.mats ? drawBuffers(m, wl) : null; if (d) d.rails = level === 'fine' ? railBuffers(c.L, m) : null; this.got(c, level, m, d); } // (Node: no workers; the same functions)
+    }
   }
+  // until the first view is in (behind the loading screen) a mesh is drawn as it arrives; then a few a frame (update)
+  eager() { const st = this.stats; return !st || (st.firstViewMs == null && performance.now() - st.t0 < 10000); }
+  arrive(r) { const c = this.chunks.get(r.id); if (c) this.got(c, r.level, r.m, r.d); }
+  // the main thread's time in layout work from t0 (a frame's update, an arrived mesh): the longest, and how many over 50 ms in flight
+  note(t0) { const ms = performance.now() - t0, st = this.stats; if (!st) return; if (st.firstViewMs == null) { st.loadMainMax = Math.max(st.loadMainMax, ms); return; } st.mainMax = Math.max(st.mainMax, ms); if (ms > 50) st.long++; }
   // on each side of a chunk with no layout chunk beside it (the layout's outer edge), today's terrain there at the side's
   // edge points (World.sampleGrid without the layout), for its ground to meet (mesh.js edgeH); null if none
   edgeH(c) {
@@ -136,24 +144,31 @@ export class Layout {
     if (cs.some((h) => h != null)) (out ||= {}).c = cs;
     return out;
   }
-  got(c, level, m) {
-    c.m[level] = m;
+  // a mesh arrived (d: what it's drawn with, draw.js; null: tools, nothing drawn)
+  got(c, level, m, d) {
+    c.m[level] = m; if (d) (c.d ||= {})[level] = d;
     const st = this.stats; if (st && st.firstRingMs == null && st.ring.every((k) => this.chunks.get(k)?.m.fine)) st.firstRingMs = performance.now() - st.t0;
-    if (level === 'fine' && !c.phys) { // physics, the mask and the skirts start with the fine mesh
+    if (level === 'fine' && !c.phys) { // physics starts with the fine mesh
       c.phys = physIndex(c.L, m); this.active.set(c.k, c); this.on = true;
-      const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 255; this.mask.needsUpdate = true; }
-      if (this.mats) { this.skirtsFor(c); this.railsFor(c); }
+      if (this.mats) this.railsFor(c, d?.rails);
       const box = { x0: c.L.x0, z0: c.L.z0, x1: c.L.x0 + c.L.size, z1: c.L.z0 + c.L.size, k: c.k }; if (this.place) for (const f of this.subs) f(box); // (what stands on it re-placed: onActive)
     }
     if (!this.mats) return; // (no drawing: tools)
-    const want = Math.hypot(c.cx - this.cam.x, c.cz - this.cam.z) < FINE_D ? 'fine' : 'coarse';
-    if (c.phys && (level === want || !c.shown)) this.show(c, c.m[want] ? want : 'fine');
+    // (drawn at the level wanted, or at whatever level came first: coarse shows until fine is in, never today's roads
+    // after; behind the loading screen now, in flight by update, a frame after the physics, within its budget)
+    if (this.eager()) { const want = Math.hypot(c.cx - this.cam.x, c.cz - this.cam.z) < FINE_D ? 'fine' : 'coarse'; if (level === want || !c.shown) this.show(c, c.d?.[want] ? want : level); }
+    this.progress();
   }
-  // the skirts about an active chunk: on each side whose neighbour isn't active (and the neighbour's facing it, gone)
-  skirtsFor(c) {
+  // the share of the first view in (the ring fine and drawn, the rest drawn): the loading screen's progress; 1: in, or
+  // given up waiting (eager)
+  progress() { const st = this.stats; if (!st || st.firstViewMs != null || !this.eager()) return 1; let n = 0; for (const k of st.ring) n += this.chunks.get(k)?.m.fine && this.drawn.has(k) ? 1 : 0; for (const k of st.view) n += this.drawn.has(k) ? 1 : 0;
+    if (n < st.ring.length + st.view.length) return n / (st.ring.length + st.view.length); st.firstViewMs = performance.now() - st.t0; return 1; }
+  // the skirts about a drawn chunk (m: its mesh, either level: the same edge points): on each side whose neighbour isn't
+  // drawn (and the neighbour's facing it, gone)
+  skirtsFor(c, m) {
     for (const [dx, dz] of SIDES) { const nk = (c.ix + dx) + ',' + (c.iz + dz), back = nk + ':' + (-dx) + ',' + (-dz);
-      if (this.active.has(nk)) { const s = this.skirts.get(back); if (s) { this.group.remove(s); s.geometry.dispose(); this.skirts.delete(back); } continue; }
-      const me = this.skirt(c, c.m.fine, dx, dz); if (me) this.skirts.set(c.k + ':' + dx + ',' + dz, me); }
+      if (this.drawn.has(nk)) { const s = this.skirts.get(back); if (s) { this.group.remove(s); s.geometry.dispose(); this.skirts.delete(back); } continue; }
+      const me = this.skirt(c, m, dx, dz); if (me) this.skirts.set(c.k + ':' + dx + ',' + dz, me); }
   }
   // a wall on one side of a chunk from its edge to today's ground there: the two needn't meet, and without it the sky
   // showed through (#297: the white sliver at Lauterbrunnen's chunk, where a road's bank met today's ground metres off)
@@ -170,90 +185,94 @@ export class Layout {
     const me = new THREE.Mesh(g, this.mats.skirt); me.name = 'layout skirt'; this.group.add(me); return me;
   }
   show(c, level) {
-    const m = c.m[level]; if (!m) return;
+    const d = c.d?.[level]; if (!d) return;
+    if (!this.drawn.has(c.k)) { // the mask (today's ground and roads not drawn there) and the skirts start with its first drawing
+      this.drawn.add(c.k); const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 255; this.mask.needsUpdate = true; }
+      this.skirtsFor(c, c.m[level]); }
     if (!c.mesh) { c.mesh = new THREE.Group(); c.mesh.name = 'layout ' + c.L.ix + ',' + c.L.iz; this.group.add(c.mesh); }
     for (const o of c.mesh.children) o.geometry.dispose(); c.mesh.clear();
     // the surface (ground, alleys, gravel, pavers); the carriageway, kerbs and pavements from the street ribbons below
-    // (the paving's angle is a triangle's (mesh.js ang): a corner shared by triangles of two angles gets a copy for each)
-    const N0 = m.pos.length / 3, vAng = new Float32Array(N0).fill(NaN), dup = [], dAng = [], idx = m.idx.slice();
-    for (let q = 0; q < m.tk.length; q++) { if (m.tk[q] > KIND.bank) continue; const a = m.ang[q]; for (let r = 0; r < 3; r++) { const v = idx[q * 3 + r]; if (vAng[v] !== vAng[v]) vAng[v] = a; else if (vAng[v] !== a) { idx[q * 3 + r] = N0 + dup.length; dup.push(v); dAng.push(a); } } }
-    const n1 = N0 + dup.length, pos = new Float32Array(n1 * 3), nrm = new Float32Array(n1 * 3), ang = new Float32Array(n1); pos.set(m.pos); nrm.set(m.nrm);
-    for (let k = 0; k < N0; k++) ang[k] = vAng[k] === vAng[k] ? vAng[k] : 0; dup.forEach((v, i) => { pos.set(m.pos.subarray(v * 3, v * 3 + 3), (N0 + i) * 3); nrm.set(m.nrm.subarray(v * 3, v * 3 + 3), (N0 + i) * 3); ang[N0 + i] = dAng[i]; });
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); g.setAttribute('aAng', new THREE.BufferAttribute(ang, 1)); g.setIndex(new THREE.BufferAttribute(idx, 1));
-    const ribG = m.rib.kind.includes(KIND.gravel), matOf = (k) => (k === KIND.ground || k === KIND.bank ? 0 : k === KIND.alley ? 1 : k === KIND.verge || (k === KIND.gravel && !ribG) ? 2 : k === KIND.pavers ? 3 : k === KIND.ballast ? 4 : -1); // (the gravel: with the streets' ribbons below when it's there)
-    for (let q = 0; q < m.tk.length;) { const mi = matOf(m.tk[q]); let e = q; while (e < m.tk.length && matOf(m.tk[e]) === mi) e++; if (mi >= 0) g.addGroup(q * 3, (e - q) * 3, mi); q = e; }
+    // (draw.js drawBuffers, in the worker: the main thread only wraps its arrays)
+    const s = d.surf, g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(s.pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(s.nrm, 3)); g.setAttribute('aAng', new THREE.BufferAttribute(s.ang, 1)); g.setIndex(new THREE.BufferAttribute(s.idx, 1));
+    for (let q = 0; q < s.groups.length; q += 3) g.addGroup(s.groups[q], s.groups[q + 1], s.groups[q + 2]);
     g.computeBoundingSphere(); const surf = new THREE.Mesh(g, this.matList); surf.receiveShadow = true; c.mesh.add(surf);
-    if (this.mats.water) { const wm = this.water(m); if (wm) c.mesh.add(wm); }
-    const r = m.rib, n = r.kind.length; if (n) {
-      const pick = (want) => { const at = []; for (let v = 0; v < n; v += 3) if (want(r.kind[v])) at.push(v); return at; };
-      const part = (vs, mat, attrs) => { const k = vs.length * 3, P = new Float32Array(k * 3), N = new Float32Array(k * 3), A = attrs.map(([, size]) => new Float32Array(k * size));
-        vs.forEach((v0, t) => { for (let q = 0; q < 3; q++) { const v = v0 + q, o = t * 3 + q; P.set(r.pos.subarray(v * 3, v * 3 + 3), o * 3); N.set(r.nrm.subarray(v * 3, v * 3 + 3), o * 3); attrs.forEach(([, size, f], a) => A[a].set(f(v), o * size)); } });
-        const gg = new THREE.BufferGeometry(); gg.setAttribute('position', new THREE.BufferAttribute(P, 3)); gg.setAttribute('normal', new THREE.BufferAttribute(N, 3)); attrs.forEach(([name, size], a) => gg.setAttribute(name, new THREE.BufferAttribute(A[a], size)));
-        gg.computeBoundingSphere(); const me = new THREE.Mesh(gg, mat); me.receiveShadow = true; c.mesh.add(me); };
-      part(pick((k) => k === KIND.tarmac), this.mats.tarmac, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((a) => ['aM' + a, 4, (v) => r.mark.subarray(v * MARK + a * 4, v * MARK + a * 4 + 4)]));
-      // (the pavement and its kerb with today's material: uv = metres across from the street's centre line, along; rinfo = half width, -, seed)
-      part(pick((k) => k === KIND.kerb || k === KIND.pave), this.mats.walk, [['uv', 2, (v) => [r.road[v * 4 + 1], r.road[v * 4]]], ['rinfo', 3, (v) => [r.road[v * 4 + 2], 0, 3]], ['rjunc', 4, () => [99, 99, 0, 0]]]);
-      // (the gravel with today's tracks' material: uv = across, along; rinfo = half width (half a metre more: its ragged edge
-      // stays inside the gravel's own triangles, there's nothing under it), the gravel look 2, seed)
-      const trk = pick((k) => k === KIND.gravel); if (trk.length) part(trk, this.mats.track, [['uv', 2, (v) => [r.road[v * 4 + 1], r.road[v * 4]]], ['rinfo', 3, (v) => [r.road[v * 4 + 2] + 0.5, 2, r.id[v] % 97]], ['rjunc', 4, () => [99, 99, 0, 0]]]);
-    }
+    if (d.water && this.mats.water) { const wg = new THREE.BufferGeometry(); wg.setAttribute('position', new THREE.BufferAttribute(d.water.pos, 3)); wg.setAttribute('aDepth', new THREE.BufferAttribute(d.water.dep, 1)); wg.computeBoundingSphere(); const wm = new THREE.Mesh(wg, this.mats.water); wm.name = 'layout water'; c.mesh.add(wm); }
+    for (const [name, mat] of [['tarmac', this.mats.tarmac], ['walk', this.mats.walk], ['track', this.mats.track]]) { const p = d.parts[name]; if (!p) continue;
+      const gg = new THREE.BufferGeometry(); gg.setAttribute('position', new THREE.BufferAttribute(p.pos, 3)); gg.setAttribute('normal', new THREE.BufferAttribute(p.nrm, 3)); for (const [a, [A, size]] of Object.entries(p.attrs)) gg.setAttribute(a, new THREE.BufferAttribute(A, size));
+      gg.computeBoundingSphere(); const me = new THREE.Mesh(gg, mat); me.receiveShadow = true; c.mesh.add(me); }
     if (c.rails) for (const o of c.rails.children) if (o.userData.near) o.visible = level === 'fine'; // (the rails and sleepers: near only, sub-pixel further)
     c.shown = level;
   }
-  // a chunk's railways (rails.js): the rails and sleepers laid on its surface (or a deck's, a tube's own profile), and a
-  // rail bridge's deck, a rail tunnel's tube and portals (a road's are roads.js's, but for its headwall raised under a way over it)
-  railsFor(c) {
-    const L = c.L, m = c.m.fine, at = (x, z) => physAt(L, m, c.phys, x, z), pcs = railPieces(L, at), ports = portalsOf(L.net.runs); if (!pcs.length && !L.net.runs.some((r) => r.kind === 'rail' && r.off) && !ports.some((p) => p.top > PORTAL_TOP)) return;
-    const G = { steel: [], sleeper: [], deck: [], tube: [], ballast: [] }, quad = (A, a, b, cc, d) => A.push(...a, ...b, ...cc, ...a, ...cc, ...d);
-    for (const pc of pcs) { const P = pc.P, n = P.length / 5, half = GAUGE[pc.cls] / 2;
-      // the rails: a head 7 cm wide RAIL_TOP over the bed, its sides down to the sleepers
-      for (const sd of [-1, 1]) { const S = railSide(pc, sd * half, at, true), k = S.length / 5, a = (i, w, dy) => [S[i * 5] - S[i * 5 + 4] * w, S[i * 5 + 2] + dy, S[i * 5 + 1] + S[i * 5 + 3] * w];
-        for (let i = 0; i + 1 < k; i++) { quad(G.steel, a(i, -0.035, RAIL_TOP), a(i, 0.035, RAIL_TOP), a(i + 1, 0.035, RAIL_TOP), a(i + 1, -0.035, RAIL_TOP)); quad(G.steel, a(i, -0.035, SLEEPER_TOP), a(i, -0.035, RAIL_TOP), a(i + 1, -0.035, RAIL_TOP), a(i + 1, -0.035, SLEEPER_TOP)); quad(G.steel, a(i, 0.035, RAIL_TOP), a(i, 0.035, SLEEPER_TOP), a(i + 1, 0.035, SLEEPER_TOP), a(i + 1, 0.035, RAIL_TOP)); } }
-      // the sleepers: every SLEEPER_STEP m along, their ends on the bed
-      const sl = SLEEPER_L[pc.cls] / 2, E0 = railSide(pc, -sl, at), E1 = railSide(pc, sl, at); let acc = SLEEPER_STEP / 2;
-      for (let i = 0; i + 1 < n; i++) { const l = Math.hypot(P[i * 5 + 5] - P[i * 5], P[i * 5 + 6] - P[i * 5 + 1]); while (acc < l) { const t = acc / l, f = (Q, k) => Q[i * 5 + k] + (Q[i * 5 + 5 + k] - Q[i * 5 + k]) * t, ux = P[i * 5 + 3] * 0.11, uz = P[i * 5 + 4] * 0.11;
-          const a = [f(E0, 0), f(E0, 2) + SLEEPER_TOP, f(E0, 1)], b = [f(E1, 0), f(E1, 2) + SLEEPER_TOP, f(E1, 1)]; quad(G.sleeper, [a[0] - ux, a[1], a[2] - uz], [b[0] - ux, b[1], b[2] - uz], [b[0] + ux, b[1], b[2] + uz], [a[0] + ux, a[1], a[2] + uz]); acc += SLEEPER_STEP; } acc -= l; }
-      if (!pc.off) continue;
-      // on a deck or in a tube: its bed (level across), and under it the deck (top, sides and parapets, underside), or round it the tube
-      const hw = pc.hw, at3 = (k, o, dy) => [P[k * 5] - P[k * 5 + 4] * o, P[k * 5 + 2] + dy, P[k * 5 + 1] + P[k * 5 + 3] * o];
-      for (let i = 0; i + 1 < n; i++) { quad(G.ballast, at3(i, -hw, 0), at3(i, hw, 0), at3(i + 1, hw, 0), at3(i + 1, -hw, 0));
-        if (pc.off === 'deck') { const W = hw + DECK_SIDE; quad(G.deck, at3(i, -W, -0.01), at3(i, W, -0.01), at3(i + 1, W, -0.01), at3(i + 1, -W, -0.01)); quad(G.deck, at3(i, W, -DECK_DEPTH), at3(i, -W, -DECK_DEPTH), at3(i + 1, -W, -DECK_DEPTH), at3(i + 1, W, -DECK_DEPTH));
-          for (const sd of [-1, 1]) { quad(G.deck, at3(i, W * sd, -DECK_DEPTH), at3(i + 1, W * sd, -DECK_DEPTH), at3(i + 1, W * sd, 0.7), at3(i, W * sd, 0.7)); quad(G.deck, at3(i, (W - 0.3) * sd, 0.7), at3(i + 1, (W - 0.3) * sd, 0.7), at3(i + 1, (W - 0.3) * sd, -0.01), at3(i, (W - 0.3) * sd, -0.01)); quad(G.deck, at3(i, W * sd, 0.7), at3(i + 1, W * sd, 0.7), at3(i + 1, (W - 0.3) * sd, 0.7), at3(i, (W - 0.3) * sd, 0.7)); } }
-        else { const W = hw + TUBE_SIDE; for (const sd of [-1, 1]) { quad(G.tube, at3(i, W * sd, -0.3), at3(i + 1, W * sd, -0.3), at3(i + 1, W * sd, TUBE_H * 0.8), at3(i, W * sd, TUBE_H * 0.8)); quad(G.tube, at3(i, W * sd, TUBE_H * 0.8), at3(i + 1, W * sd, TUBE_H * 0.8), at3(i + 1, W * 0.55 * sd, TUBE_H), at3(i, W * 0.55 * sd, TUBE_H)); }
-          quad(G.tube, at3(i, -W * 0.55, TUBE_H), at3(i + 1, -W * 0.55, TUBE_H), at3(i + 1, W * 0.55, TUBE_H), at3(i, W * 0.55, TUBE_H)); } }
-      // (a deck's piers, every ~30 m where it's 3 m or more over the ground)
-      if (pc.off === 'deck') for (let i = 15; i < n - 1; i += 15) { const x = P[i * 5], z = P[i * 5 + 1], gy = this.w.sampleGrid(x, z), top = P[i * 5 + 2] - DECK_DEPTH; if (top - gy < 3) continue; const ux = P[i * 5 + 3], uz = P[i * 5 + 4], hx = 0.8, hz = hw + DECK_SIDE - 0.4, cx = (a, o) => [x + ux * a - uz * o, z + uz * a + ux * o];
-        for (const [a0, o0, a1, o1] of [[-hx, -hz, hx, -hz], [hx, -hz, hx, hz], [hx, hz, -hx, hz], [-hx, hz, -hx, -hz]]) { const p = cx(a0, o0), q = cx(a1, o1); quad(G.deck, [p[0], gy - 1, p[1]], [q[0], gy - 1, q[1]], [q[0], top, q[1]], [p[0], top, p[1]]); } } }
-    // a rail tunnel's portals: the headwall round its mouth (as roads.js's), centred on the portal
-    for (const p of ports) { if (p.x < L.x0 || p.x >= L.x0 + L.size || p.z < L.z0 || p.z >= L.z0 + L.size) continue; const T = PORTAL_T / 2, pt = (u, v, y) => [p.x + p.dx * u - p.dz * v, p.y + y, p.z + p.dz * u + p.dx * v];
-      const box = (v0, v1, y0, y1) => { for (const u of [-T, T]) quad(G.tube, pt(u, v0, y0), pt(u, v1, y0), pt(u, v1, y1), pt(u, v0, y1)); quad(G.tube, pt(-T, v0, y1), pt(-T, v1, y1), pt(T, v1, y1), pt(T, v0, y1)); for (const v of [v0, v1]) quad(G.tube, pt(-T, v, y0), pt(T, v, y0), pt(T, v, y1), pt(-T, v, y1)); };
-      if (!p.rail) { if (p.top > PORTAL_TOP) box(-p.W, p.W, PORTAL_TOP - 0.01, p.top); continue; } // (a road's portal is roads.js's: where a way runs over it, its headwall raised to under that way, rules.js portalsOf)
-      box(-p.W, -p.hwT, -PORTAL_FOOT, p.top); box(p.hwT, p.W, -PORTAL_FOOT, p.top); box(-p.hwT, p.hwT, TUBE_H, p.top); box(-p.hwT, p.hwT, -SILL, -0.05); } // (its wings PORTAL_FOOT deep, a sill across the mouth: roads.js's)
-    const grp = new THREE.Group(); grp.name = 'layout rails ' + c.k;
-    for (const [k, A] of Object.entries(G)) { if (!A.length) continue; const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(A, 3)); if (k === 'ballast') { const nv = A.length / 3; g.setAttribute('aRoad', new THREE.Float32BufferAttribute(new Float32Array(nv * 4), 4)); g.setAttribute('aLane', new THREE.Float32BufferAttribute(new Float32Array(nv), 1)); }
-      g.computeVertexNormals(); g.computeBoundingSphere(); const me = new THREE.Mesh(g, this.mats[k]); me.receiveShadow = true; me.castShadow = k === 'deck'; me.userData.near = k === 'steel' || k === 'sleeper'; grp.add(me); }
+  // a chunk's railways (draw.js railBuffers, made in the worker): their meshes, and a rail bridge's piers down to today's
+  // ground (the World's terrain: here)
+  railsFor(c, rb) {
+    if (!rb) return; const grp = new THREE.Group(); grp.name = 'layout rails ' + c.k;
+    const add = (k, P, N) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(P, 3)); if (N) g.setAttribute('normal', new THREE.BufferAttribute(N, 3)); else g.computeVertexNormals();
+      if (k === 'ballast') { const nv = P.length / 3; g.setAttribute('aRoad', new THREE.BufferAttribute(new Float32Array(nv * 4), 4)); g.setAttribute('aLane', new THREE.BufferAttribute(new Float32Array(nv), 1)); }
+      g.computeBoundingSphere(); const me = new THREE.Mesh(g, this.mats[k]); me.receiveShadow = true; me.castShadow = k === 'deck'; me.userData.near = k === 'steel' || k === 'sleeper'; grp.add(me); };
+    for (const k of Object.keys(rb.pos)) add(k, rb.pos[k], rb.nrm[k]);
+    // (a deck's piers, where it's 3 m or more over the ground)
+    const pr = [], R = rb.piers, quad = (a, b, cc, d) => { for (const v of [a, b, cc, a, cc, d]) pr.push(v[0], v[1], v[2]); };
+    for (let q = 0; q < R.length; q += 6) { const x = R[q], z = R[q + 1], top = R[q + 2], gy = this.w.sampleGrid(x, z); if (top - gy < 3) continue; const ux = R[q + 3], uz = R[q + 4], hx = 0.8, hz = R[q + 5], cx = (a, o) => [x + ux * a - uz * o, z + uz * a + ux * o];
+      for (const [a0, o0, a1, o1] of [[-hx, -hz, hx, -hz], [hx, -hz, hx, hz], [hx, hz, -hx, hz], [-hx, hz, -hx, -hz]]) { const p = cx(a0, o0), qq = cx(a1, o1); quad([p[0], gy - 1, p[1]], [qq[0], gy - 1, qq[1]], [qq[0], top, qq[1]], [p[0], top, p[1]]); } }
+    if (pr.length) add('deck', new Float32Array(pr), null);
     c.rails = grp; this.group.add(grp);
   }
-  // each frame: the chunks about the camera fetched and asked for (fine near, coarse further); each drawn at its level
-  update(cam) {
-    const x = cam.position.x, z = cam.position.z; this.cam.x = x; this.cam.z = z;
-    if (!this.stats) { const S = this.size, ring = []; for (const k of this.index.keys()) { const [i, j] = k.split(',').map(Number); if (Math.hypot((i + 0.5) * S - x, (j + 0.5) * S - z) < FINE_D) ring.push(k); } this.stats = { t0: performance.now(), ring, firstRingMs: null }; } // (the first ring: the chunks fine about the first camera, meshed: goto.py --stats)
-    if (!this.lastScan || Math.hypot(x - this.lastScan[0], z - this.lastScan[1]) > 100) { this.lastScan = [x, z]; // (about every 100 m: which are in reach)
-      const S = this.size, r = Math.ceil(LOAD_D / S);
-      for (let i = Math.floor(x / S) - r; i <= Math.floor(x / S) + r; i++) for (let j = Math.floor(z / S) - r; j <= Math.floor(z / S) + r; j++) {
-        const k = i + ',' + j; if (!this.index.has(k) || this.chunks.has(k) || Math.hypot((i + 0.5) * S - x, (j + 0.5) * S - z) > LOAD_D) continue;
-        this.load(k).then((c) => this.ask(c, 'fine')).catch(() => {}); } }
-    for (const c of this.chunks.values()) { if (!c.phys || !this.mats) continue; const want = Math.hypot(c.cx - x, c.cz - z) < FINE_D ? 'fine' : 'coarse';
-      if (want === 'coarse' && !c.asked.has('coarse')) this.ask(c, 'coarse');
-      if (want !== c.shown && c.m[want]) this.show(c, want); }
+  // the flight's start (main.js buildFlight, at the spawn, before its shaders compile): its chunks fetched and meshed
+  // from now, and the first view (World.loaded holds the loading screen for it): fine within FINE_D, drawn within LOAD_D
+  begin(x, z) {
+    const S = this.size, ring = [], view = []; this.cam.x = x; this.cam.z = z; Object.assign(this.vel, { x: 0, z: 0, t: 0 });
+    for (const k of this.index.keys()) { const [i, j] = k.split(',').map(Number), d = Math.hypot((i + 0.5) * S - x, (j + 0.5) * S - z); if (d < FINE_D) ring.push(k); else if (d <= LOAD_D) view.push(k); }
+    // (goto.py --stats: firstRingMs the ring fine, firstViewMs all of it drawn; in flight mainMax / long the main thread's
+    // layout work (ms, and how many over 50 ms), backlog the most fine meshes waiting within FINE_D, coarseNear the most
+    // chunks within FINE_D not drawn fine 2 s after they came in range)
+    this.stats = { t0: performance.now(), ring, view, firstRingMs: null, firstViewMs: null, pool: this.workers.length, meshed: 0, workMs: 0, loadMainMax: 0, mainMax: 0, long: 0, backlog: 0, coarseNear: 0, coarseNearFrames: 0, frames: 0 };
+    this.nearT = new Map(); this.lastScan = null; this.scan();
   }
+  // the chunks within LOAD_D of the camera's track fetched and asked for: fine, and coarse for those beyond FINE_D
+  scan() {
+    const x = this.cam.x, z = this.cam.z, ex = x + this.vel.x * AHEAD, ez = z + this.vel.z * AHEAD;
+    if (this.lastScan && Math.hypot(x - this.lastScan[0], z - this.lastScan[1]) < 100 && Math.hypot(ex - this.lastScan[2], ez - this.lastScan[3]) < 100) return;
+    this.lastScan = [x, z, ex, ez]; const S = this.size; // (about every 100 m: which are in reach)
+    for (let i = Math.floor((Math.min(x, ex) - LOAD_D) / S); i <= Math.floor((Math.max(x, ex) + LOAD_D) / S); i++) for (let j = Math.floor((Math.min(z, ez) - LOAD_D) / S); j <= Math.floor((Math.max(z, ez) + LOAD_D) / S); j++) {
+      const k = i + ',' + j; if (!this.index.has(k) || this.chunks.has(k) || this.dAhead((i + 0.5) * S, (j + 0.5) * S) > LOAD_D) continue;
+      this.load(k).then((c) => { this.ask(c, 'fine'); if (this.mats && Math.hypot(c.cx - this.cam.x, c.cz - this.cam.z) >= FINE_D) this.ask(c, 'coarse'); }).catch(() => {}); }
+  }
+  // each frame: the camera's track; the chunks about it fetched and asked for (fine near, coarse further); the meshes
+  // arrived drawn (a few a frame); each drawn at its level
+  update(cam) {
+    const t0 = performance.now(), x = cam.position.x, z = cam.position.z, v = this.vel; this.cam.x = x; this.cam.z = z;
+    if (!this.stats) this.begin(x, z);
+    // (the camera's ground speed, smoothed over about half a second; a jump (a restart, goto.py) isn't a speed)
+    const dt = (t0 - v.t) / 1000; if (!v.t || dt > 2) Object.assign(v, { t: t0, px: x, pz: z });
+    else if (dt > 0.05) { const vx = (x - v.px) / dt, vz = (z - v.pz) / dt, k = Math.min(1, dt / 0.5); if (Math.hypot(vx, vz) > 3000) { v.x = v.z = 0; } else { v.x += (vx - v.x) * k; v.z += (vz - v.z) * k; } Object.assign(v, { t: t0, px: x, pz: z }); }
+    this.scan();
+    // (the drawings due, the nearest first: a level wanted that's in, or a chunk's first; then the arrived meshes (their
+    // physics), the nearest first: within the frame's BUDGET, and at least one of the two)
+    const due = []; if (this.mats) for (const c of this.chunks.values()) { if (!c.d) continue; const d = Math.hypot(c.cx - x, c.cz - z), want = d < FINE_D ? 'fine' : 'coarse';
+      if (want === 'coarse' && c.shown && !c.asked.has('coarse')) this.ask(c, 'coarse');
+      const lv = c.d[want] ? want : !c.shown ? Object.keys(c.d)[0] : null; if (lv && lv !== c.shown) due.push([d, c, lv]); } // (not drawn yet: whatever level is in)
+    due.sort((a, b) => a[0] - b[0]); let did = 0;
+    for (const [, c, lv] of due) { if (did && performance.now() - t0 >= BUDGET) break; this.show(c, lv); did++; }
+    for (let n = 0; this.done.length && ((!did && !n) || performance.now() - t0 < BUDGET); n++) { let b = 0, bp = Infinity; this.done.forEach((r, q) => { const c = this.chunks.get(r.id), p = c ? this.prio(c, r.level) : 0; if (p < bp) { bp = p; b = q; } }); this.arrive(this.done.splice(b, 1)[0]); }
+    const st = this.stats; this.progress(); if (st.firstViewMs != null && this.mats) { st.frames++; // (in flight: what's waiting, what's late)
+      let back = 0; for (const [c, level] of this.queue.values()) if (level === 'fine' && Math.hypot(c.cx - x, c.cz - z) < FINE_D) back++; st.backlog = Math.max(st.backlog, back);
+      const S = this.size, r = Math.ceil(FINE_D / S), seen = new Set(); let late = 0;
+      for (let i = Math.floor(x / S) - r; i <= Math.floor(x / S) + r; i++) for (let j = Math.floor(z / S) - r; j <= Math.floor(z / S) + r; j++) { const k = i + ',' + j; if (!this.index.has(k) || Math.hypot((i + 0.5) * S - x, (j + 0.5) * S - z) >= FINE_D) continue;
+        seen.add(k); if (!this.nearT.has(k)) this.nearT.set(k, t0); if (this.chunks.get(k)?.shown !== 'fine' && t0 - this.nearT.get(k) > 2000) late++; }
+      for (const k of this.nearT.keys()) if (!seen.has(k)) this.nearT.delete(k);
+      st.coarseNear = Math.max(st.coarseNear, late); if (late) st.coarseNearFrames++; }
+    this.note(t0);
+  }
+  // whether the first view is in (World.loaded: the loading screen waits for it)
+  viewReady() { return this.progress() >= 1; }
   // load and mesh (fine) every chunk within r of (x, z) now (tools and tests; the game streams them in update): how many
   async prime(x, z, r) {
     this.cam.x = x; this.cam.z = z; const S = this.size, n = Math.ceil(r / S), ks = [];
     for (let i = Math.floor(x / S) - n; i <= Math.floor(x / S) + n; i++) for (let j = Math.floor(z / S) - n; j <= Math.floor(z / S) + n; j++) { const k = i + ',' + j; if (this.index.has(k) && Math.hypot((i + 0.5) * S - x, (j + 0.5) * S - z) <= r) ks.push(k); }
     const cs = await Promise.all(ks.map((k) => this.load(k))); for (const c of cs) this.ask(c, 'fine');
-    while (this.queue.size || this.busy) { if (this.worker) await new Promise((res) => setTimeout(res, 20)); else this.pump(); }
+    while (this.queue.size || this.busy || this.done.length) { while (this.done.length) this.arrive(this.done.shift()); if (this.workers.length) await new Promise((res) => setTimeout(res, 20)); else this.pump(); }
     return cs.length;
   }
   // the height to place things at (x, z) on (lamps, signals, lanes, building bases): the surface's, NaN outside the active chunks
@@ -292,7 +311,7 @@ export class Layout {
     const type = k === KIND.verge || k === KIND.gravel || k === KIND.ballast ? 'sand' : k >= KIND.tarmac || lot ? 'runway' : n.y < 0.8 ? 'rock' : w.loc.desert && !(w.real && w.real.forest(x, z) > 0.45) ? 'sand' : 'grass'; // (a desert's ground: sand, but pine needles under the rims' forests, as World.groundAt)
     return { h, n: type === 'runway' ? new THREE.Vector3(0, 1, 0) : n, type };
   }
-  dispose() { this.worker?.terminate(); for (const c of this.chunks.values()) for (const o of [...(c.mesh?.children || []), ...(c.rails?.children || [])]) o.geometry.dispose(); for (const s of this.skirts.values()) s.geometry.dispose(); this.mask.dispose(); }
+  dispose() { for (const wk of this.workers || []) wk.terminate(); for (const c of this.chunks.values()) for (const o of [...(c.mesh?.children || []), ...(c.rails?.children || [])]) o.geometry.dispose(); for (const s of this.skirts.values()) s.geometry.dispose(); this.mask.dispose(); }
 }
 
 // a paved surface: its photo texture over a base colour (world-space, metres), and on the tarmac the markings from the

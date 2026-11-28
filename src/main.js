@@ -834,6 +834,7 @@ function buildFlight(cfg) {
   // detail), and over the first frame, which draws the hidden shadow casters for their shadow shaders (see warmShaders)
   // (in a kept World only what this flight added needs that: the World's own hidden casters were drawn in its first flight's warm-up)
   F.startRec = rec; mark(rec, 'setup');
+  world.layout?.begin(ac.x.x, ac.x.z); // (the baked layout round the start (?layout=1): fetched and meshed from now, while the shaders compile)
   const warm = (F.warm = { t: performance.now(), n: 0, pending: true, skip: reused ? kids : null, rec }), compiled = (via) => { warm.pending = false; warm.t = performance.now(); mark(rec, 'compiled'); if (rec) rec.via.compile ||= via; };
   setTimeout(() => compiled('timeout'), 15000); // (never stuck behind the loading screen)
   // (into the post-processing target, as the scene really renders: tone mapping and output encoding are part of a
@@ -1590,7 +1591,7 @@ function frame(now) {
       if (!F.warm && progs.length > n0) { const names = progs.slice(n0).map((p) => `${p.name} ${p.cacheKey?.slice(-48)}`).join(' | '); console.warn(`[shaders] ${progs.length - n0} compiled in flight, stalling a frame: ${names}`); window.__inflightCompiles = (window.__inflightCompiles || 0) + progs.length - n0; }
       if (restore) { restore(); compileWith(F.scene, F.effects.boom, warm); } // and every shader as lit by a crash's explosion flash (effects.js)
       // ...and until the ground photos have arrived (their upload, and the rock impostors' re-capture, would hitch), and the street cars' models (startFlight loads them first, so this is a safety net)
-      else if (warm) { const ok = F.world.loaded?.() !== false && F.traffic.vehicles.ready; if (ok || performance.now() - warm.t > 3000) { F.warm = null; $('#loading').classList.remove('show'); flightReady(F, warm.n, ok); } }
+      else if (warm) { const lp = F.world.layout?.progress() ?? 1, lm = $('#loading p'); if (lp < 1) { warm.msg ??= lm.textContent; lm.textContent = `Laying out the streets… ${Math.round(lp * 100)}%`; } const ok = F.world.loaded?.() !== false && F.traffic.vehicles.ready; if (ok || performance.now() - warm.t > (lp < 1 ? 8000 : 3000)) { F.warm = null; if (warm.msg != null) lm.textContent = warm.msg; $('#loading').classList.remove('show'); flightReady(F, warm.n, ok); } }
     }
   }
 }
