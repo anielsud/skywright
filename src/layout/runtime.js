@@ -27,6 +27,9 @@ const POOL = Math.max(1, Math.min(4, ((typeof navigator !== 'undefined' && navig
 // how far ahead (s) the camera's track is looked along, at its speed, for what to fetch and mesh first (prefetch: a
 // chunk ahead meshed before it's in reach); and the main thread's time (ms) a frame gives arrived meshes (at least one)
 const AHEAD = 4, BUDGET = 6;
+// a chunk further than DROP_D from the camera is dropped (its meshes, physics and bytes; fetched and meshed again on the
+// way back, within LOAD_D: the gap between the two keeps one at the edge from coming and going)
+const DROP_D = 4000;
 const loader = new THREE.TextureLoader(), texCache = new Map();
 const tex = (name) => { if (!texCache.has(name)) { const t = loader.load(`tex/roads/${name}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; texCache.set(name, t); } return texCache.get(name); };
 const SIDES = [[-1, 0], [1, 0], [0, -1], [0, 1]];
@@ -36,7 +39,7 @@ export class Layout {
   // ground: no file, format.js groundBytes), fallback }); dir: where its files are
   constructor(w, index, dir) {
     this.w = w; this.on = false; this.dir = dir; this.size = index.size; this.group = new THREE.Group(); this.group.name = 'layout';
-    const cs = indexChunks(index); this.index = new Map(cs.map((c) => [c.ix + ',' + c.iz, c])); this.chunks = new Map(); this.active = new Map(); this.queue = new Map(); this.busy = 0; this.loading = 0; this.done = []; this.cam = { x: 0, z: 0 }; this.vel = { x: 0, z: 0, t: 0, px: 0, pz: 0 }; this.drawn = new Set(); this.workers = [];
+    const cs = indexChunks(index); this.index = new Map(cs.map((c) => [c.ix + ',' + c.iz, c])); this.chunks = new Map(); this.active = new Map(); this.queue = new Map(); this.busy = 0; this.loading = 0; this.uids = 0; this.done = []; this.cam = { x: 0, z: 0 }; this.vel = { x: 0, z: 0, t: 0, px: 0, pz: 0 }; this.drawn = new Set(); this.workers = [];
     // the active chunks' mask, a texel a chunk over the square holding every baked chunk (today's materials don't draw where
     // it's set; New York's reach past the hi square)
     const S = this.size, ix0 = Math.min(0, ...cs.map((c) => c.ix)), iz0 = Math.min(0, ...cs.map((c) => c.iz)); this.gx0 = ix0 * S; this.gz0 = iz0 * S; this.gn = Math.max(1, ...cs.map((c) => Math.max(c.ix - ix0, c.iz - iz0) + 1));
@@ -92,7 +95,12 @@ export class Layout {
     // the water: today's plane and shore mesh (World.buildWater) don't draw inside an active chunk, whose own water is its
     // surface's part under the water level (water()), so the shore is the layout's ground's, not today's carved grid's
     const w = this.w; if (w.waterMat) { this.clipWater(w.waterMat, ...(w.shoreWater?.children || []).map((o) => o.material)); this.mats.water = waterMaterial({ U: w.waterMat.userData.U, shore: true, vdepth: true }); }
+    this.ensurePool();
+  }
+  // the meshing workers (once: early, or start)
+  ensurePool() {
     // (the arrived meshes: drawn straight away until the first view is in (behind the loading screen), then a few a frame (update))
+    if (this.workers.length || typeof Worker === 'undefined') return;
     this.workers = typeof Worker !== 'undefined' ? Array.from({ length: POOL }, () => { const wk = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }); wk.jobs = [];
       wk.onmessage = (ev) => { const t0 = performance.now(); wk.jobs.shift(); this.busy--; const st = this.stats; if (st) { st.meshed++; st.workMs += ev.data.ms; } if (this.eager()) this.arrive(ev.data); else this.done.push(ev.data); this.pump(); this.note(t0); };
       wk.onerror = (e) => { e.preventDefault?.(); this.busy--; console.warn('[layout] a chunk failed to mesh:', wk.jobs.shift(), e.message); this.pump(); }; return wk; }) : []; // (a mesh that throws: that chunk stays today's, the worker goes on)
@@ -102,9 +110,11 @@ export class Layout {
   // a chunk's file, fetched and decoded (once)
   load(k) {
     let c = this.chunks.get(k); if (c) return c.ready.then(() => c); const e = this.index.get(k);
-    c = { k, ix: e.ix, iz: e.iz, cx: (e.ix + 0.5) * this.size, cz: (e.iz + 0.5) * this.size, m: {}, phys: null, mesh: null, shown: null, asked: new Set() }; this.chunks.set(k, c);
-    this.loading++; c.ready = (async () => { if (!e.file) c.buf = groundBytes(e.ix, e.iz, !!this.w.loc.city).buffer; // (only ground: worked out, not fetched)
-      else { const r = await fetch(this.dir + e.file), s = r.body.pipeThrough(new DecompressionStream('gzip')); c.buf = await new Response(s).arrayBuffer(); } c.L = decodeLayout(c.buf); })().finally(() => { if (!--this.loading) this.pump(); }); // (the last fetch in: what was held for it, pump)
+    c = { k, uid: ++this.uids, ix: e.ix, iz: e.iz, cx: (e.ix + 0.5) * this.size, cz: (e.iz + 0.5) * this.size, m: {}, phys: null, mesh: null, shown: null, asked: new Set() }; this.chunks.set(k, c);
+    const pre = e.file && this.pre?.get(e.file); if (pre) { this.pre.delete(e.file); c.buf = pre; c.L = decodeLayout(pre); c.ready = Promise.resolve(); return c.ready.then(() => c); } // (fetched with the place: realworld.js loadReal)
+    if (!e.file) { c.buf = groundBytes(e.ix, e.iz, !!this.w.loc.city).buffer; c.L = decodeLayout(c.buf); c.ready = Promise.resolve(); return c.ready.then(() => c); } // (only ground: worked out, not fetched)
+    this.loading++; c.ready = (async () => {
+      { const r = await fetch(this.dir + e.file), s = r.body.pipeThrough(new DecompressionStream('gzip')); c.buf = await new Response(s).arrayBuffer(); } c.L = decodeLayout(c.buf); })().finally(() => { if (!--this.loading) this.pump(); }); // (the last fetch in: what was held for it, pump)
     return c.ready.then(() => c);
   }
   ask(c, level) { if (c.asked.has(level)) return; c.asked.add(level); this.queue.set(c.k + ':' + level, [c, level]); this.pump(); }
@@ -116,20 +126,21 @@ export class Layout {
   // how many meshes a worker is given at once: while the loading screen is up the main thread is busy for 100s of ms at a
   // time (the World, the shaders), and a worker that had to wait for it to be given its next stood idle; in flight, two
   // (the order can still change with the camera's track)
-  depth() { return this.eager() ? 4 : 2; }
+  depth() { return this.giving ? Infinity : this.eager() ? 4 : 2; }
   // the next meshes to make, up to depth() per worker
   pump() {
+    if (this.hold) return; // (early: every ask in first, then given out in order)
     while (this.queue.size && (!this.workers.length || this.busy < this.workers.length * this.depth())) {
       let best = null, bp = Infinity; for (const [q, [c, level]] of this.queue) { const p = this.prio(c, level); if (p < bp) { bp = p; best = q; } }
-      if (bp >= 2e5 && this.loading && this.eager()) break; // (the first view's fine far off waits for every fetch: a worker isn't taken from what the loading screen waits for)
-      const [c, level] = this.queue.get(best); this.queue.delete(best); const { grid, G } = this.lattice(c.L), edgeH = this.edgeH(c), wl = this.mats?.water ? this.w.waterLevel : null;
-      if (this.workers.length) { const wk = this.workers.reduce((a, b) => (b.jobs.length < a.jobs.length ? b : a)); wk.jobs.push(c.k + ':' + level); this.busy++; wk.postMessage({ id: c.k, buf: c.buf.slice(0), grid, G, level, edgeH, wl }, [G.buffer]); }
+      if (bp >= 2e5 && (this.giving || (this.loading && this.eager()))) break; // (the first view's fine far off waits for every fetch: a worker isn't taken from what the loading screen waits for)
+      const [c, level] = this.queue.get(best); this.queue.delete(best); const { grid, G } = this.lattice(c.L), edgeH = this.edgeH(c), wl = this.w.waterLevel; // (the water drawn only where the World has some: show)
+      if (this.workers.length) { const wk = this.workers.reduce((a, b) => (b.jobs.length < a.jobs.length ? b : a)); wk.jobs.push(c.k + ':' + level); this.busy++; wk.postMessage({ id: c.k, uid: c.uid, buf: c.buf.slice(0), grid, G, level, edgeH, wl }, [G.buffer]); }
       else { const m = meshChunk(c.L, grid, G, level, edgeH), d = this.mats ? drawBuffers(m, wl) : null; if (d) d.rails = level === 'fine' ? railBuffers(c.L, m) : null; this.got(c, level, m, d); } // (Node: no workers; the same functions)
     }
   }
   // until the first view is in (behind the loading screen) a mesh is drawn as it arrives; then a few a frame (update)
   eager() { const st = this.stats; return !st || (st.firstViewMs == null && performance.now() - st.t0 < 10000); }
-  arrive(r) { const c = this.chunks.get(r.id); if (c) this.got(c, r.level, r.m, r.d); }
+  arrive(r) { const c = this.chunks.get(r.id); if (c && c.uid === r.uid) this.got(c, r.level, r.m, r.d); } // (not a dropped chunk's: unload)
   // the main thread's time in layout work from t0 (a frame's update, an arrived mesh): the longest, and how many over 50 ms in flight
   note(t0) { const ms = performance.now() - t0, st = this.stats; if (!st) return; if (st.firstViewMs == null) { st.loadMainMax = Math.max(st.loadMainMax, ms); return; } st.mainMax = Math.max(st.mainMax, ms); if (ms > 50) st.long++; }
   // on each side of a chunk with no layout chunk beside it (the layout's outer edge), today's terrain there at the side's
@@ -147,7 +158,7 @@ export class Layout {
   // a mesh arrived (d: what it's drawn with, draw.js; null: tools, nothing drawn)
   got(c, level, m, d) {
     c.m[level] = m; if (d) (c.d ||= {})[level] = d;
-    const st = this.stats; if (st && st.firstRingMs == null && st.ring.every((k) => this.chunks.get(k)?.m.fine)) st.firstRingMs = performance.now() - st.t0;
+    const st = this.stats; this.ringCheck();
     if (level === 'fine' && !c.phys) { // physics starts with the fine mesh
       c.phys = physIndex(c.L, m); this.active.set(c.k, c); this.on = true;
       if (this.mats) this.railsFor(c, d?.rails);
@@ -161,8 +172,8 @@ export class Layout {
   }
   // the share of the first view in (the ring fine and drawn, the rest drawn): the loading screen's progress; 1: in, or
   // given up waiting (eager)
-  progress() { const st = this.stats; if (!st || st.firstViewMs != null || !this.eager()) return 1; let n = 0; for (const k of st.ring) n += this.chunks.get(k)?.m.fine && this.drawn.has(k) ? 1 : 0; for (const k of st.view) n += this.drawn.has(k) ? 1 : 0;
-    if (n < st.ring.length + st.view.length) return n / (st.ring.length + st.view.length); st.firstViewMs = performance.now() - st.t0; return 1; }
+  progress() { const st = this.stats; if (!st || st.firstViewMs != null || !this.eager()) return 1; let n = 0; const F = this.first; for (const k of F.ring) n += this.chunks.get(k)?.m.fine && this.drawn.has(k) ? 1 : 0; for (const k of F.view) n += this.drawn.has(k) ? 1 : 0;
+    if (n < st.ring + st.view) return n / (st.ring + st.view); st.firstViewMs = performance.now() - st.t0; return 1; }
   // the skirts about a drawn chunk (m: its mesh, either level: the same edge points): on each side whose neighbour isn't
   // drawn (and the neighbour's facing it, gone)
   skirtsFor(c, m) {
@@ -219,22 +230,49 @@ export class Layout {
     if (pr.length) add('deck', new Float32Array(pr), null);
     c.rails = grp; this.group.add(grp);
   }
+  // the place's start, about (World's constructor, before the rest of the World is built: main.js startFlight's guess):
+  // the chunks within LOAD_D of it that are in hand (pre: fetched with the place, realworld.js loadReal; only ground)
+  // given to the workers now, fine within FINE_D, coarse beyond, so they're meshed while the World is built. Not those
+  // on the layout's outer edge (their edge heights are today's terrain's, not built yet): those once it is (edges).
+  early(x, z, pre, edges = false) {
+    this.pre = pre; this.ensurePool(); if (!this.workers.length) return; const S = this.size, has = (i, j) => this.index.has(i + ',' + j); this.cam.x = x; this.cam.z = z; this.giving = this.hold = true;
+    for (const [k, e] of this.index) { const d = Math.hypot((e.ix + 0.5) * S - x, (e.iz + 0.5) * S - z); if (d > LOAD_D || (e.file && !pre?.has(e.file))) continue;
+      let edge = false; for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if (!has(e.ix + a, e.iz + b)) edge = true; if (edge !== edges) continue;
+      const c = this.chunks.get(k) || (this.load(k), this.chunks.get(k)); this.ask(c, 'fine'); if (d >= FINE_D) this.ask(c, 'coarse'); }
+    this.hold = false; this.pump(); this.giving = false; this.earlyT = performance.now(); this.earlyAt = [x, z];
+  }
   // the flight's start (main.js buildFlight, at the spawn, before its shaders compile): its chunks fetched and meshed
-  // from now, and the first view (World.loaded holds the loading screen for it): fine within FINE_D, drawn within LOAD_D
+  // from now (those early() gave out, already), and the first view (World.loaded holds the loading screen for it): fine
+  // within FINE_D, drawn within LOAD_D
   begin(x, z) {
     const S = this.size, ring = [], view = []; this.cam.x = x; this.cam.z = z; Object.assign(this.vel, { x: 0, z: 0, t: 0 });
     for (const k of this.index.keys()) { const [i, j] = k.split(',').map(Number), d = Math.hypot((i + 0.5) * S - x, (j + 0.5) * S - z); if (d < FINE_D) ring.push(k); else if (d <= LOAD_D) view.push(k); }
-    // (goto.py --stats: firstRingMs the ring fine, firstViewMs all of it drawn; in flight mainMax / long the main thread's
-    // layout work (ms, and how many over 50 ms), backlog the most fine meshes waiting within FINE_D, coarseNear the most
-    // chunks within FINE_D not drawn fine 2 s after they came in range)
-    this.stats = { t0: performance.now(), ring, view, firstRingMs: null, firstViewMs: null, pool: this.workers.length, meshed: 0, workMs: 0, loadMainMax: 0, mainMax: 0, long: 0, backlog: 0, coarseNear: 0, coarseNearFrames: 0, frames: 0 };
-    this.nearT = new Map(); this.lastScan = null; this.scan();
+    // (goto.py --stats: ring / view how many, firstRingMs the ring fine, firstViewMs all of it drawn (from here; earlyMs:
+    // early() was that long before); in flight mainMax / long the main thread's layout work (ms, and how many over 50 ms),
+    // backlog the most fine meshes waiting within FINE_D, coarseNear the most chunks within FINE_D not drawn fine 2 s
+    // after they came in range, chunks / dropped how many are held / were dropped)
+    this.first = { ring, view };
+    this.stats = { t0: performance.now(), earlyMs: this.earlyT ? Math.round(performance.now() - this.earlyT) : null, earlyOff: this.earlyAt ? Math.round(Math.hypot(x - this.earlyAt[0], z - this.earlyAt[1])) : null, earlyRing: ring.filter((k) => this.chunks.get(k)?.asked.has('fine')).length, ring: ring.length, view: view.length, firstRingMs: null, firstViewMs: null, pool: this.workers.length, meshed: 0, workMs: 0, loadMainMax: 0, mainMax: 0, long: 0, backlog: 0, coarseNear: 0, coarseNearFrames: 0, frames: 0, chunks: 0, dropped: 0 };
+    this.nearT = new Map(); this.lastScan = null; this.scan(); this.ringCheck(); this.progress();
+  }
+  ringCheck() { const st = this.stats; if (st && st.firstRingMs == null && this.first.ring.every((k) => this.chunks.get(k)?.m.fine)) st.firstRingMs = performance.now() - st.t0; }
+  // a chunk dropped (beyond DROP_D): its meshes, rails and skirts gone (its drawn neighbours given a skirt on that side),
+  // its mask and physics off, its bytes freed; a mesh of it still on the way is let go (arrive: uid)
+  unload(c) {
+    for (const lv of ['fine', 'coarse']) this.queue.delete(c.k + ':' + lv);
+    this.done = this.done.filter((r) => r.id !== c.k);
+    for (const g of [c.mesh, c.rails]) if (g) { for (const o of g.children) o.geometry.dispose(); this.group.remove(g); }
+    for (const [dx, dz] of SIDES) { const key = c.k + ':' + dx + ',' + dz, sk = this.skirts.get(key); if (sk) { this.group.remove(sk); sk.geometry.dispose(); this.skirts.delete(key); } }
+    if (this.drawn.has(c.k)) { this.drawn.delete(c.k); const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 0; this.mask.needsUpdate = true; }
+      for (const [dx, dz] of SIDES) { const nb = this.chunks.get((c.ix + dx) + ',' + (c.iz + dz)); if (!nb || !this.drawn.has(nb.k) || !nb.shown) continue; const me = this.skirt(nb, nb.m[nb.shown], -dx, -dz); if (me) this.skirts.set(nb.k + ':' + (-dx) + ',' + (-dz), me); } }
+    this.active.delete(c.k); this.chunks.delete(c.k); this.on = this.active.size > 0; if (this.stats) this.stats.dropped++;
   }
   // the chunks within LOAD_D of the camera's track fetched and asked for: fine, and coarse for those beyond FINE_D
   scan() {
     const x = this.cam.x, z = this.cam.z, ex = x + this.vel.x * AHEAD, ez = z + this.vel.z * AHEAD;
     if (this.lastScan && Math.hypot(x - this.lastScan[0], z - this.lastScan[1]) < 100 && Math.hypot(ex - this.lastScan[2], ez - this.lastScan[3]) < 100) return;
-    this.lastScan = [x, z, ex, ez]; const S = this.size; // (about every 100 m: which are in reach)
+    this.lastScan = [x, z, ex, ez]; const S = this.size; // (about every 100 m: which are in reach, and which are past DROP_D)
+    if (this.mats) for (const c of [...this.chunks.values()]) if (c.L && Math.hypot(c.cx - x, c.cz - z) > DROP_D) this.unload(c);
     for (let i = Math.floor((Math.min(x, ex) - LOAD_D) / S); i <= Math.floor((Math.max(x, ex) + LOAD_D) / S); i++) for (let j = Math.floor((Math.min(z, ez) - LOAD_D) / S); j <= Math.floor((Math.max(z, ez) + LOAD_D) / S); j++) {
       const k = i + ',' + j; if (!this.index.has(k) || this.chunks.has(k) || this.dAhead((i + 0.5) * S, (j + 0.5) * S) > LOAD_D) continue;
       this.load(k).then((c) => { this.ask(c, 'fine'); if (this.mats && Math.hypot(c.cx - this.cam.x, c.cz - this.cam.z) >= FINE_D) this.ask(c, 'coarse'); }).catch(() => {}); }
@@ -262,7 +300,7 @@ export class Layout {
       for (let i = Math.floor(x / S) - r; i <= Math.floor(x / S) + r; i++) for (let j = Math.floor(z / S) - r; j <= Math.floor(z / S) + r; j++) { const k = i + ',' + j; if (!this.index.has(k) || Math.hypot((i + 0.5) * S - x, (j + 0.5) * S - z) >= FINE_D) continue;
         seen.add(k); if (!this.nearT.has(k)) this.nearT.set(k, t0); if (this.chunks.get(k)?.shown !== 'fine' && t0 - this.nearT.get(k) > 2000) late++; }
       for (const k of this.nearT.keys()) if (!seen.has(k)) this.nearT.delete(k);
-      st.coarseNear = Math.max(st.coarseNear, late); if (late) st.coarseNearFrames++; }
+      st.coarseNear = Math.max(st.coarseNear, late); if (late) st.coarseNearFrames++; st.chunks = this.chunks.size; }
     this.note(t0);
   }
   // whether the first view is in (World.loaded: the loading screen waits for it)

@@ -116,11 +116,13 @@ export class World {
     this.size = this.loc.core || 22000; // (a real place can ask for a bigger detailed core: New York's reaches the Statue of Liberty)
     this.coreK = this.size / 22000; // grid and bake resolutions scale with it, so the spacing stays the same
     this.stuntPlan = this.loc.stunts ? planStunts(this, this.loc.stunts) : null; // where the stunt sites go (found from the real data) and the ground they level (rawHeight)
+    if (this.layout && opts.layoutAt) this.layout.early(...opts.layoutAt, this.real.layout.pre); // (the baked layout's chunks about the start, fetched with the place: meshed while the rest is built)
     this.group = new THREE.Group(); scene.add(this.group);
     this.t = 0; this.night = false;
     this.windBase = new THREE.Vector3(); this.gust = new THREE.Vector3(); this.gustT = new THREE.Vector3();
     this.thermals = [];
     this.buildTerrain();
+    if (this.layout && opts.layoutAt) this.layout.early(...opts.layoutAt, this.real.layout.pre, true); // (and the layout's outer edge there: its edge heights are today's terrain's, built now)
     this.buildWater();
     this.buildSky();
     this.buildRunway();

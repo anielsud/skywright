@@ -10,11 +10,19 @@ import * as THREE from 'three';
 import { toLocal } from './realworld.js';
 import { inStuntCut } from './stuntPark.js';
 
+// the location's hint for the street start (loc.roadStart: a named place from the map data, or a lat/lon) in world
+// metres, [0, 0] without one; meta, places: the real data's (also before the World: the baked layout's chunks there
+// fetched while the place loads, realworld.js loadReal)
+export function roadHint(loc, meta, places) {
+  const cfg = loc.roadStart || {};
+  if (cfg.place && places) { const p = places.find((q) => q[0] === cfg.place); if (p) return [p[1], p[2]]; }
+  else if (cfg.near?.lat != null && meta) return toLocal(meta, cfg.near.lat, cfg.near.lon);
+  return [0, 0];
+}
+
 export function roadStart(w) {
   const cfg = w.loc.roadStart || {}, R = w.real, lim = w.size / 2 - 400;
-  let hx = 0, hz = 0;
-  if (cfg.place && R) { const p = R.osm.places.find((q) => q[0] === cfg.place); if (p) [hx, hz] = [p[1], p[2]]; }
-  else if (cfg.near?.lat != null && R) [hx, hz] = toLocal(R.meta, cfg.near.lat, cfg.near.lon);
+  const [hx, hz] = R ? roadHint(w.loc, R.meta, R.osm.places) : [0, 0];
   // the roads: every mapped class for a real place (a city draws only its avenues on some tiers; the streets are still there)
   const RL = R?.roadList();
   const roads = R ? RL.roads.filter((r) => r.cls <= (cfg.maxClass ?? 3) && !r.bridge && !r.baked)
