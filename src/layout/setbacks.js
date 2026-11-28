@@ -26,7 +26,7 @@ const BIT = { seen: 1, g: 2, sb: 4, base: 8, dense: 16, roofAsked: 32, roof: 64,
 
 // the layout's key: its chunk files (each named by its bytes' hash) and its version
 export function layoutKey(index) {
-  let h = 0x811c9dc5; const s = index.v + '|' + index.chunks.map((c) => c.file).join(',');
+  let h = 0x811c9dc5; const s = index.v + '|' + index.chunks.map((c) => c.file).join(',') + (index.ground ? '|' + JSON.stringify(index.ground) : ''); // (the chunks only ground, no file: format.js groundBytes)
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
   return (h >>> 0).toString(16).padStart(8, '0');
 }

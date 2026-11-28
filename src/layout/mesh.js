@@ -19,10 +19,15 @@ const RIBBON = new Set([KIND.tarmac, KIND.kerb, KIND.pave]); // (drawn with a st
 
 // the hi grid's points a chunk's ground uses (and one more round it, for the bilinear ground): lat
 export const latticeOf = (L, grid) => { const m = Math.ceil(LAT_PAD / grid.sp) + 1, i0 = Math.floor((L.x0 - grid.x0) / grid.sp) - m, j0 = Math.floor((L.z0 - grid.z0) / grid.sp) - m, n = Math.ceil(L.size / grid.sp) + 2 * m + 1; return { i0, j0, ni: n, nj: n }; };
+export { EDGE_STEP };
 const LAT_PAD = 56; // (m past the chunk: the rules read the ground at a road's nearest point (the banks' slope), up to rules.js PAD away; both chunks beside an edge must read the same)
 
 // L: a decoded chunk; grid: { x0, z0, sp } the hi grid; G: its heights at latticeOf(L, grid)'s points (ni * nj)
-export function meshChunk(L, grid, G, level = 'fine') {
+// edgeH: { w, e, s, n } (any of them): on that side of the chunk the layout's outer edge meets today's terrain (#294's
+// edge rule: the finer side adapts to the coarser side's edge points): that terrain's heights at the side's EDGE_STEP points,
+// from its low corner (x0 or z0) on, which the side's ground points take (drawn and physics), so the two meet; c: the
+// four corners' (null: a corner every chunk about is the layout's)
+export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   const t0 = performance.now(), fine = level === 'fine', lat = latticeOf(L, grid), g = latticeGround(grid, lat, G), R = makeRules(L.net, g, !!L.city, grid.wl ?? -Infinity);
   const X0 = Math.round(L.x0 * 100), Z0 = Math.round(L.z0 * 100), S = Math.round(L.size * 100);
   // ---- the points (centimetres while they're gathered)
@@ -124,6 +129,9 @@ export function meshChunk(L, grid, G, level = 'fine') {
     if (kind == null && !(PX[p] === X0 || PZ[p] === Z0 || PX[p] === X0 + S || PZ[p] === Z0 + S)) kind = classify(PX[p], PZ[p]); // (inside: its region)
     if (kind == null) { // (a point of the chunk's edge: its region by the rules (the nearest road's widths), not this chunk's polygons, so the chunk beside works it out the same)
       kind = R.region(x, z); } // (the outlines' own order, every road's widths)
+    if (kind === KIND.ground && edgeH) { const cn = (PX[p] === X0 || PX[p] === X0 + S) && (PZ[p] === Z0 || PZ[p] === Z0 + S) ? (PX[p] === X0 ? 0 : 1) + (PZ[p] === Z0 ? 0 : 2) : -1;
+      if (cn >= 0) { const h = edgeH.c?.[cn]; if (h != null) { Y[k] = PY[k] = h; return; } } else { const sd = PX[p] === X0 ? 'w' : PX[p] === X0 + S ? 'e' : null, H = sd && edgeH[sd], sz = PZ[p] === Z0 ? 's' : PZ[p] === Z0 + S ? 'n' : null, H2 = sz && edgeH[sz], at = (A, u) => { const f = u / (EDGE_STEP * 100), i = Math.min(A.length - 2, Math.floor(f)); return A[i] + (A[i + 1] - A[i]) * (f - i); };
+      if (H) { Y[k] = PY[k] = at(H, PZ[p] - Z0); return; } if (H2) { Y[k] = PY[k] = at(H2, PX[p] - X0); return; } } } // (the layout's outer edge: today's terrain's; a corner, c: [x0 z0, x1 z0, x0 z1, x1 z1], today's where any chunk about it isn't the layout's, so all of those about it agree)
     if (kind === KIND.ground || kind === KIND.lip) { Y[k] = PY[k] = R.ground(x, z); return; } // (a portal's lip's rim: the ground's, held within the headwall, rules.js)
     Y[k] = R.drawn(x, z, kind);
     PY[k] = kind === KIND.pave && !(K & (1 << KIND.tarmac)) ? Y[k] - KERB * (1 - Math.min(1, tarmacD(PX[p], PZ[p], PAVE_RAMP * 100) / (PAVE_RAMP * 100))) : Y[k]; // (the slabs: physics ramps up to them from the carriageway's edge: a kerb is never physics)

@@ -62,5 +62,11 @@ export function decodeLayout(buf) {
   for (let i = 0; i < H.na; i++) { let x = A.a0[i * 2], z = A.a0[i * 2 + 1]; const ring = [[X0 + x, Z0 + z]]; for (let s = 1; s < A.ac[i]; s++, ad++) { x += A.ad[ad * 2]; z += A.ad[ad * 2 + 1]; ring.push([X0 + x, Z0 + z]); } areas.push({ surf: A.ak[i], ring }); }
   return { ...H, net: { runs, junctions }, areas };
 }
+// A chunk inside the layout's extent with nothing of the network or a plaza within its reach (NET_PAD) is only ground:
+// no file, listed in the index's `ground` as spans [iz, ix0, ix1] (both ends in), its bytes worked out here the same at the
+// bake and in the game (the natural ground, water and shore by the rules: mesh.js on an empty network)
+export const groundBytes = (ix, iz, city) => encodeLayout({ ix, iz, x0: ix * CHUNK, z0: iz * CHUNK, size: CHUNK, city, runs: [], jn: [], areas: [] });
+// every chunk an index lists: those with a file ({ ix, iz, file }), then the ground ones ({ ix, iz, file: null })
+export function indexChunks(index) { const out = [...index.chunks]; for (const [iz, a, b] of index.ground || []) for (let ix = a; ix <= b; ix++) out.push({ ix, iz, file: null }); return out; }
 // whether the layout is wanted (behind a flag while it's tried out: ?layout=1, or SKY_LAYOUT in tests/tools)
 export const layoutWanted = () => globalThis.SKY_LAYOUT ?? ((typeof process !== 'undefined' && process.env?.SKY_LAYOUT === '1') || (typeof location !== 'undefined' && /[?&]layout=1\b/.test(location.search || '')));

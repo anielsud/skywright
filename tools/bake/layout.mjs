@@ -6,7 +6,9 @@
 //
 //   node --import ./tools/test/node/setup.mjs tools/bake/layout.mjs nyc:all
 //   node --import ./tools/test/node/setup.mjs tools/bake/layout.mjs lauterbrunnen:-4,-3 nyc:-7,25:-6,25
-//     (place:all: every CHUNK-metre square with roads; or place:ix,iz[:ix,iz...]. A place's chunks are baked together:
+//     (place:all: every CHUNK-metre square of the layout's extent: the World's core and every one with roads, closed and
+//     with no holes (extentOf); a chunk with nothing of the network in reach is only ground: no file, listed in the index's
+//     `ground` (format.js groundBytes); or place:ix,iz[:ix,iz...]. A place's chunks are baked together:
 //     one height solve)
 // A chunk that fails a check isn't baked: it keeps today's roads,
 // listed in the index's fallback with why. Every baked chunk is checked the game's way (layout-check.mjs, on a worker
@@ -19,7 +21,7 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { worldAt } from '../test/node/world.mjs';
 import { bakeLayout } from '../../src/layout/bake.js';
-import { CHUNK, LAYOUT_V, decodeLayout } from '../../src/layout/format.js';
+import { CHUNK, LAYOUT_V, decodeLayout, indexChunks } from '../../src/layout/format.js';
 import { latticeOf } from '../../src/layout/mesh.js';
 import { groundGrid, latticeHeights } from '../../src/layout/rules.js';
 import { DRIFT_MAX } from './markcheck.mjs';
@@ -47,12 +49,16 @@ export async function bakePlace(a, world, asks) {
     for (let s = 0; s < n; s++) { const x = p.x + (q.x - p.x) * s / n, z = p.z + (q.z - p.z) * s / n, k = key(Math.floor(x / CHUNK), Math.floor(z / CHUNK)); seen.set(k, (seen.get(k) || 0) + Math.hypot(q.x - p.x, q.z - p.z) / n);
       const b = rd.baked ? 'bridge' : rd.bridge?.[i] || rd.bridge?.[i + 1] || rd.span?.[i] || rd.span?.[i + 1] ? 'bridge' : rd.tube?.[i] || rd.tube?.[i + 1] ? 'tunnel' : null; if (b) (bt.get(k) || bt.set(k, new Set()).get(k)).add(b); } } } // (bt: the chunks with a bridge or a tunnel: baked, their decks and tubes today's (roads.js) at the layout's heights)
   const wanted = cs[0] === 'all' ? [...seen.keys()] : cs.map((c) => c.split(',').map(Number).join(','));
+  // (place:all: every chunk of the layout's extent (extentOf), those with no roads too: the layout covers it all, the only
+  // edge left its outer one against today's far terrain)
+  const extent = cs[0] === 'all' ? extentOf(world, seen) : null, extra = extent ? [...extent].filter((k) => !seen.has(k)) : [];
   // (every chunk with roads is baked: the airport's ground, the stunt sites' pads and the land past the World's core are
   // all in the natural ground (rules.js groundNode: World.rawHeight); the marina's and water park's docks are their own
   // solid meshes (World.surfs) over it)
   const fallback = new Map(), chunks = [];
   for (const k of wanted) { if (why.has(k)) fallback.set(k, [...why.get(k)].sort().join('+')); else if (seen.has(k)) chunks.push(k.split(',').map(Number)); }
-  console.log(`${id}: ${wanted.length} chunks with roads; ${chunks.length} to bake, ${fallback.size} keep today's roads (${count([...fallback.values()])})`);
+  for (const k of extra) chunks.push(k.split(',').map(Number));
+  console.log(`${id}: ${wanted.length} chunks with roads${extent ? ` and ${extra.length} more without, in the extent` : ''}; ${chunks.length} to bake, ${fallback.size} keep today's roads (${count([...fallback.values()])})`);
   // ---- the bake (one height solve for them all)
   const r = bakeLayout(world, chunks, (...m) => { if (!/^\s+\[layout\]\s{3}/.test(m[0])) console.log(...m); }), tc = performance.now();
   // ---- the checks, the game's way, a worker per core
@@ -77,12 +83,24 @@ export async function bakePlace(a, world, asks) {
   for (const [k, w] of failed) fallback.set(k, 'failed: ' + w);
   // ---- files
   const dir = `assets/real/${id}/layout/`; mkdirSync(dir, { recursive: true });
-  const prev = (() => { try { return JSON.parse(readFileSync(dir + 'index.json', 'utf8')); } catch { return { chunks: [] }; } })(), keep = new Map(cs[0] === 'all' ? [] : prev.chunks.map((c) => [key(c.ix, c.iz), c]));
-  let bytesAll = 0, lenAll = 0;
-  for (const { ix, iz, bytes: raw } of r.chunks) { const k = key(ix, iz); if (failed.has(k)) { keep.delete(k); if (process.env.LAYOUT_DUMP) writeFileSync(`${process.env.LAYOUT_DUMP}/${ix}_${iz}.bin`, raw); continue; } // (LAYOUT_DUMP=dir: the failing chunks' bytes, to look at)
-    const bytes = gzipSync(raw, { level: 9 }), file = `${ix}_${iz}.${createHash('sha256').update(bytes).digest('hex').slice(0, 10)}.bin.gz`; writeFileSync(dir + file, bytes); keep.set(k, { ix, iz, file }); bytesAll += bytes.length; lenAll += seen.get(k) || 0; }
-  const chunksOut = [...keep.values()].sort((p, q) => p.ix - q.ix || p.iz - q.iz), fb = [...fallback].map(([k, w]) => { const [ix, iz] = k.split(',').map(Number); return { ix, iz, why: w }; }).sort((p, q) => p.ix - q.ix || p.iz - q.iz);
-  writeFileSync(dir + 'index.json', JSON.stringify({ v: LAYOUT_V, size: CHUNK, chunks: chunksOut, fallback: fb }) + '\n');
+  const prev = (() => { try { return JSON.parse(readFileSync(dir + 'index.json', 'utf8')); } catch { return { chunks: [] }; } })(), keep = new Map(cs[0] === 'all' ? [] : indexChunks(prev).map((c) => [key(c.ix, c.iz), c]));
+  let bytesAll = 0, lenAll = 0, bytesExtra = 0, filesExtra = 0, groundN = 0;
+  for (const { ix, iz, bytes: raw, stats: cst } of r.chunks) { const k = key(ix, iz); if (failed.has(k)) { keep.delete(k); if (process.env.LAYOUT_DUMP) writeFileSync(`${process.env.LAYOUT_DUMP}/${ix}_${iz}.bin`, raw); continue; } // (LAYOUT_DUMP=dir: the failing chunks' bytes, to look at)
+    if (!cst.runs && !cst.junctions && !cst.areas) { keep.set(k, { ix, iz, file: null }); groundN++; continue; } // (only ground: no file, format.js groundBytes)
+    const bytes = gzipSync(raw, { level: 9 }), file = `${ix}_${iz}.${createHash('sha256').update(bytes).digest('hex').slice(0, 10)}.bin.gz`; writeFileSync(dir + file, bytes); keep.set(k, { ix, iz, file }); bytesAll += bytes.length; lenAll += seen.get(k) || 0; if (!seen.has(k)) { bytesExtra += bytes.length; filesExtra++; } }
+  const all = [...keep.values()].sort((p, q) => p.iz - q.iz || p.ix - q.ix), ground = []; for (const c of all) { if (c.file) continue; const g = ground.at(-1); if (g && g[0] === c.iz && g[2] === c.ix - 1) g[2] = c.ix; else ground.push([c.iz, c.ix, c.ix]); }
+  const chunksOut = all.filter((c) => c.file).sort((p, q) => p.ix - q.ix || p.iz - q.iz), fb = [...fallback].map(([k, w]) => { const [ix, iz] = k.split(',').map(Number); return { ix, iz, why: w }; }).sort((p, q) => p.ix - q.ix || p.iz - q.iz);
+  writeFileSync(dir + 'index.json', JSON.stringify({ v: LAYOUT_V, size: CHUNK, chunks: chunksOut, ...(ground.length ? { ground } : {}), fallback: fb }) + '\n');
+  // the extent: its chunk pairs where one side is the layout's and the other today's (a chunk that failed a check), and
+  // its outer edge against today's terrain there (World.sampleGrid: the skirt's other end), each fine edge point
+  let visible = 0, outerN = 0; const outer = [];
+  if (extent) { const isOut = (k) => keep.has(k);
+    for (const k of extent) { const [i, j] = k.split(',').map(Number); for (const n of [key(i + 1, j), key(i, j + 1)]) if (extent.has(n) && isOut(k) !== isOut(n)) visible++; }
+    const SIDE = { w: [-1, 0], e: [1, 0], s: [0, -1], n: [0, 1] };
+    for (const c of results) { if (!keep.has(key(c.ix, c.iz))) continue;
+      for (const [sd, [dx, dz]] of Object.entries(SIDE)) { if (extent.has(key(c.ix + dx, c.iz + dz))) continue; outerN++;
+        for (const p of c.edges.fine[sd]) { const [a, y] = p.split('@').map(Number), x = dx ? (dx < 0 ? c.ix : c.ix + 1) * CHUNK : a, z = dx ? a : (dz < 0 ? c.iz : c.iz + 1) * CHUNK; outer.push([Math.abs(y - world.sampleGrid(x, z)), x, z]); } } }
+    outer.sort((p, q) => p[0] - q[0]); }
   for (const f of readdirSync(dir)) if (f.endsWith('.bin.gz') && !chunksOut.some((c) => c.file === f)) unlinkSync(dir + f);
   // ---- the report
   const st = (f) => { const v = results.map(f).sort((p, q) => p - q); return `p50 ${v[v.length >> 1].toFixed(0)}, p90 ${v[Math.floor(v.length * 0.9)].toFixed(0)}, max ${v[v.length - 1].toFixed(0)}`; };
@@ -98,13 +116,29 @@ export async function bakePlace(a, world, asks) {
     console.log(`  railways: ${sm((q) => q.pieces)} stretches in ${R.filter((q) => q.pieces).length} chunks; rail foot off the bed max ${mx((q) => q.railOff).toFixed(4)} m over ${sm((q) => q.railN)} samples, ${sm((q) => q.railOver)} >= 2 cm (${JSON.stringify(w?.fine.rail.railWorst)}), under the rails ${JSON.stringify(U)}; rail ends at a deck over a road's carriageway ${results.reduce((n, c) => n + (c.fine.railOver || 0), 0)} (not a deck step); ballast drawn - physics max ${mx((q) => q.bedOff).toFixed(4)} m; level crossings ${sm((q) => q.lx)}, step max ${mx((q) => q.lxStep).toFixed(4)} m (${JSON.stringify(ws?.fine.rail.lxStepAt)}), ${R.filter((q) => q.lxStep >= 0.02).length} chunks >= 2 cm; grades ${JSON.stringify(r.stats.rail)}`); }
   console.log(`  kerb top lines left soft (would cross another line): ${results.reduce((n, c) => n + (c.fine.softMissed || 0), 0)} segments in ${results.filter((c) => c.fine.softMissed).length} chunks`);
   console.log(`  mesh ms fine ${st((c) => c.fine.ms)} (outlines ${st((c) => c.fine.outlineMs)}); coarse ${st((c) => c.coarse.ms)}; triangles fine ${st((c) => c.fine.tris)}`);
+  if (extent) { const q = (f) => outer.length ? outer[Math.min(outer.length - 1, Math.floor(outer.length * f))][0].toFixed(2) : '-';
+    console.log(`  extent: ${extent.size} chunks (${seen.size} with roads, ${extra.length} added: ${groundN} only ground with no file, ${filesExtra} with a road or plaza in reach, ${(bytesExtra / 1e6).toFixed(3)} MB); visible edges inside it (layout | today's) ${visible}; outer edge ${outerN} sides, step against today's terrain p50 ${q(0.5)} m, p99 ${q(0.99)} m, max ${q(1)} m (at ${JSON.stringify(outer.at(-1)?.slice(1).map((v) => +v.toFixed(0)))})`); }
   const tf = performance.now(); console.log(`  wall: World ${((tb - t0) / 1000).toFixed(1)} s, bake ${((tc - tb) / 1000).toFixed(1)} s, checks ${((td - tc) / 1000).toFixed(1)} s on ${N} workers, files ${((tf - td) / 1000).toFixed(1)} s`, JSON.stringify(r.stats.solve), JSON.stringify(r.stats.inChunk), JSON.stringify(r.stats.overGrade));
   console.log('  furthest from the ground, in the chunks:', JSON.stringify(r.stats.worstIn));
   { const gb = mergeGround(r.chunks.filter(({ ix, iz }) => !failed.has(key(ix, iz))).map(({ ix, iz }) => gbOf.get(key(ix, iz))));
     const f = (s) => `max ${s.max} m, p99 ${s.p99} m over ${s.n} (worst ${JSON.stringify(s.worst)})`; console.log(`  ground vs today's terrain base outside the banks: at the hi grid's points ${f(gb.nodes)}; every 10 m ${f(gb.pts)}`); }
   const te = performance.now(); console.log(`  ground vs base ${((tg - tc) / 1000 + (te - tf) / 1000).toFixed(1)} s (beside the checks); ${id} in all ${((te - t0) / 1000).toFixed(1)} s`);
-  return { id, world, chunks: chunksOut.length, fallback: fallback.size, failed: failed.size, failedOnChecks, seams: `${pairs - seamBad}/${pairs}`, holes: results.reduce((s, c) => s + c.fine.holes, 0), mb: bytesAll / 1e6,
+  return { id, world, chunks: chunksOut.length, ground: groundN, extent: extent?.size, added: extra.length, mbAdded: bytesExtra / 1e6, visible, outerMax: outer.at(-1)?.[0], outerP99: outer.length ? outer[Math.floor(outer.length * 0.99)][0] : undefined, fallback: fallback.size, failed: failed.size, failedOnChecks, seams: `${pairs - seamBad}/${pairs}`, holes: results.reduce((s, c) => s + c.fine.holes, 0), mb: bytesAll / 1e6,
     heights: new Map(results.filter((c) => c.H && !failed.has(key(c.ix, c.iz))).map((c) => [key(c.ix, c.iz), c.H])),
     s: { world: (tb - t0) / 1000, bake: (tc - tb) / 1000, checks: (td - tc) / 1000, files: (tf - td) / 1000, ground: (tg - tc) / 1000 + (te - tf) / 1000, all: (te - t0) / 1000 } };
+}
+// the layout's extent: the World's core and every chunk with roads (seen), closed (a notch or a gap one or two chunks wide
+// between road chunks filled: 8-neighbour dilate, then erode) and with no holes -> Set('ix,iz')
+export function extentOf(world, seen) {
+  const half = world.size / 2, c0 = Math.floor(-half / CHUNK), c1 = Math.ceil(half / CHUNK) - 1, S = new Set(seen.keys());
+  for (let i = c0; i <= c1; i++) for (let j = c0; j <= c1; j++) S.add(key(i, j));
+  const ps = [...S].map((k) => k.split(',').map(Number)), i0 = Math.min(...ps.map((p) => p[0])) - 2, i1 = Math.max(...ps.map((p) => p[0])) + 2, j0 = Math.min(...ps.map((p) => p[1])) - 2, j1 = Math.max(...ps.map((p) => p[1])) + 2;
+  const around = (set, i, j, all) => { for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if (set.has(key(i + a, j + b)) !== all) return !all; return all; };
+  const D = new Set(); for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) if (around(S, i, j, false)) D.add(key(i, j));
+  const E = new Set(S); for (const k of D) { const [i, j] = k.split(',').map(Number); if (around(D, i, j, true)) E.add(k); }
+  const outside = new Set([key(i0, j0)]), st = [[i0, j0]]; // (holes: what the outside can't reach)
+  while (st.length) { const [i, j] = st.pop(); for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const p = i + a, q = j + b, k = key(p, q); if (p < i0 || p > i1 || q < j0 || q > j1 || outside.has(k) || E.has(k)) continue; outside.add(k); st.push([p, q]); } }
+  for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) if (!outside.has(key(i, j))) E.add(key(i, j));
+  return E;
 }
 function count(list) { const m = new Map(); for (const v of list) m.set(v, (m.get(v) || 0) + 1); return [...m].map(([k, n]) => `${n} ${k}`).join(', '); }
