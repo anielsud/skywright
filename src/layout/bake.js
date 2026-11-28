@@ -40,7 +40,7 @@ const LX_ADD = 0.75, LX_MIN = 4, LX_MAX = 35, VERTEX_AT = 0.3;
 // and a motu's paths, down into the water
 const FREEBOARD = 0.5, WET = 0.5;
 const PLANE_ACROSS = 0.5, CROSS_MAX = 0.3;
-const RELAX_OFF = 2, RELAX_HOPS = 3, RELAX_MAX = 1, RELAX_WG = 1, RELAX_ROUNDS = 4;
+const RELAX_OFF = 2, RELAX_HOPS = 3, RELAX_MAX = 1, RELAX_STREET = 0.3, RELAX_MAIN = 0.2, RELAX_WG = 1, RELAX_ROUNDS = 4;
 const cm = (v) => Math.round(v * 100);
 
 export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
@@ -188,7 +188,7 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   for (let round = 0; round < (city && !railVar.size ? 0 : RELAX_ROUNDS); round++) { // (a country place's: a city's streets are flat enough; its railways aren't)
     let off = new Set(); for (let k = 0; k < nv; k++) if (Math.abs(h[k] - gt[k]) > RELAX_OFF && (!city || railVar.has(k))) off.add(k); T.relax.push(off.size); if (!off.size) break;
     for (let hop = 0; hop < RELAX_HOPS; hop++) { const more = new Set(off); for (const k of off) for (const [o] of nb[k]) more.add(o); off = more; }
-    edges.forEach((e, q) => { const [a, b, l] = e; if ((!off.has(a) && !off.has(b)) || (city && !(e[4] >= 0))) return; const gg = Math.min(RELAX_MAX, Math.abs(gt[a] - gt[b]) / l * 1.15 + 0.01); if (gg > e[3]) { e[3] = EG[q] = gg; relaxed.add(e); } });
+    edges.forEach((e, q) => { const [a, b, l] = e; if ((!off.has(a) && !off.has(b)) || (city && !(e[4] >= 0))) return; const gg = Math.min(e[4] >= 0 || e[5] >= RELAX_STREET ? RELAX_MAX : e[5] <= GRADE.main ? RELAX_MAIN : RELAX_STREET, Math.abs(gt[a] - gt[b]) / l * 1.15 + 0.01); /* (a main road or a highway no steeper than RELAX_MAIN, a street than RELAX_STREET (a minor way, a railway: RELAX_MAX): past that the height grid's cliff or blur, not a road; it stands off the ground on its banks instead) */ if (gg > e[3]) { e[3] = EG[q] = gg; relaxed.add(e); } });
     for (const k of off) if (!city || railVar.has(k)) wg[k] = Math.max(wg[k], RELAX_WG);
     smooth(150); toPlane(); enforce();
   }

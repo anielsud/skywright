@@ -14,7 +14,7 @@ import { makeRules, latticeGround, streetOverBed, KERB, KERB_W, PAVE_RAMP, paint
 import { chunkOutlines } from './outline.js';
 import { wallsOf, WALL_EPS } from './walls.js';
 
-const LX_STEP = 1.5, RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, MOUTH_D = 6, FID_STEP = 4, FID_TOL = 0.1;
+const LX_STEP = 1.5, EDGE_FID = 4, EDGE_TOL = 0.15, RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, MOUTH_D = 6, FID_STEP = 4, FID_TOL = 0.1;
 // a chunk whose outlines have OUT_MIN points or more (the densest ~5% of New York's) has them stored by the bake (format.js
 // op): working them out takes 60+ ms there
 export const OUT_MIN = 1650;
@@ -52,6 +52,20 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
       const t0 = Math.max(0, (-B - Math.sqrt(D)) / (2 * A)), t1 = Math.min(1, (-B + Math.sqrt(D)) / (2 * A)); if (t1 <= t0) continue; const ins = [];
       for (let u = Math.ceil(t0 * l / st) * st; u < t1 * l; u += st) { if (u < 10 || u > l - 10) continue; const m = add(Math.round(PX[a] + dx * u / l), Math.round(PZ[a] + dz * u / l)); if (m === a || m === b || ins.includes(m)) continue; kinds[m] |= 1 << k; ins.push(m); }
       if (!ins.length) continue; const chain = sw ? [b, ...ins.reverse(), a] : [a, ...ins, b], rep = []; for (let q = 0; q + 1 < chain.length; q++) rep.push([chain[q], chain[q + 1], k]); E.splice(e, 1, ...rep); } }
+  // (fine: each outline edge longer than 2 EDGE_FID m given points where the surface along it bends (its height by the rules,
+  // every EDGE_FID m, simplified to within EDGE_TOL: Douglas-Peucker on along, height). An edge's points are its only ones
+  // (the hi grid's and the carriageway's own keep clear of it): a long one leaves long thin triangles beside it (a verge, a
+  // bank's foot along a road on a grade), each tilted by points tens of metres away: walls and steps across the road's edge.
+  // Once per edge, its regions' kinds together (the mesh's order picks its height): an edge two regions share split alike)
+  if (fine) { const sob = streetOverBed(L.net).has, hOf = (x, z, K) => { const kind = K & (1 << KIND.tarmac) && !(K & (1 << KIND.ballast) && !sob(x, z)) ? KIND.tarmac : K & (1 << KIND.ballast) ? KIND.ballast : K & ((1 << KIND.kerb) | (1 << KIND.pave)) ? KIND.pave : PAVED.find((q) => q !== KIND.lip && K & (1 << q)) ?? null; return kind == null ? R.ground(x, z) : R.drawn(x, z, kind); };
+    const byKey = new Map(); E.forEach(([a, b, k], e) => { const sw = PX[a] > PX[b] || (PX[a] === PX[b] && PZ[a] > PZ[b]), lo = sw ? b : a, hi = sw ? a : b, kk = lo * 1e7 + hi; let o = byKey.get(kk); if (!o) byKey.set(kk, (o = { lo, hi, K: 0, es: [] })); o.K |= 1 << k; o.es.push(e); });
+    const rep = new Map(), st = EDGE_FID * 100;
+    for (const { lo, hi, K, es } of byKey.values()) { if ((PX[lo] === PX[hi] && (PX[lo] === X0 || PX[lo] === X0 + S)) || (PZ[lo] === PZ[hi] && (PZ[lo] === Z0 || PZ[lo] === Z0 + S))) continue; const dx = PX[hi] - PX[lo], dz = PZ[hi] - PZ[lo], l = Math.hypot(dx, dz); if (l < 2 * st) continue;
+      const n = Math.ceil(l / st), Q = []; for (let q = 0; q <= n; q++) { const X = PX[lo] + dx * q / n, Z = PZ[lo] + dz * q / n; Q.push([l * q / n, hOf(X / 100, Z / 100, K), X, Z]); }
+      const keep = new Uint8Array(Q.length), stk = [[0, Q.length - 1]]; while (stk.length) { const [i, j] = stk.pop(); let bi = -1, bd = EDGE_TOL; for (let q = i + 1; q < j; q++) { const d = Math.abs(Q[q][1] - Q[i][1] - (Q[j][1] - Q[i][1]) * (Q[q][0] - Q[i][0]) / (Q[j][0] - Q[i][0])); if (d > bd) { bd = d; bi = q; } } if (bi >= 0) { keep[bi] = 1; stk.push([i, bi], [bi, j]); } }
+      const ins = []; for (let q = 1; q < Q.length - 1; q++) if (keep[q]) { const MX = Math.round(Q[q][2]), MZ = Math.round(Q[q][3]); if (key.has(MX * 1e7 + MZ)) continue; const m = add(MX, MZ); kinds[m] |= K; ins.push(m); }
+      if (ins.length) for (const e of es) rep.set(e, ins); }
+    if (rep.size) { const E2 = []; E.forEach(([a, b, k], e) => { const ins = rep.get(e); if (!ins) { E2.push([a, b, k]); return; } const ch = PX[a] > PX[b] || (PX[a] === PX[b] && PZ[a] > PZ[b]) ? [a, ...[...ins].reverse(), b] : [a, ...ins, b]; for (let q = 0; q + 1 < ch.length; q++) E2.push([ch[q], ch[q + 1], k]); }); E.length = 0; E.push(...E2); } }
   for (let s = 0; s <= S; s += EDGE_STEP * 100) { add(X0 + s, Z0); add(X0 + s, Z0 + S); add(X0, Z0 + s); add(X0 + S, Z0 + s); }
   // which paved region a point is in (cm), first in PAVED's order; ground otherwise
   const RW = 200, rows = new Map(); for (const [a, b, k] of E) { const az = PZ[a], bz = PZ[b]; if (az === bz) continue; for (let r = Math.floor(Math.min(az, bz) / RW); r <= Math.floor(Math.max(az, bz) / RW); r++) (rows.get(r) || rows.set(r, []).get(r)).push(a, b, k); }

@@ -39,7 +39,7 @@ export const DECK_SIDE = 1, DECK_DEPTH = 1.4, TUBE_SIDE = 1.2, TUBE_H = 5.6, POR
 // the portal lies far under it) and a sill SILL m deep closes the floor's edge across the mouth (roads.js); a surface
 // within FLUSH m of the floor behind the mouth meets the tube's floor (no gap: a twin carriageway at grade beside it)
 export const PORTAL_FOOT = 12, SILL = 2, FLUSH = 0.3, TOP_OVER = 0.5;
-export const HOLD = 10, SLAB_MAX = 0.3; const UNDER = 0.1, OVER = 0.3; // (the ground kept this far under a deck's underside, over a tube's crown)
+export const HOLD = 10, SLAB_MAX = 0.3, STACK_D = 1; const UNDER = 0.1, OVER = 0.3; // (the ground kept this far under a deck's underside, over a tube's crown)
 // a tunnel's portals, from the roads stopping at a tube (ends 2, 8): where (the road's end), which way into the hill (dx,
 // dz: the road's last segment's, and the tube's first's if it's stored: roads.js frames the headwall by both), the road's
 // height there (the tube's floor), the tube's half width (hwT) and the headwall's (W)
@@ -79,7 +79,13 @@ export const portalUV = (p, x, z) => [(x - p.x) * p.dx + (z - p.z) * p.dz, (z - 
 export function streetOverBed(net) {
   const lx = net.junctions.filter((J) => J.lx), ends = [];
   for (const r of net.runs) { if (r.off || r.minor) continue; const n = r.h.length; if (n < 2) continue; for (const [c, i, j] of [[r.cutA, 0, 1], [r.cutB, n - 1, n - 2]]) if (c) { const dx = r.pts[i * 2] - r.pts[j * 2], dz = r.pts[i * 2 + 1] - r.pts[j * 2 + 1], l = Math.hypot(dx, dz) || 1; ends.push({ x: r.pts[i * 2], z: r.pts[i * 2 + 1], dx: dx / l, dz: dz / l, w: r.hw + 1 }); } }
-  return { lx, ends, has: (x, z) => lx.some((J) => Math.hypot(x - J.x, z - J.z) < J.r) || ends.some((c) => { const u = (c.x - x) * c.dx + (c.z - z) * c.dz; return u > -0.01 && u < HOLD && Math.abs((z - c.z) * c.dx - (x - c.x) * c.dz) < c.w; }) };
+  // (and a street's segment beside a railway's bed at another height (STACK_D m or more apart where they're nearest: a raised
+  // line's embankment by a street, OpenStreetMap's lines closer than the two really are): the street there is the street's)
+  const segs = [], rails = []; for (const r of net.runs) { if (r.off) continue; const isR = r.kind === 'rail'; if (!isR && r.minor) continue; for (let s = 0; s + 1 < r.h.length; s++) (isR ? rails : segs).push([r.pts[s * 2], r.pts[s * 2 + 1], r.pts[s * 2 + 2], r.pts[s * 2 + 3], r.h[s], r.h[s + 1], r.hw]); }
+  const near = (ax, az, bx, bz, px, pz) => { const dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / L2)); return [Math.hypot(px - ax - dx * t, pz - az - dz * t), t]; };
+  const stack = rails.length ? segs.filter(([ax, az, bx, bz, ha, hb, hw]) => rails.some(([cx, cz, dx, dz, hc, hd, rw]) => { if (Math.max(ax, bx) + hw + rw < Math.min(cx, dx) || Math.min(ax, bx) - hw - rw > Math.max(cx, dx) || Math.max(az, bz) + hw + rw < Math.min(cz, dz) || Math.min(az, bz) - hw - rw > Math.max(cz, dz)) return false;
+    for (const [px, pz, ph, A] of [[ax, az, ha, 0], [bx, bz, hb, 0], [cx, cz, hc, 1], [dx, dz, hd, 1]]) { const [d, t] = A ? near(ax, az, bx, bz, px, pz) : near(cx, cz, dx, dz, px, pz); if (d >= hw + rw) continue; const other = A ? ha + (hb - ha) * t : hc + (hd - hc) * t; if (Math.abs(other - ph) >= STACK_D) return true; } return false; })) : [];
+  return { lx, ends, stack, has: (x, z) => lx.some((J) => Math.hypot(x - J.x, z - J.z) < J.r) || ends.some((c) => { const u = (c.x - x) * c.dx + (c.z - z) * c.dz; return u > -0.01 && u < HOLD && Math.abs((z - c.z) * c.dx - (x - c.x) * c.dz) < c.w; }) || stack.some(([ax, az, bx, bz, , , hw]) => near(ax, az, bx, bz, x, z)[0] < hw) };
 }
 // box (optional): [x0, z0, x1, z1], the only place the rules are asked about (mesh.js: the chunk, and a margin): the
 // segments' cells outside it aren't listed (the same answers inside it)
