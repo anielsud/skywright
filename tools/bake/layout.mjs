@@ -35,39 +35,30 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) { // (run as a scri
   for (const a of args) await bakePlace(a);
   process.exit(process.exitCode || 0);
 }
-// one place's bake (a: 'place:all' or 'place:ix,iz[:...]'); world: its World if it's built already; asks: Map('ix,iz' ->
-// Float64Array x, z, ...): points whose height on the chunk's fine mesh the checks give back (setbacks.mjs tallCorners).
+// one place's bake (a: 'place:all' or 'place:ix,iz[:...]'); world: its World if it's built already; asksOf(world) ->
+// Map('ix,iz' -> Float64Array x, z, ...): points whose height on the chunk's fine mesh the checks give back (setbacks.mjs
+// tallCorners); cache: cache.mjs openCache's, for a whole place (place:all): the solve and each chunk's checks given back
+// when their inputs haven't changed (the World is then built only if a later step needs it: the summary's world()).
 // -> a summary for all.mjs (heights: the asks' answers in the chunks that passed)
-export async function bakePlace(a, world, asks) {
-  const [id, ...cs] = a.split(':'), t0 = performance.now();
-  world ||= (await worldAt(id)).world; const tb = performance.now();
-  // ---- which chunks: every one with roads (or those asked for); the airport's roads keep it today's
-  // (and the railways: World.real.osm.rails, bake.py rail_entry; one on a bridge all deck, one in a tunnel all tube)
-  const rails = (world.real?.osm?.rails || []).map(([, br, f, , tun]) => { const pts = []; for (let k = 0; k < f.length; k += 2) pts.push({ x: f[k], z: f[k + 1] }); const all = new Array(pts.length).fill(true); return { kind: 'rail', pts, bridge: br ? all : null, tube: tun ? all : null }; });
-  const roads = [...world.net.roads.filter((rd) => rd.kind !== 'rail'), ...rails], seen = new Map(), why = new Map(), bt = new Map();
-  for (const rd of roads) { const P = rd.pts; for (let i = 0; i < P.length; i++) { const p = P[i], q = P[Math.min(i + 1, P.length - 1)], n = Math.max(1, Math.ceil(Math.hypot(q.x - p.x, q.z - p.z) / 10));
-    for (let s = 0; s < n; s++) { const x = p.x + (q.x - p.x) * s / n, z = p.z + (q.z - p.z) * s / n, k = key(Math.floor(x / CHUNK), Math.floor(z / CHUNK)); seen.set(k, (seen.get(k) || 0) + Math.hypot(q.x - p.x, q.z - p.z) / n);
-      const b = rd.baked ? 'bridge' : rd.bridge?.[i] || rd.bridge?.[i + 1] || rd.span?.[i] || rd.span?.[i + 1] ? 'bridge' : rd.tube?.[i] || rd.tube?.[i + 1] ? 'tunnel' : null; if (b) (bt.get(k) || bt.set(k, new Set()).get(k)).add(b); } } } // (bt: the chunks with a bridge or a tunnel: baked, their decks and tubes today's (roads.js) at the layout's heights)
-  const wanted = cs[0] === 'all' ? [...seen.keys()] : cs.map((c) => c.split(',').map(Number).join(','));
-  // (place:all: every chunk of the layout's extent (extentOf), those with no roads too: the layout covers it all, the only
-  // edge left its outer one against today's far terrain)
-  const extent = cs[0] === 'all' ? extentOf(world, seen) : null, extra = extent ? [...extent].filter((k) => !seen.has(k)) : [];
-  // (every chunk with roads is baked: the airport's ground, the stunt sites' pads and the land past the World's core are
-  // all in the natural ground (rules.js groundNode: World.rawHeight); the marina's and water park's docks are their own
-  // solid meshes (World.surfs) over it)
-  const fallback = new Map(), chunks = [];
-  for (const k of wanted) { if (why.has(k)) fallback.set(k, [...why.get(k)].sort().join('+')); else if (seen.has(k)) chunks.push(k.split(',').map(Number)); }
-  for (const k of extra) chunks.push(k.split(',').map(Number));
-  console.log(`${id}: ${wanted.length} chunks with roads${extent ? ` and ${extra.length} more without, in the extent` : ''}; ${chunks.length} to bake, ${fallback.size} keep today's roads (${count([...fallback.values()])})`);
-  // ---- the bake (one height solve for them all)
-  const r = bakeLayout(world, chunks, (...m) => { if (!/^\s+\[layout\]\s{3}/.test(m[0])) console.log(...m); }), tc = performance.now();
-  // ---- the checks, the game's way, a worker per core
-  const grid = groundGrid(world), jobs = r.chunks.map(({ ix, iz, bytes }) => { const G = latticeHeights(world, grid, latticeOf({ x0: ix * CHUNK, z0: iz * CHUNK, size: CHUNK }, grid)); // (the natural ground as the runtime's: Layout.lattice)
-    return { ix, iz, buf: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), G, Q: asks?.get(key(ix, iz)) }; }); // (Q: points to give the fine mesh's height at, for setbacks.mjs)
-  const N = workers(jobs.length), checking = onWorkers(new URL('./layout-check.mjs', import.meta.url), jobs, { grid }, N);
-  // (meanwhile, here: each chunk's ground against today's terrain base, groundcheck.mjs; reported for those that pass)
-  const gbOf = new Map(r.chunks.map(({ ix, iz, bytes }, q) => [key(ix, iz), groundOf(world, decodeLayout(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)), grid, jobs[q].G)]));
-  const tg = performance.now(), results = await checking;
+export async function bakePlace(a, world, asksOf, cache) {
+  const [id, ...cs] = a.split(':'), t0 = performance.now(), C = cs[0] === 'all' ? cache : null;
+  const W = async () => (world ||= (await worldAt(id)).world);
+  // ---- the solve: the World, which chunks, the height solve, each chunk's ground lattice (or all that from the cache)
+  const hit = C?.get(`${id}/solve`, a); let P = hit?.value, solveKey = hit?.key;
+  if (!P) { await W(); P = await solvePlace(id, cs, world, asksOf, performance.now()); if (C) solveKey = C.put(`${id}/solve`, C.traced(), a, P); }
+  const { seen, bt, extent, extra, fallback, r, grid, G: Gs, asks } = P, tb = hit ? t0 : P.tb;
+  const tc = performance.now();
+  // ---- the checks, the game's way, a worker per core (a chunk whose inputs haven't changed: its last result)
+  const jobs = r.chunks.map(({ ix, iz, bytes }, q) => ({ ix, iz, buf: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), G: Gs[q], Q: asks?.get(key(ix, iz)) })); // (Q: points to give the fine mesh's height at, for setbacks.mjs)
+  const code = C && C.stamp(C.importsOf(new URL('./layout-check.mjs', import.meta.url))), gridKey = C && C.hash(JSON.stringify(grid)), ckey = C ? jobs.map((j) => C.hash(key(j.ix, j.iz), new Uint8Array(j.buf), j.G, j.Q || '', gridKey, code)) : [];
+  const old = C ? jobs.map((j, q) => C.getK(id + '/chunks', ckey[q])) : [], todo = jobs.filter((j, q) => !old[q]);
+  const N = workers(todo.length), checking = todo.length ? onWorkers(new URL('./layout-check.mjs', import.meta.url), todo, { grid }, N) : Promise.resolve([]);
+  // (meanwhile, here, if the World is built: each chunk's ground against today's terrain base, groundcheck.mjs; reported
+  // for those that pass)
+  const groundAt = (w, q) => { const b = r.chunks[q].bytes; return groundOf(w, decodeLayout(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)), grid, Gs[q]); };
+  const gbOf = world ? r.chunks.map((c, q) => groundAt(world, q)) : null, tg = performance.now(), fresh = await checking, byJob = new Map(todo.map((j, q) => [j, fresh[q]]));
+  const results = jobs.map((j, q) => old[q] || byJob.get(j));
+  if (C) { jobs.forEach((j, q) => { if (!old[q]) C.putK(id + '/chunks', ckey[q], results[q]); }); C.prune(id + '/chunks'); }
   const td = performance.now(), byKey = new Map(results.map((c) => [key(c.ix, c.iz), c])), sum = (f) => results.reduce((n, c) => n + (f(c) || 0), 0);
   // a chunk failing a check keeps today's roads
   const failed = new Map();
@@ -100,8 +91,11 @@ export async function bakePlace(a, world, asks) {
     const SIDE = { w: [-1, 0], e: [1, 0], s: [0, -1], n: [0, 1] };
     for (const c of results) { if (!keep.has(key(c.ix, c.iz))) continue;
       for (const [sd, [dx, dz]] of Object.entries(SIDE)) { if (extent.has(key(c.ix + dx, c.iz + dz))) continue; outerN++;
-        for (const p of c.edges.fine[sd]) { const [a, y] = p.split('@').map(Number), x = dx ? (dx < 0 ? c.ix : c.ix + 1) * CHUNK : a, z = dx ? a : (dz < 0 ? c.iz : c.iz + 1) * CHUNK; outer.push([Math.abs(y - world.sampleGrid(x, z)), x, z]); } } }
-    outer.sort((p, q) => p[0] - q[0]); }
+        for (const p of c.edges.fine[sd]) { const [a, y] = p.split('@').map(Number), x = dx ? (dx < 0 ? c.ix : c.ix + 1) * CHUNK : a, z = dx ? a : (dz < 0 ? c.iz : c.iz + 1) * CHUNK; outer.push([y, x, z]); } } }
+    /* (today's terrain there, World.sampleGrid: from the cache if the solve and these points are the last bake's) */
+    const ok = C && C.hash(solveKey, Float64Array.from(outer.flat())); let T = C && C.getK(id + '/outer', ok);
+    if (!T) { const w = await W(); T = Float64Array.from(outer, ([, x, z]) => w.sampleGrid(x, z)); if (C) C.putK(id + '/outer', ok, T); }
+    if (C) C.prune(id + '/outer'); outer.forEach((o, q) => { o[0] = Math.abs(o[0] - T[q]); }); outer.sort((p, q) => p[0] - q[0]); }
   for (const f of readdirSync(dir)) if (f.endsWith('.bin.gz') && !chunksOut.some((c) => c.file === f)) unlinkSync(dir + f);
   // ---- the report
   const st = (f) => { const v = results.map(f).sort((p, q) => p - q); return `p50 ${v[v.length >> 1].toFixed(0)}, p90 ${v[Math.floor(v.length * 0.9)].toFixed(0)}, max ${v[v.length - 1].toFixed(0)}`; };
@@ -121,12 +115,41 @@ export async function bakePlace(a, world, asks) {
     console.log(`  extent: ${extent.size} chunks (${seen.size} with roads, ${extra.length} added: ${groundN} only ground with no file, ${filesExtra} with a road or plaza in reach, ${(bytesExtra / 1e6).toFixed(3)} MB); visible edges inside it (layout | today's) ${visible}; outer edge ${outerN} sides, step against today's terrain p50 ${q(0.5)} m, p99 ${q(0.99)} m, max ${q(1)} m (at ${JSON.stringify(outer.at(-1)?.slice(1).map((v) => +v.toFixed(0)))})`); }
   const tf = performance.now(); console.log(`  wall: World ${((tb - t0) / 1000).toFixed(1)} s, bake ${((tc - tb) / 1000).toFixed(1)} s, checks ${((td - tc) / 1000).toFixed(1)} s on ${N} workers, files ${((tf - td) / 1000).toFixed(1)} s`, JSON.stringify(r.stats.solve), JSON.stringify(r.stats.inChunk), JSON.stringify(r.stats.overGrade));
   console.log('  furthest from the ground, in the chunks:', JSON.stringify(r.stats.worstIn));
-  { const gb = mergeGround(r.chunks.filter(({ ix, iz }) => !failed.has(key(ix, iz))).map(({ ix, iz }) => gbOf.get(key(ix, iz))));
+  { const gk = C && C.hash(solveKey, [...failed.keys()].sort().join(' ')); let gb = C && C.getK(id + '/ground', gk); /* (from the cache: the same solve, the same chunks passed) */
+    if (!gb) { const w = gbOf ? null : await W(), pass = r.chunks.map((c, q) => q).filter((q) => !failed.has(key(r.chunks[q].ix, r.chunks[q].iz))); gb = mergeGround(pass.map((q) => (gbOf ? gbOf[q] : groundAt(w, q)))); if (C) C.putK(id + '/ground', gk, gb); }
+    if (C) C.prune(id + '/ground');
     const f = (s) => `max ${s.max} m, p99 ${s.p99} m over ${s.n} (worst ${JSON.stringify(s.worst)})`; console.log(`  ground vs today's terrain base outside the banks: at the hi grid's points ${f(gb.nodes)}; every 10 m ${f(gb.pts)}`); }
   const te = performance.now(); console.log(`  ground vs base ${((tg - tc) / 1000 + (te - tf) / 1000).toFixed(1)} s (beside the checks); ${id} in all ${((te - t0) / 1000).toFixed(1)} s`);
-  return { id, world, chunks: chunksOut.length, ground: groundN, extent: extent?.size, added: extra.length, mbAdded: bytesExtra / 1e6, visible, outerMax: outer.at(-1)?.[0], outerP99: outer.length ? outer[Math.floor(outer.length * 0.99)][0] : undefined, fallback: fallback.size, failed: failed.size, failedOnChecks, seams: `${pairs - seamBad}/${pairs}`, holes: results.reduce((s, c) => s + c.fine.holes, 0), mb: bytesAll / 1e6,
+  return { id, world: W, city: P.city, cache: C && { solve: !!hit, checked: todo.length, of: jobs.length, world: !!world }, chunks: chunksOut.length, ground: groundN, extent: extent?.size, added: extra.length, mbAdded: bytesExtra / 1e6, visible, outerMax: outer.at(-1)?.[0], outerP99: outer.length ? outer[Math.floor(outer.length * 0.99)][0] : undefined, fallback: fallback.size, failed: failed.size, failedOnChecks, seams: `${pairs - seamBad}/${pairs}`, holes: results.reduce((s, c) => s + c.fine.holes, 0), mb: bytesAll / 1e6,
     heights: new Map(results.filter((c) => c.H && !failed.has(key(c.ix, c.iz))).map((c) => [key(c.ix, c.iz), c.H])),
     s: { world: (tb - t0) / 1000, bake: (tc - tb) / 1000, checks: (td - tc) / 1000, files: (tf - td) / 1000, ground: (tg - tc) / 1000 + (te - tf) / 1000, all: (te - t0) / 1000 } };
+}
+// the solve (bakePlace's, all of it from the World): which chunks, their bake (one height solve for them all), each
+// one's natural ground at its lattice, the asks -> what the checks and the files need (cache.mjs keeps it as it is)
+async function solvePlace(id, cs, world, asksOf, tb) {
+  // ---- which chunks: every one with roads (or those asked for); the airport's roads keep it today's
+  // (and the railways: World.real.osm.rails, bake.py rail_entry; one on a bridge all deck, one in a tunnel all tube)
+  const rails = (world.real?.osm?.rails || []).map(([, br, f, , tun]) => { const pts = []; for (let k = 0; k < f.length; k += 2) pts.push({ x: f[k], z: f[k + 1] }); const all = new Array(pts.length).fill(true); return { kind: 'rail', pts, bridge: br ? all : null, tube: tun ? all : null }; });
+  const roads = [...world.net.roads.filter((rd) => rd.kind !== 'rail'), ...rails], seen = new Map(), why = new Map(), bt = new Map();
+  for (const rd of roads) { const P = rd.pts; for (let i = 0; i < P.length; i++) { const p = P[i], q = P[Math.min(i + 1, P.length - 1)], n = Math.max(1, Math.ceil(Math.hypot(q.x - p.x, q.z - p.z) / 10));
+    for (let s = 0; s < n; s++) { const x = p.x + (q.x - p.x) * s / n, z = p.z + (q.z - p.z) * s / n, k = key(Math.floor(x / CHUNK), Math.floor(z / CHUNK)); seen.set(k, (seen.get(k) || 0) + Math.hypot(q.x - p.x, q.z - p.z) / n);
+      const b = rd.baked ? 'bridge' : rd.bridge?.[i] || rd.bridge?.[i + 1] || rd.span?.[i] || rd.span?.[i + 1] ? 'bridge' : rd.tube?.[i] || rd.tube?.[i + 1] ? 'tunnel' : null; if (b) (bt.get(k) || bt.set(k, new Set()).get(k)).add(b); } } } // (bt: the chunks with a bridge or a tunnel: baked, their decks and tubes today's (roads.js) at the layout's heights)
+  const wanted = cs[0] === 'all' ? [...seen.keys()] : cs.map((c) => c.split(',').map(Number).join(','));
+  // (place:all: every chunk of the layout's extent (extentOf), those with no roads too: the layout covers it all, the only
+  // edge left its outer one against today's far terrain)
+  const extent = cs[0] === 'all' ? extentOf(world, seen) : null, extra = extent ? [...extent].filter((k) => !seen.has(k)) : [];
+  // (every chunk with roads is baked: the airport's ground, the stunt sites' pads and the land past the World's core are
+  // all in the natural ground (rules.js groundNode: World.rawHeight); the marina's and water park's docks are their own
+  // solid meshes (World.surfs) over it)
+  const fallback = new Map(), chunks = [];
+  for (const k of wanted) { if (why.has(k)) fallback.set(k, [...why.get(k)].sort().join('+')); else if (seen.has(k)) chunks.push(k.split(',').map(Number)); }
+  for (const k of extra) chunks.push(k.split(',').map(Number));
+  console.log(`${id}: ${wanted.length} chunks with roads${extent ? ` and ${extra.length} more without, in the extent` : ''}; ${chunks.length} to bake, ${fallback.size} keep today's roads (${count([...fallback.values()])})`);
+  // ---- the bake (one height solve for them all)
+  const r = bakeLayout(world, chunks, (...m) => { if (!/^\s+\[layout\]\s{3}/.test(m[0])) console.log(...m); });
+  // ---- each chunk's natural ground as the runtime's (Layout.lattice), and the asks
+  const grid = groundGrid(world), G = r.chunks.map(({ ix, iz }) => latticeHeights(world, grid, latticeOf({ x0: ix * CHUNK, z0: iz * CHUNK, size: CHUNK }, grid)));
+  return { seen, bt, wanted, extent, extra, fallback, chunks, r, grid, G, asks: asksOf ? await asksOf(world) : null, city: !!world.real?.city, tb };
 }
 // the layout's extent: the World's core and every chunk with roads (seen), closed (a notch or a gap one or two chunks wide
 // between road chunks filled: 8-neighbour dilate, then erode) and with no holes -> Set('ix,iz')
