@@ -1,7 +1,7 @@
 // Retaining walls (#294): where the ground beside a road steps instead of sloping, a near-vertical wall stands on the
 // step. Two places it happens:
-//   the bank cap: a bank that hasn't met the natural ground within rules.js BANK_MAX stops there (the ground steps from
-//                 the bank's end to the natural ground: a valley wall's switchbacks, a road on a cliff);
+//   the bank cap (outside a city): a bank that hasn't met the natural ground within rules.js BANK_MAX stops there (the
+//                 ground steps from the bank's end to the natural ground: a valley wall's switchbacks, a road on a cliff);
 //   a road's edge in a city: an expressway in a trench, its lots at the streets' height above it (cut walls along it),
 //                 or up on a fill above them.
 // Worked out from the chunk's network and the rules alone (nothing stored: the same code at the bake and in the game),
@@ -31,8 +31,9 @@ export function wallsOf(L, R, g, all = false) {
     const side = r.hw + (r.pave || vergeW(r)), edge = L.city && r.kind === 'highway' && !r.pave, ik = vergeW(r) ? KIND.verge : KIND.tarmac; /* (a city's expressway: its lots are at the streets' height beside it, in a trench or up on a fill; a street with a pavement meets its lots at the pavement's top) */
     /* (a station from a sample: the step at the bank's cap, or a city street's edge) */
     const at = ([cx, cz, h, nx, nz]) => { let hit = null; const ox = cx + nx * (side + BANK_MAX), oz = cz + nz * (side + BANK_MAX);
-      /* (the bank cap: only where the ground steps within PEEK of it (each side carried on to it by its slope, as stepAt)) */
-      if (ox > x0 - 4 && oz > z0 - 4 && ox < x1 + 4 && oz < z1 + 4 && stepAt((d) => R.ground(ox + nx * d, oz + nz * d), 0, PEEK) > WALL_MIN - 0.1) hit = find(R, cx, cz, nx, nz, side + BANK_MAX, CAP_WIN, 0);
+      /* (the bank cap, outside a city (a city's ground is its lots; where they meet a bank's cap it steps a few decimetres:
+         a seam in the city's rules, not a wall's place): only where the ground steps within PEEK of it (each side carried on to it by its slope, as stepAt)) */
+      if (!L.city && ox > x0 - 4 && oz > z0 - 4 && ox < x1 + 4 && oz < z1 + 4 && stepAt((d) => R.ground(ox + nx * d, oz + nz * d), 0, PEEK) > WALL_MIN - 0.1) hit = find(R, cx, cz, nx, nz, side + BANK_MAX, CAP_WIN, 0);
       if (!hit && edge) { const ex = cx + nx * side, ez = cz + nz * side; /* (a city street's edge: only where the ground beside it is off the road's height) */ if (ex > x0 - 2 && ez > z0 - 2 && ex < x1 + 2 && ez < z1 + 2 && Math.abs(R.ground(ex + nx * PEEK, ez + nz * PEEK) - h) > WALL_MIN) hit = find(R, cx, cz, nx, nz, side, EDGE_WIN, 1, ik); }
       return hit; };
     /* (where a wall starts or stops between two samples: bisected along the road to END_TOL, the station on the wall's side) */
@@ -62,7 +63,7 @@ export function wallsOf(L, R, g, all = false) {
     if (!ok) continue;
     /* (its top and foot straight between its ends, raised or lowered so the surfaces at its faces never stand over its top
        (and parapet) nor under its foot between them: a steep bank's end is rough along the road) */
-    let tA = top(a), tB = top(b), fA = a.lo - WALL_FOOT, fB = b.lo - WALL_FOOT, up = 0, dn = 0; const fi = b.kind ? -WALL_EPS : o0, Si = b.kind ? (x, z) => surf(R, x, z) : R.ground;
+    let tA = top(a), tB = top(b), fA = a.lo - WALL_FOOT, fB = b.lo - WALL_FOOT, up = 0, dn = 0; const fi = b.kind ? -WALL_EPS : o0, Si = b.kind ? (x, z) => R.drawn(x, z, b.ik) : R.ground;
     for (let i = 0; i <= m; i++) { const t = i / m, px = a.x + (b.x - a.x) * t, pz = a.z + (b.z - a.z) * t, s = { yIn: Si(px + nx * fi, pz + nz * fi), yOut: R.ground(px + nx * o1, pz + nz * o1) };
       up = Math.max(up, top(s) - (tA + (tB - tA) * t)); dn = Math.max(dn, fA + (fB - fA) * t - (Math.min(s.yIn, s.yOut) - WALL_FOOT)); }
     seg.push(a.x, a.z, b.x, b.z, nx, nz, tA + up, fA - dn, tB + up, fB - dn, o0, o1, b.kind); len += l; }

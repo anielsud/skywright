@@ -27,9 +27,9 @@ export function wallChecks(L, R, W) {
   const covered = (x, z, hi, lo) => { for (let q = 0; q < ns; q++) { const o = q * SEG_N, ax = S[o], az = S[o + 1], dx = S[o + 2] - ax, dz = S[o + 3] - az, L2 = dx * dx + dz * dz || 1e-9, t = ((x - ax) * dx + (z - az) * dz) / L2; if (t < -0.05 || t > 1.05) continue;
     const tt = Math.max(0, Math.min(1, t)), v = (x - ax - dx * tt) * S[o + 4] + (z - az - dz * tt) * S[o + 5], off = Math.hypot(x - ax - dx * tt, z - az - dz * tt); if (off > Math.max(Math.abs(S[o + 10]), Math.abs(S[o + 11])) + PROBE + 0.05 || v < S[o + 10] - PROBE - 0.05 || v > S[o + 11] + PROBE + 0.05) continue;
     const top = S[o + 6] + (S[o + 8] - S[o + 6]) * tt, bot = S[o + 7] + (S[o + 9] - S[o + 7]) * tt; if (top >= hi - TOP_TOL && bot <= lo + 0.05) return true; } return false; };
-  // the steps: along every road's sides, every WALL_STEP m inside each segment, square to it, at the bank's cap (and a city
-  // expressway's edge): the surface just either side, both off the paved ways (a carriageway: no wall there)
-  for (const r of L.net.runs) { if (r.off || r.kind === 'rail' || r.h.length < 2) continue; const side = r.hw + (r.pave || vergeW(r)), offs = [side + BANK_MAX]; if (L.city && r.kind === 'highway' && !r.pave) offs.push(side);
+  // the steps: along every road's sides, every WALL_STEP m inside each segment, square to it, at the bank's cap (in a city:
+  // an expressway's edge): the surface just either side, both off the paved ways (a carriageway: no wall there)
+  for (const r of L.net.runs) { if (r.off || r.kind === 'rail' || r.h.length < 2) continue; const side = r.hw + (r.pave || vergeW(r)), offs = L.city ? [] : [side + BANK_MAX]; if (L.city && r.kind === 'highway' && !r.pave) offs.push(side);
     for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, l = Math.hypot(dx, dz); if (l < 1e-3) continue;
       for (let t = WALL_STEP / 2; t < l; t += WALL_STEP) for (const sg of [1, -1]) { const nx = (-dz / l) * sg, nz = (dx / l) * sg, cx = ax + dx * t / l, cz = az + dz * t / l;
         for (const d of offs) { const x = cx + nx * d, z = cz + nz * d; if (x < x0 || z < z0 || x >= x1 || z >= z1) continue; const ix = x - nx * PROBE, iz = z - nz * PROBE, ox = x + nx * PROBE, oz = z + nz * PROBE;
