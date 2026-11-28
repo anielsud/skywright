@@ -10,7 +10,7 @@
 import Delaunator from '../../vendor/layout/delaunator.js';
 import Constrainautor from '../../vendor/layout/constrainautor.mjs';
 import { KIND } from './format.js';
-import { makeRules, latticeGround, KERB, KERB_W, PAVE_RAMP, painted, zebra } from './rules.js';
+import { makeRules, latticeGround, streetOverBed, KERB, KERB_W, PAVE_RAMP, painted, zebra } from './rules.js';
 import { chunkOutlines } from './outline.js';
 
 const RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, MOUTH_D = 6, FID_STEP = 4, FID_TOL = 0.1;
@@ -128,10 +128,11 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   // ---- heights: every one from the rules
   const X = new Float64Array(N), Z = new Float64Array(N), Y = new Float64Array(N), PY = new Float64Array(N);
   const kOf = new Map(idxs.map((p, k) => [p, k]));
+  const inLx = streetOverBed(L.net).has; /* (a point a carriageway and a railway's bed share: the bed's height (level, the rails on it; the carriageway meets it), but at a level crossing, outline.js) */
   idxs.forEach((p, k) => {
     const x = PX[p] / 100, z = PZ[p] / 100, K = kinds[p]; X[k] = x; Z[k] = z;
     if (kerbFrom.has(p) && kOf.has(kerbFrom.get(p)) && kOf.get(kerbFrom.get(p)) < k) { const g = kOf.get(kerbFrom.get(p)); Y[k] = Y[g] + KERB; PY[k] = PY[g] + KERB * Math.min(1, KERB_W / PAVE_RAMP); return; } // (a kerb's top: its gutter's height, plus the kerb drawn; in physics the start of the ramp)
-    let kind = K & (1 << KIND.tarmac) ? KIND.tarmac : K & (1 << KIND.ballast) ? KIND.ballast : K & ((1 << KIND.kerb) | (1 << KIND.pave)) ? KIND.pave : PAVED.find((q) => q !== KIND.lip && K & (1 << q)) ?? (K & (1 << KIND.lip) ? KIND.lip : null);
+    let kind = K & (1 << KIND.tarmac) && !(K & (1 << KIND.ballast) && !inLx(x, z)) ? KIND.tarmac : K & (1 << KIND.ballast) ? KIND.ballast : K & ((1 << KIND.kerb) | (1 << KIND.pave)) ? KIND.pave : PAVED.find((q) => q !== KIND.lip && K & (1 << q)) ?? (K & (1 << KIND.lip) ? KIND.lip : null);
     if (kind == null && !(PX[p] === X0 || PZ[p] === Z0 || PX[p] === X0 + S || PZ[p] === Z0 + S)) kind = pre ? R.region(x, z) : classify(PX[p], PZ[p]); // (inside: its region)
     if (kind == null) { // (a point of the chunk's edge: its region by the rules (the nearest road's widths), not this chunk's polygons, so the chunk beside works it out the same)
       kind = R.region(x, z); } // (the outlines' own order, every road's widths)

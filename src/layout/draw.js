@@ -71,7 +71,7 @@ export function railBuffers(L, m) {
       const sl = SLEEPER_L[pc.cls] / 2, E0 = railSide(pc, -sl, at), E1 = railSide(pc, sl, at); let acc = SLEEPER_STEP / 2;
       for (let i = 0; i + 1 < n; i++) { const l = Math.hypot(P[i * 5 + 5] - P[i * 5], P[i * 5 + 6] - P[i * 5 + 1]); while (acc < l) { const t = acc / l, f = (Q, k) => Q[i * 5 + k] + (Q[i * 5 + 5 + k] - Q[i * 5 + k]) * t, ux = P[i * 5 + 3] * 0.11, uz = P[i * 5 + 4] * 0.11;
           const a = [f(E0, 0), f(E0, 2) + SLEEPER_TOP, f(E0, 1)], b = [f(E1, 0), f(E1, 2) + SLEEPER_TOP, f(E1, 1)]; quad(G.sleeper, [a[0] - ux, a[1], a[2] - uz], [b[0] - ux, b[1], b[2] - uz], [b[0] + ux, b[1], b[2] + uz], [a[0] + ux, a[1], a[2] + uz]); acc += SLEEPER_STEP; } acc -= l; }
-      if (!pc.off) continue;
+      if (!pc.off || pc.off === 'rails') continue; /* (a second track in a shared tube: its rails only, the tube the other's) */
       // on a deck or in a tube: its bed (level across), and under it the deck (top, sides and parapets, underside), or round it the tube
       const hw = pc.hw, at3 = (k, o, dy) => [P[k * 5] - P[k * 5 + 4] * o, P[k * 5 + 2] + dy, P[k * 5 + 1] + P[k * 5 + 3] * o];
       for (let i = 0; i + 1 < n; i++) { quad(G.ballast, at3(i, -hw, 0), at3(i, hw, 0), at3(i + 1, hw, 0), at3(i + 1, -hw, 0));

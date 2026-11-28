@@ -6,9 +6,9 @@
 //   chunkOutlines(net, areas, L) -> { P: [[X, Z], ...] (cm), E: [[a, b, kind], ...] (an edge two regions share: once for each) }
 import CL from '../../vendor/layout/clipper1.mjs';
 import { KIND } from './format.js';
-import { vergeW, portalsOf, PORTAL_T, PORTAL_BEHIND as BEHIND } from './rules.js';
+import { vergeW, portalsOf, streetOverBed, HOLD, PORTAL_T, PORTAL_BEHIND as BEHIND } from './rules.js';
 
-const ARC = 15, EDGE_STEP = 4, CLIP = 25, SNAP = 50; // (CLIP: m about the chunk a road's stretches are kept: past a road's widest reach, its half width and pavement) // (ARC: cm a round join's arc may cut inside; EDGE_STEP: m between the chunk's edge points)
+const LX_N = 64, ARC = 15, EDGE_STEP = 4, CLIP = 25, SNAP = 50; // (CLIP: m about the chunk a road's stretches are kept: past a road's widest reach, its half width and pavement) // (ARC: cm a round join's arc may cut inside; EDGE_STEP: m between the chunk's edge points)
 const cm = (v) => Math.round(v * 100);
 
 export function chunkOutlines(net, areas, L) {
@@ -37,12 +37,18 @@ export function chunkOutlines(net, areas, L) {
   const minorKind = (r) => (!r.minor ? -1 : r.kind === 'rail' ? KIND.ballast : r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
   const area = (surf) => splitAtGrid(areas.filter((a) => a.surf === surf).map((a) => a.ring), S);
   const street = (r) => !r.minor;
-  const Tc = union(strips(street, (r) => r.hw)), Pv = union(strips((r) => r.pave > 0, (r) => r.hw + r.pave)), Vg = union(strips((r) => vergeW(r) > 0, (r) => r.hw + vergeW(r)));
+  // (a railway's bed over a street's carriageway where the two overlap, but at a level crossing (inside its circle,
+  // junctions[].lx): there the carriageway over the bed. So a street beside a railway is cut back to its bed's edge, and
+  // the rails lie on their own bed, not on the street at its height)
+  const behind = portals.filter((p) => p.rail && p.x > cx0 && p.x < cx1 && p.z > cz0 && p.z < cz1).map((p) => [corner(p.x, p.z, p.dx, p.dz, 0, -p.W), corner(p.x, p.z, p.dx, p.dz, BEHIND, -p.W), corner(p.x, p.z, p.dx, p.dz, BEHIND, p.W), corner(p.x, p.z, p.dx, p.dz, 0, p.W)]);
+  const B0 = minus(union(strips((r) => minorKind(r) === KIND.ballast, (r) => r.hw, true)), ...(behind.length ? [behind] : []));
+  const sob = B0.length ? streetOverBed(net) : { lx: [], ends: [] }, lxs = [...sob.lx.filter((J) => J.x > cx0 - J.r && J.x < cx1 + J.r && J.z > cz0 - J.r && J.z < cz1 + J.r).map((J) => { const o = []; for (let q = 0; q < LX_N; q++) o.push([cm(J.x + J.r * Math.cos(q * 2 * Math.PI / LX_N)), cm(J.z + J.r * Math.sin(q * 2 * Math.PI / LX_N))]); return o; }),
+    ...sob.ends.filter((c) => c.x > cx0 - HOLD && c.x < cx1 + HOLD && c.z > cz0 - HOLD && c.z < cz1 + HOLD).map((c) => [corner(c.x, c.z, c.dx, c.dz, 0, -c.w), corner(c.x, c.z, c.dx, c.dz, -HOLD, -c.w), corner(c.x, c.z, c.dx, c.dz, -HOLD, c.w), corner(c.x, c.z, c.dx, c.dz, 0, c.w)])];
+  const Tc = minus(union(strips(street, (r) => r.hw)), minus(B0, lxs)), Pv = union(strips((r) => r.pave > 0, (r) => r.hw + r.pave)), Vg = union(strips((r) => vergeW(r) > 0, (r) => r.hw + vergeW(r)));
   const Ta = union(strips((r) => minorKind(r) === KIND.alley, (r) => r.hw), area(0)), Tp = union(strips((r) => minorKind(r) === KIND.pavers, (r) => r.hw), area(1)), Tg = union(strips((r) => minorKind(r) === KIND.gravel, (r) => r.hw), area(2));
   // (a railway's bed: under a road's carriageway at a level crossing, over everything else; never into the hill behind a
   // portal (a tunnel's other tracks, sharing its tube, stop at its mouth: their beds' round ends))
-  const behind = portals.filter((p) => p.rail && p.x > cx0 && p.x < cx1 && p.z > cz0 && p.z < cz1).map((p) => [corner(p.x, p.z, p.dx, p.dz, 0, -p.W), corner(p.x, p.z, p.dx, p.dz, BEHIND, -p.W), corner(p.x, p.z, p.dx, p.dz, BEHIND, p.W), corner(p.x, p.z, p.dx, p.dz, 0, p.W)]);
-  const Tb = minus(union(strips((r) => minorKind(r) === KIND.ballast, (r) => r.hw, true)), Tc, ...(behind.length ? [behind] : []));
+  const Tb = minus(B0, Tc);
   const Pall = minus(Pv, Tc, Tb); // (the kerb: mesh.js, along every tarmac edge a pavement shares)
   const Lp = union(portals.filter((p) => p.x > cx0 && p.x < cx1 && p.z > cz0 && p.z < cz1).map((p) => [corner(p.x, p.z, p.dx, p.dz, 0, -p.W), corner(p.x, p.z, p.dx, p.dz, PORTAL_T / 2, -p.W), corner(p.x, p.z, p.dx, p.dz, PORTAL_T / 2, p.W), corner(p.x, p.z, p.dx, p.dz, 0, p.W)]));
   const REG = [[KIND.tarmac, Tc], [KIND.ballast, Tb], [KIND.pave, Pall], [KIND.alley, minus(Ta, Tc, Tb, Pall)], [KIND.pavers, minus(Tp, Tc, Tb, Pall, Ta)], [KIND.gravel, minus(Tg, Tc, Tb, Pall, Ta, Tp)], [KIND.verge, minus(Vg, Tc, Tb, Pall, Ta, Tp, Tg).filter((p) => Math.abs(ringArea(p)) > 5000)]]; // (no verge slivers under 0.5 m²)
