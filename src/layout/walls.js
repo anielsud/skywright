@@ -46,7 +46,9 @@ export function wallsOf(L, R, g, all = false) {
       let prevTall = false;
       for (const p of samples(r, sg, L.city ? side : side + BANK_MAX, L.city ? CITY_STEP : WALL_STEP)) { const hit = at(p), isTall = lastTall;
         if (prev && (isTall || prevTall) && (hit ? 2 : isTall ? 1 : 0) !== (prevHit ? 2 : prevTall ? 1 : 0)) { /* (next to a step too tall for a wall: the stretch between looked along every 0.5 m, every END_TOL beside a wall) */
-          const L2 = Math.hypot(p[0] - prev[0], p[1] - prev[1]), k = Math.max(1, Math.ceil(L2 / (hit || prevHit ? END_TOL : 0.5))); for (let i = 1; i < k; i++) { const t = i / k, m = prev.map((v, j) => v + (p[j] - v) * t), l = Math.hypot(m[3], m[4]) || 1; m[3] /= l; m[4] /= l; const e = at(m); if (e) push(e); } }
+          const L2 = Math.hypot(p[0] - prev[0], p[1] - prev[1]), k = Math.max(1, Math.ceil(L2 / (hit || prevHit ? END_TOL : 0.5))); const look = (k, t0, t1) => { const out = []; for (let i = 1; i < k; i++) { const t = t0 + (t1 - t0) * i / k, m = prev.map((v, j) => v + (p[j] - v) * t), l = Math.hypot(m[3], m[4]) || 1; m[3] /= l; m[4] /= l; const e = at(m); if (e) out.push([t, e]); } return out; };
+          let got = look(k, 0, 1); if (got.length === 1 && !hit && !prevHit) { const t = got[0][0], d = 1 / k; got = look(Math.max(2, Math.ceil(2 * d * L2 / END_TOL)), Math.max(0, t - d), Math.min(1, t + d)); } /* (a wall's stretch shorter than the look between a step too tall and none: looked again about it every END_TOL, so it has two ends) */
+          for (const [, e] of got) push(e); }
         else if (prev && !!hit !== !!prevHit) { const e = end(prev, p, prevHit); if (e && e.kind === (hit || prevHit).kind) push(e); }
         if (hit) push(hit); /* (a wall picked up again within JOIN of where it stopped (the inside of a hairpin, where its two legs' caps cross) is joined across) */
         prev = p; prevHit = hit; prevTall = isTall; } }
