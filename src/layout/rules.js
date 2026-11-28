@@ -39,7 +39,7 @@ export const DECK_SIDE = 1, DECK_DEPTH = 1.4, TUBE_SIDE = 1.2, TUBE_H = 5.6, POR
 // the portal lies far under it) and a sill SILL m deep closes the floor's edge across the mouth (roads.js); a surface
 // within FLUSH m of the floor behind the mouth meets the tube's floor (no gap: a twin carriageway at grade beside it)
 export const PORTAL_FOOT = 12, SILL = 2, FLUSH = 0.3, TOP_OVER = 0.5;
-export const HOLD = 10; const UNDER = 0.1, OVER = 0.3; // (the ground kept this far under a deck's underside, over a tube's crown)
+export const HOLD = 10, SLAB_MAX = 0.3; const UNDER = 0.1, OVER = 0.3; /* (SLAB_MAX: the most a surface over a tube stands over the natural ground) */ // (the ground kept this far under a deck's underside, over a tube's crown)
 // a tunnel's portals, from the roads stopping at a tube (ends 2, 8): where (the road's end), which way into the hill (dx,
 // dz: the road's last segment's, and the tube's first's if it's stored: roads.js frames the headwall by both), the road's
 // height there (the tube's floor), the tube's half width (hwT) and the headwall's (W)
@@ -119,12 +119,13 @@ export function onRun(r, x, z) { let best = Infinity, y = 0; for (let s = 0; s +
 // -> [{ sd, u0, u1, v (its centre across, in the portal's frame), t (half thickness), y0, ya, yb (its top at u0, u1), y1 (the higher) }]
 export const WALL_STEP = 0.5, WALL_LIP = 0.4, BOX_L = 10;
 export function trenchWalls(p, at, ports = [p]) {
-  const T = p.tr, out = []; if (!T) return out; const n = Math.max(1, Math.ceil((T.u1 - T.u0) / WALL_STEP)), v = p.hwT + TRENCH_W / 2, t = TRENCH_W / 2 + 0.1;
+  const T = p.tr, out = []; if (!T) return out; const n = Math.max(1, Math.ceil((T.u1 - T.u0) / WALL_STEP)), v = p.hwT + TRENCH_W / 2, t = TRENCH_W / 2 + 0.02;
   for (const sd of [-1, 1]) { let prev = null; for (let i = 0; i <= n; i++) { const u = T.u0 + (T.u1 - T.u0) * i / n, P = (w) => [p.x + p.dx * u - p.dz * w, p.z + p.dz * u + p.dx * w], c = P(sd * v);
       let k = null; { const s = edges(p, sd, u, at);
         if (s) k = { u, top: Math.max(s.inHi, s.outHi) + (s.inHi > -Infinity && s.outHi > -Infinity ? Math.min(WALL_LIP, Math.max(WALL_LIP_MIN, Math.abs(s.inHi - s.outHi))) : WALL_LIP), lo: s.lo }; }
       if (k) k.box = otherBox(ports, p, c[0], c[1]); /* (a segment with both ends in another approach's box is left out: its floor there; one end: kept to the strip's corner) */
-      if (k && prev && !(k.box && prev.box)) out.push({ sd, u0: prev.u, u1: k.u, v: sd * v, t, y0: Math.min(prev.lo, k.lo) - WALL_FOOT, ya: prev.top, yb: k.top, y1: Math.max(prev.top, k.top) }); prev = k; } }
+      const mid = P(sd * v).map((q, j) => q - (j ? p.dz : p.dx) * (T.u1 - T.u0) / n / 2), onSurf = at(mid[0], mid[1]) === at(mid[0], mid[1]); /* (its strip's middle on a surface: no strip there, another road's carriageway: no wall) */
+      if (k && prev && !(k.box && prev.box) && !onSurf) out.push({ sd, u0: prev.u, u1: k.u, v: sd * v, t, y0: Math.min(prev.lo, k.lo) - WALL_FOOT, ya: prev.top, yb: k.top, y1: Math.max(prev.top, k.top) }); prev = k; } }
   return out;
 }
 // the surfaces either side of a wall's strip about u (within WALL_WIN m along, just past its edges and WALL_WIN out): the highest
@@ -179,7 +180,7 @@ export function makeRules(net, g, city, wl = -Infinity, box = null) {
   const offClamp = (x, z, y) => { const L = offIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return y;
     for (let q = 0; q < L.length; q += 2) { const r = runs[L[q]], s = L[q + 1], ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9, t0 = ((x - ax) * dx + (z - az) * dz) / L2;
       if ((t0 < 0 && s === 0) || (t0 > 1 && s === r.h.length - 2)) continue; const t = Math.max(0, Math.min(1, t0)), d = Math.hypot(x - ax - dx * t, z - az - dz * t), hy = r.h[s] + (r.h[s + 1] - r.h[s]) * t;
-      if (r.off === 'deck') { if (d <= r.hw + DECK_SIDE + 0.05) y = Math.min(y, hy - DECK_DEPTH - UNDER); } else if (d <= r.hw + TUBE_SIDE + 0.5) y = Math.max(y, hy + TUBE_H + OVER); } // (a tube: half a metre wider, the portal's frame turned a little from the tube's)
+      if (r.off === 'deck') { if (d <= r.hw + DECK_SIDE + 0.05) y = Math.min(y, hy - DECK_DEPTH - UNDER); } else if (d <= r.hw + TUBE_SIDE + 0.5) y = Math.max(y, Math.min(hy + TUBE_H + OVER, g(x, z) + SLAB_MAX)); } // (a tube: half a metre wider, the portal's frame turned a little from the tube's; never more than SLAB_MAX over the natural ground: where the tube's crown is higher, it shows (bake.js moves a portal in to where it has cover))
     return y; };
   // a portal's opening: its lip (behind the portal, the headwall's back half, across the headwall: no surface); and the ground
   // there kept within the headwall (its rim hidden in it)
@@ -264,8 +265,8 @@ export function makeRules(net, g, city, wl = -Infinity, box = null) {
     // (a trench's approach's own floor: its own; another approach's carriageway
     // (one with no trench) within its box: towards that approach's own height, over the box, as it ends at its portal)
     if (!best) for (const p of trenches) { const [u, v] = portalUV(p, x, z); if (inTrench(p, u, v) && (u <= 0.03 ? 0 : 1e4) + Math.abs(u) < bd) { bd = (u <= 0.03 ? 0 : 1e4) + Math.abs(u); best = p; bu = u; } } if (!best) return null; // (a floor before a surface over a tube)
-    let yf; if (bu > 0.03) { const c = offClamp(x, z, -Infinity); yf = Math.max(y, c > -Infinity ? c : best.y + TUBE_H + OVER); } else { const f = sstep((bu - best.tr.u0) / fadeOf(best)); yf = y + (nearestOn(best.tr.r, x, z) - y) * f; }
-    if (!own) return [yf, true]; const g = sstep((own[1] + BOX_L) / BOX_L); return [yf + (nearestOn(own[0].ar, x, z) - yf) * g, true]; };
+    let yf; if (bu > 0.03) { const c = offClamp(x, z, -Infinity); yf = Math.max(y, Math.min(c > -Infinity ? c : best.y + TUBE_H + OVER, g(x, z) + SLAB_MAX)); } else { const f = sstep((bu - best.tr.u0) / fadeOf(best)); yf = y + (nearestOn(best.tr.r, x, z) - y) * f; }
+    if (!own) return [yf, true]; const gb = sstep((own[1] + BOX_L) / BOX_L); return [yf + (nearestOn(own[0].ar, x, z) - yf) * gb, true]; };
   const drawn = (x, z, k) => { const y = base0(x, z, k); if (trenches.length) { const t = trench(x, z, y); if (t) return t[0]; } return y + (k === KIND.pave || k === KIND.kerb ? KERB : 0); };
   const base = (x, z, k) => { const y = base0(x, z, k); if (trenches.length) { const t = trench(x, z, y); if (t) return t[0]; } return y; };
   const lot = (x, z) => { const two = nearest2(x, z, (r) => !r.minor && r.pave).filter((n, i) => i === 0 || n.d <= LOT_PAIR); if (!two.length) return null; /* (the second only if it's near: past that, which it is depends on how far the stored network reaches) */ let s = 0, ws = 0; for (const n of two) { const wt = 1 / Math.max(0.5, n.d); s += (streetH(x, z, n.h) + KERB) * wt; ws += wt; } return { y: s / ws, d: two[0].d }; };
@@ -315,7 +316,7 @@ export function makeRules(net, g, city, wl = -Infinity, box = null) {
   // alley, pavers, gravel, a verge; else the ground (a carriageway's edge, to 3 cm: its outline's points round to the
   // centimetre). For the chunk's edge points: both chunks beside it agree.
   const mk = (r) => (isRail(r) ? KIND.ballast : r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
-  const region = (x, z) => { if (portals.length && (inLip(x, z) || inWallAt(portals, x, z))) return KIND.lip; const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return KIND.ground; let best = KIND.ground, rank = 99, hasB = false;
+  const region = (x, z) => { if (portals.length && inLip(x, z)) return KIND.lip; const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return KIND.ground; let best = KIND.ground, rank = 99, hasB = false;
     const RANK = { [KIND.tarmac]: 0, [KIND.ballast]: 1, [KIND.pave]: 2, [KIND.alley]: 3, [KIND.pavers]: 4, [KIND.gravel]: 5, [KIND.verge]: 6 }; // (outline.js's order)
     for (let q = 0; q < L.length; q += 2) { const ri = L[q], s = L[q + 1], r = runs[ri], ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
       const t0 = ((x - ax) * dx + (z - az) * dz) / L2; if (pastCut(r, s, t0)) continue; // (a road stopping at a deck or tube stops square)
@@ -323,11 +324,12 @@ export function makeRules(net, g, city, wl = -Infinity, box = null) {
       const t = Math.max(0, Math.min(1, t0)), d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw;
       const k = d <= (r.minor ? 0 : 0.03) ? (r.minor ? mk(r) : KIND.tarmac) : !r.minor && r.pave && d <= r.pave ? KIND.pave : d <= vergeW(r) ? KIND.verge : null;
       if (k === KIND.ballast) hasB = true; if (k != null && RANK[k] < rank) { rank = RANK[k]; best = k; } }
+    if (best !== KIND.tarmac && trenches.length && inWallAt(portals, x, z)) return KIND.lip; /* (a trench's wall's strip, not over another road's carriageway: outline.js) */
     return best === KIND.tarmac && hasB && !sob.has(x, z) ? KIND.ballast : best; }; /* (a railway's bed over a carriageway but where streetOverBed, outline.js) */
   // every street segment whose carriageway covers (x, z) (its distance within its half width): [road, segment, distance
   // past the half width (<= 0), ...] in segIdx's order (the first lowest: nearest's, when there's one)
   const covering = (x, z) => { const out = [], L = segNear.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return out; for (let q = 0; q < L.length; q += 2) { const r = runs[L[q]], s = L[q + 1]; if (r.minor) continue; const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)); const d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw; if (d <= 0) out.push(L[q], s, d); } return out; };
-  return { base, drawn, ground, road, roadOn, lineOn, bends, nearest, nearest2, covering, lot, junction, region, portals, untrenched: base0, trenchFade: (p) => fadeOf(trenches.find((q) => q.x === p.x && q.z === p.z) || p) }; // (untrenched: the streets' surface as without any trench; trenchFade: a trench's fade, m: for the trench checks)
+  return { base, drawn, ground, road, roadOn, lineOn, bends, nearest, nearest2, covering, lot, junction, region, portals, natural: g, unlifted: ground0, untrenched: base0, trenchFade: (p) => fadeOf(trenches.find((q) => q.x === p.x && q.z === p.z) || p) }; // (natural: the natural ground; unlifted: the ground off the roads before a deck or a tube holds it; untrenched: the streets' surface as without any trench; trenchFade: a trench's fade, m: for the trench checks)
 }
 
 // The natural ground: today's terrain base without the roads' carving, at the hi grid's points (World.rawHeight: the real

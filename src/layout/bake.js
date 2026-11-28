@@ -55,7 +55,7 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   // roads of their own, each ending where the deck or tube begins (cutA, cutB), held there at the deck's or tube's height
   // (pins) so the two meet without a step; a node a road shares with a deck or a tube is held at its height too)
   const offRuns = [], pins = new Map(), pinNode = new Map(), endNode = new Map();
-  for (const rd of [...w.net.roads, ...railWays(w, g)]) {
+  for (const rd0 of [...w.net.roads, ...railWays(w, g)]) { const rd = deepen(rd0, g); // (a portal moved in to where its tube has COVER)
     if (rd.kind === 'rail' && rd.rail == null) continue; // (a made-up place's one rail line, roads.js: not the layout's)
     const n0 = rd.pts.length, P = rd.closed ? [...rd.pts, rd.pts[0]] : rd.pts, n = P.length; let a = -1, b = -1; // (a roundabout's ring: closed as a line)
     for (let i = 0; i < n; i++) if (inR(P[i])) { if (a < 0) a = i; b = i; }
@@ -284,13 +284,37 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
 // 'rail' and its class (rail); one on a bridge all deck, one in a tunnel all tube (side-by-side bores as one: mergeBores), at the straight line between the natural
 // ground at its ends (a viaduct's ways end to end: one line each, meeting at their shared ends). Their points shared with
 // another railway's (a switch; ways end to end: OpenStreetMap's shared node, the same point to the decimetre) are one node.
+// a tube's cover (#294): its crown at least COVER m under the natural ground; a portal where it has less is moved along its tube
+// to the first point (up to MOVE_MAX m in) where it has that, the stretch before it an open cut (the layout's trench, rules.js);
+// a rail tunnel's line resampled every TUNNEL_STEP m so its profile can dive (railWays)
+export const COVER = 0.3, MOVE_MAX = 180, TUNNEL_STEP = 10, DIVE_K = 0.85;
+function densify(f, step) { const out = [f[0], f[1]]; for (let k = 2; k < f.length; k += 2) { const ax = f[k - 2], az = f[k - 1], bx = f[k], bz = f[k + 1], m = Math.ceil(Math.hypot(bx - ax, bz - az) / step); for (let j = 1; j < m; j++) out.push(ax + (bx - ax) * j / m, az + (bz - az) * j / m); out.push(bx, bz); } return out; }
+// rd with each of its tubes' ends moved in to where the tube has COVER (a copy, or rd as it is)
+function deepen(rd, g) {
+  if (!rd.tube?.some(Boolean) || rd.closed || rd.railsOnly || rd.keepShape || rd.pinA != null || rd.pinB != null) return rd; /* (not a second track's in a shared tube, mergeBores: its portal the other's) */ const P = rd.pts.map((p) => ({ ...p })), tube = [...rd.tube], bridge = rd.bridge ? [...rd.bridge] : null, jn = (rd.jn || []).map(([i, q]) => [i, q]); let moved = false;
+  const insert = (i, p) => { P.splice(i, 0, p); tube.splice(i, 0, true); if (bridge) bridge.splice(i, 0, false); for (const e of jn) if (e[0] >= i) e[0]++; };
+  if (!P.every((p) => Number.isFinite(p.y))) return rd; const covered = (p) => g(p.x, p.z) - (p.y + TUBE_H) >= COVER; /* (NaN ground: never covered) */
+  for (let i = 0; i + 1 < P.length; i++) { if (!(tube[i] && tube[i + 1])) continue; let e = i + 1; while (e + 1 < P.length && tube[e + 1]) e++; // (a tube from i to e)
+    for (const dir of [1, -1]) { const a = dir > 0 ? i : e; let d = 0, k = a, found = null;
+      if (covered(P[a])) continue;
+      while (!found && k !== (dir > 0 ? e : i)) { const q = P[k], r = P[k + dir], l = Math.hypot(r.x - q.x, r.z - q.z); for (let t = 2; t < l - 0.5 && d + t <= MOVE_MAX; t += 2) { /* (not on a point: no segment shorter than half a metre) */ const f = t / l, p = { x: q.x + (r.x - q.x) * f, z: q.z + (r.z - q.z) * f, y: q.y + (r.y - q.y) * f }; if (covered(p)) { found = [k, p, f]; break; } }
+        if (found || (d += l) > MOVE_MAX) break; k += dir; if (covered(P[k])) { found = [k, null, 0]; break; } }
+      if (!found) continue; moved = true; const [k2, p] = found;
+      if (dir > 0) { for (let j = a; j <= k2; j++) tube[j] = false; if (p) { insert(k2 + 1, p); e++; } else tube[k2] = true; }
+      else { for (let j = k2; j <= a; j++) tube[j] = false; if (p) { insert(k2, p); e++; } else tube[k2] = true; } }
+    i = e; }
+  return moved ? { ...rd, pts: P, tube, bridge, jn } : rd;
+}
 function railWays(w, g) {
   const list = deckProfiles(mergeBores(w.real?.osm?.rails || [], g), w, g), key = (x, z) => 'R' + Math.round(x * 10) + ',' + Math.round(z * 10), uses = new Map();
   for (const [, , f] of list) { const seen = new Set(); for (let k = 0; k < f.length; k += 2) { const q = key(f[k], f[k + 1]); if (!seen.has(q)) { seen.add(q); uses.set(q, (uses.get(q) || 0) + 1); } } }
   const out = [];
-  for (const [, br, f, cls = 0, tun = 0, extra = {}] of list) { const n = f.length / 2; if (n < 2) continue;
+  for (const [, br, f0, cls = 0, tun = 0, extra = {}] of list) { const f = tun && !br && !extra.ys ? densify(f0, TUNNEL_STEP) : f0, n = f.length / 2; if (n < 2) continue;
     const pts = [], jn = []; for (let i = 0; i < n; i++) { const x = f[i * 2], z = f[i * 2 + 1], q = key(x, z); pts.push({ x, z, y: 0 }); if (i === 0 || i === n - 1 || uses.get(q) > 1) jn.push([i, q]); }
-    if (extra.ys) pts.forEach((p, i) => { p.y = extra.ys[i]; }); else if (br || tun) { const ya = extra.ya ?? g(pts[0].x, pts[0].z), yb = extra.yb ?? g(pts[n - 1].x, pts[n - 1].z); let s = 0; const S = [0]; for (let i = 1; i < n; i++) S.push((s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z))); pts.forEach((p, i) => { p.y = ya + (yb - ya) * (S[i] / (s || 1)); }); }
+    if (extra.ys) pts.forEach((p, i) => { p.y = extra.ys[i]; }); else if (br || tun) { const ya = extra.ya ?? g(pts[0].x, pts[0].z), yb = extra.yb ?? g(pts[n - 1].x, pts[n - 1].z); let s = 0; const S = [0]; for (let i = 1; i < n; i++) S.push((s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z))); pts.forEach((p, i) => { p.y = ya + (yb - ya) * (S[i] / (s || 1)); });
+      // (a tunnel: not along the straight line between its ends (at a flat city's grade all the way, its crown over the ground), but
+      // down from each end at the class's grade to COVER under the ground with the tube over it, as deep as that wherever it can be)
+      if (tun && !br) { const G = (RAIL_GRADE[cls] ?? 0.04) * DIVE_K; /* (a little under the grade limit: the cut up to a moved portal is the solve's, within it) */ pts.forEach((p, i) => { const gz = g(p.x, p.z); if (!(gz === gz)) return; const low = Math.min(p.y, gz - TUBE_H - COVER); p.y = Math.min(p.y, Math.max(low, ya - G * S[i], yb - G * (s - S[i]))); }); } }
     const flag = br || tun ? new Array(n).fill(true) : null;
     out.push({ kind: 'rail', rail: cls, minor: true, railsOnly: !!extra.railsOnly, keepShape: !!extra.ys, width: (RAIL_HW[cls] + (extra.wide || 0)) * 2, pts, jn: extra.railsOnly ? [] : jn, bridge: br ? flag : null, tube: tun ? flag : null, layer: 0, surf: 0, lanes: cls, pinA: extra.pinA, pinB: extra.pinB }); }
   return out;

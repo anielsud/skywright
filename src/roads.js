@@ -737,7 +737,7 @@ export function buildRoadMeshes(w, net) {
   // building a tile: its roads' ribbons, shoulders, skirts and bridges, merged per material
   const KERB_D = DETAIL_D[w.qName] ?? 1000, POLE_D = KERB_D * 2, WALK_D = KERB_D * 3;
   const D = ROAD_D[w.qName] ?? 10000, warm = new Set([tarmac, shoulder, skirtMat, concrete, poleMat, tubeMat, tubeLight, ...[sidewalk, paths, deckTarmac].filter(Boolean)]);
-  w.layout?.clip(tarmac, shoulder, skirtMat, sidewalk, paths); // (inside a baked layout chunk the layout draws the roads, #294)
+  w.layout?.clip(tarmac, shoulder, skirtMat, sidewalk, paths, tubeMat, tubeLight); // (inside a baked layout chunk the layout draws the roads, #294, and the tunnels' tubes and portals: draw.js)
   const buildTile = (t) => {
     pending = new Map(); bridgeGeos = [];
     const lamps = [], poles = [];

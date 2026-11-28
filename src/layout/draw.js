@@ -61,7 +61,7 @@ function water(m, wl) {
 // raised under a way over it). -> null (none), or { pos: { steel, sleeper, deck, tube, ballast } (triangles, x y z),
 // nrm (their flat normals), piers: [x, z, top, ux, uz, half width, ...] (a deck's piers' places, every ~30 m) }
 export function railBuffers(L, m) {
-    const phys = physIndex(L, m), at = (x, z) => physAt(L, m, phys, x, z), pcs = railPieces(L, at), ports = portalsOf(L.net.runs); if (!pcs.length && !L.net.runs.some((r) => r.kind === 'rail' && r.off) && !ports.some((p) => p.top > PORTAL_TOP)) return null;
+    const phys = physIndex(L, m), at = (x, z) => physAt(L, m, phys, x, z), pcs = railPieces(L, at), ports = portalsOf(L.net.runs); if (!pcs.length && !L.net.runs.some((r) => r.off) && !ports.length) return null;
     const G = { steel: [], sleeper: [], deck: [], tube: [], ballast: [] }, piers = [], quad = (A, a, b, cc, d) => { for (const v of [a, b, cc, a, cc, d]) A.push(v[0], v[1], v[2]); };
     for (const pc of pcs) { const P = pc.P, n = P.length / 5, half = GAUGE[pc.cls] / 2;
       // the rails: a head 7 cm wide RAIL_TOP over the bed, its sides down to the sleepers
@@ -82,13 +82,23 @@ export function railBuffers(L, m) {
       // (a deck's piers, every ~30 m where it's 3 m or more over the ground)
       // (the ground under them is today's terrain, the World's: their places here, the piers made on the main thread, runtime.js railsFor)
       if (pc.off === 'deck') for (let i = 15; i < n - 1; i += 15) piers.push(P[i * 5], P[i * 5 + 1], P[i * 5 + 2] - DECK_DEPTH, P[i * 5 + 3], P[i * 5 + 4], hw + DECK_SIDE - 0.4); }
-    // a rail tunnel's portals: the headwall round its mouth (as roads.js's), centred on the portal
+    // a road's tube (with the layout on, roads.js's is hidden in a layout chunk, runtime.js clip: its portal may have moved in,
+    // bake.js deepen): its floor, walls and vault at its own profile
+    for (const r of L.net.runs) { if (r.off !== 'tube' || r.kind === 'rail') continue; const W = r.hw + TUBE_SIDE, n = r.h.length;
+      for (let i = 0; i + 1 < n; i++) { const ax = r.pts[i * 2], az = r.pts[i * 2 + 1], bx = r.pts[i * 2 + 2], bz = r.pts[i * 2 + 3], l = Math.hypot(bx - ax, bz - az); if (l < 1e-3) continue; const mx = (ax + bx) / 2, mz = (az + bz) / 2; if (mx < L.x0 || mx >= L.x0 + L.size || mz < L.z0 || mz >= L.z0 + L.size) continue;
+        const nx = -(bz - az) / l, nz = (bx - ax) / l, A = (o, dy) => [ax + nx * o, r.h[i] + dy, az + nz * o], B = (o, dy) => [bx + nx * o, r.h[i + 1] + dy, bz + nz * o];
+        quad(G.tube, A(-W, 0), A(W, 0), B(W, 0), B(-W, 0));
+        for (const sd of [-1, 1]) { quad(G.tube, A(W * sd, -0.3), B(W * sd, -0.3), B(W * sd, TUBE_H * 0.8), A(W * sd, TUBE_H * 0.8)); quad(G.tube, A(W * sd, TUBE_H * 0.8), B(W * sd, TUBE_H * 0.8), B(W * 0.55 * sd, TUBE_H), A(W * 0.55 * sd, TUBE_H)); }
+        quad(G.tube, A(-W * 0.55, TUBE_H), B(-W * 0.55, TUBE_H), B(W * 0.55, TUBE_H), A(W * 0.55, TUBE_H)); } }
+    // a tunnel's portals: the headwall round its mouth (as roads.js's), centred on the portal; no higher than the surfaces about it
+    // and a wall's lip (over the mouth's lintel at least, up to its top: a way over it); its wings only over its lip (the opening),
+    // not over a road beside the portal (outline.js)
     for (const p of ports) { if (p.x < L.x0 || p.x >= L.x0 + L.size || p.z < L.z0 || p.z >= L.z0 + L.size) continue; const T = PORTAL_T / 2, pt = (u, v, y) => [p.x + p.dx * u - p.dz * v, p.y + y, p.z + p.dz * u + p.dx * v];
       const box = (v0, v1, y0, y1) => { for (const u of [-T, T]) quad(G.tube, pt(u, v0, y0), pt(u, v1, y0), pt(u, v1, y1), pt(u, v0, y1)); quad(G.tube, pt(-T, v0, y1), pt(-T, v1, y1), pt(T, v1, y1), pt(T, v0, y1)); for (const v of [v0, v1]) quad(G.tube, pt(-T, v, y0), pt(T, v, y0), pt(T, v, y1), pt(-T, v, y1)); };
-      if (!p.rail) { if (p.top > PORTAL_TOP) box(-p.W, p.W, PORTAL_TOP - 0.01, p.top); continue; } // (a road's portal is roads.js's: where a way runs over it, its headwall raised to under that way, rules.js portalsOf)
-      // (a trench's portal: its headwall no higher than the surfaces about it and a wall's lip, as its walls, over the mouth's lintel at least)
-      let top = p.top; if (p.tr) { let h = -Infinity; for (const u of [-PORTAL_T, PORTAL_T]) for (let v = -p.W; v <= p.W + 1e-9; v += 0.5) { const q = pt(u, v, 0), y = at(q[0], q[2]); if (y === y) h = Math.max(h, y - p.y); } top = Math.min(p.top, Math.max(TUBE_H + 0.3, h + WALL_LIP)); }
-      box(-p.W, -p.hwT, -PORTAL_FOOT, top); box(p.hwT, p.W, -PORTAL_FOOT, top); box(-p.hwT, p.hwT, TUBE_H, top); box(-p.hwT, p.hwT, -SILL, -0.05); } // (its wings PORTAL_FOOT deep, a sill across the mouth: roads.js's)
+      let h = -Infinity; for (const u of [-PORTAL_T, PORTAL_T]) for (let v = -p.W; v <= p.W + 1e-9; v += 0.5) { const q = pt(u, v, 0), y = at(q[0], q[2]); if (y === y) h = Math.max(h, y - p.y); }
+      const top = Math.min(p.top, Math.max(TUBE_H + 0.3, h + WALL_LIP)), lipAt = (v) => { const q = pt(PORTAL_T / 4, v, 0), y = at(q[0], q[2]); return !(y === y); };
+      for (const sd of [-1, 1]) { let v0 = null; for (let v = p.hwT; v <= p.W + 1e-9; v += 0.5) { const on = v + 0.25 <= p.W + 1e-9 && lipAt(sd * (v + 0.25)); if (on && v0 == null) v0 = v; if (!on && v0 != null) { box(sd > 0 ? v0 : -v, sd > 0 ? v : -v0, -PORTAL_FOOT, top); v0 = null; } } if (v0 != null) box(sd > 0 ? v0 : -p.W, sd > 0 ? p.W : -v0, -PORTAL_FOOT, top); }
+      box(-p.hwT, p.hwT, TUBE_H, top); box(-p.hwT, p.hwT, -SILL, -0.05); } // (its wings PORTAL_FOOT deep, a sill across the mouth: roads.js's)
   const pos = {}, nrm = {};
   for (const [k, A] of Object.entries(G)) { if (!A.length) continue; const P = (pos[k] = new Float32Array(A)), N = (nrm[k] = new Float32Array(P.length));
     for (let t = 0; t < P.length; t += 9) { const ax = P[t + 3] - P[t], ay = P[t + 4] - P[t + 1], az = P[t + 5] - P[t + 2], bx = P[t + 6] - P[t], by = P[t + 7] - P[t + 1], bz = P[t + 8] - P[t + 2];
