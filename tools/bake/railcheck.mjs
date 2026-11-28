@@ -11,15 +11,15 @@
 import { physAt } from '../../src/layout/mesh.js';
 import { railPieces, railSide, GAUGE, RAIL_STEP } from '../../src/layout/rails.js';
 import { KIND } from '../../src/layout/format.js';
-import { DECK_SIDE, DECK_DEPTH } from '../../src/layout/rules.js';
+import { DECK_SIDE, DECK_DEPTH, portalsOf, portalUV } from '../../src/layout/rules.js';
 
-const ALONG = 0.9, STEP_D = 0.02, SUB = 8, CLEAR_STEP = 0.5, CLEAR_END = 0.5;
+const PORTAL_NEAR = 15, DECK_END = 1.5, ALONG = 0.9, STEP_D = 0.02, SUB = 8, CLEAR_STEP = 0.5, CLEAR_END = 0.5;
 export function railChecks(L, m, ix) {
-  const at = (x, z) => physAt(L, m, ix, x, z), o = [0, 0, 0, 0], under = {}, pcs = railPieces(L, at); let off = 0, n = 0, over = 0, worst = null;
+  const at = (x, z) => physAt(L, m, ix, x, z), o = [0, 0, 0, 0], under = {}, pcs = railPieces(L, at); let off = 0, n = 0, over = 0, worst = null, offP = 0; const ports = portalsOf(L.net.runs), deckEnds = []; for (const r of L.net.runs) if (r.off === 'deck' && r.kind === 'rail') { const k = r.h.length - 1; deckEnds.push([r.pts[0], r.pts[1], r.hw + DECK_END], [r.pts[k * 2], r.pts[k * 2 + 1], r.hw + DECK_END]); } const nearP = (x, z) => ports.some((p) => { const [u, v] = portalUV(p, x, z); return Math.abs(u) < PORTAL_NEAR && Math.abs(v) < p.W + 2; }) || deckEnds.some(([ex, ez, w]) => Math.hypot(x - ex, z - ez) < w); /* (within PORTAL_NEAR m of a tunnel's portal: its mouth's cutting; or at a rail deck's end, where the surface past the abutment is under the deck (runtime.js draws the deck's bed over it): counted apart (railOffPortal)) */
   for (const pc of pcs) { if (pc.off) continue; const half = GAUGE[pc.cls] / 2;
     for (const sd of [-1, 1]) { const S = railSide(pc, sd * half, at, true);
       for (let i = 0; i + 5 < S.length; i += 5) for (let q = 1; q < SUB; q++) { const t = q / SUB, x = S[i] + (S[i + 5] - S[i]) * t, z = S[i + 1] + (S[i + 6] - S[i + 1]) * t, y = S[i + 2] + (S[i + 7] - S[i + 2]) * t, h = physAt(L, m, ix, x, z, o); if (!(h === h)) continue;
-        n++; const d = Math.abs(y - h); if (d >= 0.02) over++; if (d > off) { off = d; worst = [+x.toFixed(1), +z.toFixed(1), +d.toFixed(3)]; } const k = m.tk[o[0]], w = k === KIND.ballast ? 'ballast' : k === KIND.tarmac ? 'tarmac' : k <= KIND.bank ? 'ground' : 'other'; under[w] = (under[w] || 0) + 1; } } }
+        n++; const d = Math.abs(y - h); if (d >= 0.02) over++; if (d > off && (ports.length || deckEnds.length) && nearP(x, z)) offP = Math.max(offP, d); else if (d > off) { off = d; worst = [+x.toFixed(1), +z.toFixed(1), +d.toFixed(3)]; } const k = m.tk[o[0]], w = k === KIND.ballast ? 'ballast' : k === KIND.tarmac ? 'tarmac' : k <= KIND.bank ? 'ground' : 'other'; under[w] = (under[w] || 0) + 1; } } }
   // the bed: drawn against physics
   let bed = 0; const P = m.pos, I = m.idx, Y = m.phys; for (let q = 0; q < m.tk.length; q++) if (m.tk[q] === KIND.ballast) for (let a = 0; a < 3; a++) { const v = I[q * 3 + a]; bed = Math.max(bed, Math.abs(P[v * 3 + 1] - Y[v])); }
   // the level crossings: each railway's and road's centre line through it (rules.js streetH puts both on its plane)
@@ -41,5 +41,5 @@ export function railChecks(L, m, ix) {
         for (let v = -W; v <= W + 1e-6; v += CLEAR_STEP) { const x = ax + ux * a - uz * v, z = az + uz * a + ux * v; if (!inC(x, z)) continue; const hh = physAt(L, m, ix, x, z, o); if (!(hh === hh) || !paved(m.tk[o[0]]) || (m.tk[o[0]] === KIND.ballast && alongBed(x, z, ux, uz))) continue;
           clrN++; const c = y - hh; if (c < 0) clrBad++; if (c < clr) { clr = c; clrAt = [+x.toFixed(1), +z.toFixed(1), +c.toFixed(2), m.tk[o[0]]]; } } }
       s0 += l; } }
-  return { clear: clrN ? clr : null, clearN: clrN, clearBad: clrBad, clearAt: clrAt, railOff: off, railN: n, railOver: over, railWorst: worst, railUnder: under, bedOff: bed, lx, lxStep: step, lxStepAt: stepAt, pieces: pcs.length };
+  return { railOffPortal: offP, clear: clrN ? clr : null, clearN: clrN, clearBad: clrBad, clearAt: clrAt, railOff: off, railN: n, railOver: over, railWorst: worst, railUnder: under, bedOff: bed, lx, lxStep: step, lxStepAt: stepAt, pieces: pcs.length };
 }
