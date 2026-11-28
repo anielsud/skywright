@@ -50,14 +50,22 @@ export const SETBACK_CODE = ['src/setback.js', 'src/layout/setbacks.js'];
 export const overlayKey = (index, cityHash, texts) => layoutKey(index) + '-' + cityHash + '-' + hashBytes(new TextEncoder().encode(texts.join('\u0000')));
 
 // One baked chunk's building lines (as roadIndex's segments): each street out to its pavement's (or verge's) outer
-// edge, each piece once (S: the setback past them; k: the piece's key, its ends in whole cm)
-export function chunkLines(L, S) {
+// edge, each piece once (S: the setback past them; k: the piece's key, its ends in whole cm). ground(x, z): the natural
+// ground (World.rawHeight): a deck's piece up to DECK_LOW above it is a street to the buildings beside it, as roadIndex
+// has it (a bridge more than 5 m up passes over them); without ground every deck is left out.
+export const DECK_LOW = 5;
+export function chunkLines(L, S, ground = null) {
   const seen = new Set(), segs = [];
   for (const r of L.net.runs) {
-    if (r.minor || r.kind === RKINDS[4] || r.off) continue; // (as roadIndex: a way off the street network moves no building, nor a deck or a tube: today's meshes, up in the air or under the ground)
-    const P = r.shape, w = r.hw + (r.pave || vergeW(r)), R = w + S;
-    for (let i = 0; i + 3 < P.length; i += 2) {
-      const ax = P[i], az = P[i + 1], bx = P[i + 2], bz = P[i + 3], k = segKey(ax, az, bx, bz); if (seen.has(k)) continue; seen.add(k);
+    if (r.minor || r.kind === RKINDS[4] || (r.off && !(r.off === 'deck' && ground))) continue; // (as roadIndex: a way off the street network moves no building, nor a tube under the ground, nor a deck up in the air: below)
+    const P = r.shape, w = r.hw + (r.pave || vergeW(r)), R = w + S, deck = r.off === 'deck';
+    for (let i = 0, s = 0; i + 3 < P.length; i += 2) {
+      const ax = P[i], az = P[i + 1], bx = P[i + 2], bz = P[i + 3];
+      if (deck) { // (its stations from this shape point to the next (format.js stations: the shape's points among them, exactly), their mean height over the ground at the piece's middle)
+        let s1 = s + 1; while (s1 < r.h.length - 1 && !(r.pts[s1 * 2] === bx && r.pts[s1 * 2 + 1] === bz)) s1++;
+        let y = 0; for (let q = s; q <= s1; q++) y += r.h[q]; y /= s1 - s + 1; s = s1;
+        if (y - ground((ax + bx) / 2, (az + bz) / 2) > DECK_LOW) continue; }
+      const k = segKey(ax, az, bx, bz); if (seen.has(k)) continue; seen.add(k);
       const sg = [ax, az, bx, bz, w, 0, Math.min(ax, bx) - R, Math.max(ax, bx) + R, Math.min(az, bz) - R, Math.max(az, bz) + R]; sg.k = k; segs.push(sg);
     }
   }
@@ -83,9 +91,9 @@ export function linesIndex(lists, kept, S, box = null) {
   const I = indexSegs(segs, S); I.kept = n; return I;
 }
 // The building lines over a whole place (the bake's run): Ls the decoded chunks (format.js decodeLayout), in the
-// index's order; old: today's index (roadIndex), for where no chunk is baked
-export function buildingLines(Ls, old, size) {
-  const kept = keptLines(old, new Set(Ls.map((L) => L.ix + ',' + L.iz)), size), I = linesIndex(Ls.map((L) => chunkLines(L, old.set)), kept, old.set);
+// index's order; old: today's index (roadIndex), for where no chunk is baked; ground: chunkLines'
+export function buildingLines(Ls, old, size, ground = null) {
+  const kept = keptLines(old, new Set(Ls.map((L) => L.ix + ',' + L.iz)), size), I = linesIndex(Ls.map((L) => chunkLines(L, old.set, ground)), kept, old.set);
   I.keptSegs = kept; return I;
 }
 
