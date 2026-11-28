@@ -25,7 +25,7 @@ import { gunzipSync } from 'node:zlib';
 import { serialize } from 'node:v8';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { layoutKey, setbacksHeader } from '../../src/layout/setbacks.js';
+import { overlayKey, hashBytes, SETBACK_CODE, setbacksHeader } from '../../src/layout/setbacks.js';
 
 const PLACES = ['islands', 'lauterbrunnen', 'canyon', 'nyc'];
 const REPO = fileURLToPath(new URL('../../', import.meta.url)), LOGS = tmpdir() + '/skywright-bake/';
@@ -70,10 +70,10 @@ for (const s of out) { if (s.error) { console.log(`${s.id.padEnd(14)}  FAILED: $
   if (s.extent) console.log(`${''.padEnd(14)}  extent ${s.extent} chunks: ${s.added} added (${s.ground} only ground, no file; ${s.mbAdded.toFixed(3)} MB of files added); visible edges inside ${s.visible}; outer edge step vs today's terrain p99 ${s.outerP99?.toFixed(2)} m, max ${s.outerMax?.toFixed(2)} m`);
   if (s.cache) { const c = s.cache; console.log(`${''.padEnd(14)}  cache: solve ${c.solve ? 'hit' : 'miss'}, chunks re-checked ${c.checked}/${c.of}${'setbacks' in c ? `, setbacks ${c.setbacks ? 'hit' : 'miss'}` : ''}; World ${c.world ? 'built' : 'not built'}`); }
   if (s.setbacks) console.log(`${''.padEnd(14)}  setbacks ${s.setbacks.kb.toFixed(0)} KB: ${s.setbacks.cut} cut, ${s.setbacks.drop} dropped, ${s.setbacks.through} with a road through (ground ${f1(s.setbacks.s.ground)} s, buildings ${f1(s.setbacks.s.buildings)} s)`); }
-// (a setbacks overlay is keyed to the layout it was baked against: the game ignores one whose key isn't the layout's)
+// (a setbacks overlay is keyed to the layout, city.bin and the setback code it was baked with: the game ignores one whose key isn't theirs)
 for (const id of want) { const d = `${REPO}assets/real/${id}/`; if (!existsSync(d + 'setbacks.bin.gz')) continue;
-  const k = setbacksHeader(new Uint8Array(gunzipSync(readFileSync(d + 'setbacks.bin.gz')))).key, lk = layoutKey(JSON.parse(readFileSync(d + 'layout/index.json', 'utf8')));
-  if (k === lk) console.log(`${id}: setbacks overlay key ${k} matches the layout`); else { console.log(`${id}: setbacks overlay STALE: key ${k}, the layout's ${lk} (re-bake: setbacks.mjs ${id})`); stale = true; } }
+  const k = setbacksHeader(new Uint8Array(gunzipSync(readFileSync(d + 'setbacks.bin.gz')))).key, lk = overlayKey(JSON.parse(readFileSync(d + 'layout/index.json', 'utf8')), hashBytes(new Uint8Array(readFileSync(d + 'city.bin.gz'))), SETBACK_CODE.map((f) => readFileSync(REPO + f, 'utf8')));
+  if (k === lk) console.log(`${id}: setbacks overlay key ${k} matches`); else { console.log(`${id}: setbacks overlay STALE: key ${k}, now ${lk} (re-bake: setbacks.mjs ${id})`); stale = true; } }
 console.log(`(failed: chunks a check failed, kept today's roads, counted in fallback; seams: shared edges matching / compared)\nall in ${((performance.now() - t0) / 1000).toFixed(0)} s`);
 let code = out.some((s) => s.error) || stale ? 1 : 0;
 if (verify) { const after = owned(), diff = [];

@@ -4,11 +4,15 @@
 // that same code once, on this machine, against the layout's own building lines (each street's pavement's outer edge,
 // or its verge's: the clean outlines the layout draws; today's road lines where a chunk isn't baked) and with each
 // building's ground from the layout's surface, and writes what every road-dependent step answered: an OVERLAY,
-// assets/real/<id>/setbacks.bin.gz, keyed to the layout (layoutKey: its chunk files, which name their bytes' hashes).
-// The game reads it (realCity.js tap) instead of working them out; a stale or missing one: today's path.
+// assets/real/<id>/setbacks.bin.gz, keyed to the layout (layoutKey: its chunk files, which name their bytes' hashes),
+// city.bin's bytes and the setback code (overlayKey). The game reads it (realCity.js tap) instead of working them out;
+// a stale or missing one: today's path. With it, the low buildings and the lazy collision boxes are set back from the
+// same building lines, each tile's from the layout chunks over it as they stream in (realCity.js TileLines: chunkLines,
+// linesIndex), and today's lines where no chunk is baked kept in the overlay (keptLines): no road index is made.
 //
-// The overlay: gzip of [uint32 header length, JSON header { v, key, n (tall records), cols (each column's bytes) },
-// padded to 4] + the columns (COLS), each one run of bytes. Per tall building, in city.bin's order (its tiles, then
+// The overlay (v2): gzip of [uint32 header length, JSON header { v, key, n (tall records), cols (each column's bytes),
+// S (the lines' setback), nk (kept lines) }, padded to 4] + the columns (COLS), each one run of bytes. kept: per line
+// int32 cm x 4 (its a from the last one's b, then b from a), uint16 r cm, uint8 ends (setback.js roadIndex). Per tall building, in city.bin's order (its tiles, then
 // their tall records): mask uint16 (BIT); then, as its bits say: g int16 x 2 (its ground's lowest and highest, the
 // change from city.bin's, quarter metres); sb uint8 (1 dropped; 2 a road through it: uint8 segments x 5 float64; 3 cut
 // back: uint16 points x 2 int32 cm, each the change from the one before); base int32 cm; walls uint8 calls, each
@@ -20,8 +24,8 @@ import { RKINDS } from './format.js';
 import { vergeW } from './rules.js';
 import { indexSegs } from '../setback.js';
 
-export const SETBACKS_V = 1;
-const COLS = ['mask', 'g', 'sb', 'base', 'walls', 'box', 'bp']; // (each its own run of bytes: gzip packs them better apart)
+export const SETBACKS_V = 2; /* (2: the kept lines, and the key with city.bin's and the setback code's hashes) */
+const COLS = ['mask', 'g', 'sb', 'base', 'walls', 'box', 'bp', 'kept']; // (each its own run of bytes: gzip packs them better apart)
 const BIT = { seen: 1, g: 2, sb: 4, base: 8, dense: 16, roofAsked: 32, roof: 64, walls: 128, box: 256, bp: 512 };
 
 // the layout's key: its chunk files (each named by its bytes' hash) and its version
@@ -30,23 +34,59 @@ export function layoutKey(index) {
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
   return (h >>> 0).toString(16).padStart(8, '0');
 }
+// a 32-bit hash of bytes (a word at a time: city.bin.gz is 17 MB)
+export function hashBytes(u8, h = 0x811c9dc5) {
+  const nw = u8.byteLength >> 2, w = (u8.byteOffset & 3) === 0 ? new Uint32Array(u8.buffer, u8.byteOffset, nw) : new Uint32Array(u8.slice(0, nw * 4).buffer);
+  for (let i = 0; i < nw; i++) { h = Math.imul(h ^ w[i], 0x01000193); h ^= h >>> 15; }
+  for (let i = nw * 4; i < u8.byteLength; i++) h = Math.imul(h ^ u8[i], 0x01000193);
+  return ((h ^ u8.byteLength) >>> 0).toString(16).padStart(8, '0');
+}
+// The setback code: what works out the answers the overlay keeps and the building lines it is read with. Its text is in
+// the key (fetched at load: the game's files are served as they are), as are city.bin's bytes: a change to either
+// makes the overlay stale (today's path) until tools/bake/setbacks.mjs is run again. (realCity.js, which asks the
+// questions, is left out: it changes for much else, and most of its changes leave the answers as they were.)
+export const SETBACK_CODE = ['src/setback.js', 'src/layout/setbacks.js'];
+// the overlay's key: the layout's, city.bin.gz's bytes' hash (hashBytes) and the setback code's (texts: SETBACK_CODE's, in order)
+export const overlayKey = (index, cityHash, texts) => layoutKey(index) + '-' + cityHash + '-' + hashBytes(new TextEncoder().encode(texts.join('\u0000')));
 
-// The building lines as a road index (setback.js roadIndex's segments): each street of the baked chunks (Ls: decoded
-// chunks, format.js decodeLayout) out to its pavement's (or verge's) outer edge, each piece once; today's index's own
-// (old: roadIndex(w)) where its middle is in no baked chunk.
-export function buildingLines(Ls, old, size) {
-  const baked = new Set(Ls.map((L) => L.ix + ',' + L.iz)), seen = new Set(), segs = [], S = old.set;
-  const key = (a, b, c, d) => { const p = [a, b, c, d].map((v) => Math.round(v * 100)); return p[0] < p[2] || (p[0] === p[2] && p[1] <= p[3]) ? p.join(',') : [p[2], p[3], p[0], p[1]].join(','); };
-  for (const L of Ls) for (const r of L.net.runs) {
+// One baked chunk's building lines (as roadIndex's segments): each street out to its pavement's (or verge's) outer
+// edge, each piece once (S: the setback past them; k: the piece's key, its ends in whole cm)
+export function chunkLines(L, S) {
+  const seen = new Set(), segs = [];
+  for (const r of L.net.runs) {
     if (r.minor || r.kind === RKINDS[4] || r.off) continue; // (as roadIndex: a way off the street network moves no building, nor a deck or a tube: today's meshes, up in the air or under the ground)
     const P = r.shape, w = r.hw + (r.pave || vergeW(r)), R = w + S;
     for (let i = 0; i + 3 < P.length; i += 2) {
-      const ax = P[i], az = P[i + 1], bx = P[i + 2], bz = P[i + 3], k = key(ax, az, bx, bz); if (seen.has(k)) continue; seen.add(k);
-      segs.push([ax, az, bx, bz, w, 0, Math.min(ax, bx) - R, Math.max(ax, bx) + R, Math.min(az, bz) - R, Math.max(az, bz) + R]);
+      const ax = P[i], az = P[i + 1], bx = P[i + 2], bz = P[i + 3], k = segKey(ax, az, bx, bz); if (seen.has(k)) continue; seen.add(k);
+      const sg = [ax, az, bx, bz, w, 0, Math.min(ax, bx) - R, Math.max(ax, bx) + R, Math.min(az, bz) - R, Math.max(az, bz) + R]; sg.k = k; segs.push(sg);
     }
   }
-  let kept = 0; for (const s of old.segs) if (!baked.has(Math.floor((s[0] + s[2]) / 2 / size) + ',' + Math.floor((s[1] + s[3]) / 2 / size))) { segs.push(s); kept++; }
-  const I = indexSegs(segs, S); I.kept = kept; return I;
+  return segs;
+}
+const segKey = (a, b, c, d) => { const p = [a, b, c, d].map((v) => Math.round(v * 100)); return p[0] < p[2] || (p[0] === p[2] && p[1] <= p[3]) ? p.join(',') : [p[2], p[3], p[0], p[1]].join(','); };
+// today's segments (old: roadIndex's) where the layout has no baked chunk (their middle in none of baked: 'ix,iz'), in
+// whole centimetres as the overlay keeps them (the bake's run uses them so too)
+export function keptLines(old, baked, size) {
+  const S = old.set, cm = (v) => Math.round(v * 100) / 100, out = [];
+  for (const s of old.segs) { if (baked.has(Math.floor((s[0] + s[2]) / 2 / size) + ',' + Math.floor((s[1] + s[3]) / 2 / size))) continue;
+    out.push(lineSeg(cm(s[0]), cm(s[1]), cm(s[2]), cm(s[3]), cm(s[4]), s[5], S)); }
+  return out;
+}
+const lineSeg = (ax, az, bx, bz, r, e, S) => [ax, az, bx, bz, r, e, Math.min(ax, bx) - r - S, Math.max(ax, bx) + r + S, Math.min(az, bz) - r - S, Math.max(az, bz) + r + S];
+// The building lines as a road index (setback.js roadIndex's): lists, each chunk's (chunkLines), in the layout index's
+// order, a piece in two chunks taken from the first; then kept (keptLines). box ({ x0, z0, x1, z1 }): only the pieces
+// whose clear zones reach it (a region: what a footprint well inside it meets is what it would with them all)
+export function linesIndex(lists, kept, S, box = null) {
+  const seen = new Set(), segs = [], inBox = (s) => !box || (s[7] >= box.x0 && s[6] <= box.x1 && s[9] >= box.z0 && s[8] <= box.z1);
+  for (const list of lists) for (const s of list) { if (!inBox(s) || seen.has(s.k)) continue; seen.add(s.k); segs.push(s); }
+  let n = 0; for (const s of kept) if (inBox(s)) { segs.push(s); n++; }
+  const I = indexSegs(segs, S); I.kept = n; return I;
+}
+// The building lines over a whole place (the bake's run): Ls the decoded chunks (format.js decodeLayout), in the
+// index's order; old: today's index (roadIndex), for where no chunk is baked
+export function buildingLines(Ls, old, size) {
+  const kept = keptLines(old, new Set(Ls.map((L) => L.ix + ',' + L.iz)), size), I = linesIndex(Ls.map((L) => chunkLines(L, old.set)), kept, old.set);
+  I.keptSegs = kept; return I;
 }
 
 // ---- the overlay's bytes
@@ -67,7 +107,7 @@ const cm = (x) => Math.round(x * 100) / 100;
 export const SNAP = { sb: (s) => (s.cut && !s.drop ? { ...s, P: s.P.map((p) => [cm(p[0]), cm(p[1])]) } : s), base: (b) => (b == null ? b : cm(b)), box: (b) => b && b.map(cm) };
 // tapes: per tall record (city.bin order) what building() was told (realCity.js tap: { g, sb, base, dense, roof,
 // walls, box, bp }, each a list of answers in the order asked), or null if it never got there
-export function encodeSetbacks(tapes, key) {
+export function encodeSetbacks(tapes, key, lines = { keptSegs: [], set: 0 }) {
   const C = Object.fromEntries(COLS.map((c) => [c, new Wr()])), { mask, g, sb: X, base: Bs, walls: Ww, box: Bx, bp: Bp } = C;
   for (const T of tapes) {
     if (!T) { mask.u16(0); continue; }
@@ -82,7 +122,8 @@ export function encodeSetbacks(tapes, key) {
     if (box) for (const v of box) Bx.cm(v);
     if (bp) { Bp.u8(bp.length); for (const L of bp) { Bp.u8(L.length); for (const f of L) for (const k of ['x', 'z', 'ux', 'uz', 'hl', 'hw']) Bp.f64(f[k]); } }
   }
-  const cols = COLS.map((c) => C[c].o), hdr = new TextEncoder().encode(JSON.stringify({ v: SETBACKS_V, key, n: tapes.length, cols })), hl = hdr.length + ((4 - ((hdr.length + 4) % 4)) % 4);
+  { const K = C.kept; let x = 0, z = 0; for (const s of lines.keptSegs) { const a = [0, 1, 2, 3].map((k) => K.whole(s[k])); K.i32(a[0] - x); K.i32(a[1] - z); K.i32(a[2] - a[0]); K.i32(a[3] - a[1]); K.u16(K.whole(s[4])); K.u8(s[5]); x = a[2]; z = a[3]; } } /* (each from the last one's end) */
+  const cols = COLS.map((c) => C[c].o), hdr = new TextEncoder().encode(JSON.stringify({ v: SETBACKS_V, key, n: tapes.length, cols, S: lines.set, nk: lines.keptSegs.length })), hl = hdr.length + ((4 - ((hdr.length + 4) % 4)) % 4);
   const out = new Uint8Array(4 + hl + cols.reduce((a, b) => a + b, 0)); new DataView(out.buffer).setUint32(0, hl, true); out.set(hdr, 4); out.fill(32, 4 + hdr.length, 4 + hl);
   let o = 4 + hl; for (const c of COLS) { out.set(new Uint8Array(C[c].b, 0, C[c].o), o); o += C[c].o; }
   return out;
@@ -106,5 +147,6 @@ export function decodeSetbacks(u8) {
     if (m & BIT.bp) { const c = Bp.u8(), L = []; for (let q = 0; q < c; q++) { const n = Bp.u8(), C = []; for (let k = 0; k < n; k++) C.push({ x: Bp.f64(), z: Bp.f64(), ux: Bp.f64(), uz: Bp.f64(), hl: Bp.f64(), hw: Bp.f64() }); L.push(C); } T.bp.push(L); }
     out[i] = T;
   }
-  return { ...H, tapes: out };
+  const kept = []; { const K = R.kept; let x = 0, z = 0; for (let i = 0; i < H.nk; i++) { const ax = x + K.i32(), az = z + K.i32(), bx = ax + K.i32(), bz = az + K.i32(), r = K.u16(), e = K.u8(); kept.push(lineSeg(ax / 100, az / 100, bx / 100, bz / 100, r / 100, e, H.S)); x = bx; z = bz; } }
+  return { ...H, tapes: out, kept };
 }

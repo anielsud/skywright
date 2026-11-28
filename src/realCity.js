@@ -14,8 +14,9 @@ import { STEP, slice } from './stepClock.js';
 import { buildingMaterial, buildingDepthMaterial, furnMaterial, furnDepthMaterial, dmgAttr, C, facade, facadeSpec, floodlit, linHex, LY0, LYS } from './buildings.js';
 import { toLocal } from './realworld.js';
 import { OcclusionBuffer, OCC_LAYER, inscribedBox, binBounds, worldBounds, shadowsSeeOccluded } from './occlusion.js';
-import { SNAP } from './layout/setbacks.js';
-import { roadIndex, setBack, holeInside, fitBox, footBoxes, boundBox, inParts, irregular, lazyParts, packRing, unpackRing, FOOT, MAJOR, streetWalls, PASSAGE, clip, intrusion, WORK, workSince, Refiner, fillBare } from './setback.js';
+import { SNAP, chunkLines, linesIndex } from './layout/setbacks.js';
+import { decodeLayout } from './layout/format.js';
+import { roadIndex, LATER, setBack, holeInside, fitBox, footBoxes, boundBox, inParts, irregular, lazyParts, packRing, unpackRing, FOOT, MAJOR, streetWalls, PASSAGE, clip, intrusion, WORK, workSince, Refiner, fillBare } from './setback.js';
 
 const PQ = 16; // GPU position units per metre: int16 positions relative to each mesh's centre (+-2 km, 6 cm steps)
 const GROUP = 2; // tall buildings: the far ones drawn by height, by their distance to these GROUP x GROUP data tiles
@@ -484,8 +485,8 @@ const pick = (a, h) => a[Math.floor(h * a.length) % a.length];
 
 // an irregular building's boxes (setback.js footBoxes), each kept off the street (fitBox) unless a road runs through
 // the building (fit: false); null if footBoxes has none. quick: the boxes beside a passage, at load (footBoxes quick)
-function cityParts(city, Q, H, q, fit, quick = false) {
-  const FS = city.footStats, t0 = performance.now(), B = footBoxes(Q, H, q.ux, q.uz, true, null, quick), out = B && fit ? (quick ? B.map((f) => fitBox(city.roads, f)) : fillBare(Q, H, q.ux, q.uz, B, (f) => fitBox(city.roads, f))) : B;
+function cityParts(city, Q, H, q, fit, quick = false, I = null) { /* (I: the lines to fit to; null: city.roads) */
+  const FS = city.footStats, t0 = performance.now(), B = footBoxes(Q, H, q.ux, q.uz, true, null, quick), out = B && fit ? (quick ? B.map((f) => fitBox(I || city.roads, f)) : fillBare(Q, H, q.ux, q.uz, B, (f) => fitBox(I || city.roads, f))) : B;
   if (out && B.refine) out.refine = true; // (a huge one under FOOT.retry: cut into squares after load, CityScenery.refiner)
   FS.irr++; if (B) { FS.boxes += B.length; FS.max = Math.max(FS.max, B.length); } FS.ms += performance.now() - t0;
   return out;
@@ -493,13 +494,14 @@ function cityParts(city, Q, H, q, fit, quick = false) {
 // ...worked out when something first asks (setback.js lazyParts), from its footprint kept compact till then (out here,
 // not in CityScenery.building: a closure there would keep the whole tile's mesh writer alive with it). exact: the
 // footprint kept as it is (a big one, FOOT.eager: a few hundred of them, its boxes exactly what they'd be at load;
-// packRing's floats would move its points a millimetre)
-function lazyBoxes(city, t, P, holes, q, fit, fallback, exact = false) {
+// packRing's floats would move its points a millimetre). tile: the city tile it stands in (its building lines, TileLines)
+function lazyBoxes(city, t, P, holes, q, fit, fallback, exact = false, tile = null) {
   const fp = exact ? P : packRing(P), hp = exact ? holes : holes.map(packRing), un = exact ? (a) => a : unpackRing;
-  const parts = () => cityParts(city, un(fp), hp.map(un), q, fit) || fallback;
+  let I = null; const parts = () => cityParts(city, un(fp), hp.map(un), q, fit, false, I) || fallback;
   lazyParts(t, () => {
+    if (city.lines && tile && !(I = city.lines.get(tile))) return LATER; // (the baked layout's lines about its tile not in yet: its entry's box till they are)
     const t0 = performance.now(), w0 = { ...WORK }, B = parts(), FS = city.footStats, dt = performance.now() - t0, w = workSince(w0);
-    if (B?.refine) city.refiner.add(un(fp), hp.map(un), q.ux, q.uz, (T) => { if (city.w.destruct?.states.has(t.dk)) return; t.parts = fit ? T.map((f) => fitBox(city.roads, f)) : T; FS.boxes += T.length; FS.max = Math.max(FS.max, T.length); }); // (still bare: cut into squares, a piece at a time, setback.js Refiner)
+    if (B?.refine) city.refiner.add(un(fp), hp.map(un), q.ux, q.uz, (T) => { if (city.w.destruct?.states.has(t.dk)) return; t.parts = fit ? T.map((f) => fitBox(I || city.roads, f)) : T; FS.boxes += T.length; FS.max = Math.max(FS.max, T.length); }); // (still bare: cut into squares, a piece at a time, setback.js Refiner)
     if (dt > FS.lazy) { FS.lazy = dt; FS.lazyRedo = parts; } // (lazyRedo: the slowest one again, for tools/test/setbacks.js: info)
     if (w.cells + w.verts > (FS.lazyWork?.cells ?? 0) + (FS.lazyWork?.verts ?? 0)) FS.lazyWork = { ...w, walls: exact ? fp.length : fp.length / 2, boxes: B?.length ?? 0, big: exact }; // (the most work any one took: tools/test/setbacks.js)
     return B;
@@ -508,6 +510,62 @@ function lazyBoxes(city, t, P, holes, q, fit, fallback, exact = false) {
 
 // o[k] worked out by make the first time it's read (then a plain property)
 const lazy = (o, k, make) => Object.defineProperty(o, k, { configurable: true, enumerable: true, get() { const v = make(); Object.defineProperty(o, k, { value: v, writable: true, configurable: true, enumerable: true }); return v; }, set(v) { Object.defineProperty(o, k, { value: v, writable: true, configurable: true, enumerable: true }); } });
+
+// The building lines a city tile's buildings are set back from, on the baked layout with its overlay (#294, ?layout=1:
+// layout/setbacks.js): the low buildings (streamed by tile) and the lazy collision boxes (tall or low) read them, so no
+// building consults today's roads and no road index (setback.js roadIndex) is made. A tile's are its region's (its
+// records' box, LINES_PAD out: what the furthest reach any check makes, streetWalls' FRONT, finds) from the layout chunks
+// over it (each chunk's lines: chunkLines, from its file, the Layout's own decode if it has it), in the index's order,
+// and today's lines baked into the overlay where no chunk is baked (ov.kept). Deterministic: the same chunks, the same
+// lines, whenever they arrive. get(t): its index, or null while a chunk is still coming (fetched then; a low tile waits
+// for it: update; a lazy box is its entry's box till then).
+const LINES_PAD = 64;
+class TileLines {
+  constructor(city, LY, ov) {
+    this.city = city; this.LY = LY; this.kept = ov.kept; this.S = ov.S; this.ord = new Map([...LY.index.keys()].map((k, i) => [k, i]));
+    this.by = new Map(); this.chunk = new Map(); this.coming = new Set(); this.stats = { tiles: 0, segs: 0, ms: 0, chunks: 0 };
+  }
+  // the tile's records' box, LINES_PAD out
+  box(t) {
+    const C = this.city, U = C.city.U, S = C.city.S, q = C.q, [cx, cz] = C.tileCentre(t.i, t.j); let o = t.off, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let r = 0; r < t.nTall + t.nLow; r++) { // (readRec's layout, the outer ring only: supIndex)
+      const w0 = U[o], n = w0 & 4095, nh = w0 >> 12; let p = o + 10, x = 0, z = 0;
+      for (let k = 0; k < n; k++) { x += S[p++]; z += S[p++]; const X = cx + x / q, Z = cz + z / q; if (X < x0) x0 = X; if (X > x1) x1 = X; if (Z < z0) z0 = Z; if (Z > z1) z1 = Z; }
+      for (let h = 0; h < nh; h++) p += 2 * U[p] + 1;
+      o = p;
+    }
+    if (x0 === Infinity) { x0 = x1 = cx; z0 = z1 = cz; }
+    return { x0: x0 - LINES_PAD, z0: z0 - LINES_PAD, x1: x1 + LINES_PAD, z1: z1 + LINES_PAD };
+  }
+  // the layout chunks over a tile's box, in the index's order
+  keys(b) { const L = this.LY, S = L.size, ks = []; for (let i = Math.floor(b.x0 / S); i <= Math.floor(b.x1 / S); i++) for (let j = Math.floor(b.z0 / S); j <= Math.floor(b.z1 / S); j++) if (L.index.has(i + ',' + j)) ks.push(i + ',' + j); return ks.sort((a, c) => this.ord.get(a) - this.ord.get(c)); }
+  // a chunk's lines, if in (else fetched: not through Layout.load, whose chunks it then meshes and waits for)
+  lines(k) {
+    const have = this.chunk.get(k); if (have) return have;
+    const L = this.LY, c = L.chunks.get(k), e = L.index.get(k);
+    if (c?.L || !e.file) { const s = c?.L ? chunkLines(c.L, this.S) : []; this.chunk.set(k, s); this.stats.chunks++; return s; } // (a chunk only ground, no file: no streets)
+    if (!this.coming.has(k)) { this.coming.add(k);
+      (async () => { const r = await fetch(L.dir + e.file), s = r.body.pipeThrough(new DecompressionStream('gzip')); return decodeLayout(await new Response(s).arrayBuffer()); })()
+        .then((D) => { if (!this.chunk.has(k)) { this.chunk.set(k, chunkLines(D, this.S)); this.stats.chunks++; } }, (err) => { console.warn('[setbacks] layout chunk', k, err); this.chunk.set(k, []); }).finally(() => this.coming.delete(k)); }
+    return null;
+  }
+  get(t) {
+    const I = this.by.get(t); if (I) return I;
+    const b = t.lbox || (t.lbox = this.box(t)), ks = t.lks || (t.lks = this.keys(b)); let ready = true;
+    for (const k of ks) if (!this.lines(k)) ready = false;
+    if (!ready) return null;
+    const t0 = performance.now(), J = linesIndex(ks.map((k) => this.chunk.get(k)), this.kept, this.S, b); this.by.set(t, J);
+    this.stats.tiles++; this.stats.segs += J.segs.length; this.stats.ms += performance.now() - t0;
+    return J;
+  }
+  // every chunk any of tiles' boxes needs, in (tools and tests: the game fetches them as tiles want them)
+  async prime(tiles = this.city.tiles.values()) {
+    const ks = new Set(); for (const t of tiles) { const b = t.lbox || (t.lbox = this.box(t)); for (const k of (t.lks ||= this.keys(b))) ks.add(k); }
+    for (const k of ks) this.lines(k);
+    while (this.coming.size) await new Promise((r) => setTimeout(r, 5));
+    return ks.size;
+  }
+}
 
 // ---------------- the city ----------------
 export class CityScenery {
@@ -537,7 +595,12 @@ export class CityScenery {
     // the layout's building lines, and its ground from the layout's surface (tap); then the road index and the density
     // map are made only when something else first asks (a low tile, a lazy collision box). Recording: the bake's run.
     const BK = CityScenery.bake; this.ov = BK ? null : D.setbacks?.n === H.tiles.reduce((n, t) => n + t[3], 0) ? D.setbacks : null; this.tp = null; this.ovStats = { used: 0, miss: 0 };
-    if (BK) { this.roads = BK.roads; this.tapes = []; } else if (this.ov) lazy(this, 'roads', () => { const t1 = performance.now(), I = roadIndex(W); this.setbacks.ms += performance.now() - t1; return I; });
+    // Then the low buildings and the lazy collision boxes read each tile's building lines (TileLines; this.curLines: the
+    // tile being built's); anything else asking for roads (none known: ROADS.built counts it) gets today's index.
+    this.lines = !BK && this.ov?.kept && W.layout ? new TileLines(this, W.layout, this.ov) : null; this.curLines = null;
+    const today = () => { const t1 = performance.now(), I = roadIndex(W); this.setbacks.ms += performance.now() - t1; return I; };
+    if (BK) { this.roads = BK.roads; this.tapes = []; } else if (this.lines) { let I = null; Object.defineProperty(this, 'roads', { configurable: true, enumerable: true, get: () => this.curLines || (I ||= today()) }); }
+    else if (this.ov) lazy(this, 'roads', today);
     else this.roads = roadIndex(W);
     this.setbacks = { cut: 0, dropped: 0, through: 0, ms: performance.now() - t0 }; // set back from the streets (setback.js; ms: the index and the cuts)
     this.footStats = { n: 0, irr: 0, boxes: 0, max: 0, ms: 0, lazy: 0, load: 0 }; // (the collision boxes: ms in footBoxes, whenever; lazy: the slowest worked out after load; load: at load)
@@ -591,7 +654,7 @@ export class CityScenery {
         const ck = this.cellKey(R.P, TALL_CELL), a = M.ni, la = M.lni, v0 = M.n;
         pk.cell = ckOf.get(ck) ?? ckOf.set(ck, ckOf.size).get(ck); pk.top = rc.top;
         const fk = this.cellKey(R.P, FURN_CELL); M.fw = fws.get(fk); if (!M.fw) fws.set(fk, (M.fw = furnW(...this.cellCentre(fk, FURN_CELL))));
-        this.lastFoot = this.lastBase = null; this.curOrd = rc.ord; this.building(M, R, true); this.curOrd = null; this.tp = null;
+        this.lastFoot = this.lastBase = null; this.curOrd = rc.ord; this.bt = rc.t; this.building(M, R, true); this.curOrd = null; this.tp = null; this.bt = null;
         const ob = M.n > v0 && this.occluder(R, true); if (ob) { ob.ck = ck; occ.push(ob); (rc.t.occ || (rc.t.occ = [])).push(ob); }
         let c = cells.get(ck); if (!c) cells.set(ck, (c = []));
         c.push(a, M.ni, la, M.lni, rc.top); // (its main and late index runs)
@@ -1004,7 +1067,7 @@ export class CityScenery {
     // (a big one too (FOOT.eager): its footprint kept exact. Under FOOT.retry covered (a campus of wings, a block of
     // courtyards): its first pass's boxes, then the footprint cut into squares a piece at a time (setback.js Refiner),
     // unless it's been hit by then)
-    if (lazy) lazyBoxes(this, t, P, holes, { cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz }, !F.through, one, A > FOOT.eager);
+    if (lazy) lazyBoxes(this, t, P, holes, { cx: b0.cx, cz: b0.cz, ux: b0.ux, uz: b0.uz }, !F.through, one, A > FOOT.eager, this.bt);
     this.footStats.n++; this.footStats.load += performance.now() - tb;
     if (F.through) t.through = true;
     if (cut) t.passage = true;
@@ -1346,7 +1409,7 @@ export class CityScenery {
     const U = this.city.U, S = this.city.S, R = {}, t0 = performance.now(), r0 = t.st?.r ?? 0; // (r0: under the test stepper, 32 records per ms of budget a step, stepClock.js)
     const st = t.st || (t.st = { o: t.lowOff, r: 0, cells: new Map() }); // (one writer per LOW_CELL cell of the tile)
     const minA = this.qn === 'low' ? 60 : this.qn === 'medium' ? 25 : 0;
-    this.curTile = t.i + ',' + t.j;
+    this.curTile = t.i + ',' + t.j; this.bt = t; this.curLines = this.lines?.get(t) || null; /* (its building lines: TileLines) */
     while (st.r < t.nLow) {
       readRec(U, S, st.o, this.q, ...this.tileCentre(t.i, t.j), R); st.o = R.next; st.r++;
       if (this.skipped(R)) continue;
@@ -1355,9 +1418,9 @@ export class CityScenery {
       if (!M) { st.cells.set(ck, (M = new MeshW(...this.cellCentre(ck, LOW_CELL), 4096))); M.fw = st.fw || (st.fw = furnW(...this.tileCentre(t.i, t.j))); }
       const v0 = M.n; this.lastFoot = this.lastBase = null; this.building(M, R, false);
       const ob = M.n > v0 && this.occluder(R, false); if (ob) { ob.ck = ck; (st.occ || (st.occ = [])).push(ob); }
-      if ((st.r & 31) === 0 && (STEP.on ? st.r - r0 >= budget * 32 : performance.now() - t0 > budget)) { this.curTile = null; return false; }
+      if ((st.r & 31) === 0 && (STEP.on ? st.r - r0 >= budget * 32 : performance.now() - t0 > budget)) { this.curTile = this.bt = this.curLines = null; return false; }
     }
-    this.curTile = null;
+    this.curTile = this.bt = this.curLines = null;
     t.st = null; t.low = true; t.meshes = []; t.tris = 0; // (t.low: built; t.meshes: its cells' meshes)
     const cellM = new Map();
     for (const [ck, M] of st.cells) {
@@ -1433,7 +1496,7 @@ export class CityScenery {
     const budget = this.qn === 'low' || this.qn === 'medium' ? 3 : 5;
     const LY = this.w.layout; let go = true; if (LY && this.queue.length && !this.queue[0].low) { // (a baked layout chunk not in yet under the next tile: the first tile whose ground is ready first, #294)
       const ready = (t) => { const [cx, cz] = this.tileCentre(t.i, t.j); return LY.readyIn(cx - T / 2 - 40, cz - T / 2 - 40, cx + T / 2 + 40, cz + T / 2 + 40); };
-      const k = this.queue.findIndex((t) => t.st || ready(t)); if (k < 0) go = false; else if (k > 0) this.queue.unshift(...this.queue.splice(k, 1)); }
+      const k = this.queue.findIndex((t) => t.st || (ready(t) && (!this.lines || this.lines.get(t)))); if (k < 0) go = false; /* (and its building lines in: TileLines) */ else if (k > 0) this.queue.unshift(...this.queue.splice(k, 1)); }
     while (go && this.queue.length) {
       const t = this.queue[0];
       if (t.low) { this.queue.shift(); continue; }

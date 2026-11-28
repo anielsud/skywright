@@ -18,7 +18,7 @@ import { decodeRoadnet, way, plazas, MINOR, MINOR_KINDS } from './roadnet.js';
 import { decodeRoads, PACK_V } from './roadPack.js';
 import { ROADS } from './version.js';
 import { layoutWanted } from './layout/format.js';
-import { layoutKey, decodeSetbacks, setbacksHeader } from './layout/setbacks.js';
+import { overlayKey, hashBytes, SETBACK_CODE, decodeSetbacks, setbacksHeader } from './layout/setbacks.js';
 
 const BASE = 'assets/real/';
 const GAIN = 1.35, DESHADE = 0.3; // imagery brightness (linear, loc.satGain overrides) and how much of its baked-in shading to remove (shaders.js)
@@ -181,6 +181,7 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   if (loc.city) files.push(get(dir + 'city.bin.gz')); // a city's buildings (realCity.js)
   if (loc.city?.statue) files.push(get('assets/landmarks/liberty.glb').catch((e) => (console.warn('[landmarks] statue model', e), null))); // the Statue of Liberty scan (realLandmarks.js; tools/liberty)
   const sbZ = loc.city && layoutWanted() && setbacksWanted() ? get(dir + 'setbacks.bin.gz').catch(() => null) : null; // (the baked setbacks: layout/setbacks.js; not waited for with the rest)
+  const sbCode = sbZ ? Promise.all(SETBACK_CODE.map((f) => fetch(f).then((r) => (r.ok ? r.text() : null)))).catch(() => null) : null; // (the setback code's own text: part of the overlay's key)
   let done = 0; const tick = (p) => { done++; onProgress?.(done / files.length); return p; };
   const [meta, hiZ, farZ, hiB, farB, coverB, osm, roadsZ, geoB, cityZ, statueB] = await Promise.all(files.map((p) => p.then(tick)));
   // the largest imagery texture on this tier; a place with loc.img has a ready-made hi file per tier (no resize)
@@ -204,7 +205,7 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   // the baked road layout's chunks (#294, behind a flag while it's tried out): their bytes, decoded by the World
   if (layoutWanted()) try { D.layout = { index: await get(dir + 'layout/index.json', 'json'), dir: dir + 'layout/' }; } catch { /* (none baked here) */ } // (the chunks themselves stream in: layout/runtime.js)
   // the baked setbacks (#294): only if they were baked against this layout (else realCity.js works them out as before)
-  if (sbZ && D.layout) try { const z = await sbZ; if (z) { const b = await gunzip(z); if (setbacksHeader(b).key === layoutKey(D.layout.index)) D.setbacks = decodeSetbacks(b); else console.warn('[setbacks] baked against another layout: worked out at load'); } } catch (e) { console.warn('[setbacks]', e); }
+  if (sbZ && D.layout) try { const z = await sbZ; if (z) { const b = await gunzip(z); const code = await sbCode, key = code && !code.includes(null) && cityZ ? overlayKey(D.layout.index, hashBytes(new Uint8Array(cityZ)), code) : null; if (key && setbacksHeader(b).key === key) D.setbacks = decodeSetbacks(b); else console.warn('[setbacks] baked against another layout, city.bin or setback code: worked out at load'); } } catch (e) { console.warn('[setbacks]', e); }
   if (statueB) try { D.statue = (await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(statueB, '')).scene; } catch (e) { console.warn('[landmarks] statue model', e); }
   D.key = key;
   cache.get(id)?.dispose();

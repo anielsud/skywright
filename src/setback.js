@@ -43,8 +43,13 @@ export const workSince = (w0) => ({ index: WORK.index - w0.index, tests: WORK.te
 
 // The clear zones of a World's road network: segments [ax, az, bx, bz, r, ends, x0, x1, z0, z1] (r: the clear half
 // width; ends: 1 the segment's a is a road's dead end, 2 its b is; then its box, out to r + the setback), filed in a
-// dense 32 m grid (start: each cell's offset into list; one pass to count, one to fill).
+// dense 32 m grid (start: each cell's offset into list; one pass to count, one to fill). ROADS.built: how many were made
+// (a city on the baked layout with its overlay makes none: realCity.js TileLines; tools/test/jobs/bld-hash.js)
+export const ROADS = { built: 0, ms: 0 };
 export function roadIndex(w) {
+  const t0 = performance.now(); ROADS.built++; try { return roadIndexOf(w); } finally { ROADS.ms += performance.now() - t0; }
+}
+function roadIndexOf(w) {
   const city = !!w.loc.city, segs = [], S = city ? TOL : SETBACK; // (a city: nothing past the pavement but the slack, TOL, that setBack leaves alone)
   let gx0 = Infinity, gx1 = -Infinity, gz0 = Infinity, gz1 = -Infinity;
   for (const rd of w.net?.roads || []) {
@@ -751,9 +756,11 @@ export function irregular(P, A, x, z, ux, uz, hl, hw) {
 }
 // An irregular building's boxes, worked out the first time anything asks for them (a car near it, a blow, a test):
 // footBoxes for a whole city at load is seconds; a car or a plane only ever meets a few hundred buildings.
-// make() -> the boxes; e.parts is then a plain property.
+// make() -> the boxes; e.parts is then a plain property. make() -> LATER: not yet (what they're fitted to isn't in:
+// realCity.js TileLines), none for now (the entry's own box) and asked again next time.
+export const LATER = Symbol('later');
 export function lazyParts(e, make) {
-  Object.defineProperty(e, 'parts', { configurable: true, enumerable: true, get() { const B = make(); Object.defineProperty(e, 'parts', { value: B, writable: true, configurable: true, enumerable: true }); return B; } });
+  Object.defineProperty(e, 'parts', { configurable: true, enumerable: true, get() { const B = make(); if (B === LATER) return null; Object.defineProperty(e, 'parts', { value: B, writable: true, configurable: true, enumerable: true }); return B; } });
 }
 // a footprint ([[x, z], ...]) kept compact until it's wanted again (lazyParts)
 export const packRing = (P) => { const a = new Float32Array(P.length * 2); for (let k = 0; k < P.length; k++) { a[k * 2] = P[k][0]; a[k * 2 + 1] = P[k][1]; } return a; };
