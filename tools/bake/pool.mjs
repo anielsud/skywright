@@ -1,5 +1,5 @@
 // The bake's workers (tools/bake/): jobs dealt round-robin to N workers running `url` (each gets { jobs, ...extra }
-// in one message and answers with one list), the answers concatenated. Round-robin keeps the busy (dense) chunks spread.
+// in one message and answers with one list), the answers concatenated: worker by worker, not in the jobs' order. Round-robin keeps the busy (dense) chunks spread.
 import { cpus } from 'node:os';
 import { Worker } from 'node:worker_threads';
 
