@@ -19,6 +19,13 @@ def sh(cmd, check=True):
     return r.stdout.strip()
 
 
+def at_least(live, ver):  # live version >= ver, as numbers ('?' when unreadable: no)
+    try:
+        return tuple(map(int, live.split('.'))) >= tuple(map(int, ver.split('.')))
+    except ValueError:
+        return False
+
+
 def js_str(s):
     return json.dumps(s, ensure_ascii=False)  # a double-quoted JS string literal
 
@@ -89,10 +96,12 @@ def main():
             live = re.search(r"VERSION = '([^']*)'", urllib.request.urlopen(f'{SITE}?x={time.time()}', timeout=20).read().decode()).group(1)
         except Exception:
             live = '?'
-        if live == ver:
+        if at_least(live, ver):
             break
         time.sleep(10)
-    print(f'deploy {"success" if live == ver else "NOT LIVE"} | live {live}')
+    # (a newer live version contains this one: each release's version is main's + 1 after rebasing onto it, so
+    # versions only rise in merge order; another session's release landing first is still a success)
+    print(f'deploy {"success" if at_least(live, ver) else "NOT LIVE"} | live {live}' + (f' (includes {ver})' if at_least(live, ver) and live != ver else ''))
 
 
 if __name__ == '__main__':
