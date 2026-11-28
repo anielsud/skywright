@@ -104,6 +104,4 @@ export const groundBytes = (ix, iz, city) => encodeLayout({ ix, iz, x0: ix * CHU
 export function indexChunks(index) { const out = [...index.chunks]; for (const [iz, a, b] of index.ground || []) for (let ix = a; ix <= b; ix++) out.push({ ix, iz, file: null }); return out; }
 // whether the layout is wanted: on unless turned off (today's roads for one release while it's switched on: ?layout=0 in
 // the page, SKY_LAYOUT=0 in Node, globalThis.SKY_LAYOUT = false in a tool)
-/* In the browser, off unless ?layout=1, until the layout is at least as fast as today's roads (it measured 10-16% slower
-   on 1.258.0: today's road tiles were still built under it). In Node (tests, bakes) on unless SKY_LAYOUT=0. */
-export const layoutWanted = () => globalThis.SKY_LAYOUT ?? (typeof process !== 'undefined' && process.versions?.node ? process.env?.SKY_LAYOUT !== '0' : (typeof location !== 'undefined' && /[?&]layout=1\b/.test(location.search || '')));
+export const layoutWanted = () => globalThis.SKY_LAYOUT ?? !((typeof process !== 'undefined' && process.env?.SKY_LAYOUT === '0') || (typeof location !== 'undefined' && /[?&]layout=0\b/.test(location.search || '')));
