@@ -230,7 +230,7 @@ export function makeRules(net, g, city, wl = -Infinity, box = null) {
   // the paved region a point is in, by the outlines' own order (outline.js): a street's carriageway, its pavement, an
   // alley, pavers, gravel, a verge; else the ground (a carriageway's edge, to 3 cm: its outline's points round to the
   // centimetre). For the chunk's edge points: both chunks beside it agree.
-  const mk = (r) => (isRail(r) ? KIND.ballast : r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
+  const mk = (r) => (isRail(r) ? KIND.ballast : r.surf === 2 ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
   const region = (x, z) => { if (portals.length && inLip(x, z)) return KIND.lip; const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return KIND.ground; let best = KIND.ground, rank = 99, hasB = false;
     const RANK = { [KIND.tarmac]: 0, [KIND.ballast]: 1, [KIND.pave]: 2, [KIND.alley]: 3, [KIND.pavers]: 4, [KIND.gravel]: 5, [KIND.verge]: 6 }; // (outline.js's order)
     for (let q = 0; q < L.length; q += 2) { const ri = L[q], s = L[q + 1], r = runs[ri], ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;

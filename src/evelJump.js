@@ -246,9 +246,10 @@ export class EvelJump extends Site {
     const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, f.clone().negate()));
     ac.q.slerp(q, Math.min(1, 3 * dt)).normalize(); ac.w.multiplyScalar(Math.max(0, 1 - 6 * dt));
   }
-  // the rescue parachute: down gently, level
+  // the rescue parachute: down gently (7 m/s), level. (Its pull holds the fall against gravity too: easing towards 7 m/s
+  // alone settled where gravity's pull matched it, at 10 m/s)
   rescue(ac, dt) {
-    if (ac.v.y < -7) ac.v.y += (-7 - ac.v.y) * Math.min(1, 3 * dt);
+    if (ac.v.y < -7) ac.v.y = Math.min(-7, ac.v.y + (-7 - ac.v.y) * Math.min(1, 3 * dt) + G * dt);
     ac.v.x *= Math.max(0, 1 - 0.7 * dt); ac.v.z *= Math.max(0, 1 - 0.7 * dt);
     const fw = V(0, 0, -1).applyQuaternion(ac.q); fw.y = 0; if (fw.lengthSq() < 1e-4) fw.set(0, 0, -1); fw.normalize();
     const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(fw.clone().cross(Y), Y, fw.clone().negate()));
