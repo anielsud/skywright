@@ -28,6 +28,7 @@ import { DRIFT_MAX } from './markcheck.mjs';
 import { groundOf, mergeGround } from './groundcheck.mjs';
 import { onWorkers, workers } from './pool.mjs';
 
+globalThis.SKY_LAYOUT_BAKE = true; /* (the World as the game builds it with the layout on: realworld.js decksOverRails) */
 const key = (ix, iz) => ix + ',' + iz, WARN = 0.02, LX_FAIL = 0.05, RAIL_FAIL = 0.1;
 if (import.meta.url === pathToFileURL(process.argv[1]).href) { // (run as a script; all.mjs calls bakePlace)
   const args = process.argv.slice(2);

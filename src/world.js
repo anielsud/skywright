@@ -33,6 +33,8 @@ import { Marina } from './marina.js';
 import { WaterParks } from './waterPark.js';
 import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
 import { Layout } from './layout/runtime.js';
+import { decksOverRails } from './layout/rails.js';
+import { layoutWanted } from './layout/format.js';
 
 export const RWY = { len: 1800, width: 45 };
 export { airportGate } from './airportKit.js'; // where the airport's landside road meets the road network (roads.js)
@@ -257,6 +259,7 @@ export class World {
     this.rawFine(); // the fine grid's raw heights: routing and road profiles read them, then they are carved and baked
     this.net = this.real.network(this);
     gradeReal(this, this.net);
+    if (layoutWanted() || globalThis.SKY_LAYOUT_BAKE || (typeof process !== 'undefined' && process.env?.SKY_LAYOUT_BAKE === '1')) this.net.roads = decksOverRails(this.net.roads, this.real.osm?.rails); /* (the layout's, in the game behind its flag and in its bake (tools/bake/layout.mjs): a road's deck carried over a railway's bed beside it, layout/rails.js) */
     this.dryLand(); // no-op without a terrain bake (real places)
     flattenGrid(this, this.net);
     for (let k = 0; k < H.length; k++) H[k] = this.shoreSnap(H[k]);
