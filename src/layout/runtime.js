@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { decodeLayout, KIND } from './format.js';
 import { meshChunk, physIndex, physAt, latticeOf } from './mesh.js';
+import { meshRibbon } from './ribbon.js';
 import { groundGrid, latticeHeights } from './rules.js';
 import { sidewalkMaterial, pathMaterial, regionLook, REGION } from '../roadSurface.js';
 // the gravel (tracks and verges): a region's own where it differs (Bora Bora's tracks and verges are coral sand and dirt)
@@ -31,6 +32,7 @@ export class Layout {
     this.maskData = new Uint8Array(this.gn * this.gn); this.mask = new THREE.DataTexture(this.maskData, this.gn, this.gn, THREE.RedFormat, THREE.UnsignedByteType); this.mask.needsUpdate = true;
     this.U = { layMask: { value: this.mask }, layGrid: { value: new THREE.Vector4(this.gx0, this.gz0, S, this.gn) } };
     this.out = [0, 0, 1, 0]; this.skirts = new Map(); this.subs = []; this.o2 = [0, 0, 0, 0];
+    this.mesher = typeof location !== 'undefined' && /[?&]mesher=ribbon\b/.test(location.search || '') ? 'ribbon' : null; // (a test of another fine mesher, ribbon.js: ?layout=1&mesher=ribbon)
     this.place = !(typeof location !== 'undefined' && /[?&]layplace=0\b/.test(location.search || '')); // (false: what stands on the roads placed as before this (?layplace=0, to compare shots))
   }
   // fn(box: { x0, z0, x1, z1 }) each time a chunk's surface arrives (physics on there): what was placed on today's ground
@@ -112,8 +114,8 @@ export class Layout {
     if (this.busy || !this.queue.size) return;
     let best = null, bd = Infinity; for (const [q, [c, level]] of this.queue) { const d = Math.hypot(c.cx - this.cam.x, c.cz - this.cam.z) + (level === 'coarse' ? 1 : 0); if (d < bd) { bd = d; best = q; } }
     const [c, level] = this.queue.get(best); this.queue.delete(best); const { grid, G } = this.lattice(c.L);
-    if (this.worker) { this.busy = true; this.worker.postMessage({ id: c.k, buf: c.buf.slice(0), grid, G, level }, [G.buffer]); }
-    else { this.got(c, level, meshChunk(c.L, grid, G, level)); this.pump(); } // (Node: no workers; the same function)
+    if (this.worker) { this.busy = true; this.worker.postMessage({ id: c.k, buf: c.buf.slice(0), grid, G, level, mesher: this.mesher }, [G.buffer]); }
+    else { this.got(c, level, this.mesher === 'ribbon' && level === 'fine' ? meshRibbon(c.L, grid, G, latticeOf(c.L, grid)) : meshChunk(c.L, grid, G, level)); this.pump(); } // (Node: no workers; the same function)
   }
   got(c, level, m) {
     c.m[level] = m;

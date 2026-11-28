@@ -177,6 +177,18 @@ export function meshChunk(L, grid, G, level = 'fine') {
     stats: { points: N, tris: nt, fixed, failed, failedAt, regionArea: O.area, why, softMissed, bendMissed, covered: area / (L.size * L.size), outlineMs: tOut, delaunayMs: t1 - t0, constrainMs: t2 - t1, totalMs: performance.now() - t0 } };
 }
 
+// the highest triangle at (x, z) in cell k (ribbon.js: ground, faces and roads overlap)
+function physTop(m, ix, k, x, z, out) {
+  const P = m.pos, I = m.idx, Y = m.phys; let best = NaN, bq = -1;
+  for (let s = ix.start[k]; s < ix.start[k + 1]; s++) {
+    const q = ix.list[s], a = I[q * 3], b = I[q * 3 + 1], c = I[q * 3 + 2], ax = P[a * 3], az = P[a * 3 + 2], bx = P[b * 3], bz = P[b * 3 + 2], cx = P[c * 3], cz = P[c * 3 + 2];
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz); if (d === 0) continue;
+    const l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d, l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d, l3 = 1 - l1 - l2, E = -1e-7;
+    if (l1 < E || l2 < E || l3 < E) continue; const y = l1 * Y[a] + l2 * Y[b] + l3 * Y[c]; if (!(y <= best)) { best = y; bq = q; }
+  }
+  if (out && bq >= 0) { const a = I[bq * 3], b = I[bq * 3 + 1], c = I[bq * 3 + 2], ux = P[b * 3] - P[a * 3], uy = Y[b] - Y[a], uz = P[b * 3 + 2] - P[a * 3 + 2], vx = P[c * 3] - P[a * 3], vy = Y[c] - Y[a], vz = P[c * 3 + 2] - P[a * 3 + 2]; let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx; if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; } const l = Math.hypot(nx, ny, nz) || 1; out[0] = bq; out[1] = nx / l; out[2] = ny / l; out[3] = nz / l; }
+  return best;
+}
 // physics lookup over a fine mesh: a grid of CELL-metre cells listing the triangles touching each
 const CELL = 4;
 export function physIndex(L, m) {
@@ -193,6 +205,7 @@ export function physIndex(L, m) {
 export function physAt(L, m, ix, x, z, out) {
   const fx = (x - L.x0) / CELL, fz = (z - L.z0) / CELL; if (!(fx >= 0 && fz >= 0 && fx < ix.nc && fz < ix.nc)) return NaN;
   const k = Math.floor(fz) * ix.nc + Math.floor(fx), P = m.pos, I = m.idx, Y = m.phys;
+  if (m.top) return physTop(m, ix, k, x, z, out); // (ribbon.js's surfaces overlap: the highest)
   for (let s = ix.start[k]; s < ix.start[k + 1]; s++) {
     const q = ix.list[s], a = I[q * 3], b = I[q * 3 + 1], c = I[q * 3 + 2], ax = P[a * 3], az = P[a * 3 + 2], bx = P[b * 3], bz = P[b * 3 + 2], cx = P[c * 3], cz = P[c * 3 + 2];
     const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz); if (d === 0) continue;

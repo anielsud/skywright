@@ -138,6 +138,9 @@ export function makeRules(net, g, city, wl = -Infinity) {
   const shore = (y, gz) => (gz < wl ? gz : Math.max(wl, y > gz ? Math.min(y, gz + SHORE_K * (gz - wl)) : y));
   const ground0 = (x, z) => { const gz = g(x, z); if (city) { const l = lot(x, z); if (l && l.d <= CITY_REACH) return l.y; } return banks(x, z, gz); };
   const ground = (x, z) => portalClamp(x, z, offClamp(x, z, ground0(x, z)));
+  // the ground without the banks (a city's lots, else the natural ground; the decks' and portals' clamps): the ribbon mesher's
+  // grid (ribbon.js, a test behind ?mesher=ribbon), whose roads carry their banks as faces of their own
+  const unbanked = (x, z) => { let y = g(x, z); if (city) { const l = lot(x, z); if (l && l.d <= CITY_REACH) y = l.y; } return portalClamp(x, z, offClamp(x, z, y)); };
   // the markings' coordinates: the nearest street, and how far its point is from the nearest junction's circle
   const road = (x, z) => { const n = nearest(x, z, street); if (!n) return null; const j = junction(n.px, n.pz); return { id: n.ri, u: n.u, v: n.v, hw: n.r.hw, lanes: n.r.lanes, oneway: n.r.oneway, dj: j ? j[1] : 99 }; };
   // a point's coordinates on a given road (the one its triangle was given): along, across, and from the nearest junction's circle
@@ -174,7 +177,7 @@ export function makeRules(net, g, city, wl = -Infinity) {
       const k = d <= (r.minor ? 0 : 0.03) ? (r.minor ? mk(r) : KIND.tarmac) : !r.minor && r.pave && d <= r.pave ? KIND.pave : d <= vergeW(r) ? KIND.verge : null;
       if (k != null && RANK[k] < rank) { rank = RANK[k]; best = k; } }
     return best; };
-  return { base, drawn, ground, road, roadOn, lineOn, bends, nearest, nearest2, lot, junction, region, portals };
+  return { base, drawn, ground, unbanked, road, roadOn, lineOn, bends, nearest, nearest2, lot, junction, region, portals };
 }
 
 // The natural ground: today's terrain base without the roads' carving, at the hi grid's points (World.rawHeight: the real
