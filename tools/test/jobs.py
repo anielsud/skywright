@@ -25,7 +25,7 @@ import websockets
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smoke import CDP, Problems, free_port, start_server, launch_chrome  # noqa: E402
 
-JOBS = ['hangar', 'nyc', 'islands', 'canyon-lauterbrunnen']
+JOBS = ['hangar', 'nyc', 'islands', 'canyon-lauterbrunnen', 'ultra']
 TAG = '\u0001T'
 S = 'window.__sky'
 GRACE = 120  # s past a step's own (page-side) safety timeout before this side calls the page hung

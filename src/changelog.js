@@ -2,6 +2,9 @@
 // When you bump VERSION in src/version.js, add an entry here with the same version, written for players
 // (what they can see or do now), not for developers.
 export const CHANGELOG = [
+  { v: '1.262.0', items: [
+    "On Ultra graphics, the ground in places like Lauterbrunnen no longer has big holes in it.",
+  ] },
   { v: '1.261.0', items: [
     "The new smooth road surface is back on everywhere: roads, pavements, railways and the ground fit together with no gaps or floating bits. (Add ?layout=0 to the address for the old roads.)",
   ] },

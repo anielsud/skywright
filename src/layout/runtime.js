@@ -38,6 +38,14 @@ const tex = (name) => { if (!texCache.has(name)) { const t = loader.load(`tex/ro
 const SIDES = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 const BLOCK = 4; /* (chunks a side of a block, whose coarse surfaces are drawn as one mesh: blockMesh) */
 const akey = (i, j) => (i + 32768) * 65536 + (j + 32768); /* (an active chunk's numeric key: at) */
+/* the drawn chunks the shaders read (clip): a bit a chunk over a WIN x WIN window of chunks about the camera, in uniforms,
+   not a texture: a texture was one sampler more, and today's terrain at Ultra (4 cascades' shadow maps) already used all
+   16 a GPU gives a fragment shader, so it didn't link and drew nothing. WIN 22: +-11 chunks (5.5 km at 500 m) from the
+   camera's chunk, more than a drawn chunk's reach (dropped past DROP_D, 4 km, checked about every 100 m: scan); a
+   chunk drawn outside the window is today's there too until it's dropped. */
+const WIN = 22, WIN_U = 16; /* (WIN * WIN bits in WIN_U uints) */
+const MASK_GLSL = 'uniform highp uint layBits[' + WIN_U + ']; uniform vec4 layWin;';
+const maskTest = (xz) => '{ vec2 lc = floor((' + xz + ' - layWin.xy) / layWin.z); if (lc.x >= 0.0 && lc.y >= 0.0 && lc.x < layWin.w && lc.y < layWin.w) { highp int b = int(lc.y * layWin.w + lc.x); if (((layBits[b >> 5] >> uint(b & 31)) & 1u) != 0u) discard; } }';
 
 export class Layout {
   // index: the place's layout/index.json ({ size, chunks: [{ ix, iz, file }], ground: [[iz, ix0, ix1]] (chunks only
@@ -45,11 +53,11 @@ export class Layout {
   constructor(w, index, dir) {
     this.w = w; this.on = false; this.dir = dir; this.size = index.size; this.group = new THREE.Group(); this.group.name = 'layout'; this.group.matrixAutoUpdate = this.group.matrixWorldAutoUpdate = false; /* (everything in it at the world's origin, never moved: no matrix walk over its hundreds of meshes a frame) */
     const cs = indexChunks(index); this.index = new Map(cs.map((c) => [c.ix + ',' + c.iz, c])); this.chunks = new Map(); this.active = new Map(); this.act = new Map(); this.queue = new Map(); this.busy = 0; this.loading = 0; this.uids = 0; this.done = []; this.cam = { x: 0, z: 0 }; this.vel = { x: 0, z: 0, t: 0, px: 0, pz: 0 }; this.drawn = new Set(); this.workers = [];
-    // the active chunks' mask, a texel a chunk over the square holding every baked chunk (today's materials don't draw where
-    // it's set; New York's reach past the hi square)
+    // the drawn chunks, a byte a chunk over the square holding every baked chunk (drawnOver; New York's reach past the hi
+    // square); the shaders' copy is the window about the camera (WIN: winSync)
     const S = this.size, ix0 = Math.min(0, ...cs.map((c) => c.ix)), iz0 = Math.min(0, ...cs.map((c) => c.iz)); this.gx0 = ix0 * S; this.gz0 = iz0 * S; this.gn = Math.max(1, ...cs.map((c) => Math.max(c.ix - ix0, c.iz - iz0) + 1));
-    this.maskData = new Uint8Array(this.gn * this.gn); this.mask = new THREE.DataTexture(this.maskData, this.gn, this.gn, THREE.RedFormat, THREE.UnsignedByteType); this.mask.needsUpdate = true;
-    this.U = { layMask: { value: this.mask }, layGrid: { value: new THREE.Vector4(this.gx0, this.gz0, S, this.gn) } };
+    this.maskData = new Uint8Array(this.gn * this.gn); this.win = { x: NaN, z: NaN };
+    this.U = { layBits: { value: new Uint32Array(WIN_U) }, layWin: { value: new THREE.Vector4(0, 0, S, 0) } }; /* (layWin: the window's corner (m), a chunk's size, WIN; 0 wide until the first chunk's drawn) */
     this.out = [0, 0, 1, 0]; this.skirts = new Map(); this.blocks = new Map(); this.blocksDirty = new Set(); this.rblocks = new Map(); this.rdirty = new Set(); this.maskVer = 0; this.coverVer = -1; this.warm = []; this.subs = []; this.o2 = [0, 0, 0, 0];
     this.wallsOn = !(typeof location !== 'undefined' && /[?&]laywalls=0\b/.test(location.search || '')); /* (false: no retaining walls drawn or felt (?laywalls=0, to compare shots)) */
     this.place = !(typeof location !== 'undefined' && /[?&]layplace=0\b/.test(location.search || '')); // (false: what stands on the roads placed as before this (?layplace=0, to compare shots))
@@ -66,10 +74,10 @@ export class Layout {
       m.onBeforeCompile = function (sh, r) {
         ob.call(this, sh, r); Object.assign(sh.uniforms, U);
         sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vLayXZ;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvLayXZ = (modelMatrix * vec4(transformed, 1.0)).xz;');
-        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vLayXZ; uniform sampler2D layMask; uniform vec4 layGrid;')
-          .replace('void main() {', 'void main() {\n  { vec2 lc = floor((vLayXZ - layGrid.xy) / layGrid.z); if (lc.x >= 0.0 && lc.y >= 0.0 && lc.x < layGrid.w && lc.y < layGrid.w && texture2D(layMask, (lc + 0.5) / layGrid.w).r > 0.5) discard; }');
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vLayXZ; ' + MASK_GLSL)
+          .replace('void main() {', 'void main() {\n  ' + maskTest('vLayXZ'));
       };
-      m.customProgramCacheKey = () => key + '|layout2';
+      m.customProgramCacheKey = () => key + '|layout3';
     }
   }
   // today's water materials (World.buildWater: ShaderMaterials, their world position vW): not drawn inside an active chunk
@@ -79,8 +87,8 @@ export class Layout {
       if (!m || m.userData.layoutClip) continue; m.userData.layoutClip = true;
       const key = m.customProgramCacheKey();
       m.onBeforeCompile = (sh) => { Object.assign(sh.uniforms, U);
-        sh.fragmentShader = sh.fragmentShader.replace('void main() {', 'uniform sampler2D layMask; uniform vec4 layGrid;\nvoid main() {\n  { vec2 lc = floor((vW.xz - layGrid.xy) / layGrid.z); if (lc.x >= 0.0 && lc.y >= 0.0 && lc.x < layGrid.w && lc.y < layGrid.w && texture2D(layMask, (lc + 0.5) / layGrid.w).r > 0.5) discard; }'); };
-      m.customProgramCacheKey = () => key + '|layoutWater';
+        sh.fragmentShader = sh.fragmentShader.replace('void main() {', MASK_GLSL + '\nvoid main() {\n  ' + maskTest('vW.xz')); };
+      m.customProgramCacheKey = () => key + '|layoutWater2';
     }
   }
   // maps: the terrain's (World.terrainMaps) for the ground's material
@@ -233,7 +241,7 @@ export class Layout {
   show(c, level) {
     const d = c.d?.[level]; if (!d) return;
     if (!this.drawn.has(c.k)) { // the mask (today's ground and roads not drawn there) and the skirts start with its first drawing
-      this.drawn.add(c.k); const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 255; this.mask.needsUpdate = true; this.maskVer++; }
+      this.drawn.add(c.k); const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 255; this.maskVer++; } this.winSync(this.cam.x, this.cam.z); this.winBit(c, true);
       this.skirtsFor(c, c.m[level]); }
     if (!c.mesh) { c.mesh = new THREE.Group(); c.mesh.name = 'layout ' + c.L.ix + ',' + c.L.iz; this.group.add(c.mesh); }
     for (const o of c.mesh.children) o.geometry.dispose(); c.mesh.clear();
@@ -337,7 +345,7 @@ export class Layout {
     { const bk = Math.floor(c.ix / BLOCK) + ',' + Math.floor(c.iz / BLOCK); if (this.blocks.get(bk)?.cs.delete(c)) this.blocksDirty.add(bk); }
     if (c.walls) { c.walls.geometry.dispose(); this.group.remove(c.walls); }
     for (const [dx, dz] of SIDES) if (this.skirts.delete(c.k + ':' + dx + ',' + dz)) this.skirtsDirty = true;
-    if (this.drawn.has(c.k)) { this.drawn.delete(c.k); const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 0; this.mask.needsUpdate = true; this.maskVer++; }
+    if (this.drawn.has(c.k)) { this.drawn.delete(c.k); const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 0; this.maskVer++; } this.winBit(c, false);
       for (const [dx, dz] of SIDES) { const nb = this.chunks.get((c.ix + dx) + ',' + (c.iz + dz)); if (!nb || !this.drawn.has(nb.k) || !nb.shown) continue; const sk = this.skirt(nb, nb.m[nb.shown], -dx, -dz); if (sk) { this.skirts.set(nb.k + ':' + (-dx) + ',' + (-dz), sk); this.skirtsDirty = true; } } }
     this.active.delete(c.k); this.act.delete(akey(c.ix, c.iz)); this.chunks.delete(c.k); this.on = this.active.size > 0; if (this.stats) this.stats.dropped++;
   }
@@ -354,7 +362,7 @@ export class Layout {
   // each frame: the camera's track; the chunks about it fetched and asked for (fine near, coarse further); the meshes
   // arrived drawn (a few a frame); each drawn at its level
   update(cam) {
-    const t0 = performance.now(), x = cam.position.x, z = cam.position.z, v = this.vel; this.cam.x = x; this.cam.z = z;
+    const t0 = performance.now(), x = cam.position.x, z = cam.position.z, v = this.vel; this.cam.x = x; this.cam.z = z; this.winSync(x, z);
     if (!this.stats) this.begin(x, z);
     // (the camera's ground speed, smoothed over about half a second; a jump (a restart, goto.py) isn't a speed)
     const dt = (t0 - v.t) / 1000; if (!v.t || dt > 2) Object.assign(v, { t: t0, px: x, pz: z });
@@ -399,6 +407,17 @@ export class Layout {
         if (c !== u.layBox) { if (c) { u.layMask = o.layers.mask; o.layers.mask = 0; } else o.layers.mask = u.layMask; u.layBox = c; } }
       for (const ch of o.children) visit(ch); };
     for (const r of [w.terrain, w.roadGroup, w.tiles?.group]) if (r) visit(r);
+  }
+  /* the shaders' window of drawn chunks (WIN) about x, z: moved when the camera's chunk changes, its bits from the drawn chunks */
+  winSync(x, z) {
+    const S = this.size, ox = Math.floor(x / S) - (WIN >> 1), oz = Math.floor(z / S) - (WIN >> 1), W = this.win; if (ox === W.x && oz === W.z) return;
+    W.x = ox; W.z = oz; this.U.layBits.value.fill(0); this.U.layWin.value.set(ox * S, oz * S, S, WIN);
+    for (const k of this.drawn) { const c = this.chunks.get(k); if (c) this.winBit(c, true); }
+  }
+  /* a drawn chunk's bit in the shaders' window (nothing if it's outside) */
+  winBit(c, on) {
+    const i = c.ix - this.win.x, j = c.iz - this.win.z; if (!(i >= 0 && j >= 0 && i < WIN && j < WIN)) return;
+    const b = j * WIN + i, B = this.U.layBits.value; if (on) B[b >>> 5] |= 1 << (b & 31); else B[b >>> 5] &= ~(1 << (b & 31));
   }
   /* whether every chunk over x0..x1, z0..z1 is drawn */
   drawnOver(x0, z0, x1, z1) {
@@ -462,7 +481,7 @@ export class Layout {
     const type = k === KIND.verge || k === KIND.gravel || k === KIND.ballast ? 'sand' : k >= KIND.tarmac || lot ? 'runway' : n.y < 0.8 ? 'rock' : w.loc.desert && !(w.real && w.real.forest(x, z) > 0.45) ? 'sand' : 'grass'; // (a desert's ground: sand, but pine needles under the rims' forests, as World.groundAt)
     return { h, n: type === 'runway' ? new THREE.Vector3(0, 1, 0) : n, type };
   }
-  dispose() { for (const wk of this.workers || []) wk.terminate(); for (const c of this.chunks.values()) for (const o of [...(c.mesh?.children || []),  ...(c.walls ? [c.walls] : [])]) o.geometry.dispose(); this.skirtAll?.geometry.dispose(); for (const B of this.blocks.values()) B.mesh?.geometry.dispose(); for (const B of this.rblocks.values()) for (const m of B.ms) m.geometry.dispose(); this.mask.dispose(); }
+  dispose() { for (const wk of this.workers || []) wk.terminate(); for (const c of this.chunks.values()) for (const o of [...(c.mesh?.children || []),  ...(c.walls ? [c.walls] : [])]) o.geometry.dispose(); this.skirtAll?.geometry.dispose(); for (const B of this.blocks.values()) B.mesh?.geometry.dispose(); for (const B of this.rblocks.values()) for (const m of B.ms) m.geometry.dispose(); }
 }
 
 // a paved surface: its photo texture over a base colour (world-space, metres), and on the tarmac the markings from the
