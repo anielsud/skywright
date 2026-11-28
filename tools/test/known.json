@@ -18,8 +18,7 @@
   "nyc: pavement slabs lie on the ground": "#228 (1.25% over, 0.37% under) (runs with ?layout=0 only: today's path)",
   "islands: no steps along the roads": "#294 (68 spots on the baked layout, every chunk; none with ?layout=0)",
   "lauterbrunnen: they are graded with the network: joined, few steps": "#294 (step spots off the local grade: 0.56/km on the baked layout since #346, limit 0.4; passes with ?layout=0)",
-  "canyon: no steps along the roads": "#294 (1 spot on the baked layout, a third of its chunks, since #339; 3 with ?layout=0, #228)",
-  "nyc: a car drives through a tunnel on its floor": "#294 (on the baked layout since #343/#344: the car is wrecked (9/10 parts) before the tube, 0 steps in it; passes with ?layout=0)"
+  "canyon: no steps along the roads": "#294 (1 spot on the baked layout, a third of its chunks, since #339; 3 with ?layout=0, #228)"
  },
  "bldcheck": {
   "streets nyc: passages under the buildings over a road (raised over it, a ceiling); none over Madison Avenue at 47th": "#294 (on the baked layout since #340: 44 of 46 passages raised; passes with ?layout=0)"
