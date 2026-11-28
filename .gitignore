@@ -5,3 +5,4 @@ __pycache__/
 assets/boot/
 tools/test/node/.times.json
 reports/
+.cache/
