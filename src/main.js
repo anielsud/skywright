@@ -771,6 +771,7 @@ function buildFlight(cfg, layoutAt = null) {
   const slot = cfg.mpSlot || 0, slotX = slot ? (slot % 2 ? 1 : -1) * Math.ceil(slot / 2) * 70 : 0; // multiplayer: side by side, stepped up
   const vApp = clamp(Number.isFinite(st.stall) ? st.stall * 1.45 : 45, 32, 110);
   const rwy = world.runways[net.active ? net.freeRunway(world) : cfg.rwy || 0] || world.runway; // online: a runway nobody is on
+  const place = () => { // (again at the hand-over, on the ground: reseat)
   if (pick.spawn === 'waterpark') ac.spawn(env, wpark.at(slot), wpark.heading); // afloat at the arch, facing the boost strip and the MEGA JUMP
   else if (pick.spawn === 'afloat') ac.spawn(env, pick.at.at(slot), pick.at.heading); // a boat floats at its waterline (Aircraft.spawn), side by side online
   else if (pick.spawn === 'stand') { // standing on it (just touching: no first airborne frame to spin a rotor up), engines off
@@ -780,6 +781,14 @@ function buildFlight(cfg, layoutAt = null) {
   } else if (pick.spawn === 'runway') { ac.spawn(env, new THREE.Vector3(rwy.x, 0, rwy.len / 2 - 60), 0, st.vertical ? { pitch: Math.PI / 2 } : {}); }
   else if (pick.spawn === 'pad') padSpawn(ac, world.pad, env);
   else if (pick.spawn === 'water') { const w = pick.at; ac.spawn(env, w.pos || w, w.heading || 0); }
+  };
+  place();
+  // On the baked layout (#294) a start on the ground stands on the surface under it: the layout's once its chunk is in,
+  // today's terrain till then (the Stunt Park's pad is level at 564 m in Lauterbrunnen's chunk; today's grid there reads
+  // 564.4). The chunk round the start is fetched and meshed while the loading screen is up (layout.begin, below), so the
+  // hand-over waits for it and seats the vehicle again on what's there then (reseat): the same spawn as a restart in
+  // this World, which finds the chunk in, gets, whenever the chunk happened to arrive.
+  const reseat = ['park', 'runway', 'stand', 'pad'].includes(pick.spawn) && start !== 'air' && start !== 'approach' && world.layout ? place : null;
   if (start === 'air') { // on the extended centreline of whichever runway end has room, high enough to clear the hills ahead
     const sp = planAirStart(world, rwy, st.heli ? 120 : 450);
     ac.spawn(env, new THREE.Vector3(rwy.x + slotX, 0, sp.s * (rwy.len / 2 + 1200 + slot * 40)), sp.heading, { air: true, alt: sp.alt + slot * 30, speed: st.heli ? 0 : vApp * 1.1 });
@@ -809,6 +818,7 @@ function buildFlight(cfg, layoutAt = null) {
   sonic.onMilestone = (n) => { hud.center(`MACH ${n}!`, 1800); audio.play('ring'); };
   F = { worldKey: key, worldKids: kids, kind: vehicleKind(st), stallWarn: vehicleKind(st) === 'plane', scene, world, ac, nav, effects, sonic, shim: [], traffic, env, cfg, mission, debris: [], timeScale: 1, slowmo: 0, endT: null, paused: false, shownEnd: false, events: [], sounds: [], cfgStart: start, lastSlowmo: -99 };
   F.spawn = { x: ac.x.clone(), q: ac.q.clone() }; // (where it started: tools/test/restart.js compares restarts with fresh starts)
+  F.reseat = reseat;
   if (ac.isRocket) F.streaks = new Streaks(scene); // rockets: air rushing past (a climbing rocket sees only sky)
   if (ac.isBoat) F.boatFx = new BoatFX(scene, ac); // spray and wake (before the shaders compile)
   if (start === 'pad') F.clamp = { x: ac.x.clone(), q: ac.q.clone() }; // held down on the stand until the engines lift it
@@ -1596,7 +1606,8 @@ function frame(now) {
       if (!F.warm && progs.length > n0) { const names = progs.slice(n0).map((p) => `${p.name} ${p.cacheKey?.slice(-48)}`).join(' | '); console.warn(`[shaders] ${progs.length - n0} compiled in flight, stalling a frame: ${names}`); window.__inflightCompiles = (window.__inflightCompiles || 0) + progs.length - n0; }
       if (restore) { restore(); compileWith(F.scene, F.effects.boom, warm); } // and every shader as lit by a crash's explosion flash (effects.js)
       // ...and until the ground photos have arrived (their upload, and the rock impostors' re-capture, would hitch), and the street cars' models (startFlight loads them first, so this is a safety net)
-      else if (warm) { const lp = F.world.layout?.progress() ?? 1, lm = $('#loading p'); if (lp < 1) { warm.msg ??= lm.textContent; lm.textContent = `Laying out the streets… ${Math.round(lp * 100)}%`; } const ok = F.world.loaded?.() !== false && F.traffic.vehicles.ready; if (ok || performance.now() - warm.t > (lp < 1 ? 4000 : 3000)) { F.warm = null; if (warm.msg != null) lm.textContent = warm.msg; $('#loading').classList.remove('show'); flightReady(F, warm.n, ok); } }
+      else if (warm) { const lp = F.world.layout?.progress() ?? 1, lm = $('#loading p'); if (lp < 1) { warm.msg ??= lm.textContent; lm.textContent = `Laying out the streets… ${Math.round(lp * 100)}%`; } const sp = F.spawn.x, LY = F.world.layout, under = !F.reseat || LY.readyIn(sp.x - 2, sp.z - 2, sp.x + 2, sp.z + 2); /* (a start on the ground: the layout's chunk under it in, reseat) */
+        const ok = F.world.loaded?.() !== false && F.traffic.vehicles.ready && under; if (ok || performance.now() - warm.t > (!under ? 15000 : lp < 1 ? 4000 : 3000)) { F.warm = null; if (F.reseat) { F.reseat(); F.ac.syncVisual?.(); F.spawn = { x: F.ac.x.clone(), q: F.ac.q.clone() }; F.spawnPose = { x: F.ac.x.toArray(), q: F.ac.q.toArray(), v: F.ac.v.toArray() }; } if (warm.msg != null) lm.textContent = warm.msg; $('#loading').classList.remove('show'); flightReady(F, warm.n, ok); } }
     }
   }
 }

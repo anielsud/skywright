@@ -302,13 +302,16 @@ export class RealScenery {
   // a baked layout chunk's surface arrived (#294, ?layout=1): each building standing in it moved up or down onto it (its
   // walls from just below its lowest corner, as built: its vertices, one run in its chunk's mesh, and its collision disc)
   relayout(b) {
-    const L = this.w.layout, moved = new Map();
+    const L = this.w.layout, moved = new Map(), shifted = new Set();
     for (const a of this.grid.values()) for (const e of a) {
       if (!e.fp || e.wet || !e.rng || !e.fp.some((p) => p[0] >= b.x0 - 1 && p[0] <= b.x1 + 1 && p[1] >= b.z0 - 1 && p[1] <= b.z1 + 1)) continue; // (one across chunks: once they're all in)
       let g0 = Infinity; for (const p of e.fp) { const y = L.placeY(p[0], p[1]); if (!(y === y)) { g0 = Infinity; break; } g0 = Math.min(g0, y); }
       const dy = g0 - 0.6 - e[1]; if (!(Math.abs(dy) > 0.02 && Math.abs(dy) < 30)) continue;
       for (const [B, s, n] of e.rng) { const P = B.geo?.attributes.position; if (!P || !n) continue; for (let v = s; v < s + n; v++) P.array[v * 3 + 1] += dy; const r = moved.get(P) || [Infinity, -Infinity]; moved.set(P, [Math.min(r[0], s), Math.max(r[1], s + n)]); }
       e[1] += dy;
+      // (its collision boxes are its entry's (World.wallBoxes, hit: e[1], e[3]; its own boxes, e.parts, made whenever,
+      // have no heights of their own): moved with it. A building already hit holds its heights in its damage state too.)
+      const B = this.w.destruct?.states.get(e.dk); if (B && !shifted.has(B)) { shifted.add(B); B.y0 += dy; B.y1 += dy; B.rubble += dy; if (B.cut < 1e8) B.cut += dy; }
     }
     for (const [P, [s, t]] of moved) { P.addUpdateRange(s * 3, (t - s) * 3); P.needsUpdate = true; }
   }

@@ -141,7 +141,10 @@ export function registered(W) {
   const all = buildings(W, 0, 0, 1e9).filter((B) => B.e[3] > 0.3), out = [];
   let bad = 0, missing = 0, n = 0;
   const K = ['x', 'z', 'ux', 'uz', 'hl', 'hw', 'y0', 'y1'];
-  const has = (B, x, z, r) => { const mine = W.wallBoxes(x, z, r).filter((q) => q.e === B.e); if (!mine.length) return 'missing'; if (mine.some((q) => K.every((k) => Math.abs(q[k] - B[k]) <= 1e-6))) return null; const got = mine[0]; for (const k of K) if (Math.abs(got[k] - B[k]) > 1e-6) return `${k} ${got[k]} vs ${B[k]}`; return null; }; // (an irregular building: one of its boxes)
+  // (its base and top read from its entry after asking: on the baked layout (#294) asking can bring a chunk in (Node
+  // worlds mesh them on demand, node/world.mjs), and the buildings standing on it are moved onto its surface then,
+  // realBuildings.js relayout, entry and all: what wallBoxes gives must be where the building is now)
+  const has = (B0, x, z, r) => { W.wallBoxes(x, z, r); const mine = W.wallBoxes(x, z, r).filter((q) => q.e === B0.e); /* (asked twice: the first may bring the chunk in, moving what stands on it, after its boxes were listed) */ if (!mine.length) return 'missing'; const B = { ...B0, y0: B0.e[1], y1: B0.e[1] + B0.e[3] }; if (mine.some((q) => K.every((k) => Math.abs(q[k] - B[k]) <= 1e-6))) return null; const got = mine[0]; for (const k of K) if (Math.abs(got[k] - B[k]) > 1e-6) return `${k} ${got[k]} vs ${B[k]}`; return null; }; // (an irregular building: one of its boxes)
   for (const B of all) {
     n++;
     const at = [[B.x, B.z, 0.5]];
