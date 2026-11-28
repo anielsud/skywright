@@ -28,9 +28,9 @@ export function railPieces(L, at) {
 // a piece's rail or its sleepers' ends: its points [x, z, y, ux, uz] at offset o across, each on the surface there (a deck's or
 // tube's: level across). refine: where the surface bends between two points (more than REFINE m off the straight line between
 // them, at the middle), a point between, down to REFINE_MIN m apart: the rail follows the surface's own creases
-export const REFINE = 0.005, REFINE_MIN = 0.05;
+export const REFINE = 0.005, REFINE_MIN = 0.05, EDGE_IN = 0.02;
 export function railSide(pc, o, at, refine = false) {
-  const P = pc.P, out = [], y0 = (x, z, i) => { const y = pc.off ? P[i + 2] : at(x, z); return y === y ? y : P[i + 2]; };
+  const P = pc.P, out = [], y0 = (x, z, i) => { if (pc.off) return P[i + 2]; let y = at(x, z); for (let d = EDGE_IN; !(y === y) && d <= EDGE_IN * 64; d *= 2) for (const sg of [1, -1]) { const ux = P[i + 3] * sg, uz = P[i + 4] * sg, a = at(x + ux * d, z + uz * d), b = at(x + ux * 2 * d, z + uz * 2 * d); if (a === a && b === b) { y = 2 * a - b; break; } } return y === y ? y : P[i + 2]; }; /* (a side's point just past the chunk's edge (a piece's end on it, the rail offset across it at a slant): the surface's line along the rail from inside, carried on to it; not the centre line's height) */
   const split = (x0, z0, h0, x1, z1, h1, ux, uz, d) => { const l = Math.hypot(x1 - x0, z1 - z0); if (l < REFINE_MIN * 2 || d > 8) return; const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2, hm = at(mx, mz); if (!(hm === hm)) return;
     const dev = (t) => { const h = at(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t); return h === h ? Math.abs(h - h0 - (h1 - h0) * t) : 0; }; if (Math.max(Math.abs(hm - (h0 + h1) / 2), dev(0.25), dev(0.75), dev(0.125), dev(0.875)) <= REFINE) return; // (a crease anywhere between)
     split(x0, z0, h0, mx, mz, hm, ux, uz, d + 1); out.push(mx, mz, hm, ux, uz); split(mx, mz, hm, x1, z1, h1, ux, uz, d + 1); };
