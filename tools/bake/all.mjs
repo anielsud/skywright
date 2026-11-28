@@ -53,6 +53,7 @@ const f1 = (v) => (v == null ? '-' : v.toFixed(0)), pad = (s, n) => String(s).pa
 console.log('\nplace           chunks  fallback  failed  seams       holes    MB    World  bake  checks  ground  setbacks  wall (s)');
 for (const s of out) { if (s.error) { console.log(`${s.id.padEnd(14)}  FAILED: ${s.error} (see ${LOGS}${s.id}.log)`); continue; }
   console.log(`${s.id.padEnd(14)}${pad(s.chunks, 8)}${pad(s.fallback, 10)}${pad(s.failed, 8)}  ${s.seams.padEnd(10)}${pad(s.holes, 6)}${pad(s.mb.toFixed(2), 7)}${pad(f1(s.s.world), 8)}${pad(f1(s.s.bake), 6)}${pad(f1(s.s.checks), 8)}${pad(f1(s.s.ground), 8)}${pad(f1(s.setbacks?.s.all), 10)}${pad(f1(s.wall), 10)}`);
+  if (s.extent) console.log(`${''.padEnd(14)}  extent ${s.extent} chunks: ${s.added} added (${s.ground} only ground, no file; ${s.mbAdded.toFixed(3)} MB of files added); visible edges inside ${s.visible}; outer edge step vs today's terrain p99 ${s.outerP99?.toFixed(2)} m, max ${s.outerMax?.toFixed(2)} m`);
   if (s.setbacks) console.log(`${''.padEnd(14)}  setbacks ${s.setbacks.kb.toFixed(0)} KB: ${s.setbacks.cut} cut, ${s.setbacks.drop} dropped, ${s.setbacks.through} with a road through (ground ${f1(s.setbacks.s.ground)} s, buildings ${f1(s.setbacks.s.buildings)} s)`); }
 // (a setbacks overlay is keyed to the layout it was baked against: the game ignores one whose key isn't the layout's)
 for (const id of want) { const d = `${REPO}assets/real/${id}/`; if (!existsSync(d + 'setbacks.bin.gz')) continue;

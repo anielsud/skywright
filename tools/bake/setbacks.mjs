@@ -21,6 +21,7 @@ import { Layout } from '../../src/layout/runtime.js';
 import { roadIndex } from '../../src/setback.js';
 import { groundGrid, latticeHeights } from '../../src/layout/rules.js';
 import { latticeOf } from '../../src/layout/mesh.js';
+import { groundBytes } from '../../src/layout/format.js';
 import { layoutKey, buildingLines, encodeSetbacks } from '../../src/layout/setbacks.js';
 import { onWorkers, workers } from './pool.mjs';
 
@@ -51,7 +52,7 @@ export async function bakeSetbacks(id, W, answered = new Map()) {
   // ---- 1. the ground under each tall record: each corner the runtime's way (Layout.heightAt: its chunk's fine mesh, if
   // that chunk is baked); the chunks not answered already meshed in parallel, a worker per core (heights.mjs)
   const { recs, asks } = tallCorners(W, S), ground = new Map(), grid = groundGrid(W), ck = (x, z) => Math.floor(x / S) + ',' + Math.floor(z / S);
-  const jobs = [...asks].filter(([k]) => L.index.has(k) && !answered.has(k)).map(([k, Q]) => { const e = L.index.get(k), buf = gunzipSync(readFileSync(`assets/real/${id}/layout/${e.file}`)), lat = latticeOf({ x0: e.ix * S, z0: e.iz * S, size: S }, grid);
+  const jobs = [...asks].filter(([k]) => L.index.has(k) && !answered.has(k)).map(([k, Q]) => { const e = L.index.get(k), buf = e.file ? gunzipSync(readFileSync(`assets/real/${id}/layout/${e.file}`)) : groundBytes(e.ix, e.iz, !!W.loc.city), lat = latticeOf({ x0: e.ix * S, z0: e.iz * S, size: S }, grid);
     return { k, buf: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), G: latticeHeights(W, grid, lat), Q }; });
   const tl = performance.now(), hts = new Map(), at = new Map();
   for (const [k, H] of answered) if (L.index.has(k)) hts.set(k, H);

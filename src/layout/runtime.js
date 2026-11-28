@@ -4,11 +4,14 @@
 // with the terrain's own material, the streets with the layout's and today's pavement), and physics (World.sampleGrid /
 // groundAt) reading its fine mesh. Inside an active chunk, today's roads, kerbs, junction boxes, pavements and ground
 // (coarse, patch and detail) don't draw (clip: a mask of the active chunks their shaders read); where an active chunk
-// meets today's ground (a chunk not baked: no roads, or failed a check; or not in yet). The airfield's runways, apron and
+// meets today's ground (past the layout's extent, a chunk that failed a check, or one not in yet) a skirt closes the gap, and on
+// the extent's outer edge its ground takes today's terrain's heights (edgeH). The extent (tools/bake/layout.mjs extentOf)
+// covers the World's core and every chunk with roads; a chunk with nothing of the network in reach is only ground, worked
+// out here, not fetched (format.js groundBytes). The airfield's runways, apron and
 // landside road, the stunt sites' pads and the land past the core are in the natural ground (rules.js groundNode). Bridges' decks and tunnels' tubes stay today's (roads.js), the layout meeting them at their heights, a skirt closes the gap.
 import * as THREE from 'three';
-import { decodeLayout, KIND } from './format.js';
-import { meshChunk, physIndex, physAt, latticeOf } from './mesh.js';
+import { decodeLayout, KIND, indexChunks, groundBytes } from './format.js';
+import { meshChunk, physIndex, physAt, latticeOf, EDGE_STEP } from './mesh.js';
 import { groundGrid, latticeHeights, portalsOf, DECK_SIDE, DECK_DEPTH, TUBE_SIDE, TUBE_H, PORTAL_TOP, PORTAL_T, PORTAL_FOOT, SILL } from './rules.js';
 import { railPieces, railSide, RAIL_TOP, SLEEPER_TOP, SLEEPER_STEP, GAUGE, SLEEPER_L } from './rails.js';
 import { sidewalkMaterial, pathMaterial, regionLook, REGION } from '../roadSurface.js';
@@ -22,13 +25,14 @@ const tex = (name) => { if (!texCache.has(name)) { const t = loader.load(`tex/ro
 const SIDES = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 
 export class Layout {
-  // index: the place's layout/index.json ({ size, chunks: [{ ix, iz, file }], fallback }); dir: where its files are
+  // index: the place's layout/index.json ({ size, chunks: [{ ix, iz, file }], ground: [[iz, ix0, ix1]] (chunks only
+  // ground: no file, format.js groundBytes), fallback }); dir: where its files are
   constructor(w, index, dir) {
     this.w = w; this.on = false; this.dir = dir; this.size = index.size; this.group = new THREE.Group(); this.group.name = 'layout';
-    this.index = new Map(index.chunks.map((c) => [c.ix + ',' + c.iz, c])); this.chunks = new Map(); this.active = new Map(); this.queue = new Map(); this.busy = false; this.cam = { x: 0, z: 0 };
+    const cs = indexChunks(index); this.index = new Map(cs.map((c) => [c.ix + ',' + c.iz, c])); this.chunks = new Map(); this.active = new Map(); this.queue = new Map(); this.busy = false; this.cam = { x: 0, z: 0 };
     // the active chunks' mask, a texel a chunk over the square holding every baked chunk (today's materials don't draw where
     // it's set; New York's reach past the hi square)
-    const S = this.size, cs = index.chunks, ix0 = Math.min(0, ...cs.map((c) => c.ix)), iz0 = Math.min(0, ...cs.map((c) => c.iz)); this.gx0 = ix0 * S; this.gz0 = iz0 * S; this.gn = Math.max(1, ...cs.map((c) => Math.max(c.ix - ix0, c.iz - iz0) + 1));
+    const S = this.size, ix0 = Math.min(0, ...cs.map((c) => c.ix)), iz0 = Math.min(0, ...cs.map((c) => c.iz)); this.gx0 = ix0 * S; this.gz0 = iz0 * S; this.gn = Math.max(1, ...cs.map((c) => Math.max(c.ix - ix0, c.iz - iz0) + 1));
     this.maskData = new Uint8Array(this.gn * this.gn); this.mask = new THREE.DataTexture(this.maskData, this.gn, this.gn, THREE.RedFormat, THREE.UnsignedByteType); this.mask.needsUpdate = true;
     this.U = { layMask: { value: this.mask }, layGrid: { value: new THREE.Vector4(this.gx0, this.gz0, S, this.gn) } };
     this.out = [0, 0, 1, 0]; this.skirts = new Map(); this.subs = []; this.o2 = [0, 0, 0, 0];
@@ -107,7 +111,8 @@ export class Layout {
   load(k) {
     let c = this.chunks.get(k); if (c) return c.ready.then(() => c); const e = this.index.get(k);
     c = { k, ix: e.ix, iz: e.iz, cx: (e.ix + 0.5) * this.size, cz: (e.iz + 0.5) * this.size, m: {}, phys: null, mesh: null, shown: null, asked: new Set() }; this.chunks.set(k, c);
-    c.ready = (async () => { const r = await fetch(this.dir + e.file), s = r.body.pipeThrough(new DecompressionStream('gzip')); c.buf = await new Response(s).arrayBuffer(); c.L = decodeLayout(c.buf); })();
+    c.ready = (async () => { if (!e.file) c.buf = groundBytes(e.ix, e.iz, !!this.w.loc.city).buffer; // (only ground: worked out, not fetched)
+      else { const r = await fetch(this.dir + e.file), s = r.body.pipeThrough(new DecompressionStream('gzip')); c.buf = await new Response(s).arrayBuffer(); } c.L = decodeLayout(c.buf); })();
     return c.ready.then(() => c);
   }
   ask(c, level) { if (c.asked.has(level)) return; c.asked.add(level); this.queue.set(c.k + ':' + level, [c, level]); this.pump(); }
@@ -115,9 +120,21 @@ export class Layout {
   pump() {
     if (this.busy || !this.queue.size) return;
     let best = null, bd = Infinity; for (const [q, [c, level]] of this.queue) { const d = Math.hypot(c.cx - this.cam.x, c.cz - this.cam.z) + (level === 'coarse' ? 1 : 0); if (d < bd) { bd = d; best = q; } }
-    const [c, level] = this.queue.get(best); this.queue.delete(best); const { grid, G } = this.lattice(c.L);
-    if (this.worker) { this.busy = true; this.worker.postMessage({ id: c.k, buf: c.buf.slice(0), grid, G, level }, [G.buffer]); }
-    else { this.got(c, level, meshChunk(c.L, grid, G, level)); this.pump(); } // (Node: no workers; the same function)
+    const [c, level] = this.queue.get(best); this.queue.delete(best); const { grid, G } = this.lattice(c.L), edgeH = this.edgeH(c);
+    if (this.worker) { this.busy = true; this.worker.postMessage({ id: c.k, buf: c.buf.slice(0), grid, G, level, edgeH }, [G.buffer]); }
+    else { this.got(c, level, meshChunk(c.L, grid, G, level, edgeH)); this.pump(); } // (Node: no workers; the same function)
+  }
+  // on each side of a chunk with no layout chunk beside it (the layout's outer edge), today's terrain there at the side's
+  // edge points (World.sampleGrid without the layout), for its ground to meet (mesh.js edgeH); null if none
+  edgeH(c) {
+    const L = c.L, S = L.size, n = Math.round(S / EDGE_STEP) + 1, w = this.w; let out = null;
+    for (const [sd, dx, dz] of [['w', -1, 0], ['e', 1, 0], ['s', 0, -1], ['n', 0, 1]]) { if (this.index.has((c.ix + dx) + ',' + (c.iz + dz))) continue;
+      const H = new Float32Array(n), was = this.on; this.on = false;
+      for (let i = 0; i < n; i++) { const u = i * EDGE_STEP; H[i] = dx ? w.sampleGrid(dx < 0 ? L.x0 : L.x0 + S, L.z0 + u) : w.sampleGrid(L.x0 + u, dz < 0 ? L.z0 : L.z0 + S); }
+      this.on = was; (out ||= {})[sd] = H; }
+    const has = (dx, dz) => this.index.has((c.ix + dx) + ',' + (c.iz + dz)), cs = [[0, 0, -1, -1], [S, 0, 1, -1], [0, S, -1, 1], [S, S, 1, 1]].map(([u, v, dx, dz]) => { if (has(dx, 0) && has(0, dz) && has(dx, dz)) return null; const was = this.on; this.on = false; const h = w.sampleGrid(L.x0 + u, L.z0 + v); this.on = was; return h; });
+    if (cs.some((h) => h != null)) (out ||= {}).c = cs;
+    return out;
   }
   got(c, level, m) {
     c.m[level] = m;
