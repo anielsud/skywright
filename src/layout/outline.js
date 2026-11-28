@@ -6,7 +6,7 @@
 //   chunkOutlines(net, areas, L) -> { P: [[X, Z], ...] (cm), E: [[a, b, kind], ...] (an edge two regions share: once for each) }
 import CL from '../../vendor/layout/clipper1.mjs';
 import { KIND } from './format.js';
-import { vergeW, portalsOf, streetOverBed, HOLD, PORTAL_T, PORTAL_BEHIND as BEHIND } from './rules.js';
+import { vergeW, portalsOf, streetOverBed, HOLD, PORTAL_T, PORTAL_BEHIND as BEHIND, TRENCH_W, BOX_L } from './rules.js';
 
 const LX_N = 64, ARC = 15, EDGE_STEP = 4, CLIP = 25, SNAP = 50; // (CLIP: m about the chunk a road's stretches are kept: past a road's widest reach, its half width and pavement) // (ARC: cm a round join's arc may cut inside; EDGE_STEP: m between the chunk's edge points)
 const cm = (v) => Math.round(v * 100);
@@ -50,9 +50,14 @@ export function chunkOutlines(net, areas, L) {
   // portal (a tunnel's other tracks, sharing its tube, stop at its mouth: their beds' round ends))
   const Tb = minus(B0, Tc);
   const Pall = minus(Pv, Tc, Tb); // (the kerb: mesh.js, along every tarmac edge a pavement shares)
-  const Lp = union(portals.filter((p) => p.x > cx0 && p.x < cx1 && p.z > cz0 && p.z < cz1).map((p) => [corner(p.x, p.z, p.dx, p.dz, 0, -p.W), corner(p.x, p.z, p.dx, p.dz, PORTAL_T / 2, -p.W), corner(p.x, p.z, p.dx, p.dz, PORTAL_T / 2, p.W), corner(p.x, p.z, p.dx, p.dz, 0, p.W)]));
+  const lipOf = (pf) => union(portals.filter((p) => pf(p) && p.x > cx0 && p.x < cx1 && p.z > cz0 && p.z < cz1).map((p) => [corner(p.x, p.z, p.dx, p.dz, 0, -p.W), corner(p.x, p.z, p.dx, p.dz, PORTAL_T / 2, -p.W), corner(p.x, p.z, p.dx, p.dz, PORTAL_T / 2, p.W), corner(p.x, p.z, p.dx, p.dz, 0, p.W)])), Lp = lipOf((p) => !p.tr), Lt = lipOf((p) => p.tr); /* (a trench's portal: its lip through a carriageway beside too, under the headwall's wing) */
   const REG = [[KIND.tarmac, Tc], [KIND.ballast, Tb], [KIND.pave, Pall], [KIND.alley, minus(Ta, Tc, Tb, Pall)], [KIND.pavers, minus(Tp, Tc, Tb, Pall, Ta)], [KIND.gravel, minus(Tg, Tc, Tb, Pall, Ta, Tp)], [KIND.verge, minus(Vg, Tc, Tb, Pall, Ta, Tp, Tg).filter((p) => Math.abs(ringArea(p)) > 5000)]]; // (no verge slivers under 0.5 m²)
-  if (Lp.length) { const Lq = minus(Lp, Tc); for (const e of REG) e[1] = minus(e[1], Lq); REG.unshift([KIND.lip, Lq]); } // (not over a carriageway: another road's beside the portal, a twin tube's) // (a portal's lip: an opening through everything)
+  // (a trench's walls' strips (rules.js trenchOf): openings like the lip, through everything, a carriageway beside too: the wall stands there)
+  const near = (p, m) => p.x > cx0 - m && p.x < cx1 + m && p.z > cz0 - m && p.z < cz1 + m, boxOf = (q) => [corner(q.x, q.z, q.dx, q.dz, q.tr ? q.tr.u0 : -BOX_L, -q.hwT), corner(q.x, q.z, q.dx, q.dz, 0, -q.hwT), corner(q.x, q.z, q.dx, q.dz, 0, q.hwT), corner(q.x, q.z, q.dx, q.dz, q.tr ? q.tr.u0 : -BOX_L, q.hwT)];
+  const ccw = (q) => (ringArea(q) < 0 ? q.reverse() : q);
+  const Wl = union(...portals.filter((p) => p.tr && near(p, 60)).map((p) => { const W = [-1, 1].map((sd) => ccw([corner(p.x, p.z, p.dx, p.dz, p.tr.u0, sd * p.hwT), corner(p.x, p.z, p.dx, p.dz, p.tr.u1, sd * p.hwT), corner(p.x, p.z, p.dx, p.dz, p.tr.u1, sd * (p.hwT + TRENCH_W)), corner(p.x, p.z, p.dx, p.dz, p.tr.u0, sd * (p.hwT + TRENCH_W))]));
+    const B = portals.filter((q) => q !== p && (q.x !== p.x || q.z !== p.z) && near(q, 120)).map((q) => ccw(boxOf(q))); return B.length ? minus(W, B) : W; })); /* (not where another portal's approach runs: rules.js otherBox) */
+  if (Lp.length || Lt.length || Wl.length) { const Lq = Lt.length || Wl.length ? union(minus(Lp, Tc), Lt, Wl) : minus(Lp, Tc); /* (no trench about: as without them, exactly) */ for (const e of REG) e[1] = minus(e[1], Lq); REG.unshift([KIND.lip, Lq]); } // (not over a carriageway: another road's beside the portal, a twin tube's) // (a portal's lip: an opening through everything)
   // the chunk's: clipped to it (each region split where it crosses a chunk line first: neighbours clip the same points)
   const box = [[[X0, Z0], [X0 + S, Z0], [X0 + S, Z0 + S], [X0, Z0 + S]]];
   const key = new Map(), P = []; const add = (X, Z) => { X = Math.max(X0, Math.min(X0 + S, X)); Z = Math.max(Z0, Math.min(Z0 + S, Z)); const k = X * 1e7 + Z; let i = key.get(k); if (i == null) { i = P.length; key.set(k, i); P.push([X, Z]); } return i; };

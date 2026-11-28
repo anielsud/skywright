@@ -13,7 +13,7 @@ import { KIND } from './format.js';
 import { makeRules, latticeGround, streetOverBed, KERB, KERB_W, PAVE_RAMP, painted, zebra } from './rules.js';
 import { chunkOutlines } from './outline.js';
 
-const RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, MOUTH_D = 6, FID_STEP = 4, FID_TOL = 0.1;
+const RAIL_STEP = 6, TRENCH_STEP = 1, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, MOUTH_D = 6, FID_STEP = 4, FID_TOL = 0.1;
 // a chunk whose outlines have OUT_MIN points or more (the densest ~5% of New York's) has them stored by the bake (format.js
 // op): working them out takes 60+ ms there
 export const OUT_MIN = 1650;
@@ -116,6 +116,10 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
     L.net.runs.forEach((r) => { if (r.kind !== 'rail' || r.off) return; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3], l = Math.hypot(bx - ax, bz - az); if (l < 1e-3) continue; const ux = (bx - ax) / l, uz = (bz - az) / l;
       for (let t = 0; t < l; t += RAIL_STEP) for (const o of [0, -(r.hw - 0.3), r.hw - 0.3]) { const QX = Math.round((ax + ux * t - uz * o) * 100), QZ = Math.round((az + uz * t + ux * o) * 100);
         if (inside(QX, QZ, 50) && classify(QX, QZ) === KIND.ballast && (key.has(QX * 1e7 + QZ) || clear(QX, QZ, 25))) putP(add(QX, QZ)); } } });
+    // a tunnel's trench (rules.js trenchOf): points every TRENCH_STEP m along its floor and across it, so its fade from the streets'
+    // height to the approach's own bends smoothly, not at a long triangle's edge (a kink a vehicle feels)
+    for (const p of R.portals) { if (!p.tr) continue; for (let u = p.tr.u0 + TRENCH_STEP / 2; u < -0.5; u += TRENCH_STEP) for (const f of [-0.85, -0.45, 0, 0.45, 0.85]) { const v = f * p.hwT, QX = Math.round((p.x + p.dx * u - p.dz * v) * 100), QZ = Math.round((p.z + p.dz * u + p.dx * v) * 100);
+      if (inside(QX, QZ, 50) && classify(QX, QZ) !== KIND.lip && (key.has(QX * 1e7 + QZ) || clear(QX, QZ, 25))) putP(add(QX, QZ)); } }
   } else {
     // (with the bake's edge points only: inside, each road's stations, thinned as the outlines' points are below; their
     // regions by the rules, as a chunk's edge points without stored regions)
