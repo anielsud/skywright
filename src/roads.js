@@ -701,7 +701,7 @@ export function buildRoadMeshes(w, net) {
     pm.castShadow = w.qName === 'high' || w.qName === 'ultra'; pm.computeBoundingSphere(); group.add(pm); t.meshes.push(pm); t.poles = pm;
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lamps, 3)); const pt = new THREE.Points(lg, lampMat); group.add(pt); t.meshes.push(pt); t.lampObjs = [pm, pt]; t.lampPoles = poles;
   };
-  // a baked layout chunk's surface arrived (#294, ?layout=1): the lamps of the tiles built over it placed again on it
+  // a baked layout chunk's surface arrived (#294): the lamps of the tiles built over it placed again on it
   const inBox = (P, b) => { for (let k = 0; k < P.length; k += 4) if (P[k] > b.x0 - 8 && P[k] < b.x1 + 8 && P[k + 2] > b.z0 - 8 && P[k + 2] < b.z1 + 8) return true; return false; }; // (a lamp moved onto the kerb can cross into it)
   w.layout?.onActive((b) => { for (const t of all) { if (!t.built || !t.lampPoles || !inBox(t.lampPoles, b)) continue;
     const vis = t.poles?.visible ?? true; for (const o of t.lampObjs || []) { group.remove(o); t.meshes.splice(t.meshes.indexOf(o), 1); if (o.isPoints) o.geometry.dispose(); else o.dispose(); } t.lampObjs = null; t.poles = null;

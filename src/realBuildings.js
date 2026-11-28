@@ -299,7 +299,7 @@ export class RealScenery {
     }
     this.chunks = null;
   }
-  // a baked layout chunk's surface arrived (#294, ?layout=1): each building standing in it moved up or down onto it (its
+  // a baked layout chunk's surface arrived (#294): each building standing in it moved up or down onto it (its
   // walls from just below its lowest corner, as built: its vertices, one run in its chunk's mesh, and its collision disc)
   relayout(b) {
     const L = this.w.layout, moved = new Map(), shifted = new Set();

@@ -677,7 +677,7 @@ function startFlight(cfgOverride) {
   // real-world places load their baked geodata first (cached by the service worker after the first visit)
   const loc = LOCATIONS[cfg.location], msg = $('#loading p'), msg0 = msg.textContent;
   // (where the flight starts, about: the baked layout's chunks there fetched with the place and meshed while the World
-  // is built (#294, ?layout=1): a car's street start near the place's hint, anything else about the airfield)
+  // is built (#294): a car's street start near the place's hint, anything else about the airfield)
   const st0 = hangar.stats || analyze(hangar.design), road = st0.car && !st0.heli && cfg.landStart === 'road';
   let layoutAt = [0, 0]; const startAt = (meta, osm) => (layoutAt = road ? roadHint(loc, meta, osm.places) : [0, 0]);
   const place = loadReal(loc, qualityTier(), (f) => (msg.textContent = `Loading ${loc.name}… ${Math.round(f * 100)}%`), startAt);
@@ -853,7 +853,7 @@ function buildFlight(cfg, layoutAt = null) {
   // detail), and over the first frame, which draws the hidden shadow casters for their shadow shaders (see warmShaders)
   // (in a kept World only what this flight added needs that: the World's own hidden casters were drawn in its first flight's warm-up)
   F.startRec = rec; mark(rec, 'setup');
-  world.layout?.begin(ac.x.x, ac.x.z); // (the baked layout round the start (?layout=1): fetched and meshed from now, while the shaders compile)
+  world.layout?.begin(ac.x.x, ac.x.z); // (the baked layout round the start: fetched and meshed from now, while the shaders compile)
   const warm = (F.warm = { t: performance.now(), n: 0, pending: true, skip: reused ? kids : null, rec }), compiled = (via) => { warm.pending = false; warm.t = performance.now(); mark(rec, 'compiled'); if (rec) rec.via.compile ||= via; };
   setTimeout(() => compiled('timeout'), 15000); // (never stuck behind the loading screen)
   // (into the post-processing target, as the scene really renders: tone mapping and output encoding are part of a

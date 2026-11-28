@@ -61,7 +61,7 @@ export class LaneGraph {
     L.cx = (x0 + x1) / 2; L.cz = (z0 + z1) / 2; L.r = Math.hypot(x1 - x0, z1 - z0) / 2 + 10;
     return L;
   }
-  // a lane's points onto the baked layout's surface where it's in (#294, ?layout=1; not a bridge's deck)
+  // a lane's points onto the baked layout's surface where it's in (#294; not a bridge's deck)
   onSurf(pts, br) { const f = this.surf; if (f) pts.forEach((q, i) => { if (br?.[i]) return; const y = f(q.x, q.z); if (y === y) q.y = y; }); }
   // a layout chunk's surface arrived (box: x0, z0, x1, z1): the lanes and turns made already within it, onto it
   relevel(b) {

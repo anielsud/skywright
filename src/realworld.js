@@ -214,7 +214,7 @@ export async function loadReal(loc, quality = 'high', onProgress, startAt = null
   const packKey = ROADS !== 'dev' ? ROADS : globalThis.SKY_ROADPACK_KEY; // (tests: a dev build loads packs baked with that key)
   if (packKey) try { const b = await gunzip(await get(`assets/boot/roads-${id}.bin.gz`)), P = decodeRoads(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); if (P.key === packKey && P.v === PACK_V) D.roadPack = P; } catch { /* (missing: work them out) */ }
   if (cityZ) D.city = decodeCity(await gunzip(cityZ));
-  // the baked road layout's chunks (#294, behind a flag while it's tried out): their bytes, decoded by the World
+  // the baked road layout's chunks (#294; on unless ?layout=0: format.js layoutWanted): their bytes, decoded by the World
   { const ix = layIx && (await layIx); if (ix) D.layout = { index: ix, dir: dir + 'layout/', pre: (await layPre) || new Map() }; } // (none baked here: null; the chunks themselves stream in: layout/runtime.js, the start's already here)
   // the baked setbacks (#294): only if they were baked against this layout (else realCity.js works them out as before)
   if (sbZ && D.layout) try { const z = await sbZ; if (z) { const b = await gunzip(z); const code = await sbCode, key = code && !code.includes(null) && cityZ ? overlayKey(D.layout.index, hashBytes(new Uint8Array(cityZ)), code) : null; if (key && setbacksHeader(b).key === key) D.setbacks = decodeSetbacks(b); else console.warn('[setbacks] baked against another layout, city.bin or setback code: worked out at load'); } } catch (e) { console.warn('[setbacks]', e); }

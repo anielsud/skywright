@@ -112,7 +112,7 @@ export class World {
     // real location: satellite imagery is the ground colour, OSM drives roads, buildings and forests
     this.real = this.loc.real ? realData(this.loc) : null;
     if (this.loc.real && !this.real) throw new Error('location data not loaded');
-    this.layout = this.real?.layout?.index?.chunks?.length ? new Layout(this, this.real.layout.index, this.real.layout.dir) : null; // the baked road layout (#294; ?layout=1): its chunks stream in about the camera
+    this.layout = this.real?.layout?.index?.chunks?.length ? new Layout(this, this.real.layout.index, this.real.layout.dir) : null; // the baked road layout (#294): its chunks stream in about the camera
     if (this.real) { this.real.paintHi = (bmp, r, gain) => paintInfieldImagery(this, bmp, r, gain); Object.assign(this.detailU, this.real.uniforms()); } // (the airport's infield painted into the imagery: airportGround.js)
     this.real?.attach(this); // land past its baked squares streams in while flying (src/geostream.js) and rebuilds what it changes
     this.landUniforms(); // no bake on real places: rivers/lakes off (and compiled out of the terrain shader)

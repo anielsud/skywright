@@ -1,4 +1,4 @@
-// The baked road layout in a World (#294, behind a flag while it's tried out: format.js layoutWanted). A place's chunks
+// The baked road layout in a World (#294; on unless ?layout=0: format.js layoutWanted). A place's chunks
 // stream in about the camera (LOAD_D; dropped past DROP_D; the start's fetched with the place and meshed while the World
 // is built: early): each fetched, meshed in a pool of workers (mesh.js, and what it's drawn with,
 // draw.js; fine within FINE_D, coarse beyond, the same edge points at both levels; fine near the camera's track first,

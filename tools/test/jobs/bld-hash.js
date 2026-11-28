@@ -96,7 +96,7 @@ export function line(W, THREE) {
   const at = ([lat, lon, h]) => { const [x, z] = toLocal(W.real.meta, lat, lon); return new THREE.Vector3(x, W.heightAt(x, z) + h, z); };
   return [at([40.7030, -74.0160, 150]), at([40.8000, -73.9500, 150])];
 }
-// On the baked layout (#294, ?layout=1), what's built depends on when its chunks arrive: a low tile waits for the chunks
+// On the baked layout (#294), what's built depends on when its chunks arrive: a low tile waits for the chunks
 // under it (realCity.js update: Layout.readyIn) and for its building lines (TileLines), and the collision boxes' grid
 // order follows the tiles'. So every chunk the flight would fetch (within LOAD_D of any point on it, a scan every 100 m)
 // is meshed first, every tile's building lines are in, and the low tiles already built are dropped: then the flight

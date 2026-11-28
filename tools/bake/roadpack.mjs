@@ -12,6 +12,7 @@ const { nodeWorld } = await import(pathToFileURL(REPO + 'tools/test/node/world.m
 const { LOCATIONS } = await import(pathToFileURL(REPO + 'src/world.js').href);
 const { encodeRoads } = await import(pathToFileURL(REPO + 'src/roadPack.js').href);
 const { ROADS } = await import(pathToFileURL(REPO + 'src/version.js').href), COMMIT = process.env.ROADPACK_KEY || ROADS; // (ROADPACK_KEY: tests, with window.SKY_ROADPACK_KEY)
+globalThis.SKY_LAYOUT = false; /* (today's network, as it was baked before the layout was on) */
 globalThis.SKY_ROADPACK = true; // (realworld.js network: don't cut the stunt sites out; the game does that at load)
 mkdirSync(REPO + 'assets/boot', { recursive: true });
 const ids = process.argv.slice(2).length ? process.argv.slice(2) : Object.values(LOCATIONS).filter((l) => l?.real).map((l) => l.id);

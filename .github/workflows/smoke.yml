@@ -6,7 +6,7 @@ name: Tests
 #   for what is about drawing: hangar (boot, audio, windows, wind tunnel), nyc, islands, canyon-lauterbrunnen. Every
 #   step fails on console errors, failed requests and shader stalls. Screenshots are attached to the run.
 # - the Node tier (its job below): every logic, physics and geometry suite (known failures listed in
-#   tools/test/known.json don't fail it).
+#   tools/test/known.json don't fail it); and node-today: the cases of today's road code, with the layout off (#294).
 # Informational: not a required check. Locally: python3 tools/test/run.py (or jobs.py <job>).
 on:
   pull_request:
@@ -45,6 +45,18 @@ jobs:
           path: tools/test/node/.times.json
           include-hidden-files: true
           if-no-files-found: ignore
+
+  node-today:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    name: node tier (today's roads, ?layout=0)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Today's road internals, the layout off (roadcheck's cases marked today; removed with today's road code, #294)
+        run: SKY_LAYOUT=0 node tools/test/node/run.mjs roadcheck --jobs 4 --only '"today":true'
 
   browser:
     runs-on: ubuntu-latest
