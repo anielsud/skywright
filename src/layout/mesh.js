@@ -13,8 +13,8 @@ import { KIND } from './format.js';
 import { makeRules, latticeGround, KERB, KERB_W, PAVE_RAMP, painted, zebra } from './rules.js';
 import { chunkOutlines } from './outline.js';
 
-const NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, LANE_STEP = 6, ZEBRA = [0.5, 3.5], MOUTH_D = 6; // (ZEBRA: a crossing's band, m out from a junction's circle, as roadMat paints it)
-const PAVED = [KIND.lip, KIND.tarmac, KIND.kerb, KIND.pave, KIND.alley, KIND.pavers, KIND.gravel, KIND.verge]; // (the order a point is classed in)
+const RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, LANE_STEP = 6, ZEBRA = [0.5, 3.5], MOUTH_D = 6; // (ZEBRA: a crossing's band, m out from a junction's circle, as roadMat paints it)
+const PAVED = [KIND.lip, KIND.tarmac, KIND.kerb, KIND.ballast, KIND.pave, KIND.alley, KIND.pavers, KIND.gravel, KIND.verge]; // (the order a point is classed in)
 const RIBBON = new Set([KIND.tarmac, KIND.kerb, KIND.pave]); // (drawn with a street's coordinates: markings, the pavement's slabs)
 
 // the hi grid's points a chunk's ground uses (and one more round it, for the bilinear ground): lat
@@ -103,6 +103,11 @@ export function meshChunk(L, grid, G, level = 'fine') {
             if (inside(QX, QZ, 50) && classify(QX, QZ) === KIND.tarmac && clear(QX, QZ, 25)) putP(add(QX, QZ)); }
           dj0 = rd.dj; } else dj0 = null; } else dj0 = null;
         t += step; } } });
+    // along each railway's centre line on the ground and just inside its bed's edges, points every RAIL_STEP m: the bed
+    // follows its solved profile between the outline's corners (the rails are laid on it, rails.js)
+    L.net.runs.forEach((r) => { if (r.kind !== 'rail' || r.off) return; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3], l = Math.hypot(bx - ax, bz - az); if (l < 1e-3) continue; const ux = (bx - ax) / l, uz = (bz - az) / l;
+      for (let t = 0; t < l; t += RAIL_STEP) for (const o of [0, -(r.hw - 0.3), r.hw - 0.3]) { const QX = Math.round((ax + ux * t - uz * o) * 100), QZ = Math.round((az + uz * t + ux * o) * 100);
+        if (inside(QX, QZ, 50) && classify(QX, QZ) === KIND.ballast && (key.has(QX * 1e7 + QZ) || clear(QX, QZ, 25))) putP(add(QX, QZ)); } } });
   } else {
     keep = new Set(); const cells = new Set(), onB = (i) => PX[i] === X0 || PZ[i] === Z0 || PX[i] === X0 + S || PZ[i] === Z0 + S;
     for (let i = 0; i < PX.length; i++) { if (onB(i)) { keep.add(i); continue; } const k = Math.floor((PX[i] - X0) / (COARSE_CELL * 100)) * 4096 + Math.floor((PZ[i] - Z0) / (COARSE_CELL * 100)); if (!cells.has(k)) { cells.add(k); keep.add(i); } }
@@ -115,7 +120,7 @@ export function meshChunk(L, grid, G, level = 'fine') {
   idxs.forEach((p, k) => {
     const x = PX[p] / 100, z = PZ[p] / 100, K = kinds[p]; X[k] = x; Z[k] = z;
     if (kerbFrom.has(p) && kOf.has(kerbFrom.get(p)) && kOf.get(kerbFrom.get(p)) < k) { const g = kOf.get(kerbFrom.get(p)); Y[k] = Y[g] + KERB; PY[k] = PY[g] + KERB * Math.min(1, KERB_W / PAVE_RAMP); return; } // (a kerb's top: its gutter's height, plus the kerb drawn; in physics the start of the ramp)
-    let kind = K & (1 << KIND.tarmac) ? KIND.tarmac : K & ((1 << KIND.kerb) | (1 << KIND.pave)) ? KIND.pave : PAVED.find((q) => q !== KIND.lip && K & (1 << q)) ?? (K & (1 << KIND.lip) ? KIND.lip : null);
+    let kind = K & (1 << KIND.tarmac) ? KIND.tarmac : K & (1 << KIND.ballast) ? KIND.ballast : K & ((1 << KIND.kerb) | (1 << KIND.pave)) ? KIND.pave : PAVED.find((q) => q !== KIND.lip && K & (1 << q)) ?? (K & (1 << KIND.lip) ? KIND.lip : null);
     if (kind == null && !(PX[p] === X0 || PZ[p] === Z0 || PX[p] === X0 + S || PZ[p] === Z0 + S)) kind = classify(PX[p], PZ[p]); // (inside: its region)
     if (kind == null) { // (a point of the chunk's edge: its region by the rules (the nearest road's widths), not this chunk's polygons, so the chunk beside works it out the same)
       kind = R.region(x, z); } // (the outlines' own order, every road's widths)
@@ -147,7 +152,7 @@ export function meshChunk(L, grid, G, level = 'fine') {
   // a street's mouths: where its centre line crosses a junction's circle, [how far along it, +1 if it leaves the circle going on, -1 if it enters]
   const mouths = new Map(), mouthsOf = (ri) => { let M = mouths.get(ri); if (M) return M; M = []; const r = L.net.runs[ri];
     for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, l = Math.hypot(dx, dz); if (l < 1e-3) continue; const ux = dx / l, uz = dz / l;
-      for (const J of JN) { const fx = ax - J.x, fz = az - J.z; if (Math.abs(fx) > l + J.r || Math.abs(fz) > l + J.r) continue; const b = fx * ux + fz * uz, disc = b * b - (fx * fx + fz * fz - J.r * J.r); if (disc <= 0) continue;
+      for (const J of JN) { if (J.lx) continue; const fx = ax - J.x, fz = az - J.z; if (Math.abs(fx) > l + J.r || Math.abs(fz) > l + J.r) continue; const b = fx * ux + fz * uz, disc = b * b - (fx * fx + fz * fz - J.r * J.r); if (disc <= 0) continue;
         for (const sg of [-1, 1]) { const t = -b + sg * Math.sqrt(disc); if (t >= 0 && t < l) M.push([r.s[s] + t, sg, ax + ux * t, az + uz * t, ux, uz]); } } }
     mouths.set(ri, M); return M; };
   if (fine) for (let q = 0; q < nt; q++) { const k = tk[q]; if (!RIBBON.has(k)) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;

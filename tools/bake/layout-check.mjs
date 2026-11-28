@@ -8,6 +8,7 @@ import { KERB, makeRules, latticeGround } from '../../src/layout/rules.js';
 import { meshChunk, physIndex, physAt, latticeOf } from '../../src/layout/mesh.js';
 import { markCheck } from './markcheck.mjs';
 import { offChecks } from './layout-off.mjs';
+import { railChecks } from './railcheck.mjs';
 
 const HOLE_STEP = 2;
 parentPort.on('message', ({ jobs, grid }) => {
@@ -32,7 +33,8 @@ parentPort.on('message', ({ jobs, grid }) => {
       // the markings, the crossings and the slabs, as the material draws them (markcheck.mjs)
       const mk = markCheck(L, m); Object.assign(r.fine, { tarmacOff: off, kerbSlope: kerb, holes, samples, drift: mk.drift, driftSamples: mk.samples, lost: mk.lost, mouths: mk.mouths, whole: mk.whole, tight: mk.tight, kerbErr: mk.kerbErr, bendMissed: s.bendMissed });
       const oc = offChecks(L, m, ixx, lipIdx), ends = oc.ends, mx = (a) => (a.length ? Math.max(...a) : 0); if (oc.badAt.length) (r.badAt ||= []).push(...oc.badAt); const { rimBad, rimN, noLip, portals } = oc;
-      Object.assign(r.fine, { deckEnds: ends.deck.length, deckGap: mx(ends.deck), deckBad: ends.deck.filter((d) => d >= 0.02).length, portalEnds: ends.tube.length, portalGap: mx(ends.tube), portalBad: ends.tube.filter((d) => d >= 0.02).length, portals, rimN, rimBad, noLip });
+      r.fine.rail = railChecks(L, m, ixx);
+      Object.assign(r.fine, { deckEnds: ends.deck.length, railOver: ends.railOver.length, deckGap: mx(ends.deck), deckBad: ends.deck.filter((d) => d >= 0.02).length, portalEnds: ends.tube.length, portalGap: mx(ends.tube), portalBad: ends.tube.filter((d) => d >= 0.02).length, portals, rimN, rimBad, noLip });
       // the shore: every point of the drawn ground against the natural ground and the water level: dry ground pushed below the
       // water (must be 0), ground raised where it's under water, paved points below the water; and how many bank points the
       // shore rule changed (against the same rules without it)

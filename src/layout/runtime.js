@@ -9,7 +9,8 @@
 import * as THREE from 'three';
 import { decodeLayout, KIND } from './format.js';
 import { meshChunk, physIndex, physAt, latticeOf } from './mesh.js';
-import { groundGrid, latticeHeights } from './rules.js';
+import { groundGrid, latticeHeights, portalsOf, DECK_SIDE, DECK_DEPTH, TUBE_SIDE, TUBE_H, PORTAL_TOP, PORTAL_T, PORTAL_FOOT, SILL } from './rules.js';
+import { railPieces, railSide, RAIL_TOP, SLEEPER_TOP, SLEEPER_STEP, GAUGE, SLEEPER_L } from './rails.js';
 import { sidewalkMaterial, pathMaterial, regionLook, REGION } from '../roadSurface.js';
 // the gravel (tracks and verges): a region's own where it differs (Bora Bora's tracks and verges are coral sand and dirt)
 const GRAVEL = { fr: 0xc8b48e };
@@ -90,7 +91,10 @@ export class Layout {
     // (yellow centre lines where today's roads paint them, the US places (roadSurface.js LOOK); a desert's verges and dirt
     // tracks a warm brown, the islands' coral sand, not the Alps' grey gravel)
     this.mats = { skirt, ground, tarmac: roadMat('asphalt_d', 0x5a5a5c, true, yellow), alley: roadMat('asphalt_d', 0x5a5a5c), gravel: roadMat('gravel_d', loc.desert ? 0x9c8468 : GRAVEL[REGION[loc.id]] ?? 0xa09684), pavers: roadMat('sidewalk_d', 0xa89a88), walk: sidewalkMaterial(), track: pathMaterial(REGION[loc.id]) }; // (track: the gravel's, today's tracks' look, its ruts)
-    this.matList = [this.mats.ground, this.mats.alley, this.mats.gravel, this.mats.pavers];
+    // (a railway's bed, its sleepers and rails (realBuildings.js's look), a rail bridge's deck and a rail tunnel's tube (roads.js's))
+    Object.assign(this.mats, { ballast: roadMat('gravel_d', 0x4e463e), sleeper: new THREE.MeshStandardMaterial({ color: 0x5a4a3a, roughness: 0.95 }), steel: new THREE.MeshStandardMaterial({ color: 0x8b9097, metalness: 0.8, roughness: 0.4 }),
+      deck: new THREE.MeshStandardMaterial({ color: 0x9a968e, roughness: 0.9 }), tube: new THREE.MeshStandardMaterial({ color: 0x6e6c66, emissive: 0x2a2924, roughness: 0.9, side: THREE.DoubleSide }) });
+    this.matList = [this.mats.ground, this.mats.alley, this.mats.gravel, this.mats.pavers, this.mats.ballast];
     // the water: today's plane and shore mesh (World.buildWater) don't draw inside an active chunk, whose own water is its
     // surface's part under the water level (water()), so the shore is the layout's ground's, not today's carved grid's
     const w = this.w; if (w.waterMat) { this.clipWater(w.waterMat, ...(w.shoreWater?.children || []).map((o) => o.material)); this.mats.water = waterMaterial({ U: w.waterMat.userData.U, shore: true, vdepth: true }); }
@@ -121,7 +125,7 @@ export class Layout {
     if (level === 'fine' && !c.phys) { // physics, the mask and the skirts start with the fine mesh
       c.phys = physIndex(c.L, m); this.active.set(c.k, c); this.on = true;
       const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 255; this.mask.needsUpdate = true; }
-      if (this.mats) this.skirtsFor(c);
+      if (this.mats) { this.skirtsFor(c); this.railsFor(c); }
       const box = { x0: c.L.x0, z0: c.L.z0, x1: c.L.x0 + c.L.size, z1: c.L.z0 + c.L.size, k: c.k }; if (this.place) for (const f of this.subs) f(box); // (what stands on it re-placed: onActive)
     }
     if (!this.mats) return; // (no drawing: tools)
@@ -160,7 +164,7 @@ export class Layout {
     for (let k = 0; k < N0; k++) ang[k] = vAng[k] === vAng[k] ? vAng[k] : 0; dup.forEach((v, i) => { pos.set(m.pos.subarray(v * 3, v * 3 + 3), (N0 + i) * 3); nrm.set(m.nrm.subarray(v * 3, v * 3 + 3), (N0 + i) * 3); ang[N0 + i] = dAng[i]; });
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); g.setAttribute('aAng', new THREE.BufferAttribute(ang, 1)); g.setIndex(new THREE.BufferAttribute(idx, 1));
-    const ribG = m.rib.kind.includes(KIND.gravel), matOf = (k) => (k === KIND.ground || k === KIND.bank ? 0 : k === KIND.alley ? 1 : k === KIND.verge || (k === KIND.gravel && !ribG) ? 2 : k === KIND.pavers ? 3 : -1); // (the gravel: with the streets' ribbons below when it's there)
+    const ribG = m.rib.kind.includes(KIND.gravel), matOf = (k) => (k === KIND.ground || k === KIND.bank ? 0 : k === KIND.alley ? 1 : k === KIND.verge || (k === KIND.gravel && !ribG) ? 2 : k === KIND.pavers ? 3 : k === KIND.ballast ? 4 : -1); // (the gravel: with the streets' ribbons below when it's there)
     for (let q = 0; q < m.tk.length;) { const mi = matOf(m.tk[q]); let e = q; while (e < m.tk.length && matOf(m.tk[e]) === mi) e++; if (mi >= 0) g.addGroup(q * 3, (e - q) * 3, mi); q = e; }
     g.computeBoundingSphere(); const surf = new THREE.Mesh(g, this.matList); surf.receiveShadow = true; c.mesh.add(surf);
     if (this.mats.water) { const wm = this.water(m); if (wm) c.mesh.add(wm); }
@@ -177,7 +181,41 @@ export class Layout {
       // stays inside the gravel's own triangles, there's nothing under it), the gravel look 2, seed)
       const trk = pick((k) => k === KIND.gravel); if (trk.length) part(trk, this.mats.track, [['uv', 2, (v) => [r.road[v * 4 + 1], r.road[v * 4]]], ['rinfo', 3, (v) => [r.road[v * 4 + 2] + 0.5, 2, r.id[v] % 97]], ['rjunc', 4, () => [99, 99, 0, 0]]]);
     }
+    if (c.rails) for (const o of c.rails.children) if (o.userData.near) o.visible = level === 'fine'; // (the rails and sleepers: near only, sub-pixel further)
     c.shown = level;
+  }
+  // a chunk's railways (rails.js): the rails and sleepers laid on its surface (or a deck's, a tube's own profile), and a
+  // rail bridge's deck, a rail tunnel's tube and portals (a road's are roads.js's)
+  railsFor(c) {
+    const L = c.L, m = c.m.fine, at = (x, z) => physAt(L, m, c.phys, x, z), pcs = railPieces(L, at); if (!pcs.length && !L.net.runs.some((r) => r.kind === 'rail' && r.off)) return;
+    const G = { steel: [], sleeper: [], deck: [], tube: [], ballast: [] }, quad = (A, a, b, cc, d) => A.push(...a, ...b, ...cc, ...a, ...cc, ...d);
+    for (const pc of pcs) { const P = pc.P, n = P.length / 5, half = GAUGE[pc.cls] / 2;
+      // the rails: a head 7 cm wide RAIL_TOP over the bed, its sides down to the sleepers
+      for (const sd of [-1, 1]) { const S = railSide(pc, sd * half, at, true), k = S.length / 5, a = (i, w, dy) => [S[i * 5] - S[i * 5 + 4] * w, S[i * 5 + 2] + dy, S[i * 5 + 1] + S[i * 5 + 3] * w];
+        for (let i = 0; i + 1 < k; i++) { quad(G.steel, a(i, -0.035, RAIL_TOP), a(i, 0.035, RAIL_TOP), a(i + 1, 0.035, RAIL_TOP), a(i + 1, -0.035, RAIL_TOP)); quad(G.steel, a(i, -0.035, SLEEPER_TOP), a(i, -0.035, RAIL_TOP), a(i + 1, -0.035, RAIL_TOP), a(i + 1, -0.035, SLEEPER_TOP)); quad(G.steel, a(i, 0.035, RAIL_TOP), a(i, 0.035, SLEEPER_TOP), a(i + 1, 0.035, SLEEPER_TOP), a(i + 1, 0.035, RAIL_TOP)); } }
+      // the sleepers: every SLEEPER_STEP m along, their ends on the bed
+      const sl = SLEEPER_L[pc.cls] / 2, E0 = railSide(pc, -sl, at), E1 = railSide(pc, sl, at); let acc = SLEEPER_STEP / 2;
+      for (let i = 0; i + 1 < n; i++) { const l = Math.hypot(P[i * 5 + 5] - P[i * 5], P[i * 5 + 6] - P[i * 5 + 1]); while (acc < l) { const t = acc / l, f = (Q, k) => Q[i * 5 + k] + (Q[i * 5 + 5 + k] - Q[i * 5 + k]) * t, ux = P[i * 5 + 3] * 0.11, uz = P[i * 5 + 4] * 0.11;
+          const a = [f(E0, 0), f(E0, 2) + SLEEPER_TOP, f(E0, 1)], b = [f(E1, 0), f(E1, 2) + SLEEPER_TOP, f(E1, 1)]; quad(G.sleeper, [a[0] - ux, a[1], a[2] - uz], [b[0] - ux, b[1], b[2] - uz], [b[0] + ux, b[1], b[2] + uz], [a[0] + ux, a[1], a[2] + uz]); acc += SLEEPER_STEP; } acc -= l; }
+      if (!pc.off) continue;
+      // on a deck or in a tube: its bed (level across), and under it the deck (top, sides and parapets, underside), or round it the tube
+      const hw = pc.hw, at3 = (k, o, dy) => [P[k * 5] - P[k * 5 + 4] * o, P[k * 5 + 2] + dy, P[k * 5 + 1] + P[k * 5 + 3] * o];
+      for (let i = 0; i + 1 < n; i++) { quad(G.ballast, at3(i, -hw, 0), at3(i, hw, 0), at3(i + 1, hw, 0), at3(i + 1, -hw, 0));
+        if (pc.off === 'deck') { const W = hw + DECK_SIDE; quad(G.deck, at3(i, -W, -0.01), at3(i, W, -0.01), at3(i + 1, W, -0.01), at3(i + 1, -W, -0.01)); quad(G.deck, at3(i, W, -DECK_DEPTH), at3(i, -W, -DECK_DEPTH), at3(i + 1, -W, -DECK_DEPTH), at3(i + 1, W, -DECK_DEPTH));
+          for (const sd of [-1, 1]) { quad(G.deck, at3(i, W * sd, -DECK_DEPTH), at3(i + 1, W * sd, -DECK_DEPTH), at3(i + 1, W * sd, 0.7), at3(i, W * sd, 0.7)); quad(G.deck, at3(i, (W - 0.3) * sd, 0.7), at3(i + 1, (W - 0.3) * sd, 0.7), at3(i + 1, (W - 0.3) * sd, -0.01), at3(i, (W - 0.3) * sd, -0.01)); quad(G.deck, at3(i, W * sd, 0.7), at3(i + 1, W * sd, 0.7), at3(i + 1, (W - 0.3) * sd, 0.7), at3(i, (W - 0.3) * sd, 0.7)); } }
+        else { const W = hw + TUBE_SIDE; for (const sd of [-1, 1]) { quad(G.tube, at3(i, W * sd, -0.3), at3(i + 1, W * sd, -0.3), at3(i + 1, W * sd, TUBE_H * 0.8), at3(i, W * sd, TUBE_H * 0.8)); quad(G.tube, at3(i, W * sd, TUBE_H * 0.8), at3(i + 1, W * sd, TUBE_H * 0.8), at3(i + 1, W * 0.55 * sd, TUBE_H), at3(i, W * 0.55 * sd, TUBE_H)); }
+          quad(G.tube, at3(i, -W * 0.55, TUBE_H), at3(i + 1, -W * 0.55, TUBE_H), at3(i + 1, W * 0.55, TUBE_H), at3(i, W * 0.55, TUBE_H)); } }
+      // (a deck's piers, every ~30 m where it's 3 m or more over the ground)
+      if (pc.off === 'deck') for (let i = 15; i < n - 1; i += 15) { const x = P[i * 5], z = P[i * 5 + 1], gy = this.w.sampleGrid(x, z), top = P[i * 5 + 2] - DECK_DEPTH; if (top - gy < 3) continue; const ux = P[i * 5 + 3], uz = P[i * 5 + 4], hx = 0.8, hz = hw + DECK_SIDE - 0.4, cx = (a, o) => [x + ux * a - uz * o, z + uz * a + ux * o];
+        for (const [a0, o0, a1, o1] of [[-hx, -hz, hx, -hz], [hx, -hz, hx, hz], [hx, hz, -hx, hz], [-hx, hz, -hx, -hz]]) { const p = cx(a0, o0), q = cx(a1, o1); quad(G.deck, [p[0], gy - 1, p[1]], [q[0], gy - 1, q[1]], [q[0], top, q[1]], [p[0], top, p[1]]); } } }
+    // a rail tunnel's portals: the headwall round its mouth (as roads.js's), centred on the portal
+    for (const p of portalsOf(L.net.runs.filter((r) => r.kind === 'rail'))) { if (p.x < L.x0 || p.x >= L.x0 + L.size || p.z < L.z0 || p.z >= L.z0 + L.size) continue; const T = PORTAL_T / 2, pt = (u, v, y) => [p.x + p.dx * u - p.dz * v, p.y + y, p.z + p.dz * u + p.dx * v];
+      const box = (v0, v1, y0, y1) => { for (const u of [-T, T]) quad(G.tube, pt(u, v0, y0), pt(u, v1, y0), pt(u, v1, y1), pt(u, v0, y1)); quad(G.tube, pt(-T, v0, y1), pt(-T, v1, y1), pt(T, v1, y1), pt(T, v0, y1)); for (const v of [v0, v1]) quad(G.tube, pt(-T, v, y0), pt(T, v, y0), pt(T, v, y1), pt(-T, v, y1)); };
+      box(-p.W, -p.hwT, -PORTAL_FOOT, PORTAL_TOP); box(p.hwT, p.W, -PORTAL_FOOT, PORTAL_TOP); box(-p.hwT, p.hwT, TUBE_H, PORTAL_TOP); box(-p.hwT, p.hwT, -SILL, -0.05); } // (its wings PORTAL_FOOT deep, a sill across the mouth: roads.js's)
+    const grp = new THREE.Group(); grp.name = 'layout rails ' + c.k;
+    for (const [k, A] of Object.entries(G)) { if (!A.length) continue; const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(A, 3)); if (k === 'ballast') { const nv = A.length / 3; g.setAttribute('aRoad', new THREE.Float32BufferAttribute(new Float32Array(nv * 4), 4)); g.setAttribute('aLane', new THREE.Float32BufferAttribute(new Float32Array(nv), 1)); }
+      g.computeVertexNormals(); g.computeBoundingSphere(); const me = new THREE.Mesh(g, this.mats[k]); me.receiveShadow = true; me.castShadow = k === 'deck'; me.userData.near = k === 'steel' || k === 'sleeper'; grp.add(me); }
+    c.rails = grp; this.group.add(grp);
   }
   // each frame: the chunks about the camera fetched and asked for (fine near, coarse further); each drawn at its level
   update(cam) {
@@ -233,10 +271,10 @@ export class Layout {
     const k = c.m.fine.tk[o[0]], w = this.w, n = new THREE.Vector3(o[1], o[2], o[3]), lot = k <= KIND.bank && w.cityD && w.cityPaved(x, z) > 0.5 && w.real.bare(x, z); // (a city's paved lots, as World.groundAt says)
     const air = k <= KIND.bank && w.airfieldPaved?.(x, z); // (the airfield's runways, taxiways and apron: their meshes over this ground, World.groundAt's 'runway', at least runway height)
     if (air) return { h: Math.max(h, w.loc.rwyH), n: new THREE.Vector3(0, 1, 0), type: 'runway' };
-    const type = k === KIND.verge || k === KIND.gravel ? 'sand' : k >= KIND.tarmac || lot ? 'runway' : n.y < 0.8 ? 'rock' : w.loc.desert && !(w.real && w.real.forest(x, z) > 0.45) ? 'sand' : 'grass'; // (a desert's ground: sand, but pine needles under the rims' forests, as World.groundAt)
+    const type = k === KIND.verge || k === KIND.gravel || k === KIND.ballast ? 'sand' : k >= KIND.tarmac || lot ? 'runway' : n.y < 0.8 ? 'rock' : w.loc.desert && !(w.real && w.real.forest(x, z) > 0.45) ? 'sand' : 'grass'; // (a desert's ground: sand, but pine needles under the rims' forests, as World.groundAt)
     return { h, n: type === 'runway' ? new THREE.Vector3(0, 1, 0) : n, type };
   }
-  dispose() { this.worker?.terminate(); for (const c of this.chunks.values()) for (const o of c.mesh?.children || []) o.geometry.dispose(); for (const s of this.skirts.values()) s.geometry.dispose(); this.mask.dispose(); }
+  dispose() { this.worker?.terminate(); for (const c of this.chunks.values()) for (const o of [...(c.mesh?.children || []), ...(c.rails?.children || [])]) o.geometry.dispose(); for (const s of this.skirts.values()) s.geometry.dispose(); this.mask.dispose(); }
 }
 
 // a paved surface: its photo texture over a base colour (world-space, metres), and on the tarmac the markings from the

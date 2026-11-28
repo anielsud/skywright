@@ -530,7 +530,8 @@ export class RealScenery {
       }
       return ys;
     };
-    for (const [kind, br, flat] of list) {
+    for (const [kind, br, flat, , tun] of list) {
+      if (tun) continue; // (in a tunnel: only the baked road layout draws it, #294)
       const raw = []; for (let k = 0; k < flat.length; k += 2) raw.push([flat[k], flat[k + 1]]);
       const pts = densify(raw, 6);
       if (pts.length < 2) continue;
@@ -541,7 +542,7 @@ export class RealScenery {
     }
     const ballast = new THREE.MeshStandardMaterial({ color: 0x4e463e, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
     const steelM = new THREE.MeshStandardMaterial({ color: 0x8b9097, metalness: 0.8, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6 });
-    this.railChunks = [];
+    this.railChunks = []; W.layout?.clip(ballast, steelM); // (inside a baked layout chunk the layout lays the rails on its ballast, #294)
     const mk = (p, i, m, steel) => { if (!p.n) return; const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(p.a.slice(0, p.n), 3)); g.setIndex(new THREE.BufferAttribute(p.n / 3 > 65535 ? i.a.slice(0, i.n) : Uint16Array.from(i.a.subarray(0, i.n)), 1)); // (setIndex's rule: 32-bit once an index reaches 65535; every vertex is used, the last one too)
       g.setAttribute('normal', new THREE.BufferAttribute(vertexNormals(g.attributes.position.array, g.index.array), 3)); g.computeBoundingSphere(); const mesh = new THREE.Mesh(g, m); mesh.receiveShadow = true; this.group.add(mesh); this.railChunks.push({ m: mesh, x: g.boundingSphere.center.x, z: g.boundingSphere.center.z, r: g.boundingSphere.radius, steel }); };
     for (const c of cells.values()) { mk(c.pos, c.idx, ballast, false); mk(c.steel, c.sIdx, steelM, true); }

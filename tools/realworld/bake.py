@@ -898,6 +898,34 @@ def osm_api(L, bb, cache, step=0.08):
     print(f'  OSM API: {len(nodes)} nodes, {len(W)} ways, {len(R)} relations', flush=True)
     return W, R, tagged
 
+# a railway way in osm.json: [kind (0 rail, 1 funicular), bridge, x,z..., class, tunnel]. class (the baked road layout's
+# grade limit and bed, #294): 0 a main or branch line, 1 a yard's, siding's or spur's track (OSM service=*), 2 a narrow-gauge
+# line, 3 a rack railway (rack=* but no), 4 a funicular
+def rail_entry(tags, br, tun, flat_pts):
+    rw = tags['railway']
+    cls = 4 if rw == 'funicular' else 3 if tags.get('rack', 'no') != 'no' else 1 if tags.get('service') else 2 if rw == 'narrow_gauge' else 0
+    return [1 if rw == 'funicular' else 0, br, flat_pts, cls, 1 if tun else 0]
+
+def bake_rails(L, cache, out, api=False):
+    """osm.json's railways alone, again from the cached OSM ways (bake.py LOC --only rails): every other key as it was."""
+    bb = bbox(L, L['hi'], 500); hdr = f'[out:json][timeout:900][maxsize:1073741824][bbox:{bb}];'
+    p = os.path.join(cache, 'osm', 'ways.json')
+    if not api and os.path.exists(p): W = json.load(open(p))['elements']
+    else:
+        import re
+        W = [w for w in osm_api(L, bb, cache)[0] if 'railway' in w['tags'] and re.match('^(rail|narrow_gauge|light_rail|funicular)$', w['tags']['railway'])]
+    sq = L['hi']; q = lambda v: round(float(v), 1); flat = lambda pts: [q(c) for p in pts for c in p]; rails = []
+    for e in [e for e in W if e['type'] == 'way' and len(e.get('geometry', [])) > 1]:
+        tags = e.get('tags', {})
+        if 'highway' in tags or 'railway' not in tags or tags['railway'] not in ('rail', 'narrow_gauge', 'light_rail', 'funicular'): continue
+        pts = local_pts(L, e['geometry'])
+        if not in_square(pts, sq, 200): continue
+        tun = tags.get('tunnel') in ('yes', 'building_passage', 'culvert') or str(tags.get('layer', '0')).startswith('-')
+        rails.append(rail_entry(tags, 1 if tags.get('bridge') not in (None, 'no') else 0, tun, flat(pts)))
+    o = json.load(open(os.path.join(out, 'osm.json'))); o['rails'] = rails
+    with open(os.path.join(out, 'osm.json'), 'w') as f: json.dump(o, f, separators=(',', ':'))
+    print(f'  osm.json rails: {len(rails)} ({sum(r[4] for r in rails)} in tunnels)', flush=True)
+
 def bake_osm(L, cache, api=False):
     bb = bbox(L, L['hi'], 500)
     hdr = f'[out:json][timeout:900][maxsize:1073741824][bbox:{bb}];'
@@ -985,8 +1013,7 @@ def bake_osm(L, cache, api=False):
             roads.append([c, q(w), br, flat(pts)]); road_meta.append((geom_keys(e), tags))
             if br and city: bridges.append(dict(i=len(roads) - 1, name=tags.get('name', ''), pts=pts, layer=num(tags.get('layer'), 1)))
         elif 'railway' in tags:
-            if tun: continue
-            rails.append([1 if tags['railway'] == 'funicular' else 0, br, flat(pts)])
+            rails.append(rail_entry(tags, br, tun, flat(pts)))  # (a tunnel's: only the baked road layout draws it, #294)
         elif 'aerialway' in tags:
             cables.append([{'cable_car': 0, 'gondola': 1}.get(tags['aerialway'], 2), flat(pts)])
     # ---- places
@@ -1161,7 +1188,8 @@ def bake_cover(L, osm, N, base=None, forest=None):
     for c, w, br, pts, *_ in osm['roads']:
         P = np.array(pts).reshape(-1, 2)
         d.line([((x - x0) * k - 0.5, (z - z0) * k - 0.5) for x, z in P], fill=0, width=max(1, int(round((w + 4) * k))))
-    for kind, br, pts in osm['rails']:
+    for kind, br, pts, *more in osm['rails']:
+        if more and more[1]: continue  # (in a tunnel)
         P = np.array(pts).reshape(-1, 2)
         d.line([((x - x0) * k - 0.5, (z - z0) * k - 0.5) for x, z in P], fill=0, width=max(1, int(round(8 * k))))
     for b in osm['blds']:
@@ -1184,6 +1212,7 @@ def main():
     cache = os.path.join(a.cache, a.loc); out = os.path.join(a.out, a.loc)
     L['_osm_json'] = os.path.join(out, 'osm.json')
     os.makedirs(out, exist_ok=True)
+    if only == {'rails'}: return bake_rails(L, cache, out, a.osm_api)
     print('osm', flush=True)
     osm = bake_osm(L, cache, a.osm_api)  # heights need the lakes
     hi = None

@@ -7,6 +7,9 @@
 //                  nearest streets, out to CITY_REACH), else the banks: from each road's outer edge a set slope to the
 //                  natural ground (FILL, CUT; steeper on a steep hillside)
 //   road(x, z)     the nearest street's coordinates for the markings: { id, u, v, hw, lanes, oneway, dj }
+// A railway (kind 'rail', a way off the street network) is a bed of ballast (KIND.ballast) level across at its own height,
+// with banks as a road's; where it crosses a road on the ground (a level crossing, junctions[].lx) both lie on the
+// crossing's plane, so neither steps where the other's surface begins.
 import { KIND } from './format.js';
 
 export const LOT_PAIR = 40, KERB = 0.15, KERB_W = 0.1, PAVE_RAMP = 2, BANK_MAX = 40, CITY_REACH = 36, JBLEND = 6, SBLEND = 3;
@@ -24,11 +27,13 @@ export const vergeW = (r) => (r.minor || r.pave ? 0 : r.kind === 'highway' ? 1.5
 // lanes (5.5 m); its junctions' zebras: a city's streets and a village's (with a pavement)
 export const painted = (r, city) => !r.minor && (city || r.kind === 'highway' || r.kind === 'main' || r.hw >= 2.75);
 export const zebra = (r, city) => !r.minor && (city || r.pave > 0);
+export const isRail = (r) => r.kind === 'rail';
 const SC = 10, PAD = 54; // (grid cell, m; how far from a road its segments are found: the bake stores every road within more than this of a chunk, bake.js NET_PAD, so two chunks work out their shared edge alike)
 
 // bridges and tunnels (roads.js draws their decks and tubes at their own profile, as today): a deck is DECK_SIDE m wider than
 // its road each side and DECK_DEPTH deep; a tube's walls TUBE_SIDE m out, its crown TUBE_H up; a portal's headwall
 // PORTAL_W m wider than the tube each side, PORTAL_TOP up, PORTAL_T thick (centred on the portal)
+export const PORTAL_BEHIND = 8; // (m into the hill behind a portal no railway's bed reaches: a tunnel's other tracks stop at its mouth)
 export const DECK_SIDE = 1, DECK_DEPTH = 1.4, TUBE_SIDE = 1.2, TUBE_H = 5.6, PORTAL_W = 5, PORTAL_TOP = 11.6, PORTAL_T = 0.7;
 // with the layout on, a portal's headwall's wings reach PORTAL_FOOT m under the road (a retaining wall where the ground beside
 // the portal lies far under it) and a sill SILL m deep closes the floor's edge across the mouth (roads.js); a surface
@@ -44,7 +49,7 @@ export function portalsOf(runs) {
     const [x, z] = end === 'A' ? P(r, 0) : P(r, ns(r) - 1), [px, pz] = end === 'A' ? P(r, 1) : P(r, ns(r) - 2); let nx = px, nz = pz;
     for (const t of tubes) { if (ns(t) < 2) continue; const [ax, az] = P(t, 0), [bx, bz] = P(t, ns(t) - 1); if (Math.hypot(ax - x, az - z) < 0.02) { [nx, nz] = P(t, 1); nx = 2 * x - nx; nz = 2 * z - nz; break; } if (Math.hypot(bx - x, bz - z) < 0.02) { [nx, nz] = P(t, ns(t) - 2); nx = 2 * x - nx; nz = 2 * z - nz; break; } }
     let dx = (x - px) + (x - nx), dz = (z - pz) + (z - nz); if (Math.hypot(dx, dz) < 1e-6) { dx = x - px; dz = z - pz; } const l = Math.hypot(dx, dz) || 1, hwT = r.hw + TUBE_SIDE;
-    out.push({ x, z, dx: dx / l, dz: dz / l, y: end === 'A' ? r.h[0] : r.h[r.h.length - 1], hw: r.hw, hwT, W: hwT + PORTAL_W }); }
+    out.push({ x, z, dx: dx / l, dz: dz / l, y: end === 'A' ? r.h[0] : r.h[r.h.length - 1], hw: r.hw, hwT, W: hwT + PORTAL_W, rail: r.kind === 'rail' }); }
   return out;
 }
 // (x, z) in a portal's frame: along (into the hill, from the portal) and across
@@ -71,8 +76,9 @@ export function makeRules(net, g, city, wl = -Infinity) {
   // a portal's opening: its lip (behind the portal, the headwall's back half, across the headwall: no surface); and the ground
   // there kept within the headwall (its rim hidden in it)
   const inLip = (x, z) => portals.some((p) => { const [u, v] = portalUV(p, x, z); return u >= -0.005 && u <= PORTAL_T / 2 + 0.005 && Math.abs(v) <= p.W + 0.005; });
-  const portalClamp = (x, z, y) => { for (const p of portals) { const [u, v] = portalUV(p, x, z); if (u >= -0.05 && u <= PORTAL_T / 2 + 0.05 && Math.abs(v) <= p.W + 0.05) y = Math.min(y, p.y + (u < PORTAL_T / 4 && Math.abs(v) <= p.hwT + 0.05 ? TUBE_H - 0.1 : PORTAL_TOP - 0.3)); } return y; }; // (the mouth's front: under the crown, a steep hillside's cutting held there)
-  const street = (r) => !r.minor, any = () => true;
+  const portalClamp = (x, z, y) => { for (const p of portals) { const [u, v] = portalUV(p, x, z); if (u >= -0.05 && u <= PORTAL_T / 2 + 0.05 && Math.abs(v) <= p.W + 0.05) { y = Math.min(y, p.y + (u < PORTAL_T / 4 && Math.abs(v) <= p.hwT + 0.05 ? TUBE_H - 0.1 : PORTAL_TOP - 0.3));
+    if (p.rail) y = Math.max(y, p.y - (Math.abs(v) <= p.hwT + 0.05 ? SILL : PORTAL_FOOT) + 0.1); } } return y; }; // (a railway's portal: the ground there held up to its sill across the mouth, its wings' foot beside it: a bed narrower than the mouth, a hillside falling away beside it) // (the mouth's front: under the crown, a steep hillside's cutting held there)
+  const street = (r) => !r.minor, any = () => true, notRail = (r) => !isRail(r), hasRail = runs.some(isRail);
   // the nearest road (filter ok) to (x, z): its distance past its tarmac's edge d, height h there, u along, v across
   const nearest = (x, z, ok) => { let best = null; const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return null;
     for (let q = 0; q < L.length; q += 2) { const ri = L[q], s = L[q + 1], r = runs[ri]; if (!ok(r)) continue; const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
@@ -87,25 +93,30 @@ export function makeRules(net, g, city, wl = -Infinity) {
     return best.sort((a, b) => a.d - b.d).slice(0, 2); };
   const jGrid = new Map(); JN.forEach((J, q) => { for (let i = Math.floor((J.x - J.r - JBLEND) / SC); i <= Math.floor((J.x + J.r + JBLEND) / SC); i++) for (let j = Math.floor((J.z - J.r - JBLEND) / SC); j <= Math.floor((J.z + J.r + JBLEND) / SC); j++) { const k = key(i, j); (jGrid.get(k) || jGrid.set(k, []).get(k)).push(q); } });
   // the nearest junction within JBLEND of its circle: [junction, distance past its circle]
-  const junction = (x, z) => { let best = null, bd = Infinity; for (const q of jGrid.get(key(Math.floor(x / SC), Math.floor(z / SC))) || []) { const J = JN[q], d = Math.hypot(x - J.x, z - J.z) - J.r; if (d < JBLEND && d < bd) { bd = d; best = J; } } return best ? [best, bd] : null; };
+  const junction = (x, z) => { let best = null, bd = Infinity; for (const q of jGrid.get(key(Math.floor(x / SC), Math.floor(z / SC))) || []) { const J = JN[q]; if (J.lx) continue; const d = Math.hypot(x - J.x, z - J.z) - J.r; if (d < JBLEND && d < bd) { bd = d; best = J; } } return best ? [best, bd] : null; };
   // the street surface at (x, z) given its street's height h there: a junction's plane inside it, blending into the street's
   // (where junctions' circles overlap or nearly: their planes blended by how far inside each the point is, so the surface
   // doesn't step where one stops being the nearest)
-  const streetH = (x, z, h) => { let sw = 0, sp = 0, dmin = Infinity; for (const q of jGrid.get(key(Math.floor(x / SC), Math.floor(z / SC))) || []) { const J = JN[q], d = Math.hypot(x - J.x, z - J.z) - J.r; if (d >= JBLEND) continue; const u = (JBLEND - d) / JBLEND, wt = u * u; sw += wt; sp += wt * (J.y0 + J.gx * (x - J.x) + J.gz * (z - J.z)); if (d < dmin) dmin = d; }
+  // (lx: a level crossing's plane only: a railway's bed, a way off the street network)
+  const streetH = (x, z, h, lx = false) => { let sw = 0, sp = 0, dmin = Infinity; for (const q of jGrid.get(key(Math.floor(x / SC), Math.floor(z / SC))) || []) { const J = JN[q]; if (lx && !J.lx) continue; const d = Math.hypot(x - J.x, z - J.z) - J.r; if (d >= JBLEND) continue; const u = (JBLEND - d) / JBLEND, wt = u * u; sw += wt; sp += wt * (J.y0 + J.gx * (x - J.x) + J.gz * (z - J.z)); if (d < dmin) dmin = d; }
     if (!sw) return h; const ph = sp / sw; if (dmin <= 0) return ph; const t = dmin / JBLEND, w = t * t * (3 - 2 * t); return ph + (h - ph) * w; };
   // the streets' height at (x, z) away from a junction: every street segment within SBLEND of the nearest (by distance past
   // its tarmac's edge) blended, each weighted down to nothing as it falls SBLEND behind. Per segment, not per road: a
   // segment's distance and height change smoothly, so the blend does too, wherever streets (or a road's own two sides of a
   // sharp bend) meet, and whichever way the roads are split into ways
-  const blended = (x, z) => { const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return null; const c = []; let dmin = Infinity;
-    for (let q = 0; q < L.length; q += 2) { const r = runs[L[q]], s = L[q + 1]; if (r.minor) continue; const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
+  // (rail: the railways' instead: a yard's tracks side by side, each at its own height, make one bed without a step between)
+  const blended = (x, z, rail = false) => { const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return null; const c = []; let dmin = Infinity;
+    for (let q = 0; q < L.length; q += 2) { const r = runs[L[q]], s = L[q + 1]; if (rail ? !isRail(r) || r.off : r.minor) continue; const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
       const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw; c.push(d, r.h[s] + (r.h[s + 1] - r.h[s]) * t); if (d < dmin) dmin = d; }
     let sw = 0, sh = 0; for (let q = 0; q < c.length; q += 2) { const u = 1 - (c[q] - dmin) / SBLEND; if (u <= 0) continue; const wt = u * u * (3 - 2 * u); sw += wt; sh += wt * c[q + 1]; } return sw ? sh / sw : null; };
-  const minorKind = (k) => k === KIND.alley || k === KIND.pavers || k === KIND.gravel;
+  const minorKind = (k) => k === KIND.alley || k === KIND.pavers || k === KIND.gravel, lxs = JN.some((J) => J.lx);
   // where a road stops at a deck or a tube: its own height across its end, as the deck's or the tube's floor (level across), not
   // blended with a road beside it (a dual carriageway's other side, a ramp): fading to the blend over HOLD m back from the end
   // and over its pavement or verge sideways (no step)
   const cuts = []; runs.forEach((r) => { if (r.off || r.minor) return; const n = r.h.length; if (n < 2) return; for (const [c, i, j] of [[r.cutA, 0, 1], [r.cutB, n - 1, n - 2]]) if (c) { const dx = r.pts[i * 2] - r.pts[j * 2], dz = r.pts[i * 2 + 1] - r.pts[j * 2 + 1], l = Math.hypot(dx, dz) || 1; cuts.push({ r, x: r.pts[i * 2], z: r.pts[i * 2 + 1], dx: dx / l, dz: dz / l, y: r.h[i], side: r.pave || vergeW(r) || 1 }); } });
+  // (where a railway stops at a deck or a tube: its end, facing out (dx, dz))
+  const railCuts = []; runs.forEach((r) => { if (r.off || !isRail(r)) return; const n = r.h.length; if (n < 2) return; for (const [c, i, j] of [[r.cutA, 0, 1], [r.cutB, n - 1, n - 2]]) if (c) { const dx = r.pts[i * 2] - r.pts[j * 2], dz = r.pts[i * 2 + 1] - r.pts[j * 2 + 1], l = Math.hypot(dx, dz) || 1; railCuts.push({ r, x: r.pts[i * 2], z: r.pts[i * 2 + 1], dx: dx / l, dz: dz / l }); } });
+  const railEnd = (x, z) => { let best = null, bv = Infinity; for (const c of railCuts) { const u = (c.x - x) * c.dx + (c.z - z) * c.dz; if (u < -0.05 || u > HOLD) continue; const v = Math.abs((z - c.z) * c.dx - (x - c.x) * c.dz); if (v <= c.r.hw + 0.05 && v < bv) { bv = v; best = c.r; } } return best; }; // (the nearest: a double-track bridge's two decks)
   const sstep = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
   // (two such ends side by side, a twin tube's: each one's own height by how near its centre line the point is, sharply, so
   // each end is its own exactly and the two blend between, without a step)
@@ -114,9 +125,10 @@ export function makeRules(net, g, city, wl = -Infinity) {
     return W > 0 ? y + (sy / sk - y) * W : y; };
   const nearestOn = (r, x, z) => { let best = Infinity, y = 0; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t); if (d < best) { best = d; y = r.h[s] + (r.h[s + 1] - r.h[s]) * t; } } return y; };
   const base = (x, z, k) => {
-    const n = nearest(x, z, minorKind(k) ? any : street) || nearest(x, z, any); if (!n) return g(x, z);
+    if (k === KIND.ballast) { const re = railCuts.length ? railEnd(x, z) : null; if (re) return nearestOn(re, x, z); const y = blended(x, z, true); if (y != null) return lxs ? streetH(x, z, y, true) : y; } // (a railway's bed; HOLD m back from where it stops at a deck or a tube: its own height, the deck's or the tube floor's at its end)
+    const n = nearest(x, z, minorKind(k) ? (hasRail ? notRail : any) : street) || nearest(x, z, any); if (!n) return g(x, z);
     if (minorKind(k) && n.d > 0) { const f = Math.min(1, n.d / 20); return n.h + (g(x, z) - n.h) * f; } // (a plaza's middle, away from its ways: towards the ground)
-    if (n.r.minor) return n.h;
+    if (n.r.minor) return lxs ? streetH(x, z, n.h, true) : n.h; // (a railway's bed, a way off the street network: on a level crossing's plane there)
     const y = streetH(x, z, blended(x, z)); return cuts.length ? hold(x, z, y) : y;
   };
   const drawn = (x, z, k) => base(x, z, k) + (k === KIND.pave || k === KIND.kerb ? KERB : 0);
@@ -125,18 +137,19 @@ export function makeRules(net, g, city, wl = -Infinity) {
   // outer edge (pavement or verge) at its slope; the ground is the natural ground held between them (so two roads' banks,
   // a switchback's legs, meet without a step). Where two roads' banks disagree (a wall's place): the nearer road's.
   const slopeAt = (x, z) => Math.hypot(g(x + 2, z) - g(x - 2, z), g(x, z + 2) - g(x, z - 2)) / 4;
-  const banks = (x, z, gz) => { const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return gz; const per = new Map();
-    for (let q = 0; q < L.length; q += 2) { const ri = L[q], s = L[q + 1], r = runs[ri], ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
+  // (ok: which roads; y0: the ground to hold between them, gz's by default)
+  const banks = (x, z, gz, ok = any, y0 = gz) => { const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return y0; const per = new Map();
+    for (let q = 0; q < L.length; q += 2) { const ri = L[q], s = L[q + 1], r = runs[ri]; if (!ok(r)) continue; const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
       const t0 = ((x - ax) * dx + (z - az) * dz) / L2; if (pastCut(r, s, t0, 'tube')) continue; // (past a portal, the hill: not the approach's cutting)
       const t = Math.max(0, Math.min(1, t0)), px = ax + dx * t, pz = az + dz * t, d = Math.hypot(x - px, z - pz) - r.hw - (r.pave || vergeW(r)), b = per.get(ri);
       if (d <= BANK_MAX && (!b || d < b.d)) per.set(ri, { r, d: Math.max(0, d), h: r.h[s] + (r.h[s + 1] - r.h[s]) * t, px, pz }); }
-    if (!per.size || gz < wl) return gz; let lo = -Infinity, hi = Infinity, nb = null;
-    for (const b of per.values()) { const y = (b.r.minor ? b.h : streetH(b.px, b.pz, b.h)) + (b.r.pave ? KERB : 0), sl = BANK_STEEP * slopeAt(b.px, b.pz), kf = Math.min(BANK_TOP, Math.max(FILL, sl)), kc = Math.min(BANK_TOP, Math.max(CUT, sl));
+    if (!per.size || gz < wl) return y0; let lo = -Infinity, hi = Infinity, nb = null;
+    for (const b of per.values()) { const y = (b.r.minor ? (lxs ? streetH(b.px, b.pz, b.h, true) : b.h) : streetH(b.px, b.pz, b.h)) + (b.r.pave ? KERB : 0), sl = BANK_STEEP * slopeAt(b.px, b.pz), kf = Math.min(BANK_TOP, Math.max(FILL, sl)), kc = Math.min(BANK_TOP, Math.max(CUT, sl));
       b.lo = y - kf * b.d; b.hi = y + kc * b.d; lo = Math.max(lo, b.lo); hi = Math.min(hi, b.hi); if (!nb || b.d < nb.d) nb = b; }
-    if (lo > hi) { lo = nb.lo; hi = nb.hi; } return shore(Math.min(hi, Math.max(lo, gz)), gz); };
+    if (lo > hi) { lo = nb.lo; hi = nb.hi; } return shore(Math.min(hi, Math.max(lo, y0)), gz); };
   // (the shore: under the water the natural ground; on dry ground a fill tapers to nothing at the waterline, never below it)
   const shore = (y, gz) => (gz < wl ? gz : Math.max(wl, y > gz ? Math.min(y, gz + SHORE_K * (gz - wl)) : y));
-  const ground0 = (x, z) => { const gz = g(x, z); if (city) { const l = lot(x, z); if (l && l.d <= CITY_REACH) return l.y; } return banks(x, z, gz); };
+  const ground0 = (x, z) => { const gz = g(x, z); if (city) { const l = lot(x, z); if (l && l.d <= CITY_REACH) return hasRail ? banks(x, z, gz, isRail, l.y) : l.y; } return banks(x, z, gz); }; // (a city's lots: a railway's banks through them)
   const ground = (x, z) => portalClamp(x, z, offClamp(x, z, ground0(x, z)));
   // the markings' coordinates: the nearest street, and how far its point is from the nearest junction's circle
   const road = (x, z) => { const n = nearest(x, z, street); if (!n) return null; const j = junction(n.px, n.pz); return { id: n.ri, u: n.u, v: n.v, hw: n.r.hw, lanes: n.r.lanes, oneway: n.r.oneway, dj: j ? j[1] : 99 }; };
@@ -165,11 +178,12 @@ export function makeRules(net, g, city, wl = -Infinity) {
   // the paved region a point is in, by the outlines' own order (outline.js): a street's carriageway, its pavement, an
   // alley, pavers, gravel, a verge; else the ground (a carriageway's edge, to 3 cm: its outline's points round to the
   // centimetre). For the chunk's edge points: both chunks beside it agree.
-  const mk = (r) => (r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
+  const mk = (r) => (isRail(r) ? KIND.ballast : r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
   const region = (x, z) => { if (portals.length && inLip(x, z)) return KIND.lip; const L = segIdx.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return KIND.ground; let best = KIND.ground, rank = 99;
-    const RANK = { [KIND.tarmac]: 0, [KIND.pave]: 1, [KIND.alley]: 2, [KIND.pavers]: 3, [KIND.gravel]: 4, [KIND.verge]: 5 };
+    const RANK = { [KIND.tarmac]: 0, [KIND.ballast]: 1, [KIND.pave]: 2, [KIND.alley]: 3, [KIND.pavers]: 4, [KIND.gravel]: 5, [KIND.verge]: 6 }; // (outline.js's order)
     for (let q = 0; q < L.length; q += 2) { const ri = L[q], s = L[q + 1], r = runs[ri], ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
       const t0 = ((x - ax) * dx + (z - az) * dz) / L2; if (pastCut(r, s, t0)) continue; // (a road stopping at a deck or tube stops square)
+      if (isRail(r) && portals.some((p) => { const [u, v] = portalUV(p, x, z); return p.rail && u >= 0 && u <= PORTAL_BEHIND && Math.abs(v) <= p.W; })) continue; // (no railway's bed behind a portal, outline.js)
       const t = Math.max(0, Math.min(1, t0)), d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw;
       const k = d <= (r.minor ? 0 : 0.03) ? (r.minor ? mk(r) : KIND.tarmac) : !r.minor && r.pave && d <= r.pave ? KIND.pave : d <= vergeW(r) ? KIND.verge : null;
       if (k != null && RANK[k] < rank) { rank = RANK[k]; best = k; } }

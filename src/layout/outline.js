@@ -6,7 +6,7 @@
 //   chunkOutlines(net, areas, L) -> { P: [[X, Z], ...] (cm), E: [[a, b, kind], ...] (an edge two regions share: once for each) }
 import CL from '../../vendor/layout/clipper1.mjs';
 import { KIND } from './format.js';
-import { vergeW, portalsOf, PORTAL_T } from './rules.js';
+import { vergeW, portalsOf, PORTAL_T, PORTAL_BEHIND as BEHIND } from './rules.js';
 
 const ARC = 15, EDGE_STEP = 4, CLIP = 25, SNAP = 50; // (CLIP: m about the chunk a road's stretches are kept: past a road's widest reach, its half width and pavement) // (ARC: cm a round join's arc may cut inside; EDGE_STEP: m between the chunk's edge points)
 const cm = (v) => Math.round(v * 100);
@@ -31,16 +31,21 @@ export function chunkOutlines(net, areas, L) {
       if (Math.max(ax, bx) < cx0 || Math.min(ax, bx) > cx1 || Math.max(az, bz) < cz0 || Math.min(az, bz) > cz1) continue; out.push([[cm(ax), cm(az)], [cm(bx), cm(bz)]]); } return out; };
   // (and each capsule given a point where it crosses a chunk line, worked out from it alone, before anything is unioned: the
   // union keeps it (collinear points kept), so the chunks either side cut their outlines at the same points)
-  const strips = (filter, width) => { const out = []; for (const r of runs) if (filter(r)) { const d = width(r); if (d > 0) { const ls = segs(r), cuts = r.cutA || r.cutB ? cutsOf(r) : [];
-    for (const seg of ls) { let cap = off([seg], cm(d)); for (const c of cuts) if (segDist(seg, cm(c.x), cm(c.z)) < cm(d + 1)) cap = bool(CL.ClipType.ctDifference, cap, cutBox(c, d)); out.push(...splitAtGrid(cap, S)); } } } return out; }; // (each capsule offset alone: an offset of several unions them, the rounding again depending on which)
-  const minorKind = (r) => (!r.minor ? -1 : r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
+  const capEdge = []; // (a railway's capsules' own points on a chunk line: where two tracks' beds just touch, the union keeps one there on one side only)
+  const strips = (filter, width, keepEdge = false) => { const out = []; for (const r of runs) if (filter(r)) { const d = width(r); if (d > 0) { const ls = segs(r), cuts = r.cutA || r.cutB ? cutsOf(r) : [];
+    for (const seg of ls) { let cap = off([seg], cm(d)); for (const c of cuts) if (segDist(seg, cm(c.x), cm(c.z)) < cm(d + 1)) cap = bool(CL.ClipType.ctDifference, cap, cutBox(c, d)); const sp = splitAtGrid(cap, S); if (keepEdge) for (const q of sp) for (const [X, Z] of q) if ((X === X0 || X === X0 + S) ? Z >= Z0 && Z <= Z0 + S : (Z === Z0 || Z === Z0 + S) && X >= X0 && X <= X0 + S) capEdge.push([X, Z]); out.push(...sp); } } } return out; }; // (each capsule offset alone: an offset of several unions them, the rounding again depending on which)
+  const minorKind = (r) => (!r.minor ? -1 : r.kind === 'rail' ? KIND.ballast : r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
   const area = (surf) => splitAtGrid(areas.filter((a) => a.surf === surf).map((a) => a.ring), S);
   const street = (r) => !r.minor;
   const Tc = union(strips(street, (r) => r.hw)), Pv = union(strips((r) => r.pave > 0, (r) => r.hw + r.pave)), Vg = union(strips((r) => vergeW(r) > 0, (r) => r.hw + vergeW(r)));
   const Ta = union(strips((r) => minorKind(r) === KIND.alley, (r) => r.hw), area(0)), Tp = union(strips((r) => minorKind(r) === KIND.pavers, (r) => r.hw), area(1)), Tg = union(strips((r) => minorKind(r) === KIND.gravel, (r) => r.hw), area(2));
-  const Pall = minus(Pv, Tc); // (the kerb: mesh.js, along every tarmac edge a pavement shares)
+  // (a railway's bed: under a road's carriageway at a level crossing, over everything else; never into the hill behind a
+  // portal (a tunnel's other tracks, sharing its tube, stop at its mouth: their beds' round ends))
+  const behind = portals.filter((p) => p.rail && p.x > cx0 && p.x < cx1 && p.z > cz0 && p.z < cz1).map((p) => [corner(p.x, p.z, p.dx, p.dz, 0, -p.W), corner(p.x, p.z, p.dx, p.dz, BEHIND, -p.W), corner(p.x, p.z, p.dx, p.dz, BEHIND, p.W), corner(p.x, p.z, p.dx, p.dz, 0, p.W)]);
+  const Tb = minus(union(strips((r) => minorKind(r) === KIND.ballast, (r) => r.hw, true)), Tc, ...(behind.length ? [behind] : []));
+  const Pall = minus(Pv, Tc, Tb); // (the kerb: mesh.js, along every tarmac edge a pavement shares)
   const Lp = union(portals.filter((p) => p.x > cx0 && p.x < cx1 && p.z > cz0 && p.z < cz1).map((p) => [corner(p.x, p.z, p.dx, p.dz, 0, -p.W), corner(p.x, p.z, p.dx, p.dz, PORTAL_T / 2, -p.W), corner(p.x, p.z, p.dx, p.dz, PORTAL_T / 2, p.W), corner(p.x, p.z, p.dx, p.dz, 0, p.W)]));
-  const REG = [[KIND.tarmac, Tc], [KIND.pave, Pall], [KIND.alley, minus(Ta, Tc, Pall)], [KIND.pavers, minus(Tp, Tc, Pall, Ta)], [KIND.gravel, minus(Tg, Tc, Pall, Ta, Tp)], [KIND.verge, minus(Vg, Tc, Pall, Ta, Tp, Tg).filter((p) => Math.abs(ringArea(p)) > 5000)]]; // (no verge slivers under 0.5 m²)
+  const REG = [[KIND.tarmac, Tc], [KIND.ballast, Tb], [KIND.pave, Pall], [KIND.alley, minus(Ta, Tc, Tb, Pall)], [KIND.pavers, minus(Tp, Tc, Tb, Pall, Ta)], [KIND.gravel, minus(Tg, Tc, Tb, Pall, Ta, Tp)], [KIND.verge, minus(Vg, Tc, Tb, Pall, Ta, Tp, Tg).filter((p) => Math.abs(ringArea(p)) > 5000)]]; // (no verge slivers under 0.5 m²)
   if (Lp.length) { const Lq = minus(Lp, Tc); for (const e of REG) e[1] = minus(e[1], Lq); REG.unshift([KIND.lip, Lq]); } // (not over a carriageway: another road's beside the portal, a twin tube's) // (a portal's lip: an opening through everything)
   // the chunk's: clipped to it (each region split where it crosses a chunk line first: neighbours clip the same points)
   const box = [[[X0, Z0], [X0 + S, Z0], [X0 + S, Z0 + S], [X0, Z0 + S]]];
@@ -63,6 +68,7 @@ export function chunkOutlines(net, areas, L) {
     E = out.filter((e) => n.get(e[3]) % 2).map(([u, v, k]) => [u, v, k]); };
   // (and every point the regions have on the chunk's edge, used by this side's polygons or not: the chunk beside has them too)
   for (const [, sp] of pre) for (const r of sp) for (const [X, Z] of r) if (onEdge(X, Z) && X >= X0 && X <= X0 + S && Z >= Z0 && Z <= Z0 + S) add(X, Z);
+  for (const [X, Z] of capEdge) add(X, Z);
   for (const r of runs) for (const c of r.cutA || r.cutB ? cutsOf(r) : []) { const X = cm(c.x), Z = cm(c.z); if (X > X0 && Z > Z0 && X < X0 + S && Z < Z0 + S) add(X, Z); } // (where a road stops at a deck or tube: its end a point of its own, mesh.js)
   split(); for (let pass = 0; pass < 4; pass++) { if (!crossings(P, E, add)) break; split(); }
   // the regions a point on the chunk's edge is in (a bit per kind): from the regions before they're clipped to the chunk,
