@@ -69,7 +69,8 @@ async def main(a):
                         st = await cdp.js(f"(() => {{ const s = {S}.F.world.layout?.stats; return s ? {{ ring: s.ring.length ?? s.ring, earlyMs: s.earlyMs, earlyOff: s.earlyOff, earlyRing: s.earlyRing, ringS: s.firstRingMs == null ? null : (s.t0 + s.firstRingMs - window.__tGo) / 1000, firstRingMs: s.firstRingMs, firstViewMs: s.firstViewMs, loadMainMax: s.loadMainMax, meshed: s.meshed }} : null; }})()")
                         if not st or st.get('firstRingMs') is not None: break
                         await asyncio.sleep(0.2)
-                    out = {'version': q, 'location': loc, 'vehicle': name, 'tier': a.tier, 'load_avg': round(os.getloadavg()[0], 1), 'load_s': round(load_s, 2), 'layout': st}
+                    ph = await cdp.js(f"(() => {{ const r = {S}.lastStart; return r && Object.fromEntries(['load_ms', 'world_ms', 'setup_ms', 'compile_ms', 'first_frame_ms', 'effects_ms', 'settle_ms', 'ready_via'].map((k) => [k, r[k]])); }})()")  # (main.js flightReady: where the start's time went)
+                    out = {'phases': ph, 'version': q, 'location': loc, 'vehicle': name, 'tier': a.tier, 'load_avg': round(os.getloadavg()[0], 1), 'load_s': round(load_s, 2), 'layout': st}
                     if a.fly and loc == a.fly_place and await cdp.js(PROBE):
                         out['flight'] = await cdp.js(f'{FLY}({a.fly}, {a.speed}, {a.alt}, {json.dumps(a.center)})', timeout=a.fly + 120)
                         out['flight']['load_avg'] = round(os.getloadavg()[0], 1)
