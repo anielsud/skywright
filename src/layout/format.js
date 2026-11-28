@@ -7,7 +7,8 @@
 // A chunk file (assets/real/<id>/layout/<ix>_<iz>.<hash>.bin.gz; listed in layout/index.json), little-endian: the solved
 // network within the bake's NET_PAD of the chunk, and its plazas; the outlines are worked out from them (outline.js)
 //   uint32 header length, JSON header { v, ix, iz, x0, z0, size, city, runs, sp (shape points), st (stations), jn, na, ap }, padded
-//   rk uint8 x 6     per road: kind (RKINDS), flags (minor 1, one-way 2, surf << 2, a bridge's deck 16, a tunnel's tube 32),
+//   rk uint8 x 6     per road: kind (RKINDS), flags (minor 1, one-way 2, surf << 2, a bridge's deck 16, a tunnel's tube 32,
+//                    a railway's other track in a tube shared with another's 64: its rails only, bake.js mergeBores),
 //                    half width dm, pavement dm, lanes, ends (it stops where a deck begins: at its first point 1, its last 4;
 //                    where a tube begins: 2, 8)
 //   rn uint16        per road: its shape's points (OpenStreetMap's, simplified)
@@ -66,7 +67,7 @@ export function decodeLayout(buf) {
     const St = stations(xs, zs, 100), pts = new Float64Array(St.length * 2), h = new Float64Array(St.length); let y = A.r0[i * 3 + 2];
     St.forEach(([x, z], s) => { if (s) y += A.rh[e++]; pts[s * 2] = H.x0 + x / 100; pts[s * 2 + 1] = H.z0 + z / 100; h[s] = y / 100; });
     const shape = new Float64Array(n * 2); for (let q = 0; q < n; q++) { shape[q * 2] = H.x0 + xs[q] / 100; shape[q * 2 + 1] = H.z0 + zs[q] / 100; }
-    const k = A.rk.subarray(i * 6, i * 6 + 6); runs.push({ kind: RKINDS[k[0]], minor: !!(k[1] & 1), oneway: !!(k[1] & 2), surf: (k[1] >> 2) & 3, off: k[1] & 16 ? 'deck' : k[1] & 32 ? 'tube' : null, cutA: k[5] & 1 ? 'deck' : k[5] & 2 ? 'tube' : null, cutB: k[5] & 4 ? 'deck' : k[5] & 8 ? 'tube' : null, hw: k[2] / 10, pave: k[3] / 10, lanes: k[4], pts, h, shape }); }
+    const k = A.rk.subarray(i * 6, i * 6 + 6); runs.push({ kind: RKINDS[k[0]], minor: !!(k[1] & 1), oneway: !!(k[1] & 2), surf: (k[1] >> 2) & 3, off: k[1] & 16 ? 'deck' : k[1] & 32 ? 'tube' : k[1] & 64 ? 'rails' : null, cutA: k[5] & 1 ? 'deck' : k[5] & 2 ? 'tube' : null, cutB: k[5] & 4 ? 'deck' : k[5] & 8 ? 'tube' : null, hw: k[2] / 10, pave: k[3] / 10, lanes: k[4], pts, h, shape }); }
   const junctions = []; for (let i = 0; i < H.jn; i++) junctions.push({ x: H.x0 + A.jx[i * 4] / 100, z: H.z0 + A.jx[i * 4 + 1] / 100, r: Math.abs(A.jx[i * 4 + 2]) / 100, lx: A.jx[i * 4 + 2] < 0, y0: A.jx[i * 4 + 3] / 1000, gx: A.jg[i * 2] / 1e4, gz: A.jg[i * 2 + 1] / 1e4 });
   const areas = []; let ad = 0, X0 = Math.round(H.x0 * 100), Z0 = Math.round(H.z0 * 100);
   for (let i = 0; i < H.na; i++) { let x = A.a0[i * 2], z = A.a0[i * 2 + 1]; const ring = [[X0 + x, Z0 + z]]; for (let s = 1; s < A.ac[i]; s++, ad++) { x += A.ad[ad * 2]; z += A.ad[ad * 2 + 1]; ring.push([X0 + x, Z0 + z]); } areas.push({ surf: A.ak[i], ring }); }
