@@ -18,7 +18,7 @@ export const nodeSuite = { files: ['src/layout/format.js', 'src/layout/mesh.js',
 const PLACES = ['nyc', 'lauterbrunnen', 'canyon', 'islands'], SHORE = new Set(['islands']); // (SHORE: the places on the sea, realworld.js loc.shore: the layout's shore rules at meta.json's water level)
 export function cases() { return PLACES.filter((p) => existsSync(`assets/real/${p}/layout/index.json`)).map((place) => ({ id: `${place} layout`, place, cost: 1 })); }
 
-function hiGrid(id) { // the hi grid as realworld.js decodes it: uint16 (h + 200) * 8, each row delta-coded
+export function hiGrid(id) { // the hi grid as realworld.js decodes it: uint16 (h + 200) * 8, each row delta-coded
   const m = JSON.parse(readFileSync(`assets/real/${id}/meta.json`)), { x0, z0, size, n } = m.hi, b = gunzipSync(readFileSync(`assets/real/${id}/hi.bin.gz`)), u = new Uint16Array(b.buffer, b.byteOffset, n * n), H = new Float32Array(n * n);
   for (let j = 0; j < n; j++) { let v = 0; for (let i = 0; i < n; i++) { v = i ? (v + u[j * n + i]) & 65535 : u[j * n]; H[j * n + i] = v / 8 - 200; } }
   const sp = size / (n - 1), loc = LOCATIONS[id], height = (x, z) => { const fx = Math.max(0, Math.min(n - 1.0001, (x - x0) / sp)), fz = Math.max(0, Math.min(n - 1.0001, (z - z0) / sp)), i = fx | 0, j = fz | 0, u = fx - i, v = fz - j, k = j * n + i; return (H[k] * (1 - u) + H[k + 1] * u) * (1 - v) + (H[k + n] * (1 - u) + H[k + n + 1] * u) * v; }; // (realworld.js sampleH)

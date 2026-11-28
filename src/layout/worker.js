@@ -9,5 +9,5 @@ self.onmessage = (ev) => {
   const t0 = performance.now(), { id, uid, buf, grid, G, level, edgeH, wl } = ev.data, L = decodeLayout(buf), m = meshChunk(L, grid, G, level, edgeH), d = drawBuffers(m, wl);
   d.rails = level === 'fine' ? railBuffers(L, m) : null; // (the railways: on the fine level's surface)
   m.rib = null; // (the street ribbons: only drawn, and d has them by material)
-  self.postMessage({ id, uid, level, m, d, ms: performance.now() - t0 }, [m.pos.buffer, m.phys.buffer, m.ang.buffer, m.nrm.buffer, m.idx.buffer, m.tk.buffer, ...drawTransfer(d)]);
+  self.postMessage({ id, uid, level, m, d, ms: performance.now() - t0 }, [m.pos.buffer, m.phys.buffer, m.ang.buffer, m.nrm.buffer, m.idx.buffer, m.tk.buffer, ...(m.walls ? [m.walls.buffer] : []), ...drawTransfer(d)]);
 };

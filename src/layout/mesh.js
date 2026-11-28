@@ -12,6 +12,7 @@ import Constrainautor from '../../vendor/layout/constrainautor.mjs';
 import { KIND } from './format.js';
 import { makeRules, latticeGround, streetOverBed, KERB, KERB_W, PAVE_RAMP, painted, zebra } from './rules.js';
 import { chunkOutlines } from './outline.js';
+import { wallsOf, WALL_EPS } from './walls.js';
 
 const LX_STEP = 1.5, RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, MOUTH_D = 6, FID_STEP = 4, FID_TOL = 0.1;
 // a chunk whose outlines have OUT_MIN points or more (the densest ~5% of New York's) has them stored by the bake (format.js
@@ -94,7 +95,13 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
     let keep = null; const bis = []; // (fid: a line's profile along a street, simplified (Douglas-Peucker on along, height): a point at each one kept (above))
   const fid = (P) => { if (P.length < 3) return; const keepP = new Uint8Array(P.length), st = [[0, P.length - 1]]; while (st.length) { const [i, j] = st.pop(); let bi = -1, bd = FID_TOL; for (let k = i + 1; k < j; k++) { const f = (P[k][0] - P[i][0]) / (P[j][0] - P[i][0] || 1), d = Math.abs(P[k][1] - (P[i][1] + (P[j][1] - P[i][1]) * f)); if (d > bd) { bd = d; bi = k; } } if (bi >= 0) { keepP[bi] = 1; st.push([i, bi], [bi, j]); } }
     P.forEach(([, , X, Z], k) => { if (keepP[k] && clear(X, Z, 25)) putP(add(X, Z)); }); };
+  let walls = null, wallMs = 0;
   if (fine) {
+    // the retaining walls (walls.js): a point just either side of each one's step (at a road's edge, just outside it), so
+    // the surface steps over a sliver inside the wall, not across a triangle metres wide that would show beside it
+    const tw = performance.now(); walls = wallsOf(L, R, g);
+    for (const w of walls.st) for (const o of w.kind ? [WALL_EPS] : [-WALL_EPS, WALL_EPS]) { const X = Math.round((w.x + w.nx * o) * 100), Z = Math.round((w.z + w.nz * o) * 100); if (inside(X, Z, 10) && classify(X, Z) === KIND.ground && clear(X, Z, 3)) putP(add(X, Z)); }
+    wallMs = performance.now() - tw;
     // the hi grid's points off the paved regions, clear of the outlines
     for (let j = 1; j < lat.nj - 1; j++) for (let i = 1; i < lat.ni - 1; i++) { const X = Math.round((grid.x0 + (lat.i0 + i) * grid.sp) * 100), Z = Math.round((grid.z0 + (lat.j0 + j) * grid.sp) * 100);
       if (inside(X, Z, 50) && classify(X, Z) === KIND.ground && clear(X, Z, CLEAR * 100)) putP(add(X, Z)); }
@@ -254,8 +261,8 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   const ang = new Float32Array(nt); if (fine && L.city) for (let q = 0; q < nt; q++) { if (tk[q] > KIND.bank) continue; const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2], n = R.nearest((X[a] + X[b] + X[c]) / 3, (Z[a] + Z[b] + Z[c]) / 3, (r) => !r.minor); if (n) { const t = Math.atan2(n.dz, n.dx), h = Math.PI / 2; ang[q] = ((t % h) + h) % h; } }
   let area = 0; for (let q = 0; q < nt; q++) { const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2]; area += Math.abs((X[b] - X[a]) * (Z[c] - Z[a]) - (X[c] - X[a]) * (Z[b] - Z[a])) / 2; }
   const F32 = (a) => Float32Array.from(a);
-  return { level, pos, phys, nrm, idx, tk, ang, rib: { pos: F32(rib.pos), nrm: F32(rib.nrm), road: F32(rib.road), lane: F32(rib.lane), kind: Uint8Array.from(rib.kind), id: Uint32Array.from(rib.id), mark: rib.mark, mid: rib.mid },
-    stats: { edge: fine ? edgeOf(O, X0, Z0) : null, outline: fine && !L.outline && O.P.length >= OUT_MIN && O.P.length < 65536 ? { P: O.P, E: O.E } : null, points: N, tris: nt, fixed, failed, failedAt, regionArea: O.area, why, softMissed, bendMissed, covered: area / (L.size * L.size), outlineMs: tOut, delaunayMs: t1 - t0, constrainMs: t2 - t1, totalMs: performance.now() - t0 } };
+  return { level, pos, phys, nrm, idx, tk, ang, walls: walls ? walls.seg : null, rib: { pos: F32(rib.pos), nrm: F32(rib.nrm), road: F32(rib.road), lane: F32(rib.lane), kind: Uint8Array.from(rib.kind), id: Uint32Array.from(rib.id), mark: rib.mark, mid: rib.mid },
+    stats: { edge: fine ? edgeOf(O, X0, Z0) : null, outline: fine && !L.outline && O.P.length >= OUT_MIN && O.P.length < 65536 ? { P: O.P, E: O.E } : null, points: N, tris: nt, fixed, failed, failedAt, regionArea: O.area, why, softMissed, bendMissed, covered: area / (L.size * L.size), walls: walls ? walls.n : 0, wallLen: walls ? walls.len : 0, wallMs, outlineMs: tOut, delaunayMs: t1 - t0, constrainMs: t2 - t1, totalMs: performance.now() - t0 } };
 }
 
 // a chunk's edge points from its outlines (fine): Int32Array x, z (cm), regions (format.js eg), but not those every
