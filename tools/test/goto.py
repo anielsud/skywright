@@ -3,6 +3,7 @@
 vehicle where it was (pos/quat), pauses, puts the camera exactly where the player's was (cam/look/fov), lets the
 world stream in around it and takes a picture. Or many pictures in one launch: give several reports, or a JSON list of
 poses. A pose is a report, or just {location, at: [x, z], dist?, elev?, heading?, name?} (looks at that ground spot).
+If something blocks the view (a tree, a hill), the camera is raised round its subject until clear; noLift: true keeps it.
 Chrome starts once; the game starts once per place (and quality, time, weather, vehicle), however many poses it has.
 
   python3 tools/test/goto.py reports/<report>.json [--out shot.png] [--size 1280x720] [--wait 8]
@@ -72,9 +73,10 @@ async def main(a):
                           l = [Math.sin(h) * Math.cos(e), -Math.sin(e), -Math.cos(h) * Math.cos(e)];
                           c = [x - l[0] * d, y - l[1] * d, z - l[2] * d]; p = p || [x, y + 1, z];
                         }}
+                        window.__gotoT = r.at ? [c[0] + l[0] * (r.dist ?? 60), c[1] + l[1] * (r.dist ?? 60), c[2] + l[2] * (r.dist ?? 60)] : [p[0], p[1], p[2]]; // (what the shot is of: the spot, or the vehicle)
                         ac.x.set(p[0], p[1], p[2]); ac.q.set(q[0], q[1], q[2], q[3]); ac.v?.set(0, 0, 0); ac.w?.set?.(0, 0, 0); ac.syncVisual?.();
                         cam.position.set(c[0], c[1], c[2]); if (r.fov) cam.fov = r.fov; cam.updateProjectionMatrix();
-                        cam.lookAt(c[0] + l[0], c[1] + l[1], c[2] + l[2]); document.querySelectorAll('#modal-root').forEach((e) => (e.style.display = 'none')); return 1; }})()""")
+                        cam.up.set(0, 1, 0); /* (level: the rig camera keeps the vehicle roll in its up) */ cam.lookAt(c[0] + l[0], c[1] + l[1], c[2] + l[2]); document.querySelectorAll('#modal-root').forEach((e) => (e.style.display = 'none')); return 1; }})()""")
                     # (terrain, roads and buildings stream in around the camera: paused, the flight loop doesn't update the world,
                     # so step it here, from the camera, until the wait is over. The buildings and trees follow the camera from
                     # traffic.update in flight (world.towns.update, world.flora.update), not World.update: stepped here too)
@@ -82,6 +84,17 @@ async def main(a):
                         await cdp.js(f"""(() => {{ const F = {S}.F, cam = {S}.rig.cam; for (let i = 0; i < 20; i++) {{ F.world.update(1 / 60, cam, cam.position.clone().set(0, 0, 0), []); F.world.towns?.update(1 / 60, F.world.t, null, cam.position); F.world.flora?.update?.(cam.position); }}
                             F.world.roadGroup?.userData.update?.(cam.position, 1e5, 3000); return 1; }})()""", timeout=300)
                         await asyncio.sleep(1)
+                    # (a camera inside a tree, a hill or a building shows nothing: if anything stands between the camera and
+                    # what it looks at, raise the camera round that point, 5 degrees at a time, until the view is clear)
+                    if not r.get('noLift'):
+                        lifted = await cdp.js(f"""(() => {{ const T3 = {S}.THREE, F = {S}.F, cam = {S}.rig.cam, t = new T3.Vector3(...window.__gotoT);
+                            const blocked = () => {{ const dir = cam.position.clone().sub(t), d = dir.length(), s0 = Math.min(8, d / 4), q = new T3.Vector3(); dir.normalize(); // (from 8 m out: the vehicle parked on the spot is part of the subject, not in the way)
+                              for (let s = s0; s < d - 1; s += 2) {{ q.copy(t).addScaledVector(dir, s); const g = F.world.groundAt(q.x, q.z, q.y + 1e3); // (the game's own collision: buildings, trees, structures; and the ground)
+                                if (F.world.treeHit(q) || (g?.h ?? -1e9) > q.y + 0.3) return true; }} return false; }};
+                            let n = 0; for (; n < 16 && blocked(); n++) {{ const off = cam.position.clone().sub(t), d = off.length(), e = Math.asin(Math.min(1, off.y / d)) + 5 * Math.PI / 180, hz = Math.hypot(off.x, off.z) || 1;
+                              if (e > 1.45) break; cam.position.set(t.x + off.x / hz * Math.cos(e) * d, t.y + Math.sin(e) * d, t.z + off.z / hz * Math.cos(e) * d); cam.lookAt(t); }}
+                            return n; }})()""", timeout=120)
+                        if lifted: print(f"  {r['name']}: camera raised {int(lifted) * 5} degrees (view was blocked)", flush=True)
                     shot = await cdp.send('Page.captureScreenshot', format='png')
                     out = a.out if len(poses) == 1 else os.path.join(a.out, r['name'] + '.png')
                     open(out, 'wb').write(base64.b64decode(shot['data'])); print(out, flush=True)

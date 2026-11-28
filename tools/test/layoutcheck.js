@@ -38,13 +38,14 @@ export async function runCase(c) {
     meshes.set(e.ix + ',' + e.iz, ms);
     for (const level of ['fine', 'coarse']) { const s = ms[level].stats; out.push({ name: `${name}: meshes (${level}) with every fixed edge and the chunk covered`, ok: s.failed === 0 && Math.abs(s.covered - 1) < 1e-6, why: `${s.failed} of ${s.fixed + s.failed} fixed edges failed, ${(s.covered * 100).toFixed(4)}% covered, ${s.tris} triangles in ${s.totalMs.toFixed(0)} ms` }); }
     // on the tarmac physics is what's drawn; across a kerb physics has no step (it ramps under the slabs)
-    const m = ms.fine, I = m.idx, P = m.pos, Y = m.phys; let off = 0, step = 0; // step: the steepest physics slope on a kerb
+    const m = ms.fine, I = m.idx, P = m.pos, Y = m.phys; let off = 0, step = 0, kerbTris = 0, kerbMeasured = 0; // step: the steepest physics slope on a kerb
     for (let q = 0; q < m.tk.length; q++) { const v = [I[q * 3], I[q * 3 + 1], I[q * 3 + 2]];
       if (m.tk[q] === KIND.tarmac) for (const k of v) if (Math.abs(Y[k] - P[k * 3 + 1]) > 1e-4) off++;
+      if (m.tk[q] === KIND.kerb) kerbTris++;
       if (m.tk[q] === KIND.kerb) for (let r = 0; r < 3; r++) { // (the steepest physics rise along an edge of the kerb's strip: a 15 cm step over its 10 cm would be ~1.5; a plane through a sliver's three corners says nothing)
-        const u = v[r], w = v[(r + 1) % 3], l = Math.hypot(P[u * 3] - P[w * 3], P[u * 3 + 2] - P[w * 3 + 2]); const top = (q) => P[q * 3 + 1] - Y[q] > 0.1, gut = (q) => Math.abs(P[q * 3 + 1] - Y[q]) < 1e-4; if (l < 0.5 && ((top(u) && gut(w)) || (top(w) && gut(u)))) { const t = top(u) ? u : w, g = t === u ? w : u; step = Math.max(step, Math.abs((Y[t] - Y[g]) - (P[t * 3 + 1] - KERB - P[g * 3 + 1]))); } } } // (across the kerb, a gutter's point to a top's: how far physics rises past the surface the kerb stands on (drawn less the kerb), as tools/bake/layout-check.mjs: the surface's own slope isn't the kerb)
+        const u = v[r], w = v[(r + 1) % 3], l = Math.hypot(P[u * 3] - P[w * 3], P[u * 3 + 2] - P[w * 3 + 2]); const top = (q) => P[q * 3 + 1] - Y[q] > 0.1, gut = (q) => Math.abs(P[q * 3 + 1] - Y[q]) < 1e-4; if (l < 0.5 && ((top(u) && gut(w)) || (top(w) && gut(u)))) { kerbMeasured++; const t = top(u) ? u : w, g = t === u ? w : u; step = Math.max(step, Math.abs((Y[t] - Y[g]) - (P[t * 3 + 1] - KERB - P[g * 3 + 1]))); } } } // (across the kerb, a gutter's point to a top's: how far physics rises past the surface the kerb stands on (drawn less the kerb), as tools/bake/layout-check.mjs: the surface's own slope isn't the kerb)
     out.push({ name: `${name}: on the tarmac physics is what's drawn`, ok: off === 0, why: `${off} tarmac corners off` });
-    out.push({ name: `${name}: a kerb is never physics`, ok: step <= 0.05, why: `largest physics rise across a kerb ${step.toFixed(3)} m (drawn 0.15)` });
+    out.push({ name: `${name}: a kerb is never physics`, ok: step <= 0.05 && (!kerbTris || kerbMeasured >= kerbTris / 2), why: `largest physics rise across a kerb ${step.toFixed(3)} m (drawn 0.15); ${kerbMeasured} kerb edges stand over physics, of ${kerbTris} kerb triangles (kerbs in physics: none would)` });
     // bridges and tunnels: no step where a road meets a deck or a portal; a portal's opening rimmed by its tube and headwall
     const lip = []; for (let q = 0; q < m.tk.length; q++) if (m.tk[q] === KIND.lip) lip.push(I[q * 3], I[q * 3 + 1], I[q * 3 + 2]);
     const oc = offChecks(L, m, physIndex(L, m), lip), all = [...oc.ends.deck, ...oc.ends.tube];
