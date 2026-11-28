@@ -788,7 +788,11 @@ function buildFlight(cfg, layoutAt = null) {
   // 564.4). The chunk round the start is fetched and meshed while the loading screen is up (layout.begin, below), so the
   // hand-over waits for it and seats the vehicle again on what's there then (reseat): the same spawn as a restart in
   // this World, which finds the chunk in, gets, whenever the chunk happened to arrive.
-  const reseat = ['park', 'runway', 'stand', 'pad'].includes(pick.spawn) && start !== 'air' && start !== 'approach' && world.layout ? place : null;
+  // (Only the starts seated on the ground: a helipad's deck (stand) and the launch pad stand on their own surfaces, which
+  // no chunk changes. And only if the ground under it did change: else the vehicle stays as the warm-up's steps settled
+  // it, its gear compressed as it rests. Seated again, it's a fresh seat: the gear unloaded, as Aircraft.spawn leaves a new one.)
+  const sx = ac.x.x, sz = ac.x.z, ground0 = env.groundAt(sx, sz).h, reseat = ['park', 'runway'].includes(pick.spawn) && start !== 'air' && start !== 'approach' && world.layout
+    ? () => { if (Math.abs(env.groundAt(sx, sz).h - ground0) <= 0.001) return false; place(); for (const p of ac.parts) if (p.gear) for (const w of p.gear.wheels) { w.comp = 0; w.contact = false; } return true; } : null;
   if (start === 'air') { // on the extended centreline of whichever runway end has room, high enough to clear the hills ahead
     const sp = planAirStart(world, rwy, st.heli ? 120 : 450);
     ac.spawn(env, new THREE.Vector3(rwy.x + slotX, 0, sp.s * (rwy.len / 2 + 1200 + slot * 40)), sp.heading, { air: true, alt: sp.alt + slot * 30, speed: st.heli ? 0 : vApp * 1.1 });
@@ -1607,7 +1611,7 @@ function frame(now) {
       if (restore) { restore(); compileWith(F.scene, F.effects.boom, warm); } // and every shader as lit by a crash's explosion flash (effects.js)
       // ...and until the ground photos have arrived (their upload, and the rock impostors' re-capture, would hitch), and the street cars' models (startFlight loads them first, so this is a safety net)
       else if (warm) { const lp = F.world.layout?.progress() ?? 1, lm = $('#loading p'); if (lp < 1) { warm.msg ??= lm.textContent; lm.textContent = `Laying out the streets… ${Math.round(lp * 100)}%`; } const sp = F.spawn.x, LY = F.world.layout, under = !F.reseat || LY.readyIn(sp.x - 2, sp.z - 2, sp.x + 2, sp.z + 2); /* (a start on the ground: the layout's chunk under it in, reseat) */
-        const ok = F.world.loaded?.() !== false && F.traffic.vehicles.ready && under; if (ok || performance.now() - warm.t > (!under ? 15000 : lp < 1 ? 4000 : 3000)) { F.warm = null; if (F.reseat) { F.reseat(); F.ac.syncVisual?.(); F.spawn = { x: F.ac.x.clone(), q: F.ac.q.clone() }; F.spawnPose = { x: F.ac.x.toArray(), q: F.ac.q.toArray(), v: F.ac.v.toArray() }; } if (warm.msg != null) lm.textContent = warm.msg; $('#loading').classList.remove('show'); flightReady(F, warm.n, ok); } }
+        const ok = F.world.loaded?.() !== false && F.traffic.vehicles.ready && under; if (ok || performance.now() - warm.t > (!under ? 15000 : lp < 1 ? 4000 : 3000)) { F.warm = null; if (F.reseat?.()) { F.ac.syncVisual?.(); F.spawn = { x: F.ac.x.clone(), q: F.ac.q.clone() }; F.spawnPose = { x: F.ac.x.toArray(), q: F.ac.q.toArray(), v: F.ac.v.toArray() }; } if (warm.msg != null) lm.textContent = warm.msg; $('#loading').classList.remove('show'); flightReady(F, warm.n, ok); } }
     }
   }
 }
