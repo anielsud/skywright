@@ -17,17 +17,8 @@
   "nyc: junctions are drawn where physics drives": "#228 (1,949 of 38,199 junctions) (runs with ?layout=0 only: today's path)",
   "nyc: pavement slabs lie on the ground": "#228 (1.25% over, 0.37% under) (runs with ?layout=0 only: today's path)",
   "islands: no steps along the roads": "#294 (68 spots on the baked layout, every chunk; none with ?layout=0)",
-  "lauterbrunnen: they are graded with the network: joined, few steps": "#294 (step spots over 1.5/km on the baked layout, a quarter of its chunks: 1.91/km over every chunk; passes with ?layout=0)",
-  "lauterbrunnen: they are drivable: paved, a track's gravel loose": "#294 (181 of 200 spots: paved tracks are the layout's gravel; passes with ?layout=0)",
-  "canyon: no steps along the roads": "#294 (1 spot on the baked layout, a third of its chunks, since #339; 3 with ?layout=0, #228)",
-  "islands: they are drawn, where physics drives": "#294 (8 of 221 spots: today's ribbons, which don't draw inside a layout chunk, measured against the layout's surface since #339; what the layout draws against its physics is checked by its bake and layoutcheck; passes with ?layout=0)"
- },
- "stunts": {
-  "canyon: too slow for the canyon jump: the rescue parachute lowers it": "#294 (-10.05 m/s at touchdown on the baked layout's canyon floor, limit -9; passes with ?layout=0)"
- },
- "waterpark": {
-  "islands: site: open, deep water, nothing built, no bridge, clear of the marina": "#294 (2 of 1470 points too shallow on the baked layout's lagoon floor, chosen on today's; passes with ?layout=0)",
-  "lauterbrunnen: site: open, deep water, nothing built, no bridge, clear of the marina": "#294 (13 of 1470 points dry on the baked layout's lake shore, chosen on today's; passes with ?layout=0)"
+  "lauterbrunnen: they are graded with the network: joined, few steps": "#294 (step spots off the local grade: 0.64/km on the baked layout, limit 0.4; passes with ?layout=0)",
+  "canyon: no steps along the roads": "#294 (1 spot on the baked layout, a third of its chunks, since #339; 3 with ?layout=0, #228)"
  },
  "walls": {
   "lauterbrunnen: every building is a wall box, with its own box": "#294 (on the baked layout since #337/#338/#340: buildings moved onto a chunk's surface (onActive) without their wall boxes, e.g. (-1182, 22702) y0 1574.98 vs 1575.02, x 0.15 m off; passes with ?layout=0)"
