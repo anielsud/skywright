@@ -23,7 +23,7 @@ const PAVE = { main: 4.5, street: 3.5 }; // (as roadgrade.js: a city street's pa
 const PAVE_VILLAGE = 1.8, BUILT_D = 30, BUILT_N = 5, BUILT_WIN = 120, BUILT_MIN = 60;
 // a country junction's plane: out to JR_K x its widest road's half width + JR_ADD m (at least JR_MIN), not its whole box (a
 // lane's junction box reaches far along its arms: an apron of tilted plane over the road there)
-const JR_K = 1.5, JR_ADD = 1.5, JR_MIN = 4;
+const JR_K = 1.5, JR_ADD = 1.5, JR_MIN = 4, EDGE_IN = 0.98, EDGE_MIN = 0.5;
 // grade limits: the street network's as roadgrade.js; the ways off it steeper (a farm's service road, a gravel track;
 // a footpath steps up the hillside: its OSM line is coarser than its zigzags), and kept within MINOR_OFF m of the ground
 const GRADE = { highway: 0.18, main: 0.18, street: 0.22 }, GRADE_MINOR = { service: 0.3, track: 0.35, ped: 0.6 }, MINOR_OFF = 1.5; // (alpine: Swiss pass and valley roads reach 15-20%)
@@ -40,7 +40,7 @@ const LX_ADD = 0.75, LX_MIN = 4, LX_MAX = 35, VERTEX_AT = 0.3;
 // and a motu's paths, down into the water
 const FREEBOARD = 0.5, WET = 0.5;
 const PLANE_ACROSS = 0.5, CROSS_MAX = 0.3;
-const RELAX_OFF = 2, RELAX_HOPS = 3, RELAX_MAX = 1, RELAX_STREET = 0.3, RELAX_MAIN = 0.2, RELAX_WG = 1, RELAX_ROUNDS = 4;
+const RELAX_OFF = 2, RELAX_HOPS = 3, RELAX_MAX = 1, RELAX_STREET = 0.3, RELAX_MAIN = 0.2, PLANE_MAX = 0.25, PLANE_MAX_CITY = 0.2, RELAX_WG = 1, RELAX_ROUNDS = 4;
 const cm = (v) => Math.round(v * 100);
 
 export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
@@ -135,6 +135,21 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
       for (let s = 0; s < r.pts.length; s++) { pts.push(r.pts[s]); vars.push(r.vars[s]); while (q < ins[ri].length && ins[ri][q][0] === s) { pts.push([ins[ri][q][2], ins[ri][q][3]]); vars.push(ins[ri][q][4]); q++; } }
       r.pts = pts; r.vars = vars; T.ties = (T.ties || 0) + ins[ri].length / 2; });
   }
+  // (a station on each road where it crosses a junction's circle (just inside: one of the plane's members): the plane and the
+  // road meet there, and the road leaves it within its grade. Without it the plane runs on to the circle past its last member
+  // (up to SEG m in) at its own slope while the road takes its own, metres apart on a steep arm, and the blend between them
+  // (rules.js JBLEND) climbs half a metre in a metre)
+  { const hw0 = new Map(); for (const r of runs) if (!r.minor) for (const v of r.vars) hw0.set(v, Math.max(hw0.get(v) || 0, r.hw));
+    const circ = [], CC = 40, cg = new Map(); for (const j of w.net.junctions) { if (!inR(j)) continue; let r = 0; for (let q = 0; q < j.box.length; q += 2) r = Math.max(r, Math.hypot(j.box[q] - j.x, j.box[q + 1] - j.z)); r = Math.min(35, Math.max(6, r)); if (!city) { const v = node.get(j.nd), hw = v != null ? hw0.get(v) : null; if (hw) r = Math.min(r, Math.max(JR_MIN, JR_K * hw + JR_ADD)); }
+      const c = [j.x, j.z, r * EDGE_IN]; circ.push(c); for (let a = Math.floor((j.x - r) / CC); a <= Math.floor((j.x + r) / CC); a++) for (let b = Math.floor((j.z - r) / CC); b <= Math.floor((j.z + r) / CC); b++) (cg.get(a * 100003 + b) || cg.set(a * 100003 + b, []).get(a * 100003 + b)).push(c); }
+    let added = 0; for (const r of runs) { if (r.off) continue; const ins = [];
+      for (let s = 0; s + 1 < r.pts.length; s++) { const [ax, az] = r.pts[s], [bx, bz] = r.pts[s + 1], dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz); if (L < 2 * EDGE_MIN) continue; const seen = new Set();
+        for (let a = Math.floor(Math.min(ax, bx) / CC); a <= Math.floor(Math.max(ax, bx) / CC); a++) for (let b = Math.floor(Math.min(az, bz) / CC); b <= Math.floor(Math.max(az, bz) / CC); b++) for (const c of cg.get(a * 100003 + b) || []) { if (seen.has(c)) continue; seen.add(c); const [cx, cz, cr] = c, ia = Math.hypot(ax - cx, az - cz) < cr, ib = Math.hypot(bx - cx, bz - cz) < cr; if (ia === ib) continue;
+          const fx = ax - cx, fz = az - cz, A = L * L, B = 2 * (fx * dx + fz * dz), Cq = fx * fx + fz * fz - cr * cr, D = B * B - 4 * A * Cq; if (D < 0) continue; const t = ia ? (-B + Math.sqrt(D)) / (2 * A) : (-B - Math.sqrt(D)) / (2 * A); if (t * L < EDGE_MIN || (1 - t) * L < EDGE_MIN) continue; ins.push([s, t, ax + dx * t, az + dz * t]); } }
+      if (!ins.length) continue; ins.sort((p, q) => p[0] - q[0] || p[1] - q[1]); const pts = [], vars = []; let q = 0;
+      for (let s = 0; s < r.pts.length; s++) { pts.push(r.pts[s]); vars.push(r.vars[s]); while (q < ins.length && ins[q][0] === s) { (r.keepAt ||= new Set()).add(pts.length); pts.push([ins[q][2], ins[q][3]]); vars.push(newVar(ins[q][2], ins[q][3])); q++; added++; } } /* (kept in its stored shape: keepLine) */
+      r.pts = pts; r.vars = vars; }
+    T.edgeStations = added; }
   for (const r of runs) { r.s = [0]; for (let i = 1; i < r.pts.length; i++) r.s.push(r.s[i - 1] + Math.hypot(r.pts[i][0] - r.pts[i - 1][0], r.pts[i][1] - r.pts[i - 1][1])); }
   tic('networkMs', t0);
   // ---- 2. height solve
@@ -163,6 +178,7 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
     // through it): the slope across that line isn't known from them. Where it came out steeper than CROSS_MAX (up to 220%:
     // a village's pavement 12 m under its street) the plane takes the slope along the line only, level across it)
     { const m2 = (a + c) / 2, r2 = Math.hypot((a - c) / 2, b), lmin = m2 - r2, lmax = m2 + r2; const th = 0.5 * Math.atan2(2 * b, a - c), ux = Math.cos(th), uz = Math.sin(th); J.line = n >= 3 && lmax > 1e-6 && lmin < PLANE_ACROSS * PLANE_ACROSS * n && Math.abs(gz * ux - gx * uz) > CROSS_MAX; if (J.line) { J.wasLine = true; const sl = (d * ux + e * uz) / lmax; gx = sl * ux; gz = sl * uz; } }
+    { const gl = Math.hypot(gx, gz), cap = city ? PLANE_MAX_CITY : PLANE_MAX; if (gl > cap) { gx *= cap / gl; gz *= cap / gl; } } /* (no steeper than its streets may be (relaxed): a plane fitted across arms of different grades can come out steeper than any of them) */
     J.mx = mx; J.mz = mz; J.my = my; J.gx = gx; J.gz = gz; };
   const toPlane = () => { for (const J of JN) { plane(J); const { my, gx, gz, mx, mz } = J; for (const k of J.m) h[k] = my + gx * (VX[k] - mx) + gz * (VZ[k] - mz); } pinAll(); };
   const clampGrades = (passes) => { for (let p = 0; p < passes; p++) for (let e = 0; e < ne; e++) { const a = EA[e], b = EB[e], d = h[a] - h[b], lim = EG[e] * EL[e]; if (Math.abs(d) > lim) { const ex = (Math.abs(d) - lim) / 2 * Math.sign(d); h[a] -= ex; h[b] += ex; } } pinAll(); };
@@ -244,7 +260,7 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   const cellOf = (x, z) => Math.floor(x / CHUNK) * 100003 + Math.floor(z / CHUNK), byCell = new Map(), put = (k, kind, i) => { let c = byCell.get(k); if (!c) byCell.set(k, (c = { r: [], j: [], a: [] })); if (c[kind].at(-1) !== i) c[kind].push(i); };
   const boxCells = (x0, z0, x1, z1, kind, i) => { for (let a = Math.floor(x0 / CHUNK); a <= Math.floor(x1 / CHUNK); a++) for (let b = Math.floor(z0 / CHUNK); b <= Math.floor(z1 / CHUNK); b++) put(a * 100003 + b, kind, i); };
   const allRuns = [...runs, ...offRuns];
-  allRuns.forEach((r, ri) => { const sh = r.ceil ? keepLine(r) : r.keepAll ? r.osmPts.map(([x, z]) => [cm(x), cm(z)]) : rdpLine(r.osmPts.map(([x, z]) => [cm(x), cm(z)]), SHAPE_TOL); r.shape = [sh[0]]; for (let i = 1; i < sh.length; i++) { const [px, pz] = sh[i - 1], [qx, qz] = sh[i], k = Math.ceil(Math.max(Math.abs(qx - px), Math.abs(qz - pz)) / 30000); for (let s2 = 1; s2 <= k; s2++) r.shape.push([Math.round(px + (qx - px) * s2 / k), Math.round(pz + (qz - pz) * s2 / k)]); }
+  allRuns.forEach((r, ri) => { const sh = r.ceil || r.keepAt ? keepLine(r) : r.keepAll ? r.osmPts.map(([x, z]) => [cm(x), cm(z)]) : rdpLine(r.osmPts.map(([x, z]) => [cm(x), cm(z)]), SHAPE_TOL); r.shape = [sh[0]]; for (let i = 1; i < sh.length; i++) { const [px, pz] = sh[i - 1], [qx, qz] = sh[i], k = Math.ceil(Math.max(Math.abs(qx - px), Math.abs(qz - pz)) / 30000); for (let s2 = 1; s2 <= k; s2++) r.shape.push([Math.round(px + (qx - px) * s2 / k), Math.round(pz + (qz - pz) * s2 / k)]); }
     for (let i = 0; i + 1 < r.shape.length; i++) { const [ax, az] = r.shape[i], [bx, bz] = r.shape[i + 1]; boxCells(Math.min(ax, bx) / 100 - NET_PAD, Math.min(az, bz) / 100 - NET_PAD, Math.max(ax, bx) / 100 + NET_PAD, Math.max(az, bz) / 100 + NET_PAD, 'r', ri); } });
   JN.forEach((J, q) => boxCells(J.x - NET_PAD - J.r, J.z - NET_PAD - J.r, J.x + NET_PAD + J.r, J.z + NET_PAD + J.r, 'j', q));
   (w.net.areas || []).forEach((ar, q) => boxCells(ar.bb[0] - NET_PAD, ar.bb[1] - NET_PAD, ar.bb[2] + NET_PAD, ar.bb[3] + NET_PAD, 'a', q));
@@ -455,7 +471,7 @@ function deckCeil(V, runs, offRuns, pins, T) {
 // a road's stored shape (as rdpLine of its own points) keeping its stations held under a deck and those either side (r.ceil):
 // its points split at them, each piece simplified
 function keepLine(r) {
-  const osm = new Set(r.osmPts), keep = new Set(); for (const q of r.ceil) for (const d of [-1, 0, 1]) if (r.pts[q + d]) keep.add(q + d);
+  const osm = new Set(r.osmPts), keep = new Set(r.keepAt || []); for (const q of r.ceil || []) for (const d of [-1, 0, 1]) if (r.pts[q + d]) keep.add(q + d);
   const out = []; let piece = [];
   r.pts.forEach((p, q) => { if (!osm.has(p) && !keep.has(q)) return; piece.push([cm(p[0]), cm(p[1])]); if (keep.has(q) || q === r.pts.length - 1) { const sh = rdpLine(piece, SHAPE_TOL); out.push(...(out.length ? sh.slice(1) : sh)); piece = [piece[piece.length - 1]]; } });
   if (piece.length > 1) { const sh = rdpLine(piece, SHAPE_TOL); out.push(...sh.slice(1)); }
