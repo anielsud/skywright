@@ -4,9 +4,13 @@
 //   rim:  a portal's lip (its opening, rules.js) has every rim point within what covers it: the tube's mouth (below its crown, the lintel over it)
 //         at the front, the headwall's lintel behind, the headwall (its wings PORTAL_FOOT deep, up to its top: rules.js portalsOf) beside the mouth, the floor and
 //         its sill (SILL deep) across the mouth (no gap between the surface and the tube)
+//   trench: a portal's approach in a walled trench (rules.js trenchOf): (wall) every point of its walls' strips (openings) within
+//         its wall's height and thickness (rules.js trenchWalls, from the physics either side); (open) the surfaces either side
+//         reach the wall, no hole between from above (physics just inside and just outside the strip, and the wall thicker than
+//         the strip); (top) the wall's top no more than WALL_LIP (and 10 cm) over the higher surface beside it, every 0.1 m; (step) along the approach's carriageway through the trench, no step for a vehicle: no kink in its physics less the approach's own height, every STEP_D m
 import { physAt } from '../../src/layout/mesh.js';
 import { KIND } from '../../src/layout/format.js';
-import { portalsOf, portalUV, TUBE_H, TUBE_SIDE, KERB, SLAB_MAX, PORTAL_T, PORTAL_FOOT, SILL, FLUSH } from '../../src/layout/rules.js';
+import { portalsOf, portalUV, trenchWalls, wallTop, edges, WALL_STEP, WALL_WIN, inWall, inWallAt, otherBox, onRun, WALL_LIP, TUBE_H, TUBE_SIDE, KERB, SLAB_MAX, PORTAL_T, PORTAL_FOOT, SILL, FLUSH, TRENCH_W } from '../../src/layout/rules.js';
 
 // L: a decoded chunk; m: its fine mesh; ix: physIndex(L, m); lipIdx: the lip triangles' corners (vertex indices)
 export function offChecks(L, m, ix, lipIdx, opts = {}) {
@@ -29,7 +33,8 @@ export function offChecks(L, m, ix, lipIdx, opts = {}) {
         if (!(h === h)) { ok = false; break; } if (Math.abs(w) <= pt.hwT ? !(y >= -SILL - 0.01 && y <= FLUSH + 0.01) && !(y >= TUBE_H - 0.01 && y <= pt.top + 0.01) : !(y >= -PORTAL_FOOT - 0.01 && y <= pt.top + 0.01)) { ok = false; break; } }
       if (!ok) noLip++; } }
   const tc = opts.rules ? tubeChecks(L, m, opts.rules, badAt) : { slabN: 0, slabBad: 0, slabMax: 0, coverN: 0, coverBad: 0, coverMin: Infinity };
-  return { ends, badAt, rimBad, rimN, noLip, portals: portals.length, ...tc };
+  const tr = trenchChecks(L, m, ix, lipIdx, portals, badAt, allPortals, opts.walls || trenchWalls, opts.rules);
+  return { ends, badAt, rimBad, rimN, noLip, portals: portals.length, ...tc, ...tr };
 }
 // over a tunnel's tube (tubes.js: its road dives, rules.js: nothing holds the ground over it):
 //   slab:  every surface point over a tube (its walls' width and SLAB_PAD more, between its ends) no more than SLAB_MAX over the
@@ -50,4 +55,30 @@ function tubeChecks(L, m, R, badAt) {
     const n = R.nearest(x, z, (r) => !r.off), st = n && n.d <= 0 ? R.base(x, z, KIND.tarmac) : -Infinity, c = Math.max(R.natural(x, z), st) - (t.h[k] + TUBE_H); out.coverMin = Math.min(out.coverMin, c);
     if (c < COVER_MIN) { out.coverBad++; if (out.coverBad <= 3) badAt.push(['cover', +x.toFixed(1), +z.toFixed(1), +c.toFixed(2)]); } }
   return out;
+}
+export const STEP_MAX = 0.05, STEP_D = 0.05, TRENCH_STEP = 1; // (m: how far a sample along the trench's floor (its physics less the approach's own height) leaves the line through the two before it, STEP_D apart: a riser's edge, a slope changing by 100% within 5 cm; a grade, however steep, is the solve's or the streets' as they were)
+function trenchChecks(L, m, ix, lipIdx, portals, badAt, allPortals, wallsOf, R) {
+  const P = m.pos, at = (x, z) => physAt(L, m, ix, x, z), xz = (p, u, v) => [p.x + p.dx * u - p.dz * v, p.z + p.dz * u + p.dx * v], inC = (x, z) => x > L.x0 && z > L.z0 && x < L.x0 + L.size && z < L.z0 + L.size;
+  let trenches = 0, wallN = 0, wallBad = 0, openN = 0, openBad = 0, stepN = 0, stepBad = 0, stepMax = 0, topN = 0, topBad = 0, topMax = 0; const seen = new Set();
+  const AW = allPortals.filter((q) => q.tr).map((q) => [q, wallsOf(q, at, allPortals)]); /* (every trench's walls about: two trenches' strips can cross, either wall covers) */
+  const covered = (x, z, y) => AW.some(([q, W]) => { const [u, w] = portalUV(q, x, z); return W.some((b) => Math.sign(b.v) === Math.sign(w) && u >= b.u0 - 0.01 && u <= b.u1 + 0.01 && Math.abs(Math.abs(w) - Math.abs(b.v)) <= b.t + 0.01 && y >= b.y0 - 0.01 && y <= wallTop(b, u) + 0.01); });
+  const inHead = (x, z, y, m = 0.05) => allPortals.some((q) => { const [u, w] = portalUV(q, x, z); return Math.abs(u) <= PORTAL_T / 2 + m && Math.abs(w) <= q.W + 0.05 && (y == null || (y - q.y >= -PORTAL_FOOT - 0.01 && y - q.y <= q.top + 0.01)); });
+  for (const p of portals) { if (!p.tr) continue; trenches++; const W = AW.find(([q]) => q.x === p.x && q.z === p.z)[1];
+    // (wall) every strip point within a wall
+    for (const v of lipIdx) { if (seen.has(v)) continue; const x = P[v * 3], z = P[v * 3 + 2], [u, w] = portalUV(p, x, z); if (!inWall(p, u, w) || !inWallAt(allPortals, x, z)) continue; seen.add(v); wallN++; const y = P[v * 3 + 1];
+      const wing = inHead(x, z, y); /* (in a headwall (its wing, or another portal's beside): it covers it) */
+      if (!wing && !covered(x, z, y)) { wallBad++; if (wallBad <= 3) badAt.push(['wall', +x.toFixed(2), +z.toFixed(2), +u.toFixed(2), +w.toFixed(2), +y.toFixed(2)]); } }
+    // (open) the surfaces either side reach the wall; (top) and it stands no more than its lip over the higher of them
+    for (const sd of [-1, 1]) for (let u = p.tr.u0 + 0.05; u < p.tr.u1 - 0.05; u += 0.1) { const b = W.find((q) => q.sd === sd && u >= q.u0 && u <= q.u1); const [cx, cz] = xz(p, u, sd * (p.hwT + TRENCH_W / 2)); if (!inC(cx, cz) || otherBox(allPortals, p, cx, cz)) continue;
+      const H = [p.hwT - 0.05, p.hwT + TRENCH_W + 0.05].map((o) => { const [x, z] = xz(p, u, sd * o); return at(x, z); });
+      const E = !inHead(cx, cz, null, WALL_STEP) ? edges(p, sd, u, at, WALL_WIN + WALL_STEP / 2) : null; /* (by the portal: in the headwall, which stands higher; the surfaces within reach of the wall's two samples about u) */ if (b && E) { topN++; const d = wallTop(b, u) - Math.max(E.inHi, E.outHi); /* (over the highest surface beside it within WALL_WIN: a fin stands metres over it) */ topMax = Math.max(topMax, d); if (d > WALL_LIP + 0.1) { topBad++; if (topBad <= 3) badAt.push(['top', +cx.toFixed(1), +cz.toFixed(1), +u.toFixed(2), +d.toFixed(2)]); } }
+      if (u > -0.5 && u < PORTAL_T / 2 + 1.5 || (u - p.tr.u0) % 0.5 > 0.1 || inHead(cx, cz, null, WALL_STEP)) continue; /* (by a headwall: it covers it; open: every half metre) */
+      for (const [k, o] of [[0, p.hwT - 0.05], [1, p.hwT + TRENCH_W + 0.05]]) { const [x, z] = xz(p, u, sd * o), h = H[k]; if (!(h === h) && allPortals.some((q) => { const [qu, qv] = portalUV(q, x, z); return (q.tr && (q.x !== p.x || q.z !== p.z) && inWall(q, qu, qv)) || (qu > -0.05 && qu < PORTAL_T / 2 + 0.05 && Math.abs(qv) <= q.W); })) continue; if (!b && [-WALL_STEP, WALL_STEP].some((du) => otherBox(allPortals, p, ...xz(p, u + du, sd * (p.hwT + TRENCH_W / 2))))) continue; /* (a wall's segment left out by another approach's box) */ openN++; /* (in another trench's wall or a portal's lip: what covers it there) */
+        if (!(h === h) || !b || b.t < TRENCH_W / 2 + 0.05 || h < b.y0 || h > wallTop(b, u) + 0.01) { openBad++; if (openBad <= 3) badAt.push(['open', +x.toFixed(1), +z.toFixed(1), +u.toFixed(2), sd * o, h === h ? +h.toFixed(2) : null]); } } }
+    // (step) along the approach's carriageway through the trench
+    // (R: the chunk's rules: a kink no more than the streets' surface without the trench bends over one mesh step there (where the floor fades from it) isn't the trench's)
+    const ua = p.tr.u0 + (R ? R.trenchFade(p) : p.tr.fade) / 2; /* (from halfway through its fade: before, the streets' surface as it was, mostly) */
+    for (let f = -0.9; f < 0.95; f += 0.15) { let p1 = null, p2 = null; for (let u = ua; u <= -0.05; u += STEP_D) { const [x, z] = xz(p, u, f * p.hw); if (!inC(x, z) || otherBox(allPortals, p, x, z)) { p1 = p2 = null; continue; } const h0 = at(x, z); if (!(h0 === h0)) { p1 = p2 = null; continue; } const own = onRun(p.tr.r, x, z), h = h0 - own, hn = R ? R.untrenched(x, z, KIND.tarmac) - own : 0; /* (against the approach's own profile) */
+      if (p2 != null) { stepN++; const d = Math.abs(h - 2 * p1 + p2), un = (du) => { const [a, b] = xz(p, u - STEP_D + du, f * p.hw); return R.untrenched(a, b, KIND.tarmac) - onRun(p.tr.r, a, b); }, dn = R && d > STEP_MAX ? Math.abs(un(TRENCH_STEP) - 2 * un(0) + un(-TRENCH_STEP)) * STEP_D / TRENCH_STEP : 0; /* (the streets' own bend over a mesh step (mesh.js TRENCH_STEP), as one edge would take it) */ stepMax = Math.max(stepMax, d); if (d > STEP_MAX && d > dn + STEP_MAX) { stepBad++; if (stepBad <= 3) badAt.push(['step', +x.toFixed(1), +z.toFixed(1), +u.toFixed(2), +d.toFixed(3)]); } } p2 = p1; p1 = h; } } }
+  return { trenches, wallN, wallBad, openN, openBad, stepN, stepBad, stepMax, topN, topBad, topMax };
 }

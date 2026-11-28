@@ -16,7 +16,7 @@ import * as THREE from 'three';
 import { decodeLayout, KIND, indexChunks, groundBytes } from './format.js';
 import { meshChunk, physIndex, physAt, latticeOf, EDGE_STEP, ZEBRA_IN, ZEBRA_OUT } from './mesh.js';
 import { drawBuffers, railBuffers } from './draw.js';
-import { groundGrid, latticeHeights } from './rules.js';
+import { groundGrid, latticeHeights, portalsOf, trenchWalls } from './rules.js';
 import { sidewalkMaterial, pathMaterial, regionLook, REGION } from '../roadSurface.js';
 // the gravel (tracks and verges): a region's own where it differs (Bora Bora's tracks and verges are coral sand and dirt)
 const GRAVEL = { fr: 0xc8b48e };
@@ -35,6 +35,7 @@ const loader = new THREE.TextureLoader(), texCache = new Map();
 const tex = (name) => { if (!texCache.has(name)) { const t = loader.load(`tex/roads/${name}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; texCache.set(name, t); } return texCache.get(name); };
 const SIDES = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 
+const TRENCH_E = {}; // (a trench wall's entry for the wall contact: none of a building's damage)
 export class Layout {
   // index: the place's layout/index.json ({ size, chunks: [{ ix, iz, file }], ground: [[iz, ix0, ix1]] (chunks only
   // ground: no file, format.js groundBytes), fallback }); dir: where its files are
@@ -216,10 +217,23 @@ export class Layout {
     if (c.rails) for (const o of c.rails.children) if (o.userData.near) o.visible = level === 'fine'; // (the rails and sleepers: near only, sub-pixel further)
     c.shown = level;
   }
+  // a tunnel's approach in a walled trench (rules.js trenchOf): its retaining walls along their strips (openings in the surface),
+  // each segment from under the lower surface beside it to a lip over the higher, following them (trenchWalls, from the chunk's
+  // physics); each segment the chunk's its middle is in; solid (c.walls: Layout.wallBoxes, World.wallBoxes) -> a mesh, or null
+  trenchWalls(c) {
+    const L = c.L, ports = portalsOf(L.net.runs); c.walls = []; if (!ports.some((p) => p.tr)) return null; const m = c.m.fine, at = (x, z) => physAt(L, m, c.phys, x, z), A = [], quad = (a, b, cc, d) => A.push(...a, ...b, ...cc, ...a, ...cc, ...d);
+    for (const p of ports) for (const b of trenchWalls(p, at, ports)) { const um = (b.u0 + b.u1) / 2, cx = p.x + p.dx * um - p.dz * b.v, cz = p.z + p.dz * um + p.dx * b.v; if (cx < L.x0 || cx >= L.x0 + L.size || cz < L.z0 || cz >= L.z0 + L.size) continue;
+      const q = (u, v, y) => [p.x + p.dx * u - p.dz * v, y, p.z + p.dz * u + p.dx * v], v0 = b.v - b.t, v1 = b.v + b.t, a = b.u0, e = b.u1;
+      quad(q(a, v0, b.ya), q(a, v1, b.ya), q(e, v1, b.yb), q(e, v0, b.yb)); for (const v of [v0, v1]) quad(q(a, v, b.y0), q(e, v, b.y0), q(e, v, b.yb), q(a, v, b.ya)); for (const [u, y] of [[a, b.ya], [e, b.yb]]) quad(q(u, v0, b.y0), q(u, v1, b.y0), q(u, v1, y), q(u, v0, y));
+      c.walls.push({ x: cx, z: cz, ux: p.dx, uz: p.dz, hl: (e - a) / 2 + 0.02, hw: b.t, y0: b.y0, y1: b.y1, e: TRENCH_E }); }
+    if (!A.length) return null; const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(A, 3)); g.computeVertexNormals(); g.computeBoundingSphere();
+    const me = new THREE.Mesh(g, this.mats.tube); me.receiveShadow = true; return me;
+  }
   // a chunk's railways (draw.js railBuffers, made in the worker): their meshes, and a rail bridge's piers down to today's
   // ground (the World's terrain: here)
   railsFor(c, rb) {
-    if (!rb) return; const grp = new THREE.Group(); grp.name = 'layout rails ' + c.k;
+    const walls = this.trenchWalls(c); if (!rb && !walls) return; const grp = new THREE.Group(); grp.name = 'layout rails ' + c.k; if (walls) grp.add(walls);
+    if (!rb) { c.rails = grp; this.group.add(grp); return; }
     const add = (k, P, N) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(P, 3)); if (N) g.setAttribute('normal', new THREE.BufferAttribute(N, 3)); else g.computeVertexNormals();
       if (k === 'ballast') { const nv = P.length / 3; g.setAttribute('aRoad', new THREE.BufferAttribute(new Float32Array(nv * 4), 4)); g.setAttribute('aLane', new THREE.BufferAttribute(new Float32Array(nv), 1)); }
       g.computeBoundingSphere(); const me = new THREE.Mesh(g, this.mats[k]); me.receiveShadow = true; me.castShadow = k === 'deck'; me.userData.near = k === 'steel' || k === 'sleeper'; grp.add(me); };
@@ -315,6 +329,8 @@ export class Layout {
     return cs.length;
   }
   // the height to place things at (x, z) on (lamps, signals, lanes, building bases): the surface's, NaN outside the active chunks
+  // the trenches' walls near (x, z), as World.wallBoxes gives buildings' boxes (appended to out)
+  wallBoxes(x, z, r, out) { if (!this.on) return out; for (const c of this.active.values()) for (const b of c.walls || []) if ((b.x - x) ** 2 + (b.z - z) ** 2 < (r + b.hl + b.hw) ** 2) out.push(b); return out; }
   placeY(x, z) { return this.place && this.on ? this.heightAt(x, z) : NaN; }
   // the physics height at (x, z) (NaN outside the active chunks)
   heightAt(x, z, out) { const c = this.active.get(Math.floor(x / this.size) + ',' + Math.floor(z / this.size)); return c ? physAt(c.L, c.m.fine, c.phys, x, z, out) : NaN; }

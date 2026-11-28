@@ -7,7 +7,7 @@
 //   parts: { tarmac, walk, track }  the street ribbons by material, each { pos, nrm, attrs: { name: [array, size] } } | null
 import { KIND } from './format.js';
 import { MARK, physIndex, physAt } from './mesh.js';
-import { portalsOf, DECK_SIDE, DECK_DEPTH, TUBE_SIDE, TUBE_H, PORTAL_TOP, PORTAL_T, PORTAL_FOOT, SILL } from './rules.js';
+import { portalsOf, WALL_LIP, DECK_SIDE, DECK_DEPTH, TUBE_SIDE, TUBE_H, PORTAL_TOP, PORTAL_T, PORTAL_FOOT, SILL } from './rules.js';
 import { railPieces, railSide, RAIL_TOP, SLEEPER_TOP, SLEEPER_STEP, GAUGE, SLEEPER_L } from './rails.js';
 
 // (the surface's materials, runtime.js matList: ground, alley, gravel, pavers, ballast; -1 not in the surface)
@@ -86,7 +86,9 @@ export function railBuffers(L, m) {
     for (const p of ports) { if (p.x < L.x0 || p.x >= L.x0 + L.size || p.z < L.z0 || p.z >= L.z0 + L.size) continue; const T = PORTAL_T / 2, pt = (u, v, y) => [p.x + p.dx * u - p.dz * v, p.y + y, p.z + p.dz * u + p.dx * v];
       const box = (v0, v1, y0, y1) => { for (const u of [-T, T]) quad(G.tube, pt(u, v0, y0), pt(u, v1, y0), pt(u, v1, y1), pt(u, v0, y1)); quad(G.tube, pt(-T, v0, y1), pt(-T, v1, y1), pt(T, v1, y1), pt(T, v0, y1)); for (const v of [v0, v1]) quad(G.tube, pt(-T, v, y0), pt(T, v, y0), pt(T, v, y1), pt(-T, v, y1)); };
       if (!p.rail) { if (p.top > PORTAL_TOP) box(-p.W, p.W, PORTAL_TOP - 0.01, p.top); continue; } // (a road's portal is roads.js's: where a way runs over it, its headwall raised to under that way, rules.js portalsOf)
-      box(-p.W, -p.hwT, -PORTAL_FOOT, p.top); box(p.hwT, p.W, -PORTAL_FOOT, p.top); box(-p.hwT, p.hwT, TUBE_H, p.top); box(-p.hwT, p.hwT, -SILL, -0.05); } // (its wings PORTAL_FOOT deep, a sill across the mouth: roads.js's)
+      // (a trench's portal: its headwall no higher than the surfaces about it and a wall's lip, as its walls, over the mouth's lintel at least)
+      let top = p.top; if (p.tr) { let h = -Infinity; for (const u of [-PORTAL_T, PORTAL_T]) for (let v = -p.W; v <= p.W + 1e-9; v += 0.5) { const q = pt(u, v, 0), y = at(q[0], q[2]); if (y === y) h = Math.max(h, y - p.y); } top = Math.min(p.top, Math.max(TUBE_H + 0.3, h + WALL_LIP)); }
+      box(-p.W, -p.hwT, -PORTAL_FOOT, top); box(p.hwT, p.W, -PORTAL_FOOT, top); box(-p.hwT, p.hwT, TUBE_H, top); box(-p.hwT, p.hwT, -SILL, -0.05); } // (its wings PORTAL_FOOT deep, a sill across the mouth: roads.js's)
   const pos = {}, nrm = {};
   for (const [k, A] of Object.entries(G)) { if (!A.length) continue; const P = (pos[k] = new Float32Array(A)), N = (nrm[k] = new Float32Array(P.length));
     for (let t = 0; t < P.length; t += 9) { const ax = P[t + 3] - P[t], ay = P[t + 4] - P[t + 1], az = P[t + 5] - P[t + 2], bx = P[t + 6] - P[t], by = P[t + 7] - P[t + 1], bz = P[t + 8] - P[t + 2];
