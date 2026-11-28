@@ -26,6 +26,14 @@ def at_least(live, ver):  # live version >= ver, as numbers ('?' when unreadable
         return False
 
 
+def undo_release(branch, why):
+    """A release commit was pushed but the merge failed: take it back off the branch (here and on GitHub), so a
+    re-run doesn't add a second changelog entry for the same version, then stop."""
+    sh('git reset -q --hard HEAD~1', check=False)
+    sh(f'git push -q -f origin HEAD:{branch}', check=False)
+    sys.exit(why + '\n(the release commit was taken back off the branch: fix the cause and run again)')
+
+
 def js_str(s):
     return json.dumps(s, ensure_ascii=False)  # a double-quoted JS string literal
 
@@ -59,7 +67,7 @@ def main():
         if st.startswith('MERGEABLE'):
             break
         if st.startswith('CONFLICTING'):
-            sys.exit('✗ the PR conflicts with main')
+            undo_release(branch, '✗ the PR conflicts with main')
         time.sleep(3)
     # GitHub sometimes refuses the merge for a few seconds after a push ('Base branch was modified'), even with the PR
     # mergeable: wait and try again rather than leave a pushed release commit behind (a re-run would add a second one)
@@ -68,7 +76,7 @@ def main():
         if r.returncode == 0:
             break
         if 'Base branch was modified' not in r.stderr + r.stdout or k == 9:
-            sys.exit(f'✗ gh pr merge {branch} --squash\n{r.stdout}{r.stderr}')
+            undo_release(branch, f'✗ gh pr merge {branch} --squash\n{r.stdout}{r.stderr}')
         print('  merge refused (base branch was modified); retrying'); time.sleep(15)
     print(f'merged as {ver}')
     # the deploy: GitHub's deploy-pages step sometimes fails to find its artifact; a fresh run fixes it
