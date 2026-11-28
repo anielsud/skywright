@@ -139,3 +139,28 @@ export async function sweep(name, location) {
   if (S.F === F) S.endFlight();
   return r;
 }
+
+// ---------------- every program links, within the texture units ----------------
+// A program over the fragment shader's texture units doesn't link, and three draws nothing with it: no stall, no late
+// show, only holes (1.261.0: today's terrain at Ultra was 17 samplers with the layout's mask, over 16). Every compiled
+// program (renderer.info.programs) read back from GL: its link status and its active samplers, against 16, the units
+// every GPU we run on gives (WebGL 2's minimum; Mac Chrome and SwiftShader give no more), or fewer if this one has fewer.
+export function programs() {
+  const R = S.renderer, gl = R.getContext(), units = Math.min(16, gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS));
+  const SAMP = new Set([gl.SAMPLER_2D, gl.SAMPLER_CUBE, gl.SAMPLER_3D, gl.SAMPLER_2D_SHADOW, gl.SAMPLER_2D_ARRAY, gl.SAMPLER_2D_ARRAY_SHADOW, gl.SAMPLER_CUBE_SHADOW,
+    gl.INT_SAMPLER_2D, gl.INT_SAMPLER_3D, gl.INT_SAMPLER_CUBE, gl.INT_SAMPLER_2D_ARRAY, gl.UNSIGNED_INT_SAMPLER_2D, gl.UNSIGNED_INT_SAMPLER_3D, gl.UNSIGNED_INT_SAMPLER_CUBE, gl.UNSIGNED_INT_SAMPLER_2D_ARRAY]);
+  const out = { units, n: 0, unlinked: [], over: [], most: 0, mostName: '' };
+  for (const p of R.info.programs) {
+    out.n++; const n = gl.getProgramParameter(p.program, gl.ACTIVE_UNIFORMS) || 0; let samp = 0;
+    for (let i = 0; i < n; i++) { const u = gl.getActiveUniform(p.program, i); if (u && SAMP.has(u.type)) samp += u.size; }
+    const name = `${p.name || '?'} (${String(p.cacheKey || '').slice(0, 60)})`;
+    if (!gl.getProgramParameter(p.program, gl.LINK_STATUS)) out.unlinked.push(`${name}: ${(gl.getProgramInfoLog(p.program) || '').slice(0, 200)}`);
+    if (samp > units) out.over.push(`${name}: ${samp} samplers`);
+    if (samp > out.most) { out.most = samp; out.mostName = p.name || '?'; }
+  }
+  return out;
+}
+export function programChecks(where, r) {
+  return [[`${where}: every program links (${r.n})`, !r.unlinked.length, r.unlinked.join(' | ').slice(0, 800)],
+    [`${where}: no program over ${r.units} texture units`, !r.over.length, r.over.length ? r.over.join(' | ').slice(0, 800) : `most ${r.most} (${r.mostName})`]];
+}

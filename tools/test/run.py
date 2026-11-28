@@ -27,6 +27,7 @@ JOBS = {
     'nyc': PAGE + ['tools/test/jobs/nyc.js', 'tools/test/smoke.js', 'tools/test/padcheck.js', 'tools/test/helipadcheck.js', 'tools/test/shadercheck.js', 'tools/test/startbakes.js', 'tools/test/stunts.js', 'tools/test/waterpark.js', 'tools/test/walls.js', 'tools/bake/*'],
     'islands': PAGE + ['tools/test/jobs/islands.js', 'tools/test/smoke.js', 'tools/test/padcheck.js', 'tools/test/shadercheck.js', 'tools/test/startbakes.js', 'tools/test/sr71flight.js', 'tools/bake/*'],
     'canyon-lauterbrunnen': PAGE + ['tools/test/jobs/canyon-lauterbrunnen.js', 'tools/test/smoke.js', 'tools/test/padcheck.js', 'tools/test/shadercheck.js', 'tools/test/startbakes.js', 'tools/test/restart.js', 'tools/test/jobs/wiring.js', 'tools/bake/*'],
+    'ultra': PAGE + ['tools/test/jobs/ultra.js', 'tools/test/shadercheck.js', 'tools/bake/*'],
 }
 # --ci: jobs.py --ci --quality low (a CI runner's software GPU; Low: ~100 shader programs a place instead of 140)
 HARNESS = ['tools/test/run.py', 'tools/test/node/*', 'tools/test/jobs.py', 'tools/test/jobs/harness.js']  # changing these runs everything

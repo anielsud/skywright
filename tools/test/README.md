@@ -189,6 +189,12 @@ The jobs:
   hangar frees the World and a fresh Rocket start builds a new one (same spawn, same scene child count as the
   restart), then runway, air, stunt park, street, marina and water park each swapped into that World, restarted (same
   World, start and spawn) and 4 s stepped on. The start-rule wiring (`wiring.js`) runs at each place while it is up.
+- **ultra** (Lauterbrunnen built at **Ultra** whatever `--quality` says, the baked layout on): the Kestrel from the
+  runway, the whole scene drawn once, then every compiled program read back from GL (`shadercheck.js programs`): each
+  must link and none may have more active samplers than 16 texture units (WebGL 2's minimum, all Mac Chrome and
+  SwiftShader give). A program over them doesn't link and three draws nothing with it: no stall, no console error on
+  every GPU, only holes (1.261.0: today's terrain at Ultra, 4 cascades' shadow maps, plus the layout's mask was 17).
+  Ultra is the tier with the most samplers; the step's PASS line prints the most any program uses.
 
 ## Run the smoke test (older script)
 
@@ -769,6 +775,10 @@ How shaders are kept from stalling a frame (#273):
 - **A shadow caster's depth shader doesn't depend on its map unless it alpha-tests** (shaders.js installFog, #287):
   three's shared depth material otherwise compiled a mapped copy of the same shader whenever draw order handed it a
   textured caster first, mid-flight.
+- **Within 16 texture units at Ultra** (its 4 cascades' shadow maps are 3 more samplers than High in every lit
+  shader): a per-place or per-feature lookup goes in uniforms or a channel of a texture the material already reads,
+  not a texture of its own, when the material is near the limit (the layout's drawn-chunk mask: uniforms, layout/runtime.js
+  WIN). The `ultra` job fails on a program that doesn't link or is over 16.
 - Give custom materials a `name`: the checks print it.
 
 Every job step fails on a **stall** (a program compiled during a frame's draw: `[shaders] N compiled in flight,

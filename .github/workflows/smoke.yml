@@ -3,7 +3,8 @@ name: Tests
 # Every PR runs the whole suite, as parallel jobs:
 # - the browser jobs (tools/test/jobs.py, one matrix entry each): headless Chrome with WebGL via SwiftShader (no GPU),
 #   booted once per job, each map built once and every vehicle swapped into it, game time stepped, frames drawn only
-#   for what is about drawing: hangar (boot, audio, windows, wind tunnel), nyc, islands, canyon-lauterbrunnen. Every
+#   for what is about drawing: hangar (boot, audio, windows, wind tunnel), nyc, islands, canyon-lauterbrunnen, ultra
+#   (Lauterbrunnen built at Ultra whatever --quality: every program links, within 16 texture units). Every
 #   step fails on console errors, failed requests and shader stalls. Screenshots are attached to the run.
 # - the Node tier (its job below): every logic, physics and geometry suite (known failures listed in
 #   tools/test/known.json don't fail it); and node-today: the cases of today's road code, with the layout off (#294).
@@ -64,7 +65,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        job: [hangar, nyc, islands, canyon-lauterbrunnen]
+        job: [hangar, nyc, islands, canyon-lauterbrunnen, ultra]
     name: browser (${{ matrix.job }})
     env:
       SKY_CDP_TIMEOUT: '120' # (software WebGL on the runner: a screenshot can take long)
