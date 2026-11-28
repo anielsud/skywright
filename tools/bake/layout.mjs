@@ -72,7 +72,7 @@ export async function bakePlace(a, world, asks) {
   // a chunk failing a check keeps today's roads
   const failed = new Map();
   for (const c of results) { const f = c.fine, co = c.coarse, bad = [];
-    if (f.failed || co.failed) bad.push('fixed edges'); if (Math.abs(f.covered - 1) > 1e-6 || Math.abs(co.covered - 1) > 1e-6) bad.push('cover'); if (f.holes) bad.push('holes'); if (f.tarmacOff > 1e-4) bad.push('tarmac off physics'); if (f.kerbSlope > 0.05 || (f.kerbTris && f.kerbMeasured < f.kerbTris / 2)) bad.push('kerb in physics'); // (kerbMeasured: kerb edges whose top stands over physics; if kerbs were physics none would, and the rise alone would pass) if (f.drift > DRIFT_MAX) bad.push('markings off the centre line'); if (f.deckBad) bad.push('deck step'); if (f.portalBad) bad.push('portal step'); if (f.rimBad || f.noLip) bad.push('portal gap');
+    if (f.failed || co.failed) bad.push('fixed edges'); if (Math.abs(f.covered - 1) > 1e-6 || Math.abs(co.covered - 1) > 1e-6) bad.push('cover'); if (f.holes) bad.push('holes'); if (f.tarmacOff > 1e-4) bad.push('tarmac off physics'); if (f.kerbSlope > 0.05 || (f.kerbTris && f.kerbMeasured < f.kerbTris / 2)) bad.push('kerb in physics'); /* (kerbMeasured: kerb edges whose top stands over physics; if kerbs were physics none would, and the rise alone would pass) */ if (f.drift > DRIFT_MAX) bad.push('markings off the centre line'); if (f.deckBad) bad.push('deck step'); if (f.portalBad) bad.push('portal step'); if (f.rimBad || f.noLip) bad.push('portal gap');
     if (bad.length) failed.set(key(c.ix, c.iz), bad.join('+')); }
   // shared edges between two baked chunks: the same points and heights from both sides, at every pair of levels
   let pairs = 0, seamBad = 0; const seamList = [];
