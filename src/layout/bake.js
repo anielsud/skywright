@@ -83,6 +83,7 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
         }
         const minor = !!rd.minor, kind = rd.kind, rail = rd.rail ?? -1, cutA = s1 === s0 ? cA : null, cutB = e1 === e0 ? cB : null;
         if (cutA) pins.set(vars[0], P[s1].y); if (cutB) pins.set(vars[vars.length - 1], P[e1].y);
+        if (rd.pinA != null && s1 === 0) pins.set(vars[0], rd.pinA); if (rd.pinB != null && e1 === n - 1) pins.set(vars[vars.length - 1], rd.pinB); // (a railway ending on a double tube's portal beside its track: bake.js mergeBores)
         runs.push({ rail, cutA, cutB, rd, osmPts: osm.map((k) => pts[k]), kind, minor, surf: rd.surf || 0, hw: rd.width / 2, lanes: rd.lanes || (rd.oneway ? 1 : 2), oneway: !!rd.oneway, layer: rd.layer || 0, pts, vars, grade: rail >= 0 ? RAIL_GRADE[rail] : minor ? GRADE_MINOR[kind] ?? 0.3 : (city ? GRADE_CITY : GRADE)[kind] ?? 0.2, pave: city && !minor && !rd.baked && PAVE[kind] ? PAVE[kind] : village ? PAVE_VILLAGE : 0 });
       }
       s0 = e0;
@@ -278,20 +279,72 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
 }
 
 // the railways (World.real.osm.rails: bake.py rail_entry) as the network's ways: a way off the street network (minor) of kind
-// 'rail' and its class (rail); one on a bridge all deck (one in a tunnel: left out), at the straight line between the natural
+// 'rail' and its class (rail); one on a bridge all deck, one in a tunnel all tube (side-by-side bores as one: mergeBores), at the straight line between the natural
 // ground at its ends (a viaduct's ways end to end: one line each, meeting at their shared ends). Their points shared with
 // another railway's (a switch; ways end to end: OpenStreetMap's shared node, the same point to the decimetre) are one node.
 function railWays(w, g) {
-  const list = w.real?.osm?.rails || [], key = (x, z) => 'R' + Math.round(x * 10) + ',' + Math.round(z * 10), uses = new Map();
+  const list = mergeBores(w.real?.osm?.rails || [], g), key = (x, z) => 'R' + Math.round(x * 10) + ',' + Math.round(z * 10), uses = new Map();
   for (const [, , f] of list) { const seen = new Set(); for (let k = 0; k < f.length; k += 2) { const q = key(f[k], f[k + 1]); if (!seen.has(q)) { seen.add(q); uses.set(q, (uses.get(q) || 0) + 1); } } }
   const out = [];
-  for (const [, br, f, cls = 0, tun = 0] of list) { const n = f.length / 2; if (n < 2 || tun) continue; // (one in a tunnel: not yet (as today, not drawn): its tubes' portals, often side by side, failed the checks)
+  for (const [, br, f, cls = 0, tun = 0, extra = {}] of list) { const n = f.length / 2; if (n < 2) continue;
     const pts = [], jn = []; for (let i = 0; i < n; i++) { const x = f[i * 2], z = f[i * 2 + 1], q = key(x, z); pts.push({ x, z, y: 0 }); if (i === 0 || i === n - 1 || uses.get(q) > 1) jn.push([i, q]); }
-    if (br || tun) { const ya = g(pts[0].x, pts[0].z), yb = g(pts[n - 1].x, pts[n - 1].z); let s = 0; const S = [0]; for (let i = 1; i < n; i++) S.push((s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z))); pts.forEach((p, i) => { p.y = ya + (yb - ya) * (S[i] / (s || 1)); }); }
+    if (br || tun) { const ya = extra.ya ?? g(pts[0].x, pts[0].z), yb = extra.yb ?? g(pts[n - 1].x, pts[n - 1].z); let s = 0; const S = [0]; for (let i = 1; i < n; i++) S.push((s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z))); pts.forEach((p, i) => { p.y = ya + (yb - ya) * (S[i] / (s || 1)); }); }
     const flag = br || tun ? new Array(n).fill(true) : null;
-    out.push({ kind: 'rail', rail: cls, minor: true, width: RAIL_HW[cls] * 2, pts, jn, bridge: br ? flag : null, tube: tun ? flag : null, layer: 0, surf: 0, lanes: cls }); }
+    out.push({ kind: 'rail', rail: cls, minor: true, width: (RAIL_HW[cls] + (extra.wide || 0)) * 2, pts, jn, bridge: br ? flag : null, tube: tun ? flag : null, layer: 0, surf: 0, lanes: cls, pinA: extra.pinA, pinB: extra.pinB }); }
   return out;
 }
+// a double-track tunnel mapped as two ways side by side (one per track: their tubes overlap, each portal inside the other's
+// lip): one tube for both, the first way's, widened to take the other (extra.wide m more each side). Where the two lie within
+// BORE_D m of each other all along, the other's tunnel is left out; where they part inside the hill (two bores), the other's
+// is cut back to where they're BORE_D apart (its profile kept: extra.ya, yb), its stretch nearer the portal left out. Either
+// way the other's approach ends on the kept tube's portal plane (cut back or carried on to it), held at its floor's height
+// there (extra.pinA, pinB).
+const BORE_D = 8;
+function mergeBores(list, g) {
+  const lineD = (f, x, z) => { let b = Infinity; for (let k = 0; k + 3 < f.length; k += 2) { const ax = f[k], az = f[k + 1], dx = f[k + 2] - ax, dz = f[k + 3] - az, L = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L)); b = Math.min(b, Math.hypot(x - ax - dx * t, z - az - dz * t)); } return b; };
+  const far = (f, o) => { let m = 0; for (let k = 0; k < f.length; k += 2) m = Math.max(m, lineD(o, f[k], f[k + 1])); return m; };
+  const lenOf = (f) => { let s = 0; for (let k = 2; k < f.length; k += 2) s += Math.hypot(f[k] - f[k - 2], f[k + 1] - f[k - 1]); return s; };
+  const tun = []; list.forEach((e, i) => { if (e[4] && e[2].length >= 4) tun.push(i); });
+  const into = new Map(), wide = new Map(), trim = new Map(), ends = []; // (a bore left out -> the kept one; the kept one's extra half width; a bore cut back: [from its start, from its end] m; the left-out ends)
+  for (let a = 0; a < tun.length; a++) { const i = tun[a]; if (into.has(i)) continue; const A = list[i][2];
+    for (let b = a + 1; b < tun.length; b++) { const j = tun[b]; if (into.has(j)) continue; const B = list[j][2], nB = B.length / 2;
+      const near = (x, z) => Math.min(Math.hypot(A[0] - x, A[1] - z), Math.hypot(A[A.length - 2] - x, A[A.length - 1] - z)) <= 2 * BORE_D && lineD(A, x, z) <= BORE_D; // (an end of B beside an end of A)
+      const nA = near(B[0], B[1]), nZ = near(B[nB * 2 - 2], B[nB * 2 - 1]); if (!nA && !nZ) continue;
+      const endSep = (x, z) => Math.abs(endFrame(A, x, z)[1]);
+      if (Math.max(far(B, A), far(A, B)) <= BORE_D) { let sep = Math.max(endSep(B[0], B[1]), endSep(B[nB * 2 - 2], B[nB * 2 - 1])); for (let k = 2; k < B.length - 2; k += 2) sep = Math.max(sep, lineD(A, B[k], B[k + 1]));
+        into.set(j, i); wide.set(i, Math.max(wide.get(i) || 0, sep)); ends.push({ x: B[0], z: B[1], A }, { x: B[nB * 2 - 2], z: B[nB * 2 - 1], A }); continue; }
+      // (two bores parting inside the hill: from each end of B beside A, along B to where it's BORE_D from A)
+      const L = lenOf(B), at = (s) => { let acc = 0; for (let k = 2; k < B.length; k += 2) { const l = Math.hypot(B[k] - B[k - 2], B[k + 1] - B[k - 1]); if (acc + l >= s || k === B.length - 2) { const t = l ? Math.min(1, (s - acc) / l) : 0; return [B[k - 2] + (B[k] - B[k - 2]) * t, B[k - 1] + (B[k + 1] - B[k - 1]) * t]; } acc += l; } };
+      const T = trim.get(j) || [0, 0];
+      for (const [isA, x, z] of [[true, B[0], B[1]], [false, B[nB * 2 - 2], B[nB * 2 - 1]]]) { if (!(isA ? nA : nZ)) continue; let s = 0; while (s < L / 2) { s += 1; const [px, pz] = at(isA ? s : L - s); if (lineD(A, px, pz) > BORE_D) break; }
+        T[isA ? 0 : 1] = s; ends.push({ x, z, A }); wide.set(i, Math.max(wide.get(i) || 0, endSep(x, z))); }
+      trim.set(j, T); } }
+  if (!into.size && !trim.size) return list;
+  // (a bore cut back: its points from s0 to L - s1, its ends' heights on its straight profile, railWays's)
+  const cut = (f, s0, s1) => { const L = lenOf(f), ya = g(f[0], f[1]), yb = g(f[f.length - 2], f[f.length - 1]), o = []; let acc = 0;
+    const pt = (s) => { let c = 0; for (let k = 2; k < f.length; k += 2) { const l = Math.hypot(f[k] - f[k - 2], f[k + 1] - f[k - 1]); if (c + l >= s || k === f.length - 2) { const t = l ? Math.min(1, (s - c) / l) : 0; return [f[k - 2] + (f[k] - f[k - 2]) * t, f[k - 1] + (f[k + 1] - f[k - 1]) * t]; } c += l; } };
+    o.push(...pt(s0)); for (let k = 2; k < f.length - 2; k += 2) { acc += Math.hypot(f[k] - f[k - 2], f[k + 1] - f[k - 1]); if (acc > s0 + 0.5 && acc < L - s1 - 0.5) o.push(f[k], f[k + 1]); } o.push(...pt(L - s1));
+    return { f: o, ya: ya + (yb - ya) * s0 / (L || 1), yb: ya + (yb - ya) * (L - s1) / (L || 1) }; };
+  const out = list.map((e, i) => { if (into.has(i)) return null; const ex = {}; if (wide.has(i)) ex.wide = wide.get(i); let f = e[2];
+    if (trim.has(i)) { const [s0, s1] = trim.get(i), c = cut(f, s0, s1); f = c.f; ex.ya = c.ya; ex.yb = c.yb; if (lenOf(f) < 2) return null; }
+    return Object.keys(ex).length ? [e[0], e[1], f, e[3], e[4], ex] : e; });
+  out.forEach((e, q) => { if (!e || e[4]) return; let f = e[2], ex = null;
+    for (const end of ['A', 'B']) { const n = f.length / 2, i0 = end === 'A' ? 0 : n - 1, x = f[i0 * 2], z = f[i0 * 2 + 1], E = ends.find((c) => Math.hypot(c.x - x, c.z - z) < 0.05); if (!E) continue;
+      const A = E.A, [ax, az, ux, uz] = portalOfLine(A, x, z), pts = []; for (let k = 0; k < f.length; k += 2) pts.push([f[k], f[k + 1]]); if (end === 'A') pts.reverse();
+      // (from its far end towards the portal: points up to the plane kept, then the point on it)
+      const u = (p) => (p[0] - ax) * ux + (p[1] - az) * uz, keep = [pts[0]]; let k = 1; for (; k < pts.length; k++) { if (u(pts[k]) >= -0.05) break; keep.push(pts[k]); }
+      const prev = keep[keep.length - 1], up = u(prev); let px, pz;
+      if (k < pts.length) { const nx = pts[k], t = up / (up - u(nx)); px = prev[0] + (nx[0] - prev[0]) * t; pz = prev[1] + (nx[1] - prev[1]) * t; } else { px = prev[0] - ux * up; pz = prev[1] - uz * up; } // (cut where it crosses the plane; or carried on along the tube's axis to it)
+      if (Math.hypot(px - prev[0], pz - prev[1]) > 0.05) keep.push([px, pz]); else keep[keep.length - 1] = [px, pz];
+      if (end === 'A') keep.reverse(); f = keep.flat(); (ex ||= {})['pin' + end] = g(ax, az); if (e[1]) ex[end === 'A' ? 'ya' : 'yb'] = g(ax, az); } // (a bridge's: its deck's profile ends there)
+    if (ex) out[q] = [e[0], e[1], f, e[3], e[4], ex]; });
+  return out.filter(Boolean);
+}
+// a tube's line f: at its end nearer (x, z), the portal (that end) and the way into the tube (ux, uz)
+function portalOfLine(f, x, z) { const n = f.length / 2, a = Math.hypot(f[0] - x, f[1] - z) <= Math.hypot(f[n * 2 - 2] - x, f[n * 2 - 1] - z), [i, j] = a ? [0, 1] : [n - 1, n - 2];
+  const ax = f[i * 2], az = f[i * 2 + 1], dx = f[j * 2] - ax, dz = f[j * 2 + 1] - az, l = Math.hypot(dx, dz) || 1; return [ax, az, dx / l, dz / l]; }
+// (x, z) in the frame of a tube's nearer end: along into it, across
+function endFrame(f, x, z) { const [ax, az, ux, uz] = portalOfLine(f, x, z); return [(x - ax) * ux + (z - az) * uz, (z - az) * ux - (x - ax) * uz]; }
 
 // rings with a vertex wherever they cross a chunk line (x or z a multiple of S cm), at a crossing worked out the
 // same way whichever chunk asks: neighbours clip the same points

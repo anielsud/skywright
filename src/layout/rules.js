@@ -38,7 +38,7 @@ export const DECK_SIDE = 1, DECK_DEPTH = 1.4, TUBE_SIDE = 1.2, TUBE_H = 5.6, POR
 // with the layout on, a portal's headwall's wings reach PORTAL_FOOT m under the road (a retaining wall where the ground beside
 // the portal lies far under it) and a sill SILL m deep closes the floor's edge across the mouth (roads.js); a surface
 // within FLUSH m of the floor behind the mouth meets the tube's floor (no gap: a twin carriageway at grade beside it)
-export const PORTAL_FOOT = 12, SILL = 2, FLUSH = 0.3;
+export const PORTAL_FOOT = 12, SILL = 2, FLUSH = 0.3, TOP_OVER = 0.5;
 const UNDER = 0.1, OVER = 0.3, HOLD = 10; // (the ground kept this far under a deck's underside, over a tube's crown)
 // a tunnel's portals, from the roads stopping at a tube (ends 2, 8): where (the road's end), which way into the hill (dx,
 // dz: the road's last segment's, and the tube's first's if it's stored: roads.js frames the headwall by both), the road's
@@ -46,11 +46,26 @@ const UNDER = 0.1, OVER = 0.3, HOLD = 10; // (the ground kept this far under a d
 export function portalsOf(runs) {
   const out = [], tubes = runs.filter((r) => r.off === 'tube'), P = (r, i) => [r.shape[i * 2], r.shape[i * 2 + 1]], ns = (r) => r.shape.length / 2;
   for (const r of runs) for (const end of ['A', 'B']) { if (r['cut' + end] !== 'tube' || ns(r) < 2) continue;
-    const [x, z] = end === 'A' ? P(r, 0) : P(r, ns(r) - 1), [px, pz] = end === 'A' ? P(r, 1) : P(r, ns(r) - 2); let nx = px, nz = pz;
-    for (const t of tubes) { if (ns(t) < 2) continue; const [ax, az] = P(t, 0), [bx, bz] = P(t, ns(t) - 1); if (Math.hypot(ax - x, az - z) < 0.02) { [nx, nz] = P(t, 1); nx = 2 * x - nx; nz = 2 * z - nz; break; } if (Math.hypot(bx - x, bz - z) < 0.02) { [nx, nz] = P(t, ns(t) - 2); nx = 2 * x - nx; nz = 2 * z - nz; break; } }
-    let dx = (x - px) + (x - nx), dz = (z - pz) + (z - nz); if (Math.hypot(dx, dz) < 1e-6) { dx = x - px; dz = z - pz; } const l = Math.hypot(dx, dz) || 1, hwT = r.hw + TUBE_SIDE;
+    const [x, z] = end === 'A' ? P(r, 0) : P(r, ns(r) - 1), [px, pz] = end === 'A' ? P(r, 1) : P(r, ns(r) - 2); let nx = px, nz = pz, thw = r.hw;
+    for (const t of tubes) { if (ns(t) < 2) continue; const [ax, az] = P(t, 0), [bx, bz] = P(t, ns(t) - 1); if (Math.hypot(ax - x, az - z) < 0.02) { [nx, nz] = P(t, 1); nx = 2 * x - nx; nz = 2 * z - nz; thw = Math.max(thw, t.hw); break; } if (Math.hypot(bx - x, bz - z) < 0.02) { [nx, nz] = P(t, ns(t) - 2); nx = 2 * x - nx; nz = 2 * z - nz; thw = Math.max(thw, t.hw); break; } } // (thw: the tube's half width: a double-track tunnel's, wider than its track's bed, bake.js mergeBores)
+    let dx = (x - px) + (x - nx), dz = (z - pz) + (z - nz); if (Math.hypot(dx, dz) < 1e-6) { dx = x - px; dz = z - pz; } const l = Math.hypot(dx, dz) || 1, hwT = thw + TUBE_SIDE;
     out.push({ x, z, dx: dx / l, dz: dz / l, y: end === 'A' ? r.h[0] : r.h[r.h.length - 1], hw: r.hw, hwT, W: hwT + PORTAL_W, rail: r.kind === 'rail' }); }
-  return out;
+  // (a railway's portal in another's mouth (several tracks into one tube: a switch at the portal, a yard's tracks, bake.js
+  // mergeBores's other track): one portal, the widest (then by where it is, so every chunk keeps the same one); the other
+  // track ends inside its mouth)
+  const rails = out.filter((p) => p.rail).sort((a, b) => b.hwT - a.hwT || a.x - b.x || a.z - b.z), kept = [];
+  for (const p of rails) { if (kept.some((k) => { const [u, v] = portalUV(k, p.x, p.z); return u > -1 && u < PORTAL_T + 1 && Math.abs(v) <= k.W; })) p.drop = true; else kept.push(p); }
+  // (each one's headwall's top: PORTAL_TOP over the floor, or higher where another way runs over or beside it above that (a
+  // switchback over a mountain tunnel's portal): up to that way's surface (its strip, kerb and verge: stations every 0.5 m
+  // along it), and TOP_OVER more)
+  const res = out.filter((p) => !p.drop);
+  for (const p of res) { let top = PORTAL_TOP; for (const r of runs) { if (r.off || r.kind === 'rail') continue; const reach = r.hw + (r.pave || 0) + vergeW(r) + 0.5, n = r.h.length;
+      for (let i = 0; i + 1 < n; i++) { const ax = r.pts[i * 2], az = r.pts[i * 2 + 1], bx = r.pts[i * 2 + 2], bz = r.pts[i * 2 + 3], [ua, va] = portalUV(p, ax, az), [ub, vb] = portalUV(p, bx, bz);
+        if (Math.max(ua, ub) < -1 - reach || Math.min(ua, ub) > PORTAL_T + 1 + reach || Math.min(Math.abs(va), Math.abs(vb)) > p.W + reach + Math.hypot(bx - ax, bz - az)) continue;
+        const k = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 0.5)); for (let q = 0; q <= k; q++) { const t = q / k, u = ua + (ub - ua) * t, v = va + (vb - va) * t; if (u < -1 - reach || u > PORTAL_T + 1 + reach || Math.abs(v) > p.W + reach) continue;
+          top = Math.max(top, r.h[i] + (r.h[i + 1] - r.h[i]) * t + (r.pave ? KERB : 0) - p.y + TOP_OVER); } } }
+    p.top = top; }
+  return res;
 }
 // (x, z) in a portal's frame: along (into the hill, from the portal) and across
 export const portalUV = (p, x, z) => [(x - p.x) * p.dx + (z - p.z) * p.dz, (z - p.z) * p.dx - (x - p.x) * p.dz];
@@ -120,9 +135,13 @@ export function makeRules(net, g, city, wl = -Infinity) {
   const sstep = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
   // (two such ends side by side, a twin tube's: each one's own height by how near its centre line the point is, sharply, so
   // each end is its own exactly and the two blend between, without a step)
-  const hold = (x, z, y) => { let W = 0, sk = 0, sy = 0; for (const c of cuts) { const u = (c.x - x) * c.dx + (c.z - z) * c.dz; if (u < -0.01 || u > HOLD) continue; const v = Math.abs((z - c.z) * c.dx - (x - c.x) * c.dz); if (v > c.r.hw + c.side) continue;
-      const w = (1 - sstep(u / HOLD)) * (1 - sstep((v - c.r.hw) / c.side)); if (w <= 0) continue; const k = Math.exp(-8 * (v / c.r.hw) ** 2) + 1e-12; W = Math.max(W, w); sk += k; sy += k * nearestOn(c.r, x, z); }
-    return W > 0 ? y + (sy / sk - y) * W : y; };
+  // (by how much nearer each end's centre line is than the nearest's, over HOLD_V m: on one end's centre line that end alone, so
+  // two decks ending a metre apart at one short stretch each meet their own; between two ends side by side, a blend)
+  const HOLD_V = 0.35, hc = [];
+  const hold = (x, z, y) => { let W = 0, vmin = Infinity; hc.length = 0; for (const c of cuts) { const u = (c.x - x) * c.dx + (c.z - z) * c.dz; if (u < -0.01 || u > HOLD) continue; const v = Math.abs((z - c.z) * c.dx - (x - c.x) * c.dz); if (v > c.r.hw + c.side) continue;
+      const w = (1 - sstep(u / HOLD)) * (1 - sstep((v - c.r.hw) / c.side)); if (w <= 0) continue; W = Math.max(W, w); hc.push(c, v); if (v < vmin) vmin = v; }
+    if (!(W > 0)) return y; let sk = 0, sy = 0; for (let q = 0; q < hc.length; q += 2) { const k = Math.exp(-(((hc[q + 1] - vmin) / HOLD_V) ** 2)); if (k < 1e-9) continue; sk += k; sy += k * nearestOn(hc[q].r, x, z); }
+    return y + (sy / sk - y) * W; };
   const nearestOn = (r, x, z) => { let best = Infinity, y = 0; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t); if (d < best) { best = d; y = r.h[s] + (r.h[s + 1] - r.h[s]) * t; } } return y; };
   const base = (x, z, k) => {
     if (k === KIND.ballast) { const re = railCuts.length ? railEnd(x, z) : null; if (re) return nearestOn(re, x, z); const y = blended(x, z, true); if (y != null) return lxs ? streetH(x, z, y, true) : y; } // (a railway's bed; HOLD m back from where it stops at a deck or a tube: its own height, the deck's or the tube floor's at its end)
