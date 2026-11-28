@@ -16,6 +16,7 @@ import { gunzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { decodeLayout, groundBytes } from '../../../src/layout/format.js';
 import { meshChunk } from '../../../src/layout/mesh.js';
+import { Vehicles } from '../../../src/vehicles.js';
 
 const worlds = new Map();
 const renderer = new Proxy({}, { get: (t, k) => (k === 'then' ? undefined : () => ({})) });
@@ -52,6 +53,9 @@ export async function worldAt(id, { time = 11 } = {}) {
 // meshed in changes nothing. Off (?layout=0, SKY_LAYOUT=0): no layout, nothing to do. The bakes keep their World's
 // ground today's (globalThis.SKY_LAYOUT_LAZY = false: tools/bake/setbacks.mjs, layout.mjs).
 const REPO = fileURLToPath(new URL('../../../', import.meta.url));
+// placing that reads the layout's surface directly (Layout.heightAt), not through placeY: a traffic car's height on its
+// lane (vehicles.js pathPoint), each frame, wherever it is in the city. Only the chunks in, as in the game
+const quietly = { n: 0 }; { const pp = Vehicles.prototype.pathPoint; Vehicles.prototype.pathPoint = function (...a) { quietly.n++; try { return pp.apply(this, a); } finally { quietly.n--; } }; }
 export function lazyLayout(world) {
   const L = world.layout; if (!L || L.lazy || globalThis.SKY_LAYOUT_LAZY === false) return world;
   const mesh = (k) => { const e = L.index.get(k); if (!e) return undefined; let c = L.chunks.get(k);
@@ -61,7 +65,7 @@ export function lazyLayout(world) {
     if (!c.L) return undefined; /* (being fetched by the streaming: it meshes it) */
     if (!c.m.fine) { c.asked.add('fine'); const { grid, G } = L.lattice(c.L); L.got(c, 'fine', meshChunk(c.L, grid, G, 'fine', L.edgeH(c)), null); }
     return Map.prototype.get.call(L.active, k); };
-  class Active extends Map { off = 0; get(k) { return super.get(k) ?? (this.off ? undefined : mesh(k)); } has(k) { return super.has(k) || (!this.off && !!mesh(k)); } }
+  class Active extends Map { off = 0; get(k) { return super.get(k) ?? (this.off || quietly.n ? undefined : mesh(k)); } has(k) { return super.has(k) || (!this.off && !quietly.n && !!mesh(k)); } }
   const A = new Active(L.active); L.active = A; L.lazy = true; L.on = true;
   /* (and the retaining walls' boxes, wallBoxes: what asks for them stands on the ground first, World.groundAt, which meshes
   its chunk; asking at every building in a city (walls.js registered) doesn't mesh the city) */
@@ -69,6 +73,10 @@ export function lazyLayout(world) {
   /* (today's road tiles, built about the camera (roads.js group.userData.update) on whatever ground is in: inside a
   layout chunk they don't draw, so building one doesn't mesh the chunks under it either) */
   const G = world.roadGroup?.userData; if (G?.update) { const up = G.update; G.update = (...a) => { A.off++; try { return up(...a); } finally { A.off--; } }; }
+  /* (what's placed again on a chunk when it arrives (onActive: lamps, lanes, trees, buildings) reads only the chunks in:
+  a lamp over the edge doesn't mesh the next chunk, and that one the next, across the city) */
+  const quiet = (f) => (box) => { A.off++; try { return f(box); } finally { A.off--; } };
+  L.subs = L.subs.map(quiet); const onActive = L.onActive.bind(L); L.onActive = (f) => onActive(quiet(f));
   const unload = L.unload.bind(L); L.unload = (c) => { unload(c); L.on = true; }; /* (a chunk dropped far from the camera (World.update): meshed again when asked about) */
   return world;
 }
