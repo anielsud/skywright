@@ -26,7 +26,7 @@ const PAVE_VILLAGE = 1.8, BUILT_D = 30, BUILT_N = 5, BUILT_WIN = 120, BUILT_MIN 
 const JR_K = 1.5, JR_ADD = 1.5, JR_MIN = 4, EDGE_IN = 0.98, EDGE_MIN = 0.5;
 // grade limits: the street network's as roadgrade.js; the ways off it steeper (a farm's service road, a gravel track;
 // a footpath steps up the hillside: its OSM line is coarser than its zigzags), and kept within MINOR_OFF m of the ground
-const GRADE = { highway: 0.18, main: 0.18, street: 0.22 }, GRADE_MINOR = { service: 0.3, track: 0.35, ped: 0.6 }, MINOR_OFF = 1.5; // (alpine: Swiss pass and valley roads reach 15-20%)
+const GRADE = { highway: 0.18, main: 0.18, street: 0.22 }, GRADE_MINOR = { service: 0.3, track: 0.35, ped: 0.6 }, MINOR_OFF = 1.5, MINOR_BAND = 2.5, MINOR_SMOOTH = 12; // (alpine: Swiss pass and valley roads reach 15-20%)
 const GRADE_CITY = { highway: 0.07, main: 0.12, street: 0.2 }; // (a city's: as roadgrade.js)
 // the railways (OpenStreetMap's, bake.py rail_entry: by class): a main or branch line, a yard's or siding's track, a narrow-gauge
 // line, a rack railway (the Wengernalpbahn: 25%), a funicular (it follows its hillside: 60% and more). The bed's half width:
@@ -213,7 +213,13 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   // its OSM line, up a hillside steeper than any track): kept within MINOR_OFF m of the ground, over its limit there)
   { const street = new Set(); for (const r of runs) if (!r.minor) for (const v of r.vars) street.add(v); let held = 0;
     for (const r of runs) if (r.minor && r.rail < 0) for (const v of r.vars) if (!street.has(v) && !railVar.has(v) && !member.has(v) && Math.abs(h[v] - gt[v]) > MINOR_OFF) { h[v] = gt[v] + Math.sign(h[v] - gt[v]) * MINOR_OFF; held++; }
-    T.minorHeld = held; }
+    T.minorHeld = held;
+    // (then each such way's profile smoothed: the hold point by point leaves kinks where the band follows a hairpin's ground (80-90%
+    // over a few metres). A few passes, each station towards its neighbours' line (by distance along the way), within MINOR_BAND m
+    // of the ground; its ends, a street's, a railway's, a junction's and a pinned station stay)
+    const fixed = (v) => street.has(v) || railVar.has(v) || member.has(v) || pins.has(v), mins = runs.filter((r) => r.minor && r.rail < 0 && r.vars.length > 2);
+    for (let it = 0; it < MINOR_SMOOTH; it++) for (const r of mins) for (let i = 1; i + 1 < r.vars.length; i++) { const v = r.vars[i]; if (fixed(v)) continue; const a = r.vars[i - 1], b = r.vars[i + 1], la = r.s[i] - r.s[i - 1], lb = r.s[i + 1] - r.s[i]; if (la + lb < 1e-3) continue;
+      const line = h[a] + (h[b] - h[a]) * la / (la + lb); h[v] = Math.max(gt[v] - MINOR_BAND, Math.min(gt[v] + MINOR_BAND, (h[v] + line) / 2)); } }
   lift();
   // (constraints the solve can't meet (pins over a grade limit) leave stations NaN, and the network about them with them: each
   // put back on its ground, counted and logged, so one infeasible tunnel never takes the network to 0)
