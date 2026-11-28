@@ -12,7 +12,7 @@
 //     Everything else (heights, the reshaped ground, the markings' coordinates) the game works out with rules.js.
 import CL from '../../vendor/layout/clipper1.mjs';
 import { CHUNK, KIND, RKINDS, encodeLayout, stations } from './format.js';
-import { naturalGround } from './rules.js';
+import { naturalGround, TUBE_H, TUBE_SIDE } from './rules.js';
 
 const PIN_W = 1e4, SEG = 8, MARGIN = 150, ARC = 8, SIMPLIFY = 25, SHAPE_TOL = 15, EDGE_STEP = 4, NET_PAD = 75; // (NET_PAD: the network stored with a chunk reaches this far past it: past every rule's reach, rules.js)
 const PAVE = { main: 4.5, street: 3.5 }; // (as roadgrade.js: a city street's pavement, a country road's verge)
@@ -139,7 +139,8 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   // ---- 2. height solve
   t0 = performance.now();
   const nv = V.length, floor = wl + FREEBOARD, gt = Float64Array.from(V, (v) => Math.max(v.g, floor)), h = Float64Array.from(gt), edges = [], nb = V.map(() => []); // (gt: the ground each station is pulled to: the natural ground, above the water)
-  const lift = () => { let n = 0; for (let k = 0; k < nv; k++) if (h[k] < floor && !pins.has(k)) { h[k] = floor; n++; } return n; };
+  const lo = crownFloor(V, runs, offRuns, pins, floor, T); // (each station's lowest: the floor, or over a tube near its portal its crown's)
+  const lift = () => { let n = 0; for (let k = 0; k < nv; k++) if (h[k] < lo[k] && !pins.has(k)) { h[k] = lo[k]; n++; } return n; };
   for (const r of runs) for (let i = 0; i + 1 < r.vars.length; i++) { const a = r.vars[i], b = r.vars[i + 1]; if (a === b) continue; const l = Math.max(0.5, r.s[i + 1] - r.s[i]); edges.push([a, b, l, r.grade, r.rail, r.grade]); nb[a].push([b, 1 / l]); nb[b].push([a, 1 / l]); }
   for (const [a, b] of eqs) { edges.push([a, b, 0.5, 0, -1, 0]); nb[a].push([b, 2]); nb[b].push([a, 2]); } // (a crossing at both ways' own points: level)
   const railVar = new Set(); for (const r of runs) if (r.rail >= 0) for (const v of r.vars) railVar.add(v);
@@ -201,7 +202,7 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   // the railways' grades against their class's limit (relaxed or not: how far over the limit, where the ground is steeper)
   { const R = {}; for (const e of edges) { const [a, b, l, , c, G0] = e; if (!(c >= 0) || inOne(a, b)) continue; const k = RAIL_CLASS[c], o = Math.abs(h[a] - h[b]) / l - G0, q = R[k] || (R[k] = { edges: 0, km: 0, over: 0, overRelaxed: 0, max: 0, limit: G0 }); q.edges++; q.km += l / 1000; if (o > 1e-3) { q.over++; if (e[3] > G0) q.overRelaxed++; q.max = Math.max(q.max, o); } }
     for (const q of Object.values(R)) { q.km = +q.km.toFixed(1); q.max = +q.max.toFixed(3); } T.rail = { grades: R, levelCrossings: JN.filter((J) => J.lx).length, eqs: eqs.length }; }
-  T.solve = { linePlanes: JN.filter((J) => J.wasLine).length, shore: T.shore, relax: T.relax, relaxedEdges: T.relaxedEdges, minorHeld: T.minorHeld, vars: nv, junctions: JN.length, iters, maxFromGround: +dev.toFixed(2), worstOverGrade: +Math.max(0, over).toFixed(3) };
+  T.solve = { linePlanes: JN.filter((J) => J.wasLine).length, shore: T.shore, crown: T.crown, relax: T.relax, relaxedEdges: T.relaxedEdges, minorHeld: T.minorHeld, vars: nv, junctions: JN.length, iters, maxFromGround: +dev.toFixed(2), worstOverGrade: +Math.max(0, over).toFixed(3) };
   { // (the worst edges over their limit: between which junctions, how long, how far the planes' ends are apart)
     const ov = edges.filter(([a, b]) => !inOne(a, b)).map(([a, b, l, G]) => [Math.abs(h[a] - h[b]) / l - G, a, b, l, G]).filter((e) => e[0] > 1e-3).sort((p, q) => q[0] - p[0]);
     T.overGrade = { edges: ov.length, bothJunctions: ov.filter(([, a, b]) => memberOf.has(a) && memberOf.has(b)).length, worst: ov.slice(0, 4).map(([o, a, b, l, G]) => ({ x: +V[a].x.toFixed(1), z: +V[a].z.toFixed(1), over: +o.toFixed(3), l: +l.toFixed(1), limit: G, rise: +Math.abs(h[a] - h[b]).toFixed(2), ends: [memberOf.has(a) ? 'junction' : V[a].tie ? 'tie' : 'road', memberOf.has(b) ? 'junction' : V[b].tie ? 'tie' : 'road'] })) }; }
@@ -339,6 +340,26 @@ function mergeBores(list, g) {
       if (end === 'A') keep.reverse(); f = keep.flat(); (ex ||= {})['pin' + end] = g(ax, az); if (e[1]) ex[end === 'A' ? 'ya' : 'yb'] = g(ax, az); } // (a bridge's: its deck's profile ends there)
     if (ex) out[q] = [e[0], e[1], f, e[3], e[4], ex]; });
   return out.filter(Boolean);
+}
+// the crown floor (#294): a way over a tube within CROWN_REACH m of its portal (its centre line over the tube's walls) is
+// held CROWN_OVER m over the tube's crown there, so a street over a portal's mouth runs over its lintel, not through the
+// tube (the height grid has the two a metre or two apart). Each station's lowest height (the shore's floor elsewhere)
+const CROWN_REACH = 15, CROWN_OVER = 0.8, CROWN_MAX = 8, CROWN_LAP = 1.5;
+function crownFloor(V, runs, offRuns, pins, floor, T) {
+  const lo = new Float64Array(V.length).fill(floor), C = 20, grid = new Map(), key = (i, j) => i * 100003 + j;
+  for (const t of offRuns) { if (t.off !== 'tube' || t.pts.length < 2) continue; const n = t.pts.length, s = [0]; for (let i = 1; i < n; i++) s.push(s[i - 1] + Math.hypot(t.pts[i][0] - t.pts[i - 1][0], t.pts[i][1] - t.pts[i - 1][1])); const hwT = t.hw + TUBE_SIDE;
+    for (let i = 0; i + 1 < n; i++) { if (s[i] > CROWN_REACH && s[n - 1] - s[i + 1] > CROWN_REACH) continue; const [ax, az] = t.pts[i], [bx, bz] = t.pts[i + 1], sg = { t, i, s, hwT };
+      for (let a = Math.floor((Math.min(ax, bx) - hwT) / C); a <= Math.floor((Math.max(ax, bx) + hwT) / C); a++) for (let b = Math.floor((Math.min(az, bz) - hwT) / C); b <= Math.floor((Math.max(az, bz) + hwT) / C); b++) (grid.get(key(a, b)) || grid.set(key(a, b), []).get(key(a, b))).push(sg); } }
+  if (!grid.size) return lo;
+  const own = new Set(); for (const r of runs) { if (r.rd?.tube?.some(Boolean)) for (const v of r.vars) own.add(v); } // (a way's own approach to its tube: not over it)
+  let held = 0, skipped = 0;
+  for (const r of runs) r.vars.forEach((k, q) => { if (r.minor && r.rail < 0) return; if (pins.has(k) || own.has(k)) return; const x = V[k].x, z = V[k].z, reach = r.hw + (r.pave || 0); let need = -Infinity;
+    for (const { t, i, s, hwT } of grid.get(key(Math.floor(x / C), Math.floor(z / C))) || []) { const [ax, az] = t.pts[i], [bx, bz] = t.pts[i + 1], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9, lap = Math.max(0, reach - CROWN_LAP); let f = ((x - ax) * dx + (z - az) * dz) / L2; // (a way whose strip lies over the tube by CROWN_LAP m or more: a street over it; one only touching its walls (a twin carriageway at grade beside it) isn't held)
+      const sl = Math.sqrt(L2), over = lap / sl; if (f < (i === 0 ? -over : 0) || f > (i + 2 === s.length ? 1 + over : 1)) continue; f = Math.max(0, Math.min(1, f)); /* (past the portal by up to its strip: a street over the mouth) */ const d = Math.abs((x - ax) * dz - (z - az) * dx) / Math.sqrt(L2), along = s[i] + (s[i + 1] - s[i]) * f;
+      if (d > hwT + lap || Math.min(along, s[s.length - 1] - along) > CROWN_REACH) continue;
+      need = Math.max(need, t.ys[i] + (t.ys[i + 1] - t.ys[i]) * f + TUBE_H + CROWN_OVER); }
+    if (need > lo[k]) { if (need - V[k].g > CROWN_MAX) { skipped++; return; } lo[k] = need; held++; } });
+  T.crown = { held, skipped }; return lo;
 }
 // a tube's line f: at its end nearer (x, z), the portal (that end) and the way into the tube (ux, uz)
 function portalOfLine(f, x, z) { const n = f.length / 2, a = Math.hypot(f[0] - x, f[1] - z) <= Math.hypot(f[n * 2 - 2] - x, f[n * 2 - 1] - z), [i, j] = a ? [0, 1] : [n - 1, n - 2];

@@ -127,9 +127,11 @@ export function makeRules(net, g, city, wl = -Infinity) {
   // (rail: the railways' instead: a yard's tracks side by side, each at its own height, make one bed without a step between)
   const blended = (x, z, rail = false) => { const k = key(Math.floor(x / SC), Math.floor(z / SC)), b = blendedIn(segNear.get(k), x, z, rail); return b && b[1] + SBLEND < NEAR_D ? b[0] : blendedIn(segIdx.get(k), x, z, rail)?.[0] ?? null; };
   const blendedIn = (L, x, z, rail) => { if (!L) return null; const c = []; let dmin = Infinity;
-    for (let q = 0; q < L.length; q += 2) { const r = runs[L[q]], s = L[q + 1]; if (rail ? !isRail(r) || r.off : r.minor) continue; const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9;
-      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw; c.push(d, r.h[s] + (r.h[s + 1] - r.h[s]) * t); if (d < dmin) dmin = d; }
+    for (let q = 0; q < L.length; q += 2) { const r = runs[L[q]], s = L[q + 1]; if (rail ? !isRail(r) || r.off : r.minor) continue; const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9, t0 = ((x - ax) * dx + (z - az) * dz) / L2;
+      if (!rail && pastCut(r, s, t0, 'tube') && behind(r, t0 > 1, x, z)) continue; /* (behind a portal, over its tube: not the approach's height, a way over or beside it its own) */ const t = Math.max(0, Math.min(1, t0)), d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw; c.push(d, r.h[s] + (r.h[s + 1] - r.h[s]) * t); if (d < dmin) dmin = d; }
     let sw = 0, sh = 0; for (let q = 0; q < c.length; q += 2) { const u = 1 - (c[q] - dmin) / SBLEND; if (u <= 0) continue; const wt = u * u * (3 - 2 * u); sw += wt; sh += wt * c[q + 1]; } return sw ? [sh / sw, dmin] : null; };
+  // (a road stopping at a tube (at its B end, or A): (x, z) behind that portal's plane, by more than 5 cm (the portal's frame is turned a little from the road's))
+  const behind = (r, atB, x, z) => { const n = r.h.length, ex = r.pts[atB ? n * 2 - 2 : 0], ez = r.pts[atB ? n * 2 - 1 : 1]; return portals.some((p) => Math.abs(p.x - ex) < 0.05 && Math.abs(p.z - ez) < 0.05 && portalUV(p, x, z)[0] > 0.05); };
   const minorKind = (k) => k === KIND.alley || k === KIND.pavers || k === KIND.gravel, lxs = JN.some((J) => J.lx);
   // where a road stops at a deck or a tube: its own height across its end, as the deck's or the tube's floor (level across), not
   // blended with a road beside it (a dual carriageway's other side, a ramp): fading to the blend over HOLD m back from the end
