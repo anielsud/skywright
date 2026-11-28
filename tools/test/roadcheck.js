@@ -23,7 +23,18 @@ const DETAIL_VERTS = 12000, DETAIL_Q = 1.5, DETAIL_TESTS = 24;
 // ground layers under the roads, junction boxes, pavement slabs and the open ground just past them), which the baked
 // layout (#294) replaces where its chunks are: only with the layout off (SKY_LAYOUT=0)
 const TODAY_ONLY = ['bleed', 'detail', 'junctions', 'pavements', 'cityGround'];
-export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 600 : 60 }) /* (the whole map's roads on the layout: every chunk meshed, node/world.mjs lazyLayout) */), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), { id: 'nyc traffic safety', loc: 'nyc', world: 'nyc', safety: true, cost: 12 }, { id: 'nyc posts', loc: 'nyc', world: 'nyc', posts: true, cost: 6 }, { id: 'traffic models face forward', models: true, cost: 0.2 }, ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 })), ...PLACES.map((loc) => ({ id: `${loc} ground under the road`, loc, world: loc, bleed: true, cost: loc === 'nyc' ? 30 : 12 })), { id: 'nyc open ground', loc: 'nyc', world: 'nyc', cityGround: true, cost: 6 }, ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} junctions`, loc, world: loc, junctions: true, cost: loc === 'nyc' ? 40 : 10 })), ...PLACES.map((loc) => ({ id: `${loc} off the street network`, loc, world: loc, minor: true, cost: loc === 'nyc' ? 400 : 60 })), { id: 'nyc pavements', loc: 'nyc', world: 'nyc', pavements: true, cost: 20 }].filter((c) => !layoutWanted() || !TODAY_ONLY.some((k) => c[k])); }
+// The whole-map cases on the baked layout (#294) read about LAY_N of its chunks with roads (all of a small place's; one
+// in k of a big one's, picked by a fixed hash of the chunk: the same every run) and all of today's ground (a fallback chunk, past
+// the layout's extent): meshing every chunk of New York cost a worker ~10 min and GBs. Every chunk is checked by the
+// bake itself (tools/bake/layout.mjs: holes, cover, physics = drawn, grades, seams) and layoutcheck meshes a sample
+// again. With the layout off (SKY_LAYOUT=0) everything is read.
+const LAY_N = 400;
+export const sampleK = (w) => (w.layout ? Math.max(1, Math.round([...w.layout.index.values()].filter((e) => e.file).length / LAY_N)) : 1); /* (chunks with roads; the only-ground ones count as theirs) */
+export function sampled(w) {
+  const L = w.layout; if (!L) return () => true; const S = L.size, k = sampleK(w);
+  return (x, z) => { const ix = Math.floor(x / S), iz = Math.floor(z / S); return !L.index.has(ix + ',' + iz) || ((Math.imul(ix, 73856093) ^ Math.imul(iz, 19349663)) >>> 0) % k === 0; };
+}
+export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world: loc, cost: loc === 'nyc' ? 60 : 15 })), ...PLACES.map((loc) => ({ id: `${loc} ground detail`, loc, world: loc, detail: true, cost: 3 })), ...PLACES.map((loc) => ({ id: `${loc} traffic`, loc, world: loc, traffic: true, cost: 3 })), { id: 'nyc traffic safety', loc: 'nyc', world: 'nyc', safety: true, cost: 12 }, { id: 'nyc posts', loc: 'nyc', world: 'nyc', posts: true, cost: 6 }, { id: 'traffic models face forward', models: true, cost: 0.2 }, ...PLACES.map((loc) => ({ id: `${loc} road pack`, loc, world: loc, pack: true, cost: 2 })), ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} tunnel drive`, loc, world: loc, tunnel: true, cost: 6 })), ...PLACES.map((loc) => ({ id: `${loc} ground under the road`, loc, world: loc, bleed: true, cost: loc === 'nyc' ? 30 : 12 })), { id: 'nyc open ground', loc: 'nyc', world: 'nyc', cityGround: true, cost: 6 }, ...['lauterbrunnen', 'nyc'].map((loc) => ({ id: `${loc} junctions`, loc, world: loc, junctions: true, cost: loc === 'nyc' ? 40 : 10 })), ...PLACES.map((loc) => ({ id: `${loc} off the street network`, loc, world: loc, minor: true, cost: loc === 'nyc' ? 25 : 8 })), { id: 'nyc pavements', loc: 'nyc', world: 'nyc', pavements: true, cost: 20 }].map((c) => (TODAY_ONLY.some((k) => c[k]) ? { ...c, today: true } : c)).filter((c) => !layoutWanted() || !c.today); } // (today: CI runs them with SKY_LAYOUT=0, --only '"today":true')
 
 // The ways off the street network (roads.js rd.minor: pedestrian streets, paved footpaths, alleys and service roads,
 // tracks) and the plazas (net.areas), every place: they are there (at least MINOR_MIN of each), drawn (the road
@@ -39,17 +50,18 @@ async function minorCheck(w, c, ctx) {
   for (const r of M) count[r.kind] = (count[r.kind] || 0) + 1;
   const want = MINOR_MIN[c.loc] || {}, short = Object.entries(want).filter(([k, n]) => (count[k] || 0) < n).map(([k, n]) => `${k} ${count[k] || 0} < ${n}`);
   // the spots: a point on the ground along a few hundred minor ways (not a bridge's), and inside each plaza
-  const lim = w.half - 300, spots = [];
-  for (let k = 0; k < M.length && spots.length < 300; k += Math.max(1, Math.floor(M.length / 300))) {
+  const lim = w.half - 300, spots = [], keep = sampled(w), K = sampleK(w); /* (on the layout: as many spots, from its sampled chunks) */
+  for (let k = 0; k < M.length && spots.length < 300; k += Math.max(1, Math.floor(M.length / 300 / K))) {
     const r = M[k], i = r.pts.length >> 1, j = Math.min(r.pts.length - 1, i + 1), p = r.pts[i].clone().lerp(r.pts[j], 0.5); if (r.bridge?.[i] || r.bridge?.[j] || Math.abs(p.x) > lim || Math.abs(p.z) > lim) continue;
     // (only where it is the one road there, the segment's four corners too: not where it overlaps a street or another
     // way, where the surface is their blend, RoadSurface.blend, and the ribbon's corners follow it)
     const a = r.pts[i], b = r.pts[j], dl = Math.hypot(b.x - a.x, b.z - a.z) || 1, rx = -(b.z - a.z) / dl * r.width / 2, rz = (b.x - a.x) / dl * r.width / 2;
     if ([[p.x, p.z], [a.x + rx, a.z + rz], [a.x - rx, a.z - rz], [b.x + rx, b.z + rz], [b.x - rx, b.z - rz]].some(([x, z]) => w.roadSurf.q(x, z) && w.roadSurf.nIn > 1)) continue;
+    if (!keep(p.x, p.z)) continue;
     spots.push({ x: p.x, z: p.z, surf: r.surf || 0, what: r.kind, first: r.pts[0] });
   }
   const inPoly = (R, x, z) => { let c = false; for (let i = 0, n = R.length / 2, j = n - 1; i < n; j = i++) { const xi = R[i * 2], zi = R[i * 2 + 1], xj = R[j * 2], zj = R[j * 2 + 1]; if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) c = !c; } return c; };
-  for (const a of A.slice(0, 200)) { // (a point well inside: a grid point of its box that is inside)
+  for (const a of A.filter((a) => keep((a.bb[0] + a.bb[2]) / 2, (a.bb[1] + a.bb[3]) / 2)).slice(0, 200)) { // (a point well inside: a grid point of its box that is inside)
     let at = null; for (let t = 0; t < 25 && !at; t++) { const x = a.bb[0] + (a.bb[2] - a.bb[0]) * (0.1 + 0.8 * ((t % 5) / 4)), z = a.bb[1] + (a.bb[3] - a.bb[1]) * (0.1 + 0.8 * (Math.floor(t / 5) / 4)); if (inPoly(a.ring, x, z)) at = { x, z }; }
     if (at) spots.push({ ...at, surf: a.surf || 0, what: 'plaza' });
   }
@@ -105,11 +117,11 @@ async function minorCheck(w, c, ctx) {
   // their own grades (the streets' checks above leave them out): along them, where they join the streets and each
   // other, where they cross. Farm tracks up the Alps' hillsides and steep driveways meeting a street are rougher than
   // the streets: a budget per km (MINOR_ROUGH) rather than none.
-  const R = measure(w, { minor: true }), per = (L) => L.length / Math.max(1, R.km), top = (L) => [...L].sort((a, b) => b.v - a.v).slice(0, 2).map((q) => `(${q.x}, ${q.z}) ${q.v.toFixed(2)}`).join('; ');
+  const R = measure(w, { minor: true }), per = (L) => L.length / Math.max(1, R.km), perAll = (L) => L.length / Math.max(1, R.kmAll), /* (steps and slopes: per km read, sampled(); joins and crossings: from the network's own heights, every one) */ top = (L) => [...L].sort((a, b) => b.v - a.v).slice(0, 2).map((q) => `(${q.x}, ${q.z}) ${q.v.toFixed(2)}`).join('; ');
   const n = spots.length;
   return [
-    { name: `${c.loc}: they are graded with the network: joined, few steps`, ok: per(R.joins) + per(R.crossings) <= MINOR_ROUGH.joins && per(R.steps) <= MINOR_ROUGH.steps && per(R.steep) <= MINOR_ROUGH.steep,
-      why: `${R.km.toFixed(0)} km: ${R.joins.length} junctions and ${R.crossings.length} crossings off by more than ${JOIN} m (${(per(R.joins) + per(R.crossings)).toFixed(3)}/km, at most ${MINOR_ROUGH.joins})${R.joins.length ? ' (' + top(R.joins) + ' m)' : ''}; ${R.steps.length} step spots (${per(R.steps).toFixed(2)}/km, at most ${MINOR_ROUGH.steps}), ${R.steep.length} steeper than ${STEEP * 100}% (${per(R.steep).toFixed(2)}/km, at most ${MINOR_ROUGH.steep})` },
+    { name: `${c.loc}: they are graded with the network: joined, few steps`, ok: perAll(R.joins) + perAll(R.crossings) <= MINOR_ROUGH.joins && per(R.steps) <= MINOR_ROUGH.steps && per(R.steep) <= MINOR_ROUGH.steep,
+      why: `${R.kmAll.toFixed(0)} km (${R.km.toFixed(0)} read on the ground): ${R.joins.length} junctions and ${R.crossings.length} crossings off by more than ${JOIN} m (${(perAll(R.joins) + perAll(R.crossings)).toFixed(3)}/km, at most ${MINOR_ROUGH.joins})${R.joins.length ? ' (' + top(R.joins) + ' m)' : ''}; ${R.steps.length} step spots (${per(R.steps).toFixed(2)}/km, at most ${MINOR_ROUGH.steps}), ${R.steep.length} steeper than ${STEEP * 100}% (${per(R.steep).toFixed(2)}/km, at most ${MINOR_ROUGH.steep})` },
     { name: `${c.loc}: pedestrian streets, alleys, tracks and plazas are in the road network`, ok: !short.length && M.length > 0, why: `${Object.entries(count).map(([k, v]) => `${v} ${k}`).join(', ')}${short.length ? ': too few ' + short.join(', ') : ''}` },
     { name: `${c.loc}: they are drawn, where physics drives`, ok: n > 20 && drawn >= 0.97 * n && apart <= 0.03 * n, why: `${drawn} of ${n} spots drawn${ex.drawn.length ? ' (missing e.g. ' + ex.drawn.join('; ') + ')' : ''}, ${apart} drawn more than 0.2 m off the ground physics stands on${ex.apart.length ? ' (e.g. ' + ex.apart.join('; ') + ')' : ''}` },
     { name: `${c.loc}: they are drivable: paved, a track's gravel loose`, ok: n > 20 && paved >= 0.97 * n, why: `${paved} of ${n} spots (${soft} gravel)${ex.paved.length ? '; not, e.g. ' + ex.paved.join('; ') : ''}` },
@@ -478,7 +490,7 @@ function inHull(H, x, z) { for (let i = 0; i < H.length; i++) { const a = H[i], 
 export function measure(w, { minor = false } = {}) { // (minor: the ways off the street network, and where they join or cross a street, instead of the streets: minorCheck)
   const roads = w.net.roads.filter((r) => r.kind !== 'rail' && (minor || !r.minor)), mine = (rd) => !rd.minor === !minor, lim = w.half - 200, inCore = (x, z) => Math.abs(x) < lim && Math.abs(z) < lim;
   const isDeck = (rd, i) => !!(rd.bridge?.[i] && rd.bridge?.[(i + 1) % rd.pts.length]);
-  const out = { km: 0, steps: [], steep: [], joins: [], crossings: [] }, nodes = new Map();
+  const out = { km: 0, kmAll: 0, steps: [], steep: [], joins: [], crossings: [] }, nodes = new Map(), keep = sampled(w);
   // segment hash (20 m cells)
   const C = 20, segs = new Map(), key = (i, j) => i + ',' + j;
   roads.forEach((rd, ri) => {
@@ -506,6 +518,7 @@ export function measure(w, { minor = false } = {}) { // (minor: the ways off the
       for (let s = 0; s < L; s += 1) {
         const x = a.x + dx * s, z = a.z + dz * s;
         if (!inCore(x, z)) { prev = null; flush(); continue; }
+        out.kmAll += 0.001; if (!keep(x, z)) { prev = null; flush(); continue; }
         out.km += 0.001;
         const h = w.sampleGrid(x, z);
         if (minor) run.push({ x, z, h, kind: rd.kind });
@@ -513,7 +526,7 @@ export function measure(w, { minor = false } = {}) { // (minor: the ways off the
         prev = h;
         if (s % 2) continue;
         for (const f of [-0.7, 0, 0.7]) {
-          const px = x - dz * hw * f, pz = z + dx * hw * f;
+          const px = x - dz * hw * f, pz = z + dx * hw * f; if (!keep(px - 0.5, pz - 0.5) || !keep(px + 0.5, pz + 0.5)) continue;
           const g = Math.hypot(w.sampleGrid(px + 0.5, pz) - w.sampleGrid(px - 0.5, pz), w.sampleGrid(px, pz + 0.5) - w.sampleGrid(px, pz - 0.5));
           if (g > STEEP) spot(out.steep, px, pz, g, rd.kind);
         }

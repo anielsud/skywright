@@ -67,7 +67,7 @@ issue). The Node runner reports them as `known` and doesn't count them. A listed
 a fresh worker; if it passes then, it is listed as `FLAKY` at the end, with the first run's failure, and doesn't fail
 the run (a flaky check is still a bug: fix it); if it fails again, it fails. **CI** (`.github/workflows/smoke.yml`, "Tests") runs the whole suite on every PR, as
 parallel jobs: the four browser jobs (one matrix entry each: `jobs.py <job> --quality low --ci`, screenshots attached
-to the run) and the Node tier (3 parts, `run.mjs --shard K/3`). There is no nightly run and no selection by what changed: everything, every time.
+to the run) and the Node tier (3 parts, `run.mjs --shard K/3`), plus today's road code with the baked layout off (`SKY_LAYOUT=0 run.mjs roadcheck --only '"today":true'`: the roadcheck cases of today's ground layers, junction boxes and pavements, until that code is removed, #294). There is no nightly run and no selection by what changed: everything, every time.
 Where a runner's time goes: it has no GPU, so Chrome's software GPU (SwiftShader) builds every shader program a new
 place needs (~100 at Low, ~0.3 s each) and draws a frame in 1-2 s whatever the window size; building a map takes
 22-50 s and swapping a vehicle into it 10-30 s. Hence the jobs' rules below. Anything that reads a canvas back

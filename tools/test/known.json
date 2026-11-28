@@ -1,25 +1,24 @@
 {
  "_": "Known failures: a failed check listed here reports as 'known' and doesn't fail the run; a listed check that passes says so (remove it). Keys: suite -> check name -> the issue tracking it.",
  "roadcheck": {
-  "islands: no walls or ramps on the roads": "#294 (83 spots on the baked layout; 16 with ?layout=0, #228)",
-  "canyon: no steps along the roads": "#294 (1 spots on the baked layout; 3 with ?layout=0, #228)",
-  "canyon: no walls or ramps on the roads": "#294 (66 spots on the baked layout; 5 with ?layout=0, #228)",
-  "lauterbrunnen: no steps along the roads": "#294 (512 spots on the baked layout; 204 with ?layout=0, #228)",
-  "lauterbrunnen: no walls or ramps on the roads": "#294 (562 spots on the baked layout; 354 with ?layout=0, #228)",
-  "lauterbrunnen: road ends meet the road they join": "#294 (1 end on the baked layout; 1 with ?layout=0, #228)",
-  "lauterbrunnen: roads cross at the same height": "#294 (7 crossings on the baked layout; 7 with ?layout=0, #228)",
-  "nyc: no steps along the roads": "#294 (689 spots on the baked layout; 605 with ?layout=0, #228)",
-  "nyc: no walls or ramps on the roads": "#294 (2,565 spots on the baked layout; 1,235 with ?layout=0, #228)",
-  "nyc: road ends meet the road they join": "#294 (20 ends on the baked layout; 20 with ?layout=0, #228)",
-  "nyc: roads cross at the same height": "#294 (271 crossings on the baked layout; 272 with ?layout=0, #228)",
+  "islands: no walls or ramps on the roads": "#294 (83 spots on the baked layout, every chunk; 16 with ?layout=0, #228)",
+  "canyon: no walls or ramps on the roads": "#294 (24 spots on the baked layout, a third of its chunks; 66 over every chunk; 5 with ?layout=0, #228)",
+  "lauterbrunnen: no steps along the roads": "#294 (161 spots on the baked layout, a quarter of its chunks; 512 over every chunk; 204 with ?layout=0, #228)",
+  "lauterbrunnen: no walls or ramps on the roads": "#294 (184 spots on the baked layout, a quarter of its chunks; 562 over every chunk; 354 with ?layout=0, #228)",
+  "lauterbrunnen: road ends meet the road they join": "#294 (1 end; read from the network's heights, not the ground: as with ?layout=0, #228)",
+  "lauterbrunnen: roads cross at the same height": "#294 (7 crossings; read from the network's heights, not the ground: as with ?layout=0, #228)",
+  "nyc: no steps along the roads": "#294 (136 spots on the baked layout, an eighth of its chunks; 689 over every chunk; 605 with ?layout=0, #228)",
+  "nyc: no walls or ramps on the roads": "#294 (405 spots on the baked layout, an eighth of its chunks; 2,565 over every chunk; 1,235 with ?layout=0, #228)",
+  "nyc: road ends meet the road they join": "#294 (20 ends; read from the network's heights, not the ground: as with ?layout=0, #228)",
+  "nyc: roads cross at the same height": "#294 (271 crossings; read from the network's heights, not the ground: 272 with ?layout=0, #228)",
   "lauterbrunnen: junctions have no bare ground between their arms": "#228 (71 of 893 junctions) (runs with ?layout=0 only: today's path)",
   "lauterbrunnen: junctions are drawn where physics drives": "#228 (110 of 893 junctions) (runs with ?layout=0 only: today's path)",
   "nyc: junctions have no bare ground between their arms": "#228 (2,136 of 38,199 junctions) (runs with ?layout=0 only: today's path)",
   "nyc: junctions are drawn where physics drives": "#228 (1,949 of 38,199 junctions) (runs with ?layout=0 only: today's path)",
   "nyc: pavement slabs lie on the ground": "#228 (1.25% over, 0.37% under) (runs with ?layout=0 only: today's path)",
-  "islands: no steps along the roads": "#294 (68 spots on the baked layout; none with ?layout=0)",
-  "lauterbrunnen: they are graded with the network: joined, few steps": "#294 (1,573 step spots, 1.91/km, on the baked layout; passes with ?layout=0)",
-  "lauterbrunnen: they are drivable: paved, a track's gravel loose": "#294 (238 of 260: paved tracks are the layout's gravel; passes with ?layout=0)"
+  "islands: no steps along the roads": "#294 (68 spots on the baked layout, every chunk; none with ?layout=0)",
+  "lauterbrunnen: they are graded with the network: joined, few steps": "#294 (step spots over 1.5/km on the baked layout, a quarter of its chunks: 1.91/km over every chunk; passes with ?layout=0)",
+  "lauterbrunnen: they are drivable: paved, a track's gravel loose": "#294 (181 of 200 spots: paved tracks are the layout's gravel; passes with ?layout=0)"
  },
  "stunts": {
   "canyon: too slow for the canyon jump: the rescue parachute lowers it": "#294 (-10.05 m/s at touchdown on the baked layout's canyon floor, limit -9; passes with ?layout=0)"

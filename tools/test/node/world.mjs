@@ -42,9 +42,12 @@ export async function worldAt(id, { time = 11 } = {}) {
   if (process.env.SKY_WORLD_LOG) console.log(`  [world] ${id} built in ${out.ms} ms`); // (how often, and how long: SKY_WORLD_LOG=1)
   return out;
 }
-// The baked road layout (#294) in a Node World: each chunk read and meshed (fine) the first time anything asks about a
-// point in it (physics, placing, a city tile waiting for it), so a test anywhere stands on the layout's surface as the
-// game does once its chunks round the camera are in (layout/runtime.js streams them; here they're synchronous, so a
+// The baked road layout (#294) in a Node World: each chunk read and meshed (fine) the first time physics asks about a
+// point in it (World.sampleGrid / groundAt: Layout.heightAt, ground) or a city tile waits for it (readyIn), so a test
+// anywhere stands on the layout's surface as the game does once its chunks round the camera are in. Placing (lanes,
+// lamps, trees, building lines: placeY, kindAt, pavedAt, edgeAt) reads only the chunks already in, as in the game,
+// where what was placed before a chunk arrived is placed again on it (onActive): a lane graph over the whole map
+// doesn't mesh the whole map (layout/runtime.js streams them; here they're synchronous, so a
 // result doesn't hang on when a chunk arrived). A chunk's mesh doesn't depend on its neighbours', so the order they're
 // meshed in changes nothing. Off (?layout=0, SKY_LAYOUT=0): no layout, nothing to do. The bakes keep their World's
 // ground today's (globalThis.SKY_LAYOUT_LAZY = false: tools/bake/setbacks.mjs, layout.mjs).
@@ -58,8 +61,9 @@ export function lazyLayout(world) {
     if (!c.L) return undefined; /* (being fetched by the streaming: it meshes it) */
     if (!c.m.fine) { c.asked.add('fine'); const { grid, G } = L.lattice(c.L); L.got(c, 'fine', meshChunk(c.L, grid, G, 'fine', L.edgeH(c)), null); }
     return Map.prototype.get.call(L.active, k); };
-  class Active extends Map { get(k) { return super.get(k) ?? mesh(k); } has(k) { return super.has(k) || !!mesh(k); } }
+  class Active extends Map { off = 0; get(k) { return super.get(k) ?? (this.off ? undefined : mesh(k)); } has(k) { return super.has(k) || (!this.off && !!mesh(k)); } }
   const A = new Active(L.active); L.active = A; L.lazy = true; L.on = true;
+  for (const f of ['placeY', 'kindAt', 'pavedAt', 'edgeAt']) { const o = L[f].bind(L); L[f] = (...a) => { A.off++; try { return o(...a); } finally { A.off--; } }; }
   const unload = L.unload.bind(L); L.unload = (c) => { unload(c); L.on = true; }; /* (a chunk dropped far from the camera (World.update): meshed again when asked about) */
   return world;
 }
