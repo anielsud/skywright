@@ -2,7 +2,7 @@
 // draws them (the street ribbons' interpolated coordinates, runtime.js roadMat / sidewalkMaterial):
 //   drift   along every street's centre line (every metre in the chunk and 1 m off its edge, MARK_OUT m or more past any
 //           junction's circle, where lane lines and the centre line are painted): the across coordinate the carriageway's
-//           triangle there interpolates. 0 on the centre line; the markings' centre is that far off it (m). A sample
+//           triangle there interpolates, of the street the material picks there (mark below). 0 on the centre line; the markings' centre is that far off it (m). A sample
 //           whose triangle is another street's, or unpainted, counts as 'lost' (that stretch has no markings); one where
 //           another street's carriageway overlaps isn't counted, nor one by a corner sharper than SHARP (atSharp).
 //   zebras  at every mouth onto a junction (in the chunk) of a street with crossings (rules.js zebra): across the carriageway at three distances in the
@@ -12,6 +12,7 @@
 //           true distance from its street's centre line (joints run along the kerb when they agree): max error.
 import { KIND } from '../../src/layout/format.js';
 import { zebra } from '../../src/layout/rules.js';
+import { MARK, MARK_K, MARK_S } from '../../src/layout/mesh.js';
 
 export const MARK_OUT = 4, ZEBRA_AT = [0.8, 2, 3.2], ZEBRA_BAND = 3.5, ZEBRA_TOL = 0.15, DRIFT_MAX = 0.05, SHARP = Math.PI / 3; // (ZEBRA_BAND: the crossing's far edge past the circle, runtime.js roadMat)
 export function markCheck(L, m, detail = false) {
@@ -21,7 +22,12 @@ export function markCheck(L, m, detail = false) {
   // the ribbon triangle at (x, z): [t, l1, l2, l3] or null
   const at = (x, z) => { for (const t of grid.get(Math.floor(x / C) * 1e6 + Math.floor(z / C)) || []) { const P = (q) => [R.pos[(t + q) * 3], R.pos[(t + q) * 3 + 2]], [A, B, Cc] = [P(0), P(1), P(2)], den = (B[1] - Cc[1]) * (A[0] - Cc[0]) + (Cc[0] - B[0]) * (A[1] - Cc[1]); if (!den) continue;
     const l1 = ((B[1] - Cc[1]) * (x - Cc[0]) + (Cc[0] - B[0]) * (z - Cc[1])) / den, l2 = ((Cc[1] - A[1]) * (x - Cc[0]) + (A[0] - Cc[0]) * (z - Cc[1])) / den, l3 = 1 - l1 - l2; if (l1 >= -1e-6 && l2 >= -1e-6 && l3 >= -1e-6) return [t, l1, l2, l3]; } return null; };
-  const lerp = (h, c) => h[1] * R.road[h[0] * 4 + c] + h[2] * R.road[(h[0] + 1) * 4 + c] + h[3] * R.road[(h[0] + 2) * 4 + c];
+  // a carriageway's markings at a point, as the material picks them (mesh.js rib.mark, runtime.js roadMat): of its
+  // streets the one nearest past its half width, and of that one's four mouths the nearest -> { id, v, hw, dj }
+  const M = MARK, ml = (h, c) => h[1] * R.mark[h[0] * M + c] + h[2] * R.mark[(h[0] + 1) * M + c] + h[3] * R.mark[(h[0] + 2) * M + c];
+  const mark = (h) => { let b = -1, bd = Infinity; for (let i = 0; i < MARK_K; i++) { const hw = R.mark[h[0] * M + i * MARK_S + 6]; if (!(hw > 0)) continue; const d = Math.abs(ml(h, i * MARK_S + 1)) - hw; if (d < bd) { bd = d; b = i; } }
+    if (b < 0) return { id: -1, v: 0, hw: 0, dj: 99 }; const o = b * MARK_S, dj = [2, 3, 4, 5].map((k) => ml(h, o + k)).reduce((p, q) => (Math.abs(q) < Math.abs(p) ? q : p));
+    return { id: R.mid[h[0] * MARK_K + b], v: ml(h, o + 1), hw: R.mark[h[0] * M + o + 6], dj }; };
   const jd = (x, z) => { let d = Infinity; for (const j of J) d = Math.min(d, Math.hypot(x - j.x, z - j.z) - j.r); return d; };
   // (another street's carriageway over this point too (two that merge, or overlap at a junction): which one's markings show is a choice, not drift)
   const shared = (x, z, ri) => { for (let q = 0; q < runs.length; q++) { const rd = runs[q]; if (q === ri || rd.minor || rd.off) continue; for (let s = 0; s + 1 < rd.h.length; s++) { const ax = rd.pts[s * 2], az = rd.pts[s * 2 + 1], dx = rd.pts[s * 2 + 2] - ax, dz = rd.pts[s * 2 + 3] - az; if (Math.abs(x - ax) > 80 || Math.abs(z - az) > 80) continue; const L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)); if (Math.hypot(x - ax - dx * t, z - az - dz * t) < rd.hw) return true; } } return false; };
@@ -34,8 +40,8 @@ export function markCheck(L, m, detail = false) {
       for (let d = 0.5; d < l; d += 1) { const x = ax + ux * d, z = az + uz * d; if (!inC(x, z, 1) || jd(x, z) < MARK_OUT) continue; // (1 m: a bend's points (mesh.js) stay 0.5 m off the chunk's edge)
         if (sharp.some(([px, pz]) => Math.hypot(x - px, z - pz) < rd.hw * 2 + 1)) { atSharp++; continue; } // (a corner sharper than SHARP: no one centre line there)
         const h = at(x, z); if (!h || R.kind[h[0]] !== KIND.tarmac) continue; // (off the carriageway: a plaza's, say)
-        if (R.id[h[0]] !== ri || !R.road[h[0] * 4 + 2]) { if (shared(x, z, ri)) continue; lost++; if (lostAt.length < 8) lostAt.push([+x.toFixed(1), +z.toFixed(1), ri, R.id[h[0]]]); continue; }
-        const v = Math.abs(lerp(h, 1)); samples++; if (v > drift) { drift = v; worst = [+x.toFixed(2), +z.toFixed(2), ri, +v.toFixed(3)]; } } }
+        const mk = mark(h); if (mk.id !== ri || !mk.hw) { if (shared(x, z, ri)) continue; lost++; if (lostAt.length < 8) lostAt.push([+x.toFixed(1), +z.toFixed(1), ri, mk.id]); continue; }
+        const v = Math.abs(mk.v); samples++; if (v > drift) { drift = v; worst = [+x.toFixed(2), +z.toFixed(2), ri, +v.toFixed(3)]; } } }
     // the mouths: where its centre line leaves a junction's circle; the crossing's band from there, along the street
     if (zebra(rd, L.city)) for (const j of J) { if (!inC(j.x, j.z, -j.r)) continue; // (a street with crossings: a city's, or one with a pavement)
       let onIt = false; for (let s = 0; s < n; s++) if (Math.hypot(rd.pts[s * 2] - j.x, rd.pts[s * 2 + 1] - j.z) < Math.max(1, j.r * 0.5)) onIt = true; if (!onIt) continue; // (one of the street's own junctions, not one it passes)
@@ -45,8 +51,8 @@ export function markCheck(L, m, detail = false) {
           if (!inC(x, z, 1)) continue; let other = Infinity; for (const k of J) if (k !== j) other = Math.min(other, Math.hypot(x - k.x, z - k.z) - k.r); if (other + ZEBRA_AT[1] < 2 * ZEBRA_BAND + 0.5) { tight++; continue; } // (two junctions' circles closer than two crossings' bands: no room for both)
           let ok = true, why = null;
           for (const dz of ZEBRA_AT) { let lo = Infinity, hi = -Infinity; for (let v = -(rd.hw - 0.4); v <= rd.hw - 0.4 + 1e-6 && ok; v += 0.25) { const t = tm + sg * dz, px = ax + ux * t - uz * v, pz = az + uz * t + ux * v, h = at(px, pz);
-              if (!inC(px, pz, 0.05) || shared(px, pz, ri)) { ok = null; break; } if (!h || R.kind[h[0]] !== KIND.tarmac) { ok = false; why = 'not carriageway'; break; } if (R.id[h[0]] !== ri) { ok = false; why = 'cross street'; break; } if (!R.road[h[0] * 4 + 2]) { ok = false; why = 'unpainted'; break; } // (off it: the chunk beside's, or another street's carriageway too)
-              const g = lerp(h, 3); lo = Math.min(lo, g); hi = Math.max(hi, g); }
+              if (!inC(px, pz, 0.05) || shared(px, pz, ri)) { ok = null; break; } if (!h || R.kind[h[0]] !== KIND.tarmac) { ok = false; why = 'not carriageway'; break; } const mk = mark(h); if (mk.id !== ri) { ok = false; why = 'cross street'; break; } if (!mk.hw) { ok = false; why = 'unpainted'; break; } // (off it: the chunk beside's, or another street's carriageway too)
+              const g = mk.dj; lo = Math.min(lo, g); hi = Math.max(hi, g); }
             if (ok && (Math.abs(lo - dz) > ZEBRA_TOL || Math.abs(hi - dz) > ZEBRA_TOL)) { ok = false; why = `dj ${lo.toFixed(2)}..${hi.toFixed(2)} want ${dz}`; } if (!ok) break; }
           if (ok === null) continue; mouths++; // (a crossing over another street's carriageway too: not counted)
           if (ok) whole++; else if (broken.length < 12) broken.push([+x.toFixed(1), +z.toFixed(1), ri, why]); } } }

@@ -13,7 +13,8 @@ import { KIND } from './format.js';
 import { makeRules, latticeGround, KERB, KERB_W, PAVE_RAMP, painted, zebra } from './rules.js';
 import { chunkOutlines } from './outline.js';
 
-const RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, LANE_STEP = 6, ZEBRA = [0.5, 3.5], MOUTH_D = 6; // (ZEBRA: a crossing's band, m out from a junction's circle, as roadMat paints it)
+const RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, MOUTH_D = 6, FID_STEP = 4, FID_TOL = 0.1;
+export const MARK_K = 4, MARK_S = 8, MARK = MARK_K * MARK_S; // (a carriageway corner's markings coordinates, rib.mark: below)
 const PAVED = [KIND.lip, KIND.tarmac, KIND.kerb, KIND.ballast, KIND.pave, KIND.alley, KIND.pavers, KIND.gravel, KIND.verge]; // (the order a point is classed in)
 const RIBBON = new Set([KIND.tarmac, KIND.kerb, KIND.pave]); // (drawn with a street's coordinates: markings, the pavement's slabs)
 
@@ -77,7 +78,9 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   const clear = (x, z, d) => { for (let i = Math.floor((x - d) / C); i <= Math.floor((x + d) / C); i++) for (let j = Math.floor((z - d) / C); j <= Math.floor((z + d) / C); j++) { const k = i * 1e6 + j, el = eg.get(k), pl = pg.get(k);
     if (el) for (let q = 0; q < el.length; q += 2) if (segD(x, z, el[q], el[q + 1]) < d) return false; if (pl) for (const p of pl) if (Math.hypot(PX[p] - x, PZ[p] - z) < d) return false; } return true; };
   const tarmacD = (x, z, max) => { let best = max; for (let i = Math.floor((x - max) / C); i <= Math.floor((x + max) / C); i++) for (let j = Math.floor((z - max) / C); j <= Math.floor((z + max) / C); j++) { const el = eg.get(i * 1e6 + j); if (!el) continue; for (let q = 0; q < el.length; q += 2) if ((kinds[el[q]] & (1 << KIND.tarmac)) && (kinds[el[q + 1]] & (1 << KIND.tarmac))) best = Math.min(best, segD(x, z, el[q], el[q + 1])); } return best; };
-    let keep = null; const bis = []; // (coarse: which points are used; fine: the bends' bisectors, fixed soft)
+    let keep = null; const bis = []; // (fid: a line's profile along a street, simplified (Douglas-Peucker on along, height): a point at each one kept (above))
+  const fid = (P) => { if (P.length < 3) return; const keepP = new Uint8Array(P.length), st = [[0, P.length - 1]]; while (st.length) { const [i, j] = st.pop(); let bi = -1, bd = FID_TOL; for (let k = i + 1; k < j; k++) { const f = (P[k][0] - P[i][0]) / (P[j][0] - P[i][0] || 1), d = Math.abs(P[k][1] - (P[i][1] + (P[j][1] - P[i][1]) * f)); if (d > bd) { bd = d; bi = k; } } if (bi >= 0) { keepP[bi] = 1; st.push([i, bi], [bi, j]); } }
+    P.forEach(([, , X, Z], k) => { if (keepP[k] && clear(X, Z, 25)) putP(add(X, Z)); }); };
   if (fine) {
     // the hi grid's points off the paved regions, clear of the outlines
     for (let j = 1; j < lat.nj - 1; j++) for (let i = 1; i < lat.ni - 1; i++) { const X = Math.round((grid.x0 + (lat.i0 + i) * grid.sp) * 100), Z = Math.round((grid.z0 + (lat.j0 + j) * grid.sp) * 100);
@@ -87,28 +90,23 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
     for (let x = L.x0 + step / 2; x < L.x0 + L.size; x += step) for (let z = L.z0 + step / 2; z < L.z0 + L.size; z += step) { const X = Math.round(x * 100), Z = Math.round(z * 100);
       if (!inside(X, Z, 50) || classify(X, Z) !== KIND.ground) continue; const gy = g(x, z), y = R.ground(x, z); if (Math.abs(y - gy) <= BANK_MIN) continue;
       if (clear(X, Z, (L.city ? 2 : 1.5) * 100)) putP(add(X, Z)); }
-    // along each street's centre line, points every LANE_STEP m (every metre near a junction's circle): its carriageway's
-    // triangles short strips across that one street, so its markings stop at the junction's mouth and nowhere else
-    L.net.runs.forEach((r, ri) => { if (r.minor || r.off) return; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3], l = Math.hypot(bx - ax, bz - az);
-      let dj0 = null, tSide = -Infinity; const ux = (bx - ax) / (l || 1), uz = (bz - az) / (l || 1);
-      for (let t = 0; t < l;) { const x = ax + (bx - ax) * t / l, z = az + (bz - az) * t / l, X = Math.round(x * 100), Z = Math.round(z * 100); let step = LANE_STEP;
-        const onT = inside(X, Z, 50) && classify(X, Z) === KIND.tarmac;
-        // (at a bend: points across the carriageway on its bisector, the line between them fixed (soft), so no triangle
-        // crosses it: each side takes its own segment's line (rules.js lineOn), and the two agree on it. Whichever street
-        // is nearest there: a street meeting this one at its bend (no junction) mustn't take the bend's away)
-        if (onT && t === 0 && s > 0 && !((R.junction(x, z) || [0, 99])[1] <= 0.3)) { const [nx, nz] = R.bends(r)[s], ch = Math.abs(nx * ux + nz * uz); if (ch < 0.99995 && ch > 0.5) { const chain = [];
-            for (const v of [-(r.hw - 0.35), -r.hw / 2, 0, r.hw / 2, r.hw - 0.35]) { const o = v / ch, QX = Math.round((x - nz * o) * 100), QZ = Math.round((z + nx * o) * 100); if (!v) { if (key.has(X * 1e7 + Z) || clear(X, Z, 25)) { const i = add(X, Z); putP(i); chain.push(i); } else chain.push(-1); continue; } // (o along the bisector: v from either segment's line)
-              if (inside(QX, QZ, 50) && classify(QX, QZ) === KIND.tarmac && (key.has(QX * 1e7 + QZ) || clear(QX, QZ, 25))) { const i = add(QX, QZ); putP(i); chain.push(i); } else chain.push(-1); }
-            for (let q = 0; q + 1 < chain.length; q++) if (chain[q] >= 0 && chain[q + 1] >= 0) bis.push([chain[q], chain[q + 1]]); } }
-        if (onT) { const rd = R.road(x, z); if (rd && rd.id === ri) { if (rd.dj < 6) step = 1; if (rd.dj > 0.3 && clear(X, Z, 60)) putP(add(X, Z));
-          // (where it passes a crossing's edges, ZEBRA m from the junction's circle, and every LANE_STEP m: points across the
-          // carriageway just inside its kerbs, so the crossing's triangles are this street's alone and none is a long
-          // sliver along a kerb from one junction to the next)
-          const edge = t - tSide >= LANE_STEP - 1e-6; if (edge) tSide = t;
-          if (edge || (dj0 != null && ZEBRA.some((d) => (dj0 - d) * (rd.dj - d) <= 0))) for (const o of [-1, 1]) { const off = o * (r.hw - 0.35), qx = x - uz * off, qz = z + ux * off, QX = Math.round(qx * 100), QZ = Math.round(qz * 100);
-            if (inside(QX, QZ, 50) && classify(QX, QZ) === KIND.tarmac && clear(QX, QZ, 25)) putP(add(QX, QZ)); }
-          dj0 = rd.dj; } else dj0 = null; } else dj0 = null;
-        t += step; } } });
+    // at each bend of a street: points across its carriageway on the bisector, the line between them fixed (soft), so no
+    // triangle crosses it: each side takes its own segment's line (rules.js lineOn), and the two agree on it. Whichever
+    // street is nearest there: a street meeting this one at its bend (no junction) mustn't take the bend's away. (No other
+    // points along a street: its markings come from each triangle's two nearest streets, picked per fragment, below)
+    L.net.runs.forEach((r) => { if (r.minor || r.off) return; for (let s = 1; s + 1 < r.h.length; s++) { const x = r.pts[s * 2], z = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3], l = Math.hypot(bx - x, bz - z), X = Math.round(x * 100), Z = Math.round(z * 100);
+      if (l < 1e-9 || !(inside(X, Z, 50) && classify(X, Z) === KIND.tarmac) || (R.junction(x, z) || [0, 99])[1] <= 0.3) continue; const ux = (bx - x) / l, uz = (bz - z) / l, [nx, nz] = R.bends(r)[s], ch = Math.abs(nx * ux + nz * uz); if (!(ch < 0.9999995 && ch > 0.5)) continue; const chain = [];
+      for (const v of [-(r.hw - 0.35), -r.hw / 2, 0, r.hw / 2, r.hw - 0.35]) { const o = v / ch, QX = Math.round((x - nz * o) * 100), QZ = Math.round((z + nx * o) * 100); if (!v) { if (key.has(X * 1e7 + Z) || clear(X, Z, 25)) { const i = add(X, Z); putP(i); chain.push(i); } else chain.push(-1); continue; } // (o along the bisector: v from either segment's line)
+        if (inside(QX, QZ, 50) && classify(QX, QZ) === KIND.tarmac && (key.has(QX * 1e7 + QZ) || clear(QX, QZ, 25))) { const i = add(QX, QZ); putP(i); chain.push(i); } else chain.push(-1); }
+      for (let q = 0; q + 1 < chain.length; q++) if (chain[q] >= 0 && chain[q + 1] >= 0) bis.push([chain[q], chain[q + 1]]); } });
+    // where a street's surface isn't straight along it (its grades change at its stations; a junction's plane or another
+    // street blends in): its profile along its centre line and just inside each kerb, every FID_STEP m, each simplified to
+    // within FID_TOL (Douglas-Peucker on along, height), a point at each one kept: the carriageway's long triangles follow
+    // the rules there
+    L.net.runs.forEach((r) => { if (r.minor || r.off) return; for (const o of [0, -(r.hw - 0.35), r.hw - 0.35]) { const P = [];
+      for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3], l = Math.hypot(bx - ax, bz - az); if (l < 1e-3) continue; const ux = (bx - ax) / l, uz = (bz - az) / l;
+        for (let t = 0; t < l; t += FID_STEP) { const x = ax + ux * t - uz * o, z = az + uz * t + ux * o, X = Math.round(x * 100), Z = Math.round(z * 100); if (!(inside(X, Z, 50) && classify(X, Z) === KIND.tarmac)) { fid(P); P.length = 0; continue; } P.push([r.s[s] + t, R.base(x, z, KIND.tarmac), X, Z]); } }
+      fid(P); } });
     // along each railway's centre line on the ground and just inside its bed's edges, points every RAIL_STEP m: the bed
     // follows its solved profile between the outline's corners (the rails are laid on it, rails.js)
     L.net.runs.forEach((r) => { if (r.kind !== 'rail' || r.off) return; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3], l = Math.hypot(bx - ax, bz - az); if (l < 1e-3) continue; const ux = (bx - ax) / l, uz = (bz - az) / l;
@@ -162,18 +160,54 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   for (let k = 0; k < N; k++) { pos[k * 3] = X[k]; pos[k * 3 + 1] = Y[k]; pos[k * 3 + 2] = Z[k]; phys[k] = PY[k]; }
   for (let q = 0; q < nt; q++) { const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2], ux = X[b] - X[a], uy = Y[b] - Y[a], uz = Z[b] - Z[a], vx = X[c] - X[a], vy = Y[c] - Y[a], vz = Z[c] - Z[a]; const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx; for (const v of [a, b, c]) { nrm[v * 3] += nx; nrm[v * 3 + 1] += ny; nrm[v * 3 + 2] += nz; } }
   for (let k = 0; k < N; k++) { const l = Math.hypot(nrm[k * 3], nrm[k * 3 + 1], nrm[k * 3 + 2]) || 1; nrm[k * 3] /= l; nrm[k * 3 + 1] /= l; nrm[k * 3 + 2] /= l; }
-  // ---- the streets' triangles (carriageway, kerb, pavement) on their own, each given its middle's street as one line:
-  // every corner's along and across from that line (so they interpolate exactly: markings on the centre line, slabs along
-  // the kerb), and how far along the street from its nearest mouth onto a junction, linear too (a crossing's band square
-  // across; below 0 inside the junction, where nothing is painted). rib = { pos, nrm, road (u, v, hw, dj), lane, kind, id }
-  const rib = { pos: [], nrm: [], road: [], lane: [], kind: [], id: [] }, JN = L.net.junctions;
+  // ---- the streets' triangles (carriageway, kerb, pavement) on their own. A kerb's or pavement's: its middle's street as
+  // one line, every corner's along and across from that line (so they interpolate exactly: slabs along the kerb), and how
+  // far along the street from its nearest mouth onto a junction, linear too. A carriageway's (mark): its MARK_K
+  // nearest streets' lines (a triangle can reach from one street's carriageway into others': no points along the streets;
+  // a street's bend gives two), each a line, every corner's along and across from it and its distance past
+  // its four nearest mouths (along each mouth's own segment: a crossing's band square across; below 0 inside the
+  // junction, where nothing is painted; a triangle from one junction to the next can reach past several). Each is linear, so
+  // it interpolates exactly; the material takes, per fragment, the street nearest past its half width and its nearest
+  // mouth (markcheck.mjs does the same). rib = { pos, nrm, road (u, v, hw, dj), lane, kind, id, mark (per corner, per
+  // street MARK_S: u, v, its distance past each of four mouths, hw (0: none), lane bits), mid (per corner, per street: its id) }
+  const rib = { pos: [], nrm: [], road: [], lane: [], kind: [], id: [], mark: [], mid: [] }, JN = L.net.junctions, NOMARK = new Array(MARK).fill(0), NOMID = new Array(MARK_K).fill(0xffffffff);
   // a street's mouths: where its centre line crosses a junction's circle, [how far along it, +1 if it leaves the circle going on, -1 if it enters]
   const mouths = new Map(), mouthsOf = (ri) => { let M = mouths.get(ri); if (M) return M; M = []; const r = L.net.runs[ri];
     for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, l = Math.hypot(dx, dz); if (l < 1e-3) continue; const ux = dx / l, uz = dz / l;
       for (const J of JN) { if (J.lx) continue; const fx = ax - J.x, fz = az - J.z; if (Math.abs(fx) > l + J.r || Math.abs(fz) > l + J.r) continue; const b = fx * ux + fz * uz, disc = b * b - (fx * fx + fz * fz - J.r * J.r); if (disc <= 0) continue;
         for (const sg of [-1, 1]) { const t = -b + sg * Math.sqrt(disc); if (t >= 0 && t < l) M.push([r.s[s] + t, sg, ax + ux * t, az + uz * t, ux, uz]); } } }
     mouths.set(ri, M); return M; };
-  if (fine) for (let q = 0; q < nt; q++) { const k = tk[q]; if (!RIBBON.has(k)) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;
+  const segD2 = (x, z, ax, az, bx, bz) => { const dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-12, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)); return Math.hypot(x - ax - dx * t, z - az - dz * t); };
+  const triD = ([a, b, c], x, z) => { const s1 = (X[b] - X[a]) * (z - Z[a]) - (Z[b] - Z[a]) * (x - X[a]), s2 = (X[c] - X[b]) * (z - Z[b]) - (Z[c] - Z[b]) * (x - X[b]), s3 = (X[a] - X[c]) * (z - Z[c]) - (Z[a] - Z[c]) * (x - X[c]);
+    return (s1 >= 0 && s2 >= 0 && s3 >= 0) || (s1 <= 0 && s2 <= 0 && s3 <= 0) ? 0 : Math.min(segD2(x, z, X[a], Z[a], X[b], Z[b]), segD2(x, z, X[b], Z[b], X[c], Z[c]), segD2(x, z, X[c], Z[c], X[a], Z[a])); }; // (a point's distance from a triangle, 0 in it)
+  const street = (r) => !r.minor;
+  const laneBits = (ri, ln) => Math.min(15, ln.lanes) + (ln.oneway ? 16 : 0) + (painted(L.net.runs[ri], L.city) ? 32 : 0) + (zebra(L.net.runs[ri], L.city) ? 64 : 0);
+  const PICK = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [0.5, 0.5, 0], [0, 0.5, 0.5], [0.5, 0, 0.5], [0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8], [1 / 3, 1 / 3, 1 / 3]];
+  const SAMPLE = [[0.9, 0.05, 0.05], [0.05, 0.9, 0.05], [0.05, 0.05, 0.9], [0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6], [0.45, 0.45, 0.1], [0.1, 0.45, 0.45], [0.45, 0.1, 0.45], [1 / 3, 1 / 3, 1 / 3]];
+  if (fine) for (let q = 0; q < nt; q++) { if (tk[q] !== KIND.tarmac) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;
+    // (the streets' lines nearest a few points inside it, by how many: the first MARK_K)
+    // (a street's line there: a bend's two segments are two, the nearer taken per fragment as across a bend's bisector;
+    // its stations along one straight segment are one)
+    const lineOf = (ri, q) => { const r = L.net.runs[ri], ax = r.pts[q * 2], az = r.pts[q * 2 + 1], dx = r.pts[q * 2 + 2] - ax, dz = r.pts[q * 2 + 3] - az, l = Math.hypot(dx, dz); return l < 1e-3 ? null : { ax, az, dx: dx / l, dz: dz / l, u0: r.s[q], hw: r.hw, lanes: r.lanes, oneway: r.oneway, l }; };
+    const lkey = (ri, ln) => ri + ':' + Math.round(ln.dx * 1e4) + ':' + Math.round(ln.dz * 1e4) + ':' + Math.round((ln.dx * ln.az - ln.dz * ln.ax) * 100);
+    const votes = new Map(); SAMPLE.forEach(([a, b, c], si) => { const x = a * X[vs[0]] + b * X[vs[1]] + c * X[vs[2]], z = a * Z[vs[0]] + b * Z[vs[1]] + c * Z[vs[2]], n = R.nearest(x, z, street); if (!n) return; const ln = lineOf(n.ri, n.s); if (!ln) return;
+      const lk = lkey(n.ri, ln), w = votes.get(lk) || votes.set(lk, [n.ri, 0, si, ln, n.s]).get(lk); w[1]++; });
+    // (and each voted line's street's segments either side of it, unvoted: a gentle bend in the triangle that no point
+    // fell beside)
+    for (const [ri, , , , s0] of [...votes.values()]) { const r = L.net.runs[ri];
+      for (const q of [s0 - 1, s0 + 1]) { if (q < 0 || q + 1 >= r.h.length) continue; const ax = r.pts[q * 2], az = r.pts[q * 2 + 1], dx = r.pts[q * 2 + 2] - ax, dz = r.pts[q * 2 + 3] - az, l = Math.hypot(dx, dz); if (l < 1e-3 || triD(vs, ax + dx / 2, az + dz / 2) > l / 2 + r.hw) continue;
+        const nl = lineOf(ri, q), lk = lkey(ri, nl); if (!votes.has(lk)) votes.set(lk, [ri, 0, SAMPLE.length + q, nl, q]); } }
+    const cands = [...votes.values()].sort((a, b) => b[1] - a[1] || a[2] - b[2]).slice(0, MARK_K).map(([ri, , , ln]) => {
+      // (its four mouths: those nearest the most of a few points in the triangle and its corners, then the nearest it)
+      const MS = mouthsOf(ri), mv = MS.map((M) => [0, triD(vs, M[2], M[3]), M]); if (MS.length > 4) for (const [a, b, c] of PICK) { const x = a * X[vs[0]] + b * X[vs[1]] + c * X[vs[2]], z = a * Z[vs[0]] + b * Z[vs[1]] + c * Z[vs[2]]; let bi = 0, bd = Infinity; MS.forEach((M, i) => { const d = Math.hypot(M[2] - x, M[3] - z); if (d < bd) { bd = d; bi = i; } }); mv[bi][0]--; }
+      const ms = mv.sort((a, b) => a[0] - b[0] || a[1] - b[1]).slice(0, 4).map((m) => m[2]);
+      return { ri, ln, ms, lane: laneBits(ri, ln) }; }).filter(Boolean);
+    const first = cands[0];
+    vs.forEach((v) => { const x = X[v], z = Z[v], m = new Array(MARK).fill(0); rib.pos.push(x, Y[v], z); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]);
+      cands.forEach((c, i) => { const { ln, ms } = c, o = i * MARK_S, dj = ms.map((M) => M[1] * ((x - M[2]) * M[4] + (z - M[3]) * M[5])); m[o] = ln.u0 + (x - ln.ax) * ln.dx + (z - ln.az) * ln.dz; m[o + 1] = ln.dx * (z - ln.az) - ln.dz * (x - ln.ax);
+        for (let k = 0; k < 4; k++) m[o + 2 + k] = dj.length ? dj[Math.min(k, dj.length - 1)] : 99; m[o + 6] = ln.hw; m[o + 7] = c.lane; });
+      rib.mark.push(...m); rib.mid.push(...NOMID.map((n, i) => (cands[i] ? cands[i].ri : n))); rib.road.push(m[0], m[1], first ? first.ln.hw : 0, [m[2], m[3], m[4], m[5]].reduce((a, b) => (Math.abs(b) < Math.abs(a) ? b : a))); rib.lane.push(first ? first.lane : 0); rib.kind.push(KIND.tarmac); rib.id.push(first ? first.ri : 0xffffffff); }); }
+  if (fine) for (let q = 0; q < nt; q++) { const k = tk[q]; if (!RIBBON.has(k) || k === KIND.tarmac) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;
     const rc = R.road(cx, cz); if (!rc) continue; const ln = R.lineOn(rc.id, cx, cz); if (!ln) continue;
     const along = (x, z) => ln.u0 + (x - ln.ax) * ln.dx + (z - ln.az) * ln.dz, across = (x, z) => ln.dx * (z - ln.az) - ln.dz * (x - ln.ax), uc = along(cx, cz);
     // (the junction: the street's mouth nearest along it to one of its corners (a long thin triangle reaching a mouth:
@@ -183,20 +217,20 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
     // street bends in its crossing's band (a village's streets), the band stays square across)
     const us = vs.map((v) => along(X[v], Z[v])); let um = 0, sg = 0, bd = Infinity, mo = null; for (const M of mouthsOf(rc.id)) for (const u of us) if (Math.abs(u - M[0]) < bd) { bd = Math.abs(u - M[0]); um = M[0]; sg = M[1]; mo = M; }
     const near = sg && Math.min(...us.map((u) => sg * (u - um))) < MOUTH_D;
-    vs.forEach((v, q) => { const u = us[q]; rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(u, across(X[v], Z[v]), ln.hw, !sg ? 99 : near ? sg * ((X[v] - mo[2]) * mo[4] + (Z[v] - mo[3]) * mo[5]) : sg * (u - um)); rib.lane.push(Math.min(15, ln.lanes) + (ln.oneway ? 16 : 0) + (painted(L.net.runs[rc.id], L.city) ? 32 : 0) + (zebra(L.net.runs[rc.id], L.city) ? 64 : 0)); rib.kind.push(k); rib.id.push(rc.id); }); }
+    vs.forEach((v, q) => { const u = us[q]; rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(u, across(X[v], Z[v]), ln.hw, !sg ? 99 : near ? sg * ((X[v] - mo[2]) * mo[4] + (Z[v] - mo[3]) * mo[5]) : sg * (u - um)); rib.lane.push(Math.min(15, ln.lanes) + (ln.oneway ? 16 : 0) + (painted(L.net.runs[rc.id], L.city) ? 32 : 0) + (zebra(L.net.runs[rc.id], L.city) ? 64 : 0)); rib.kind.push(k); rib.id.push(rc.id); rib.mark.push(...NOMARK); rib.mid.push(...NOMID); }); }
   // the gravel (fine): its triangles on their own too, each given the track nearest its middle as one line (its corners'
   // along and across from it: the material's two wheel ruts and grassy crown, as today's tracks, roadSurface.js
   // pathMaterial); a gravel plaza's (no track there) its world x, z, half width 1e4 (no edge). road = (along, across, half width, -)
   const track = (r) => r.minor && (r.surf === 2 || r.kind === 'track');
   if (fine) for (let q = 0; q < nt; q++) { if (tk[q] !== KIND.gravel) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;
     const n = R.nearest(cx, cz, track), on = n && n.d <= 0.5;
-    for (const v of vs) { rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(on ? n.u + (X[v] - n.px) * n.dx + (Z[v] - n.pz) * n.dz : X[v], on ? n.dx * (Z[v] - n.pz) - n.dz * (X[v] - n.px) : Z[v], on ? n.r.hw : 1e4, 99); rib.lane.push(0); rib.kind.push(KIND.gravel); rib.id.push(on ? n.ri : 0xffffffff); } }
+    for (const v of vs) { rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(on ? n.u + (X[v] - n.px) * n.dx + (Z[v] - n.pz) * n.dz : X[v], on ? n.dx * (Z[v] - n.pz) - n.dz * (X[v] - n.px) : Z[v], on ? n.r.hw : 1e4, 99); rib.lane.push(0); rib.kind.push(KIND.gravel); rib.id.push(on ? n.ri : 0xffffffff); rib.mark.push(...NOMARK); rib.mid.push(...NOMID); } }
   // the ground's paving (a city's lots): its squares along the street nearest each triangle's middle (an angle a
   // triangle, within a right angle: one across a triangle, or the squares swirl; runtime.js gives its corners their own copies)
   const ang = new Float32Array(nt); if (fine && L.city) for (let q = 0; q < nt; q++) { if (tk[q] > KIND.bank) continue; const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2], n = R.nearest((X[a] + X[b] + X[c]) / 3, (Z[a] + Z[b] + Z[c]) / 3, (r) => !r.minor); if (n) { const t = Math.atan2(n.dz, n.dx), h = Math.PI / 2; ang[q] = ((t % h) + h) % h; } }
   let area = 0; for (let q = 0; q < nt; q++) { const a = idx[q * 3], b = idx[q * 3 + 1], c = idx[q * 3 + 2]; area += Math.abs((X[b] - X[a]) * (Z[c] - Z[a]) - (X[c] - X[a]) * (Z[b] - Z[a])) / 2; }
   const F32 = (a) => Float32Array.from(a);
-  return { level, pos, phys, nrm, idx, tk, ang, rib: { pos: F32(rib.pos), nrm: F32(rib.nrm), road: F32(rib.road), lane: F32(rib.lane), kind: Uint8Array.from(rib.kind), id: Uint32Array.from(rib.id) },
+  return { level, pos, phys, nrm, idx, tk, ang, rib: { pos: F32(rib.pos), nrm: F32(rib.nrm), road: F32(rib.road), lane: F32(rib.lane), kind: Uint8Array.from(rib.kind), id: Uint32Array.from(rib.id), mark: F32(rib.mark), mid: Uint32Array.from(rib.mid) },
     stats: { edge: fine ? edgeOf(O, X0, Z0) : null, points: N, tris: nt, fixed, failed, failedAt, regionArea: O.area, why, softMissed, bendMissed, covered: area / (L.size * L.size), outlineMs: tOut, delaunayMs: t1 - t0, constrainMs: t2 - t1, totalMs: performance.now() - t0 } };
 }
 
