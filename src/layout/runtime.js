@@ -17,11 +17,13 @@ import { decodeLayout, KIND, indexChunks, groundBytes } from './format.js';
 import { meshChunk, physIndex, physAt, latticeOf, EDGE_STEP, ZEBRA_IN, ZEBRA_OUT } from './mesh.js';
 import { drawBuffers, railBuffers } from './draw.js';
 import { groundGrid, latticeHeights } from './rules.js';
+import { SEG_N } from './walls.js';
 import { sidewalkMaterial, pathMaterial, regionLook, REGION } from '../roadSurface.js';
 // the gravel (tracks and verges): a region's own where it differs (Bora Bora's tracks and verges are coral sand and dirt)
 const GRAVEL = { fr: 0xc8b48e };
 import { terrainMaterial, waterMaterial, FOG } from '../shaders.js';
 
+const WALL_REACH = 30; /* (m: a retaining wall's box reaches at most this far from the 50 m cell its middle is filed under (a segment is a few metres)) */
 const FINE_D = 900, LOAD_D = 2500; // metres from the camera to a chunk's middle: fine within FINE_D; fetched within LOAD_D
 // the meshing workers: a pool sharing one queue (a core or two left for the page and the GPU process)
 const POOL = Math.max(1, Math.min(4, ((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4) - 2));
@@ -47,6 +49,7 @@ export class Layout {
     this.maskData = new Uint8Array(this.gn * this.gn); this.mask = new THREE.DataTexture(this.maskData, this.gn, this.gn, THREE.RedFormat, THREE.UnsignedByteType); this.mask.needsUpdate = true;
     this.U = { layMask: { value: this.mask }, layGrid: { value: new THREE.Vector4(this.gx0, this.gz0, S, this.gn) } };
     this.out = [0, 0, 1, 0]; this.skirts = new Map(); this.subs = []; this.o2 = [0, 0, 0, 0];
+    this.wallsOn = !(typeof location !== 'undefined' && /[?&]laywalls=0\b/.test(location.search || '')); /* (false: no retaining walls drawn or felt (?laywalls=0, to compare shots)) */
     this.place = !(typeof location !== 'undefined' && /[?&]layplace=0\b/.test(location.search || '')); // (false: what stands on the roads placed as before this (?layplace=0, to compare shots))
   }
   // fn(box: { x0, z0, x1, z1 }) each time a chunk's surface arrives (physics on there): what was placed on today's ground
@@ -92,6 +95,10 @@ export class Layout {
     // (a railway's bed, its sleepers and rails (realBuildings.js's look), a rail bridge's deck and a rail tunnel's tube (roads.js's))
     Object.assign(this.mats, { ballast: roadMat('gravel_d', 0x4e463e), sleeper: new THREE.MeshStandardMaterial({ color: 0x5a4a3a, roughness: 0.95 }), steel: new THREE.MeshStandardMaterial({ color: 0x8b9097, metalness: 0.8, roughness: 0.4 }),
       deck: new THREE.MeshStandardMaterial({ color: 0x9a968e, roughness: 0.9 }), tube: new THREE.MeshStandardMaterial({ color: 0x6e6c66, emissive: 0x2a2924, roughness: 0.9, side: THREE.DoubleSide }) });
+    // (the retaining walls (walls.js): grey stone in the Alps, concrete elsewhere; the paving's texture, in metres along and up (uv / 3))
+    const stone = REGION[loc.id] === 'ch', wt = loader.load('tex/roads/sidewalk_d.jpg'); wt.wrapS = wt.wrapT = THREE.RepeatWrapping; wt.colorSpace = THREE.SRGBColorSpace; if (stone) wt.repeat.set(2, 2);
+    this.mats.wall = new THREE.MeshStandardMaterial({ map: wt, color: stone ? 0xf2ece2 : 0xffffff, roughness: 0.92 }); /* (the texture is the colour: a tint under it as well left the wall's albedo about 0.1, near black in shade) */
+    { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute([0, -1e4, 0, 0, -1e4, 0, 0, -1e4, 0], 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0], 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 2)); const m = new THREE.Mesh(g, this.mats.wall); m.frustumCulled = false; m.name = 'layout wall warm-up'; this.group.add(m); } /* (always there: its shader compiled with the rest, not when the first wall arrives) */
     this.matList = [this.mats.ground, this.mats.alley, this.mats.gravel, this.mats.pavers, this.mats.ballast];
     // the water: today's plane and shore mesh (World.buildWater) don't draw inside an active chunk, whose own water is its
     // surface's part under the water level (water()), so the shore is the layout's ground's, not today's carved grid's
@@ -163,6 +170,7 @@ export class Layout {
     if (level === 'fine' && !c.phys) { // physics starts with the fine mesh
       c.phys = physIndex(c.L, m); this.active.set(c.k, c); this.on = true;
       if (this.mats) this.railsFor(c, d?.rails);
+      if (this.wallsOn && m.walls?.length) this.wallsFor(c, m.walls);
       const box = { x0: c.L.x0, z0: c.L.z0, x1: c.L.x0 + c.L.size, z1: c.L.z0 + c.L.size, k: c.k }; if (this.place) for (const f of this.subs) f(box); // (what stands on it re-placed: onActive)
     }
     if (!this.mats) return; // (no drawing: tools)
@@ -216,6 +224,29 @@ export class Layout {
     if (c.rails) for (const o of c.rails.children) if (o.userData.near) o.visible = level === 'fine'; // (the rails and sleepers: near only, sub-pixel further)
     c.shown = level;
   }
+  // a chunk's retaining walls (walls.js, worked out with its fine mesh: segments of SEG_N): drawn (a box along each, its
+  // faces o0 and o1 out along n from the step, from its foot to its top) and felt by the cars (wallBoxes: as a building's)
+  wallsFor(c, S) {
+    const P = [], N = [], U = [], cells = new Map(), e = { layoutWall: true }; let along = 0;
+    const quad = (a, b, cc, d, n, ua, ub) => { for (const [v, uv] of [[a, [ua, a[1] / 3]], [b, [ub, b[1] / 3]], [cc, [ub, cc[1] / 3]], [a, [ua, a[1] / 3]], [cc, [ub, cc[1] / 3]], [d, [ua, d[1] / 3]]]) { P.push(v[0], v[1], v[2]); N.push(n[0], n[1], n[2]); U.push(uv[0], uv[1]); } };
+    for (let o = 0; o < S.length; o += SEG_N) { const ax = S[o], az = S[o + 1], bx = S[o + 2], bz = S[o + 3], nx = S[o + 4], nz = S[o + 5], tA = S[o + 6], fA = S[o + 7], tB = S[o + 8], fB = S[o + 9], o0 = S[o + 10], o1 = S[o + 11], l = Math.hypot(bx - ax, bz - az); if (l < 1e-3) continue;
+      const p = (x, z, off, y) => [x + nx * off, y, z + nz * off], ua = along / 3, ub = (along + l) / 3; along += l;
+      const iA0 = p(ax, az, o0, fA), iA1 = p(ax, az, o0, tA), iB0 = p(bx, bz, o0, fB), iB1 = p(bx, bz, o0, tB), oA0 = p(ax, az, o1, fA), oA1 = p(ax, az, o1, tA), oB0 = p(bx, bz, o1, fB), oB1 = p(bx, bz, o1, tB);
+      const ux = (bx - ax) / l, uz = (bz - az) / l, side = (nx * -uz + nz * ux) > 0 ? 1 : -1; /* (winding: each face's front outward) */
+      const f = (q, a, b, cc, d, n) => (side * q > 0 ? quad(a, b, cc, d, n, ua, ub) : quad(d, cc, b, a, n, ub, ua));
+      f(1, oA0, oB0, oB1, oA1, [nx, 0, nz]); f(-1, iA0, iB0, iB1, iA1, [-nx, 0, -nz]); f(-1, iA1, iB1, oB1, oA1, [0, 1, 0]); f(1, iA0, oA0, oA1, iA1, [-ux, 0, -uz]); f(1, oB0, iB0, iB1, oB1, [ux, 0, uz]); /* (its faces, top and ends) */
+      // its box: along it, between its faces, foot to top (cells of 50 m by its middle, reach WALL_REACH)
+      const mx = (ax + bx) / 2 + nx * (o0 + o1) / 2, mz = (az + bz) / 2 + nz * (o0 + o1) / 2, b = { x: mx, z: mz, ux, uz, hl: l / 2 + 0.05, hw: (o1 - o0) / 2, y0: Math.min(fA, fB), y1: Math.max(tA, tB), e }, k = Math.floor(mx / 50) + ',' + Math.floor(mz / 50); (cells.get(k) || cells.set(k, []).get(k)).push(b); }
+    c.wallCells = cells; if (!this.mats || !P.length) return;
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2)); g.computeBoundingSphere();
+    const me = new THREE.Mesh(g, this.mats.wall); me.name = 'layout walls ' + c.k; me.castShadow = me.receiveShadow = true; c.walls = me; this.group.add(me);
+  }
+  // the retaining walls' boxes within r of (x, z), added to out (World.wallBoxes: what a car or bike meets as a building's wall)
+  wallBoxes(x, z, r, out) {
+    if (!this.on) return out; const R = r + WALL_REACH;
+    for (let i = Math.floor((x - R) / 50); i <= Math.floor((x + R) / 50); i++) for (let j = Math.floor((z - R) / 50); j <= Math.floor((z + R) / 50); j++) { const c = this.active.get(Math.floor(i * 50 / this.size) + ',' + Math.floor(j * 50 / this.size)); const L = c?.wallCells?.get(i + ',' + j); if (L) for (const b of L) if ((b.x - x) ** 2 + (b.z - z) ** 2 <= (r + b.hl + b.hw) ** 2) out.push(b); }
+    return out;
+  }
   // a chunk's railways (draw.js railBuffers, made in the worker): their meshes, and a rail bridge's piers down to today's
   // ground (the World's terrain: here)
   railsFor(c, rb) {
@@ -263,6 +294,7 @@ export class Layout {
     for (const lv of ['fine', 'coarse']) this.queue.delete(c.k + ':' + lv);
     this.done = this.done.filter((r) => r.id !== c.k);
     for (const g of [c.mesh, c.rails]) if (g) { for (const o of g.children) o.geometry.dispose(); this.group.remove(g); }
+    if (c.walls) { c.walls.geometry.dispose(); this.group.remove(c.walls); }
     for (const [dx, dz] of SIDES) { const key = c.k + ':' + dx + ',' + dz, sk = this.skirts.get(key); if (sk) { this.group.remove(sk); sk.geometry.dispose(); this.skirts.delete(key); } }
     if (this.drawn.has(c.k)) { this.drawn.delete(c.k); const i = (c.L.x0 - this.gx0) / this.size, j = (c.L.z0 - this.gz0) / this.size; if (i >= 0 && j >= 0 && i < this.gn && j < this.gn) { this.maskData[j * this.gn + i] = 0; this.mask.needsUpdate = true; }
       for (const [dx, dz] of SIDES) { const nb = this.chunks.get((c.ix + dx) + ',' + (c.iz + dz)); if (!nb || !this.drawn.has(nb.k) || !nb.shown) continue; const me = this.skirt(nb, nb.m[nb.shown], -dx, -dz); if (me) this.skirts.set(nb.k + ':' + (-dx) + ',' + (-dz), me); } }
@@ -350,7 +382,7 @@ export class Layout {
     const type = k === KIND.verge || k === KIND.gravel || k === KIND.ballast ? 'sand' : k >= KIND.tarmac || lot ? 'runway' : n.y < 0.8 ? 'rock' : w.loc.desert && !(w.real && w.real.forest(x, z) > 0.45) ? 'sand' : 'grass'; // (a desert's ground: sand, but pine needles under the rims' forests, as World.groundAt)
     return { h, n: type === 'runway' ? new THREE.Vector3(0, 1, 0) : n, type };
   }
-  dispose() { for (const wk of this.workers || []) wk.terminate(); for (const c of this.chunks.values()) for (const o of [...(c.mesh?.children || []), ...(c.rails?.children || [])]) o.geometry.dispose(); for (const s of this.skirts.values()) s.geometry.dispose(); this.mask.dispose(); }
+  dispose() { for (const wk of this.workers || []) wk.terminate(); for (const c of this.chunks.values()) for (const o of [...(c.mesh?.children || []), ...(c.rails?.children || []), ...(c.walls ? [c.walls] : [])]) o.geometry.dispose(); for (const s of this.skirts.values()) s.geometry.dispose(); this.mask.dispose(); }
 }
 
 // a paved surface: its photo texture over a base colour (world-space, metres), and on the tarmac the markings from the
