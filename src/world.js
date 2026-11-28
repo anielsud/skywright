@@ -34,6 +34,9 @@ import { WaterParks } from './waterPark.js';
 import { MOON_U, moonAge, moonPhase, moonLagHours, loadMoonTexture } from './moon.js';
 import { Layout } from './layout/runtime.js';
 import { decksOverRails } from './layout/rails.js';
+import { diveTubes } from './layout/tubes.js';
+import { naturalGround } from './layout/rules.js';
+import { junctionShapes } from './junctions.js';
 import { layoutWanted } from './layout/format.js';
 
 export const RWY = { len: 1800, width: 45 };
@@ -261,7 +264,8 @@ export class World {
     this.rawFine(); // the fine grid's raw heights: routing and road profiles read them, then they are carved and baked
     this.net = this.real.network(this);
     gradeReal(this, this.net);
-    if (layoutWanted() || globalThis.SKY_LAYOUT_BAKE || (typeof process !== 'undefined' && process.env?.SKY_LAYOUT_BAKE === '1')) this.net.roads = decksOverRails(this.net.roads, this.real.osm?.rails); /* (the layout's, in the game behind its flag and in its bake (tools/bake/layout.mjs): a road's deck carried over a railway's bed beside it, layout/rails.js) */
+    if (layoutWanted() || globalThis.SKY_LAYOUT_BAKE || (typeof process !== 'undefined' && process.env?.SKY_LAYOUT_BAKE === '1')) { this.net.roads = decksOverRails(this.net.roads, this.real.osm?.rails);
+      const dv = diveTubes(this.net.roads, naturalGround(this), !!this.loc.city); this.tubeDive = dv; if (dv.inserted) this.net.junctions = junctionShapes(this.net.roads, !!this.loc.city); } /* (tunnels dive under the layout's natural ground and the streets over them, layout/tubes.js: what draws and drives in them follows) */ /* (the layout's, in the game behind its flag and in its bake (tools/bake/layout.mjs): a road's deck carried over a railway's bed beside it, layout/rails.js) */
     this.dryLand(); // no-op without a terrain bake (real places)
     flattenGrid(this, this.net);
     for (let k = 0; k < H.length; k++) H[k] = this.shoreSnap(H[k]);

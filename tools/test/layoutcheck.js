@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { decodeLayout, KIND } from '../../src/layout/format.js';
 import { meshChunk, latticeOf, physIndex } from '../../src/layout/mesh.js';
 import { offChecks } from '../bake/layout-off.mjs';
-import { KERB, latticeHeights } from '../../src/layout/rules.js';
+import { KERB, latticeHeights, makeRules, latticeGround } from '../../src/layout/rules.js';
 import { World, LOCATIONS } from '../../src/world.js';
 import { airportGate } from '../../src/airportKit.js';
 
@@ -48,8 +48,8 @@ export async function runCase(c) {
     out.push({ name: `${name}: a kerb is never physics`, ok: step <= 0.05 && (!kerbTris || kerbMeasured >= kerbTris / 2), why: `largest physics rise across a kerb ${step.toFixed(3)} m (drawn 0.15); ${kerbMeasured} kerb edges stand over physics, of ${kerbTris} kerb triangles (kerbs in physics: none would)` });
     // bridges and tunnels: no step where a road meets a deck or a portal; a portal's opening rimmed by its tube and headwall
     const lip = []; for (let q = 0; q < m.tk.length; q++) if (m.tk[q] === KIND.lip) lip.push(I[q * 3], I[q * 3 + 1], I[q * 3 + 2]);
-    const oc = offChecks(L, m, physIndex(L, m), lip), all = [...oc.ends.deck, ...oc.ends.tube];
-    if (all.length || oc.portals) out.push({ name: `${name}: roads meet their decks and portals without a step, each portal opens onto its tube`, ok: all.every((d) => d < 0.02) && !oc.rimBad && !oc.noLip, why: `${oc.ends.deck.length} deck ends, ${oc.ends.tube.length} portal ends, largest step ${Math.max(0, ...all).toFixed(4)} m; ${oc.portals} portals, ${oc.rimBad} of ${oc.rimN} rim points uncovered, ${oc.noLip} with no opening` });
+    const oc = offChecks(L, m, physIndex(L, m), lip, { rules: makeRules(L.net, latticeGround(grid, latticeOf(L, grid), lat), !!L.city, grid.wl) }), all = [...oc.ends.deck, ...oc.ends.tube];
+    if (all.length || oc.portals) out.push({ name: `${name}: roads meet their decks and portals without a step, each portal opens onto its tube`, ok: all.every((d) => d < 0.02) && !oc.rimBad && !oc.noLip && !oc.slabBad && !oc.coverBad, why: `${oc.ends.deck.length} deck ends, ${oc.ends.tube.length} portal ends, largest step ${Math.max(0, ...all).toFixed(4)} m; ${oc.portals} portals, ${oc.rimBad} of ${oc.rimN} rim points uncovered, ${oc.noLip} with no opening; over tubes ${oc.slabBad} of ${oc.slabN} points raised, ${oc.coverBad} of ${oc.coverN} stations without cover` });
   }
   // chunks side by side: the shared edge's segments, positions and heights, the same from both sides at every pair of levels
   for (const e of idx.chunks.filter((e) => meshes.has(e.ix + ',' + e.iz))) { const b = meshes.get(e.ix + 1 + ',' + e.iz), a = meshes.get(e.ix + ',' + e.iz); if (!b) continue;
