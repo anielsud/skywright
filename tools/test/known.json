@@ -4,12 +4,12 @@
   "islands: no walls or ramps on the roads": "#294 (83 spots on the baked layout, every chunk; 16 with ?layout=0, #228)",
   "canyon: no walls or ramps on the roads": "#294 (24 spots on the baked layout, a third of its chunks; 66 over every chunk; 5 with ?layout=0, #228)",
   "lauterbrunnen: no steps along the roads": "#294 (161 spots on the baked layout, a quarter of its chunks; 512 over every chunk; 204 with ?layout=0, #228)",
-  "lauterbrunnen: no walls or ramps on the roads": "#294 (184 spots on the baked layout, a quarter of its chunks; 562 over every chunk; 354 with ?layout=0, #228)",
+  "lauterbrunnen: no walls or ramps on the roads": "#294 (185 spots on the baked layout, a quarter of its chunks; 562 over every chunk before #337/#338; 354 with ?layout=0, #228)",
   "lauterbrunnen: road ends meet the road they join": "#294 (1 end; read from the network's heights, not the ground: as with ?layout=0, #228)",
-  "lauterbrunnen: roads cross at the same height": "#294 (7 crossings; read from the network's heights, not the ground: as with ?layout=0, #228)",
-  "nyc: no steps along the roads": "#294 (136 spots on the baked layout, an eighth of its chunks; 689 over every chunk; 605 with ?layout=0, #228)",
-  "nyc: no walls or ramps on the roads": "#294 (405 spots on the baked layout, an eighth of its chunks; 2,565 over every chunk; 1,235 with ?layout=0, #228)",
-  "nyc: road ends meet the road they join": "#294 (20 ends; read from the network's heights, not the ground: as with ?layout=0, #228)",
+  "lauterbrunnen: roads cross at the same height": "#294 (8 crossings; read from the network's heights, not the ground: 7 with ?layout=0, #228)",
+  "nyc: no steps along the roads": "#294 (133 spots on the baked layout, an eighth of its chunks; 689 over every chunk before #337/#338; 605 with ?layout=0, #228)",
+  "nyc: no walls or ramps on the roads": "#294 (418 spots on the baked layout, an eighth of its chunks; 2,565 over every chunk before #337/#338; 1,235 with ?layout=0, #228)",
+  "nyc: road ends meet the road they join": "#294 (21 ends, worst 4.8 m at (-4624, 4642) since #337; read from the network's heights, not the ground: 20 with ?layout=0, #228)",
   "nyc: roads cross at the same height": "#294 (271 crossings; read from the network's heights, not the ground: 272 with ?layout=0, #228)",
   "lauterbrunnen: junctions have no bare ground between their arms": "#228 (71 of 893 junctions) (runs with ?layout=0 only: today's path)",
   "lauterbrunnen: junctions are drawn where physics drives": "#228 (110 of 893 junctions) (runs with ?layout=0 only: today's path)",
@@ -27,11 +27,10 @@
   "islands: site: open, deep water, nothing built, no bridge, clear of the marina": "#294 (2 of 1470 points too shallow on the baked layout's lagoon floor, chosen on today's; passes with ?layout=0)",
   "lauterbrunnen: site: open, deep water, nothing built, no bridge, clear of the marina": "#294 (13 of 1470 points dry on the baked layout's lake shore, chosen on today's; passes with ?layout=0)"
  },
- "setbacks": {
-  "nyc: no collision box on a road": "#294 (the baked setbacks overlay: 4,188 of 38,441 boxes; passes with ?setbacks=0 or ?layout=0)",
-  "nyc: no collision box reaches more than 1 m past its walls": "#294 (the baked setbacks overlay: 20,366 of 38,441; passes with ?setbacks=0 or ?layout=0)",
-  "nyc: no collision box reaches more than 2 m past its walls": "#294 (the baked setbacks overlay: 10,788 of 38,441; passes with ?setbacks=0 or ?layout=0)",
-  "nyc: the boxes cover the buildings": "#294 (the baked setbacks overlay: 1 building under 90%; passes with ?setbacks=0 or ?layout=0)",
-  "nyc: a toppling top collides as its own shape": "#294 (the baked setbacks overlay: no tall tower with irregular boxes to topple; passes with ?setbacks=0 or ?layout=0)"
+ "walls": {
+  "lauterbrunnen: every building is a wall box, with its own box": "#294 (on the baked layout since #337/#338/#340: buildings moved onto a chunk's surface (onActive) without their wall boxes, e.g. (-1182, 22702) y0 1574.98 vs 1575.02, x 0.15 m off; passes with ?layout=0)"
+ },
+ "bldcheck": {
+  "streets nyc: passages under the buildings over a road (raised over it, a ceiling); none over Madison Avenue at 47th": "#294 (on the baked layout since #340: 44 of 46 passages raised; passes with ?layout=0)"
  }
 }
