@@ -81,7 +81,7 @@ const approachOf = (p, runs) => runs.find((q) => !q.off && ((q.cutA === 'tube' &
 function trenchOf(p, runs, ports) {
   const r = p.ar;
   if (!r) return null; let lo = Infinity, hi = -Infinity, nearHit = false;
-  for (const q of runs) { if (q === r || q.off) continue; const reach = q.hw + (q.pave || vergeW(q)), n = q.h.length;
+  for (const q of runs) { if (q === r || q.off || (p.rail && isRail(q))) continue; /* (a railway's other tracks beside its portal: its bed's, bake.js mergeBores) */ const reach = q.hw + (q.pave || vergeW(q)), n = q.h.length;
     for (let i = 0; i + 1 < n; i++) { const ax = q.pts[i * 2], az = q.pts[i * 2 + 1], bx = q.pts[i * 2 + 2], bz = q.pts[i * 2 + 3], l = Math.hypot(bx - ax, bz - az); if (l < 1e-3) continue;
       if (Math.abs(((bx - ax) * p.dx + (bz - az) * p.dz) / l) < 0.7) continue; /* (only a way alongside: one across the mouth keeps the crown floor, bake.js) */
       const [ua, va] = portalUV(p, ax, az), [ub, vb] = portalUV(p, bx, bz); if (Math.max(ua, ub) < -TRENCH_MAX || Math.min(ua, ub) > TRENCH_IN || Math.min(Math.abs(va), Math.abs(vb)) - reach > p.hwT + TRENCH_W + l) continue;
