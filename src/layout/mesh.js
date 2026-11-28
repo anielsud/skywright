@@ -14,7 +14,7 @@ import { makeRules, latticeGround, KERB, KERB_W, PAVE_RAMP, painted, zebra } fro
 import { chunkOutlines } from './outline.js';
 
 const RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, MOUTH_D = 6, FID_STEP = 3, FID_TOL = 0.1;
-export const MARK_K = 3, MARK_S = 8, MARK = MARK_K * MARK_S; // (a carriageway corner's markings coordinates, rib.mark: below)
+export const MARK_K = 4, MARK_S = 8, MARK = MARK_K * MARK_S; // (a carriageway corner's markings coordinates, rib.mark: below)
 const PAVED = [KIND.lip, KIND.tarmac, KIND.kerb, KIND.ballast, KIND.pave, KIND.alley, KIND.pavers, KIND.gravel, KIND.verge]; // (the order a point is classed in)
 const RIBBON = new Set([KIND.tarmac, KIND.kerb, KIND.pave]); // (drawn with a street's coordinates: markings, the pavement's slabs)
 
@@ -95,7 +95,7 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
     // street is nearest there: a street meeting this one at its bend (no junction) mustn't take the bend's away. (No other
     // points along a street: its markings come from each triangle's two nearest streets, picked per fragment, below)
     L.net.runs.forEach((r) => { if (r.minor || r.off) return; for (let s = 1; s + 1 < r.h.length; s++) { const x = r.pts[s * 2], z = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3], l = Math.hypot(bx - x, bz - z), X = Math.round(x * 100), Z = Math.round(z * 100);
-      if (l < 1e-9 || !(inside(X, Z, 50) && classify(X, Z) === KIND.tarmac) || (R.junction(x, z) || [0, 99])[1] <= 0.3) continue; const ux = (bx - x) / l, uz = (bz - z) / l, [nx, nz] = R.bends(r)[s], ch = Math.abs(nx * ux + nz * uz); if (!(ch < 0.99995 && ch > 0.5)) continue; const chain = [];
+      if (l < 1e-9 || !(inside(X, Z, 50) && classify(X, Z) === KIND.tarmac) || (R.junction(x, z) || [0, 99])[1] <= 0.3) continue; const ux = (bx - x) / l, uz = (bz - z) / l, [nx, nz] = R.bends(r)[s], ch = Math.abs(nx * ux + nz * uz); if (!(ch < 0.9999995 && ch > 0.5)) continue; const chain = [];
       for (const v of [-(r.hw - 0.35), -r.hw / 2, 0, r.hw / 2, r.hw - 0.35]) { const o = v / ch, QX = Math.round((x - nz * o) * 100), QZ = Math.round((z + nx * o) * 100); if (!v) { if (key.has(X * 1e7 + Z) || clear(X, Z, 25)) { const i = add(X, Z); putP(i); chain.push(i); } else chain.push(-1); continue; } // (o along the bisector: v from either segment's line)
         if (inside(QX, QZ, 50) && classify(QX, QZ) === KIND.tarmac && (key.has(QX * 1e7 + QZ) || clear(QX, QZ, 25))) { const i = add(QX, QZ); putP(i); chain.push(i); } else chain.push(-1); }
       for (let q = 0; q + 1 < chain.length; q++) if (chain[q] >= 0 && chain[q + 1] >= 0) bis.push([chain[q], chain[q + 1]]); } });
@@ -163,8 +163,8 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   // ---- the streets' triangles (carriageway, kerb, pavement) on their own. A kerb's or pavement's: its middle's street as
   // one line, every corner's along and across from that line (so they interpolate exactly: slabs along the kerb), and how
   // far along the street from its nearest mouth onto a junction, linear too. A carriageway's (mark): its MARK_K
-  // nearest streets (a triangle can reach from one street's carriageway into others': no points along the streets; three
-  // where ways merge without a junction), each as one line, every corner's along and across from it and its distance past
+  // nearest streets' lines (a triangle can reach from one street's carriageway into others': no points along the streets;
+  // a street's bend gives two), each a line, every corner's along and across from it and its distance past
   // its four nearest mouths (along each mouth's own segment: a crossing's band square across; below 0 inside the
   // junction, where nothing is painted; a triangle from one junction to the next can reach past several). Each is linear, so
   // it interpolates exactly; the material takes, per fragment, the street nearest past its half width and its nearest
@@ -184,9 +184,17 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   const PICK = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [0.5, 0.5, 0], [0, 0.5, 0.5], [0.5, 0, 0.5], [0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8], [1 / 3, 1 / 3, 1 / 3]];
   const SAMPLE = [[0.9, 0.05, 0.05], [0.05, 0.9, 0.05], [0.05, 0.05, 0.9], [0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6], [0.45, 0.45, 0.1], [0.1, 0.45, 0.45], [0.45, 0.1, 0.45], [1 / 3, 1 / 3, 1 / 3]];
   if (fine) for (let q = 0; q < nt; q++) { if (tk[q] !== KIND.tarmac) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;
-    // (the streets nearest a few points inside it, by how many: the first MARK_K)
-    const votes = new Map(); for (const [a, b, c] of SAMPLE) { const x = a * X[vs[0]] + b * X[vs[1]] + c * X[vs[2]], z = a * Z[vs[0]] + b * Z[vs[1]] + c * Z[vs[2]], rd = R.road(x, z); if (!rd) continue; const w = votes.get(rd.id) || votes.set(rd.id, [rd.id, 0, 0, 0]).get(rd.id); w[1]++; w[2] += x; w[3] += z; }
-    const cands = [...votes.values()].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, MARK_K).map(([ri, n, sx, sz]) => { const ln = R.lineOn(ri, sx / n, sz / n); if (!ln) return null;
+    // (the streets' lines nearest a few points inside it, by how many: the first MARK_K)
+    // (a street's line there: a bend's two segments are two, the nearer taken per fragment as across a bend's bisector;
+    // its stations along one straight segment are one)
+    const votes = new Map(); SAMPLE.forEach(([a, b, c], si) => { const x = a * X[vs[0]] + b * X[vs[1]] + c * X[vs[2]], z = a * Z[vs[0]] + b * Z[vs[1]] + c * Z[vs[2]], rd = R.road(x, z); if (!rd) return; const ln = R.lineOn(rd.id, x, z); if (!ln) return;
+      const lk = rd.id + ':' + Math.round(ln.dx * 1e4) + ':' + Math.round(ln.dz * 1e4) + ':' + Math.round((ln.dx * ln.az - ln.dz * ln.ax) * 100); const w = votes.get(lk) || votes.set(lk, [rd.id, 0, si, ln]).get(lk); w[1]++; });
+    // (and each voted line's street's segments either side of it, unvoted: a gentle bend in the triangle that no point
+    // fell beside)
+    for (const [ri, , , ln] of [...votes.values()]) { const r = L.net.runs[ri]; let s0 = -1; for (let q = 0; q + 1 < r.h.length; q++) if (r.pts[q * 2] === ln.ax && r.pts[q * 2 + 1] === ln.az) { s0 = q; break; } if (s0 < 0) continue;
+      for (const q of [s0 - 1, s0 + 1]) { if (q < 0 || q + 1 >= r.h.length) continue; const ax = r.pts[q * 2], az = r.pts[q * 2 + 1], dx = r.pts[q * 2 + 2] - ax, dz = r.pts[q * 2 + 3] - az, l = Math.hypot(dx, dz); if (l < 1e-3 || triD(vs, ax + dx / 2, az + dz / 2) > l / 2 + r.hw) continue;
+        const nl = { ax, az, dx: dx / l, dz: dz / l, u0: r.s[q], hw: r.hw, lanes: r.lanes, oneway: r.oneway }, lk = ri + ':' + Math.round(nl.dx * 1e4) + ':' + Math.round(nl.dz * 1e4) + ':' + Math.round((nl.dx * az - nl.dz * ax) * 100); if (!votes.has(lk)) votes.set(lk, [ri, 0, SAMPLE.length + q, nl]); } }
+    const cands = [...votes.values()].sort((a, b) => b[1] - a[1] || a[2] - b[2]).slice(0, MARK_K).map(([ri, , , ln]) => {
       // (its four mouths: those nearest the most of a few points in the triangle and its corners, then the nearest it)
       const MS = mouthsOf(ri), mv = MS.map((M) => [0, triD(vs, M[2], M[3]), M]); if (MS.length > 4) for (const [a, b, c] of PICK) { const x = a * X[vs[0]] + b * X[vs[1]] + c * X[vs[2]], z = a * Z[vs[0]] + b * Z[vs[1]] + c * Z[vs[2]]; let bi = 0, bd = Infinity; MS.forEach((M, i) => { const d = Math.hypot(M[2] - x, M[3] - z); if (d < bd) { bd = d; bi = i; } }); mv[bi][0]--; }
       const ms = mv.sort((a, b) => a[0] - b[0] || a[1] - b[1]).slice(0, 4).map((m) => m[2]);
