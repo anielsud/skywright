@@ -28,7 +28,7 @@ import { DRIFT_MAX } from './markcheck.mjs';
 import { groundOf, mergeGround } from './groundcheck.mjs';
 import { onWorkers, workers } from './pool.mjs';
 
-const key = (ix, iz) => ix + ',' + iz;
+const key = (ix, iz) => ix + ',' + iz, RAIL_TOL = 0.02;
 if (import.meta.url === pathToFileURL(process.argv[1]).href) { // (run as a script; all.mjs calls bakePlace)
   const args = process.argv.slice(2);
   if (!args.length) { console.error(readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).join('\n')); process.exit(1); }
@@ -63,13 +63,14 @@ export async function bakePlace(a, world, asksOf, cache) {
   // a chunk failing a check keeps today's roads
   const failed = new Map();
   for (const c of results) { const f = c.fine, co = c.coarse, bad = [];
-    if (f.failed || co.failed) bad.push('fixed edges'); if (Math.abs(f.covered - 1) > 1e-6 || Math.abs(co.covered - 1) > 1e-6) bad.push('cover'); if (f.holes) bad.push('holes'); if (f.tarmacOff > 1e-4) bad.push('tarmac off physics'); if (f.kerbSlope > 0.05 || (f.kerbTris && f.kerbMeasured < f.kerbTris / 2)) bad.push('kerb in physics'); /* (kerbMeasured: kerb edges whose top stands over physics; if kerbs were physics none would, and the rise alone would pass) */ if (f.drift > DRIFT_MAX) bad.push('markings off the centre line'); if (f.deckBad) bad.push('deck step'); if (f.portalBad) bad.push('portal step'); if (f.rimBad || f.noLip) bad.push('portal gap');
+    if (f.failed || co.failed) bad.push('fixed edges'); if (Math.abs(f.covered - 1) > 1e-6 || Math.abs(co.covered - 1) > 1e-6) bad.push('cover'); if (f.holes) bad.push('holes'); if (f.tarmacOff > 1e-4) bad.push('tarmac off physics'); if (f.kerbSlope > 0.05 || (f.kerbTris && f.kerbMeasured < f.kerbTris / 2)) bad.push('kerb in physics'); /* (kerbMeasured: kerb edges whose top stands over physics; if kerbs were physics none would, and the rise alone would pass) */ if (f.drift > DRIFT_MAX) bad.push('markings off the centre line'); if (f.deckBad) bad.push('deck step'); if (f.portalBad) bad.push('portal step'); if (f.rimBad || f.noLip) bad.push('portal gap'); if (f.rail.lxStep >= RAIL_TOL) bad.push('level crossing step'); if (f.rail.railOver) bad.push('rail off its bed'); if (f.rail.clearBad) bad.push('deck clearance'); /* (railcheck.mjs: a step over RAIL_TOL across a crossing; a rail sample RAIL_TOL or more off its bed; a paved surface over a rail deck's underside) */
     if (bad.length) failed.set(key(c.ix, c.iz), bad.join('+')); }
   // shared edges between two baked chunks: the same points and heights from both sides, at every pair of levels
   let pairs = 0, seamBad = 0; const seamList = [];
   for (const c of results) for (const [dx, dz, mine, theirs] of [[1, 0, 'e', 'w'], [0, 1, 'n', 's']]) { const o = byKey.get(key(c.ix + dx, c.iz + dz)); if (!o || failed.has(key(c.ix, c.iz)) || failed.has(key(o.ix, o.iz))) continue; pairs++; // (between two that pass: one that fails keeps today's roads, a skirt between)
     const bad = [['fine', 'fine'], ['fine', 'coarse'], ['coarse', 'fine']].filter(([la, lb]) => c.edges[la][mine].join() !== o.edges[lb][theirs].join()); if (bad.length) { seamBad++; seamList.push(`${key(c.ix, c.iz)}|${key(o.ix, o.iz)}`); } }
   const failedOnChecks = failed.size;
+  if (failed.size || seamList.length) console.log(`  failed chunks: ${[...failed].map(([k, w]) => k + ' ' + w).join('; ')}${seamList.length ? '; seams ' + seamList.join(' ') : ''}`);
   for (const pr of seamList) for (const k of pr.split('|')) if (!failed.has(k)) failed.set(k, 'seam'); // (a shared edge that doesn't match: both keep today's roads, skirts between)
   for (const [k, w] of failed) fallback.set(k, 'failed: ' + w);
   // ---- files

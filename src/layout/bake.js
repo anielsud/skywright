@@ -69,7 +69,7 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
       const ty = off(s0); let e0 = s0 + 1; while (e0 < b && off(e0) === ty) e0++;
       if (ty === 'wet') { s0 = e0; continue; }
       if (ty) { const pts = [], ys = []; for (let i = s0; i <= e0; i++) { pts.push([P[i].x, P[i].z]); ys.push(P[i].y); const nd = jn.get(i % n0); if (nd != null && !pinNode.has(nd)) pinNode.set(nd, P[i].y); if (nd != null && (i === s0 || i === e0) && !endNode.has(nd)) endNode.set(nd, ty); }
-        offRuns.push({ rail: rd.rail ?? -1, off: ty, rd, osmPts: pts, pts, ys, kind: rd.kind, minor: !!rd.minor, surf: rd.surf || 0, hw: rd.width / 2, lanes: rd.lanes || (rd.oneway ? 1 : 2), oneway: !!rd.oneway, pave: 0 }); s0 = e0; continue; }
+        offRuns.push({ rail: rd.rail ?? -1, off: ty, rd, keepAll: !!rd.keepShape, osmPts: pts, pts, ys, kind: rd.kind, minor: !!rd.minor, surf: rd.surf || 0, hw: rd.width / 2, lanes: rd.lanes || (rd.oneway ? 1 : 2), oneway: !!rd.oneway, pave: 0 }); s0 = e0; continue; }
       // (in a country place, a street's stretch split again where it enters or leaves a built-up stretch: PAVE_VILLAGE)
       const parts = []; if (built && !rd.minor && rd.kind !== 'highway') { const f = built(P, s0, e0); let s1 = s0; for (let q = s0 + 1; q <= e0; q++) if (q === e0 || f[q - s0] !== f[q - s0 - 1]) { parts.push([s1, q, f[s1 - s0]]); s1 = q; } } else parts.push([s0, e0, false]);
       const cA = cut(s0 > a ? off(s0 - 1) : a > 0 ? off(a - 1) : null), cB = cut(e0 < b ? off(e0) : b < n - 1 ? off(b) : null);
@@ -240,7 +240,7 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   const cellOf = (x, z) => Math.floor(x / CHUNK) * 100003 + Math.floor(z / CHUNK), byCell = new Map(), put = (k, kind, i) => { let c = byCell.get(k); if (!c) byCell.set(k, (c = { r: [], j: [], a: [] })); if (c[kind].at(-1) !== i) c[kind].push(i); };
   const boxCells = (x0, z0, x1, z1, kind, i) => { for (let a = Math.floor(x0 / CHUNK); a <= Math.floor(x1 / CHUNK); a++) for (let b = Math.floor(z0 / CHUNK); b <= Math.floor(z1 / CHUNK); b++) put(a * 100003 + b, kind, i); };
   const allRuns = [...runs, ...offRuns];
-  allRuns.forEach((r, ri) => { const sh = r.ceil ? keepLine(r) : rdpLine(r.osmPts.map(([x, z]) => [cm(x), cm(z)]), SHAPE_TOL); r.shape = [sh[0]]; for (let i = 1; i < sh.length; i++) { const [px, pz] = sh[i - 1], [qx, qz] = sh[i], k = Math.ceil(Math.max(Math.abs(qx - px), Math.abs(qz - pz)) / 30000); for (let s2 = 1; s2 <= k; s2++) r.shape.push([Math.round(px + (qx - px) * s2 / k), Math.round(pz + (qz - pz) * s2 / k)]); }
+  allRuns.forEach((r, ri) => { const sh = r.ceil ? keepLine(r) : r.keepAll ? r.osmPts.map(([x, z]) => [cm(x), cm(z)]) : rdpLine(r.osmPts.map(([x, z]) => [cm(x), cm(z)]), SHAPE_TOL); r.shape = [sh[0]]; for (let i = 1; i < sh.length; i++) { const [px, pz] = sh[i - 1], [qx, qz] = sh[i], k = Math.ceil(Math.max(Math.abs(qx - px), Math.abs(qz - pz)) / 30000); for (let s2 = 1; s2 <= k; s2++) r.shape.push([Math.round(px + (qx - px) * s2 / k), Math.round(pz + (qz - pz) * s2 / k)]); }
     for (let i = 0; i + 1 < r.shape.length; i++) { const [ax, az] = r.shape[i], [bx, bz] = r.shape[i + 1]; boxCells(Math.min(ax, bx) / 100 - NET_PAD, Math.min(az, bz) / 100 - NET_PAD, Math.max(ax, bx) / 100 + NET_PAD, Math.max(az, bz) / 100 + NET_PAD, 'r', ri); } });
   JN.forEach((J, q) => boxCells(J.x - NET_PAD - J.r, J.z - NET_PAD - J.r, J.x + NET_PAD + J.r, J.z + NET_PAD + J.r, 'j', q));
   (w.net.areas || []).forEach((ar, q) => boxCells(ar.bb[0] - NET_PAD, ar.bb[1] - NET_PAD, ar.bb[2] + NET_PAD, ar.bb[3] + NET_PAD, 'a', q));
@@ -285,14 +285,51 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
 // ground at its ends (a viaduct's ways end to end: one line each, meeting at their shared ends). Their points shared with
 // another railway's (a switch; ways end to end: OpenStreetMap's shared node, the same point to the decimetre) are one node.
 function railWays(w, g) {
-  const list = mergeBores(w.real?.osm?.rails || [], g), key = (x, z) => 'R' + Math.round(x * 10) + ',' + Math.round(z * 10), uses = new Map();
+  const list = deckProfiles(mergeBores(w.real?.osm?.rails || [], g), w, g), key = (x, z) => 'R' + Math.round(x * 10) + ',' + Math.round(z * 10), uses = new Map();
   for (const [, , f] of list) { const seen = new Set(); for (let k = 0; k < f.length; k += 2) { const q = key(f[k], f[k + 1]); if (!seen.has(q)) { seen.add(q); uses.set(q, (uses.get(q) || 0) + 1); } } }
   const out = [];
   for (const [, br, f, cls = 0, tun = 0, extra = {}] of list) { const n = f.length / 2; if (n < 2) continue;
     const pts = [], jn = []; for (let i = 0; i < n; i++) { const x = f[i * 2], z = f[i * 2 + 1], q = key(x, z); pts.push({ x, z, y: 0 }); if (i === 0 || i === n - 1 || uses.get(q) > 1) jn.push([i, q]); }
-    if (br || tun) { const ya = extra.ya ?? g(pts[0].x, pts[0].z), yb = extra.yb ?? g(pts[n - 1].x, pts[n - 1].z); let s = 0; const S = [0]; for (let i = 1; i < n; i++) S.push((s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z))); pts.forEach((p, i) => { p.y = ya + (yb - ya) * (S[i] / (s || 1)); }); }
+    if (extra.ys) pts.forEach((p, i) => { p.y = extra.ys[i]; }); else if (br || tun) { const ya = extra.ya ?? g(pts[0].x, pts[0].z), yb = extra.yb ?? g(pts[n - 1].x, pts[n - 1].z); let s = 0; const S = [0]; for (let i = 1; i < n; i++) S.push((s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z))); pts.forEach((p, i) => { p.y = ya + (yb - ya) * (S[i] / (s || 1)); }); }
     const flag = br || tun ? new Array(n).fill(true) : null;
-    out.push({ kind: 'rail', rail: cls, minor: true, railsOnly: !!extra.railsOnly, width: (RAIL_HW[cls] + (extra.wide || 0)) * 2, pts, jn: extra.railsOnly ? [] : jn, bridge: br ? flag : null, tube: tun ? flag : null, layer: 0, surf: 0, lanes: cls, pinA: extra.pinA, pinB: extra.pinB }); }
+    out.push({ kind: 'rail', rail: cls, minor: true, railsOnly: !!extra.railsOnly, keepShape: !!extra.ys, width: (RAIL_HW[cls] + (extra.wide || 0)) * 2, pts, jn: extra.railsOnly ? [] : jn, bridge: br ? flag : null, tube: tun ? flag : null, layer: 0, surf: 0, lanes: cls, pinA: extra.pinA, pinB: extra.pinB }); }
+  return out;
+}
+// a railway bridge's deck profile (#294): not the straight line between the natural ground at its ends, but over everything
+// under it. Each deck's line in DECK_STEP m stations; at each, its lowest: the ground under it (DECK_DEPTH + GROUND_CLR, from
+// nothing at an abutment to all of it DECK_RAMP m in), a road or another railway under it (crossing it, not along it: at its
+// natural ground, or a road's own deck's height if it's lower than this one's) DECK_DEPTH + its clearance + CLEAR_PAD; the
+// straight line where it's higher (a viaduct over a valley). Then lifted to stay within the class's grade (a cone from every
+// station's lowest, along the deck and through the decks it shares an end with: a viaduct's ways end to end), so its ends
+// rise too and the railway's approaches climb to them in the solve (each held at the deck's end: pins). A deck end that
+// mergeBores holds at a portal's floor (ya, yb) stays there. -> the list, a deck's entry with its stations and their heights
+// (extra.ys)
+const DECK_STEP = 8, GROUND_CLR = 0.5, DECK_RAMP = 20, CLEAR_PAD = 0.3, ALONG = 0.9;
+function deckProfiles(list, w, g) {
+  const decks = list.map((e, q) => (e[1] && !e[4] && e[2].length >= 4 ? q : -1)).filter((q) => q >= 0); if (!decks.length) return list;
+  const ek = (x, z) => Math.round(x * 10) + ',' + Math.round(z * 10), endUse = new Map(); for (const q of decks) { const f = list[q][2]; for (const k of [ek(f[0], f[1]), ek(f[f.length - 2], f[f.length - 1])]) endUse.set(k, (endUse.get(k) || 0) + 1); }
+  // (the ways that can be under a deck: the roads (a tube's stretches left out) and the railways on the ground, in a grid of segments)
+  const C = 40, grid = new Map(), put = (sg) => { for (let i = Math.floor(Math.min(sg[0], sg[2]) / C); i <= Math.floor(Math.max(sg[0], sg[2]) / C); i++) for (let j = Math.floor(Math.min(sg[1], sg[3]) / C); j <= Math.floor(Math.max(sg[1], sg[3]) / C); j++) (grid.get(i * 100003 + j) || grid.set(i * 100003 + j, []).get(i * 100003 + j)).push(sg); };
+  for (const rd of w.net.roads) { if (rd.kind === 'rail') continue; const P = rd.pts, cl = rd.minor ? CLEAR.minor : CLEAR.street; for (let i = 0; i + 1 < P.length; i++) { if (rd.tube?.[i] && rd.tube?.[i + 1]) continue; const dk = (rd.baked || (rd.bridge?.[i] && rd.bridge?.[i + 1])) ? [P[i].y, P[i + 1].y] : null; put([P[i].x, P[i].z, P[i + 1].x, P[i + 1].z, rd.width / 2, cl, dk]); } }
+  for (const e of list) { if (e[1] || e[4]) continue; const f = e[2]; for (let k = 0; k + 3 < f.length; k += 2) put([f[k], f[k + 1], f[k + 2], f[k + 3], RAIL_HW[e[3] || 0], CLEAR.rail, null]); }
+  const P = decks.map((q) => { const [, , f, cls = 0, , ex = {}] = list[q], pts = []; for (let k = 0; k < f.length; k += 2) { if (k) { const ax = f[k - 2], az = f[k - 1], l = Math.hypot(f[k] - ax, f[k + 1] - az), n = Math.ceil(l / DECK_STEP); for (let s = 1; s < n; s++) pts.push([ax + (f[k] - ax) * s / n, az + (f[k + 1] - az) * s / n]); } pts.push([f[k], f[k + 1]]); }
+    const S = [0]; for (let i = 1; i < pts.length; i++) S.push(S[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])); const L = S[S.length - 1] || 1, ya = ex.ya ?? g(f[0], f[1]), yb = ex.yb ?? g(f[f.length - 2], f[f.length - 1]);
+    const real = [endUse.get(ek(f[0], f[1])) === 1, endUse.get(ek(f[f.length - 2], f[f.length - 1])) === 1], W = RAIL_HW[cls] + (ex.wide || 0) + DECK_SIDE;
+    const base = pts.map(([x, z], i) => { const st = ya + (yb - ya) * S[i] / L, dEnd = Math.min(real[0] ? S[i] : Infinity, real[1] ? L - S[i] : Infinity); let lo = g(x, z) + (DECK_DEPTH + GROUND_CLR) * Math.min(1, dEnd / DECK_RAMP);
+      const j = Math.max(0, Math.min(pts.length - 2, i)), ux0 = pts[j + 1][0] - pts[j][0], uz0 = pts[j + 1][1] - pts[j][1], ul = Math.hypot(ux0, uz0) || 1, ux = ux0 / ul, uz = uz0 / ul;
+      for (const [ax, az, bx, bz, hw, cl, dk] of grid.get(Math.floor(x / C) * 100003 + Math.floor(z / C)) || []) { const dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz; if (L2 < 1e-6) continue; const sl = Math.sqrt(L2); if (Math.abs((dx * ux + dz * uz) / sl) > ALONG) continue; /* (along it: an approach, a track beside it) */
+        const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)), px = ax + dx * t, pz = az + dz * t; if (Math.hypot(x - px, z - pz) > W + hw) continue;
+        const wy = dk ? dk[0] + (dk[1] - dk[0]) * t : g(px, pz); if (dk && wy > st - DECK_DEPTH) continue; /* (a road's deck over this one, or level with it: not under it) */
+        lo = Math.max(lo, wy + DECK_DEPTH + cl + CLEAR_PAD); }
+      return Math.max(st, lo); });
+    return { q, pts, S, base, y: base.slice(), G: RAIL_GRADE[cls] || 0.04, fixA: ex.ya != null, fixB: ex.yb != null, ka: ek(f[0], f[1]), kb: ek(f[f.length - 2], f[f.length - 1]) }; });
+  // (the cone: along each deck both ways, and its ends' heights shared with the decks meeting there, until nothing rises)
+  for (let pass = 0; pass < 50; pass++) { let moved = false; const node = new Map(), up = (k, v) => { if (!(node.get(k) >= v)) node.set(k, v); };
+    for (const d of P) { const y = d.y, n = y.length; for (let i = 1; i < n; i++) y[i] = Math.max(y[i], y[i - 1] - d.G * (d.S[i] - d.S[i - 1])); for (let i = n - 2; i >= 0; i--) y[i] = Math.max(y[i], y[i + 1] - d.G * (d.S[i + 1] - d.S[i])); up(d.ka, y[0]); up(d.kb, y[n - 1]); }
+    for (const d of P) { const n = d.y.length; for (const [i, k] of [[0, d.ka], [n - 1, d.kb]]) if (node.get(k) > d.y[i] + 1e-6) { d.y[i] = node.get(k); moved = true; } }
+    if (!moved) break; }
+  const out = list.slice();
+  for (const d of P) { if (d.fixA) d.y[0] = d.base[0]; if (d.fixB) d.y[d.y.length - 1] = d.base[d.base.length - 1]; const e = list[d.q]; out[d.q] = [e[0], e[1], d.pts.flat(), e[3], e[4], { ...(e[5] || {}), ys: d.y }]; }
   return out;
 }
 // a double-track tunnel mapped as two ways side by side (one per track: their tubes overlap, each portal inside the other's
@@ -394,8 +431,9 @@ function deckCeil(V, runs, offRuns, pins, T) {
   const own = new Set(); for (const r of runs) { if (r.rd?.bridge?.some(Boolean)) for (const v of r.vars) own.add(v); } /* (a deck's own approach: not under it) */
   let held = 0, skipped = 0;
   for (const r of runs) r.vars.forEach((k, q) => { if (pins.has(k) || own.has(k)) return; const x = V[k].x, z = V[k].z, reach = r.hw + (r.pave || 0), cl = r.rail >= 0 ? CLEAR.rail : r.minor ? CLEAR.minor : CLEAR.street; let need = Infinity;
+    const qa = r.pts[Math.max(0, q - 1)], qb = r.pts[Math.min(r.pts.length - 1, q + 1)], rl = Math.hypot(qb[0] - qa[0], qb[1] - qa[1]) || 1, rx = (qb[0] - qa[0]) / rl, rz = (qb[1] - qa[1]) / rl; /* (the way's direction there: one along the deck (its approach, a track beside it) isn't under it) */
     for (const { t, i, W } of grid.get(key(Math.floor(x / C), Math.floor(z / C))) || []) { const [ax, az] = t.pts[i], [bx, bz] = t.pts[i + 1], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1e-9, f = ((x - ax) * dx + (z - az) * dz) / L2;
-      if (f < (i === 0 ? 0 : -1e-9) || f > (i + 2 === t.pts.length ? 1 : 1 + 1e-9)) continue; const d = Math.abs((x - ax) * dz - (z - az) * dx) / Math.sqrt(L2); if (d > W + reach) continue;
+      if (f < (i === 0 ? 0 : -1e-9) || f > (i + 2 === t.pts.length ? 1 : 1 + 1e-9)) continue; if (Math.abs((rx * dx + rz * dz) / Math.sqrt(L2)) > ALONG) continue; const d = Math.abs((x - ax) * dz - (z - az) * dx) / Math.sqrt(L2); if (d > W + reach) continue;
       const under = t.ys[i] + (t.ys[i + 1] - t.ys[i]) * f - DECK_DEPTH; need = Math.min(need, Math.max(under - cl, Math.min(under - CLEAR_LOW, V[k].g - CEIL_MAX))); }
     if (need < Infinity) { if (V[k].g - need > CEIL_SKIP) { skipped++; return; } (r.ceil ||= new Set()).add(q); } /* (its stored shape keeps it and the stations either side: keepLine) */
     if (need < up[k]) { up[k] = need; held++; } });
