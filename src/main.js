@@ -34,6 +34,7 @@ import { Analytics } from './analytics.js';
 import { Blackbox } from './blackbox.js';
 import { designSummary, trackHangar } from './buildStats.js';
 import { loadReal } from './realworld.js';
+import { roadHint } from './landStart.js';
 import { trafficModels } from './trafficModels.js';
 import { newStart, mark, phases, gpuFamily, frameStats, PERF_WINDOW_MS } from './startStats.js';
 import { aircraftLights, updateAircraftLights } from './navLights.js';
@@ -675,13 +676,17 @@ function startFlight(cfgOverride) {
   const rec = (startRec = newStart(renderer.info.programs.length)); // what this start costs: flight_ready (startStats.js)
   // real-world places load their baked geodata first (cached by the service worker after the first visit)
   const loc = LOCATIONS[cfg.location], msg = $('#loading p'), msg0 = msg.textContent;
-  const place = loadReal(loc, qualityTier(), (f) => (msg.textContent = `Loading ${loc.name}… ${Math.round(f * 100)}%`));
+  // (where the flight starts, about: the baked layout's chunks there fetched with the place and meshed while the World
+  // is built (#294, ?layout=1): a car's street start near the place's hint, anything else about the airfield)
+  const st0 = hangar.stats || analyze(hangar.design), road = st0.car && !st0.heli && cfg.landStart === 'road';
+  let layoutAt = [0, 0]; const startAt = (meta, osm) => (layoutAt = road ? roadHint(loc, meta, osm.places) : [0, 0]);
+  const place = loadReal(loc, qualityTier(), (f) => (msg.textContent = `Loading ${loc.name}… ${Math.round(f * 100)}%`), startAt);
   // (and the street cars' models, so the World is built with them: trafficModelsNow; never rejects)
   const ready = Promise.all([place, trafficModels(baseTier(qualityTier()))]);
   ready.then(() => { const t = performance.now(); setTimeout(() => {
     mark(rec, 'data', t); // (when the data was in: the 50 ms below is the page getting to show the message)
     msg.textContent = msg0;
-    try { buildFlight(cfg); } catch (e) { fail(e); }
+    try { buildFlight(cfg, layoutAt); } catch (e) { fail(e); }
   }, 50); }, (e) => { msg.textContent = msg0; fail(new Error(`couldn’t load ${loc.name} (it needs the internet the first time): ${e.message}`)); });
 }
 const PARKED = [2, 0, 4, 7]; // the airport's parked planes (presets)
@@ -715,14 +720,14 @@ function freeKept() {
   for (const kind of ['geo', 'tex']) for (const r of res[kind]) if (!keep[kind].has(r)) r.dispose();
   renderer.renderLists.dispose();
 }
-function buildFlight(cfg) {
+function buildFlight(cfg, layoutAt = null) {
   const key = World.key({ location: cfg.location, quality: qualityTier(), time: cfg.time, weather: cfg.weather, moon: cfg.moon });
   let scene, world, kids, reused = false;
   if (kept?.key === key) { ({ scene, world, kids } = kept); kept = null; reused = true; } // (already reset by endFlight)
   else {
     freeKept();
     scene = new THREE.Scene();
-    world = new World(renderer, scene, { location: cfg.location, quality: qualityTier(), time: cfg.time, weather: cfg.weather });
+    world = new World(renderer, scene, { location: cfg.location, quality: qualityTier(), time: cfg.time, weather: cfg.weather, layoutAt });
     const moonSet = MOONS.find(([k]) => k === cfg.moon)?.[2]; if (moonSet != null) world.setMoonAge(moonSet); // 'real' keeps today's phase
     world.addParked(PARKED.map((i) => parkedStatic(presets[i]))); // (kept per design for the session: traffic.js)
     kids = new Set(scene.children);
@@ -1591,7 +1596,7 @@ function frame(now) {
       if (!F.warm && progs.length > n0) { const names = progs.slice(n0).map((p) => `${p.name} ${p.cacheKey?.slice(-48)}`).join(' | '); console.warn(`[shaders] ${progs.length - n0} compiled in flight, stalling a frame: ${names}`); window.__inflightCompiles = (window.__inflightCompiles || 0) + progs.length - n0; }
       if (restore) { restore(); compileWith(F.scene, F.effects.boom, warm); } // and every shader as lit by a crash's explosion flash (effects.js)
       // ...and until the ground photos have arrived (their upload, and the rock impostors' re-capture, would hitch), and the street cars' models (startFlight loads them first, so this is a safety net)
-      else if (warm) { const lp = F.world.layout?.progress() ?? 1, lm = $('#loading p'); if (lp < 1) { warm.msg ??= lm.textContent; lm.textContent = `Laying out the streets… ${Math.round(lp * 100)}%`; } const ok = F.world.loaded?.() !== false && F.traffic.vehicles.ready; if (ok || performance.now() - warm.t > (lp < 1 ? 8000 : 3000)) { F.warm = null; if (warm.msg != null) lm.textContent = warm.msg; $('#loading').classList.remove('show'); flightReady(F, warm.n, ok); } }
+      else if (warm) { const lp = F.world.layout?.progress() ?? 1, lm = $('#loading p'); if (lp < 1) { warm.msg ??= lm.textContent; lm.textContent = `Laying out the streets… ${Math.round(lp * 100)}%`; } const ok = F.world.loaded?.() !== false && F.traffic.vehicles.ready; if (ok || performance.now() - warm.t > (lp < 1 ? 4000 : 3000)) { F.warm = null; if (warm.msg != null) lm.textContent = warm.msg; $('#loading').classList.remove('show'); flightReady(F, warm.n, ok); } }
     }
   }
 }

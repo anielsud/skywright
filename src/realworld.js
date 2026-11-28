@@ -17,7 +17,7 @@ import { GeoStream } from './geostream.js';
 import { decodeRoadnet, way, plazas, MINOR, MINOR_KINDS } from './roadnet.js';
 import { decodeRoads, PACK_V } from './roadPack.js';
 import { ROADS } from './version.js';
-import { layoutWanted } from './layout/format.js';
+import { layoutWanted, indexChunks } from './layout/format.js';
 import { overlayKey, hashBytes, SETBACK_CODE, decodeSetbacks, setbacksHeader } from './layout/setbacks.js';
 
 const BASE = 'assets/real/';
@@ -172,8 +172,18 @@ function pixels(bmp, size) {
   return g.getImageData(0, 0, size, size).data;
 }
 
+// the baked layout's chunk files within PRE_D of (x, z), fetched and unzipped: file -> bytes (layout/runtime.js Layout:
+// the start's chunks in hand when the World is built, their meshing begun before the rest of it; #294)
+const PRE_D = 2600;
+async function prefetchLayout(index, dir, [x, z]) {
+  const S = index.size, out = new Map();
+  await Promise.all(indexChunks(index).filter((c) => c.file && Math.hypot((c.ix + 0.5) * S - x, (c.iz + 0.5) * S - z) <= PRE_D).map(async (c) => {
+    try { out.set(c.file, (await gunzip(await get(dir + c.file))).buffer); } catch { /* (fetched again when it's wanted) */ } }));
+  return out;
+}
 // Load (once) everything a real location needs. quality: the World's tier (smaller imagery textures on low/medium).
-export async function loadReal(loc, quality = 'high', onProgress) {
+// startAt(meta, osm): where the flight will start, about ([x, z]; the baked layout's chunks there fetched with the rest)
+export async function loadReal(loc, quality = 'high', onProgress, startAt = null) {
   const id = loc.id, key = id + ':' + quality;
   if (cache.get(id)?.key === key) { cache.get(id).stream.prime(1500); return cache.get(id); } // (not awaited: see below)
   const dir = BASE + id + '/';
@@ -182,8 +192,10 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   if (loc.city?.statue) files.push(get('assets/landmarks/liberty.glb').catch((e) => (console.warn('[landmarks] statue model', e), null))); // the Statue of Liberty scan (realLandmarks.js; tools/liberty)
   const sbZ = loc.city && layoutWanted() && setbacksWanted() ? get(dir + 'setbacks.bin.gz').catch(() => null) : null; // (the baked setbacks: layout/setbacks.js; not waited for with the rest)
   const sbCode = sbZ ? Promise.all(SETBACK_CODE.map((f) => fetch(f).then((r) => (r.ok ? r.text() : null)))).catch(() => null) : null; // (the setback code's own text: part of the overlay's key)
+  const layIx = layoutWanted() ? get(dir + 'layout/index.json', 'json').catch(() => null) : null; // (the baked road layout, #294: its index now, the start's chunks once meta and osm are in)
   let done = 0; const tick = (p) => { done++; onProgress?.(done / files.length); return p; };
   const [meta, hiZ, farZ, hiB, farB, coverB, osm, roadsZ, geoB, cityZ, statueB] = await Promise.all(files.map((p) => p.then(tick)));
+  const layPre = layIx && startAt ? layIx.then((ix) => (ix ? prefetchLayout(ix, dir + 'layout/', startAt(meta, osm)) : null)).catch(() => null) : null;
   // the largest imagery texture on this tier; a place with loc.img has a ready-made hi file per tier (no resize)
   const texSize = quality === 'high' || quality === 'ultra' ? 4096 : 2048, fit = { resizeWidth: texSize, resizeHeight: texSize, resizeQuality: 'high' };
   const opt = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
@@ -203,7 +215,7 @@ export async function loadReal(loc, quality = 'high', onProgress) {
   if (packKey) try { const b = await gunzip(await get(`assets/boot/roads-${id}.bin.gz`)), P = decodeRoads(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); if (P.key === packKey && P.v === PACK_V) D.roadPack = P; } catch { /* (missing: work them out) */ }
   if (cityZ) D.city = decodeCity(await gunzip(cityZ));
   // the baked road layout's chunks (#294, behind a flag while it's tried out): their bytes, decoded by the World
-  if (layoutWanted()) try { D.layout = { index: await get(dir + 'layout/index.json', 'json'), dir: dir + 'layout/' }; } catch { /* (none baked here) */ } // (the chunks themselves stream in: layout/runtime.js)
+  { const ix = layIx && (await layIx); if (ix) D.layout = { index: ix, dir: dir + 'layout/', pre: (await layPre) || new Map() }; } // (none baked here: null; the chunks themselves stream in: layout/runtime.js, the start's already here)
   // the baked setbacks (#294): only if they were baked against this layout (else realCity.js works them out as before)
   if (sbZ && D.layout) try { const z = await sbZ; if (z) { const b = await gunzip(z); const code = await sbCode, key = code && !code.includes(null) && cityZ ? overlayKey(D.layout.index, hashBytes(new Uint8Array(cityZ)), code) : null; if (key && setbacksHeader(b).key === key) D.setbacks = decodeSetbacks(b); else console.warn('[setbacks] baked against another layout, city.bin or setback code: worked out at load'); } } catch (e) { console.warn('[setbacks]', e); }
   if (statueB) try { D.statue = (await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(statueB, '')).scene; } catch (e) { console.warn('[landmarks] statue model', e); }
