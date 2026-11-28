@@ -13,7 +13,7 @@ import { KIND } from './format.js';
 import { makeRules, latticeGround, streetOverBed, KERB, KERB_W, PAVE_RAMP, painted, zebra } from './rules.js';
 import { chunkOutlines } from './outline.js';
 
-const RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, MOUTH_D = 6, FID_STEP = 4, FID_TOL = 0.1;
+const LX_STEP = 1.5, RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_CELL = 8, CITY_IN = 10, BANK_STEP = 4, BANK_MIN = 0.03, CLEAR = 0.75, MOUTH_D = 6, FID_STEP = 4, FID_TOL = 0.1;
 // a chunk whose outlines have OUT_MIN points or more (the densest ~5% of New York's) has them stored by the bake (format.js
 // op): working them out takes 60+ ms there
 export const OUT_MIN = 1650;
@@ -42,6 +42,15 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   const O = pre ? edgeOnly(L.edge) : L.outline || chunkOutlines(L.net, L.areas, L), ol = O.P.map(([x, z]) => add(x, z)), tOut = performance.now() - t0; // (the outlines: from the network, outline.js)
   const E = []; for (const [a0, b0, k] of O.E) { const a = ol[a0], b = ol[b0]; E.push([a, b, k]); kinds[a] |= 1 << k; kinds[b] |= 1 << k; }
   for (const [i, m] of O.edgeBits) kinds[ol[i]] = m; // (a point on the chunk's edge: its regions as the chunk beside sees them too (outline.js))
+  // (fine: each outline edge through a level crossing's circle, and LX_STEP m past it, split every LX_STEP m: inside, the
+  // crossing's steep plane; outside, each way's own profile. A long edge across the circle's edge leaves only long thin
+  // triangles there (its other points metres away), each tilted its own way: a step at their creases)
+  if (fine) for (const J of L.net.junctions) { if (!J.lx) continue; const cx = J.x * 100, cz = J.z * 100, R0 = (J.r + LX_STEP) * 100, st = LX_STEP * 100;
+    for (let e = E.length - 1; e >= 0; e--) { const [a0, b0, k] = E[e], sw = PX[a0] > PX[b0] || (PX[a0] === PX[b0] && PZ[a0] > PZ[b0]), a = sw ? b0 : a0, b = sw ? a0 : b0; /* (from its lower end: an edge two regions share is split at the same points from both) */ if ((PX[a] === PX[b] && (PX[a] === X0 || PX[a] === X0 + S)) || (PZ[a] === PZ[b] && (PZ[a] === Z0 || PZ[a] === Z0 + S))) continue; // (not along the chunk's edge: the chunk beside has it whole)
+      const dx = PX[b] - PX[a], dz = PZ[b] - PZ[a], l = Math.hypot(dx, dz); if (l < 2 * st) continue; const fx = PX[a] - cx, fz = PZ[a] - cz, A = l * l, B = 2 * (fx * dx + fz * dz), Cq = fx * fx + fz * fz - R0 * R0, D = B * B - 4 * A * Cq; if (D <= 0) continue;
+      const t0 = Math.max(0, (-B - Math.sqrt(D)) / (2 * A)), t1 = Math.min(1, (-B + Math.sqrt(D)) / (2 * A)); if (t1 <= t0) continue; const ins = [];
+      for (let u = Math.ceil(t0 * l / st) * st; u < t1 * l; u += st) { if (u < 10 || u > l - 10) continue; const m = add(Math.round(PX[a] + dx * u / l), Math.round(PZ[a] + dz * u / l)); if (m === a || m === b || ins.includes(m)) continue; kinds[m] |= 1 << k; ins.push(m); }
+      if (!ins.length) continue; const chain = sw ? [b, ...ins.reverse(), a] : [a, ...ins, b], rep = []; for (let q = 0; q + 1 < chain.length; q++) rep.push([chain[q], chain[q + 1], k]); E.splice(e, 1, ...rep); } }
   for (let s = 0; s <= S; s += EDGE_STEP * 100) { add(X0 + s, Z0); add(X0 + s, Z0 + S); add(X0, Z0 + s); add(X0 + S, Z0 + s); }
   // which paved region a point is in (cm), first in PAVED's order; ground otherwise
   const RW = 200, rows = new Map(); for (const [a, b, k] of E) { const az = PZ[a], bz = PZ[b]; if (az === bz) continue; for (let r = Math.floor(Math.min(az, bz) / RW); r <= Math.floor(Math.max(az, bz) / RW); r++) (rows.get(r) || rows.set(r, []).get(r)).push(a, b, k); }
