@@ -97,7 +97,7 @@ export class Layout {
       deck: new THREE.MeshStandardMaterial({ color: 0x9a968e, roughness: 0.9 }), tube: new THREE.MeshStandardMaterial({ color: 0x6e6c66, emissive: 0x2a2924, roughness: 0.9, side: THREE.DoubleSide }) });
     // (the retaining walls (walls.js): grey stone in the Alps, concrete elsewhere; the paving's texture, in metres along and up (uv / 3))
     const stone = REGION[loc.id] === 'ch', wt = loader.load('tex/roads/sidewalk_d.jpg'); wt.wrapS = wt.wrapT = THREE.RepeatWrapping; wt.colorSpace = THREE.SRGBColorSpace; if (stone) wt.repeat.set(2, 2);
-    this.mats.wall = new THREE.MeshStandardMaterial({ map: wt, color: stone ? 0xc2bcb0 : 0xe6e2da, roughness: 0.92 });
+    this.mats.wall = new THREE.MeshStandardMaterial({ map: wt, color: stone ? 0xf2ece2 : 0xffffff, roughness: 0.92 }); /* (the texture is the colour: a tint under it as well left the wall's albedo about 0.1, near black in shade) */
     { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute([0, -1e4, 0, 0, -1e4, 0, 0, -1e4, 0], 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0], 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 2)); const m = new THREE.Mesh(g, this.mats.wall); m.frustumCulled = false; m.name = 'layout wall warm-up'; this.group.add(m); } /* (always there: its shader compiled with the rest, not when the first wall arrives) */
     this.matList = [this.mats.ground, this.mats.alley, this.mats.gravel, this.mats.pavers, this.mats.ballast];
     // the water: today's plane and shore mesh (World.buildWater) don't draw inside an active chunk, whose own water is its

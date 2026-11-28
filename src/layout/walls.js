@@ -13,39 +13,43 @@
 //   a station: { x, z (on the step), nx, nz (away from the road), yIn, yOut (the surface where it meets the wall's inner and outer face), hi, lo (and the highest
 //                and lowest of those and the surfaces just either side of the step),
 //                o0, o1 (the wall's faces along n from x, z), kind (0 the bank cap, 1 a road's edge) }
+//   tall: the bank caps stepping more than WALL_TALL, left without a wall ({ x, z, h }, in the chunk, one per WALL_STEP square)
 //   a segment: ax, az, bx, bz, nx, nz, aTop, aBot, bTop, bBot, o0, o1, kind
 import { KIND } from './format.js';
 import { BANK_MAX, vergeW } from './rules.js';
 
-export const WALL_STEP = 2, WALL_MIN = 0.3, WALL_T = 0.5, PARAPET = 1, PARAPET_DROP = 2, WALL_EPS = 0.05, WALL_FOOT = 0.5, SEG_N = 13;
-const CAP_WIN = 3, EDGE_WIN = 0, END_TOL = 0.15, PEEK = 0.3, JOIN = 2.5 * WALL_STEP, PAVED = new Set([KIND.tarmac, KIND.kerb, KIND.pave, KIND.verge, KIND.ballast, KIND.alley, KIND.pavers, KIND.gravel, KIND.lip]);
+export const WALL_STEP = 2, WALL_MIN = 0.3, WALL_MIN_CITY = 1, WALL_TALL = 8, WALL_T = 0.5, PARAPET = 1, PARAPET_DROP = 2, WALL_EPS = 0.05, WALL_FOOT = 0.5, SEG_N = 13;
+const CAP_WIN = 3, EDGE_WIN = 0, END_TOL = 0.15, CITY_STEP = 4, PEEK = 0.3, JOIN = 2.5 * WALL_STEP, PAVED = new Set([KIND.tarmac, KIND.kerb, KIND.pave, KIND.verge, KIND.ballast, KIND.alley, KIND.pavers, KIND.gravel, KIND.lip]);
 // the surface the rules give at (x, z): a paved region's drawn height, else the ground
 const surf = (R, x, z) => { const k = R.region(x, z); return k === KIND.ground || k === KIND.bank ? R.ground(x, z) : R.drawn(x, z, k); };
 // whether a wall may stand at (x, z): not on any way's surface (another carriageway, a pavement, a verge, a railway's bed)
 export const wallFree = (R, x, z) => !PAVED.has(R.region(x, z));
 
 export function wallsOf(L, R, g, all = false) {
-  const st = [], x0 = L.x0, z0 = L.z0, x1 = L.x0 + L.size, z1 = L.z0 + L.size;
+  const st = [], tall = [], x0 = L.x0, z0 = L.z0, x1 = L.x0 + L.size, z1 = L.z0 + L.size;
   for (const r of L.net.runs) {
-    if (r.off || r.kind === 'rail') continue; const n = r.h.length; if (n < 2) continue;
+    if (r.off || r.kind === 'rail' || (L.city && r.kind !== 'highway')) continue; const n = r.h.length; if (n < 2) continue; /* (in a city only an expressway's edge is walled) */
     const side = r.hw + (r.pave || vergeW(r)), edge = L.city && r.kind === 'highway' && !r.pave, ik = vergeW(r) ? KIND.verge : KIND.tarmac; /* (a city's expressway: its lots are at the streets' height beside it, in a trench or up on a fill; a street with a pavement meets its lots at the pavement's top) */
     /* (a station from a sample: the step at the bank's cap, or a city street's edge) */
-    const at = ([cx, cz, h, nx, nz]) => { let hit = null; const ox = cx + nx * (side + BANK_MAX), oz = cz + nz * (side + BANK_MAX);
+    let lastTall = false; const at = ([cx, cz, h, nx, nz]) => { let hit = null; const ox = cx + nx * (side + BANK_MAX), oz = cz + nz * (side + BANK_MAX);
       /* (the bank cap, outside a city (a city's ground is its lots; where they meet a bank's cap it steps a few decimetres:
          a seam in the city's rules, not a wall's place): only where the ground steps within PEEK of it (each side carried on to it by its slope, as stepAt)) */
-      if (!L.city && ox > x0 - 4 && oz > z0 - 4 && ox < x1 + 4 && oz < z1 + 4 && stepAt((d) => R.ground(ox + nx * d, oz + nz * d), 0, PEEK) > WALL_MIN - 0.1) hit = find(R, cx, cz, nx, nz, side + BANK_MAX, CAP_WIN, 0);
-      if (!hit && edge) { const ex = cx + nx * side, ez = cz + nz * side; /* (a city street's edge: only where the ground beside it is off the road's height) */ if (ex > x0 - 2 && ez > z0 - 2 && ex < x1 + 2 && ez < z1 + 2 && Math.abs(R.ground(ex + nx * PEEK, ez + nz * PEEK) - h) > WALL_MIN) hit = find(R, cx, cz, nx, nz, side, EDGE_WIN, 1, ik); }
-      return hit; };
+      if (!L.city && ox > x0 - 4 && oz > z0 - 4 && ox < x1 + 4 && oz < z1 + 4 && (stepAt((d) => R.ground(ox + nx * d, oz + nz * d), 0, PEEK)) > WALL_MIN - 0.1) hit = find(R, cx, cz, nx, nz, side + BANK_MAX, CAP_WIN, 0);
+      if (!hit && edge) { const ex = cx + nx * side, ez = cz + nz * side; /* (a city expressway's edge: only where the ground beside it is off the road's height) */ if (ex > x0 - 2 && ez > z0 - 2 && ex < x1 + 2 && ez < z1 + 2 && Math.abs(R.ground(ex + nx * PEEK, ez + nz * PEEK) - h) > WALL_MIN_CITY) hit = find(R, cx, cz, nx, nz, side, EDGE_WIN, 1, ik); }
+      if (hit?.tall) { tall.push(hit); lastTall = true; return null; } lastTall = false; return hit; };
     /* (where a wall starts or stops between two samples: bisected along the road to END_TOL, the station on the wall's side) */
     const end = (p, q, hp) => { let a = p, b = q, best = null; const mix = (u, v) => { const m = u.map((x, i) => (x + v[i]) / 2), l = Math.hypot(m[3], m[4]) || 1; m[3] /= l; m[4] /= l; return m; };
       while (Math.hypot(a[0] - b[0], a[1] - b[1]) > END_TOL) { const m = mix(a, b), h = at(m); if (!!h === !!hp) { a = m; if (h) best = h; } else { b = m; if (h) best = h; } }
       return best; };
     for (const sg of [1, -1]) { let chain = null, prev = null, prevHit = null;
       const push = (hit) => { if (chain && Math.hypot(hit.x - chain.x, hit.z - chain.z) <= JOIN && chain.kind === hit.kind) hit.prev = chain; chain = hit; st.push(hit); };
-      for (const p of samples(r, sg, side + BANK_MAX)) { const hit = at(p);
-        if (prev && !!hit !== !!prevHit) { const e = end(prev, p, prevHit); if (e && e.kind === (hit || prevHit).kind) push(e); }
+      let prevTall = false;
+      for (const p of samples(r, sg, L.city ? side : side + BANK_MAX, L.city ? CITY_STEP : WALL_STEP)) { const hit = at(p), isTall = lastTall;
+        if (prev && (isTall || prevTall) && (hit ? 2 : isTall ? 1 : 0) !== (prevHit ? 2 : prevTall ? 1 : 0)) { /* (next to a step too tall for a wall: the stretch between looked along every 0.5 m, every END_TOL beside a wall) */
+          const L2 = Math.hypot(p[0] - prev[0], p[1] - prev[1]), k = Math.max(1, Math.ceil(L2 / (hit || prevHit ? END_TOL : 0.5))); for (let i = 1; i < k; i++) { const t = i / k, m = prev.map((v, j) => v + (p[j] - v) * t), l = Math.hypot(m[3], m[4]) || 1; m[3] /= l; m[4] /= l; const e = at(m); if (e) push(e); } }
+        else if (prev && !!hit !== !!prevHit) { const e = end(prev, p, prevHit); if (e && e.kind === (hit || prevHit).kind) push(e); }
         if (hit) push(hit); /* (a wall picked up again within JOIN of where it stopped (the inside of a hairpin, where its two legs' caps cross) is joined across) */
-        prev = p; prevHit = hit; } }
+        prev = p; prevHit = hit; prevTall = isTall; } }
   }
   // (a wall's end joined to another's start within JOIN, facing much the same way (not back to back): a road's way split there (OSM's ways), or
   // two roads' caps meeting at a corner)
@@ -63,20 +67,25 @@ export function wallsOf(L, R, g, all = false) {
     if (!ok) continue;
     /* (its top and foot straight between its ends, raised or lowered so the surfaces at its faces never stand over its top
        (and parapet) nor under its foot between them: a steep bank's end is rough along the road) */
-    let tA = top(a), tB = top(b), fA = a.lo - WALL_FOOT, fB = b.lo - WALL_FOOT, up = 0, dn = 0; const fi = b.kind ? -WALL_EPS : o0, Si = b.kind ? (x, z) => R.drawn(x, z, b.ik) : R.ground;
-    for (let i = 0; i <= m; i++) { const t = i / m, px = a.x + (b.x - a.x) * t, pz = a.z + (b.z - a.z) * t, s = { yIn: Si(px + nx * fi, pz + nz * fi), yOut: R.ground(px + nx * o1, pz + nz * o1) };
-      up = Math.max(up, top(s) - (tA + (tB - tA) * t)); dn = Math.max(dn, fA + (fB - fA) * t - (Math.min(s.yIn, s.yOut) - WALL_FOOT)); }
+    let tA = top(a), tB = top(b), fA = a.lo - WALL_FOOT, fB = b.lo - WALL_FOOT, up = 0, dn = 0; const fi = b.kind ? -WALL_EPS : o0, Si = b.kind ? (x, z) => R.drawn(x, z, b.ik) : R.ground, T = [];
+    for (let i = 0; i <= m; i++) { const t = i / m, px = a.x + (b.x - a.x) * t, pz = a.z + (b.z - a.z) * t, s = { yIn: Si(px + nx * fi, pz + nz * fi), yOut: R.ground(px + nx * o1, pz + nz * o1) }, ts = top(s); T.push(ts);
+      up = Math.max(up, ts - (tA + (tB - tA) * t)); dn = Math.max(dn, fA + (fB - fA) * t - (Math.min(s.yIn, s.yOut) - WALL_FOOT)); }
+    /* (where the surfaces along it vary more than its parapet, a straight top would stand over them: a piece per sample instead) */
+    if (T.some((ts, i) => tA + up + (tB - tA) * i / m - ts > PARAPET + 0.1)) { for (let i = 0; i < m; i++) { const t0 = i / m, t1 = (i + 1) / m, y = Math.max(T[i], T[i + 1]);
+        seg.push(a.x + (b.x - a.x) * t0, a.z + (b.z - a.z) * t0, a.x + (b.x - a.x) * t1, a.z + (b.z - a.z) * t1, nx, nz, y, fA - dn + (fB - fA) * t0, y, fA - dn + (fB - fA) * t1, o0, o1, b.kind); }
+      len += l; continue; }
     seg.push(a.x, a.z, b.x, b.z, nx, nz, tA + up, fA - dn, tB + up, fB - dn, o0, o1, b.kind); len += l; }
-  return { st, seg: Float32Array.from(seg), n: seg.length / SEG_N, len };
+  return { st, seg: Float32Array.from(seg), n: seg.length / SEG_N, len, tall: [...new Map(tall.filter((t) => t.x >= x0 && t.z >= z0 && t.x < x1 && t.z < z1).map((t) => [Math.round(t.x / WALL_STEP) + ',' + Math.round(t.z / WALL_STEP), t])).values()] };
 }
-// the points along road r's side sg (1 left, -1 right) a wall is looked for from: every WALL_STEP m along each segment,
+// the points along road r's side sg (1 left, -1 right) a wall is looked for from: every step m along each segment (a city's
+// expressways: CITY_STEP, the ends bisected as everywhere),
 // its normal; round a bend's outside (the normal turning forward), a fan of normals at the bend's point, WALL_STEP m apart at reach m out
 // -> [[cx, cz, h, nx, nz], ...]
-export function samples(r, sg, reach) {
+export function samples(r, sg, reach, step = WALL_STEP) {
   const out = [], n = r.h.length; let pn = null, pd = null; /* (pn, pd: the segment before's normal and direction) */
   for (let s = 0; s + 1 < n; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, l = Math.hypot(dx, dz); if (l < 1e-3) continue;
-    const nx = (-dz / l) * sg, nz = (dx / l) * sg, k = Math.max(1, Math.round(l / WALL_STEP));
-    if (pn && (nx - pn[0]) * pd[0] + (nz - pn[1]) * pd[1] > 0) { const an = Math.atan2(pn[0] * nz - pn[1] * nx, pn[0] * nx + pn[1] * nz), f = Math.ceil(Math.abs(an) * reach / WALL_STEP);
+    const nx = (-dz / l) * sg, nz = (dx / l) * sg, k = Math.max(1, Math.round(l / step));
+    if (pn && (nx - pn[0]) * pd[0] + (nz - pn[1]) * pd[1] > 0) { const an = Math.atan2(pn[0] * nz - pn[1] * nx, pn[0] * nx + pn[1] * nz), f = Math.ceil(Math.abs(an) * reach / step);
       for (let i = 1; i < f; i++) { const c = Math.cos(an * i / f), sn = Math.sin(an * i / f); out.push([ax, az, r.h[s], pn[0] * c - pn[1] * sn, pn[0] * sn + pn[1] * c]); } }
     for (let q = 0; q <= k; q++) { const t = q / k; out.push([ax + dx * t, az + dz * t, r.h[s] + (r.h[s + 1] - r.h[s]) * t, nx, nz]); }
     pn = [nx, nz]; pd = [dx / l, dz / l]; }
@@ -100,10 +109,12 @@ export function find(R, cx, cz, nx, nz, d0, win, kind, ik = KIND.verge) {
     if (d == null) return null; }
   const o0 = kind ? -0.02 : -WALL_T / 2, o1 = kind ? WALL_T : WALL_T / 2; if (!kind && stepAt(S, d) < WALL_MIN) return null; /* (a steep slope, no step) */
   const yIn = kind ? surf(R, cx + nx * (d - WALL_EPS), cz + nz * (d - WALL_EPS)) : S(d + o0), yOut = S(d + o1); /* (the surfaces where they meet the wall's faces; inside a road's edge, whichever paved surface is there) */
-  if (kind && Math.abs(yIn - yOut) < WALL_MIN) return null;
+  if (kind && Math.abs(yIn - yOut) < WALL_MIN_CITY) return null; /* (in a city only a step of a metre or more: a lower one is a kerb's or a lot's) */
   const x = cx + nx * d, z = cz + nz * d;
   if (kind === 0 && !(wallFree(R, x - nx * WALL_EPS, z - nz * WALL_EPS) && wallFree(R, x + nx * WALL_EPS, z + nz * WALL_EPS))) return null;
-  if (kind === 1 && !wallFree(R, x + nx * WALL_EPS, z + nz * WALL_EPS)) return null; /* (another way's surface beside the edge: no wall) */
+  if (kind === 1 && !(wallFree(R, x + nx * WALL_EPS, z + nz * WALL_EPS) && wallFree(R, x + nx * (WALL_T + 0.5), z + nz * (WALL_T + 0.5)))) return null; /* (another way's surface beside the edge, or a median's strip too narrow for a wall: no wall) */
   const yi = kind ? yIn : S(d - WALL_EPS), yo = S(d + WALL_EPS); /* (and just either side of the step: where a lot's edge meets the wall's end, the two differ) */
-  return { x, z, nx, nz, yIn, yOut, hi: Math.max(yIn, yOut, yi, yo), lo: Math.min(yIn, yOut, yi, yo), o0, o1, kind, ik, prev: null };
+  const hi = Math.max(yIn, yOut, yi, yo), lo = Math.min(yIn, yOut, yi, yo);
+  if (!kind && stepAt(S, d) > WALL_TALL) return { tall: true, x, z, h: stepAt(S, d) }; /* (a bank's cap stepping more than WALL_TALL: no wall (a gallery's, a tunnel's or the height data's), counted) */
+  return { x, z, nx, nz, yIn, yOut, hi, lo, o0, o1, kind, ik, prev: null };
 }

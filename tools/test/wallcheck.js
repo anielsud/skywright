@@ -9,7 +9,7 @@ import { gunzipSync } from 'node:zlib';
 import { decodeLayout, KIND } from '../../src/layout/format.js';
 import { latticeOf } from '../../src/layout/mesh.js';
 import { makeRules, latticeGround, latticeHeights, BANK_MAX, vergeW } from '../../src/layout/rules.js';
-import { wallsOf, wallFree, stepAt, SEG_N, PARAPET, WALL_STEP, WALL_T } from '../../src/layout/walls.js';
+import { wallsOf, wallFree, stepAt, SEG_N, PARAPET, WALL_STEP, WALL_T, WALL_MIN_CITY, WALL_TALL } from '../../src/layout/walls.js';
 import { hiGrid } from './layoutcheck.js';
 
 export const nodeSuite = { files: ['src/layout/walls.js', 'src/layout/rules.js', 'src/layout/format.js', 'tools/test/wallcheck.js', 'assets/real/nyc/layout/index.json', 'assets/real/lauterbrunnen/layout/index.json'] };
@@ -22,7 +22,7 @@ const surf = (R, x, z) => { const k = R.region(x, z); return k === KIND.ground |
 // the checks on one chunk's walls (W: wallsOf's, its segments all kept: those across the chunk's edge too) ->
 // { steps, uncovered, worst: [step m, x, z], at: [some uncovered], onWay, topBad, topWorst }
 export function wallChecks(L, R, W) {
-  const S = W.seg, ns = S.length / SEG_N, x0 = L.x0, z0 = L.z0, x1 = L.x0 + L.size, z1 = L.z0 + L.size, out = { steps: 0, uncovered: 0, worst: [0], at: [], onWay: 0, topBad: 0, topWorst: 0, topAt: [] };
+  const S = W.seg, ns = S.length / SEG_N, x0 = L.x0, z0 = L.z0, x1 = L.x0 + L.size, z1 = L.z0 + L.size, out = { steps: 0, tall: 0, uncovered: 0, worst: [0], at: [], onWay: 0, topBad: 0, topWorst: 0, topAt: [] };
   // (a point covered: a segment it's beside (along it, and between its faces) whose top reaches the higher side and foot the lower)
   const covered = (x, z, hi, lo) => { for (let q = 0; q < ns; q++) { const o = q * SEG_N, ax = S[o], az = S[o + 1], dx = S[o + 2] - ax, dz = S[o + 3] - az, L2 = dx * dx + dz * dz || 1e-9, t = ((x - ax) * dx + (z - az) * dz) / L2; if (t < -0.05 || t > 1.05) continue;
     const tt = Math.max(0, Math.min(1, t)), v = (x - ax - dx * tt) * S[o + 4] + (z - az - dz * tt) * S[o + 5], off = Math.hypot(x - ax - dx * tt, z - az - dz * tt); if (off > Math.max(Math.abs(S[o + 10]), Math.abs(S[o + 11])) + PROBE + 0.05 || v < S[o + 10] - PROBE - 0.05 || v > S[o + 11] + PROBE + 0.05) continue;
@@ -33,7 +33,7 @@ export function wallChecks(L, R, W) {
     for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, l = Math.hypot(dx, dz); if (l < 1e-3) continue;
       for (let t = WALL_STEP / 2; t < l; t += WALL_STEP) for (const sg of [1, -1]) { const nx = (-dz / l) * sg, nz = (dx / l) * sg, cx = ax + dx * t / l, cz = az + dz * t / l;
         for (const d of offs) { const x = cx + nx * d, z = cz + nz * d; if (x < x0 || z < z0 || x >= x1 || z >= z1) continue; const ix = x - nx * PROBE, iz = z - nz * PROBE, ox = x + nx * PROBE, oz = z + nz * PROBE;
-          if (!wallFree(R, ox, oz) || !wallFree(R, x + nx * (WALL_T + 0.02), z + nz * (WALL_T + 0.02)) || (d > side && !wallFree(R, ix, iz))) continue; /* (room for a wall: not a median's sliver between two carriageways) */ const yi = surf(R, ix, iz), yo = surf(R, ox, oz), st = stepAt((v) => surf(R, cx + nx * v, cz + nz * v), d); if (st <= STEP_MAX) continue;
+          if (!wallFree(R, ox, oz) || !wallFree(R, x + nx * (WALL_T + 0.5), z + nz * (WALL_T + 0.5)) || (d > side && !wallFree(R, ix, iz))) continue; /* (room for a wall: not a median's sliver between two carriageways) */ const yi = surf(R, ix, iz), yo = surf(R, ox, oz), st = stepAt((v) => surf(R, cx + nx * v, cz + nz * v), d); if (st <= (L.city ? WALL_MIN_CITY + 0.05 : STEP_MAX)) continue; if (d > side && st > WALL_TALL) { out.tall++; continue; } /* (in a city only steps of a metre or more are walled; a cap step over WALL_TALL is the data's, counted) */
           out.steps++; if (!covered(x, z, Math.max(yi, yo), Math.min(yi, yo))) { out.uncovered++; if (st > out.worst[0]) out.worst = [st, x, z]; if (out.at.length < 12) out.at.push([+x.toFixed(1), +z.toFixed(1), +st.toFixed(2), d > side ? 'cap' : 'edge']); } } } } }
   // no wall on a paved surface; its top the higher surface's, up to its parapet over it (at each end, just either side of the step)
   for (let q = 0; q < ns; q++) { const o = q * SEG_N, ax = S[o], az = S[o + 1], bx = S[o + 2], bz = S[o + 3], nx = S[o + 4], nz = S[o + 5], o0 = S[o + 10], o1 = S[o + 11], edge = S[o + 12] === 1, l = Math.hypot(bx - ax, bz - az), m = Math.max(1, Math.ceil(l / 0.5));
