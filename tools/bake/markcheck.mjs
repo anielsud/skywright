@@ -8,11 +8,13 @@
 //   zebras  at every mouth onto a junction (in the chunk) of a street with crossings (rules.js zebra): across the carriageway at three distances in the
 //           crossing's band (ZEBRA_AT m past the circle), whether every sample is this street's, painted, and its
 //           distance-from-the-junction coordinate is the one wanted (ZEBRA_TOL: the band square across). whole / mouths.
+//           Where another street's carriageway overlaps the band (left out of those): whether no street without a
+//           crossing there takes part of it. overHeld / overMouths.
 //   kerbs   the pavement's slabs: at every pavement and kerb ribbon corner, the across coordinate it's given against its
 //           true distance from its street's centre line (joints run along the kerb when they agree): max error.
 import { KIND } from '../../src/layout/format.js';
 import { zebra } from '../../src/layout/rules.js';
-import { MARK, MARK_K, MARK_S } from '../../src/layout/mesh.js';
+import { MARK, MARK_K, MARK_S, ZEBRA_IN, ZEBRA_OUT } from '../../src/layout/mesh.js';
 
 export const MARK_OUT = 4, ZEBRA_AT = [0.8, 2, 3.2], ZEBRA_BAND = 3.5, ZEBRA_TOL = 0.15, DRIFT_MAX = 0.05, SHARP = Math.PI / 3; // (ZEBRA_BAND: the crossing's far edge past the circle, runtime.js roadMat)
 export function markCheck(L, m, detail = false) {
@@ -23,17 +25,19 @@ export function markCheck(L, m, detail = false) {
   const at = (x, z) => { for (const t of grid.get(Math.floor(x / C) * 1e6 + Math.floor(z / C)) || []) { const P = (q) => [R.pos[(t + q) * 3], R.pos[(t + q) * 3 + 2]], [A, B, Cc] = [P(0), P(1), P(2)], den = (B[1] - Cc[1]) * (A[0] - Cc[0]) + (Cc[0] - B[0]) * (A[1] - Cc[1]); if (!den) continue;
     const l1 = ((B[1] - Cc[1]) * (x - Cc[0]) + (Cc[0] - B[0]) * (z - Cc[1])) / den, l2 = ((Cc[1] - A[1]) * (x - Cc[0]) + (A[0] - Cc[0]) * (z - Cc[1])) / den, l3 = 1 - l1 - l2; if (l1 >= -1e-6 && l2 >= -1e-6 && l3 >= -1e-6) return [t, l1, l2, l3]; } return null; };
   // a carriageway's markings at a point, as the material picks them (mesh.js rib.mark, runtime.js roadMat): of its
-  // streets the one nearest past its half width, and of that one's four mouths the nearest -> { id, v, hw, dj }
+  // streets the one nearest past its half width (past its stretch along its line: from the stretch's end), and of that one's four mouths the nearest -> { id, v, hw, dj }
   const M = MARK, ml = (h, c) => h[1] * R.mark[h[0] * M + c] + h[2] * R.mark[(h[0] + 1) * M + c] + h[3] * R.mark[(h[0] + 2) * M + c];
-  const mark = (h) => { let b = -1, bd = Infinity; for (let i = 0; i < MARK_K; i++) { const hw = R.mark[h[0] * M + i * MARK_S + 6]; if (!(hw > 0)) continue; const d = Math.abs(ml(h, i * MARK_S + 1)) - hw; if (d < bd) { bd = d; b = i; } }
-    if (b < 0) return { id: -1, v: 0, hw: 0, dj: 99 }; const o = b * MARK_S, dj = [2, 3, 4, 5].map((k) => ml(h, o + k)).reduce((p, q) => (Math.abs(q) < Math.abs(p) ? q : p));
-    return { id: R.mid[h[0] * MARK_K + b], v: ml(h, o + 1), hw: R.mark[h[0] * M + o + 6], dj }; };
+  const mdj = (h, o) => [2, 3, 4, 5].map((k) => ml(h, o + k)).reduce((p, q) => (Math.abs(q) < Math.abs(p) ? q : p));
+  const mark = (h) => { let b = -1, bd = Infinity; for (let i = 0; i < MARK_K; i++) { const o = i * MARK_S, hw = R.mark[h[0] * M + o + 6]; if (!(hw > 0)) continue; const u = ml(h, o), v = ml(h, o + 1), S = MARK_K * MARK_S + i * 2, ex = Math.max(0, R.mark[h[0] * M + S] - u, u - R.mark[h[0] * M + S + 1]); let d = Math.hypot(v, ex) - hw; const dj = mdj(h, o);
+      if (d < 0 && R.mark[h[0] * M + o + 7] >= 128 && (R.mark[h[0] * M + o + 7] & 64) && dj > ZEBRA_IN && dj < ZEBRA_OUT) d -= 1e4; if (d < bd) { bd = d; b = i; } } // (inside its carriageway in its crossing's band: that street, runtime.js mScore)
+    if (b < 0) return { id: -1, v: 0, hw: 0, dj: 99 }; const o = b * MARK_S;
+    return { id: R.mid[h[0] * MARK_K + b], v: ml(h, o + 1), hw: R.mark[h[0] * M + o + 6], dj: mdj(h, o), zb: !!(R.mark[h[0] * M + o + 7] & 64) }; };
   const jd = (x, z) => { let d = Infinity; for (const j of J) d = Math.min(d, Math.hypot(x - j.x, z - j.z) - j.r); return d; };
   // (another street's carriageway over this point too (two that merge, or overlap at a junction): which one's markings show is a choice, not drift)
   const shared = (x, z, ri) => { for (let q = 0; q < runs.length; q++) { const rd = runs[q]; if (q === ri || rd.minor || rd.off) continue; for (let s = 0; s + 1 < rd.h.length; s++) { const ax = rd.pts[s * 2], az = rd.pts[s * 2 + 1], dx = rd.pts[s * 2 + 2] - ax, dz = rd.pts[s * 2 + 3] - az; if (Math.abs(x - ax) > 80 || Math.abs(z - az) > 80) continue; const L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)); if (Math.hypot(x - ax - dx * t, z - az - dz * t) < rd.hw) return true; } } return false; };
   const inC = (x, z, e = 0.5) => x > L.x0 + e && z > L.z0 + e && x < L.x0 + L.size - e && z < L.z0 + L.size - e;
   let drift = 0, samples = 0, lost = 0, atSharp = 0, worst = null; const lostAt = [];
-  let mouths = 0, whole = 0, tight = 0; const broken = [];
+  let mouths = 0, whole = 0, tight = 0, overMouths = 0, overHeld = 0; const overAt = []; const broken = [];
   runs.forEach((rd, ri) => { if (rd.minor || rd.off) return; const n = rd.h.length;
     const sharp = []; let pd = null; for (let s = 0; s + 1 < n; s++) { const dx = rd.pts[s * 2 + 2] - rd.pts[s * 2], dz = rd.pts[s * 2 + 3] - rd.pts[s * 2 + 1], l = Math.hypot(dx, dz); if (l < 1e-3) continue; if (pd && pd[0] * dx / l + pd[1] * dz / l < Math.cos(SHARP)) sharp.push([rd.pts[s * 2], rd.pts[s * 2 + 1]]); pd = [dx / l, dz / l]; }
     for (let s = 0; s + 1 < n; s++) { const ax = rd.pts[s * 2], az = rd.pts[s * 2 + 1], bx = rd.pts[s * 2 + 2], bz = rd.pts[s * 2 + 3], l = Math.hypot(bx - ax, bz - az); if (l < 1e-3) continue; const ux = (bx - ax) / l, uz = (bz - az) / l;
@@ -50,6 +54,11 @@ export function markCheck(L, m, detail = false) {
         for (const sg of [-1, 1]) { const tm = tJ + sg * half, tz = tm + sg * ZEBRA_AT[1]; if (tz < 0 || tz > l) continue; const x = ax + ux * tz, z = az + uz * tz;
           if (!inC(x, z, 1)) continue; let other = Infinity; for (const k of J) if (k !== j) other = Math.min(other, Math.hypot(x - k.x, z - k.z) - k.r); if (other + ZEBRA_AT[1] < 2 * ZEBRA_BAND + 0.5) { tight++; continue; } // (two junctions' circles closer than two crossings' bands: no room for both)
           let ok = true, why = null;
+          // (held: where another street's carriageway overlaps the band (no junction between them), whether every sample
+          // there takes this street, or another in its own crossing's band (two crossings overlapping): no street without a
+          // crossing there takes part of the band)
+          let over = false, held = true; for (const dz of ZEBRA_AT) for (let v = -(rd.hw - 0.4); v <= rd.hw - 0.4 + 1e-6; v += 0.25) { const t = tm + sg * dz, px = ax + ux * t - uz * v, pz = az + uz * t + ux * v; if (!inC(px, pz, 0.05) || !shared(px, pz, ri)) continue; over = true; const h = at(px, pz); const mk = h && R.kind[h[0]] === KIND.tarmac ? mark(h) : null; if (mk && mk.id !== ri && !(mk.zb && mk.dj > ZEBRA_IN && mk.dj < ZEBRA_OUT)) { held = false; if (overAt.length < 12) overAt.push([+px.toFixed(1), +pz.toFixed(1), ri, mark(h).id]); } }
+          if (over) { overMouths++; if (held) overHeld++; }
           for (const dz of ZEBRA_AT) { let lo = Infinity, hi = -Infinity; for (let v = -(rd.hw - 0.4); v <= rd.hw - 0.4 + 1e-6 && ok; v += 0.25) { const t = tm + sg * dz, px = ax + ux * t - uz * v, pz = az + uz * t + ux * v, h = at(px, pz);
               if (!inC(px, pz, 0.05) || shared(px, pz, ri)) { ok = null; break; } if (!h || R.kind[h[0]] !== KIND.tarmac) { ok = false; why = 'not carriageway'; break; } const mk = mark(h); if (mk.id !== ri) { ok = false; why = 'cross street'; break; } if (!mk.hw) { ok = false; why = 'unpainted'; break; } // (off it: the chunk beside's, or another street's carriageway too)
               const g = mk.dj; lo = Math.min(lo, g); hi = Math.max(hi, g); }
@@ -62,7 +71,7 @@ export function markCheck(L, m, detail = false) {
   let kerbErr = 0, kerbN = 0; for (let t = 0; t < R.kind.length; t++) { if (R.kind[t] !== KIND.kerb && R.kind[t] !== KIND.pave) continue; const rd = runs[R.id[t]], x = R.pos[t * 3], z = R.pos[t * 3 + 2]; let best = Infinity, mid = false;
     for (let s = 0; s + 1 < rd.h.length; s++) { const ax = rd.pts[s * 2], az = rd.pts[s * 2 + 1], dx = rd.pts[s * 2 + 2] - ax, dz = rd.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9, q0 = ((x - ax) * dx + (z - az) * dz) / L2, q = Math.max(0, Math.min(1, q0)), d = Math.hypot(x - ax - dx * q, z - az - dz * q); if (d < best) { best = d; mid = q0 > 0 && q0 < 1; } }
     if (mid && best < rd.hw + rd.pave + 1 && jd(x, z) > 1) { kerbErr = Math.max(kerbErr, Math.abs(Math.abs(R.road[t * 4 + 1]) - best)); kerbN++; } }
-  const r = { drift, samples, lost, atSharp, mouths, whole, tight, kerbErr, kerbN };
-  if (detail) Object.assign(r, { worst, lostAt, broken });
+  const r = { drift, samples, lost, atSharp, mouths, whole, tight, overMouths, overHeld, kerbErr, kerbN };
+  if (detail) Object.assign(r, { worst, lostAt, broken, overAt });
   return r;
 }

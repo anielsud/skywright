@@ -219,7 +219,10 @@ export function makeRules(net, g, city, wl = -Infinity, box = null) {
       const k = d <= (r.minor ? 0 : 0.03) ? (r.minor ? mk(r) : KIND.tarmac) : !r.minor && r.pave && d <= r.pave ? KIND.pave : d <= vergeW(r) ? KIND.verge : null;
       if (k != null && RANK[k] < rank) { rank = RANK[k]; best = k; } }
     return best; };
-  return { base, drawn, ground, road, roadOn, lineOn, bends, nearest, nearest2, lot, junction, region, portals };
+  // every street segment whose carriageway covers (x, z) (its distance within its half width): [road, segment, distance
+  // past the half width (<= 0), ...] in segIdx's order (the first lowest: nearest's, when there's one)
+  const covering = (x, z) => { const out = [], L = segNear.get(key(Math.floor(x / SC), Math.floor(z / SC))); if (!L) return out; for (let q = 0; q < L.length; q += 2) { const r = runs[L[q]], s = L[q + 1]; if (r.minor) continue; const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], dx = r.pts[s * 2 + 2] - ax, dz = r.pts[s * 2 + 3] - az, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)); const d = Math.hypot(x - ax - dx * t, z - az - dz * t) - r.hw; if (d <= 0) out.push(L[q], s, d); } return out; };
+  return { base, drawn, ground, road, roadOn, lineOn, bends, nearest, nearest2, covering, lot, junction, region, portals };
 }
 
 // The natural ground: today's terrain base without the roads' carving, at the hi grid's points (World.rawHeight: the real

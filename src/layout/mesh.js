@@ -17,7 +17,8 @@ const RAIL_STEP = 6, NONE = new Set(), KERB_GRADE = 0.3, EDGE_STEP = 4, COARSE_C
 // a chunk whose outlines have OUT_MIN points or more (the densest ~5% of New York's) has them stored by the bake (format.js
 // op): working them out takes 60+ ms there
 export const OUT_MIN = 1650;
-export const MARK_K = 4, MARK_S = 8, MARK = MARK_K * MARK_S; // (a carriageway corner's markings coordinates, rib.mark: below)
+export const ZEBRA_IN = 0.5, ZEBRA_OUT = 3.5; // (a crossing's band, m past a junction's circle: runtime.js roadMat paints it)
+export const MARK_K = 4, MARK_S = 8, MARK = MARK_K * MARK_S + MARK_K * 2; // (a carriageway corner's markings coordinates, rib.mark: below)
 const PAVED = [KIND.lip, KIND.tarmac, KIND.kerb, KIND.ballast, KIND.pave, KIND.alley, KIND.pavers, KIND.gravel, KIND.verge]; // (the order a point is classed in)
 const RIBBON = new Set([KIND.tarmac, KIND.kerb, KIND.pave]); // (drawn with a street's coordinates: markings, the pavement's slabs)
 
@@ -172,7 +173,8 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   // junction, where nothing is painted; a triangle from one junction to the next can reach past several). Each is linear, so
   // it interpolates exactly; the material takes, per fragment, the street nearest past its half width and its nearest
   // mouth (markcheck.mjs does the same). rib = { pos, nrm, road (u, v, hw, dj), lane, kind, id, mark (per corner, per
-  // street MARK_S: u, v, its distance past each of four mouths, hw (0: none), lane bits), mid (per corner, per street: its id) }
+  // street MARK_S: u, v, its distance past each of four mouths, hw (0: none), lane bits (and 128: voted); then per
+  // street its stretch along the line, from and to: past them its distance is to the stretch's end), mid (per corner, per street: its id) }
   let nRib = 0; if (fine) for (let q = 0; q < nt; q++) if (RIBBON.has(tk[q]) || tk[q] === KIND.gravel) nRib++;
   const rib = { pos: [], nrm: [], road: [], lane: [], kind: [], id: [], mark: new Float32Array(nRib * 3 * MARK), mid: new Uint32Array(nRib * 3 * MARK_K).fill(0xffffffff) }, JN = L.net.junctions;
   // a street's mouths: where its centre line crosses a junction's circle, [how far along it, +1 if it leaves the circle going on, -1 if it enters]
@@ -194,22 +196,29 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
     // its stations along one straight segment are one)
     const lineOf = (ri, q) => { const r = L.net.runs[ri], ax = r.pts[q * 2], az = r.pts[q * 2 + 1], dx = r.pts[q * 2 + 2] - ax, dz = r.pts[q * 2 + 3] - az, l = Math.hypot(dx, dz); return l < 1e-3 ? null : { ax, az, dx: dx / l, dz: dz / l, u0: r.s[q], hw: r.hw, lanes: r.lanes, oneway: r.oneway, l }; };
     const lkey = (ri, ln) => ri + ':' + Math.round(ln.dx * 1e4) + ':' + Math.round(ln.dz * 1e4) + ':' + Math.round((ln.dx * ln.az - ln.dz * ln.ax) * 100);
-    const votes = new Map(); SAMPLE.forEach(([a, b, c], si) => { const x = a * X[vs[0]] + b * X[vs[1]] + c * X[vs[2]], z = a * Z[vs[0]] + b * Z[vs[1]] + c * Z[vs[2]], n = R.nearest(x, z, street); if (!n) return; const ln = lineOf(n.ri, n.s); if (!ln) return;
-      const lk = lkey(n.ri, ln), w = votes.get(lk) || votes.set(lk, [n.ri, 0, si, ln, n.s]).get(lk); w[1]++; });
+    const votes = new Map(), vote = (ri, q, si, n) => { const ln = lineOf(ri, q); if (!ln) return; const lk = lkey(ri, ln), w = votes.get(lk) || votes.set(lk, [ri, 0, si, ln, q]).get(lk); w[1] += n; };
+    SAMPLE.forEach(([a, b, c], si) => { const x = a * X[vs[0]] + b * X[vs[1]] + c * X[vs[2]], z = a * Z[vs[0]] + b * Z[vs[1]] + c * Z[vs[2]], cv = R.covering(x, z);
+      // (the nearest street's line two votes; every other whose carriageway covers the point one: two overlapping without
+      // a junction both candidates, so a crossing's band can be held by its street)
+      if (!cv.length) { const n = R.nearest(x, z, street); if (n) vote(n.ri, n.s, si, 2); return; } let bq = 0; for (let q = 3; q < cv.length; q += 3) if (cv[q + 2] < cv[bq + 2]) bq = q;
+      for (let q = 0; q < cv.length; q += 3) vote(cv[q], cv[q + 1], si + (q === bq ? 0 : 0.5), q === bq ? 2 : 1); });
     // (and each voted line's street's segments either side of it, unvoted: a gentle bend in the triangle that no point
     // fell beside)
     for (const [ri, , , , s0] of [...votes.values()]) { const r = L.net.runs[ri];
       for (const q of [s0 - 1, s0 + 1]) { if (q < 0 || q + 1 >= r.h.length) continue; const ax = r.pts[q * 2], az = r.pts[q * 2 + 1], dx = r.pts[q * 2 + 2] - ax, dz = r.pts[q * 2 + 3] - az, l = Math.hypot(dx, dz); if (l < 1e-3 || triD(vs, ax + dx / 2, az + dz / 2) > l / 2 + r.hw) continue;
         const nl = lineOf(ri, q), lk = lkey(ri, nl); if (!votes.has(lk)) votes.set(lk, [ri, 0, SAMPLE.length + q, nl, q]); } }
-    const cands = [...votes.values()].sort((a, b) => b[1] - a[1] || a[2] - b[2]).slice(0, MARK_K).map(([ri, , , ln]) => {
-      // (its four mouths: those nearest the most of a few points in the triangle and its corners, then the nearest it)
-      const MS = mouthsOf(ri), mv = MS.map((M) => [0, triD(vs, M[2], M[3]), M]); if (MS.length > 4) for (const [a, b, c] of PICK) { const x = a * X[vs[0]] + b * X[vs[1]] + c * X[vs[2]], z = a * Z[vs[0]] + b * Z[vs[1]] + c * Z[vs[2]]; let bi = 0, bd = Infinity; MS.forEach((M, i) => { const d = Math.hypot(M[2] - x, M[3] - z); if (d < bd) { bd = d; bi = i; } }); mv[bi][0]--; }
+    const cands = [...votes.values()].sort((a, b) => b[1] - a[1] || a[2] - b[2]).slice(0, MARK_K).map(([ri, nv, , ln, q0]) => {
+      // (the line's stretch along it: its segment and those in line with it either side, as stations split a straight)
+      const r = L.net.runs[ri], k0 = lkey(ri, ln); let qa = q0, qb = q0; while (qa > 0) { const l2 = lineOf(ri, qa - 1); if (!l2 || lkey(ri, l2) !== k0) break; qa--; } while (qb + 2 < r.h.length) { const l2 = lineOf(ri, qb + 1); if (!l2 || lkey(ri, l2) !== k0) break; qb++; }
+      // (its four mouths along this line (one round a bend or across it measures its distance the wrong way): those nearest
+      // the most of a few points in the triangle and its corners, then the nearest it)
+      const M0 = mouthsOf(ri), M1 = M0.filter((M) => Math.abs(M[4] * ln.dx + M[5] * ln.dz) > 0.7 && Math.abs(ln.dx * (M[3] - ln.az) - ln.dz * (M[2] - ln.ax)) < ln.hw + 5), MS = M1.length ? M1 : M0, mv = MS.map((M) => [0, triD(vs, M[2], M[3]), M]); if (MS.length > 4) for (const [a, b, c] of PICK) { const x = a * X[vs[0]] + b * X[vs[1]] + c * X[vs[2]], z = a * Z[vs[0]] + b * Z[vs[1]] + c * Z[vs[2]]; let bi = 0, bd = Infinity; MS.forEach((M, i) => { const d = Math.hypot(M[2] - x, M[3] - z); if (d < bd) { bd = d; bi = i; } }); mv[bi][0]--; }
       const ms = mv.sort((a, b) => a[0] - b[0] || a[1] - b[1]).slice(0, 4).map((m) => m[2]);
-      return { ri, ln, ms, lane: laneBits(ri, ln) }; }).filter(Boolean);
+      return { ri, ln, ms, lane: laneBits(ri, ln) + (nv ? 128 : 0), lo: r.s[qa], hi: r.s[qb + 1] }; }).filter(Boolean); // (128: a line nearest somewhere in it, not only a bend's neighbour: only it holds a crossing's band, runtime.js mScore)
     const first = cands[0];
     vs.forEach((v) => { const x = X[v], z = Z[v], rv = rib.kind.length, m = rib.mark.subarray(rv * MARK, rv * MARK + MARK); rib.pos.push(x, Y[v], z); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]);
       cands.forEach((c, i) => { const { ln, ms } = c, o = i * MARK_S, dj = ms.map((M) => M[1] * ((x - M[2]) * M[4] + (z - M[3]) * M[5])); m[o] = ln.u0 + (x - ln.ax) * ln.dx + (z - ln.az) * ln.dz; m[o + 1] = ln.dx * (z - ln.az) - ln.dz * (x - ln.ax);
-        for (let k = 0; k < 4; k++) m[o + 2 + k] = dj.length ? dj[Math.min(k, dj.length - 1)] : 99; m[o + 6] = ln.hw; m[o + 7] = c.lane; });
+        for (let k = 0; k < 4; k++) m[o + 2 + k] = dj.length ? dj[Math.min(k, dj.length - 1)] : 99; m[o + 6] = ln.hw; m[o + 7] = c.lane; m[MARK_K * MARK_S + i * 2] = c.lo; m[MARK_K * MARK_S + i * 2 + 1] = c.hi; });
       cands.forEach((c, i) => { rib.mid[rv * MARK_K + i] = c.ri; }); rib.road.push(m[0], m[1], first ? first.ln.hw : 0, [m[2], m[3], m[4], m[5]].reduce((a, b) => (Math.abs(b) < Math.abs(a) ? b : a))); rib.lane.push(first ? first.lane : 0); rib.kind.push(KIND.tarmac); rib.id.push(first ? first.ri : 0xffffffff); }); }
   if (fine) for (let q = 0; q < nt; q++) { const k = tk[q]; if (!RIBBON.has(k) || k === KIND.tarmac) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;
     const rc = R.road(cx, cz); if (!rc) continue; const ln = R.lineOn(rc.id, cx, cz); if (!ln) continue;
