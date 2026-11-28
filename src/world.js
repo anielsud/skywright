@@ -1443,6 +1443,7 @@ export class World {
   // re-captured once the rock photo is in): main.js keeps the loading screen up meanwhile (at most a few seconds)
   loaded() {
     for (const u of Object.values(this.detailU)) if (u?.value?.isTexture && !u.value.image) return false;
+    if (this.layout && !this.layout.viewReady()) return false; // (the baked layout's first view: fine round the start, drawn in reach, layout/runtime.js begin)
     if (this.roadCam && this.roadGroup?.userData.update && !this.roadGroup.userData.update(this.roadCam, 0, 2500)) return false; // (the road tiles round the start, built now, behind the loading screen)
     return !this.flora || (!!this.flora.captured && !!this.flora.rockCaptured); // (the tree impostors too: captured after the warm-up, their textured shader would compile mid-flight)
   }

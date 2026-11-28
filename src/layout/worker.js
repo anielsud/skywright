@@ -1,8 +1,13 @@
-// Meshes a chunk's baked layout off the main thread (mesh.js). In: { id, buf (the decompressed file), grid, G, level, edgeH (mesh.js) }.
+// Meshes a chunk's baked layout off the main thread (mesh.js), and works out what it's drawn with (draw.js: the surface, the streets, the water, the railways). One of a
+// pool (runtime.js POOL). In: { id, buf (the decompressed file), grid, G, level, edgeH (mesh.js), wl (the water level, or
+// null: no water drawn) }. Out: { id, level, m (the mesh, without its ribbons), d (draw.js drawBuffers), ms (meshing and drawing, ms) }.
 import { decodeLayout } from './format.js';
 import { meshChunk } from './mesh.js';
+import { drawBuffers, railBuffers, drawTransfer } from './draw.js';
 
 self.onmessage = (ev) => {
-  const { id, buf, grid, G, level, edgeH } = ev.data, m = meshChunk(decodeLayout(buf), grid, G, level, edgeH), r = m.rib;
-  self.postMessage({ id, level, m }, [m.pos.buffer, m.phys.buffer, m.ang.buffer, m.nrm.buffer, m.idx.buffer, m.tk.buffer, r.pos.buffer, r.nrm.buffer, r.road.buffer, r.lane.buffer, r.kind.buffer, r.id.buffer, r.mark.buffer, r.mid.buffer]);
+  const t0 = performance.now(), { id, buf, grid, G, level, edgeH, wl } = ev.data, L = decodeLayout(buf), m = meshChunk(L, grid, G, level, edgeH), d = drawBuffers(m, wl);
+  d.rails = level === 'fine' ? railBuffers(L, m) : null; // (the railways: on the fine level's surface)
+  m.rib = null; // (the street ribbons: only drawn, and d has them by material)
+  self.postMessage({ id, level, m, d, ms: performance.now() - t0 }, [m.pos.buffer, m.phys.buffer, m.ang.buffer, m.nrm.buffer, m.idx.buffer, m.tk.buffer, ...drawTransfer(d)]);
 };
