@@ -15,7 +15,7 @@ import { CHUNK, KIND, RKINDS, encodeLayout, stations } from './format.js';
 import { diveProfile, twinAnd, DIVE_K, TUBE_STEP, COVER as TUBE_COVER } from './tubes.js';
 import { naturalGround, TUBE_H, TUBE_SIDE, DECK_SIDE, DECK_DEPTH } from './rules.js';
 
-const PIN_W = 1e4, SEG = 8, MARGIN = 150, ARC = 8, SIMPLIFY = 25, SHAPE_TOL = 15, EDGE_STEP = 4, NET_PAD = 75; // (NET_PAD: the network stored with a chunk reaches this far past it: past every rule's reach, rules.js)
+const LAYER_GAP = 2, PIN_W = 1e4, SEG = 8, MARGIN = 150, ARC = 8, SIMPLIFY = 25, SHAPE_TOL = 15, EDGE_STEP = 4, NET_PAD = 75; // (NET_PAD: the network stored with a chunk reaches this far past it: past every rule's reach, rules.js)
 const PAVE = { main: 4.5, street: 3.5 }; // (as roadgrade.js: a city street's pavement, a country road's verge)
 // a country place's pavements: only along a street's built-up stretches (OpenStreetMap's sidewalk tags aren't in the
 // road data; the buildings are): BUILT_N or more buildings within BUILT_D m of the road per 100 m, averaged over
@@ -96,7 +96,13 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   { const at = new Map(); for (const [nd, ty] of endNode) { const v = node.get(nd); if (v != null) at.set(v, ty); }
     for (const r of runs) { const c = (v) => (r.rail >= 0 ? at.get(v) : 'deck'); if (!r.cutA && at.has(r.vars[0])) r.cutA = c(r.vars[0]); if (!r.cutB && at.has(r.vars[r.vars.length - 1])) r.cutB = c(r.vars[r.vars.length - 1]); } }
   const pinAll = () => { for (const [k, y] of pins) h[k] = y; };
-  // (roads crossing without a shared node, on the same layer: tied at the crossing)
+  // (roads crossing without a shared node, on the same layer: tied at the crossing; on different layers too where their graded
+  // heights there (World.net's) are within LAYER_GAP m: one can't pass over the other (a tunnel's approach in a cut too shallow
+  // for the street over it), so they cross on one surface, not two blended into a hump)
+  const yOn = (rd, x, z) => { const P = rd.pts; let best = Infinity, y = NaN; for (let i = 0; i + 1 < P.length; i++) { const a = P[i], b = P[i + 1], dx = b.x - a.x, dz = b.z - a.z, L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / L2)), d = Math.hypot(x - a.x - dx * t, z - a.z - dz * t); if (d < best) { best = d; y = a.y + (b.y - a.y) * t; } } return y; };
+  const nearLayers = (A, B, list, p, q) => { if (!A.rd || !B.rd || A.rail >= 0 || B.rail >= 0 || A.minor || B.minor) return false; const [, sa] = list[p], [, sb] = list[q], [ax, az] = A.pts[sa], [bx, bz] = A.pts[sa + 1], [cx, cz] = B.pts[sb], [dx, dz] = B.pts[sb + 1];
+    const den = (bx - ax) * (dz - cz) - (bz - az) * (dx - cx); if (Math.abs(den) < 1e-9) return false; const t = ((cx - ax) * (dz - cz) - (cz - az) * (dx - cx)) / den, x = ax + (bx - ax) * t, z = az + (bz - az) * t, ya = yOn(A.rd, x, z), yb = yOn(B.rd, x, z);
+    return Number.isFinite(ya) && Number.isFinite(yb) && Math.abs(ya - yb) < LAYER_GAP; };
   const lxAt = [], eqs = []; // (the level crossings; two points to be at one height)
   const lxOf = (A, B, x, z, ax, az, bx, bz, cx, cz, dx, dz) => { const [R, T] = A.rail >= 0 ? [B, A] : [A, B], la = Math.hypot(bx - ax, bz - az) || 1, lb = Math.hypot(dx - cx, dz - cz) || 1, c = Math.abs(((bx - ax) * (dx - cx) + (bz - az) * (dz - cz)) / la / lb), sn = Math.max(0.2, Math.sqrt(Math.max(0, 1 - c * c)));
     const a = R.hw + (R.pave || 0), b = T.hw; return { x, z, r: Math.min(LX_MAX, Math.max(LX_MIN, Math.sqrt(a * a + b * b + 2 * a * b * c) / sn + LX_ADD)) }; };
@@ -104,7 +110,7 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
     runs.forEach((r, ri) => { for (let s = 0; s + 1 < r.pts.length; s++) { const [ax, az] = r.pts[s], [bx, bz] = r.pts[s + 1]; for (let i = Math.floor(Math.min(ax, bx) / C); i <= Math.floor(Math.max(ax, bx) / C); i++) for (let j = Math.floor(Math.min(az, bz) / C); j <= Math.floor(Math.max(az, bz) / C); j++) { const k = key(i, j); (segGrid.get(k) || segGrid.set(k, []).get(k)).push([ri, s]); } } });
     const seen = new Set();
     for (const list of segGrid.values()) for (let p = 0; p < list.length; p++) for (let q = p + 1; q < list.length; q++) {
-      const [ra, sa] = list[p], [rb, sb] = list[q]; if (ra === rb || runs[ra].layer !== runs[rb].layer) continue;
+      const [ra, sa] = list[p], [rb, sb] = list[q]; if (ra === rb || (runs[ra].layer !== runs[rb].layer && !nearLayers(runs[ra], runs[rb], list, p, q))) continue;
       const id = ra < rb ? `${ra}:${sa}:${rb}:${sb}` : `${rb}:${sb}:${ra}:${sa}`; if (seen.has(id)) continue; seen.add(id);
       const A = runs[ra], B = runs[rb], [ax, az] = A.pts[sa], [bx, bz] = A.pts[sa + 1], [cx, cz] = B.pts[sb], [dx, dz] = B.pts[sb + 1];
       const den = (bx - ax) * (dz - cz) - (bz - az) * (dx - cx); if (Math.abs(den) < 1e-9) continue;
