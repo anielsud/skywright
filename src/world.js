@@ -1243,6 +1243,7 @@ export class World {
     if (T.city) scan(T.city.grid, 0);
     else if (T.grid) { if (T.wallN !== T.grid.size) { T.wallN = T.grid.size; T.wallReach = reach(T.grid); } scan(T.grid, T.wallReach); }
     for (const e of T.landmarks?.boxes || []) add(e);
+    this.layout?.wallBoxes(x, z, r, out); // (a tunnel approach's trench walls, #294 ?layout=1)
     return out;
   }
   // ---------------- clouds ----------------
