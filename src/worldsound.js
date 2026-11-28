@@ -334,7 +334,7 @@ export class WorldSound {
   // the real railways (OSM), thinned to a point every ~150 m
   railPoints() {
     const out = [];
-    for (const [, , flat] of this.world.real?.osm?.rails || []) {
+    for (const [, , flat, , tun] of this.world.real?.osm?.rails || []) { if (tun) continue; // (in a tunnel)
       let lx = 1e9, lz = 1e9;
       for (let k = 0; k < flat.length; k += 2) { const x = flat[k], z = flat[k + 1]; if ((x - lx) ** 2 + (z - lz) ** 2 > 150 * 150) { out.push(x, z); lx = x; lz = z; } }
     }

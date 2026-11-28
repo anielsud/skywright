@@ -15,7 +15,7 @@ import { zebra } from '../../src/layout/rules.js';
 
 export const MARK_OUT = 4, ZEBRA_AT = [0.8, 2, 3.2], ZEBRA_BAND = 3.5, ZEBRA_TOL = 0.15, DRIFT_MAX = 0.05, SHARP = Math.PI / 3; // (ZEBRA_BAND: the crossing's far edge past the circle, runtime.js roadMat)
 export function markCheck(L, m, detail = false) {
-  const R = m.rib, C = 8, grid = new Map(), J = L.net.junctions, runs = L.net.runs;
+  const R = m.rib, C = 8, grid = new Map(), J = L.net.junctions.filter((j) => !j.lx), runs = L.net.runs; // (not a level crossing's: no markings stop there)
   for (let t = 0; t < R.kind.length; t += 3) { let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity; for (let q = 0; q < 3; q++) { x0 = Math.min(x0, R.pos[(t + q) * 3]); x1 = Math.max(x1, R.pos[(t + q) * 3]); z0 = Math.min(z0, R.pos[(t + q) * 3 + 2]); z1 = Math.max(z1, R.pos[(t + q) * 3 + 2]); }
     for (let i = Math.floor(x0 / C); i <= Math.floor(x1 / C); i++) for (let j = Math.floor(z0 / C); j <= Math.floor(z1 / C); j++) { const k = i * 1e6 + j; (grid.get(k) || grid.set(k, []).get(k)).push(t); } }
   // the ribbon triangle at (x, z): [t, l1, l2, l3] or null

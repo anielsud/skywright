@@ -15,14 +15,14 @@
 //   rd int16 x 2     per shape point after a road's first: the change in x, z (cm; the bake splits longer steps)
 //   rh int16         per station after a road's first: the change in height (cm). The stations are the shape's points
 //                    and, between two, ceil(length / SEG) - 1 more evenly spaced (stations())
-//   jx int32 x 4     per junction: x, z (cm from the corner), radius (cm), its plane's height at x, z (mm): each as the
-//                    change from the junction before's
+//   jx int32 x 4     per junction: x, z (cm from the corner), radius (cm; negative: a level crossing's), its plane's height
+//                    at x, z (mm): each as the change from the junction before's
 //   jg int16 x 2     per junction: its plane's slope along x, z (x 1e-4)
 //   ac uint16, ak uint8  per plaza: its ring's points, its surface (0 tarmac, 1 paving, 2 gravel)
 //   a0 int32 x 2     per plaza: its first point (cm from the corner); ad int16 x 2 per point after: the change
 export const CHUNK = 500, LAYOUT_V = 2, SEG = 24;
-export const KIND = { ground: 0, bank: 1, tarmac: 2, kerb: 3, pave: 4, verge: 5, pavers: 6, gravel: 7, alley: 8, lip: 9, out: 255 }; // (lip: a tunnel portal's opening, behind its headwall: no surface)
-export const RKINDS = ['highway', 'main', 'street', 'service', 'ped', 'track', 'other'];
+export const KIND = { ground: 0, bank: 1, tarmac: 2, kerb: 3, pave: 4, verge: 5, pavers: 6, gravel: 7, alley: 8, lip: 9, ballast: 10, out: 255 }; // (lip: a tunnel portal's opening, behind its headwall: no surface; ballast: a railway's bed)
+export const RKINDS = ['highway', 'main', 'street', 'service', 'ped', 'track', 'other', 'rail']; // (a railway: a way off the street network, its lanes its class, bake.js RAIL_CLASS)
 
 const pad4 = (n) => (4 - (n % 4)) % 4;
 const SPEC = (H) => [['rk', Uint8Array, H.runs * 6], ['rn', Uint16Array, H.runs], ['r0', Int32Array, H.runs * 3], ['rd', Int16Array, Math.max(0, H.sp - H.runs) * 2], ['rh', Int16Array, Math.max(0, H.st - H.runs)], ['jx', Int32Array, H.jn * 4], ['jg', Int16Array, H.jn * 2], ['ac', Uint16Array, H.na], ['ak', Uint8Array, H.na], ['a0', Int32Array, H.na * 2], ['ad', Int16Array, Math.max(0, H.ap - H.na) * 2]];
@@ -57,7 +57,7 @@ export function decodeLayout(buf) {
     St.forEach(([x, z], s) => { if (s) y += A.rh[e++]; pts[s * 2] = H.x0 + x / 100; pts[s * 2 + 1] = H.z0 + z / 100; h[s] = y / 100; });
     const shape = new Float64Array(n * 2); for (let q = 0; q < n; q++) { shape[q * 2] = H.x0 + xs[q] / 100; shape[q * 2 + 1] = H.z0 + zs[q] / 100; }
     const k = A.rk.subarray(i * 6, i * 6 + 6); runs.push({ kind: RKINDS[k[0]], minor: !!(k[1] & 1), oneway: !!(k[1] & 2), surf: (k[1] >> 2) & 3, off: k[1] & 16 ? 'deck' : k[1] & 32 ? 'tube' : null, cutA: k[5] & 1 ? 'deck' : k[5] & 2 ? 'tube' : null, cutB: k[5] & 4 ? 'deck' : k[5] & 8 ? 'tube' : null, hw: k[2] / 10, pave: k[3] / 10, lanes: k[4], pts, h, shape }); }
-  const junctions = []; for (let i = 0; i < H.jn; i++) junctions.push({ x: H.x0 + A.jx[i * 4] / 100, z: H.z0 + A.jx[i * 4 + 1] / 100, r: A.jx[i * 4 + 2] / 100, y0: A.jx[i * 4 + 3] / 1000, gx: A.jg[i * 2] / 1e4, gz: A.jg[i * 2 + 1] / 1e4 });
+  const junctions = []; for (let i = 0; i < H.jn; i++) junctions.push({ x: H.x0 + A.jx[i * 4] / 100, z: H.z0 + A.jx[i * 4 + 1] / 100, r: Math.abs(A.jx[i * 4 + 2]) / 100, lx: A.jx[i * 4 + 2] < 0, y0: A.jx[i * 4 + 3] / 1000, gx: A.jg[i * 2] / 1e4, gz: A.jg[i * 2 + 1] / 1e4 });
   const areas = []; let ad = 0, X0 = Math.round(H.x0 * 100), Z0 = Math.round(H.z0 * 100);
   for (let i = 0; i < H.na; i++) { let x = A.a0[i * 2], z = A.a0[i * 2 + 1]; const ring = [[X0 + x, Z0 + z]]; for (let s = 1; s < A.ac[i]; s++, ad++) { x += A.ad[ad * 2]; z += A.ad[ad * 2 + 1]; ring.push([X0 + x, Z0 + z]); } areas.push({ surf: A.ak[i], ring }); }
   return { ...H, net: { runs, junctions }, areas };
