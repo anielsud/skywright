@@ -24,10 +24,9 @@ export function diveProfile(ys, S, cov, G) {
   for (let k = 0; k < n; k++) covered[k] = out[k] + TUBE_H <= cov(k) + 0.01;
   return { ys: out, covered: tidy(covered, S) };
 }
-// (the tube's covered points tidied: a dip between two tube stretches, shorter than RUN_MIN m, tube too; a covered stretch
-// shorter than RUN_MIN m among uncovered ones, a cut too: no tube a few metres long with portals at both ends)
+// (the tube's covered points tidied: a covered stretch shorter than RUN_MIN m among uncovered ones, a cut too: no tube a few
+// metres long with portals at both ends. A dip without cover between two tube stretches stays a cut: no tube shows over the ground)
 function tidy(c0, S) { const covered = c0.slice(), n = covered.length, runs = []; for (let k = 0; k < n;) { let e = k; while (e + 1 < n && covered[e + 1] === covered[k]) e++; runs.push([k, e, covered[k]]); k = e + 1; }
-  for (const [a, e, c] of runs) { const l = S[e] - S[a]; if (!c && a > 0 && e < n - 1 && l < RUN_MIN && covered[a - 1] && covered[e + 1]) for (let k = a; k <= e; k++) covered[k] = true; }
   for (const [a, e, c] of runs) { const l = S[e] - S[a]; if (c && l < RUN_MIN && (a === 0 || !covered[a - 1]) && (e === n - 1 || !covered[e + 1])) for (let k = a; k <= e; k++) covered[k] = false; }
   return covered;
 }
@@ -66,17 +65,25 @@ export function diveTubes(roads, g, city) {
   { const cvs = twinAnd(chains.map(({ pts }) => ({ S: chainS.get(pts), at: (k) => pts[k].rd.pts[pts[k].k], cov: pts.map((q) => q.cov) })));
     chains.forEach(({ pts }, ci) => { const cv = cvs[ci]; pts.forEach((q, k) => { for (const [rd, i] of [[q.rd, q.k], ...q.also]) rd.tube[i] = cv[k]; });
       if (!cv.some(Boolean)) st.cuts++; else { st.dived++; if (cv.some((c) => !c)) st.partCut++; } }); }
-  // (a street at grade over a stretch that's now an open cut, OVER_MIN m or more over it: a deck there, DECK_PAD m past the cut's edge)
-  const segs = segIndex(roads.filter((s) => s.kind !== 'rail' && !s.minor && !hadTube.has(s))); // (a street: a way off the street network crosses as it is)
-  for (const { rd, a, e } of parts) { const P = rd.pts, hw = rd.width / 2;
-    for (let k = a; k < e; k++) { if (rd.tube[k] && rd.tube[k + 1]) continue; const p = P[k], q = P[k + 1];
-      const done = new Set(); for (const [s, i] of segs(p, q)) { if (done.has(s)) continue; const Q = s.pts; { /* (one deck per street per cut segment: its indices change with it) */ if (s.bridge?.[i] && s.bridge?.[i + 1]) continue; if (s.tube?.[i] && s.tube?.[i + 1]) continue;
-          const X = cross(p, q, Q[i], Q[i + 1]); if (!X) continue; const yc = Q[i].y + (Q[i + 1].y - Q[i].y) * X.u, yr = p.y + (q.y - p.y) * X.t; if (yc - yr < OVER_MIN) continue;
-          // (the street's points either side of the cut, its half width and DECK_PAD m out: inserted if its segment is longer)
-          const l = Math.hypot(Q[i + 1].x - Q[i].x, Q[i + 1].z - Q[i].z), sinA = Math.max(0.3, X.sin), half = (hw + DECK_PAD) / sinA, u0 = X.u - half / l, u1 = X.u + half / l;
-          if (!s.bridge) s.bridge = new Array(s.pts.length).fill(false);
-          let i0 = i, i1 = i + 1; if (u1 < 1 - 1e-3) { insertAt(s, i + 1, u1, i); st.inserted = true; } if (u0 > 1e-3) { insertAt(s, i + 1, u0 / (u1 < 1 - 1e-3 ? u1 : 1), i); st.inserted = true; i0 = i + 1; i1 = i + 2; }
-          s.bridge[i0] = s.bridge[i1] = true; st.decks++; if (yc - yr < TUBE_H) st.lowDecks++; segs.dirty(s); done.add(s); } } } }
+  const cuts = []; for (const { rd, a, e } of parts) { const P = rd.pts; for (let k = a; k < e; k++) if (!(rd.tube[k] && rd.tube[k + 1])) cuts.push({ p: P[k], q: P[k + 1], hw: rd.width / 2 }); }
+  const d = decksOverCuts(roads, cuts, hadTube); st.decks = d.decks; st.lowDecks = d.lowDecks; if (d.inserted) st.inserted = true;
+  return st;
+}
+// a street at grade over an open cut (cuts: [{ p, q ({x, y, z}), hw }]: a tunnel's stretch without cover, a road's here or a
+// railway's, bake.js railCuts), OVER_MIN m or more over it: a deck there, DECK_PAD m past the cut's edge (points inserted on
+// the street, as rails.js decksOverRails' decks). skip: roads left alone (a tunnel's own). -> { decks, lowDecks, inserted }
+export function decksOverCuts(roads, cuts, skip = new Set()) {
+  const st = { decks: 0, lowDecks: 0, inserted: false };
+  const segs = segIndex(roads.filter((s) => s.kind !== 'rail' && !s.minor && !skip.has(s))); // (a street: a way off the street network crosses as it is)
+  for (const { p, q, hw } of cuts) { const done = new Set();
+    for (const [s, i] of segs(p, q)) { if (done.has(s)) continue; const Q = s.pts; /* (one deck per street per cut segment: its indices change with it) */
+      if ((s.bridge?.[i] && s.bridge?.[i + 1]) || (s.tube?.[i] && s.tube?.[i + 1])) continue;
+      const X = cross(p, q, Q[i], Q[i + 1]); if (!X) continue; const yc = Q[i].y + (Q[i + 1].y - Q[i].y) * X.u, yr = p.y + (q.y - p.y) * X.t; if (yc - yr < OVER_MIN) continue;
+      // (the street's points either side of the cut, its half width and DECK_PAD m out: inserted if its segment is longer)
+      const l = Math.hypot(Q[i + 1].x - Q[i].x, Q[i + 1].z - Q[i].z), sinA = Math.max(0.3, X.sin), half = (hw + DECK_PAD) / sinA, u0 = X.u - half / l, u1 = X.u + half / l;
+      if (!s.bridge) s.bridge = new Array(s.pts.length).fill(false);
+      let i0 = i, i1 = i + 1; if (u1 < 1 - 1e-3) { insertAt(s, i + 1, u1, i); st.inserted = true; } if (u0 > 1e-3) { insertAt(s, i + 1, u0 / (u1 < 1 - 1e-3 ? u1 : 1), i); st.inserted = true; i0 = i + 1; i1 = i + 2; }
+      s.bridge[i0] = s.bridge[i1] = true; st.decks++; if (yc - yr < TUBE_H) st.lowDecks++; segs.dirty(s); done.add(s); } }
   return st;
 }
 // the segments of roads near segment pq: [[road, its segment's index], ...] (a road's points inserted: dirty(road) re-files it)

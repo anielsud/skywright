@@ -265,8 +265,9 @@ export function makeRules(net, g, city, wl = -Infinity, box = null) {
     // (a trench's approach's own floor: its own; another approach's carriageway
     // (one with no trench) within its box: towards that approach's own height, over the box, as it ends at its portal)
     if (!best) for (const p of trenches) { const [u, v] = portalUV(p, x, z); if (inTrench(p, u, v) && (u <= 0.03 ? 0 : 1e4) + Math.abs(u) < bd) { bd = (u <= 0.03 ? 0 : 1e4) + Math.abs(u); best = p; bu = u; } } if (!best) return null; // (a floor before a surface over a tube)
-    let yf; if (bu > 0.03) { const c = offClamp(x, z, -Infinity); yf = Math.max(y, c > -Infinity ? c : best.y + TUBE_H + OVER); } else { const f = sstep((bu - best.tr.u0) / fadeOf(best)); yf = y + (nearestOn(best.tr.r, x, z) - y) * f; }
-    if (!own) return [yf, true]; const g = sstep((own[1] + BOX_L) / BOX_L); return [yf + (nearestOn(own[0].ar, x, z) - yf) * g, true]; };
+    { const n = nearest(x, z, street); if (n && n.d <= 0.03 && n.r !== best.tr.r && Math.abs(n.dx * best.dx + n.dz * best.dz) < 0.7) return null; } // (a street across the trench (a deck's end over the cut, tubes.js): its own surface, not the floor)
+    let yf; if (bu > 0.03) { const c = offClamp(x, z, -Infinity); yf = Math.max(y, c > -Infinity ? c : Math.min(best.y + TUBE_H + OVER, g(x, z) + SLAB_MAX)); } else { const f = sstep((bu - best.tr.u0) / fadeOf(best)); yf = y + (nearestOn(best.tr.r, x, z) - y) * f; }
+    if (!own) return [yf, true]; const gb = sstep((own[1] + BOX_L) / BOX_L); return [yf + (nearestOn(own[0].ar, x, z) - yf) * gb, true]; };
   const drawn = (x, z, k) => { const y = base0(x, z, k); if (trenches.length) { const t = trench(x, z, y); if (t) return t[0]; } return y + (k === KIND.pave || k === KIND.kerb ? KERB : 0); };
   const base = (x, z, k) => { const y = base0(x, z, k); if (trenches.length) { const t = trench(x, z, y); if (t) return t[0]; } return y; };
   const lot = (x, z) => { const two = nearest2(x, z, (r) => !r.minor && r.pave).filter((n, i) => i === 0 || n.d <= LOT_PAIR); if (!two.length) return null; /* (the second only if it's near: past that, which it is depends on how far the stored network reaches) */ let s = 0, ws = 0; for (const n of two) { const wt = 1 / Math.max(0.5, n.d); s += (streetH(x, z, n.h) + KERB) * wt; ws += wt; } return { y: s / ws, d: two[0].d }; };

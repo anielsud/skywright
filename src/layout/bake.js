@@ -12,10 +12,10 @@
 //     Everything else (heights, the reshaped ground, the markings' coordinates) the game works out with rules.js.
 import CL from '../../vendor/layout/clipper1.mjs';
 import { CHUNK, KIND, RKINDS, encodeLayout, stations } from './format.js';
-import { diveProfile, twinAnd, DIVE_K, TUBE_STEP, COVER as TUBE_COVER } from './tubes.js';
+import { diveProfile, twinAnd, TWIN_D, DIVE_K, TUBE_STEP, COVER as TUBE_COVER } from './tubes.js';
 import { naturalGround, TUBE_H, TUBE_SIDE, DECK_SIDE, DECK_DEPTH } from './rules.js';
 
-const PIN_W = 1e4, SEG = 8, MARGIN = 150, ARC = 8, SIMPLIFY = 25, SHAPE_TOL = 15, EDGE_STEP = 4, NET_PAD = 75; // (NET_PAD: the network stored with a chunk reaches this far past it: past every rule's reach, rules.js)
+const SOLVE_WILD = 300, PIN_W = 1e4, SEG = 8, MARGIN = 150, ARC = 8, SIMPLIFY = 25, SHAPE_TOL = 15, EDGE_STEP = 4, NET_PAD = 75; // (NET_PAD: the network stored with a chunk reaches this far past it: past every rule's reach, rules.js)
 const PAVE = { main: 4.5, street: 3.5 }; // (as roadgrade.js: a city street's pavement, a country road's verge)
 // a country place's pavements: only along a street's built-up stretches (OpenStreetMap's sidewalk tags aren't in the
 // road data; the buildings are): BUILT_N or more buildings within BUILT_D m of the road per 100 m, averaged over
@@ -201,7 +201,8 @@ export function bakeLayout(w, chunks, log = () => {}, opts = {}) {
   lift();
   // (constraints the solve can't meet (pins over a grade limit) leave stations NaN, and the network about them with them: each
   // put back on its ground, counted and logged, so one infeasible tunnel never takes the network to 0)
-  { let bad = 0; for (let k = 0; k < nv; k++) if (!Number.isFinite(h[k])) { h[k] = pins.has(k) ? pins.get(k) : V[k].g; bad++; } T.infeasible = bad; if (bad) log(`  [layout] height solve: ${bad} stations not finite, put back on their pin or ground`); }
+  { let bad = 0; for (let k = 0; k < nv; k++) if (!Number.isFinite(h[k]) || Math.abs(h[k] - V[k].g) > SOLVE_WILD) { h[k] = pins.has(k) ? pins.get(k) : V[k].g; bad++; } T.infeasible = bad; if (bad) log(`  [layout] height solve: ${bad} stations not finite, put back on their pin or ground`); }
+  // (SOLVE_WILD: a station further than this from its ground has diverged, not graded)
   { let low = 0, lifted = 0; for (let k = 0; k < nv; k++) { if (h[k] < floor - 1e-6) low++; if (V[k].g < floor) lifted++; } T.shore = { below: low, overWater: lifted }; } // (stations below the floor after all (0); stations whose ground is under it)
   let dev = 0, over = 0; for (let k = 0; k < nv; k++) dev = Math.max(dev, Math.abs(h[k] - V[k].g)); for (const [a, b, l, G] of edges) if (!inOne(a, b) && G < 0.3) over = Math.max(over, Math.abs(h[a] - h[b]) / l - G);
   // the railways' grades against their class's limit (relaxed or not: how far over the limit, where the ground is steeper)
@@ -294,19 +295,25 @@ function railWays(w, g) {
   const list = deckProfiles(mergeBores(w.real?.osm?.rails || [], g), w, g), key = (x, z) => 'R' + Math.round(x * 10) + ',' + Math.round(z * 10), uses = new Map();
   for (const [, , f] of list) { const seen = new Set(); for (let k = 0; k < f.length; k += 2) { const q = key(f[k], f[k + 1]); if (!seen.has(q)) { seen.add(q); uses.set(q, (uses.get(q) || 0) + 1); } } }
   const out = [];
-  const dived = []; // (the tunnels dived: tubes.js twinAnd over them all)
+  const dived = [], kept = []; // (the tunnels dived: tubes.js twinAnd over them all; second bores kept to their twin's line)
   for (const [, br, f0, cls = 0, tun = 0, extra = {}] of list) { const f = tun && !br && !extra.ys ? densifyLine(f0, TUBE_STEP) : f0, n = f.length / 2; if (n < 2) continue;
     const pts = [], jn = []; for (let i = 0; i < n; i++) { const x = f[i * 2], z = f[i * 2 + 1], q = key(x, z); pts.push({ x, z, y: 0 }); if (i === 0 || i === n - 1 || uses.get(q) > 1) jn.push([i, q]); }
     if (extra.ys) pts.forEach((p, i) => { p.y = extra.ys[i]; }); else if (br || tun) { const ya = extra.ya ?? g(pts[0].x, pts[0].z), yb = extra.yb ?? g(pts[n - 1].x, pts[n - 1].z); let s = 0; const S = [0]; for (let i = 1; i < n; i++) S.push((s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z))); pts.forEach((p, i) => { p.y = ya + (yb - ya) * (S[i] / (s || 1)); }); }
     const flag = br || tun ? new Array(n).fill(true) : null;
     // (a tunnel dives as a road's does, tubes.js: at DIVE_K x its class's grade; its tube only where its roof has cover, an open cut
     // before that)
-    let tube = flag; if (tun && !br && !extra.ys) { const S = [0]; for (let i = 1; i < n; i++) S.push(S[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z));
+    let tube = flag; if (tun && !br && extra.ys) kept.push({ pts, set: (cv) => cv.forEach((c, i) => { tube[i] = c; }) }); /* (a second bore cut back, mergeBores: dived with its twin below) */
+    if (tun && !br && !extra.ys) { const S = [0]; for (let i = 1; i < n; i++) S.push(S[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z));
       const cov = (k) => { const gz = g(pts[k].x, pts[k].z); return (gz === gz ? gz : Infinity) - TUBE_COVER; }, r = diveProfile(pts.map((p) => p.y), S, cov, (RAIL_GRADE[cls] ?? 0.04) * DIVE_K);
       r.ys.forEach((y, i) => { pts[i].y = y; }); tube = r.covered.slice(); dived.push({ S, at: (k) => pts[k], cov: r.covered, set: (cv) => cv.forEach((c, i) => { tube[i] = c; }) }); }
     const way = { kind: 'rail', rail: cls, minor: true, railsOnly: !!extra.railsOnly, keepShape: !!extra.ys, width: (RAIL_HW[cls] + (extra.wide || 0)) * 2, pts, jn: extra.railsOnly ? [] : jn, bridge: br ? flag : null, tube: tun ? tube : null, layer: 0, surf: 0, lanes: cls, pinA: extra.pinA, pinB: extra.pinB }; out.push(way); }
   // (tunnels side by side, a railway's tracks: their tubes where every one beside is a tube too, tubes.js twinAnd)
   const cvs = twinAnd(dived); dived.forEach((d, i) => d.set(cvs[i]));
+  // (a second bore, cut back beside its twin (mergeBores, its points' own heights): each point the height and the tube of the twin's
+  // nearest point within TWIN_D m, so it dives with it and its portal is where the twin's is)
+  if (kept.length) { const C = 20, grid = new Map(), key = (i, j) => i * 100003 + j; dived.forEach((d, di) => d.cov.forEach((_, k) => { const p = d.at(k), kk = key(Math.floor(p.x / C), Math.floor(p.z / C)); (grid.get(kk) || grid.set(kk, []).get(kk)).push(di, k); }));
+    for (const w of kept) { const cv = w.pts.map(() => true); w.pts.forEach((p, i) => { let best = null, bd = TWIN_D; for (let a = Math.floor((p.x - TWIN_D) / C); a <= Math.floor((p.x + TWIN_D) / C); a++) for (let b = Math.floor((p.z - TWIN_D) / C); b <= Math.floor((p.z + TWIN_D) / C); b++) { const L = grid.get(key(a, b)) || []; for (let q = 0; q < L.length; q += 2) { const o = dived[L[q]].at(L[q + 1]), d = Math.hypot(o.x - p.x, o.z - p.z); if (d < bd) { bd = d; best = [L[q], L[q + 1], o]; } } }
+      if (best) { p.y = best[2].y; cv[i] = cvs[best[0]][best[1]]; } }); w.set(cv); } }
   return out;
 }
 // a railway bridge's deck profile (#294): not the straight line between the natural ground at its ends, but over everything
