@@ -248,12 +248,14 @@ export class Layout {
     const dt = (t0 - v.t) / 1000; if (!v.t || dt > 2) Object.assign(v, { t: t0, px: x, pz: z });
     else if (dt > 0.05) { const vx = (x - v.px) / dt, vz = (z - v.pz) / dt, k = Math.min(1, dt / 0.5); if (Math.hypot(vx, vz) > 3000) { v.x = v.z = 0; } else { v.x += (vx - v.x) * k; v.z += (vz - v.z) * k; } Object.assign(v, { t: t0, px: x, pz: z }); }
     this.scan();
-    // (the arrived meshes, the nearest first, within the frame's BUDGET (at least one))
-    let arrived = 0; for (let n = 0; this.done.length && (!n || performance.now() - t0 < BUDGET); n++) { let b = 0, bp = Infinity; this.done.forEach((r, q) => { const c = this.chunks.get(r.id), p = c ? this.prio(c, r.level) : 0; if (p < bp) { bp = p; b = q; } }); this.arrive(this.done.splice(b, 1)[0]); arrived++; }
-    let shown = 0; if (this.mats) for (const c of this.chunks.values()) { if (!c.d) continue; const want = Math.hypot(c.cx - x, c.cz - z) < FINE_D ? 'fine' : 'coarse';
+    // (the drawings due, the nearest first: a level wanted that's in, or a chunk's first; then the arrived meshes (their
+    // physics), the nearest first: within the frame's BUDGET, and at least one of the two)
+    const due = []; if (this.mats) for (const c of this.chunks.values()) { if (!c.d) continue; const d = Math.hypot(c.cx - x, c.cz - z), want = d < FINE_D ? 'fine' : 'coarse';
       if (want === 'coarse' && c.shown && !c.asked.has('coarse')) this.ask(c, 'coarse');
-      const lv = c.d[want] ? want : !c.shown ? Object.keys(c.d)[0] : null; // (not drawn yet: whatever level is in)
-      if (lv && lv !== c.shown && ((!shown && !arrived) || performance.now() - t0 < BUDGET)) { this.show(c, lv); shown++; } }
+      const lv = c.d[want] ? want : !c.shown ? Object.keys(c.d)[0] : null; if (lv && lv !== c.shown) due.push([d, c, lv]); } // (not drawn yet: whatever level is in)
+    due.sort((a, b) => a[0] - b[0]); let did = 0;
+    for (const [, c, lv] of due) { if (did && performance.now() - t0 >= BUDGET) break; this.show(c, lv); did++; }
+    for (let n = 0; this.done.length && ((!did && !n) || performance.now() - t0 < BUDGET); n++) { let b = 0, bp = Infinity; this.done.forEach((r, q) => { const c = this.chunks.get(r.id), p = c ? this.prio(c, r.level) : 0; if (p < bp) { bp = p; b = q; } }); this.arrive(this.done.splice(b, 1)[0]); }
     const st = this.stats; this.progress(); if (st.firstViewMs != null && this.mats) { st.frames++; // (in flight: what's waiting, what's late)
       let back = 0; for (const [c, level] of this.queue.values()) if (level === 'fine' && Math.hypot(c.cx - x, c.cz - z) < FINE_D) back++; st.backlog = Math.max(st.backlog, back);
       const S = this.size, r = Math.ceil(FINE_D / S), seen = new Set(); let late = 0;
