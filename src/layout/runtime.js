@@ -11,7 +11,7 @@
 // landside road, the stunt sites' pads and the land past the core are in the natural ground (rules.js groundNode). Bridges' decks and tunnels' tubes stay today's (roads.js), the layout meeting them at their heights, a skirt closes the gap.
 import * as THREE from 'three';
 import { decodeLayout, KIND, indexChunks, groundBytes } from './format.js';
-import { meshChunk, physIndex, physAt, latticeOf, EDGE_STEP } from './mesh.js';
+import { meshChunk, physIndex, physAt, latticeOf, EDGE_STEP, MARK } from './mesh.js';
 import { groundGrid, latticeHeights, portalsOf, DECK_SIDE, DECK_DEPTH, TUBE_SIDE, TUBE_H, PORTAL_TOP, PORTAL_T, PORTAL_FOOT, SILL } from './rules.js';
 import { railPieces, railSide, RAIL_TOP, SLEEPER_TOP, SLEEPER_STEP, GAUGE, SLEEPER_L } from './rails.js';
 import { sidewalkMaterial, pathMaterial, regionLook, REGION } from '../roadSurface.js';
@@ -191,7 +191,7 @@ export class Layout {
         vs.forEach((v0, t) => { for (let q = 0; q < 3; q++) { const v = v0 + q, o = t * 3 + q; P.set(r.pos.subarray(v * 3, v * 3 + 3), o * 3); N.set(r.nrm.subarray(v * 3, v * 3 + 3), o * 3); attrs.forEach(([, size, f], a) => A[a].set(f(v), o * size)); } });
         const gg = new THREE.BufferGeometry(); gg.setAttribute('position', new THREE.BufferAttribute(P, 3)); gg.setAttribute('normal', new THREE.BufferAttribute(N, 3)); attrs.forEach(([name, size], a) => gg.setAttribute(name, new THREE.BufferAttribute(A[a], size)));
         gg.computeBoundingSphere(); const me = new THREE.Mesh(gg, mat); me.receiveShadow = true; c.mesh.add(me); };
-      part(pick((k) => k === KIND.tarmac), this.mats.tarmac, [['aRoad', 4, (v) => r.road.subarray(v * 4, v * 4 + 4)], ['aLane', 1, (v) => [r.lane[v]]]]);
+      part(pick((k) => k === KIND.tarmac), this.mats.tarmac, [0, 1, 2, 3, 4, 5].map((a) => ['aM' + a, 4, (v) => r.mark.subarray(v * MARK + a * 4, v * MARK + a * 4 + 4)]));
       // (the pavement and its kerb with today's material: uv = metres across from the street's centre line, along; rinfo = half width, -, seed)
       part(pick((k) => k === KIND.kerb || k === KIND.pave), this.mats.walk, [['uv', 2, (v) => [r.road[v * 4 + 1], r.road[v * 4]]], ['rinfo', 3, (v) => [r.road[v * 4 + 2], 0, 3]], ['rjunc', 4, () => [99, 99, 0, 0]]]);
       // (the gravel with today's tracks' material: uv = across, along; rinfo = half width (half a metre more: its ragged edge
@@ -296,19 +296,26 @@ export class Layout {
 }
 
 // a paved surface: its photo texture over a base colour (world-space, metres), and on the tarmac the markings from the
-// layout's road coordinates (aRoad: along, across, half width, from the junction's mouth; aLane: lanes | one-way 16 |
-// painted 32): lane lines, the centre line (New York's double yellow) and a crossing's zebra at each junction's mouth
+// layout's road coordinates for the carriageway's three nearest streets (mesh.js rib.mark; aM0 .. aM5, two per street:
+// along, across, past each of its four nearest mouths, half width (0: none), lanes | one-way 16 | painted 32 | zebra 64), the street nearest past its half width taken per fragment, and its nearest mouth: lane lines, the centre line (New
+// York's double yellow) and a crossing's zebra at each junction's mouth (tools/bake/markcheck.mjs picks the same)
 function roadMat(texName, color, marks = false, yellow = 0) {
   const m = new THREE.MeshStandardMaterial({ color, roughness: 0.92, metalness: 0 }), T = tex(texName);
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, FOG); sh.uniforms.tDet = { value: T }; sh.uniforms.uYellow = { value: yellow }; // (the shared fog's uniforms: every custom hook must add them)
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aRoad; attribute float aLane; varying vec4 vRoad; varying float vLane; varying vec2 vLW;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRoad = aRoad; vLane = aLane; vLW = (modelMatrix * vec4(transformed, 1.0)).xz;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D tDet; uniform float uYellow; varying vec4 vRoad; varying float vLane; varying vec2 vLW;')
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aM0; attribute vec4 aM1; attribute vec4 aM2; attribute vec4 aM3; attribute vec4 aM4; attribute vec4 aM5; varying vec4 vM0; varying vec4 vM1; varying vec4 vM2; varying vec4 vM3; varying vec4 vM4; varying vec4 vM5; varying vec2 vLW;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvM0 = aM0; vM1 = aM1; vM2 = aM2; vM3 = aM3; vM4 = aM4; vM5 = aM5; vLW = (modelMatrix * vec4(transformed, 1.0)).xz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D tDet; uniform float uYellow; varying vec4 vM0; varying vec4 vM1; varying vec4 vM2; varying vec4 vM3; varying vec4 vM4; varying vec4 vM5; varying vec2 vLW;')
       .replace('#include <map_fragment>', `#include <map_fragment>
         vec3 det = texture2D(tDet, vLW / 3.0).rgb; diffuseColor.rgb *= 0.55 + 0.9 * dot(det, vec3(0.333));
         ${marks ? `{
-          float v = vRoad.y, u = vRoad.x, hw = vRoad.z, dj = vRoad.w, aa = fwidth(v) * 0.8 + 0.005, ua = fwidth(u) * 0.8 + 0.005;
+          float f0 = fwidth(vM0.y), f1 = fwidth(vM2.y), f2 = fwidth(vM4.y), g0 = fwidth(vM0.x), g1 = fwidth(vM2.x), g2 = fwidth(vM4.x);
+          float d0 = vM1.z > 0.0 ? abs(vM0.y) - vM1.z : 1e9, d1 = vM3.z > 0.0 ? abs(vM2.y) - vM3.z : 1e9, d2 = vM5.z > 0.0 ? abs(vM4.y) - vM5.z : 1e9;
+          vec4 A = vM0, B = vM1; float fv = f0, fu = g0, bd = d0;
+          if (d1 < bd) { A = vM2; B = vM3; fv = f1; fu = g1; bd = d1; }
+          if (d2 < bd) { A = vM4; B = vM5; fv = f2; fu = g2; }
+          float vLane = B.w, dj = abs(A.w) < abs(A.z) ? A.w : A.z; dj = abs(B.x) < abs(dj) ? B.x : dj; dj = abs(B.y) < abs(dj) ? B.y : dj;
+          float v = A.y, u = A.x, hw = B.z, aa = fv * 0.8 + 0.005, ua = fu * 0.8 + 0.005;
           float lanes = max(1.0, mod(vLane, 16.0)), oneway = mod(floor(vLane / 16.0), 2.0), painted = mod(floor(vLane / 32.0), 2.0), zebra = step(64.0, vLane);
           float paint = 0.0; vec3 col = vec3(0.92);
           if (hw > 0.5 && dj > 0.5) { // (dj below 0: inside the junction's circle)

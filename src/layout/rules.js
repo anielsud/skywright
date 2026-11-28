@@ -77,8 +77,9 @@ export function makeRules(net, g, city, wl = -Infinity) {
   for (const r of runs) { const n = r.h.length; r.s = new Float64Array(n); for (let i = 1; i < n; i++) r.s[i] = r.s[i - 1] + Math.hypot(r.pts[i * 2] - r.pts[i * 2 - 2], r.pts[i * 2 + 1] - r.pts[i * 2 - 1]); }
   const segIdx = new Map(), segNear = new Map(), key = (i, j) => i * 100003 + j, offIdx = new Map(), portals = portalsOf(runs);
   runs.forEach((r, ri) => { if (r.off) return; for (let s = 0; s + 1 < r.h.length; s++) { const ax = r.pts[s * 2], az = r.pts[s * 2 + 1], bx = r.pts[s * 2 + 2], bz = r.pts[s * 2 + 3];
-    for (let i = Math.floor((Math.min(ax, bx) - PAD) / SC); i <= Math.floor((Math.max(ax, bx) + PAD) / SC); i++) for (let j = Math.floor((Math.min(az, bz) - PAD) / SC); j <= Math.floor((Math.max(az, bz) + PAD) / SC); j++) { const k = key(i, j); (segIdx.get(k) || segIdx.set(k, []).get(k)).push(ri, s);
-      if (i >= Math.floor((Math.min(ax, bx) - PAD_N) / SC) && i <= Math.floor((Math.max(ax, bx) + PAD_N) / SC) && j >= Math.floor((Math.min(az, bz) - PAD_N) / SC) && j <= Math.floor((Math.max(az, bz) + PAD_N) / SC)) (segNear.get(k) || segNear.set(k, []).get(k)).push(ri, s); } } });
+    const ni0 = Math.floor((Math.min(ax, bx) - PAD_N) / SC), ni1 = Math.floor((Math.max(ax, bx) + PAD_N) / SC), nj0 = Math.floor((Math.min(az, bz) - PAD_N) / SC), nj1 = Math.floor((Math.max(az, bz) + PAD_N) / SC);
+    for (let i = Math.floor((Math.min(ax, bx) - PAD) / SC); i <= Math.floor((Math.max(ax, bx) + PAD) / SC); i++) for (let j = Math.floor((Math.min(az, bz) - PAD) / SC); j <= Math.floor((Math.max(az, bz) + PAD) / SC); j++) { const k = key(i, j); let a = segIdx.get(k); if (!a) segIdx.set(k, (a = [])); a.push(ri, s);
+      if (i >= ni0 && i <= ni1 && j >= nj0 && j <= nj1) { let b = segNear.get(k); if (!b) segNear.set(k, (b = [])); b.push(ri, s); } } } });
   // (segNear: the segments within PAD_N of a cell, in segIdx's order; a segment left out is more than PAD_N away, more than
   // NEAR_D past its tarmac's edge: an answer nearer than that from segNear alone is segIdx's, exactly)
   const NEAR_D = PAD_N - runs.reduce((m, r) => (r.off ? m : Math.max(m, r.hw)), 0);
