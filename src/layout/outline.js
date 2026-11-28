@@ -34,7 +34,7 @@ export function chunkOutlines(net, areas, L) {
   const capEdge = []; // (a railway's capsules' own points on a chunk line: where two tracks' beds just touch, the union keeps one there on one side only)
   const strips = (filter, width, keepEdge = false) => { const out = []; for (const r of runs) if (filter(r)) { const d = width(r); if (d > 0) { const ls = segs(r), cuts = r.cutA || r.cutB ? cutsOf(r) : [];
     for (const seg of ls) { let cap = off([seg], cm(d)); for (const c of cuts) if (segDist(seg, cm(c.x), cm(c.z)) < cm(d + 1)) cap = bool(CL.ClipType.ctDifference, cap, cutBox(c, d)); const sp = splitAtGrid(cap, S); if (keepEdge) for (const q of sp) for (const [X, Z] of q) if ((X === X0 || X === X0 + S) ? Z >= Z0 && Z <= Z0 + S : (Z === Z0 || Z === Z0 + S) && X >= X0 && X <= X0 + S) capEdge.push([X, Z]); out.push(...sp); } } } return out; }; // (each capsule offset alone: an offset of several unions them, the rounding again depending on which)
-  const minorKind = (r) => (!r.minor ? -1 : r.kind === 'rail' ? KIND.ballast : r.surf === 2 || r.kind === 'track' ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
+  const minorKind = (r) => (!r.minor ? -1 : r.kind === 'rail' ? KIND.ballast : r.surf === 2 ? KIND.gravel : r.surf === 1 || r.kind === 'ped' ? KIND.pavers : KIND.alley);
   const area = (surf) => splitAtGrid(areas.filter((a) => a.surf === surf).map((a) => a.ring), S);
   const street = (r) => !r.minor;
   // (a railway's bed over a street's carriageway where the two overlap, but at a level crossing (inside its circle,

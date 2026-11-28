@@ -266,7 +266,7 @@ export function meshChunk(L, grid, G, level = 'fine', edgeH = null) {
   // the gravel (fine): its triangles on their own too, each given the track nearest its middle as one line (its corners'
   // along and across from it: the material's two wheel ruts and grassy crown, as today's tracks, roadSurface.js
   // pathMaterial); a gravel plaza's (no track there) its world x, z, half width 1e4 (no edge). road = (along, across, half width, -)
-  const track = (r) => r.minor && (r.surf === 2 || r.kind === 'track');
+  const track = (r) => r.minor && r.surf === 2;
   if (fine) for (let q = 0; q < nt; q++) { if (tk[q] !== KIND.gravel) continue; const vs = [idx[q * 3], idx[q * 3 + 1], idx[q * 3 + 2]], cx = (X[vs[0]] + X[vs[1]] + X[vs[2]]) / 3, cz = (Z[vs[0]] + Z[vs[1]] + Z[vs[2]]) / 3;
     const n = R.nearest(cx, cz, track), on = n && n.d <= 0.5;
     for (const v of vs) { rib.pos.push(X[v], Y[v], Z[v]); rib.nrm.push(nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]); rib.road.push(on ? n.u + (X[v] - n.px) * n.dx + (Z[v] - n.pz) * n.dz : X[v], on ? n.dx * (Z[v] - n.pz) - n.dz * (X[v] - n.px) : Z[v], on ? n.r.hw : 1e4, 99); rib.lane.push(0); rib.kind.push(KIND.gravel); rib.id.push(on ? n.ri : 0xffffffff); } }

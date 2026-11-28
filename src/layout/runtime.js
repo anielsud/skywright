@@ -103,6 +103,10 @@ export class Layout {
     // the water: today's plane and shore mesh (World.buildWater) don't draw inside an active chunk, whose own water is its
     // surface's part under the water level (water()), so the shore is the layout's ground's, not today's carved grid's
     const w = this.w; if (w.waterMat) { this.clipWater(w.waterMat, ...(w.shoreWater?.children || []).map((o) => o.material)); this.mats.water = waterMaterial({ U: w.waterMat.userData.U, shore: true, vdepth: true }); }
+    // every material an empty stand-in (as roads.js's), so its shaders compile in the flight's warm-up, before any chunk
+    // is drawn: the shadow ones too of those that cast one (a deck's, show; a retaining wall's, walls), drawn in the
+    // warm-up's first frame (main.js warmShaders)
+    for (const [k, mt] of Object.entries(this.mats)) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(9, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0], 3)); const me = new THREE.Mesh(g, mt); me.name = 'layout warm ' + k; me.frustumCulled = false; me.castShadow = k === 'deck' || k === 'wall'; this.group.add(me); }
     this.ensurePool();
   }
   // the meshing workers (once: early, or start)

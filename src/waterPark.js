@@ -22,6 +22,7 @@ import * as THREE from 'three';
 import { mulberry32, clamp } from './noise.js';
 import { Site, THEMES, V, Y, PAINT, DIRT, col, kicker, stuntMaterials, ATLAS } from './stuntKit.js';
 import { toLocal } from './realworld.js';
+import { naturalGround } from './layout/rules.js';
 
 const SLICK = 4; // collide.js SURFACES: 'slick'
 const DEG = Math.PI / 180;
@@ -48,12 +49,22 @@ export function findWaterSite(w, cfg) {
   const [cx, cz] = centre(w, cfg.near), rad = cfg.r ?? 2500, lim = w.size / 2 - 300, need = cfg.depth ?? C.depth;
   const why = { edge: 0, airport: 0, land: 0, shallow: 0, bridge: 0, built: 0, marina: 0 };
   const no = (k) => { why[k]++; return -1; };
+  // the water at (x, z) and the floor under it, or null on land. With the baked layout (#294) its chunks are the ground
+  // the park will sit on, but most aren't meshed yet while the World is built: there, their natural ground away from the
+  // roads (the hi grid's points, shore-snapped: layout/rules.js naturalGround) and the water over it as World.groundAt
+  // has it; paving (a street, a quay, a city's lot: World.groundAt's 'runway') is land in the layout too
+  const nat = w.layout ? naturalGround(w) : null, S = w.layout?.size;
+  const water = (x, z) => {
+    const g = w.groundAt(x, z), k = Math.floor(x / S) + ',' + Math.floor(z / S);
+    if (nat && g.type !== 'runway' && w.layout.index.has(k) && !(w.layout.on && w.layout.active.has(k))) { const f = nat(x, z), wt = w.waterOver(x, z, f); return wt ? { h: wt.h, floor: f } : null; }
+    return g.type === 'water' ? { h: g.h, floor: w.heightAt(x, z) } : null;
+  };
   // the water depth at (x, z) if it is open water a boat may use, else -1
   const depth = (x, z) => {
     if (Math.abs(x) > lim || Math.abs(z) > lim || (R && R.inHi(x, z) < 200)) return no('edge');
     if (x > AIRPORT.x0 && x < AIRPORT.x1 && Math.abs(z) < AIRPORT.z) return no('airport');
-    const g = w.groundAt(x, z); if (g.type !== 'water') return no('land');
-    const d = g.h - w.heightAt(x, z); if (d < 1) return no('shallow');
+    const g = water(x, z); if (!g) return no('land');
+    const d = g.h - g.floor; if (d < 1) return no('shallow');
     if (w.roadSurf?.q(x, z, true)) return no('bridge');
     if (w.towns?.hit?.(P.set(x, g.h + 2, z)) || w.towns?.hit?.(P.set(x, g.h + 6, z))) return no('built'); // (overwater bungalows, piers)
     if (M) { const [lx, lz] = M.L(x, z); if (Math.hypot(x - M.x, z - M.z) < 380 || (lz > -40 && lz < (M.site.channel ?? 300) + 120 && Math.abs(lx) < 90)) return no('marina'); }

@@ -1671,8 +1671,17 @@ function warmShaders(scene, skip = null) {
     for (let p = o; p; p = p.parent) if (!p.visible) { const q = p; q.visible = true; undo.push(() => (q.visible = false)); }
     if (o.frustumCulled) { o.frustumCulled = false; undo.push(() => (o.frustumCulled = true)); }
   });
+  // (three.js draws every plain shadow caster with one shared depth material, its side switched per caster, and only
+  // builds it a new shader when something else changes between two casters (instanced or not): so whether a side's
+  // shadow shader is built here hung on the order the casters happened to be drawn in, and a two-sided caster (a road
+  // bridge's concrete) could build it in flight. Stand-ins with a depth material of each side of their own build all three)
+  for (const [mt, dm] of DEPTH_SIDES) { const m = new THREE.Mesh(WARM_TRI, mt); m.castShadow = true; m.frustumCulled = false; m.customDepthMaterial = dm; scene.add(m); undo.push(() => scene.remove(m)); }
   return () => { for (const u of undo.reverse()) u(); };
 }
+// (each side: a material that draws nothing and casts its shadow from that side, WebGLShadowMap setting its depth
+// material's side from it; and that depth material, as WebGLShadowMap's own)
+const DEPTH_SIDES = [THREE.FrontSide, THREE.BackSide, THREE.DoubleSide].map((side) => [new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, shadowSide: side }), new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking })]);
+const WARM_TRI = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(9, 3)).setAttribute('normal', new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0], 3)); // (a triangle of no size)
 function onResize() {
   const w = window.innerWidth, h = window.innerHeight;
   renderer.setSize(w, h, false); canvas.style.width = w + 'px'; canvas.style.height = h + 'px';

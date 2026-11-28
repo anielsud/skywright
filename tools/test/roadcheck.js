@@ -12,7 +12,7 @@
 export const nodeSuite = { files: ['src/roads.js', 'src/roadgrade.js', 'src/realworld.js', 'src/world.js', 'src/roadnet.js', 'src/roadPack.js', 'src/junctions.js', 'src/roadSurface.js', 'src/vehicles.js', 'src/laneGraph.js', 'src/signals.js', 'src/trafficModels.js', 'tools/test/roadcheck.js'] }; // (and the ground detail: detailCheck)
 
 const PLACES = ['islands', 'canyon', 'lauterbrunnen', 'nyc'];
-const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3, STEP_CITY = 0.12;
+const STEP = 0.35, STEEP = 0.45, JOIN = 0.3, SNAP = 3, STEP_CITY = 0.12, STEP_W = 5;
 // the ground detail's rebuild work caps (detailCheck): vertices (97 x 97 = 9409 now), road lookups per vertex (1 now),
 // segments + junction boxes tested per vertex (worst rebuild now: islands 5.3, canyon 2.9, lauterbrunnen 6.0, nyc 7.8)
 const DETAIL_VERTS = 12000, DETAIL_Q = 1.5, DETAIL_TESTS = 24;
@@ -25,7 +25,7 @@ export function cases() { return [...PLACES.map((loc) => ({ id: loc, loc, world:
 // on them: paved, a track's gravel loose; a car driven along one stays on it, in one piece), and carry no traffic
 // (no lane of laneGraph.js on them, no junction box with one as an arm, no car of a running Vehicles on one away from
 // the streets).
-const MINOR_ROUGH = { joins: 0.03, steps: 1.5, steep: 1.5 }; // (a km, on adding them: Lauterbrunnen 0.77 step spots and 1.24 steep ones, Bora Bora's hillside drives 1.21 and 0.66; New York 0.021 joins or crossings off, all under half a metre)
+const MINOR_ROUGH = { joins: 0.03, steps: 0.4, steep: 1.5 }; // (a km, on adding them: Lauterbrunnen 1.24 steep spots, Bora Bora's hillside drives 0.66; New York 0.021 joins or crossings off, all under half a metre. Steps off the way's grade (measure), today's roads: Bora Bora 0.24, Lauterbrunnen 0.21, New York 0.18, the canyon 0.03; counted as any 1 m rise over STEP, before #294, they were 1.21, 0.77 and 0.67 under a 1.5 limit)
 const MINOR_MIN = { nyc: { ped: 1000, service: 2000, plazas: 50 }, lauterbrunnen: { ped: 100, service: 1000, track: 1000, plazas: 20 }, islands: { service: 50, track: 20 }, canyon: { service: 100, track: 100 } };
 async function minorCheck(w, c, ctx) {
   const THREE = await import('three'), { LaneGraph } = await import('../../src/laneGraph.js'), { junctionPlan } = await import('../../src/junctions.js'), { Vehicles } = await import('../../src/vehicles.js'), { envOf } = await import('./node/world.mjs');
@@ -485,19 +485,25 @@ export function measure(w, { minor = false } = {}) { // (minor: the ways off the
   });
   const near = (x, z, fn) => { const ci = Math.floor(x / C), cj = Math.floor(z / C); for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) for (const v of segs.get(key(i, j)) || []) fn(v); };
   const spot = (list, x, z, v, what) => { const c = list.find((c) => Math.hypot(c.x - x, c.z - z) < 40); if (c) { c.n++; if (v > c.v) c.v = v; } else list.push({ x: Math.round(x), z: Math.round(z), v, n: 1, what }); };
+  // (a way off the street network's steps: a 1 m rise more than STEP off its grade there, the median rise of the STEP_W
+  // metres either side; a track may climb steeper than STEP in 1 m where the hillside does (its grade then is the steep
+  // check's), and that is a slope, not a step)
+  let run = [];
+  const flush = () => { for (let k = 1; k < run.length; k++) { const d = run[k].h - run[k - 1].h; if (Math.abs(d) <= STEP) continue; const win = []; for (let j = Math.max(1, k - STEP_W); j <= Math.min(run.length - 1, k + STEP_W); j++) if (j !== k) win.push(run[j].h - run[j - 1].h); win.sort((p, q) => p - q); const off = Math.abs(d - (win.length ? win[win.length >> 1] : 0)); if (off > STEP) spot(out.steps, run[k].x, run[k].z, off, run[k].kind); } run = []; };
   roads.forEach((rd, ri) => {
     const P = rd.pts, n = P.length, hw = rd.width / 2, last = rd.closed ? n : n - 1;
     let prev = null;
     for (let i = 0; i < last; i++) {
       const a = P[i], b = P[(i + 1) % n], L = Math.hypot(b.x - a.x, b.z - a.z);
-      if (isDeck(rd, i) || L < 1e-3 || !mine(rd)) { prev = null; continue; }
+      if (isDeck(rd, i) || L < 1e-3 || !mine(rd)) { prev = null; flush(); continue; }
       const dx = (b.x - a.x) / L, dz = (b.z - a.z) / L;
       for (let s = 0; s < L; s += 1) {
         const x = a.x + dx * s, z = a.z + dz * s;
-        if (!inCore(x, z)) { prev = null; continue; }
+        if (!inCore(x, z)) { prev = null; flush(); continue; }
         out.km += 0.001;
         const h = w.sampleGrid(x, z);
-        if (prev != null && Math.abs(h - prev) > STEP) spot(out.steps, x, z, Math.abs(h - prev), rd.kind);
+        if (minor) run.push({ x, z, h, kind: rd.kind });
+        else if (prev != null && Math.abs(h - prev) > STEP) spot(out.steps, x, z, Math.abs(h - prev), rd.kind);
         prev = h;
         if (s % 2) continue;
         for (const f of [-0.7, 0, 0.7]) {
@@ -507,6 +513,7 @@ export function measure(w, { minor = false } = {}) { // (minor: the ways off the
         }
       }
     }
+    flush();
     // junctions (roads.bin topology, rd.jn): every road through a node meets the others there (checked below, once
     // per node); roads without topology (the airport road): an end on another road's line meets it
     if (!rd.jn && !rd.closed && mine(rd)) for (const [e, ie] of [[P[0], 0], [P[n - 1], n - 2]]) {
