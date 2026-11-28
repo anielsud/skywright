@@ -123,7 +123,7 @@ export class MapTiles {
     const core = this.inCore(i, j); // (the core: its baked grid, with the airport, roads and towns flattened in)
     for (let b = 0; b < n; b++) {
       const z = z0 + (b - 0.5) * st;
-      for (let a = 0; a < n; a++) H[b * n + a] = core ? W.sampleGrid(x0 + (a - 0.5) * st, z) : W.height(x0 + (a - 0.5) * st, z);
+      for (let a = 0; a < n; a++) H[b * n + a] = core ? W.sampleToday(x0 + (a - 0.5) * st, z) : W.height(x0 + (a - 0.5) * st, z);
       yield;
     }
     let S = this.scratch.get(res);

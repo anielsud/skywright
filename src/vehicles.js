@@ -171,7 +171,7 @@ export class Vehicles {
     const blobs = (this.blobs = new THREE.InstancedMesh(blob, bm, bodies)); blobs.count = 0; blobs.frustumCulled = false; blobs.renderOrder = -1;
     this.group.add(blobs);
   }
-  pathPoint(path, s, out, dirOut) {
+  pathPoint(path, s, out, dirOut, memo) {
     s = ((s % path.total) + path.total) % path.total;
     const L = path.len; let lo = 0, hi = L.length - 1;
     while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (L[mid] <= s) lo = mid; else hi = mid - 1; }
@@ -181,7 +181,7 @@ export class Vehicles {
     // roads and rail carry their own profile (what physics drives on, bridges included); the apron loop is flat ground
     out.y = path.kind === 'apron' ? this.world.sampleGrid(out.x, out.z) + 0.25 : a.y + (b.y - a.y) * t + 0.02;
     // (a baked layout chunk, #294: its surface, which the lane's points only sample; not a bridge's deck or the rail)
-    const lay = this.world.layout; if (lay?.on && lay.place && path.kind !== 'apron' && path.kind !== 'rail' && !path.bridge?.[lo] && !path.bridge?.[(lo + 1) % path.pts.length]) { const y = lay.heightAt(out.x, out.z); if (y === y) out.y = y + 0.02; }
+    const lay = this.world.layout; if (lay?.on && lay.place && path.kind !== 'apron' && path.kind !== 'rail' && !path.bridge?.[lo] && !path.bridge?.[(lo + 1) % path.pts.length]) { const y = lay.heightAt(out.x, out.z, undefined, memo); if (y === y) out.y = y + 0.02; } /* (memo: this car's last triangle, layout/mesh.js physAt) */
     return lo;
   }
   // Who is in each junction (node key -> [{ c, M: its way through }]): the cars on the turn curves, the cars over their
@@ -327,7 +327,7 @@ export class Vehicles {
       }
       if (camPos) { const dl = Math.hypot(L.cx - camPos.x, L.cz - camPos.z) - L.r; if (dl > this.drawDist) continue; } // the whole lane is too far to see: simulate only
       for (const c of list) {
-        this.pathPoint(path, c.s, p, d);
+        this.pathPoint(path, c.s, p, d, c.lay ||= {});
         const dd = camPos ? (p.x - camPos.x) ** 2 + (p.z - camPos.z) ** 2 : 0;
         if (dd > R2) continue;
         const mdl = this.model(c.type);

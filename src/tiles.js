@@ -53,7 +53,7 @@ export class TerrainTiles {
       const r = this.job.it.next();
       if (r.done) {
         if (this.job.t) {
-          const t = this.job.t, k = this.key(t.i, t.j), old = this.tiles.get(k); if (old) this.drop(old); this.tiles.set(k, r.value); this.treesDirty = true; this.far.maskDirty = true;
+          const t = this.job.t, k = this.key(t.i, t.j), old = this.tiles.get(k); if (old) this.drop(old); this.tiles.set(k, r.value); this.treesDirty = true; this.far.maskDirty = true; this.w.layout?.touch();
           if (this.job.stale) { r.value.stale = true; this.queue.push({ ...t, inv: true }); }
         }
         this.job = null;
@@ -144,7 +144,9 @@ export class TerrainTiles {
     if (!this.depthData) { this.depthData = new Uint16Array(R * R); this.depthTex = new THREE.DataTexture(this.depthData, R, R, THREE.RedFormat, THREE.HalfFloatType); this.depthTex.magFilter = this.depthTex.minFilter = THREE.LinearFilter; }
     const tmp = new Uint16Array(R * R);
     // relative to the water level, like the core's height maps: half floats are fine-grained near zero, i.e. at the shore
-    for (let j = 0; j < R; j++) { for (let i = 0; i < R; i++) tmp[j * R + i] = THREE.DataUtils.toHalfFloat(W.sampleGrid(ox + (i + 0.5) * span / R, oz + (j + 0.5) * span / R) - W.waterLevel); if (j % 4 === 3) yield; }
+    // (sampleCoarse: the same as sampleGrid outside the core, the only place the water shader reads this, and inside it
+    // the coarse grid, for the texels at the core's edge to blend with, without the fine bake, roads or layout to look up)
+    for (let j = 0; j < R; j++) { for (let i = 0; i < R; i++) tmp[j * R + i] = THREE.DataUtils.toHalfFloat(W.sampleCoarse(ox + (i + 0.5) * span / R, oz + (j + 0.5) * span / R) - W.waterLevel); if (j % 4 === 3) yield; }
     this.depthData.set(tmp);
     this.depthTex.needsUpdate = true;
     U.outerTex.value = this.depthTex; U.outerOrigin.value.set(ox, oz); U.outerSize.value = span;

@@ -298,14 +298,23 @@ export function physIndex(L, m) {
   return { nc, start: cnt, list };
 }
 // the physics height at (x, z) on a chunk's fine mesh (NaN outside it); out (optional): [triangle, nx, ny, nz]
-export function physAt(L, m, ix, x, z, out) {
+export function physAt(L, m, ix, x, z, out, memo = ix) {
   const fx = (x - L.x0) / CELL, fz = (z - L.z0) / CELL; if (!(fx >= 0 && fz >= 0 && fx < ix.nc && fz < ix.nc)) return NaN;
-  const k = Math.floor(fz) * ix.nc + Math.floor(fx), P = m.pos, I = m.idx, Y = m.phys;
-  for (let s = ix.start[k]; s < ix.start[k + 1]; s++) {
-    const q = ix.list[s], a = I[q * 3], b = I[q * 3 + 1], c = I[q * 3 + 2], ax = P[a * 3], az = P[a * 3 + 2], bx = P[b * 3], bz = P[b * 3 + 2], cx = P[c * 3], cz = P[c * 3 + 2];
-    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz); if (d === 0) continue;
+  const k = Math.floor(fz) * ix.nc + Math.floor(fx);
+  /* (the triangle found last, first: a wheel, a hull point or a car asks about the same few square metres frame after frame,
+     and a fine cell lists tens of triangles) */
+  if (memo.lm === m && memo.lk === k) { const h = physTri(m, memo.lq, x, z, out); if (h === h) return h; } /* (memo: the caller's own, a traffic car's, else the chunk's) */
+  for (let s = ix.start[k]; s < ix.start[k + 1]; s++) { const q = ix.list[s], h = physTri(m, q, x, z, out); if (h === h) { memo.lq = q; memo.lk = k; memo.lm = m; return h; } }
+  return NaN;
+}
+/* the physics height at (x, z) on triangle q of a fine mesh, NaN if (x, z) isn't in it; out as physAt's */
+function physTri(m, q, x, z, out) {
+  const P = m.pos, I = m.idx, Y = m.phys;
+  {
+    const a = I[q * 3], b = I[q * 3 + 1], c = I[q * 3 + 2], ax = P[a * 3], az = P[a * 3 + 2], bx = P[b * 3], bz = P[b * 3 + 2], cx = P[c * 3], cz = P[c * 3 + 2];
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz); if (d === 0) return NaN;
     const l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d, l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d, l3 = 1 - l1 - l2, E = -1e-7;
-    if (l1 < E || l2 < E || l3 < E) continue;
+    if (l1 < E || l2 < E || l3 < E) return NaN;
     if (out) { const ux = bx - ax, uy = Y[b] - Y[a], uz = bz - az, vx = cx - ax, vy = Y[c] - Y[a], vz = cz - az; let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx; if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; } const l = Math.hypot(nx, ny, nz) || 1; out[0] = q; out[1] = nx / l; out[2] = ny / l; out[3] = nz / l; }
     return l1 * Y[a] + l2 * Y[b] + l3 * Y[c];
   }

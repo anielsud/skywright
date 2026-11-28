@@ -757,7 +757,7 @@ export function buildRoadMeshes(w, net) {
       if (split) t.walk = { m, split };
     }
     if (bridgeGeos.length) { const m = new THREE.Mesh(mergeAll(bridgeGeos), concrete); m.castShadow = m.receiveShadow = true; group.add(m); t.meshes.push(m); }
-    t.built = true; pending = null;
+    t.built = true; pending = null; w.layout?.touch(); /* (a baked layout chunk under it already: not drawn there, layout/runtime.js cover) */
   };
   // (the rail line, if any, now: it is one long object)
   if (net.rail && (pending = new Map())) { const rl = net.rail; strip(rl, [-2.3, 2.3], (i) => rl.pts[i].y + 0.05, () => true, mat('rail'), (c, d) => [c, d / 8]); for (const [material, geos] of pending) group.add(new THREE.Mesh(mergeGeometries(geos), material)); pending = null; }
